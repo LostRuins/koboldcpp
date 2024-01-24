@@ -728,7 +728,9 @@ struct llama_server_context
         slot->sparams.penalty_last_n  = json_value(data, "repeat_last_n",     default_sparams.penalty_last_n);
         slot->sparams.penalty_repeat  = json_value(data, "repeat_penalty",    default_sparams.penalty_repeat);
         slot->sparams.penalty_freq    = json_value(data, "frequency_penalty", default_sparams.penalty_freq);
-        slot->sparams.randomization_factor = json_value(data, "randomization_factor",            default_sparams.randomization_factor);
+        slot->sparams.randomization_factor = json_value(data, "randomization_factor",   default_sparams.randomization_factor);
+        slot->sparams.dynatemp_range       = json_value(data, "dynatemp_range",                  default_sparams.dynatemp_range);
+        slot->sparams.dynatemp_exponent    = json_value(data, "dynatemp_exponent",               default_sparams.dynatemp_exponent);
         slot->sparams.penalty_present = json_value(data, "presence_penalty",  default_sparams.penalty_present);
         slot->sparams.mirostat        = json_value(data, "mirostat",          default_sparams.mirostat);
         slot->sparams.mirostat_tau    = json_value(data, "mirostat_tau",      default_sparams.mirostat_tau);
