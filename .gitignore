@@ -20,8 +20,6 @@ build*/
 out/
 tmp/
 
-venv/
-
 models/*
 models-mnt
 
@@ -63,6 +61,10 @@ models-mnt
 arm_neon.h
 compile_commands.json
 CMakeSettings.json
+/venv/
+/cmake-build-debug/
+/cmake-build-release/
+/.idea/
 
 __pycache__
 dist
@@ -126,3 +128,9 @@ conda/
 
 # Jetbrains idea folder
 .idea/
+/tests/test-autorelease
+/xaa
+/xab
+/xac
+
+examples/

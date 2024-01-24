@@ -721,6 +721,7 @@ extern "C" {
             struct llama_context * ctx,
           llama_token_data_array * candidates,
                            float   p,
+                           float   randomization_factor,
                           size_t   min_keep);
 
     /// @details DYNATEMP! #TODO KALO

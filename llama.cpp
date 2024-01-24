@@ -8234,14 +8234,39 @@ void llama_sample_top_p(struct llama_context * ctx, llama_token_data_array * can
     }
 }
 
-void llama_sample_min_p(struct llama_context * ctx, llama_token_data_array * candidates, float p, size_t min_keep) {
+void llama_sample_min_p(struct llama_context * ctx, llama_token_data_array * candidates, float p, float randomization_factor, size_t min_keep) {
     if (p <= 0.0f || !candidates->size) {
         return;
     }
 
-    llama_sample_softmax(ctx, candidates);
-
     const int64_t t_start_sample_us = ggml_time_us();
+
+    llama_sample_softmax(ctx, candidates);
+    // Check if the randomizationFactor value is above 0 and apply Gaussian noise if so
+    if (randomization_factor > 0.0) {
+        // Create a random number generator
+        std::default_random_engine generator;
+        std::random_device rd;
+        generator.seed(rd());
+        // Create a Gaussian distribution with mean 0 and standard deviation of your choice
+        std::normal_distribution<float> distribution(0.0f, randomization_factor); // Replace 1.0f with the desired standard deviation
+
+        // Print the randomization factor read from the file
+
+        // Apply Gaussian noise to each logit
+        for (size_t i = 0; i < candidates->size; ++i) {
+            // Add Gaussian noise to the logit
+            candidates->data[i].logit += distribution(generator);
+        }
+
+        candidates->sorted = false;
+
+        // Re-normalize probabilities if necessary
+        llama_sample_softmax(ctx, candidates);
+    }
+
+    // Store original top probability
+    float original_top_prob = candidates->data[0].p;
 
     float scale = candidates->data[0].p; // scale by max prob
     size_t i = 1; // first token always matches
@@ -8254,6 +8279,7 @@ void llama_sample_min_p(struct llama_context * ctx, llama_token_data_array * can
 
     // Resize the output vector to keep only the matching tokens
     candidates->size = i;
+    llama_sample_softmax(ctx, candidates);
 
     if (ctx) {
         ctx->t_sample_us += ggml_time_us() - t_start_sample_us;
