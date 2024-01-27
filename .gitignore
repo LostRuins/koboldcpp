@@ -20,6 +20,8 @@ build*/
 out/
 tmp/
 
+venv/
+
 models/*
 models-mnt
 
