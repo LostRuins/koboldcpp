@@ -21,7 +21,8 @@ enum FileFormat
     GGJT=3, // 3=(llama ggjt)
     GGJT_2=4, //newer llama format unshuffled
     GGJT_3=5, //using 16bit scalar
-    GGUF_LLAMA=6, //GGUF (llama newest ver)
+
+    GGUF_GENERIC=6, //GGUF (llama newest ver)
 
     GPTJ_1=100, //the very first super old GPTJ format
     GPTJ_2=101, //pygmalion, uses old ggml lib
@@ -47,14 +48,21 @@ enum FileFormat
 
     MPT_1=500, //first supported mpt version
 
-    GGUF_FALCON=600, //GGUF (falcon)
+};
 
+enum GGUFArch
+{
+    DEFAULT = 0, //used for llama and other generic gguf
+    FALCON = 1,
+    PHI = 2,
 };
 
 struct FileFormatExtraMeta
 {
     int n_ctx_train = 2048;
     int fileversion = 0;
+    GGUFArch model_architecture = GGUFArch::DEFAULT;
+    int n_expert_count = 0;
 };
 
 enum ModelLoadResult

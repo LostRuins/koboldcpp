@@ -6,9 +6,8 @@ It requires no dependencies, installation or setup.
 Just copy this single static HTML file anywhere and open it in a browser, or from a webserver.
 Please go to https://github.com/LostRuins/lite.koboldai.net for updates on Kobold Lite.
 Kobold Lite is under the AGPL v3.0 License unless otherwise exempted. Please do not remove this line.
-Current version: 104
--Concedo
--->
+Current version: 107
+
 
 <script>
 	const urlParams = new URLSearchParams(window.location.search);
@@ -142,7 +141,7 @@ Current version: 104
 			display: flex;
 			flex-wrap: wrap;
 			background-color: #4d4d4d;
-			padding: 10px;
+			padding: 6px;
 		}
 
 		body.connected .settingsmenu,
@@ -1135,8 +1134,8 @@ Current version: 104
 
 		.settingitem {
 			width: 50%;
-			padding-left: 8px;
-			padding-right: 8px;
+			padding-left: 6px;
+			padding-right: 6px;
 			padding-bottom: 5px;
 			padding-top: 5px;
 			display: inline-block;
@@ -3110,6 +3109,30 @@ Current version: 104
 		console.log("beep sound");
 	}
 
+	let notify_allowed = false;
+	function shownotify()
+	{
+		if ("Notification" in window) {
+			// Request permission to show notifications
+			if (Notification.permission === "granted" || notify_allowed) {
+				var notification = new Notification("Kobold Lite", {
+					body: "Text Generation Completed!"
+				});
+			} else {
+				Notification.requestPermission().then(function (permission) {
+					if (permission === "granted") {
+						notify_allowed = true;
+						console.log("Notification permission granted");
+					} else {
+						console.log("Notification permission denied");
+					}
+				});
+			}
+		} else {
+			console.log("Notification API not supported in this browser");
+		}
+	}
+
 	function compare_version_str(a, b) {
 		var i, diff;
 		var regExStrip0 = /(\.0+)+$/;
@@ -3261,6 +3284,9 @@ Current version: 104
     const a1111_options_endpoint = "/sdapi/v1/options";
     const a1111_txt2img_endpoint = "/sdapi/v1/txt2img";
 
+	const xtts_gen_endpoint = "/tts_to_audio/";
+	const xtts_voices_endpoint = "/speakers_list";
+
 	//support for quick news updates
 	const horde_news_endpoint = "https://hordenews.concedo.workers.dev"
 
@@ -3317,6 +3343,7 @@ Current version: 104
 	var custom_claude_key = "";
 	var custom_claude_model = "";
 	var a1111_base_url = "http://localhost:7860";
+	var xtts_base_url = " http://localhost:8020";
 	var uses_cors_proxy = false; //we start off attempting a direct connection. switch to proxy if that fails
 	var synchro_polled_response = null;
 	var synchro_pending_stream = ""; //used for token pseduo streaming for kobold api only
@@ -3367,8 +3394,9 @@ Current version: 104
 		instruct_has_markdown: true,
 		placeholder_tags: true,
 		persist_session: true,
-		speech_synth: 0, //0 is disabled
+		speech_synth: 0, //0 is disabled, 100 is xtts
 		beep_on: false,
+		notify_on: false,
 		narrate_both_sides: false,
 		image_styles: "",
 		grammar:"",
@@ -3378,6 +3406,7 @@ Current version: 104
 		img_autogen: false,
 		img_allownsfw: true,
 		img_cfgscale: 7,
+		img_allowhd: false,
 		img_steps: 20,
 		save_images: true,
 		prompt_for_savename: false,
@@ -3405,6 +3434,8 @@ Current version: 104
 		rep_pen_slope: 0.7,
 		temperature: 0.7,
 		dynatemp_range: 0.0,
+		dynatemp_exponent: 1.0,
+		smoothing_factor: 0.0,
 		top_p: 0.92,
 		min_p: 0.00,
 		presence_penalty: 0.00,
@@ -3428,6 +3459,8 @@ Current version: 104
 			description: "Known Working Settings.",
 			temp: defaultsettings.temperature,
 			dynatemp_range: defaultsettings.dynatemp_range,
+			dynatemp_exponent: defaultsettings.dynatemp_exponent,
+			smoothing_factor: defaultssettings.smoothing_factor,
 			genamt: defaultsettings.max_length,
 			top_k: defaultsettings.top_k,
 			top_p: defaultsettings.top_p,
@@ -3446,6 +3479,8 @@ Current version: 104
 			description: "Good defaults with a different sampler order.",
 			temp: defaultsettings.temperature,
 			dynatemp_range: defaultsettings.dynatemp_range,
+			dynatemp_exponent: defaultsettings.dynatemp_exponent,
+			smoothing_factor: defaultsettings.smoothing_factor,
 			genamt: defaultsettings.max_length,
 			top_k: defaultsettings.top_k,
 			top_p: defaultsettings.top_p,
@@ -3459,7 +3494,8 @@ Current version: 104
 			rep_pen_slope: defaultsettings.rep_pen_slope,
 			sampler_order: [0, 1, 2, 3, 4, 5, 6]
 		},
-		{"preset":"Godlike","description":"Makes AI give a descriptive and sensual output.","temp":0.7,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":0.5,"min_p":0.0,"presence_penalty":0.0,"top_a":0.75,"typical":0.19,"tfs":0.97,"rep_pen":1.1,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,5,4,3,2,1,0]},{"preset":"Mayday","description":"Wacky plot, creativity from AI, crazy stories you want AI to weird out.","temp":1.05,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":0.95,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":1,"rep_pen":1.1,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,0,1,2,3,4,5]},{"preset":"Good Winds","description":"Let AI direct the plot, but still stay logical.","temp":0.7,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.9,"rep_pen":1.1,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,0,1,2,3,4,5]},{"preset":"Liminal Drift","description":"Drives coherent dialogue, responses, and behavior, sometimes surreal situations arise based on information already present in the story.","temp":0.66,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0.96,"typical":0.6,"tfs":1,"rep_pen":1.1,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,4,5,1,0,2,3]},{"preset":"TavernAI","description":"Preset used in TavernAI.","temp":0.79,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":0.9,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.95,"rep_pen":1.19,"rep_pen_range":1024,"rep_pen_slope":0.9,"sampler_order":[6,0,1,2,3,4,5]},{"preset":"Storywriter 6B","description":"Optimized settings for relevant output.","genamt":120,"rep_pen":1.1,"rep_pen_range":2048,"rep_pen_slope":0.2,"sampler_order":[6,5,0,2,3,1,4],"temp":0.72,"dynatemp_range":0.0,"tfs":1,"top_a":0,"top_k":0,"top_p":0.73,"min_p":0.0,"presence_penalty":0.0,"typical":1},{"preset":"Coherent Creativity 6B","description":"A good balance between coherence, creativity, and quality of prose.","genamt":120,"rep_pen":1.2,"rep_pen_range":2048,"rep_pen_slope":0,"sampler_order":[6,5,0,2,3,1,4],"temp":0.51,"dynatemp_range":0.0,"tfs":0.99,"top_a":0,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"typical":1},{"preset":"Luna Moth 6B","description":"A great degree of creativity without losing coherency.","temp":1.5,"dynatemp_range":0.0,"genamt":120,"top_k":85,"top_p":0.24,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":1,"rep_pen":1.1,"rep_pen_range":2048,"rep_pen_slope":0,"sampler_order":[6,5,0,2,3,1,4]},{"preset":"Pleasing Results 6B","description":"Expectable output with alternative context settings.","temp":0.44,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.9,"rep_pen":1.15,"rep_pen_range":2048,"rep_pen_slope":6.8,"sampler_order":[6,5,0,2,3,1,4]},{"preset":"Genesis 13B","description":"Stable and logical, but with scattered creativity.","temp":0.63,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":0.98,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.98,"rep_pen":1.05,"rep_pen_range":2048,"rep_pen_slope":0.1,"sampler_order":[6,2,0,3,5,1,4]},{"preset":"Basic Coherence 13B","description":"Keep things on track.","temp":0.59,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.87,"rep_pen":1.1,"rep_pen_range":2048,"rep_pen_slope":0.3,"sampler_order":[6,5,0,2,3,1,4]},{"preset":"Ouroboros 13B","description":"Versatile, conforms well to poems, lists, chat, etc.","temp":1.07,"dynatemp_range":0.0,"genamt":120,"top_k":100,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.93,"rep_pen":1.05,"rep_pen_range":404,"rep_pen_slope":0.8,"sampler_order":[6,0,5,3,2,1,4]},{"preset":"Ace of Spades 13B","description":"Expressive, while still staying focused.","temp":1.15,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":0.95,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.8,"rep_pen":1.05,"rep_pen_range":2048,"rep_pen_slope":7,"sampler_order":[6,3,2,0,5,1,4]},{"preset":"Low Rider 13B","description":"Reliable, aimed at story development.","temp":0.94,"dynatemp_range":0.0,"genamt":120,"top_k":12,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.94,"rep_pen":1.05,"rep_pen_range":2048,"rep_pen_slope":0.2,"sampler_order":[6,5,0,2,3,1,4]},{"preset":"Pro Writer 13B","description":"Optimal setting for readability, based on AI-powered mass statistical analysis of Euterpe output.","temp":1.35,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.69,"rep_pen":1.15,"rep_pen_range":2048,"rep_pen_slope":0.1,"sampler_order":[6,3,2,5,0,1,4]},{"preset":"Default 20B","description":"Good starting settings for NeoX 20B.","temp":0.6,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":0.9,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":1,"rep_pen":1.04,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,0,1,2,3,4,5]},{"preset":"Min-P","description":"A good default for Min-P, only works on backends with min-p.","temp":1.25,"dynatemp_range":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.1,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":1,"rep_pen":1.03,"rep_pen_range":320,"rep_pen_slope":0.7,"sampler_order":[6,5,0,1,3,4,2]}
+
+		{"preset":"Godlike","description":"Makes AI give a descriptive and sensual output.","temp":0.7,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":0.5,"min_p":0.0,"presence_penalty":0.0,"top_a":0.75,"typical":0.19,"tfs":0.97,"rep_pen":1.1,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,5,4,3,2,1,0]},{"preset":"Mayday","description":"Wacky plot, creativity from AI, crazy stories you want AI to weird out.","temp":1.05,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":0.95,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":1,"rep_pen":1.1,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,0,1,2,3,4,5]},{"preset":"Good Winds","description":"Let AI direct the plot, but still stay logical.","temp":0.7,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.9,"rep_pen":1.1,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,0,1,2,3,4,5]},{"preset":"Liminal Drift","description":"Drives coherent dialogue, responses, and behavior, sometimes surreal situations arise based on information already present in the story.","temp":0.66,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0.96,"typical":0.6,"tfs":1,"rep_pen":1.1,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,4,5,1,0,2,3]},{"preset":"TavernAI","description":"Preset used in TavernAI.","temp":0.79,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":0.9,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.95,"rep_pen":1.19,"rep_pen_range":1024,"rep_pen_slope":0.9,"sampler_order":[6,0,1,2,3,4,5]},{"preset":"Storywriter 6B","description":"Optimized settings for relevant output.","genamt":120,"rep_pen":1.1,"rep_pen_range":2048,"rep_pen_slope":0.2,"sampler_order":[6,5,0,2,3,1,4],"temp":0.72,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"tfs":1,"top_a":0,"top_k":0,"top_p":0.73,"min_p":0.0,"presence_penalty":0.0,"typical":1},{"preset":"Coherent Creativity 6B","description":"A good balance between coherence, creativity, and quality of prose.","genamt":120,"rep_pen":1.2,"rep_pen_range":2048,"rep_pen_slope":0,"sampler_order":[6,5,0,2,3,1,4],"temp":0.51,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"tfs":0.99,"top_a":0,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"typical":1},{"preset":"Luna Moth 6B","description":"A great degree of creativity without losing coherency.","temp":1.5,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":85,"top_p":0.24,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":1,"rep_pen":1.1,"rep_pen_range":2048,"rep_pen_slope":0,"sampler_order":[6,5,0,2,3,1,4]},{"preset":"Pleasing Results 6B","description":"Expectable output with alternative context settings.","temp":0.44,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.9,"rep_pen":1.15,"rep_pen_range":2048,"rep_pen_slope":6.8,"sampler_order":[6,5,0,2,3,1,4]},{"preset":"Genesis 13B","description":"Stable and logical, but with scattered creativity.","temp":0.63,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":0.98,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.98,"rep_pen":1.05,"rep_pen_range":2048,"rep_pen_slope":0.1,"sampler_order":[6,2,0,3,5,1,4]},{"preset":"Basic Coherence 13B","description":"Keep things on track.","temp":0.59,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.87,"rep_pen":1.1,"rep_pen_range":2048,"rep_pen_slope":0.3,"sampler_order":[6,5,0,2,3,1,4]},{"preset":"Ouroboros 13B","description":"Versatile, conforms well to poems, lists, chat, etc.","temp":1.07,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":100,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.93,"rep_pen":1.05,"rep_pen_range":404,"rep_pen_slope":0.8,"sampler_order":[6,0,5,3,2,1,4]},{"preset":"Ace of Spades 13B","description":"Expressive, while still staying focused.","temp":1.15,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":0.95,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.8,"rep_pen":1.05,"rep_pen_range":2048,"rep_pen_slope":7,"sampler_order":[6,3,2,0,5,1,4]},{"preset":"Low Rider 13B","description":"Reliable, aimed at story development.","temp":0.94,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":12,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.94,"rep_pen":1.05,"rep_pen_range":2048,"rep_pen_slope":0.2,"sampler_order":[6,5,0,2,3,1,4]},{"preset":"Pro Writer 13B","description":"Optimal setting for readability, based on AI-powered mass statistical analysis of Euterpe output.","temp":1.35,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":0.69,"rep_pen":1.15,"rep_pen_range":2048,"rep_pen_slope":0.1,"sampler_order":[6,3,2,5,0,1,4]},{"preset":"Default 20B","description":"Good starting settings for NeoX 20B.","temp":0.6,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0"genamt":120,"top_k":0,"top_p":0.9,"min_p":0.0,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":1,"rep_pen":1.04,"rep_pen_range":1024,"rep_pen_slope":0.7,"sampler_order":[6,0,1,2,3,4,5]},{"preset":"Min-P","description":"A good default for Min-P, only works on backends with min-p.","temp":1.25,"dynatemp_range":0.0,"dynatemp_exponent":1.0,"smoothing_factor":0.0,"genamt":120,"top_k":0,"top_p":1,"min_p":0.1,"presence_penalty":0.0,"top_a":0,"typical":1,"tfs":1,"rep_pen":1.03,"rep_pen_range":320,"rep_pen_slope":0.7,"sampler_order":[6,5,0,1,3,4,2]}
 	];
 
 	function polyfills()
@@ -4032,8 +4068,6 @@ Current version: 104
 				"sd_model_checkpoint": desired_model,
 				"eta_noise_seed_delta": 0.0,
 				"CLIP_stop_at_last_layers": 1.0,
-				"eta_ddim": 0.0,
-				"eta_ancestral": 1.0,
 				"ddim_discretize": "uniform",
 				"img2img_fix_steps": false,
 				"sd_hypernetwork": "None",
@@ -5946,6 +5980,51 @@ Current version: 104
 		document.getElementById("advancedloadfile").classList.add("hidden");
 	}
 
+	function preview_dynatemp(isModifiedRange)
+	{
+		if(isModifiedRange)
+		{
+			let currtmp = parseFloat(document.getElementById("dynatemp_outtemp").value);
+			let currrng = parseFloat(document.getElementById("dynatemp_range").value);
+			let a1 = currtmp - currrng;
+			let a2 = currtmp + currrng;
+			a1 = a1<0?0:a1;
+			a2 = a2<0?0:a2;
+			document.getElementById("dynatemp_min").value = a1.toFixed(2);
+			document.getElementById("dynatemp_max").value = a2.toFixed(2);
+			document.getElementById("temperature").value = currtmp.toFixed(3);
+			document.getElementById("temperature_slide").value = document.getElementById("temperature").value;
+		}
+		else
+		{
+			let a1 = parseFloat(document.getElementById("dynatemp_min").value);
+			let a2 = parseFloat(document.getElementById("dynatemp_max").value);
+			if (a2<a1)
+			{
+				a2 = a1;
+				document.getElementById("dynatemp_max").value = document.getElementById("dynatemp_min").value;
+			}
+			let avg = (a1+a2)*0.5;
+			let diff = Math.abs(a2 - a1)*0.5;
+			document.getElementById("dynatemp_range").value = diff.toFixed(3);
+			document.getElementById("dynatemp_outtemp").value = avg.toFixed(3);
+			document.getElementById("temperature").value = avg.toFixed(3);
+			document.getElementById("temperature_slide").value = document.getElementById("temperature").value;
+		}
+
+	}
+	function confirm_dynatemp()
+	{
+		document.getElementById("dynatempcontainer").classList.add("hidden");
+	}
+	function show_dynatemp()
+	{
+		let currtmp = parseFloat(document.getElementById("temperature").value);
+		document.getElementById("dynatemp_outtemp").value = currtmp.toFixed(3);
+		preview_dynatemp(true);
+		document.getElementById("dynatempcontainer").classList.remove("hidden");
+	}
+
 	function explain_horde()
 	{
 		msgbox("The AI Horde generates text using crowdsourced GPUs by volunteer workers. By default your inputs are not logged, but as Horde workers are open source, they can be modified to do so. <br><br>In all cases, the sender will *always be anonymous*, however you are still advised to avoid sending privacy sensitive information.<br><br>For any issues, you can find us on discord at <a class=\"color_blueurl\" href=\"https://koboldai.org/discord\">https://koboldai.org/discord</a>","Disclaimer",true);
@@ -7257,6 +7336,8 @@ Current version: 104
 		document.getElementById("instruct_endtag").value = localsettings.instruct_endtag;
 		document.getElementById("min_p").value = localsettings.min_p;
 		document.getElementById("dynatemp_range").value = localsettings.dynatemp_range;
+		document.getElementById("dynatemp_exponent").value = localsettings.dynatemp_exponent;
+		document.getElementById("smoothing_factor").value = localsettings.smoothing_factor;
 		document.getElementById("presence_penalty").value = localsettings.presence_penalty;
 		document.getElementById("sampler_seed").value = localsettings.sampler_seed;
 		document.getElementById("top_k").value = localsettings.top_k;
@@ -7338,9 +7419,12 @@ Current version: 104
 		} else {
 			console.log("No speech synth available");
 		}
+		ttshtml += "<option value=\"100\">XTTS API Server</option>";
 		document.getElementById("ttsselect").innerHTML = ttshtml;
 		document.getElementById("ttsselect").value = localsettings.speech_synth;
+		toggle_tts_mode();
 		document.getElementById("beep_on").checked = localsettings.beep_on;
+		document.getElementById("notify_on").checked = localsettings.notify_on;
 		document.getElementById("narrate_both_sides").checked = localsettings.narrate_both_sides;
 		toggle_opmode();
 
@@ -7348,6 +7432,7 @@ Current version: 104
 		update_horde_sdmodels();
 
 		document.getElementById("tokenstreammode").value = localsettings.tokenstreammode;
+		document.getElementById("img_allowhd").checked = localsettings.img_allowhd;
 		document.getElementById("img_autogen").checked = localsettings.img_autogen;
 		document.getElementById("save_images").checked = localsettings.save_images;
 		document.getElementById("img_cfgscale").value = localsettings.img_cfgscale;
@@ -7376,6 +7461,8 @@ Current version: 104
 			document.getElementById("presence_penalty").value = found.presence_penalty;
 			document.getElementById("min_p").value = found.min_p;
 			document.getElementById("dynatemp_range").value = found.dynatemp_range;
+			document.getElementById("dynatemp_exponent").value = found.dynatemp_exponent;
+			document.getElementById("smoothing_factor").value = found.smoothing_factor;
 			document.getElementById("top_k").value = found.top_k;
 			document.getElementById("top_p").value = document.getElementById("top_p_slide").value = found.top_p;
 			document.getElementById("top_a").value = found.top_a;
@@ -7511,6 +7598,8 @@ Current version: 104
 		localsettings.sampler_seed = document.getElementById("sampler_seed").value;
 		localsettings.min_p = document.getElementById("min_p").value;
 		localsettings.dynatemp_range = document.getElementById("dynatemp_range").value;
+		localsettings.dynatemp_exponent = document.getElementById("dynatemp_exponent").value;
+		localsettings.smoothing_factor = document.getElementById("smoothing_factor").value;
 		localsettings.presence_penalty = document.getElementById("presence_penalty").value;
 		localsettings.top_k = document.getElementById("top_k").value;
 		localsettings.top_a = document.getElementById("top_a").value;
@@ -7522,6 +7611,7 @@ Current version: 104
 
 		localsettings.speech_synth = document.getElementById("ttsselect").value;
 		localsettings.beep_on = (document.getElementById("beep_on").checked?true:false);
+		localsettings.notify_on = (document.getElementById("notify_on").checked?true:false);
 		localsettings.narrate_both_sides = (document.getElementById("narrate_both_sides").checked?true:false);
 		localsettings.auto_ctxlen = (document.getElementById("auto_ctxlen").checked ? true : false);
 		localsettings.auto_genamt = (document.getElementById("auto_genamt").checked ? true : false);
@@ -7529,6 +7619,7 @@ Current version: 104
 		localsettings.image_styles = pendingstyle;
 		localsettings.grammar = pendinggrammar;
 		localsettings.tokenstreammode = document.getElementById("tokenstreammode").value;
+		localsettings.img_allowhd = (document.getElementById("img_allowhd").checked ? true : false);
 		localsettings.img_autogen = (document.getElementById("img_autogen").checked ? true : false);
 		localsettings.save_images = (document.getElementById("save_images").checked ? true : false);
 		localsettings.prompt_for_savename = (document.getElementById("prompt_for_savename").checked ? true : false);
@@ -7576,6 +7667,10 @@ Current version: 104
 		localsettings.top_p = cleannum(localsettings.top_p, 0.002, 1);
 		localsettings.min_p = cleannum(localsettings.min_p, 0.0, 1);
 		localsettings.dynatemp_range = cleannum(localsettings.dynatemp_range, 0.0, 2.0);
+		localsettings.dynatemp_range = cleannum(localsettings.dynatemp_range, 0.0, 5);
+		localsettings.dynatemp_range = (localsettings.dynatemp_range>localsettings.temperature?localsettings.temperature:localsettings.dynatemp_range);
+		localsettings.dynatemp_exponent = cleannum(localsettings.dynatemp_exponent, 0.0, 10.0);
+		localsettings.smoothing_factor = cleannum(localsettings.smoothing_factor, 0.0, 10.0);
 		localsettings.presence_penalty = cleannum(localsettings.presence_penalty, -2, 2);
 		localsettings.top_k = cleannum(Math.floor(localsettings.top_k), 0, 300);
 		localsettings.top_a = cleannum(localsettings.top_a, 0, 1);
@@ -7949,6 +8044,7 @@ Current version: 104
 		groupchat_removals = [];
 		welcome = "";
 		last_known_filename = "saved_story.json";
+		is_impersonate_user = false;
 		if (!keep_memory)
 		{
 			current_memory = "";
@@ -8257,6 +8353,102 @@ Current version: 104
 		}
 	}
 
+	var xtts_is_connected = false;
+	function fetch_xtts_voices(silent)
+	{
+		if(!xtts_is_connected)
+		{
+			fetch(xtts_base_url + xtts_voices_endpoint)
+			.then(x => x.json())
+			.then(data => {
+				console.log(data);
+				//repopulate our voices list
+				let dropdown = document.getElementById("xtts_voices");
+					let selectionhtml = ``;
+					for (var i = 0; i < data.length; ++i) {
+						selectionhtml += `<option value="` + data[i] + `">`+data[i]+`</option>`;
+					}
+					dropdown.innerHTML = selectionhtml;
+					xtts_is_connected = true;
+			}).catch((error) => {
+				xtts_is_connected = false;
+				if(!silent)
+				{
+					msgbox("XTTS Connect Error: " + error+"\nCheck XTTS API Server endpoint URL.\n");
+				}
+			});
+		}
+	}
+
+	function toggle_tts_mode()
+	{
+		if(document.getElementById("ttsselect").value==100)
+		{
+			document.getElementById("xtts_container").classList.remove("hidden");
+		}else{
+			document.getElementById("xtts_container").classList.add("hidden");
+		}
+	}
+	function set_xtts_url()
+	{
+		inputBox("Enter XTTS API Server URL.","XTTS API Server URL",xtts_base_url,"Input XTTS API Server URL", ()=>{
+			let userinput = getInputBoxValue();
+			userinput = userinput.trim();
+			if(userinput!="" && userinput.slice(-1)=="/")
+			{
+				userinput = userinput.slice(0, -1);
+			}
+			if (userinput != null && userinput!="") {
+				xtts_base_url = userinput.trim();
+				xtts_is_connected = false;
+				fetch_xtts_voices(false);
+			}
+		},false);
+	}
+	function tts_speak(text)
+	{
+		if(localsettings.speech_synth==100) //xtts api server
+		{
+			if(xtts_is_connected)
+			{
+				const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+				let xtts_payload = {
+					"text": text,
+					"speaker_wav": document.getElementById("xtts_voices").value,
+					"language": "EN"
+				};
+
+				fetch(xtts_base_url + xtts_gen_endpoint, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify(xtts_payload),
+				})
+				.then(response => response.arrayBuffer())
+				.then(data => {
+					return audioContext.decodeAudioData(data);
+				})
+				.then(decodedData => {
+					const playSound = audioContext.createBufferSource();
+					playSound.buffer = decodedData;
+					playSound.connect(audioContext.destination);
+					playSound.start(audioContext.currentTime);
+				}).catch((error) => {
+					console.log("XTTS Speak Error: " + error);
+				});
+			}
+		}
+		else
+		{
+			if ('speechSynthesis' in window) {
+				let utterance = new window.SpeechSynthesisUtterance(text);
+				utterance.voice = window.speechSynthesis.getVoices()[localsettings.speech_synth - 1];
+				window.speechSynthesis.speak(utterance);
+			}
+		}
+	}
+
 	function submit_generation() {
 
 		let newgen = document.getElementById("input_text").value;
@@ -8268,12 +8460,11 @@ Current version: 104
 			waiting_for_autosummary = false;
 			idle_timer = 0;
 			idle_triggered_counter = 0;
-			if (localsettings.speech_synth > 0 && 'speechSynthesis' in window) {
+			if (localsettings.speech_synth > 0)
+			{
 				if(localsettings.narrate_both_sides)
 				{
-					let utterance = new window.SpeechSynthesisUtterance(newgen);
-					utterance.voice = window.speechSynthesis.getVoices()[localsettings.speech_synth - 1];
-					window.speechSynthesis.speak(utterance);
+					tts_speak(newgen);
 				}
 			}
 
@@ -8423,7 +8614,12 @@ Current version: 104
 
 				//randomize opponent if there is more than one
 				let hasMulti = false;
-				if(co.includes("||$||"))
+				if(is_impersonate_user)
+				{
+					is_impersonate_user = false;
+					co = localsettings.chatname;
+				}
+				else if(co.includes("||$||"))
 				{
 					let coarr = co.split("||$||");
 					coarr = coarr.filter(x=>(x&&x!=""));
@@ -8735,6 +8931,7 @@ Current version: 104
 
 			render_gametext();
 		}
+		is_impersonate_user = false;
 	}
 
 	function get_stop_sequences() //the input object may not always be the same!
@@ -8808,6 +9005,8 @@ Current version: 104
 			//also supports min_p, in that it wont crash, so add it on. it will be ignored if not found
 			submit_payload.params.min_p = localsettings.min_p;
 			submit_payload.params.dynatemp_range = localsettings.dynatemp_range;
+			submit_payload.params.dynatemp_exponent = localsettings.dynatemp_exponent;
+			submit_payload.params.smoothing_factor = localsettings.smoothing_factor;
 		}
 		//presence pen and logit bias for OAI and newer kcpp
 		if((custom_kobold_endpoint != "" && is_using_kcpp_with_mirostat()) || custom_oai_endpoint!="")
@@ -9250,6 +9449,8 @@ Current version: 104
 
 				//horde should support min_p in future too
 				submit_payload.params.min_p = localsettings.min_p;
+				submit_payload.params.dynatemp_range = localsettings.dynatemp_range;
+				submit_payload.params.dynatemp_exponent = localsettings.dynatemp_exponent;
 			}
 
 			last_request_str = JSON.stringify(submit_payload);
@@ -9403,10 +9604,11 @@ Current version: 104
 				{
 					//console.log(outputimg);
 					let origImg = "data:image/jpeg;base64," + outputimg;
+					let imgres = localsettings.img_allowhd?400:256;
 					compressImage(origImg, (newDataUri) => {
 						image_db[imgid].done = true;
 						image_db[imgid].result = newDataUri;
-					}, true);
+					}, true, true, imgres);
 				}else{
 					image_db[imgid].queue = "Failed";
 					msgbox("Image Generation Failed!\n\nPlease make sure A1111 is running and properly configured!\nIn your local install of Automatic1111 WebUi, modify webui-user.bat and add these flags to enable API access:\n\nset COMMANDLINE_ARGS= --api --listen --cors-allow-origins=*\n");
@@ -9430,10 +9632,11 @@ Current version: 104
 					{
 						//console.log(outputimg);
 						let origImg = "data:image/jpeg;base64," + outputimg;
+						let imgres = localsettings.img_allowhd?380:256;
 						compressImage(origImg, (newDataUri) => {
 							image_db[imgid].done = true;
 							image_db[imgid].result = newDataUri;
-						}, true);
+						}, true, true, imgres);
 					}else{
 						image_db[imgid].queue = "Failed";
 						msgbox("Image Generation Failed!\n\nPlease make sure your OpenAI key is set correctly and you are allowed to use DALL-E.\n");
@@ -9482,6 +9685,7 @@ Current version: 104
 	function render_image_html(data, pend_txt = "", float=true) {
 		var dim = (localsettings.opmode == 2 ? 160 : 200); //adventure mode has smaller pictures
 		let siclass = (float?"storyimgfloat":"storyimg");
+		let reinvertcolor = localsettings.invert_colors?" invert_colors":"";
 		let alttxt = "";
 		if (!data || data == "") {
 			let waittime = "Unavailable";
@@ -9493,13 +9697,13 @@ Current version: 104
 				console.log("Cannot render " + pend_txt);
 			}
 
-			return `<div class="`+siclass+`" contenteditable="false"><img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDABsSFBcUERsXFhceHBsgKEIrKCUlKFE6PTBCYFVlZF9VXVtqeJmBanGQc1tdhbWGkJ6jq62rZ4C8ybqmx5moq6T/2wBDARweHigjKE4rK06kbl1upKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKT/wAARCAEAAQADASIAAhEBAxEB/8QAGQABAQEBAQEAAAAAAAAAAAAAAAEDAgQF/8QAIBABAAIBBQEBAQEAAAAAAAAAAAECEgMRMVKRIWFBof/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwD7AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABETPENNPT3je3jUHm22HpmInljqUx+xwDgAAAAAAAAAAAAAAAAAAAAAAAAABaxvaIRaztaJB6AAEmN4mFSZ2iZB5wAAAAAAAAAAAAAAAAAAAAAAAAAAAaaeptG1vWrzETMcSD0zMRyx1L5fI4cb7gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7rpzNd/HAAAAAAAAAAAAAAAAAAAAAAAAAAAAADTT09/s8Gnp7/Z4agONSmX2OXYDzDbUpl9jliAAAAAAAAAAAAAAAAAAAsVmd9o4KVm0/jeIiI2gHnGupp/2vjIAABpp6e/2TT09/s8NQAAAAHGpTL7HLsB5htqUy+xyxAAAAAAAAAAAAAAAWlZtP4UrNp/G8RFY2gCIiI2hQAZ6mn/a+NAHmaaenv8AZ4dzp1m2/wDjoAAAAAAAABxqUy+xy7AeYbalMvscsQAAAAAAAAAAFpWbT+FKzafxvEREbQBEREbQoAAAAAAAAAAAAAAAAAONSmX2OXYDzDbUpl9jliAAAAAAAtKzafxaVm0/jaIiI2gCIiI2hQAAAAAAAAAAAAAAAAAAAAAcalMvscuwHmG2pTL7HLEAAAAFi0xxMwZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6kzvyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/Z" width=` + dim + ` height=` + dim + ` style="border-radius: 6%;" title="`+alttxt+`" alt="` + pend_txt + `"><div class=\"loader2\"></div><div class=\"imagelabel\">` + waittime + `</div></div>`;
+			return `<div class="`+siclass+reinvertcolor+`" contenteditable="false"><img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDABsSFBcUERsXFhceHBsgKEIrKCUlKFE6PTBCYFVlZF9VXVtqeJmBanGQc1tdhbWGkJ6jq62rZ4C8ybqmx5moq6T/2wBDARweHigjKE4rK06kbl1upKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKT/wAARCAEAAQADASIAAhEBAxEB/8QAGQABAQEBAQEAAAAAAAAAAAAAAAEDAgQF/8QAIBABAAIBBQEBAQEAAAAAAAAAAAECEgMRMVKRIWFBof/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwD7AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABETPENNPT3je3jUHm22HpmInljqUx+xwDgAAAAAAAAAAAAAAAAAAAAAAAAABaxvaIRaztaJB6AAEmN4mFSZ2iZB5wAAAAAAAAAAAAAAAAAAAAAAAAAAAaaeptG1vWrzETMcSD0zMRyx1L5fI4cb7gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7rpzNd/HAAAAAAAAAAAAAAAAAAAAAAAAAAAAADTT09/s8Gnp7/Z4agONSmX2OXYDzDbUpl9jliAAAAAAAAAAAAAAAAAAAsVmd9o4KVm0/jeIiI2gHnGupp/2vjIAABpp6e/2TT09/s8NQAAAAHGpTL7HLsB5htqUy+xyxAAAAAAAAAAAAAAAWlZtP4UrNp/G8RFY2gCIiI2hQAZ6mn/a+NAHmaaenv8AZ4dzp1m2/wDjoAAAAAAAABxqUy+xy7AeYbalMvscsQAAAAAAAAAAFpWbT+FKzafxvEREbQBEREbQoAAAAAAAAAAAAAAAAAONSmX2OXYDzDbUpl9jliAAAAAAAtKzafxaVm0/jaIiI2gCIiI2hQAAAAAAAAAAAAAAAAAAAAAcalMvscuwHmG2pTL7HLEAAAAFi0xxMwZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6ZW7T6gC5W7T6kzvyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/Z" width=` + dim + ` height=` + dim + ` style="border-radius: 6%;" title="`+alttxt+`" alt="` + pend_txt + `"><div class=\"loader2\"></div><div class=\"imagelabel\">` + waittime + `</div></div>`;
 		} else {
 			let imghash = cyrb_hash(data);
 			if (completed_imgs_meta[imghash] != null) {
 				alttxt = completed_imgs_meta[imghash].alt?escapeHtml(completed_imgs_meta[imghash].alt):"";
 			}
-			return `<div class="`+siclass+`"><img src="` + data + `" width=` + dim + ` height=` + dim + ` title="`+alttxt+`" style="border-radius: 6%; cursor: pointer;" onclick="return click_image(this);"></div>`;
+			return `<div class="`+siclass+reinvertcolor+`"><img src="` + data + `" width=` + dim + ` height=` + dim + ` title="`+alttxt+`" style="border-radius: 6%; cursor: pointer;" onclick="return click_image(this);"></div>`;
 		}
 	}
 
@@ -9667,6 +9871,11 @@ Current version: 104
 			}
 		}
 
+		//second pass for trimming whitespace
+		if (localsettings.trimwhitespace) {
+			gentxt = gentxt.replace(/[\t\r\n ]+$/, '');
+		}
+
 		let gentxtspeak = gentxt;
 		if (pending_context_preinjection != "") {
 			if(gentxt!="" && gentxt[0]!=" " && localsettings.opmode==3)
@@ -9678,15 +9887,13 @@ Current version: 104
 			pending_context_preinjection = "";
 		}
 
-		if (localsettings.speech_synth > 0 && 'speechSynthesis' in window)
+		if (localsettings.speech_synth > 0)
 		{
 			if(localsettings.narrate_both_sides)
 			{
 				gentxtspeak = gentxt;
 			}
-			let utterance = new window.SpeechSynthesisUtterance(gentxtspeak);
-			utterance.voice = window.speechSynthesis.getVoices()[localsettings.speech_synth - 1];
-			window.speechSynthesis.speak(utterance);
+			tts_speak(gentxtspeak);
 		}
 
 		if(gentxt!="")
@@ -9697,6 +9904,10 @@ Current version: 104
 		if(localsettings.beep_on)
 		{
 			playbeep();
+		}
+		if(localsettings.notify_on)
+		{
+			shownotify();
 		}
 		let lastreq = "<a href=\"#\" onclick=\"show_last_req()\">Last request</a> served by <a href=\"#\" onclick=\"get_and_show_workers()\">" + genworker + "</a> using <span class=\"color_darkgreen\">"+genmdl+ "</span>"+(genkudos>0?(" for " + genkudos + " kudos"):"")+" in " + getTimeTaken() + " seconds.";
 		document.getElementById("lastreq").innerHTML = lastreq;
@@ -9739,7 +9950,8 @@ Current version: 104
 										img.queue = 0;
 										let origImg = "data:image/jpeg;base64," + finalimg.generations[0].img;
 										//console.log("Original image: " + origImg);
-										compressImage(origImg, (newDataUri) => { img.result = newDataUri; }, true);
+										let imgres = localsettings.img_allowhd?380:256;
+										compressImage(origImg, (newDataUri) => { img.result = newDataUri; }, true, true, imgres);
 									}
 								})
 								.catch((error) => {
@@ -11226,7 +11438,23 @@ Current version: 104
 			+ `<a href='#' class='color_blueurl' onclick='impersonate_message(0)'>Impersonate `+localsettings.chatopponent+` speaking as them</a>`;
 		}
 
+		gs += `<br><a href='#' class='color_blueurl' onclick='impersonate_user()'>Make the AI write a response as me (for 1 turn)</a>`;
+
 		document.getElementById("groupselectitems").innerHTML = gs;
+	}
+	var is_impersonate_user = false;
+	function impersonate_user()
+	{
+		hide_popups();
+		let willsubmit = (document.getElementById("entersubmit").checked ? true : false);
+		if (willsubmit) {
+			document.getElementById("input_text").value = "";
+			document.getElementById("cht_inp").value = "";
+			is_impersonate_user = true;
+			submit_generation();
+		}else{
+			msgbox("Backend is generating or busy - try again later");
+		}
 	}
 	function impersonate_message(index)
 	{
@@ -11649,7 +11877,7 @@ Current version: 104
 		let newbodystr = noSystemPrompt ? input : style('sys') + input;					 // First, create the string we'll transform. Style system bubble if we should.
 		if (newbodystr.endsWith(bot)) { newbodystr = newbodystr.slice(0, -bot.length); } // Remove the last chat bubble if prompt ends with `end_sequence`.
 		newbodystr = transformInputToAestheticStyle(newbodystr,isPreview); 						 // Transform input to aesthetic style, reduce any unnecessary spaces or newlines, and trim empty replies if they exist.
-		if (synchro_pending_stream != "") {
+		if (synchro_pending_stream != "" && !isPreview) {
 			newbodystr += getStreamingText();
 		} 		 // Add the pending stream if it's needed. This will add any streamed text to a new bubble for the AI.
 		newbodystr += contextDict.closeTag + '</p></div></div>';						 // Lastly, append the closing div so our body's raw form is completed.
@@ -11696,7 +11924,8 @@ Current version: 104
 		}
 		function image(role) {
 			if (!as[`${role}_portrait`] || as.border_style == 'None' || role == 'sys') { return ''; }
-			return `<div class='${role}-portrait-image${classSuffixStr}' style='width:${as.portraitSize(role).width}px; height:${as.portraitSize(role).height}px; border-radius: ${as.portraitRadius()}'></div>`;
+			let reinvertcolor = localsettings.invert_colors?" invert_colors":"";
+			return `<div class='${role}-portrait-image${classSuffixStr}${reinvertcolor}' style='width:${as.portraitSize(role).width}px; height:${as.portraitSize(role).height}px; border-radius: ${as.portraitRadius()}'></div>`;
 		}
 		function applyStylizedCodeBlocks() {
 			let blocks = newbodystr.split(/(```[\s\S]*?\n[\s\S]*?```)/g);
@@ -12451,7 +12680,7 @@ Current version: 104
 								<option value="6">ChatML</option>
 								<option value="7">KoboldAI Format</option>
 							</select>
-							<table class="settingsmall text-center" style="border-spacing: 4px 2px;	border-collapse: separate;">
+							<table class="settingsmall text-center" style="border-spacing: 3px 2px;	border-collapse: separate;">
 								<tr>
 									<th>Start Seq.<span class="helpicon">?<span class="helptext">The sequence to start an instruction prompt</span></span></th>
 									<th>End Seq.<span class="helpicon">?<span class="helptext">The sequence to end an instruction prompt</span></span></th>
@@ -12476,7 +12705,7 @@ Current version: 104
 						<div class="settinglabel">
 
 							<div class="justifyleft settingsmall">Advanced Sampler Config <span class="helpicon">?<span class="helptext">These settings control alternative samplers configurations. They are inactive by default, you usually do not need to change them.</span></span></div>
-							<table class="settingsmall text-center" style="border-spacing: 4px 2px;
+							<table class="settingsmall text-center" style="border-spacing: 3px 2px;
 							border-collapse: separate;">
 								<tr>
 								  <th title="Top-K Sampling. 0 to Deactivate.">Top-K</th>
@@ -12500,9 +12729,11 @@ Current version: 104
 								<th title="Min-P Sampling. 0 to Deactivate.">Min-P</th>
 								<th title="Presence Penalty. 0 to Deactivate.">PrPen.</th>
 								<th title="DynaTemp Range. 0 to Deactivate.">DyTmp.R</th>
+								<th title="DynaTemp Configs. Range 0 to Deactivate.">DyTmp.</th>
+								<th title="Smoothing Factor. 0 to Deactivate.">Smtg.F</th>
 								</tr>
-								<tr>
 
+								<tr>
 								<td><input class="" type="text" inputmode="decimal" placeholder="0" value="0"
 								id="sampler_seed"></td>
 								<td><input class="" type="text" inputmode="decimal" placeholder="0" value="0"
@@ -12511,11 +12742,11 @@ Current version: 104
 								id="presence_penalty"></td>
 								<td><input class="" type="text" inputmode="decimal" placeholder="0" value="0"
 								id="dynatemp_range"></td>
+								<td><input class="" type="text" inputmode="decimal" placeholder="0" value="0"
+								id="smoothing_factor"></td>
+								<td><button type="button" class="btn btn-primary" style="padding:1px 3px;font-size:8px;" onclick="show_dynatemp()">Set</button></td>
 								</tr>
-
-
 							  </table>
-
 						</div>
 					</div>
 
@@ -12524,7 +12755,7 @@ Current version: 104
 
 							<div class="justifyleft settingsmall">Mirostat (If supported) <span class="helpicon">?<span class="helptext">Replaces your samplers with mirostat, an alternative sampling method. May not be available depending on backend, not supported on Horde.</span></span></div>
 							<div id="mirosupporteddiv">
-								<table class="settingsmall text-center" style="border-spacing: 4px 2px;
+								<table class="settingsmall text-center" style="border-spacing: 3px 2px;
 								border-collapse: separate;">
 									<tr>
 									<th title="Mirostat Type 0/1/2">Mode</th>
@@ -12550,7 +12781,7 @@ Current version: 104
 
 					<div class="settingitem">
 						<div class="settinglabel">
-							<table class="settingsmall text-center" style="border-spacing: 4px 2px;
+							<table class="settingsmall text-center" style="border-spacing: 3px 2px;
 							border-collapse: separate;">
 								<tr>
 								  <th title="Repetition Penalty Range">RpRng.</th>
@@ -12632,8 +12863,16 @@ Current version: 104
 					<div class="settingitem">
 						<div class="settinglabel">
 							<div class="justifyleft settingsmall">TTS <span class="helpicon">?<span class="helptext">Enable Text-To-Speech to have your story automatically read to you.</span></span></div>
-							<select class="form-control" id="ttsselect" style="height:20px;padding:0;margin:0px 0 0;">
+							<select class="form-control" id="ttsselect" style="height:20px;padding:0;margin:0px 0 0;" onchange="toggle_tts_mode()">
 							</select>
+							<div id="xtts_container" class="settinglabel hidden">
+								<table width="100%"><tr>
+								<td><button id="xtts_url" type="button" class="btn btn-primary" style="width:100%; padding:2px 3px;margin-top:2px;font-size:11px;" onclick="set_xtts_url()">Set URL</button></td>
+								<td><select class="form-control" id="xtts_voices" style="font-size:12px;height:20px;padding:0;margin:0px 0 0;">
+								<option value="female_calm" selected>female_calm</option><option value="female">female</option><option value="male">male</option>
+								</select></td>
+								</tr></table>
+							</div>
 						</div>
 						<div class="settinglabel">
 							<div class="justifyleft settingsmall"  title="If unchecked, only speak AI replies, not other text.">Narrate Both Sides </div>
@@ -12642,6 +12881,10 @@ Current version: 104
 						<div class="settinglabel">
 							<div class="justifyleft settingsmall"  title="Play a sound when generation is complete">Beep on Done </div>
 						   <input type="checkbox" id="beep_on" style="margin:0px 0 0;">
+						</div>
+						<div class="settinglabel">
+							<div class="justifyleft settingsmall"  title="Show notification when generation is complete">Notify on Done </div>
+						   <input type="checkbox" id="notify_on" style="margin:0px 0 0;">
 						</div>
 						<button id="resetallsettings" type="button" class="btn btn-primary bg_red" style="padding:2px 3px;margin-top:2px;font-size:11px;" onclick="reset_all_settings()">Reset ALL Settings</button>
 					</div>
@@ -12941,7 +13184,7 @@ Current version: 104
 			</div>
 
 			<div class="zoomedimgdiv">
-				<img id="zoomedimg" src="" style="border-radius: 6%;" width="300px" height="300px">
+				<img id="zoomedimg" src="" style="border-radius: 6%;" width="320px" height="320px">
 			</div>
 
 			<div class="aidgpopuplistheader anotelabel zoomedimgdesc" id="zoomedimgdesc" style="word-wrap: break-word;">
@@ -12950,6 +13193,46 @@ Current version: 104
 			<div class="popupfooter">
 				<button type="button" class="bg_red btn btn-primary" style="width: 124px;" onclick="delete_curr_image();hide_popups();">Delete Image</button>
 				<button type="button" class="btn btn-primary" onclick="hide_popups()">Close</button>
+			</div>
+		</div>
+	</div>
+
+	<div class="popupcontainer flex hidden" id="dynatempcontainer">
+		<div class="popupbg flex"></div>
+		<div class="nspopup fixsize">
+			<div class="popuptitlebar">
+				<div class="popuptitletext">Dynamic Temperature Wizard</div>
+			</div>
+			<div class="inlinelabel">
+			Dynamic temperature is specified by a Temperature Value and a Temperature Range. Actual temperature is allowed to be automatically adjusted dynamically between (DynaTemp ± DynaRange).<br><br>
+			For ease of use, a simple converter is provided here. Setting both values to the same temperature disables DynaTemp.<br><br>
+			</div>
+
+			<div class="inlinelabel">
+				<div class="justifyleft" style="padding:4px">Minimum Temperature: </div>
+				<input type="text" oninput="preview_dynatemp(false)" inputmode="decimal" id="dynatemp_min" style="width:60px">
+			</div>
+			<div class="inlinelabel">
+				<div class="justifyleft" style="padding:4px">Maximum Temperature: </div>
+				<input type="text" oninput="preview_dynatemp(false)" inputmode="decimal" id="dynatemp_max" style="width:60px">
+			</div>
+			<hr>
+			<div class="inlinelabel">
+				<div class="justifyleft" style="padding:4px">Temperature:</div>
+				<input type="text" oninput="preview_dynatemp(true)" inputmode="decimal" id="dynatemp_outtemp" style="width:60px" >
+			</div>
+			<div class="inlinelabel">
+				<div class="justifyleft" style="padding:4px">DynaTemp-Range:</div>
+				<input type="text" oninput="preview_dynatemp(true)" inputmode="decimal" id="dynatemp_range" style="width:60px" >
+			</div>
+			<hr>
+			<div class="inlinelabel">
+				<div class="justifyleft" style="padding:4px">DynaTemp-Exponent:</div>
+				<input type="text" oninput="preview_dynatemp(false)" inputmode="decimal" id="dynatemp_exponent" style="width:60px" >
+			</div>
+
+			<div class="popupfooter">
+				<button type="button" class="btn btn-primary" onclick="confirm_dynatemp()">Ok</button>
 			</div>
 		</div>
 	</div>
@@ -12971,6 +13254,13 @@ Current version: 104
 				<div class="justifyleft" style="padding:4px">Cfg. Scale: </div>
 				<input type="text" inputmode="decimal" id="img_cfgscale" style="width:60px">
 			</div>
+			<div class="inlinelabel">
+				<div class="justifyleft" style="padding:4px">Save Higher-Res <span class="helpicon">?
+					<span class="helptext">This option will result in larger save files which may be slower. Changing this setting only applies to NEW images.</span>
+				</span>: </div>
+				<input type="checkbox" id="img_allowhd" style="margin:0px 0 0;">
+			</div>
+
 
 			<div class="popupfooter">
 				<button type="button" class="btn btn-primary" onclick="confirmImgStyle()">Ok</button>

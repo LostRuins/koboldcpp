@@ -385,7 +385,7 @@ static to_fp32_cuda_t ggml_v2_get_to_fp32_cuda(ggml_v2_type type) {
 }
 
 // buffer pool for cuda
-#define MAX_CUDA_BUFFERS 16
+#define MAX_CUDA_BUFFERS_V2 16
 
 struct scoped_spin_lock {
     std::atomic_flag& lock;
@@ -406,13 +406,13 @@ struct cuda_buffer {
     size_t size = 0;
 };
 
-static cuda_buffer g_cuda_buffer_pool[MAX_CUDA_BUFFERS];
+static cuda_buffer g_cuda_buffer_pool[MAX_CUDA_BUFFERS_V2];
 static std::atomic_flag g_cuda_pool_lock = ATOMIC_FLAG_INIT;
 
 static void * ggml_v2_cuda_pool_malloc(size_t size, size_t * actual_size) {
     scoped_spin_lock lock(g_cuda_pool_lock);
 
-    for (int i = 0; i < MAX_CUDA_BUFFERS; ++i) {
+    for (int i = 0; i < MAX_CUDA_BUFFERS_V2; ++i) {
         cuda_buffer& b = g_cuda_buffer_pool[i];
         if (b.size >= size && b.ptr != nullptr) {
             void * ptr = b.ptr;
@@ -431,7 +431,7 @@ static void * ggml_v2_cuda_pool_malloc(size_t size, size_t * actual_size) {
 static void ggml_v2_cuda_pool_free(void * ptr, size_t size) {
     scoped_spin_lock lock(g_cuda_pool_lock);
 
-    for (int i = 0; i < MAX_CUDA_BUFFERS; ++i) {
+    for (int i = 0; i < MAX_CUDA_BUFFERS_V2; ++i) {
         cuda_buffer& b = g_cuda_buffer_pool[i];
         if (b.ptr == nullptr) {
             b.ptr = ptr;
@@ -439,7 +439,7 @@ static void ggml_v2_cuda_pool_free(void * ptr, size_t size) {
             return;
         }
     }
-    fprintf(stderr, "WARNING: cuda buffer pool full, increase MAX_CUDA_BUFFERS\n");
+    fprintf(stderr, "WARNING: cuda buffer pool full, increase MAX_CUDA_BUFFERS_V2\n");
     CUDA_CHECK(cudaFree(ptr));
 }
 

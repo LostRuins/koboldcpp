@@ -3,15 +3,9 @@
 #include "llama.h"
 #include "common.h"
 #include "train.h"
-#include <unordered_map>
 #include <vector>
-#include <cassert>
-#include <climits>
 #include <cstring>
-#include <cstdarg>
 #include <ctime>
-#include <random>
-#include <stdexcept>
 #include <algorithm>
 #include <string>
 
@@ -1144,9 +1138,8 @@ static void save_as_llama_lora(const char * filename, struct my_llama_lora * lor
         return tn_buf.data();
     };
 
-    uint32_t LLAMA_FILE_MAGIC_LORA = 0x67676C61; // 'ggla'
     // write_magic
-    file.write_u32(LLAMA_FILE_MAGIC_LORA);   // magic
+    file.write_u32(LLAMA_FILE_MAGIC_GGLA);   // magic
     file.write_u32(1); // version
     // write_hparams
     file.write_u32(lora->hparams.lora_r);
@@ -1806,7 +1799,9 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> train_tokens;
     std::vector<size_t> train_samples_begin;
     std::vector<size_t> train_samples_size;
-    printf("%s: tokenize training data\n", __func__);
+    printf("%s: tokenize training data from %s\n", __func__, params.common.fn_train_data);
+    printf("%s: sample-start: %s\n", __func__, params.common.sample_start.c_str());
+    printf("%s: include-sample-start: %s\n", __func__, params.common.include_sample_start ? "true" : "false");
     tokenize_file(lctx,
             params.common.fn_train_data,
             params.common.sample_start,

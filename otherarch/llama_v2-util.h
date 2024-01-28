@@ -48,14 +48,6 @@
         } \
     } while (0)
 
-#ifdef __GNUC__
-#ifdef __MINGW32__
-__attribute__((format_old(gnu_printf, 1, 2)))
-#else
-__attribute__((format_old(printf, 1, 2)))
-#endif
-#endif
-
 
 struct llama_v2_file {
     // use FILE * so we don't have to re-open the file to mmap

@@ -44,6 +44,7 @@ struct load_model_inputs
     const bool use_contextshift;
     const int clblast_info = 0;
     const int cublas_info = 0;
+    const int vulkan_info = 0;
     const int blasbatchsize = 512;
     const int debugmode = 0;
     const int forceversion = 0;
@@ -82,6 +83,7 @@ struct generation_inputs
     const bool grammar_retain_state;
     const bool quiet = false;
     const float dynatemp_range = 0.0f;
+    const float dynatemp_exponent = 1.0f;
     const float smoothing_factor = 0.0f;
     const logit_bias logit_biases[logit_bias_max];
 
@@ -105,5 +107,6 @@ extern bool generation_finished;
 extern float last_eval_time;
 extern float last_process_time;
 extern int last_token_count;
+extern int last_seed;
 extern int total_gens;
 extern stop_reason last_stop_reason;

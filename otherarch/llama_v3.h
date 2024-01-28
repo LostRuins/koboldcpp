@@ -1,10 +1,10 @@
 #ifndef LLAMA_V3_H
 #define LLAMA_V3_H
 
-#include "ggml.h"
+#include "ggml_v3.h"
 #ifdef GGML_USE_CUBLAS
-#include "ggml-cuda.h"
-#define LLAMA_V3_MAX_DEVICES GGML_CUDA_MAX_DEVICES
+#include "ggml_v3-cuda.h"
+#define LLAMA_V3_MAX_DEVICES GGML_V3_CUDA_MAX_DEVICES
 #else
 #define LLAMA_V3_MAX_DEVICES 1
 #endif // GGML_USE_CUBLAS
@@ -477,9 +477,9 @@ extern "C" {
 
 #include <vector>
 #include <string>
-struct ggml_tensor;
+struct ggml_v3_tensor;
 
-const std::vector<std::pair<std::string, struct ggml_tensor *>>& llama_v3_internal_get_tensor_map(struct llama_v3_context * ctx);
+const std::vector<std::pair<std::string, struct ggml_v3_tensor *>>& llama_v3_internal_get_tensor_map(struct llama_v3_context * ctx);
 
 #endif
 

@@ -48,9 +48,9 @@
 
 #ifdef __GNUC__
 #ifdef __MINGW32__
-__attribute__((format_old(gnu_printf, 1, 2)))
+__attribute__((format(gnu_printf, 1, 2)))
 #else
-__attribute__((format_old(printf, 1, 2)))
+__attribute__((format(printf, 1, 2)))
 #endif
 #endif
 static std::string format_old(const char * fmt, ...) {

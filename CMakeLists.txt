@@ -1,6 +1,5 @@
-# DO NOT USE THIS FILE.
-# IT'S ONLY FOR CUBLAS BUILD PURPOSES ON WINDOWS VISUAL STUDIO.
-# IT WILL NOT BE UPDATED OR MAINTAINED !!!
+# THIS FILE IS ONLY INTENDED CUBLAS BUILD PURPOSES ON WINDOWS VISUAL STUDIO.
+# YOU'RE NOT RECOMMENDED TO USE IT
 
 message(STATUS "============== ============== ==============")
 message(STATUS "WARNING! Recommend NOT to use this file. It is UNSUPPORTED for normal users. Use MAKE instead.")
@@ -69,6 +68,7 @@ find_package(Threads REQUIRED)
 add_compile_definitions(LOG_DISABLE_LOGS)
 
 set(GGML_SOURCES_CUDA ggml-cuda.cu ggml-cuda.h)
+set(GGML_V3_CUDA_SOURCES otherarch/ggml_v3-cuda.cu otherarch/ggml_v3-cuda.h)
 set(GGML_V2_CUDA_SOURCES otherarch/ggml_v2-cuda.cu otherarch/ggml_v2-cuda.h)
 set(GGML_V2_LEGACY_CUDA_SOURCES otherarch/ggml_v2-cuda-legacy.cu otherarch/ggml_v2-cuda-legacy.h)
 
@@ -174,6 +174,15 @@ if (LLAMA_HIPBLAS)
         set_source_files_properties(otherarch/ggml_v2-cuda.cu PROPERTIES LANGUAGE CXX)
         target_link_libraries(ggml-v2-rocm PUBLIC hip::device hip::host roc::rocblas roc::hipblas)
 
+        add_library(ggml-v3-rocm OBJECT ${GGML_V3_CUDA_SOURCES})
+        if (LLAMA_CUDA_FORCE_DMMV)
+            target_compile_definitions(ggml-v3-rocm PUBLIC GGML_CUDA_FORCE_DMMV)
+        endif()
+        target_compile_definitions(ggml-v3-rocm PUBLIC GGML_CUDA_DMMV_X=${LLAMA_CUDA_DMMV_X})
+        target_compile_definitions(ggml-v3-rocm PUBLIC GGML_CUDA_MMV_Y=${LLAMA_CUDA_MMV_Y})
+        target_compile_definitions(ggml-v3-rocm PUBLIC K_QUANTS_PER_ITERATION=${LLAMA_CUDA_KQUANTS_ITER})
+        set_source_files_properties(otherarch/ggml_v3-cuda.cu PROPERTIES LANGUAGE CXX)
+        target_link_libraries(ggml-v3-rocm PUBLIC hip::device hip::host roc::rocblas roc::hipblas)
 
         add_library(ggml-v2-legacy-rocm OBJECT ${GGML_V2_LEGACY_CUDA_SOURCES})
         if (LLAMA_CUDA_FORCE_DMMV)
@@ -404,6 +413,15 @@ target_compile_features(ggml_v2 PUBLIC c_std_11) # don't bump
 target_link_libraries(ggml_v2 PUBLIC Threads::Threads ${LLAMA_EXTRA_LIBS})
 set_target_properties(ggml_v2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_library(ggml_v3 OBJECT
+            otherarch/ggml_v3.c
+            otherarch/ggml_v3.h
+            ${GGML_V3_CUDA_SOURCES})
+target_include_directories(ggml_v3 PUBLIC . ./otherarch ./otherarch/tools)
+target_compile_features(ggml_v3 PUBLIC c_std_11) # don't bump
+target_link_libraries(ggml_v3 PUBLIC Threads::Threads ${LLAMA_EXTRA_LIBS})
+set_target_properties(ggml_v3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(common2
             common/common.cpp
             common/common.h
@@ -429,7 +447,7 @@ if (LLAMA_CUBLAS)
     set_target_properties(${TARGET} PROPERTIES PREFIX "")
     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME "koboldcpp_cublas")
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_link_libraries(${TARGET} PUBLIC Threads::Threads ggml ggml_v1 ggml_v2 common2 gpttype_adapter ${LLAMA_EXTRA_LIBS})
+    target_link_libraries(${TARGET} PUBLIC Threads::Threads ggml ggml_v1 ggml_v2 ggml_v3 common2 gpttype_adapter ${LLAMA_EXTRA_LIBS})
     target_compile_features(${TARGET} PRIVATE cxx_std_11)
 endif()
 
@@ -441,7 +459,7 @@ if (LLAMA_HIPBLAS)
     set_target_properties(${TARGET} PROPERTIES PREFIX "")
     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME "koboldcpp_hipblas")
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_link_libraries(${TARGET} PUBLIC Threads::Threads ggml ggml_v1 ggml_v2 common2 gpttype_adapter ${LLAMA_EXTRA_LIBS})
+    target_link_libraries(${TARGET} PUBLIC Threads::Threads ggml ggml_v1 ggml_v2 ggml_v3 common2 gpttype_adapter ${LLAMA_EXTRA_LIBS})
     target_compile_features(${TARGET} PRIVATE cxx_std_11)
 endif()
 

@@ -20,5 +20,6 @@ dependencies:
   - pyinstaller
   - libcblas
   - ocl-icd-system
+  - libvulkan-loader
   - pip:
     - customtkinter

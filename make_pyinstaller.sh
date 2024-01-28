@@ -9,6 +9,7 @@ pyinstaller --noconfirm --onefile --clean --console --collect-all customtkinter 
 --add-data "./koboldcpp_noavx2.so:." \
 --add-data "./koboldcpp_clblast.so:." \
 --add-data "./koboldcpp_clblast_noavx2.so:." \
+--add-data "./koboldcpp_vulkan.so:." \
 --add-data "./rwkv_vocab.embd:." \
 --add-data "./rwkv_world_vocab.embd:." \
 "./koboldcpp.py" -n "koboldcpp"

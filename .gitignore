@@ -32,6 +32,7 @@ models-mnt
 /embedding
 /gguf
 /gguf-llama-simple
+/imatrix
 /infill
 /libllama.so
 /llama-bench
@@ -40,6 +41,7 @@ models-mnt
 /lookup
 /main
 /metal
+/passkey
 /perplexity
 /q8dot
 /quantize
@@ -108,6 +110,7 @@ tests/test-tokenizer-1-bpe
 /koboldcpp_clblast.so
 /koboldcpp_clblast_noavx2.so
 /koboldcpp_cublas.so
+/koboldcpp_vulkan.so
 /koboldcpp_default.dll
 /koboldcpp_failsafe.dll
 /koboldcpp_openblas.dll
@@ -115,6 +118,7 @@ tests/test-tokenizer-1-bpe
 /koboldcpp_clblast.dll
 /koboldcpp_clblast_noavx2.dll
 /koboldcpp_cublas.dll
+/koboldcpp_vulkan.dll
 /cublas64_11.dll
 /cublasLt64_11.dll
 /rocblas/

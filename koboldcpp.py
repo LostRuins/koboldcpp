@@ -38,6 +38,7 @@ class load_model_inputs(ctypes.Structure):
                 ("use_contextshift", ctypes.c_bool),
                 ("clblast_info", ctypes.c_int),
                 ("cublas_info", ctypes.c_int),
+                ("vulkan_info", ctypes.c_int),
                 ("blasbatchsize", ctypes.c_int),
                 ("debugmode", ctypes.c_int),
                 ("forceversion", ctypes.c_int),
@@ -79,6 +80,7 @@ class generation_inputs(ctypes.Structure):
                 ("grammar_retain_state", ctypes.c_bool),
                 ("quiet", ctypes.c_bool),
                 ("dynatemp_range", ctypes.c_float),
+                ("dynatemp_exponent", ctypes.c_float),
                 ("smoothing_factor", ctypes.c_float),
                 ("logit_biases", logit_bias * logit_bias_max)]
 
@@ -126,11 +128,11 @@ lib_clblast = pick_existant_file("koboldcpp_clblast.dll","koboldcpp_clblast.so")
 lib_clblast_noavx2 = pick_existant_file("koboldcpp_clblast_noavx2.dll","koboldcpp_clblast_noavx2.so")
 lib_cublas = pick_existant_file("koboldcpp_cublas.dll","koboldcpp_cublas.so")
 lib_hipblas = pick_existant_file("koboldcpp_hipblas.dll","koboldcpp_hipblas.so")
-
+lib_vulkan = pick_existant_file("koboldcpp_vulkan.dll","koboldcpp_vulkan.so")
 
 def init_library():
     global handle, args
-    global lib_default,lib_failsafe,lib_openblas,lib_noavx2,lib_clblast,lib_clblast_noavx2,lib_cublas,lib_hipblas
+    global lib_default,lib_failsafe,lib_openblas,lib_noavx2,lib_clblast,lib_clblast_noavx2,lib_cublas,lib_hipblas,lib_vulkan
 
     libname = ""
     use_openblas = False # if true, uses OpenBLAS for acceleration. libopenblas.dll must exist in the same dir.
@@ -139,6 +141,8 @@ def init_library():
     use_hipblas = False #uses hipblas instead
     use_noavx2 = False #uses no avx2 instructions
     use_failsafe = False #uses no intrinsics, failsafe mode
+    use_vulkan = False #uses vulkan (needs avx2)
+
     if args.noavx2:
         use_noavx2 = True
         if args.useclblast:
@@ -171,6 +175,12 @@ def init_library():
             elif file_exists(lib_hipblas):
                 print("Attempting to use hipBLAS library for faster prompt ingestion. A compatible AMD GPU will be required.")
                 use_hipblas = True
+    elif (args.usevulkan is not None):
+        if not file_exists(lib_vulkan):
+            print("Warning: Vulkan library file not found. Non-BLAS library will be used.")
+        else:
+            print("Attempting to use Vulkan library for faster prompt ingestion. A compatible Vulkan will be required.")
+            use_vulkan = True
 
     else:
         if not file_exists(lib_openblas) or (os.name=='nt' and not file_exists("libopenblas.dll")):
@@ -199,6 +209,8 @@ def init_library():
             libname = lib_hipblas
         elif use_openblas:
             libname = lib_openblas
+        elif use_vulkan:
+            libname = lib_vulkan
         else:
             libname = lib_default
 
@@ -228,6 +240,7 @@ def init_library():
     handle.get_last_eval_time.restype = ctypes.c_float
     handle.get_last_process_time.restype = ctypes.c_float
     handle.get_last_token_count.restype = ctypes.c_int
+    handle.get_last_seed.restype = ctypes.c_int
     handle.get_total_gens.restype = ctypes.c_int
     handle.get_last_stop_reason.restype = ctypes.c_int
     handle.abort_generate.restype = ctypes.c_bool
@@ -300,6 +313,11 @@ def load_model(model_filename):
         elif (args.usecublas and "3" in args.usecublas):
             inputs.cublas_info = 3
 
+    if args.usevulkan:
+        inputs.vulkan_info = int(args.usevulkan)
+    else:
+        inputs.vulkan_info = 0
+
     inputs.executable_path = (getdirpath()+"/").encode("UTF-8")
     inputs.debugmode = args.debugmode
     banned_tokens = args.bantokens
@@ -311,8 +329,8 @@ def load_model(model_filename):
     ret = handle.load_model(inputs)
     return ret
 
-def generate(prompt, memory="", max_length=32, max_context_length=512, temperature=0.7, top_k=100, top_a=0.0, top_p=0.92, min_p=0.0, typical_p=1.0, tfs=1.0, rep_pen=1.0, rep_pen_range=128, presence_penalty=0.0, mirostat=0, mirostat_tau=5.0, mirostat_eta=0.1, sampler_order=[6,0,1,3,4,2,5], seed=-1, stop_sequence=[], use_default_badwordsids=False, stream_sse=False, grammar='', grammar_retain_state=False, genkey='', trimstop=False, quiet=False, dynatemp_range=0.0, smoothing_factor=0.0, logit_biases={}):
-    global maxctx, args, currentusergenkey, totalgens
+def generate(prompt, memory="", max_length=32, max_context_length=512, temperature=0.7, top_k=100, top_a=0.0, top_p=0.92, min_p=0.0, typical_p=1.0, tfs=1.0, rep_pen=1.0, rep_pen_range=128, presence_penalty=0.0, mirostat=0, mirostat_tau=5.0, mirostat_eta=0.1, sampler_order=[6,0,1,3,4,2,5], seed=-1, stop_sequence=[], use_default_badwordsids=False, stream_sse=False, grammar='', grammar_retain_state=False, genkey='', trimstop=False, quiet=False, dynatemp_range=0.0, dynatemp_exponent=1.0, smoothing_factor=0.0, logit_biases={}):
+    global maxctx, args, currentusergenkey, totalgens, pendingabortkey
     inputs = generation_inputs()
     outputs = ctypes.create_unicode_buffer(ctypes.sizeof(generation_outputs))
     inputs.prompt = prompt.encode("UTF-8")
@@ -340,6 +358,7 @@ def generate(prompt, memory="", max_length=32, max_context_length=512, temperatu
     inputs.stream_sse = stream_sse
     inputs.quiet = quiet
     inputs.dynatemp_range = dynatemp_range
+    inputs.dynatemp_exponent = dynatemp_exponent
     inputs.smoothing_factor = smoothing_factor
     inputs.grammar = grammar.encode("UTF-8")
     inputs.grammar_retain_state = grammar_retain_state
@@ -391,16 +410,23 @@ def generate(prompt, memory="", max_length=32, max_context_length=512, temperatu
 
     currentusergenkey = genkey
     totalgens += 1
-    ret = handle.generate(inputs,outputs)
-    outstr = ""
-    if ret.status==1:
-        outstr = ret.text.decode("UTF-8","ignore")
-    if trimstop:
-        for trim_str in stop_sequence:
-            sindex = outstr.find(trim_str)
-            if sindex != -1 and trim_str!="":
-                outstr = outstr[:sindex]
-    return outstr
+    #early exit if aborted
+
+    if pendingabortkey!="" and pendingabortkey==genkey:
+        print(f"\nDeferred Abort for GenKey: {pendingabortkey}")
+        pendingabortkey = ""
+        return ""
+    else:
+        ret = handle.generate(inputs,outputs)
+        outstr = ""
+        if ret.status==1:
+            outstr = ret.text.decode("UTF-8","ignore")
+        if trimstop:
+            for trim_str in stop_sequence:
+                sindex = outstr.find(trim_str)
+                if sindex != -1 and trim_str!="":
+                    outstr = outstr[:sindex]
+        return outstr
 
 def utfprint(str):
     try:
@@ -428,7 +454,7 @@ maxhordelen = 256
 modelbusy = threading.Lock()
 requestsinqueue = 0
 defaultport = 5001
-KcppVersion = "1.54"
+KcppVersion = "1.56"
 showdebug = True
 showsamplerwarning = True
 showmaxctxwarning = True
@@ -440,6 +466,7 @@ punishcounter = 0 #causes a timeout if too many errors
 rewardcounter = 0 #reduces error counts for successful jobs
 totalgens = 0
 currentusergenkey = "" #store a special key so polled streaming works even in multiuser
+pendingabortkey = "" #if an abort is received for the non-active request, remember it (at least 1) to cancel later
 args = None #global args
 gui_layers_untouched = True
 runmode_untouched = True
@@ -469,6 +496,14 @@ class ServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         global friendlymodelname
         is_quiet = args.quiet
         def run_blocking(): #api format 1=basic,2=kai,3=oai,4=oai-chat
+
+            #alias all nonstandard alternative names for rep pen.
+            rp1 = genparams.get('repeat_penalty', 1.0)
+            rp2 = genparams.get('repetition_penalty', 1.0)
+            rp3 = genparams.get('rep_pen', 1.0)
+            rp_max = max(rp1,rp2,rp3)
+            genparams["rep_pen"] = rp_max
+
             if api_format==1:
                 genparams["prompt"] = genparams.get('text', "")
                 genparams["top_k"] = int(genparams.get('top_k', 120))
@@ -478,8 +513,8 @@ class ServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 genparams["max_length"] = genparams.get('max_tokens', 100)
                 presence_penalty = genparams.get('presence_penalty', genparams.get('frequency_penalty', 0.0))
                 genparams["presence_penalty"] = presence_penalty
-                if presence_penalty > 0 and (genparams.get('rep_pen', 0)==0):
-                    genparams["rep_pen"] = 1.0
+                if presence_penalty > 0:
+                    genparams["rep_pen"] = 1.0 #disable rep pen if presence pen is specified for OAI
                 # openai allows either a string or a list as a stop sequence
                 if isinstance(genparams.get('stop',[]), list):
                     genparams["stop_sequence"] = genparams.get('stop', [])
@@ -535,7 +570,7 @@ class ServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 typical_p=genparams.get('typical', 1.0),
                 tfs=genparams.get('tfs', 1.0),
                 rep_pen=genparams.get('rep_pen', 1.0),
-                rep_pen_range=genparams.get('rep_pen_range', 0),
+                rep_pen_range=genparams.get('rep_pen_range', 256),
                 presence_penalty=genparams.get('presence_penalty', 0.0),
                 mirostat=genparams.get('mirostat', 0),
                 mirostat_tau=genparams.get('mirostat_tau', 5.0),
@@ -551,6 +586,7 @@ class ServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 trimstop=genparams.get('trim_stop', False),
                 quiet=is_quiet,
                 dynatemp_range=genparams.get('dynatemp_range', 0.0),
+                dynatemp_exponent=genparams.get('dynatemp_exponent', 1.0),
                 smoothing_factor=genparams.get('smoothing_factor', 0.0),
                 logit_biases=genparams.get('logit_bias', {})
                 )
@@ -570,9 +606,11 @@ class ServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             res = {"data": {"seqs":[recvtxt]}}
         elif api_format==3:
             res = {"id": "cmpl-1", "object": "text_completion", "created": 1, "model": friendlymodelname,
+            "usage": {"prompt_tokens": 100,"completion_tokens": 100,"total_tokens": 200},
             "choices": [{"text": recvtxt, "index": 0, "finish_reason": "length"}]}
         elif api_format==4:
             res = {"id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": friendlymodelname,
+            "usage": {"prompt_tokens": 100,"completion_tokens": 100,"total_tokens": 200},
             "choices": [{"index": 0, "message":{"role": "assistant", "content": recvtxt,}, "finish_reason": "length"}]}
         else:
             res = {"results": [{"text": recvtxt}]}
@@ -644,8 +682,10 @@ class ServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                         await self.send_oai_sse_event('[DONE]')
                     break
         except Exception as ex:
-            print("SSE streaming was interrupted due to an exception")
+            print("Token streaming was interrupted or aborted!")
             print(ex)
+            handle.abort_generate()
+            time.sleep(0.2) #short delay
 
         # flush buffers, sleep a bit to make sure all data sent, and then force close the connection
         self.wfile.flush()
@@ -657,17 +697,18 @@ class ServerRequestHandler(http.server.SimpleHTTPRequestHandler):
     async def handle_request(self, genparams, api_format, stream_flag):
         tasks = []
 
-        if stream_flag:
-            tasks.append(self.handle_sse_stream(api_format))
-
-        generate_task = asyncio.create_task(self.generate_text(genparams, api_format, stream_flag))
-        tasks.append(generate_task)
-
         try:
+            if stream_flag:
+                tasks.append(self.handle_sse_stream(api_format))
+
+            generate_task = asyncio.create_task(self.generate_text(genparams, api_format, stream_flag))
+            tasks.append(generate_task)
+
             await asyncio.gather(*tasks)
             generate_result = generate_task.result()
             return generate_result
         except (BrokenPipeError, ConnectionAbortedError) as cae: # attempt to abort if connection lost
+            print("An ongoing connection was aborted or interrupted!")
             print(cae)
             handle.abort_generate()
             time.sleep(0.2) #short delay
@@ -800,7 +841,8 @@ Enter Prompt:<br>
             lastc = handle.get_last_token_count()
             totalgens = handle.get_total_gens()
             stopreason = handle.get_last_stop_reason()
-            response_body = (json.dumps({"last_process":lastp,"last_eval":laste,"last_token_count":lastc, "total_gens":totalgens, "stop_reason":stopreason, "queue":requestsinqueue, "idle":(0 if modelbusy.locked() else 1), "hordeexitcounter":exitcounter}).encode())
+            lastseed = handle.get_last_seed()
+            response_body = (json.dumps({"last_process":lastp,"last_eval":laste,"last_token_count":lastc, "last_seed":lastseed, "total_gens":totalgens, "stop_reason":stopreason, "queue":requestsinqueue, "idle":(0 if modelbusy.locked() else 1), "hordeexitcounter":exitcounter}).encode())
 
         elif self.path.endswith('/api/extra/generate/check'):
             pendtxtStr = ""
@@ -848,7 +890,7 @@ Enter Prompt:<br>
         return
 
     def do_POST(self):
-        global modelbusy, requestsinqueue, currentusergenkey, totalgens
+        global modelbusy, requestsinqueue, currentusergenkey, totalgens, pendingabortkey
         content_length = int(self.headers['content-length'])
         body = self.rfile.read(content_length)
         self.path = self.path.rstrip('/')
@@ -883,10 +925,13 @@ Enter Prompt:<br>
             if (multiuserkey=="" and requestsinqueue==0) or (multiuserkey!="" and multiuserkey==currentusergenkey):
                 ag = handle.abort_generate()
                 time.sleep(0.1) #short delay before replying
-                response_body = (json.dumps({"success": ("true" if ag else "false")}).encode())
+                response_body = (json.dumps({"success": ("true" if ag else "false"), "done":"true"}).encode())
                 print("\nGeneration Aborted")
+            elif (multiuserkey!="" and requestsinqueue>0):
+                pendingabortkey = multiuserkey
+                response_body = (json.dumps({"success": "true", "done":"false"}).encode())
             else:
-                response_body = (json.dumps({"success": "false"}).encode())
+                response_body = (json.dumps({"success": "false", "done":"false"}).encode())
 
         elif self.path.endswith('/api/extra/generate/check'):
             pendtxtStr = ""
@@ -1115,6 +1160,7 @@ def show_new_gui():
     CUDevices = ["1","2","3","4","All"]
     CLDevicesNames = ["","","",""]
     CUDevicesNames = ["","","","",""]
+    VKDevicesNames = ["","","",""]
     MaxMemory = [0]
 
     tabcontent = {}
@@ -1123,24 +1169,19 @@ def show_new_gui():
         (lib_clblast, "Use CLBlast"),
         (lib_cublas, "Use CuBLAS"),
         (lib_hipblas, "Use hipBLAS (ROCm)"),
+        (lib_vulkan, "Use Vulkan"),
         (lib_default, "Use No BLAS"),
         (lib_clblast_noavx2, "CLBlast NoAVX2 (Old CPU)"),
         (lib_noavx2, "NoAVX2 Mode (Old CPU)"),
         (lib_failsafe, "Failsafe Mode (Old CPU)")]
-    openblas_option, clblast_option, cublas_option, hipblas_option, default_option, clblast_noavx2_option, noavx2_option, failsafe_option = (opt if file_exists(lib) or (os.name == 'nt' and file_exists(opt + ".dll")) else None for lib, opt in lib_option_pairs)
+    openblas_option, clblast_option, cublas_option, hipblas_option, vulkan_option, default_option, clblast_noavx2_option, noavx2_option, failsafe_option = (opt if file_exists(lib) or (os.name == 'nt' and file_exists(opt + ".dll")) else None for lib, opt in lib_option_pairs)
     # slider data
     blasbatchsize_values = ["-1", "32", "64", "128", "256", "512", "1024", "2048"]
     blasbatchsize_text = ["Don't Batch BLAS","32","64","128","256","512","1024","2048"]
-    contextsize_text = ["256", "512", "1024", "2048", "3072", "4096", "6144", "8192", "12288", "16384", "24576", "32768", "65536"]
+    contextsize_text = ["256", "512", "1024", "2048", "3072", "4096", "6144", "8192", "12288", "16384", "24576", "32768", "49152", "65536"]
     runopts = [opt for lib, opt in lib_option_pairs if file_exists(lib)]
     antirunopts = [opt.replace("Use ", "") for lib, opt in lib_option_pairs if not (opt in runopts)]
-    if os.name != 'nt':
-        if "NoAVX2 Mode (Old CPU)" in antirunopts:
-            antirunopts.remove("NoAVX2 Mode (Old CPU)")
-        if "Failsafe Mode (Old CPU)" in antirunopts:
-            antirunopts.remove("Failsafe Mode (Old CPU)")
-        if "CLBlast NoAVX2 (Old CPU)" in antirunopts:
-            antirunopts.remove("CLBlast NoAVX2 (Old CPU)")
+
     if not any(runopts):
         exitcounter = 999
         show_gui_msgbox("No Backends Available!","KoboldCPP couldn't locate any backends to use (i.e Default, OpenBLAS, CLBlast, CuBLAS).\n\nTo use the program, please run the 'make' command from the directory.")
@@ -1259,9 +1300,11 @@ def show_new_gui():
     def makefileentry(parent, text, searchtext, var, row=0, width=200, filetypes=[], onchoosefile=None, singlerow=False, tooltiptxt=""):
         makelabel(parent, text, row,0,tooltiptxt)
         def getfilename(var, text):
-            var.set(askopenfilename(title=text,filetypes=filetypes))
-            if onchoosefile:
-                onchoosefile(var.get())
+            fnam = askopenfilename(title=text,filetypes=filetypes)
+            if fnam:
+                var.set(fnam)
+                if onchoosefile:
+                    onchoosefile(var.get())
         entry = ctk.CTkEntry(parent, width, textvariable=var)
         button = ctk.CTkButton(parent, 50, text="Browse", command= lambda a=var,b=searchtext:getfilename(a,b))
         if singlerow:
@@ -1331,6 +1374,17 @@ def show_new_gui():
                     FetchedCUdeviceMem = [line.split(",")[1].strip() for line in getamdvram.splitlines()[1:] if line.strip()]
             except Exception as e:
                 pass
+
+        try: # Get Vulkan names
+            output = run(['vulkaninfo','--summary'], capture_output=True, text=True, check=True, encoding='utf-8').stdout
+            devicelist = [line.split("=")[1].strip() for line in output.splitlines() if "deviceName" in line]
+            idx = 0
+            for dname in devicelist:
+                if idx<len(VKDevicesNames):
+                    VKDevicesNames[idx] = dname
+                    idx += 1
+        except Exception as e:
+            pass
 
         for idx in range(0,4):
             if(len(FetchedCUdevices)>idx):
@@ -1415,7 +1469,7 @@ def show_new_gui():
         # backend count label with the tooltip function
         nl = '\n'
         tooltxt = f"Number of backends you have built and available." + (f"\n\nMissing Backends: \n\n{nl.join(antirunopts)}" if len(runopts) != 6 else "")
-        num_backends_built = makelabel(parent, str(len(runopts)) + f"/{7 if os.name == 'nt' else 4}", 5, 2,tooltxt)
+        num_backends_built = makelabel(parent, str(len(runopts)) + f"/8", 5, 2,tooltxt)
         num_backends_built.grid(row=1, column=1, padx=195, pady=0)
         num_backends_built.configure(text_color="#00ff00")
 
@@ -1432,7 +1486,10 @@ def show_new_gui():
             try:
                 s = int(gpu_choice_var.get())-1
                 v = runopts_var.get()
-                if v == "Use CLBlast" or v == "CLBlast NoAVX2 (Old CPU)":
+                if v == "Use Vulkan":
+                    quick_gpuname_label.configure(text=VKDevicesNames[s])
+                    gpuname_label.configure(text=VKDevicesNames[s])
+                elif v == "Use CLBlast" or v == "CLBlast NoAVX2 (Old CPU)":
                     quick_gpuname_label.configure(text=CLDevicesNames[s])
                     gpuname_label.configure(text=CLDevicesNames[s])
                 else:
@@ -1451,12 +1508,12 @@ def show_new_gui():
         global runmode_untouched
         runmode_untouched = False
         index = runopts_var.get()
-        if index == "Use CLBlast" or index == "CLBlast NoAVX2 (Old CPU)" or index == "Use CuBLAS" or index == "Use hipBLAS (ROCm)":
+        if index == "Use Vulkan" or index == "Use CLBlast" or index == "CLBlast NoAVX2 (Old CPU)" or index == "Use CuBLAS" or index == "Use hipBLAS (ROCm)":
             quick_gpuname_label.grid(row=3, column=1, padx=75, sticky="W")
             gpuname_label.grid(row=3, column=1, padx=75, sticky="W")
             gpu_selector_label.grid(row=3, column=0, padx = 8, pady=1, stick="nw")
             quick_gpu_selector_label.grid(row=3, column=0, padx = 8, pady=1, stick="nw")
-            if index == "Use CLBlast" or index == "CLBlast NoAVX2 (Old CPU)":
+            if index == "Use Vulkan" or index == "Use CLBlast" or index == "CLBlast NoAVX2 (Old CPU)":
                 gpu_selector_box.grid(row=3, column=1, padx=8, pady=1, stick="nw")
                 quick_gpu_selector_box.grid(row=3, column=1, padx=8, pady=1, stick="nw")
                 if gpu_choice_var.get()=="All":
@@ -1489,7 +1546,7 @@ def show_new_gui():
             tensor_split_label.grid_forget()
             tensor_split_entry.grid_forget()
 
-        if index == "Use CLBlast" or index == "CLBlast NoAVX2 (Old CPU)" or index == "Use CuBLAS" or index == "Use hipBLAS (ROCm)":
+        if index == "Use Vulkan" or index == "Use CLBlast" or index == "CLBlast NoAVX2 (Old CPU)" or index == "Use CuBLAS" or index == "Use hipBLAS (ROCm)":
             gpu_layers_label.grid(row=5, column=0, padx = 8, pady=1, stick="nw")
             gpu_layers_entry.grid(row=5, column=1, padx=8, pady=1, stick="nw")
             quick_gpu_layers_label.grid(row=5, column=0, padx = 8, pady=1, stick="nw")
@@ -1703,6 +1760,8 @@ def show_new_gui():
                 args.usecublas = ["lowvram",str(gpuchoiceidx)] if lowvram_var.get() == 1 else ["normal",str(gpuchoiceidx)]
             if mmq_var.get()==1:
                 args.usecublas.append("mmq")
+        if runopts_var.get() == "Use Vulkan":
+            args.usevulkan = int(gpuchoiceidx)
         if gpulayers_var.get():
             args.gpulayers = int(gpulayers_var.get())
         if runopts_var.get()=="Use No BLAS":
@@ -1782,6 +1841,11 @@ def show_new_gui():
                     if str(g) in dict["usecublas"]:
                         gpu_choice_var.set(str(g+1))
                         break
+        elif "usevulkan" in dict:
+            if vulkan_option is not None:
+                runopts_var.set(vulkan_option)
+                gpu_choice_var.set(str(int(dict["usevulkan"])+1))
+
         elif  "noavx2" in dict and "noblas" in dict and dict["noblas"] and dict["noavx2"]:
             if failsafe_option is not None:
                 runopts_var.set(failsafe_option)
@@ -2148,12 +2212,18 @@ def setuptunnel():
             tunnelproc.wait()
 
         if os.name == 'nt':
-            print("Downloading Cloudflare Tunnel for Windows...")
-            subprocess.run("curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -o cloudflared.exe", shell=True, capture_output=True, text=True, check=True, encoding='utf-8')
+            if os.path.exists("cloudflared.exe") and os.path.getsize("cloudflared.exe") > 100000:
+                print("Cloudflared file exists, reusing it...")
+            else:
+                print("Downloading Cloudflare Tunnel for Windows...")
+                subprocess.run("curl -fL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -o cloudflared.exe", shell=True, capture_output=True, text=True, check=True, encoding='utf-8')
         else:
-            print("Downloading Cloudflare Tunnel for Linux...")
-            subprocess.run("curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared-linux-amd64", shell=True, capture_output=True, text=True, check=True, encoding='utf-8')
-            subprocess.run("chmod +x 'cloudflared-linux-amd64'", shell=True)
+            if os.path.exists("cloudflared-linux-amd64") and os.path.getsize("cloudflared-linux-amd64") > 100000:
+                print("Cloudflared file exists, reusing it...")
+            else:
+                print("Downloading Cloudflare Tunnel for Linux...")
+                subprocess.run("curl -fL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared-linux-amd64", shell=True, capture_output=True, text=True, check=True, encoding='utf-8')
+                subprocess.run("chmod +x 'cloudflared-linux-amd64'", shell=True)
         tunnel_thread = threading.Thread(target=run_tunnel)
         tunnel_thread.start()
     except Exception as ex:
@@ -2221,6 +2291,7 @@ def unload_libs():
         del handle.get_last_eval_time
         del handle.get_last_process_time
         del handle.get_last_token_count
+        del handle.get_last_seed
         del handle.get_total_gens
         del handle.get_last_stop_reason
         del handle.abort_generate
@@ -2485,7 +2556,7 @@ if __name__ == '__main__':
     parser.add_argument("--threads", help="Use a custom number of threads if specified. Otherwise, uses an amount based on CPU cores", type=int, default=default_threads)
     parser.add_argument("--blasthreads", help="Use a different number of threads during BLAS if specified. Otherwise, has the same value as --threads",metavar=('[threads]'), type=int, default=0)
     parser.add_argument("--highpriority", help="Experimental flag. If set, increases the process CPU priority, potentially speeding up generation. Use caution.", action='store_true')
-    parser.add_argument("--contextsize", help="Controls the memory allocated for maximum context size, only change if you need more RAM for big contexts. (default 2048)", type=int,choices=[256, 512,1024,2048,3072,4096,6144,8192,12288,16384,24576,32768,65536], default=2048)
+    parser.add_argument("--contextsize", help="Controls the memory allocated for maximum context size, only change if you need more RAM for big contexts. (default 2048)", type=int,choices=[256, 512,1024,2048,3072,4096,6144,8192,12288,16384,24576,32768,49152,65536], default=2048)
     parser.add_argument("--blasbatchsize", help="Sets the batch size used in BLAS processing (default 512). Setting it to -1 disables BLAS mode, but keeps other benefits like GPU offload.", type=int,choices=[-1,32,64,128,256,512,1024,2048], default=512)
     parser.add_argument("--ropeconfig", help="If set, uses customized RoPE scaling from configured frequency scale and frequency base (e.g. --ropeconfig 0.25 10000). Otherwise, uses NTK-Aware scaling set automatically based on context size. For linear rope, simply set the freq-scale and ignore the freq-base",metavar=('[rope-freq-scale]', '[rope-freq-base]'), default=[0.0, 10000.0], type=float, nargs='+')
     parser.add_argument("--smartcontext", help="Reserving a portion of context to try processing less frequently.", action='store_true')
@@ -2502,7 +2573,8 @@ if __name__ == '__main__':
     compatgroup.add_argument("--noblas", help="Do not use OpenBLAS for accelerated prompt ingestion", action='store_true')
     compatgroup.add_argument("--useclblast", help="Use CLBlast for GPU Acceleration. Must specify exactly 2 arguments, platform ID and device ID (e.g. --useclblast 1 0).", type=int, choices=range(0,9), nargs=2)
     compatgroup.add_argument("--usecublas", help="Use CuBLAS for GPU Acceleration. Requires CUDA. Select lowvram to not allocate VRAM scratch buffer. Enter a number afterwards to select and use 1 GPU. Leaving no number will use all GPUs. For hipBLAS binaries, please check YellowRoseCx rocm fork.", nargs='*',metavar=('[lowvram|normal] [main GPU ID] [mmq]'), choices=['normal', 'lowvram', '0', '1', '2', '3', 'mmq'])
-    parser.add_argument("--gpulayers", help="Set number of layers to offload to GPU when using GPU. Requires GPU.",metavar=('[GPU layers]'), type=int, default=0)
+    compatgroup.add_argument("--usevulkan", help="Use Vulkan for GPU Acceleration. Can optionally specify GPU Device ID (e.g. --usevulkan 0).", metavar=('[Device ID]'), nargs='?', const=0, type=int, default=None)
+    parser.add_argument("--gpulayers", help="Set number of layers to offload to GPU when using GPU. Requires GPU.",metavar=('[GPU layers]'), nargs='?', const=1, type=int, default=0)
     parser.add_argument("--tensor_split", help="For CUDA with ALL GPU set only, ratio to split tensors across multiple GPUs, space-separated list of proportions, e.g. 7 3", metavar=('[Ratios]'), type=float, nargs='+')
     parser.add_argument("--onready", help="An optional shell command to execute after the model has been loaded.", metavar=('[shell command]'), type=str, default="",nargs=1)
     parser.add_argument("--multiuser", help="Runs in multiuser mode, which queues incoming requests instead of blocking them.", metavar=('limit'), nargs='?', const=1, type=int, default=0)

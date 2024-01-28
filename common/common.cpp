@@ -168,6 +168,24 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
             if (params.n_threads_batch <= 0) {
                 params.n_threads_batch = std::thread::hardware_concurrency();
             }
+        } else if (arg == "-td" || arg == "--threads-draft") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.n_threads_draft = std::stoi(argv[i]);
+            if (params.n_threads_draft <= 0) {
+                params.n_threads_draft = std::thread::hardware_concurrency();
+            }
+        } else if (arg == "-tbd" || arg == "--threads-batch-draft") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.n_threads_batch_draft = std::stoi(argv[i]);
+            if (params.n_threads_batch_draft <= 0) {
+                params.n_threads_batch_draft = std::thread::hardware_concurrency();
+            }
         } else if (arg == "-p" || arg == "--prompt") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -186,6 +204,23 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
             params.prompt_cache_all = true;
         } else if (arg == "--prompt-cache-ro") {
             params.prompt_cache_ro = true;
+        } else if (arg == "-bf" || arg == "--binary-file") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            std::ifstream file(argv[i], std::ios::binary);
+            if (!file) {
+                fprintf(stderr, "error: failed to open file '%s'\n", argv[i]);
+                invalid_param = true;
+                break;
+            }
+            // store the external file name in params
+            params.prompt_file = argv[i];
+            std::ostringstream ss;
+            ss << file.rdbuf();
+            params.prompt = ss.str();
+            fprintf(stderr, "Read %zu bytes from binary file %s\n", params.prompt.size(), argv[i]);
         } else if (arg == "-f" || arg == "--file") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -221,6 +256,20 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
                 break;
             }
             params.n_ctx = std::stoi(argv[i]);
+        } else if (arg == "--grp-attn-n" || arg == "-gan") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+
+            params.grp_attn_n = std::stoi(argv[i]);
+        } else if (arg == "--grp-attn-w" || arg == "-gaw") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+
+            params.grp_attn_w = std::stoi(argv[i]);
         } else if (arg == "--rope-freq-base") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -530,9 +579,8 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
                 invalid_param = true;
                 break;
             }
-#ifdef LLAMA_SUPPORTS_GPU_OFFLOAD
             params.n_gpu_layers = std::stoi(argv[i]);
-#else
+#ifndef LLAMA_SUPPORTS_GPU_OFFLOAD
             fprintf(stderr, "warning: not compiled with GPU offload support, --n-gpu-layers option will be ignored\n");
             fprintf(stderr, "warning: see main README.md for information on enabling GPU BLAS support\n");
 #endif
@@ -541,9 +589,8 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
                 invalid_param = true;
                 break;
             }
-#ifdef LLAMA_SUPPORTS_GPU_OFFLOAD
             params.n_gpu_layers_draft = std::stoi(argv[i]);
-#else
+#ifndef LLAMA_SUPPORTS_GPU_OFFLOAD
             fprintf(stderr, "warning: not compiled with GPU offload support, --n-gpu-layers-draft option will be ignored\n");
             fprintf(stderr, "warning: see main README.md for information on enabling GPU BLAS support\n");
 #endif
@@ -552,25 +599,44 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
                 invalid_param = true;
                 break;
             }
-#ifdef GGML_USE_CUBLAS
             params.main_gpu = std::stoi(argv[i]);
-#else
-            fprintf(stderr, "warning: llama.cpp was compiled without cuBLAS. It is not possible to set a main GPU.\n");
-#endif
+#ifndef GGML_USE_CUBLAS
+            fprintf(stderr, "warning: llama.cpp was compiled without cuBLAS. Setting the main GPU has no effect.\n");
+#endif // GGML_USE_CUBLAS
+        } else if (arg == "--split-mode" || arg == "-sm") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            std::string arg_next = argv[i];
+            if (arg_next == "none") {
+                params.split_mode = LLAMA_SPLIT_NONE;
+            } else if (arg_next == "layer") {
+                params.split_mode = LLAMA_SPLIT_LAYER;
+            } else if (arg_next == "row") {
+                params.split_mode = LLAMA_SPLIT_ROW;
+            } else {
+                invalid_param = true;
+                break;
+            }
+#ifndef GGML_USE_CUBLAS
+            fprintf(stderr, "warning: llama.cpp was compiled without cuBLAS. Setting the split mode has no effect.\n");
+#endif // GGML_USE_CUBLAS
         } else if (arg == "--tensor-split" || arg == "-ts") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
-#ifdef GGML_USE_CUBLAS
             std::string arg_next = argv[i];
 
             // split string by , and /
             const std::regex regex{R"([,/]+)"};
             std::sregex_token_iterator it{arg_next.begin(), arg_next.end(), regex, -1};
             std::vector<std::string> split_arg{it, {}};
-            GGML_ASSERT(split_arg.size() <= LLAMA_MAX_DEVICES);
-
+            if (split_arg.size() >= LLAMA_MAX_DEVICES) {
+                invalid_param = true;
+                break;
+            }
             for (size_t i = 0; i < LLAMA_MAX_DEVICES; ++i) {
                 if (i < split_arg.size()) {
                     params.tensor_split[i] = std::stof(split_arg[i]);
@@ -578,14 +644,8 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
                     params.tensor_split[i] = 0.0f;
                 }
             }
-#else
-            fprintf(stderr, "warning: llama.cpp was compiled without cuBLAS. It is not possible to set a tensor split.\n");
-#endif // GGML_USE_CUBLAS
-        } else if (arg == "--no-mul-mat-q" || arg == "-nommq") {
-#ifdef GGML_USE_CUBLAS
-            params.mul_mat_q = false;
-#else
-            fprintf(stderr, "warning: llama.cpp was compiled without cuBLAS. Disabling mul_mat_q kernels has no effect.\n");
+#ifndef GGML_USE_CUBLAS
+            fprintf(stderr, "warning: llama.cpp was compiled without cuBLAS. Setting a tensor split has no effect.\n");
 #endif // GGML_USE_CUBLAS
         } else if (arg == "--no-mmap") {
             params.use_mmap = false;
@@ -593,6 +653,8 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
             params.numa = true;
         } else if (arg == "--verbose-prompt") {
             params.verbose_prompt = true;
+        } else if (arg == "--no-display-prompt") {
+            params.display_prompt = false;
         } else if (arg == "-r" || arg == "--reverse-prompt") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -609,6 +671,12 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
             if (params.logdir.back() != DIRECTORY_SEPARATOR) {
                 params.logdir += DIRECTORY_SEPARATOR;
             }
+        } else if (arg == "--save-all-logits" || arg == "--kl-divergence-base") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.logits_file = argv[i];
         } else if (arg == "--perplexity" || arg == "--all-logits") {
             params.logits_all = true;
         } else if (arg == "--ppl-stride") {
@@ -617,6 +685,12 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
                 break;
             }
             params.ppl_stride = std::stoi(argv[i]);
+        } else if (arg == "-ptc" || arg == "--print-token-count") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.n_print = std::stoi(argv[i]);
         } else if (arg == "--ppl-output-type") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -631,6 +705,24 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
                 break;
             }
             params.hellaswag_tasks = std::stoi(argv[i]);
+        } else if (arg == "--winogrande") {
+            params.winogrande = true;
+        } else if (arg == "--winogrande-tasks") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.winogrande_tasks = std::stoi(argv[i]);
+        } else if (arg == "--multiple-choice") {
+            params.multiple_choice = true;
+        } else if (arg == "--multiple-choice-tasks") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.multiple_choice_tasks = std::stoi(argv[i]);
+        } else if (arg == "--kl-divergence") {
+            params.kl_divergence = true;
         } else if (arg == "--ignore-eos") {
             params.ignore_eos = true;
         } else if (arg == "--no-penalize-nl") {
@@ -799,7 +891,7 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("\n");
     printf("options:\n");
     printf("  -h, --help            show this help message and exit\n");
-    printf("      --version         show version and build info\n");
+    printf("  --version             show version and build info\n");
     printf("  -i, --interactive     run in interactive mode\n");
     printf("  --interactive-first   run in interactive mode and wait for input right away\n");
     printf("  -ins, --instruct      run in instruction mode (use with Alpaca models)\n");
@@ -813,6 +905,10 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("  -t N, --threads N     number of threads to use during generation (default: %d)\n", params.n_threads);
     printf("  -tb N, --threads-batch N\n");
     printf("                        number of threads to use during batch and prompt processing (default: same as --threads)\n");
+    printf("  -td N, --threads-draft N");
+    printf("                        number of threads to use during generation (default: same as --threads)");
+    printf("  -tbd N, --threads-batch-draft N\n");
+    printf("                        number of threads to use during batch and prompt processing (default: same as --threads-draft)\n");
     printf("  -p PROMPT, --prompt PROMPT\n");
     printf("                        prompt to start generation with (default: empty)\n");
     printf("  -e, --escape          process prompt escapes sequences (\\n, \\r, \\t, \\', \\\", \\\\)\n");
@@ -826,6 +922,8 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("  --in-suffix STRING    string to suffix after user inputs with (default: empty)\n");
     printf("  -f FNAME, --file FNAME\n");
     printf("                        prompt file to start generation.\n");
+    printf("  -bf FNAME, --binary-file FNAME\n");
+    printf("                        binary file containing multiple choice tasks.\n");
     printf("  -n N, --n-predict N   number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)\n", params.n_predict);
     printf("  -c N, --ctx-size N    size of the prompt context (default: %d, 0 = loaded from model)\n", params.n_ctx);
     printf("  -b N, --batch-size N  batch size for prompt processing (default: %d)\n", params.n_batch);
@@ -872,6 +970,11 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("  --logits-all          return logits for all tokens in the batch (default: disabled)\n");
     printf("  --hellaswag           compute HellaSwag score over random tasks from datafile supplied with -f\n");
     printf("  --hellaswag-tasks N   number of tasks to use when computing the HellaSwag score (default: %zu)\n", params.hellaswag_tasks);
+    printf("  --winogrande          compute Winogrande score over random tasks from datafile supplied with -f\n");
+    printf("  --winogrande-tasks N  number of tasks to use when computing the Winogrande score (default: %zu)\n", params.winogrande_tasks);
+    printf("  --multiple-choice     compute multiple choice score over random tasks from datafile supplied with -f\n");
+    printf("  --multiple-choice-tasks N number of tasks to use when computing the multiple choice score (default: %zu)\n", params.winogrande_tasks);
+    printf("  --kl-divergence       computes KL-divergence to logits provided via --kl-divergence-base");
     printf("  --keep N              number of tokens to keep from the initial prompt (default: %d, -1 = all)\n", params.n_keep);
     printf("  --draft N             number of tokens to draft for speculative decoding (default: %d)\n", params.n_draft);
     printf("  --chunks N            max number of chunks to process (default: %d, -1 = all)\n", params.n_chunks);
@@ -896,16 +999,22 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("                        number of layers to store in VRAM\n");
     printf("  -ngld N, --n-gpu-layers-draft N\n");
     printf("                        number of layers to store in VRAM for the draft model\n");
-    printf("  -ts SPLIT --tensor-split SPLIT\n");
-    printf("                        how to split tensors across multiple GPUs, comma-separated list of proportions, e.g. 3,1\n");
-    printf("  -mg i, --main-gpu i   the GPU to use for scratch and small tensors\n");
-#ifdef GGML_USE_CUBLAS
-    printf("  -nommq, --no-mul-mat-q\n");
-    printf("                        use " GGML_CUBLAS_NAME " instead of custom mul_mat_q " GGML_CUDA_NAME " kernels.\n");
-    printf("                        Not recommended since this is both slower and uses more VRAM.\n");
-#endif // GGML_USE_CUBLAS
+    printf("  -sm SPLIT_MODE, --split-mode SPLIT_MODE\n");
+    printf("                        how to split the model across multiple GPUs, one of:\n");
+    printf("                          - none: use one GPU only\n");
+    printf("                          - layer (default): split layers and KV across GPUs\n");
+    printf("                          - row: split rows across GPUs\n");
+    printf("  -ts SPLIT, --tensor-split SPLIT\n");
+    printf("                        fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1\n");
+    printf("  -mg i, --main-gpu i   the GPU to use for the model (with split-mode = none),\n");
+    printf("                        or for intermediate results and KV (with split-mode = row) (default: %d)\n", params.main_gpu);
 #endif
-    printf("  --verbose-prompt      print prompt before generation\n");
+    printf("  --verbose-prompt      print a verbose prompt before generation (default: %s)\n", params.verbose_prompt ? "true" : "false");
+    printf("  --no-display-prompt   don't print prompt at generation (default: %s)\n", !params.display_prompt ? "true" : "false");
+    printf("  -gan N, --grp-attn-n N\n");
+    printf("                        group-attention factor (default: %d)\n", params.grp_attn_n);
+    printf("  -gaw N, --grp-attn-w N\n");
+    printf("                        group-attention width (default: %.1f)\n", (double)params.grp_attn_w);
     printf("  -dkvc, --dump-kv-cache\n");
     printf("                        verbose print of the KV cache\n");
     printf("  -nkvo, --no-kv-offload\n");
@@ -927,6 +1036,8 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("                        advanced option to override model metadata by key. may be specified multiple times.\n");
     printf("                        types: int, float, bool. example: --override-kv tokenizer.ggml.add_bos_token=bool:false\n");
+    printf("  -ptc N, --print-token-count N\n");
+    printf("                        print token count every N tokens (default: %d)\n", params.n_print);
     printf("\n");
 #ifndef LOG_DISABLE_LOGS
     log_print_usage();
@@ -1016,6 +1127,7 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
     mparams.main_gpu        = params.main_gpu;
+    mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
     mparams.use_mmap        = params.use_mmap;
     mparams.use_mlock       = params.use_mlock;
@@ -1030,6 +1142,9 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
 }
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
+    if (s == "f32") {
+        return GGML_TYPE_F32;
+    }
     if (s == "f16") {
         return GGML_TYPE_F16;
     }
@@ -1541,6 +1656,7 @@ void dump_non_result_info_yaml(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "min_p: %f # default: 0.0\n", sparams.min_p);
     fprintf(stream, "typical_p: %f # default: 1.0\n", sparams.typical_p);
     fprintf(stream, "verbose_prompt: %s # default: false\n", params.verbose_prompt ? "true" : "false");
+    fprintf(stream, "display_prompt: %s # default: true\n", params.display_prompt ? "true" : "false");
 }
 
 //
