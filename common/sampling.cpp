@@ -143,7 +143,7 @@ static void sampler_queue(
             case 'y': llama_sample_typical  (ctx_main, &cur_p, typical_p, min_keep); break;
             case 'p': llama_sample_top_p    (ctx_main, &cur_p, top_p,     min_keep); break;
             case 'm': llama_sample_min_p    (ctx_main, &cur_p, min_p,     min_keep); break;
-            case 't': llama_sample_temp     (ctx_main, &cur_p, temp); break;
+            case 't': llama_sample_temp     (ctx_main, &cur_p, temp, smoothing_factor); break;
             default : break;
         }
     }
@@ -160,6 +160,7 @@ static llama_token llama_sampling_sample_impl(
     const int n_vocab = llama_n_vocab(llama_get_model(ctx_main));
 
     const float   temp            = params.temp;
+    const float  smoothing_factor = params.smoothing_factor;
     const int32_t penalty_last_n  = params.penalty_last_n < 0 ? params.n_prev : params.penalty_last_n;
     const float   penalty_repeat  = params.penalty_repeat;
     const float   penalty_freq    = params.penalty_freq;
@@ -237,10 +238,10 @@ static llama_token llama_sampling_sample_impl(
     } else {
         if (mirostat == 1) {
             const int mirostat_m = 100;
-            llama_sample_temp(ctx_main, &cur_p, temp);
+            llama_sample_temp(ctx_main, &cur_p, temp, smoothing_factor);
             id = llama_sample_token_mirostat(ctx_main, &cur_p, mirostat_tau, mirostat_eta, mirostat_m, &ctx_sampling->mirostat_mu);
         } else if (mirostat == 2) {
-            llama_sample_temp(ctx_main, &cur_p, temp);
+            llama_sample_temp(ctx_main, &cur_p, temp, smoothing_factor);
             id = llama_sample_token_mirostat_v2(ctx_main, &cur_p, mirostat_tau, mirostat_eta, &ctx_sampling->mirostat_mu);
         } else {
             // temperature sampling

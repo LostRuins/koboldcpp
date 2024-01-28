@@ -749,7 +749,8 @@ extern "C" {
     LLAMA_API void llama_sample_temp(
             struct llama_context * ctx,
           llama_token_data_array * candidates,
-                           float   temp);
+                           float   temp,
+                           float   smoothing_factor);
 
     LLAMA_API DEPRECATED(void llama_sample_temperature(
                 struct llama_context * ctx,

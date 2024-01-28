@@ -79,6 +79,7 @@ class generation_inputs(ctypes.Structure):
                 ("grammar_retain_state", ctypes.c_bool),
                 ("quiet", ctypes.c_bool),
                 ("dynatemp_range", ctypes.c_float),
+                ("smoothing_factor", ctypes.c_float),
                 ("logit_biases", logit_bias * logit_bias_max)]
 
 class generation_outputs(ctypes.Structure):
@@ -310,7 +311,7 @@ def load_model(model_filename):
     ret = handle.load_model(inputs)
     return ret
 
-def generate(prompt, memory="", max_length=32, max_context_length=512, temperature=0.7, top_k=100, top_a=0.0, top_p=0.92, min_p=0.0, typical_p=1.0, tfs=1.0, rep_pen=1.0, rep_pen_range=128, presence_penalty=0.0, mirostat=0, mirostat_tau=5.0, mirostat_eta=0.1, sampler_order=[6,0,1,3,4,2,5], seed=-1, stop_sequence=[], use_default_badwordsids=False, stream_sse=False, grammar='', grammar_retain_state=False, genkey='', trimstop=False, quiet=False, dynatemp_range=0.0, logit_biases={}):
+def generate(prompt, memory="", max_length=32, max_context_length=512, temperature=0.7, top_k=100, top_a=0.0, top_p=0.92, min_p=0.0, typical_p=1.0, tfs=1.0, rep_pen=1.0, rep_pen_range=128, presence_penalty=0.0, mirostat=0, mirostat_tau=5.0, mirostat_eta=0.1, sampler_order=[6,0,1,3,4,2,5], seed=-1, stop_sequence=[], use_default_badwordsids=False, stream_sse=False, grammar='', grammar_retain_state=False, genkey='', trimstop=False, quiet=False, dynatemp_range=0.0, smoothing_factor=0.0, logit_biases={}):
     global maxctx, args, currentusergenkey, totalgens
     inputs = generation_inputs()
     outputs = ctypes.create_unicode_buffer(ctypes.sizeof(generation_outputs))
@@ -339,6 +340,7 @@ def generate(prompt, memory="", max_length=32, max_context_length=512, temperatu
     inputs.stream_sse = stream_sse
     inputs.quiet = quiet
     inputs.dynatemp_range = dynatemp_range
+    inputs.smoothing_factor = smoothing_factor
     inputs.grammar = grammar.encode("UTF-8")
     inputs.grammar_retain_state = grammar_retain_state
     inputs.unban_tokens_rt = not use_default_badwordsids
@@ -549,6 +551,7 @@ class ServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 trimstop=genparams.get('trim_stop', False),
                 quiet=is_quiet,
                 dynatemp_range=genparams.get('dynatemp_range', 0.0),
+                smoothing_factor=genparams.get('smoothing_factor', 0.0),
                 logit_biases=genparams.get('logit_bias', {})
                 )
 

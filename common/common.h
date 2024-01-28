@@ -83,6 +83,7 @@ struct gpt_params {
 
     // DynaTemp!
     float   dynatemp_range     = 0.0f;  // enables DynaTemp if greater than 0. dynatemp_min = temperature - dt_range, dynatemp_max = temperature + dt_range
+    float   smoothing_factor   = 0.0f;
 
     // // sampling parameters
     struct llama_sampling_params sparams;

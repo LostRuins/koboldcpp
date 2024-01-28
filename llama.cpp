@@ -8386,7 +8386,7 @@ void llama_sample_typical(struct llama_context * ctx, llama_token_data_array * c
     }
 }
 
-void llama_sample_temp(struct llama_context * ctx, llama_token_data_array * candidates, float temp) {
+void llama_sample_temp(struct llama_context * ctx, llama_token_data_array * candidates, float temp, float smoothing_factor) {
     // Get current time
     const int64_t t_start_sample_us = ggml_time_us();
 
@@ -8416,20 +8416,20 @@ void llama_sample_temp(struct llama_context * ctx, llama_token_data_array * cand
 	float k = h; // Maximum logit value to be added after the transformation
 
     // Read smoothing_factor from "ExtStuff.txt"
-    float smoothing_factor = 0;
-    FILE* file = fopen("ExtStuff.txt", "r");
-    if (file) {
-        if (fscanf(file, "smoothing_factor=%f", &smoothing_factor) != 1) {
-            smoothing_factor = 0;
-        }
-        fclose(file);
-    } else {
-        file = fopen("ExtStuff.txt", "w");
-        if (file) {
-            fprintf(file, "smoothing_factor=0\n");
-            fclose(file);
-        }
-    }
+//    float smoothing_factor = 0;
+//    FILE* file = fopen("ExtStuff.txt", "r");
+//    if (file) {
+//        if (fscanf(file, "smoothing_factor=%f", &smoothing_factor) != 1) {
+//            smoothing_factor = 0;
+//        }
+//        fclose(file);
+//    } else {
+//        file = fopen("ExtStuff.txt", "w");
+//        if (file) {
+//            fprintf(file, "smoothing_factor=0\n");
+//            fclose(file);
+//        }
+//    }
 
     // Verbose print the smoothing_factor read
     printf("Read smoothing_factor: %f\n", smoothing_factor);
@@ -8469,8 +8469,8 @@ void llama_sample_temp(struct llama_context * ctx, llama_token_data_array * cand
     }
 }
 
-void llama_sample_temperature(struct llama_context * ctx, llama_token_data_array * candidates_p, float temp) {
-    llama_sample_temp(ctx, candidates_p, temp);
+void llama_sample_temperature(struct llama_context * ctx, llama_token_data_array * candidates_p, float temp, float smoothing_factor) {
+    llama_sample_temp(ctx, candidates_p, temp, smoothing_factor);
 }
 
 void llama_sample_entropy(struct llama_context * ctx, llama_token_data_array * candidates_p, float temp, float min_temp = 0, float max_temp = 2.0f) {
