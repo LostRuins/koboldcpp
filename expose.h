@@ -84,6 +84,7 @@ struct generation_inputs
     const bool quiet = false;
     const float dynatemp_range = 0.0f;
     const float dynatemp_exponent = 1.0f;
+    const float randomization_factor = 0.0f;
     const float smoothing_factor = 0.0f;
     const logit_bias logit_biases[logit_bias_max];
 

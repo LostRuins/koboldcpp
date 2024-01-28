@@ -765,15 +765,6 @@ extern "C" {
                            float   randomization_factor,
                           size_t   min_keep);
 
-    /// @details DYNATEMP! #TODO KALO
-    LLAMA_API void llama_sample_entropy(
-            struct llama_context* ctx,
-        llama_token_data_array* candidates,
-                           float   p,
-                           size_t   min_keep,
-                           float min_temp,
-                           float max_temp);
-
     /// @details Tail Free Sampling described in https://www.trentonbricken.com/Tail-Free-Sampling/.
     LLAMA_API void llama_sample_tail_free(
             struct llama_context * ctx,
