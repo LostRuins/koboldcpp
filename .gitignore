@@ -73,7 +73,7 @@ dist
 
 dist/
 *.spec
-
+*.kcpps
 zig-out/
 zig-cache/
 

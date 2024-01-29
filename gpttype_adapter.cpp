@@ -1483,6 +1483,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs, generation_o
         generation_finished = true;
         return output;
     }
+
     concat_output_mtx.lock();
     concat_output = "";
     concat_output_reader_copy = "";
@@ -1528,6 +1529,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs, generation_o
     kcpp_params->mirostat_tau = inputs.mirostat_tau;
     kcpp_params->dynatemp_range = inputs.dynatemp_range;
     kcpp_params->dynatemp_exponent = inputs.dynatemp_exponent;
+    kcpp_params->randomization_factor = inputs.randomization_factor;
     kcpp_params->smoothing_factor = inputs.smoothing_factor;
     kcpp_params->n_ctx = inputs.max_context_length;
     kcpp_params->n_batch = n_batch;
@@ -1926,6 +1928,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs, generation_o
             const float tfs_z = kcpp_params->tfs_z;
             const float dynatemp_range = kcpp_params->dynatemp_range;
             const float dynatemp_exponent = kcpp_params->dynatemp_exponent;
+            const float randomization_factor = kcpp_params->randomization_factor;
+            const float smoothing_factor = kcpp_params->smoothing_factor;
 
             if (!startedsampling)
             {
@@ -1981,7 +1985,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs, generation_o
 
             id = SampleLogits(logitsPtr, nctx, n_vocab, last_n_size, repeat_penalty, presence_penalty,
             top_k, top_a, top_p, min_p, typical_p, tfs_z, temp, rng,
-            kcpp_params->mirostat, kcpp_params->mirostat_tau, kcpp_params->mirostat_eta, sampler_order, grammar, dynatemp_range, dynatemp_exponent, kcpp_params->randomization_factor, kcpp_params->smoothing_factor);
+            kcpp_params->mirostat, kcpp_params->mirostat_tau, kcpp_params->mirostat_eta, sampler_order, grammar, dynatemp_range, dynatemp_exponent, randomization_factor, smoothing_factor);
 
             if (grammar != nullptr) {
                 grammar_accept_token(file_format, n_vocab, grammar, id);
