@@ -358,7 +358,7 @@ else
 	endif
 
 	ifdef LLAMA_OPENBLAS
-	OPENBLAS_BUILD = $(CXX) $(CXXFLAGS) $^ $(ARCH_ADD) -lopenblas -shared -o $@.so $(LDFLAGS)
+	OPENBLAS_BUILD = $(CXX) $(CXXFLAGS) $^ $(ARCH_ADD) -lopenblasp -shared -o $@.so $(LDFLAGS)
 	endif
 	ifdef LLAMA_CLBLAST
 		ifeq ($(UNAME_S),Darwin)

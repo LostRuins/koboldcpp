@@ -352,6 +352,15 @@ ggml_backend_t ggml_backend_blas_init(void) {
     fprintf(stderr, "%s: warning: ggml is using OpenMP, but BLIS was compiled without OpenMP support\n", __func__);
 #endif
 
+    fprintf(stderr, "%s: openblas_get_parallel %d \n", __func__, openblas_get_parallel());
+    fprintf(stderr, "%s: openblas_get_config %s \n", __func__, openblas_get_config());
+
+#ifdef GGML_USE_OPENMP
+    fprintf(stderr, "%s: GGML_USE_OPENMP %s \n", __func__, GGML_USE_OPENMP);
+#else
+    fprintf(stderr, "%s: GGML_USE_OPENMP n/a \n", __func__);
+#endif
+
     return backend;
 }
 
