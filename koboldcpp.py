@@ -728,6 +728,16 @@ def fetch_gpu_properties(testCL,testCU,testVK):
                     getamdvram = subprocess.run(['rocm-smi', '--showmeminfo', 'vram', '--csv'], capture_output=True, text=True, check=True, encoding='utf-8').stdout # fetch VRAM of devices
                     if getamdvram:
                         FetchedCUdeviceMem = [line.split(",")[1].strip() for line in getamdvram.splitlines()[1:] if line.strip()]
+
+                visible_devices = os.environ.get('HIP_VISIBLE_DEVICES') or os.environ.get('CUDA_VISIBLE_DEVICES')
+                if visible_devices:
+                    use_devices = [int(n.strip()) for n in visible_devices.split(',')]
+
+                # note: can legit be an empty array, which means no GPU should be used
+                if use_devices is not None:
+                    FetchedCUdevices = [FetchedCUdevices[i] for i in use_devices]
+                    FetchedCUdeviceMem = [FetchedCUdeviceMem[i] for i in use_devices]
+
             except Exception as e:
                 pass
         lowestcumem = 0
