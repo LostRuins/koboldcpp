@@ -2202,42 +2202,47 @@ def RunServerMultiThreaded(addr, port):
 def show_gui():
     global guimode
     guimode = True
-    from tkinter.filedialog import askopenfilename
-    from tkinter.filedialog import asksaveasfile
+    from tkinter.filedialog import askopenfilename, asksaveasfile
+    import sys
+    import customtkinter as ctk
 
     # if args received, launch
     if len(sys.argv) != 1 and not args.showgui:
         import tkinter as tk
-        root = tk.Tk() #we dont want the useless window to be visible, but we want it in taskbar
+        root = tk.Tk()  # we don't want the useless window to be visible, but we want it in taskbar
         root.attributes("-alpha", 0)
-        args.model_param = askopenfilename(title="Select ggml model .bin or .gguf file or .kcpps config")
+        args.model_param = askopenfilename(
+            title="Select ggml model .bin or .gguf file or .kcpps config"
+        )
         root.withdraw()
         root.quit()
-        if args.model_param and args.model_param!="" and (args.model_param.lower().endswith('.kcpps') or args.model_param.lower().endswith('.kcppt')):
+        if (
+            args.model_param
+            and args.model_param != ""
+            and args.model_param.lower().endswith(('.kcpps', '.kcppt'))
+        ):
             load_config_cli(args.model_param)
         if not args.model_param and not args.sdmodel and not args.whispermodel and not args.nomodel:
             global exitcounter
             exitcounter = 999
-            exit_with_error(2,"No ggml model or kcpps file was selected. Exiting.")
+            exit_with_error(2, "No ggml model or kcpps file was selected. Exiting.")
         return
 
-    #dummy line to get darkdetect imported in pyinstaller
+    # Dummy line to get darkdetect imported in PyInstaller
     try:
         import darkdetect as darkdt
         darkdt.isDark()
-        pass
     except Exception as e:
         pass
 
-    import customtkinter as ctk
-    nextstate = 0 #0=exit, 1=launch
+    nextstate = 0  # 0=exit, 1=launch
     original_windowwidth = 550
     original_windowheight = 550
     windowwidth = original_windowwidth
     windowheight = original_windowheight
     ctk.set_appearance_mode("dark")
     root = ctk.CTk()
-    root.geometry(str(windowwidth) + "x" + str(windowheight))
+    root.geometry(f"{windowwidth}x{windowheight}")
     root.title(f"KoboldCpp v{KcppVersion}")
 
     gtooltip_box = None
@@ -2247,46 +2252,69 @@ def show_gui():
     window_reference_height = None
     previous_event_width = None
     previous_event_height = None
+
+    # Define helper functions for on_resize
+    def handle_initial_resize(event):
+        nonlocal window_reference_width, window_reference_height, previous_event_width, previous_event_height
+        window_reference_width = event.width
+        window_reference_height = event.height
+        previous_event_width = window_reference_width
+        previous_event_height = window_reference_height
+
+    def calculate_smallratio(new_width, new_height):
+        incr_w = new_width / window_reference_width
+        incr_h = new_height / window_reference_height
+        smallratio = round(min(incr_w, incr_h), 2)
+        return smallratio
+
+    def get_last_position(geometry):
+        parts = geometry.split('+', 1)
+        return parts[1] if len(parts) == 2 else ""
+
+    def calculate_new_dimensions(smallratio):
+        new_width = max(256, min(1024, math.floor(original_windowwidth * smallratio)))
+        new_height = max(256, min(1024, math.floor(original_windowheight * smallratio)))
+        return new_width, new_height
+
+    def update_geometry_and_scaling(new_width, new_height, lastpos, smallratio):
+        root.geometry(f"{new_width}x{new_height}+{lastpos}")
+        ctk.set_widget_scaling(smallratio)
+
+    def update_ui_elements():
+        changerunmode(1, 1, 1)
+        togglerope(1, 1, 1)
+        toggleflashattn(1, 1, 1)
+        togglectxshift(1, 1, 1)
+        togglehorde(1, 1, 1)
+        togglesdquant(1, 1, 1)
+        toggletaesd(1, 1, 1)
+
     def on_resize(event):
+        nonlocal window_reference_width, window_reference_height, previous_event_width, previous_event_height
         if not event.widget.master:
-            nonlocal window_reference_width, window_reference_height, previous_event_width,previous_event_height
             if not window_reference_width and not window_reference_height:
-                window_reference_width = event.width
-                window_reference_height = event.height
-                previous_event_width = window_reference_width
-                previous_event_height = window_reference_height
+                handle_initial_resize(event)
             else:
                 new_width = event.width
                 new_height = event.height
-                incr_w = new_width/window_reference_width
-                incr_h = new_height/window_reference_height
-                smallratio = min(incr_w,incr_h)
-                smallratio = round(smallratio,2)
-                if new_width != previous_event_width or new_height!=previous_event_height:
-                    lastpos = root.geometry()
-                    lparr = lastpos.split('+', 1)
-                    lastpos = ("+"+str(lparr[1])) if (len(lparr)==2) else ""
+                smallratio = calculate_smallratio(new_width, new_height)
+
+                if new_width != previous_event_width or new_height != previous_event_height:
+                    geometry = root.geometry()
+                    lastpos = get_last_position(geometry)
                     previous_event_width = new_width
                     previous_event_height = new_height
-                    windowwidth = math.floor(original_windowwidth*smallratio)
-                    windowwidth = max(256, min(1024, windowwidth))
-                    windowheight = math.floor(original_windowheight*smallratio)
-                    windowheight = max(256, min(1024, windowheight))
-                    root.geometry(str(windowwidth) + "x" + str(windowheight) + str(lastpos))
-                    ctk.set_widget_scaling(smallratio)
-                    changerunmode(1,1,1)
-                    togglerope(1,1,1)
-                    toggleflashattn(1,1,1)
-                    togglectxshift(1,1,1)
-                    togglehorde(1,1,1)
-                    togglesdquant(1,1,1)
-                    toggletaesd(1,1,1)
+                    new_windowwidth, new_windowheight = calculate_new_dimensions(smallratio)
+                    update_geometry_and_scaling(new_windowwidth, new_windowheight, lastpos, smallratio)
+                    update_ui_elements()
 
-    if sys.platform=="darwin":
-        root.resizable(False,False)
+    # Configure window resizing
+    if sys.platform == "darwin":
+        root.resizable(False, False)
     else:
-        root.resizable(True,True)
+        root.resizable(True, True)
         root.bind("<Configure>", on_resize)
+
     global using_gui_launcher
     using_gui_launcher = True
     kcpp_exporting_template = False
