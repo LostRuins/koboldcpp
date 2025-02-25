@@ -141,8 +141,7 @@
                          },
                          "dynatemp_range": {
                             "default": 0,
-                            "description": "If greater than 0, uses dynamic temperature. Dynamic temperature range will be between Temp+Range and Temp-Range. If less or equal to 0 , uses static temperature.",
-                            "minimum": 0,
+                            "description": "If not 0, uses dynamic temperature. Dynamic temperature range will be between Temp-Range and Temp+Range. If equal to 0 , uses static temperature.",
                             "type": "number"
                          },
                          "smoothing_factor": {

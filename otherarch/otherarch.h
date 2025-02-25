@@ -47,7 +47,7 @@ struct kcpp_params {
     std::vector<std::string> dry_sequence_breakers; // DRY sequence breakers
     float xtc_threshold        = 0;
     float xtc_probability      = 0;
-    float   dynatemp_range     = 0.0f;  // enables DynaTemp if greater than 0. dynatemp_min = temperature - dt_range, dynatemp_max = temperature + dt_range
+    float   dynatemp_range     = 0.0f;  // enables DynaTemp if neq 0. dynatemp_min = temperature - dt_range, dynatemp_max = temperature + dt_range
     float   dynatemp_exponent  = 1.0f;
 
     std::string model_filename       = ""; // model path
