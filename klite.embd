@@ -8543,7 +8543,7 @@ Current version indicated by LITEVER below.
 	function confirm_dynatemp()
 	{
 		document.getElementById("dynatempcontainer").classList.add("hidden");
-		document.getElementById("dynatemp_overview").innerText = (document.getElementById("dynatemp_range").value>0?"ON":"OFF");
+		document.getElementById("dynatemp_overview").innerText = (document.getElementById("dynatemp_range").value!=0?"ON":"OFF");
 	}
 	function show_dynatemp()
 	{
@@ -10867,7 +10867,7 @@ Current version indicated by LITEVER below.
 		document.getElementById("dynatemp_exponent").value = localsettings.dynatemp_exponent;
 		document.getElementById("smoothing_factor").value = localsettings.smoothing_factor;
 		document.getElementById("nsigma").value = localsettings.nsigma;
-		document.getElementById("dynatemp_overview").innerText = (localsettings.dynatemp_range>0?"ON":"OFF");
+		document.getElementById("dynatemp_overview").innerText = (localsettings.dynatemp_range!=0?"ON":"OFF");
 		document.getElementById("presence_penalty").value = localsettings.presence_penalty;
 		document.getElementById("sampler_seed").value = localsettings.sampler_seed;
 		document.getElementById("top_k").value =  document.getElementById("top_k_slide").value = localsettings.top_k;
@@ -11072,7 +11072,7 @@ Current version indicated by LITEVER below.
 			document.getElementById("rep_pen_slope").value = found.rep_pen_slope;
 			document.getElementById("sampler_order").value = found.sampler_order.toString();
 			document.getElementById("presetsdesc").innerText = found.description;
-			document.getElementById("dynatemp_overview").innerText = (document.getElementById("dynatemp_range").value>0?"ON":"OFF");
+			document.getElementById("dynatemp_overview").innerText = (document.getElementById("dynatemp_range").value!=0?"ON":"OFF");
 		}else{
 			document.getElementById("presetsdesc").innerText = "";
 		}
