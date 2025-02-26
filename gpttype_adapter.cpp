@@ -1189,8 +1189,8 @@ void sample_rep_pen(int n_ctx, int rep_pen_range, float rep_pen, float rep_pen_s
     const int64_t t_start_sample_us = ggml_time_us();
 
     // Create a frequency map to count occurrences of each token in last_tokens
-    std::unordered_set<llama_token> tokens_near(last_tokens[0], last_tokens[last_n_repeat / 2]);
-    std::unordered_set<llama_token> tokens_far(last_tokens[last_n_repeat / 2], last_tokens[last_n_repeat - 1]);;
+    std::unordered_set<llama_token> tokens_near(last_tokens, last_tokens + last_n_repeat / 2);
+    std::unordered_set<llama_token> tokens_far(last_tokens + last_n_repeat / 2, last_tokens + last_n_repeat);
     
     float rep_pen_reduced = rep_pen;
     if(rep_pen_reduced>1.0f)
