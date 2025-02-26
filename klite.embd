@@ -8527,7 +8527,7 @@ Current version indicated by LITEVER below.
 			let a1 = parseFloat(document.getElementById("dynatemp_min").value);
 			let a2 = parseFloat(document.getElementById("dynatemp_max").value);
 			let avg = (a1+a2)*0.5;
-			let diff = Math.abs(a2 - a1)*0.5;
+			let diff = (a2 - a1)*0.5;
 			document.getElementById("dynatemp_range").value = diff.toFixed(3);
 			document.getElementById("dynatemp_outtemp").value = avg.toFixed(3);
 			document.getElementById("temperature").value = avg.toFixed(3);
