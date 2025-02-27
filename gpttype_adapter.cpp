@@ -11,6 +11,7 @@
 #include <time.h>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include "model_adapter.h"
 #include "otherarch.h"
 #include "llama.h"
@@ -913,7 +914,7 @@ void sample_top_a(llama_token_data_array * candidates, float a, size_t min_keep)
     candidates->size = last_idx;
 }
 
-void sample_xtc(llama_token_data_array * cur_p, float xtc_threshold, float xtc_probability, float xtc_nsigma, std::unordered_map<llama_token, int> nsig_tokens,  std::mt19937 & rng)
+void sample_xtc(llama_token_data_array * cur_p, float xtc_threshold, float xtc_probability, float xtc_nsigma, std::unordered_set<llama_token> nsig_tokens,  std::mt19937 & rng)
 {
     if (xtc_threshold > 0.5f || xtc_probability <= 0.0f || cur_p->size <= 1 || (xtc_nsigma > 0.0f && nsig_tokens.size() <= 1)) {
         return;
@@ -1473,8 +1474,13 @@ void sample_top_n_sigma(llama_token_data_array * cur_p, float nsigma) {
     sample_softmax(cur_p);
 }
 
-std::unordered_map<llama_token, int> exclude_n_sigma(llama_token_data_array * cur_p, float xtc_nsigma) {
-    const llama_token_data * sigma_tokens = cur_p->data;
+std::unordered_set<llama_token> exclude_n_sigma(llama_token_data_array * cur_p, float xtc_nsigma) {
+
+    std::unordered_set<llama_token> token_mask;
+
+    if (xtc_nsigma <= 0.0f || cur_p->size <= 1) {
+        return token_mask;
+    }
 
     // find max logit and calculate mean
     float nsigmax = cur_p->data[0].logit;
@@ -1495,14 +1501,13 @@ std::unordered_map<llama_token, int> exclude_n_sigma(llama_token_data_array * cu
     float nsigstd = sqrt(nsigacc / cur_p->size);
 
     // create nsigma mask
-    std::unordered_map<llama_token, int> token_count_sigma;
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (cur_p->data[i].logit > nsigmax - (xtc_nsigma * nsigstd)) {
-            token_count_sigma[sigma_tokens[i].id]++;
+            token_mask.insert(cur_p->data[i].id);
         }
     }
 
-    return token_count_sigma;
+    return token_mask;
 }
 
 void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val) {
@@ -1639,7 +1644,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
 {
     int id = 0;
     std::vector<llama_token_data> candidates;
-    std::unordered_map<llama_token, int> xtc_nsig_tokens;
+    std::unordered_set<llama_token> xtc_nsig_mask;
     candidates.reserve(n_vocab);
     for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
         candidates.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
@@ -1694,14 +1699,12 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
             sample_temperature(&candidates_p, temp);
         }
         // create nsigma mask for xtc
-        if (xtc_nsigma > 0.0f) {
-            xtc_nsig_tokens = exclude_n_sigma(&candidates_p, xtc_nsigma);
-        }
+        xtc_nsig_mask = exclude_n_sigma(&candidates_p, xtc_nsigma);
         // nsigma must come before any softmax samplers (excluding dynatemp) and right after temperature
         sample_top_n_sigma(&candidates_p, nsigma);
         sample_smooth(&candidates_p, smoothing_factor);
         // xtc always last
-        sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_tokens, rng);
+        sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_mask, rng);
         id = sample_token(&candidates_p, rng);
     }
     else if (xtc_nsigma > 0.0f) // dyna xtc chain
@@ -1720,7 +1723,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         }
         // create nsigma mask for xtc
         // nsigma must come before any softmax samplers (excluding dynatemp) and right after temperature
-        xtc_nsig_tokens = exclude_n_sigma(&candidates_p, xtc_nsigma);
+        xtc_nsig_mask = exclude_n_sigma(&candidates_p, xtc_nsigma);
 
         for (int i = 0; i < sampler_order.size(); i++) {
             switch (sampler_order[i]) {
@@ -1751,7 +1754,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
             }
         }
         // xtc always last
-        sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_tokens, rng);
+        sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_mask, rng);
         id = sample_token(&candidates_p, rng);
     }
     else // custom chain
@@ -1802,7 +1805,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
             }
         }
         // xtc always last
-        sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_tokens, rng);
+        sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_mask, rng);
         id = sample_token(&candidates_p, rng);
     }
 
