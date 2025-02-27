@@ -931,9 +931,10 @@ void sample_xtc(llama_token_data_array * cur_p, float xtc_threshold, float xtc_p
     size_t last_idx = cur_p->size;
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (xtc_nsigma > 0.0f) {
+            // if dynaxtc enabled then use nsgima mask instead
             break;
         } else {
-            // go until we reach a value under the threshold
+            // else go until we reach a value under the threshold
             float checkprob = cur_p->data[i].p;
             if (checkprob < xtc_threshold) {
                 last_idx = i;
@@ -942,14 +943,15 @@ void sample_xtc(llama_token_data_array * cur_p, float xtc_threshold, float xtc_p
         }
     }
 
-    if (xtc_nsigma > 0.0f) {
+    if (xtc_nsigma > 0.0f) { // check if dynaxtc is enabled
+        // remove all tokens within the nsgima mask
         for (size_t i = 0; i < cur_p->size; ++i) {
             const auto token_in_sigma = nsig_tokens.find(cur_p->data[i].id);
             bool in_sigma = (token_in_sigma != nsig_tokens.end());
             if (!in_sigma) {
                 continue;
             }
-            cur_p->data[i].logit -= 999.0f;
+            cur_p->data[i].logit -= 999.0f; // infinity gets wonky results downstream, this hack works well enough
         }
     }
     else if (last_idx > 1)  // check if there are 2 or more viable candidates
@@ -1462,7 +1464,7 @@ void sample_top_n_sigma(llama_token_data_array * cur_p, float nsigma) {
     }
     float nsigstd = sqrt(nsigacc / cur_p->size);
 
-    //apply mask
+    // apply nsigma mask
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (cur_p->data[i].logit < nsigmax - (nsigma * nsigstd)) {
             cur_p->data[i].logit -= 999.0f;
@@ -1492,7 +1494,7 @@ std::unordered_map<llama_token, int> exclude_n_sigma(llama_token_data_array * cu
     }
     float nsigstd = sqrt(nsigacc / cur_p->size);
 
-    //apply mask
+    // create nsigma mask
     std::unordered_map<llama_token, int> token_count_sigma;
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (cur_p->data[i].logit > nsigmax - (xtc_nsigma * nsigstd)) {
@@ -1655,10 +1657,10 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         sample_grammar(file_format, n_vocab, &candidates_p, grammar);
     }
 
-    //dry always first as logits cannot be resorted
+    // dry always first as logits cannot be resorted
     sample_dry(n_ctx, dry_penalty_last_n, dry_multiplier, dry_base, dry_allowed_length, dry_sequence_breakers, &candidates_p);
 
-    //prefilter to top 3k tokens for improved speed
+    // prefilter to top 3k tokens for improved speed
     sample_top_k(&candidates_p, 3000);
 
     if (mirostat == 1 || mirostat == 2) // mirostat chain
@@ -1683,7 +1685,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         if (dynatemp_range > 0) {
             float dynatemp_min = temp - dynatemp_range;
             float dynatemp_max = temp + dynatemp_range;
-            //do not allow negative values
+            // do not allow negative values
             dynatemp_min       = dynatemp_min < 0 ? 0 : dynatemp_min;
             dynatemp_max       = dynatemp_max < 0 ? 0 : dynatemp_max;
             dynatemp_exponent  = dynatemp_exponent < 0 ? 0 : dynatemp_exponent;
@@ -1691,11 +1693,14 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         } else {
             sample_temperature(&candidates_p, temp);
         }
+        // create nsigma mask for xtc
         if (xtc_nsigma > 0.0f) {
             xtc_nsig_tokens = exclude_n_sigma(&candidates_p, xtc_nsigma);
         }
+        // nsigma must come before any softmax samplers (excluding dynatemp) and right after temperature
         sample_top_n_sigma(&candidates_p, nsigma);
         sample_smooth(&candidates_p, smoothing_factor);
+        // xtc always last
         sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_tokens, rng);
         id = sample_token(&candidates_p, rng);
     }
@@ -1705,7 +1710,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         if (dynatemp_range > 0) {
             float dynatemp_min = temp - dynatemp_range;
             float dynatemp_max = temp + dynatemp_range;
-            //do not allow negative values
+            // do not allow negative values
             dynatemp_min       = dynatemp_min < 0 ? 0 : dynatemp_min;
             dynatemp_max       = dynatemp_max < 0 ? 0 : dynatemp_max;
             dynatemp_exponent  = dynatemp_exponent < 0 ? 0 : dynatemp_exponent;
@@ -1713,6 +1718,8 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         } else {
             sample_temperature(&candidates_p, temp);
         }
+        // create nsigma mask for xtc
+        // nsigma must come before any softmax samplers (excluding dynatemp) and right after temperature
         xtc_nsig_tokens = exclude_n_sigma(&candidates_p, xtc_nsigma);
 
         for (int i = 0; i < sampler_order.size(); i++) {
@@ -1743,6 +1750,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                     break;
             }
         }
+        // xtc always last
         sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_tokens, rng);
         id = sample_token(&candidates_p, rng);
     }
@@ -1773,7 +1781,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                     {
                         float dynatemp_min = temp - dynatemp_range;
                         float dynatemp_max = temp + dynatemp_range;
-                        //do not allow negative values
+                        // do not allow negative values
                         dynatemp_min = dynatemp_min<0?0:dynatemp_min;
                         dynatemp_max = dynatemp_max<0?0:dynatemp_max;
                         dynatemp_exponent = dynatemp_exponent<0?0:dynatemp_exponent;
@@ -1793,7 +1801,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                     break;
             }
         }
-        //xtc always last
+        // xtc always last
         sample_xtc(&candidates_p, xtc_threshold, xtc_probability, xtc_nsigma, xtc_nsig_tokens, rng);
         id = sample_token(&candidates_p, rng);
     }
