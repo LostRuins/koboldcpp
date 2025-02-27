@@ -932,10 +932,19 @@ void sample_xtc(llama_token_data_array * cur_p, float xtc_threshold, float xtc_p
     size_t last_idx = cur_p->size;
     for (size_t i = 0; i < cur_p->size; ++i) {
         if (xtc_nsigma > 0.0f) {
-            // if dynaxtc enabled then use nsgima mask instead
-            break;
+            // if dynaxtc is enabled use nsigma mask to trim tokens instead
+
+            if (nsig_tokens.find(cur_p->data[i].id) == nsig_tokens.end())
+            { // if token isn't in mask then skip to next token candidate
+                continue;
+            }
+            else
+            {  // otherwise the token is trimmed
+                cur_p->data[i].logit -= 999.0f;
+            }
+
         } else {
-            // else go until we reach a value under the threshold
+            // otherwise go until we reach a value under the threshold
             float checkprob = cur_p->data[i].p;
             if (checkprob < xtc_threshold) {
                 last_idx = i;
@@ -944,18 +953,7 @@ void sample_xtc(llama_token_data_array * cur_p, float xtc_threshold, float xtc_p
         }
     }
 
-    if (xtc_nsigma > 0.0f) { // check if dynaxtc is enabled
-        // remove all tokens within the nsgima mask
-        for (size_t i = 0; i < cur_p->size; ++i) {
-            const auto token_in_sigma = nsig_tokens.find(cur_p->data[i].id);
-            bool in_sigma = (token_in_sigma != nsig_tokens.end());
-            if (!in_sigma) {
-                continue;
-            }
-            cur_p->data[i].logit -= 999.0f; // infinity gets wonky results downstream, this hack works well enough
-        }
-    }
-    else if (last_idx > 1)  // check if there are 2 or more viable candidates
+    if (last_idx > 1 && xtc_nsigma <= 0.0f)  // check if there are 2 or more viable candidates
     {
         if (debugmode==1 && !is_quiet) {
             printf("XTC penalties [");
@@ -973,8 +971,11 @@ void sample_xtc(llama_token_data_array * cur_p, float xtc_threshold, float xtc_p
         if (debugmode==1 && !is_quiet) {
             printf("]\n");
         }
+    } // otherwise xtc does not do anything
+
+    if (last_idx > 1 || xtc_nsigma > 0.0f) {
         cur_p->sorted = false;
-    }  // otherwise xtc does not do anything
+    }
 
     // printf("\n\nCandidates: %d, Threshold: %f, LastIdx: %d",candidates->size,xtc_threshold,last_idx);
     // printf("\nCandidates: %f %f %f %f\n",candidates->data[0].p,candidates->data[1].p,candidates->data[2].p,candidates->data[3].p);
