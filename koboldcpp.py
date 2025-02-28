@@ -40,6 +40,7 @@ logprobs_max = 5
 default_draft_amount = 8
 default_ttsmaxlen = 4096
 default_visionmaxres = 1024
+net_save_slots = 8
 
 # abuse prevention
 stop_token_max = 256
@@ -48,7 +49,7 @@ logit_bias_max = 512
 dry_seq_break_max = 128
 
 # global vars
-KcppVersion = "1.84.2"
+KcppVersion = "1.85"
 showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False}
@@ -86,6 +87,7 @@ runmode_untouched = True
 modelfile_extracted_meta = None
 importvars_in_progress = False
 has_multiplayer = False
+savedata_obj = None
 multiplayer_story_data_compressed = None #stores the full compressed story of the current multiplayer session
 multiplayer_turn_major = 1 # to keep track of when a client needs to sync their stories
 multiplayer_turn_minor = 1
@@ -677,7 +679,7 @@ def string_contains_or_overlaps_sequence_substring(inputstr, sequences):
     return False
 
 def get_capabilities():
-    global has_multiplayer, KcppVersion, friendlymodelname, friendlysdmodelname, fullsdmodelpath, mmprojpath, password, fullwhispermodelpath, ttsmodelpath
+    global savedata_obj, has_multiplayer, KcppVersion, friendlymodelname, friendlysdmodelname, fullsdmodelpath, mmprojpath, password, fullwhispermodelpath, ttsmodelpath
     has_llm = not (friendlymodelname=="inactive")
     has_txt2img = not (friendlysdmodelname=="inactive" or fullsdmodelpath=="")
     has_vision = (mmprojpath!="")
@@ -686,7 +688,7 @@ def get_capabilities():
     has_search = True if args.websearch else False
     has_tts = (ttsmodelpath!="")
     admin_type = (2 if args.admin and args.admindir and args.adminpassword else (1 if args.admin and args.admindir else 0))
-    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":has_vision,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "admin": admin_type}
+    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":has_vision,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "savedata":(savedata_obj is not None), "admin": admin_type}
 
 def dump_gguf_metadata(file_path): #if you're gonna copy this into your own project at least credit concedo
     chunk_size = 1024*1024*12  # read first 12mb of file
@@ -2365,7 +2367,7 @@ Enter Prompt:<br>
     def do_GET(self):
         global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui
         global last_req_time, start_time
-        global has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastgeneratedcomfyimg, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, mmprojpath, password
+        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastgeneratedcomfyimg, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, mmprojpath, password
         self.path = self.path.rstrip('/')
         response_body = None
         content_type = 'application/json'
@@ -2552,7 +2554,7 @@ Enter Prompt:<br>
         return
 
     def do_POST(self):
-        global modelbusy, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastgeneratedcomfyimg, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive
+        global modelbusy, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastgeneratedcomfyimg, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots
         contlenstr = self.headers['content-length']
         content_length = 0
         body = None
@@ -2709,6 +2711,84 @@ Enter Prompt:<br>
                 if sender!="" and senderbusy:
                     multiplayer_lastactive[sender] = int(time.time())
                 response_body = (json.dumps({"turn_major":multiplayer_turn_major,"turn_minor":multiplayer_turn_minor,"idle":self.get_multiplayer_idle_state(sender),"data_format":multiplayer_dataformat}).encode())
+
+        elif self.path.endswith('/api/extra/data/list'):
+            if not self.secure_endpoint():
+                return
+            if savedata_obj is None:
+                response_body = (json.dumps([]).encode())
+                return
+            output = []
+            for i in range (net_save_slots):
+                if str(i) in savedata_obj:
+                    output.append(savedata_obj[str(i)]["title"])
+                else:
+                    output.append("")
+            response_body = (json.dumps(output).encode())
+
+        elif self.path.endswith('/api/extra/data/load'):
+            if not self.secure_endpoint():
+                return
+            if savedata_obj is None:
+                response_body = (json.dumps({"success":False,"data":None}).encode())
+            loadid = -1
+            try:
+                tempbody = json.loads(body)
+                loadid = tryparseint(tempbody.get('slot', 0))
+            except Exception:
+                loadid = -1
+            if loadid < 0 or str(loadid) not in savedata_obj:
+                response_body = (json.dumps({"success":False,"data":None}).encode())
+            else:
+                response_body = (json.dumps({"success":True,"data":savedata_obj[str(loadid)]}).encode())
+
+        elif self.path.endswith('/api/extra/data/save'):
+            if not self.secure_endpoint():
+                return
+            if savedata_obj is None:
+                response_code = 400
+                response_body = (json.dumps({"success":False, "error":"SaveDataFile not enabled!"}).encode())
+            else:
+                try:
+                    incoming_story = json.loads(body) # ensure submitted data is valid json
+                    slotid = tryparseint(incoming_story.get('slot', -1))
+                    dataformat = incoming_story.get('format', "")
+                    title = incoming_story.get('title', "")
+                    if not title or title=="":
+                        title = "Untitled Save"
+                    storybody = incoming_story.get('data', None) #should be a compressed string
+                    if slotid >= 0 and slotid < net_save_slots:  # we shall provide 4 network save slots
+                        saveneeded = False
+                        if storybody and storybody!="":
+                            storybody = str(storybody)
+                            if len(storybody) > (1024*1024*8): #limit story to 8mb
+                                response_code = 400
+                                response_body = (json.dumps({"success":False, "error":"Story is too long!"}).encode())
+                            else:
+                                savedata_obj[str(slotid)] = {"title":title, "format":dataformat, "data":storybody}
+                                saveneeded = True
+                        else: #erasing existing story
+                            if str(slotid) in savedata_obj:
+                                savedata_obj.pop(str(slotid))
+                                saveneeded = True
+                        if saveneeded:
+                            if args.savedatafile and os.path.exists(args.savedatafile):
+                                with open(args.savedatafile, 'w+', encoding='utf-8', errors='ignore') as f:
+                                    json.dump(savedata_obj, f)
+                                    print(f"Data was saved to slot {slotid}")
+                                response_body = (json.dumps({"success":True, "error":""}).encode())
+                            else:
+                                response_code = 400
+                                response_body = (json.dumps({"success":False, "error":"SaveDataFile is missing!"}).encode())
+                        else:
+                            response_body = (json.dumps({"success":True, "error":""}).encode())
+                    else:
+                        response_code = 400
+                        response_body = (json.dumps({"success":False, "error":"No story submitted or invalid slot!"}).encode())
+                except Exception as e:
+                    utfprint("Remote Save Story - Body Error: " + str(e))
+                    response_code = 400
+                    response_body = (json.dumps({"success": False, "error":"Submitted story invalid!"}).encode())
 
         elif self.path.endswith('/api/extra/multiplayer/getstory'):
             if not self.secure_endpoint():
@@ -3039,8 +3119,11 @@ def RunServerMultiThreaded(addr, port, server_handler):
             ipv6_sock = context.wrap_socket(ipv6_sock, server_side=True)
 
     numThreads = 24
-    ipv4_sock.bind((addr, port))
-    ipv4_sock.listen(numThreads)
+    try:
+        ipv4_sock.bind((addr, port))
+        ipv4_sock.listen(numThreads)
+    except Exception:
+         print("IPv4 Socket Failed to Bind.")
 
     if ipv6_sock:
         try:
@@ -3100,7 +3183,7 @@ def show_gui():
     global using_gui_launcher
     using_gui_launcher = True
     from tkinter.filedialog import askopenfilename, askdirectory
-    from tkinter.filedialog import asksaveasfile
+    from tkinter.filedialog import asksaveasfilename
 
     # if args received, launch
     if len(sys.argv) != 1 and not args.showgui:
@@ -3217,7 +3300,7 @@ def show_gui():
 
     tabs = ctk.CTkFrame(root, corner_radius = 0, width=windowwidth, height=windowheight-50)
     tabs.grid(row=0, stick="nsew")
-    tabnames= ["Quick Launch", "Hardware", "Tokens", "Model Files", "Network", "Horde Worker","Image Gen","Audio","Admin","Extra"]
+    tabnames= ["Quick Launch", "Hardware", "Tokens", "Loaded Files", "Network", "Horde Worker","Image Gen","Audio","Admin","Extra"]
     navbuttons = {}
     navbuttonframe = ctk.CTkFrame(tabs, width=100, height=int(tabs.cget("height")))
     navbuttonframe.grid(row=0, column=0, padx=2,pady=2)
@@ -3279,6 +3362,7 @@ def show_gui():
     lora_var = ctk.StringVar()
     lora_base_var = ctk.StringVar()
     preloadstory_var = ctk.StringVar()
+    savedatafile_var = ctk.StringVar()
     mmproj_var = ctk.StringVar()
     visionmaxres_var = ctk.StringVar(value=str(default_visionmaxres))
     draftmodel_var = ctk.StringVar()
@@ -3388,14 +3472,22 @@ def show_gui():
         entry.grid(row=row, column=(0 if singleline else 1), padx=padx, sticky="nw")
         return entry, label
 
-    def makefileentry(parent, text, searchtext, var, row=0, width=200, filetypes=[], onchoosefile=None, singlerow=False, singlecol=True, is_dir=False, tooltiptxt=""):
+    #file dialog types: 0=openfile,1=savefile,2=opendir
+    def makefileentry(parent, text, searchtext, var, row=0, width=200, filetypes=[], onchoosefile=None, singlerow=False, singlecol=True, dialog_type=0, tooltiptxt=""):
         label = makelabel(parent, text, row,0,tooltiptxt,columnspan=3)
         def getfilename(var, text):
             initialDir = os.path.dirname(var.get())
             initialDir = initialDir if os.path.isdir(initialDir) else None
             fnam = None
-            if is_dir:
+            if dialog_type==2:
                 fnam = askdirectory(title=text, mustexist=True, initialdir=initialDir)
+            elif dialog_type==1:
+                fnam = asksaveasfilename(title=text, filetypes=filetypes, defaultextension=filetypes, initialdir=initialDir)
+                if not fnam:
+                    fnam = ""
+                else:
+                    fnam = str(fnam).strip()
+                    fnam = f"{fnam}.jsondb" if ".jsondb" not in fnam.lower() else fnam
             else:
                 fnam = askopenfilename(title=text,filetypes=filetypes, initialdir=initialDir)
             if fnam:
@@ -3780,7 +3872,7 @@ def show_gui():
     togglectxshift(1,1,1)
 
     # Model Tab
-    model_tab = tabcontent["Model Files"]
+    model_tab = tabcontent["Loaded Files"]
 
     makefileentry(model_tab, "Text Model:", "Select GGUF or GGML Model File", model_var, 1,width=280,singlerow=True, onchoosefile=on_picked_model_file,tooltiptxt="Select a GGUF or GGML model file on disk to be loaded.")
     makefileentry(model_tab, "Text Lora:", "Select Lora File",lora_var, 3,width=280,singlerow=True,tooltiptxt="Select an optional GGML Text LoRA adapter to use.\nLeave blank to skip.")
@@ -3792,6 +3884,7 @@ def show_gui():
     makelabelentry(model_tab, "Splits: ", draftgpusplit_str_vars, 13, 50,padx=210,singleline=True,tooltip="Distribution of draft model layers. Leave blank to follow main model's gpu split. Only works if multi-gpu (All) selected in main model.", labelpadx=160)
     makelabelentry(model_tab, "Layers: ", draftgpulayers_var, 13, 50,padx=320,singleline=True,tooltip="How many layers to GPU offload for the draft model", labelpadx=270)
     makefileentry(model_tab, "Preload Story:", "Select Preloaded Story File", preloadstory_var, 15,width=280,singlerow=True,tooltiptxt="Select an optional KoboldAI JSON savefile \nto be served on launch to any client.")
+    makefileentry(model_tab, "SaveData File:", "Select or Create New SaveData Database File", savedatafile_var, 17,width=280,filetypes=[("KoboldCpp SaveDB", "*.jsondb")],singlerow=True,dialog_type=1,tooltiptxt="Selecting a file will allow data to be loaded and saved persistently to this KoboldCpp server remotely. File is created if it does not exist.")
     makefileentry(model_tab, "ChatCompletions Adapter:", "Select ChatCompletions Adapter File", chatcompletionsadapter_var, 24, width=250, filetypes=[("JSON Adapter", "*.json")], tooltiptxt="Select an optional ChatCompletions Adapter JSON file to force custom instruct tags.")
     def pickpremadetemplate():
         initialDir = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'kcpp_adapters')
@@ -3912,7 +4005,7 @@ def show_gui():
     admin_tab = tabcontent["Admin"]
     makecheckbox(admin_tab, "Enable Model Administration", admin_var, 1, 0,tooltiptxt="Enable a admin server, allowing you to remotely relaunch and swap models and configs.")
     makelabelentry(admin_tab, "Admin Password:" , admin_password_var, 3, 150,padx=120,singleline=True,tooltip="Require a password to access admin functions. You are strongly advised to use one for publically accessible instances!")
-    makefileentry(admin_tab, "Config Directory:", "Select directory containing .kcpps files to relaunch from", admin_dir_var, 5, width=280, is_dir=True, tooltiptxt="Specify a directory to look for .kcpps configs in, which can be used to swap models.")
+    makefileentry(admin_tab, "Config Directory:", "Select directory containing .kcpps files to relaunch from", admin_dir_var, 5, width=280, dialog_type=2, tooltiptxt="Specify a directory to look for .kcpps configs in, which can be used to swap models.")
 
     def kcpp_export_template():
         nonlocal kcpp_exporting_template
@@ -3940,12 +4033,12 @@ def show_gui():
         savdict["draftgpusplit"] = None
         savdict["config"] = None
         savdict["ttsthreads"] = 0
-        filename = asksaveasfile(filetypes=file_type, defaultextension=file_type)
-        if filename is None:
+        filename = asksaveasfilename(filetypes=file_type, defaultextension=file_type)
+        if not filename:
             return
-        filenamestr = str(filename.name).strip()
+        filenamestr = str(filename).strip()
         filenamestr = f"{filenamestr}.kcppt" if ".kcppt" not in filenamestr.lower() else filenamestr
-        file = open(filenamestr, 'a')
+        file = open(filenamestr, 'w')
         file.write(json.dumps(savdict))
         file.close()
         pass
@@ -4070,6 +4163,7 @@ def show_gui():
         args.model_param = None if model_var.get() == "" else model_var.get()
         args.lora = None if lora_var.get() == "" else ([lora_var.get()] if lora_base_var.get()=="" else [lora_var.get(), lora_base_var.get()])
         args.preloadstory = None if preloadstory_var.get() == "" else preloadstory_var.get()
+        args.savedatafile = None if savedatafile_var.get() == "" else savedatafile_var.get()
         try:
             if kcpp_exporting_template and isinstance(args.preloadstory, str) and args.preloadstory!="" and os.path.exists(args.preloadstory):
                 print("Embedding preload story...")   # parse and save embedded preload story
@@ -4277,6 +4371,7 @@ def show_gui():
 
         password_var.set(dict["password"] if ("password" in dict and dict["password"]) else "")
         preloadstory_var.set(dict["preloadstory"] if ("preloadstory" in dict and dict["preloadstory"]) else "")
+        savedatafile_var.set(dict["savedatafile"] if ("savedatafile" in dict and dict["savedatafile"]) else "")
         chatcompletionsadapter_var.set(dict["chatcompletionsadapter"] if ("chatcompletionsadapter" in dict and dict["chatcompletionsadapter"]) else "")
         port_var.set(dict["port_param"] if ("port_param" in dict and dict["port_param"]) else defaultport)
         host_var.set(dict["host"] if ("host" in dict and dict["host"]) else "")
@@ -4327,12 +4422,12 @@ def show_gui():
         export_vars()
         savdict = json.loads(json.dumps(args.__dict__))
         file_type = [("KoboldCpp Settings", "*.kcpps")]
-        filename = asksaveasfile(filetypes=file_type, defaultextension=file_type)
-        if filename is None:
+        filename = asksaveasfilename(filetypes=file_type, defaultextension=file_type)
+        if not filename:
             return
-        filenamestr = str(filename.name).strip()
+        filenamestr = str(filename).strip()
         filenamestr = f"{filenamestr}.kcpps" if ".kcpps" not in filenamestr.lower() else filenamestr
-        file = open(filenamestr, 'a')
+        file = open(filenamestr, 'w')
         file.write(json.dumps(savdict))
         file.close()
         pass
@@ -4831,8 +4926,10 @@ def load_config_cli(filename):
             else:
                 setattr(args, key, value)
         if args.istemplate:
-            print("\nA .kcppt template was selected from CLI - automatically selecting your backend...")
-            auto_set_backend_cli()
+            print("\nA .kcppt template was selected from CLI...")
+            if (args.usecublas is None) and (args.usevulkan is None) and (args.useclblast is None):
+                print("Automatically selecting your backend...")
+                auto_set_backend_cli()
 
 def save_config_cli(filename):
     savdict = json.loads(json.dumps(args.__dict__))
@@ -4840,7 +4937,7 @@ def save_config_cli(filename):
         return
     filenamestr = str(filename).strip()
     filenamestr = f"{filenamestr}.kcpps" if ".kcpps" not in filenamestr.lower() else filenamestr
-    file = open(filenamestr, 'a')
+    file = open(filenamestr, 'w')
     file.write(json.dumps(savdict))
     file.close()
     print(f"\nSaved .kcpps configuration file as {filename}\nIt can be loaded with --config [filename] in future.")
@@ -5285,7 +5382,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         friendlymodelname = "koboldcpp/" + sanitize_string(newmdldisplayname)
 
     # horde worker settings
-    global maxhordelen, maxhordectx, showdebug, has_multiplayer
+    global maxhordelen, maxhordectx, showdebug, has_multiplayer, savedata_obj
     if args.hordemodelname and args.hordemodelname!="":
         friendlymodelname = args.hordemodelname
         if args.debugmode == 1:
@@ -5305,6 +5402,25 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
     if args.multiplayer:
         has_multiplayer = True
+
+    if args.savedatafile and isinstance(args.savedatafile, str):
+        filepath = args.savedatafile
+        try:
+            with open(filepath, 'r+', encoding='utf-8', errors='ignore') as f:
+                loaded = json.load(f)
+                savedata_obj = loaded
+                print(f"Loaded existing savedatafile at '{filepath}'.")
+        except FileNotFoundError:
+            try:
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                with open(filepath, 'w+', encoding='utf-8', errors='ignore') as f:
+                    savedata_obj = {}
+                    print(f"File '{filepath}' did not exist. Created new savedatafile.")
+                    json.dump(savedata_obj, f)
+            except Exception as e:
+                print(f"Failed to create savedatafile '{filepath}': {e}")
+        except Exception as e:
+            print(f"Failed to access savedatafile '{filepath}': {e}")
 
     if args.highpriority:
         print("Setting process to Higher Priority - Use Caution")
@@ -5815,6 +5931,7 @@ if __name__ == '__main__':
     advparser.add_argument("--highpriority", help="Experimental flag. If set, increases the process CPU priority, potentially speeding up generation. Use caution.", action='store_true')
     advparser.add_argument("--foreground", help="Windows only. Sends the terminal to the foreground every time a new prompt is generated. This helps avoid some idle slowdown issues.", action='store_true')
     advparser.add_argument("--preloadstory", metavar=('[savefile]'), help="Configures a prepared story json save file to be hosted on the server, which frontends (such as KoboldAI Lite) can access over the API.", default="")
+    advparser.add_argument("--savedatafile", metavar=('[savefile]'), help="If enabled, creates or opens a persistent database file on the server, that allows users to save and load their data remotely.", default="")
     advparser.add_argument("--quiet", help="Enable quiet mode, which hides generation inputs and outputs in the terminal. Quiet mode is automatically enabled when running a horde worker.", action='store_true')
     advparser.add_argument("--ssl", help="Allows all content to be served over SSL instead. A valid UNENCRYPTED SSL cert and key .pem files must be provided", metavar=('[cert_pem]', '[key_pem]'), nargs='+')
     advparser.add_argument("--nocertify", help="Allows insecure SSL connections. Use this if you have cert errors and need to bypass certificate restrictions.", action='store_true')

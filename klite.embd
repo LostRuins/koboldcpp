@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 
 <script>
-	const LITEVER = 217;
+	const LITEVER = 220;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = true;
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -462,13 +462,13 @@ Current version indicated by LITEVER below.
 	.saveloadpopup {
 		width: 660px;
 		background-color: #262626;
-		margin-top: 80px;
+		margin-top: 120px;
 	}
 	@media (max-width: 768px) {
 		.saveloadpopup {
 			width: 100%;
 			background-color: #262626;
-			margin-top: 80px;
+			margin-top: 120px;
 		}
 	}
 	.saveloadgrid
@@ -478,7 +478,7 @@ Current version indicated by LITEVER below.
 		margin-top: 4px;
 		padding: 4px;
 		display: grid;
-		gap: 4px;
+		gap: 2px;
 		font-size: 12px;
 	}
 	@media (max-width: 340px) {
@@ -2067,6 +2067,9 @@ Current version indicated by LITEVER below.
 	.color_green {
 		color: #3bf723;
 	}
+	.color_lightgreen {
+		color: #b6ffa6;
+	}
 	.color_offwhite {
 		color: #bedae9;
 	}
@@ -2210,6 +2213,24 @@ Current version indicated by LITEVER below.
 		background-color: #8a8a8a;
 	}
 	.bg_teal:disabled:hover {
+		background-color: #8a8a8a;
+	}
+	.bg_primary {
+		background-color: #337ab7;
+	}
+	.bg_primary:hover {
+		background-color: #286090;
+	}
+	.bg_primary:active:focus {
+		background-color: #23527c;
+	}
+	.bg_primary:focus {
+		background-color: #23527c;
+	}
+	.bg_primary:disabled {
+		background-color: #8a8a8a;
+	}
+	.bg_primary:disabled:hover {
 		background-color: #8a8a8a;
 	}
 
@@ -2832,6 +2853,9 @@ Current version indicated by LITEVER below.
 	const koboldcpp_tts_endpoint = "/api/extra/tts";
 	const koboldcpp_admin_list_endpoint = "/api/admin/list_options";
 	const koboldcpp_admin_reload_endpoint = "/api/admin/reload_config";
+	const koboldcpp_savedata_list_endpoint = "/api/extra/data/list";
+	const koboldcpp_savedata_save_endpoint = "/api/extra/data/save";
+	const koboldcpp_savedata_load_endpoint = "/api/extra/data/load";
 
 	const oai_models_endpoint = "/models";
 	const oai_submit_endpoint = "/completions";
@@ -2843,6 +2867,7 @@ Current version indicated by LITEVER below.
 
 	const claude_submit_endpoint = "/complete";
 	const claude_submit_endpoint_v3 = "/messages";
+	const claude_models_endpoint = "/v1/models";
 
 	const default_openrouter_base = "https://openrouter.ai/api/v1";
 	const default_mistralai_base = "https://api.mistral.ai/v1";
@@ -2895,7 +2920,7 @@ Current version indicated by LITEVER below.
 	const HD_RES_PX = 768;
 	const NO_HD_RES_PX = 512;
 	const AVATAR_PX = 384;
-	const SAVE_SLOTS = 6;
+	const SAVE_SLOTS = 8;
 	const num_regex_rows = 4;
 	const default_websearch_template = `### New Task:\nFrom above text, rephrase the search engine query "{{QUERY}}" as a single short phrase (for search engines) using proper nouns, references and names to avoid ambiguity.\n\n### Rephrased Search Query Created:\n`;
 
@@ -2983,6 +3008,7 @@ Current version indicated by LITEVER below.
 	var koboldcpp_has_vision = false;
 	var koboldcpp_has_multiplayer = false;
 	var koboldcpp_has_websearch = false;
+	var koboldcpp_has_savedatafile = false;
 	var koboldcpp_admin_type = 0; //0 = no admin, 1=has admin, 2=protected admin
 	var lastSearchQuery = "";
 	var lastSearchResults = [];
@@ -3007,6 +3033,7 @@ Current version indicated by LITEVER below.
 	var thinking_action = 1; //0=display, 1=collapse, 2=hide, 3=remove
 	var start_thinking_tag = "<think>";
 	var force_thinking_tag = false;
+	var strip_past_thinking = true;
 	var voice_typing_mode = 0; //0=off, 1=on, 2=ptt
 	var koboldcpp_has_whisper = false; //does backend support voice typing
 	var voice_is_recording = false; //currently recording voice?
@@ -5405,7 +5432,7 @@ Current version indicated by LITEVER below.
 					display_endpoint_container();
 				}
 			}).catch((error) => {
-				console.log("Error: " + error);
+				console.error(error);
 				msgbox("Failed to connect to AI Horde Service!\nPlease check your network connection.<br><br>You may still be able to connect to an alternative service, <a href='#' class='color_blueurl' onclick='hide_popups();display_endpoint_container()'>click here to view options</a>.","Error Encountered",true);
 				document.body.classList.remove("connected");
 				document.getElementById("connectstatus").innerHTML = "Offline Mode";
@@ -5446,9 +5473,8 @@ Current version indicated by LITEVER below.
 		//read the url params, and autoload a shared story if found
 		const foundStory = urlParams.get('s');
 		const foundScenario = urlParams.get('scenario');
-		const foundChub = urlParams.get('chub');
-		const foundPyg = urlParams.get('pyg');
-		const foundAicc = urlParams.get('aicc');
+		const foundScenarioSource = scenario_sources.find(scenario => urlParams.get(scenario.urlParam))
+
 		let foundQuery = urlParams.get('query');
 		if (!foundQuery || foundQuery == "")
 		{
@@ -5474,19 +5500,10 @@ Current version indicated by LITEVER below.
 			}
 			//purge url params
 			window.history.replaceState(null, null, window.location.pathname);
-		} else if (foundChub && foundChub != "") {
+		} else if (foundScenarioSource) {
+			console.log(foundScenarioSource, urlParams.get(foundScenarioSource.urlParam));
 			display_scenarios();
-			get_chubai_scenario(foundChub);
-			//purge url params
-			window.history.replaceState(null, null, window.location.pathname);
-		} else if (foundPyg && foundPyg != "") {
-			display_scenarios();
-			get_pygchat_scenario(foundPyg);
-			//purge url params
-			window.history.replaceState(null, null, window.location.pathname);
-		} else if (foundAicc && foundAicc != "") {
-			display_scenarios();
-			get_aicc_scenario(foundAicc);
+			import_scenario(foundScenarioSource, urlParams.get(foundScenarioSource.urlParam));
 			//purge url params
 			window.history.replaceState(null, null, window.location.pathname);
 		}
@@ -6066,6 +6083,10 @@ Current version indicated by LITEVER below.
 	{
 		return (custom_kobold_endpoint!="" && koboldcpp_version && koboldcpp_version!="" && compare_version_str(koboldcpp_version, "1.78") >= 0 && koboldcpp_has_multiplayer);
 	}
+	function is_using_kcpp_with_savedatafile()
+	{
+		return (custom_kobold_endpoint!="" && koboldcpp_version && koboldcpp_version!="" && compare_version_str(koboldcpp_version, "1.84") >= 0 && koboldcpp_has_savedatafile);
+	}
 	function is_using_kcpp_with_websearch()
 	{
 		return (custom_kobold_endpoint!="" && koboldcpp_version && koboldcpp_version!="" && compare_version_str(koboldcpp_version, "1.80") >= 0 && koboldcpp_has_websearch);
@@ -6375,6 +6396,7 @@ Current version indicated by LITEVER below.
 		new_save_storyobj.thinking_action = thinking_action;
 		new_save_storyobj.start_thinking_tag = start_thinking_tag;
 		new_save_storyobj.force_thinking_tag = force_thinking_tag;
+		new_save_storyobj.strip_past_thinking = strip_past_thinking;
 
 		if (export_settings) {
 			new_save_storyobj.savedsettings = JSON.parse(JSON.stringify(localsettings));
@@ -6705,6 +6727,10 @@ Current version indicated by LITEVER below.
 				if(storyobj.force_thinking_tag)
 				{
 					force_thinking_tag = storyobj.force_thinking_tag;
+				}
+				if(storyobj.strip_past_thinking)
+				{
+					strip_past_thinking = storyobj.strip_past_thinking;
 				}
 				if(storyobj.start_thinking_tag)
 				{
@@ -7183,78 +7209,7 @@ Current version indicated by LITEVER below.
 		return loadedwi;
 	}
 
-	function get_aetherroom_scenario()
-	{
-		inputBox("Enter aetherroom.club prompt URL, or 4-digit prompt number","Import from aetherroom.club","","https://aetherroom.club/1234", ()=>{
-			let userinput = getInputBoxValue().toLowerCase().trim();
-			if(userinput=="")
-			{
-				//pass
-			}
-			else
-			{
-				if (userinput.includes("aetherroom.club/")) {
-					//is a url, extract the ID
-					userinput = userinput.replace("/api/","/");
-					userinput = userinput.split("aetherroom.club/")[1];
-					userinput = userinput.split("/")[0];
-					userinput = userinput.split("#")[0];
-					userinput = userinput.split("?")[0];
-				}
-				//remove common malformed ids to reduce load
-				if(userinput!="" && is_numeric(userinput) && userinput>0 && userinput<50000)
-				{
-					fetch(apply_proxy_url("https://aetherroom.club/api/"+userinput,true))
-					.then(x => x.json())
-					.then(data => {
-						console.log(data);
-						temp_scenario =
-						{
-							"title":data.title?data.title:"",
-							"desc":data.description?data.description:"",
-							"opmode":2,
-							"adventure_context_mod":false,
-							"adventure_switch_mode":1,
-							"prompt":data.promptContent?data.promptContent:"",
-							"memory": data.memory?data.memory:"",
-							"authorsnote": data.authorsNote?data.authorsNote:"",
-							"worldinfo": []
-						};
-						if (data.worldInfos)
-						{
-							for (let w = 0; w < data.worldInfos.length; ++w) {
-								let keys = data.worldInfos[w].keys;
-								let entry = data.worldInfos[w].entry;
-
-								let nwi = {
-									"key": (keys ? keys : ""),
-									"keysecondary": "",
-									"keyanti": "",
-									"content": (entry ? entry : ""),
-									"comment": "",
-									"folder": null,
-									"selective": false,
-									"constant": false,
-									"probability":100
-								};
-								temp_scenario.worldinfo.push(nwi);
-							}
-						}
-						preview_temp_scenario();
-					}).catch((error) => {
-						temp_scenario = null;
-						document.getElementById("scenariodesc").innerText = "Error: Selected scenario is invalid.";
-						console.log("Error: " + error);
-					});
-				}else{
-					temp_scenario = null;
-					document.getElementById("scenariodesc").innerText = "Error: User input is invalid\n\n Please ensure you have input a valid aetherroom.club URL or ID (e.g. https://aetherroom.club/1234 or just 1234)";
-				}
-			}
-		},false);
-	}
-
-	function load_temp_scenario_from_tavernobj(obj,loadall)
+	function load_temp_scenario_from_tavernobj(obj)
 	{
 		if(obj!=null)
 		{
@@ -7264,47 +7219,44 @@ Current version indicated by LITEVER below.
 				obj = obj.data;
 			}
 
-			if(loadall)
+			let chatopponent = obj.name?obj.name:"Bot";
+			let memory = obj.description?("Persona: "+obj.description):"";
+			memory += obj.personality?("\nPersonality: "+obj.personality):"";
+			let scenario = obj.scenario?obj.scenario:"";
+			let examplemsg = obj.mes_example?obj.mes_example:"";
+			let greeting = obj.first_mes?obj.first_mes:"";
+			let sysprompt = obj.system_prompt?obj.system_prompt:"";
+
+			//aliases
+			if(examplemsg=="" && obj.mesExample!="")
 			{
-				let chatopponent = obj.name?obj.name:"Bot";
-				let memory = obj.description?("Persona: "+obj.description):"";
-				memory += obj.personality?("\nPersonality: "+obj.personality):"";
-				let scenario = obj.scenario?obj.scenario:"";
-				let examplemsg = obj.mes_example?obj.mes_example:"";
-				let greeting = obj.first_mes?obj.first_mes:"";
-				let sysprompt = obj.system_prompt?obj.system_prompt:"";
-
-				//aliases
-				if(examplemsg=="" && obj.mesExample!="")
-				{
-					examplemsg = obj.mesExample;
-				}
-				if(greeting=="" && obj.firstMes!="")
-				{
-					greeting = obj.firstMes;
-				}
-
-				if(scenario!="")
-				{
-					scenario = "\n[Scenario: "+scenario+"]";
-				}
-				if(examplemsg!="")
-				{
-					examplemsg = "\n"+examplemsg;
-				}
-				if(sysprompt!="")
-				{
-					sysprompt = sysprompt+"\n";
-				}
-				let combinedmem = sysprompt + memory + scenario + examplemsg;
-				temp_scenario.title = chatopponent;
-				let prev2 = replaceAll(obj.description,"{{char}}",chatopponent,true);
-				prev2 = replaceAll(prev2,"{{user}}","User",true);
-				temp_scenario.desc = prev2;
-				temp_scenario.chatopponent = chatopponent;
-				temp_scenario.prompt = ("\n{{char}}: "+ greeting);
-				temp_scenario.memory = combinedmem;
+				examplemsg = obj.mesExample;
 			}
+			if(greeting=="" && obj.firstMes!="")
+			{
+				greeting = obj.firstMes;
+			}
+
+			if(scenario!="")
+			{
+				scenario = "\n[Scenario: "+scenario+"]";
+			}
+			if(examplemsg!="")
+			{
+				examplemsg = "\n"+examplemsg;
+			}
+			if(sysprompt!="")
+			{
+				sysprompt = sysprompt+"\n";
+			}
+			let combinedmem = sysprompt + memory + scenario + examplemsg;
+			temp_scenario.title = chatopponent;
+			let prev2 = replaceAll(obj.description,"{{char}}",chatopponent,true);
+			prev2 = replaceAll(prev2,"{{user}}","User",true);
+			temp_scenario.desc = prev2;
+			temp_scenario.chatopponent = chatopponent;
+			temp_scenario.prompt = ("\n{{char}}: "+ greeting);
+			temp_scenario.memory = combinedmem;
 
 			//since cai format has no wi, try to grab it from tavern format
 			if(obj.character_book && obj.character_book.entries && obj.character_book.entries.length>0)
@@ -7316,355 +7268,6 @@ Current version indicated by LITEVER below.
 		}
 	}
 
-	function get_chubai_portrait(userinput, card_is_defective, original_no_exist)
-	{
-		//try to obtain the full portrait image
-		fetch("https://api.chub.ai/api/characters/download", {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-			},
-			body: JSON.stringify({
-			"format": "tavern",
-			"fullPath": userinput,
-			"version": "main"
-			}),
-			referrerPolicy: 'no-referrer',
-			})
-			.then(rb => {
-				if(rb.ok)
-				{
-					return rb.blob();
-				}else{
-					throw new Error('Cannot fetch tavern image');
-				}
-			})
-			.then(blob => {
-				preview_temp_scenario();
-
-				readTavernPngFromBlob(blob,(obj)=>{
-					load_temp_scenario_from_tavernobj(obj,card_is_defective);
-				});
-
-				const objectURL = URL.createObjectURL(blob);
-				const compressedImg = compressImage(objectURL, (compressedImageURI, aspectratio)=>{
-					temp_scenario.image = compressedImageURI;
-					temp_scenario.image_aspect = aspectratio;
-					preview_temp_scenario();
-				}, true, true, AVATAR_PX);
-			})
-			.catch(error => {
-				if(original_no_exist)
-				{
-					temp_scenario = null;
-					document.getElementById("scenariodesc").innerText = "Error: Selected scenario is invalid.";
-					console.log("Error: " + error);
-				}
-				else
-				{
-					preview_temp_scenario();
-					console.error("Error fetching tavern image:", error);
-				}
-
-		});
-	}
-
-	function get_pygchat_scenario(charstr="")
-	{
-		const loadpyg = function(userinput)
-		{
-			if(userinput=="")
-			{
-				//pass
-			}
-			else
-			{
-				if (userinput.match(/pygmalion\.chat\//i)) {
-					const urlParams = new URLSearchParams(userinput);
-					const cid = urlParams.get('id');
-					if(cid && cid!="")
-					{
-						userinput = cid;
-					}
-				}
-				userinput = userinput.endsWith('/') ? userinput.slice(0, -1) : userinput;
-				if(userinput!="")
-				{
-					temp_scenario = {
-						"title":"",
-						"desc": "",
-						"opmode":3,
-						"chatname": "User",
-						"chatopponent": "",
-						"gui_type":1,
-						"prompt":"",
-						"memory": "",
-						"authorsnote": "",
-						"worldinfo": [],
-					};
-
-					document.getElementById("scenariodesc").innerText = "Loading scenario from Pygmalion.Chat...";
-					let charurl = "https://server.pygmalion.chat/api/export/character/"+userinput+"/v2";
-					fetch(apply_proxy_url(charurl,true), {
-					method: 'GET',
-					headers: {
-						'Content-Type': 'application/json',
-					},
-				//	body: JSON.stringify({ "character_id": userinput }),
-					referrerPolicy: 'no-referrer',
-					})
-					.then(x => {
-						if(x.ok)
-						{
-							return x.json();
-						}else{
-							console.log('Cannot fetch pyg scenario: try fallback to tavern image');
-							throw new Error('Cannot fetch character from pygmalion.chat');
-							return null;
-						}
-					})
-					.then(data => {
-						console.log(data);
-						if(data && data.character) //if fetch was successful
-						{
-							load_temp_scenario_from_tavernobj(data.character,true);
-							if(data.character.data && data.character.data.avatar)
-							{
-								const compressedImg = compressImage(data.character.data.avatar, (compressedImageURI, aspectratio)=>{
-									temp_scenario.image = compressedImageURI;
-									temp_scenario.image_aspect = aspectratio;
-									preview_temp_scenario();
-								}, true, true, AVATAR_PX);
-							}
-						}else{
-							temp_scenario = null;
-							document.getElementById("scenariodesc").innerText = "Error: Selected scenario is invalid.";
-						}
-
-					}).catch((error) => {
-						temp_scenario = null;
-						document.getElementById("scenariodesc").innerText = "Error: Selected scenario is invalid.";
-						console.log("Error: " + error);
-					});
-				}else{
-					temp_scenario = null;
-					document.getElementById("scenariodesc").innerText = "Error: User input is invalid\n\n Please ensure you have input a valid Pygmalion.Chat UUID or URL.";
-				}
-			}
-		}
-
-		if(charstr=="")
-		{
-			inputBox("Enter pygmalion.chat character UUID","Import from pygmalion.chat","","d7950ca8-c241-4725-8de1-42866e389ebf", ()=>{
-				let userinput = getInputBoxValue().trim();
-				loadpyg(userinput);
-			},false);
-		}else{
-			loadpyg(charstr);
-		}
-	}
-
-	function get_aicc_scenario(inputstr="")
-	{
-		const loadaicc = function(userinput)
-		{
-			if(userinput=="")
-			{
-				//pass
-			}
-			else
-			{
-
-				let useraw = false;
-				if (userinput.match(/aicharactercards\.com\//i) && userinput.match(/sdm_process_download/i))
-				{
-					useraw = true;
-				}
-				else {
-					userinput = userinput.split("#")[0].split("?")[0];
-					userinput = userinput.endsWith('/') ? userinput.slice(0, -1) : userinput;
-					if (userinput.match(/aicharactercards\.com\//i) || userinput.match(/AICC\//i)) {
-						// is a URL, extract the character name
-						let tmp = userinput.split("/");
-						if(tmp.length >= 2)
-						{
-							userinput = tmp[tmp.length-2] + "/" + tmp[tmp.length-1];
-						}
-					}
-				}
-
-				if(userinput!="")
-				{
-					temp_scenario = {
-						"title":"",
-						"desc": "",
-						"opmode":3,
-						"chatname": "User",
-						"chatopponent": "",
-						"gui_type":1,
-						"prompt":"",
-						"memory": "",
-						"authorsnote": "",
-						"worldinfo": [],
-					};
-
-					let finalurl = useraw?userinput:"https://aicharactercards.com/wp-json/pngapi/v1/image/"+userinput;
-					finalurl = apply_proxy_url(finalurl,true);
-					//try to obtain the full portrait image
-					fetch(finalurl, {
-						method: 'GET',
-						redirect: 'follow',
-						referrerPolicy: 'no-referrer',
-						})
-						.then(rb => {
-							if(rb.ok)
-							{
-								return rb.blob();
-							}else{
-								throw new Error('Cannot fetch tavern image');
-							}
-						})
-						.then(blob => {
-							preview_temp_scenario();
-
-							readTavernPngFromBlob(blob,(obj)=>{
-								load_temp_scenario_from_tavernobj(obj,true);
-							});
-
-							const objectURL = URL.createObjectURL(blob);
-							const compressedImg = compressImage(objectURL, (compressedImageURI, aspectratio)=>{
-								temp_scenario.image = compressedImageURI;
-								temp_scenario.image_aspect = aspectratio;
-								preview_temp_scenario();
-							}, true, true, AVATAR_PX);
-						})
-						.catch(error => {
-							temp_scenario = null;
-							document.getElementById("scenariodesc").innerText = "Error: Selected scenario is invalid.";
-							console.log("Error: " + error);
-
-						});
-				} else {
-					temp_scenario = null;
-					document.getElementById("scenariodesc").innerText = "Error: User input is invalid\n\n Please ensure you have input a valid AICC URL or ID.";
-				}
-			}
-		}
-
-		if(inputstr=="")
-		{
-			inputBox("Enter aicharactercards.com prompt URL","Import from aicharactercards.com","","https://aicharactercards.com/character-cards/work-jobs/deffcolony/lara-lightland", ()=>{
-				let userinput = getInputBoxValue().trim();
-				loadaicc(userinput);
-			},false);
-		}else{
-			loadaicc(inputstr);
-		}
-	}
-
-	function get_chubai_scenario(chubstr="")
-	{
-		const loadchub = function(userinput)
-		{
-			if(userinput=="")
-			{
-				//pass
-			}
-			else
-			{
-				if (userinput.match(/chub\.ai\//i)) {
-					// is a URL, extract the character name
-					userinput = userinput.replace(/\/characters\//i, '/');
-					userinput = userinput.split(/chub\.ai\//i)[1].split("#")[0].split("?")[0];
-				} else if (userinput.match(/characterhub\.org\//i)) {
-					// is a URL, extract the character name
-					userinput = userinput.replace(/\/characters\//i, '/');
-					userinput = userinput.split(/characterhub\.org\//i)[1].split("#")[0].split("?")[0];
-				}
-				userinput = userinput.endsWith('/') ? userinput.slice(0, -1) : userinput;
-				if(userinput!="")
-				{
-					temp_scenario = {
-						"title":"",
-						"desc": "",
-						"opmode":3,
-						"chatname": "User",
-						"chatopponent": "",
-						"gui_type":1,
-						"prompt":"",
-						"memory": "",
-						"authorsnote": "",
-						"worldinfo": [],
-					};
-
-					document.getElementById("scenariodesc").innerText = "Loading scenario from CharacterHub / Chub...";
-					fetch("https://api.chub.ai/api/characters/download", {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-					},
-					body: JSON.stringify({
-					"format": "cai",
-					"fullPath": userinput,
-					"version": "main"
-					}),
-					referrerPolicy: 'no-referrer',
-					})
-					.then(x => {
-						if(x.ok)
-						{
-							return x.json();
-						}else{
-							console.log('Cannot fetch chub scenario: try fallback to tavern image');
-							//cai format failed, try fallback to portrait only
-							get_chubai_portrait(userinput, true, true);
-							return null;
-						}
-					})
-					.then(data => {
-						if(data) //if cai fetch was successful
-						{
-							console.log(data);
-							let botname = data.name?data.name:"Bot";
-							let cdef = data.definition?data.definition.replace("END_OF_DIALOG","").trim():"";
-							let cdesc = data.description?data.description:"";
-							let greeting = data.greeting?data.greeting:"";
-							let previewtxt = (data.title ? data.title + '\n\n' : '') + replaceAll(cdesc,"{{char}}",botname,true);
-							previewtxt = replaceAll(previewtxt,"{{user}}","User",true);
-
-							temp_scenario.title = data.name?data.name:"";
-							temp_scenario.desc = previewtxt;
-							temp_scenario.chatopponent = botname;
-							temp_scenario.prompt = ("\n{{char}}: "+greeting);
-							temp_scenario.memory = cdesc +"\n"+ cdef;
-
-							let card_is_defective = (data.name==""&&previewtxt==""&&greeting==""&&cdesc==""&&cdef=="");
-
-							get_chubai_portrait(userinput, card_is_defective, false);
-						}
-
-					}).catch((error) => {
-						temp_scenario = null;
-						document.getElementById("scenariodesc").innerText = "Error: Selected scenario is invalid.";
-						console.log("Error: " + error);
-					});
-				}else{
-					temp_scenario = null;
-					document.getElementById("scenariodesc").innerText = "Error: User input is invalid\n\n Please ensure you have input a valid CharacterHub / ChubAI URL or ID.";
-				}
-			}
-		}
-
-		if(chubstr=="")
-		{
-			inputBox("Enter characterhub.org or chub.ai prompt URL","Import from characterhub.org / chub.ai","","https://characterhub.org/characters/Anonymous/example-character", ()=>{
-				let userinput = getInputBoxValue().trim();
-				loadchub(userinput);
-			},false);
-		}else{
-			loadchub(chubstr);
-		}
-	}
 
 	function leave_multiplayer()
 	{
@@ -8034,17 +7637,370 @@ Current version indicated by LITEVER below.
 		}
 	}
 
+	/**
+	 * @type {{
+	 * 		name: string;
+	 * 		urlParam: string;
+	 *		inputBox: {
+	 *			text: string;
+	 *			placeholder: string;
+	 *		};
+	 *		extraction: (userInput: string) => string;
+	 *		fetch: (value: string) => Promise<void>;
+	 *	}[]}
+	 **/
+	const scenario_sources = [
+		// Aetherroom.club
+		{
+			name: "aetherroom.club",
+			urlParam: "aether",
+			inputBox: {
+				text: "Enter aetherroom.club prompt URL, or 4-digit prompt number",
+				placeholder: "https://aetherroom.club/1234"
+			},
+			extraction: (userInput) => {
+				userInput = userInput.toLowerCase();
+				if (userInput.includes("aetherroom.club/")) {
+					//is a url, extract the ID
+					userInput = userInput.replace("/api/","/");
+					userInput = userInput.split("aetherroom.club/")[1];
+					userInput = userInput.split("/")[0];
+					userInput = userInput.split("#")[0];
+					userInput = userInput.split("?")[0];
+				}
+				if(!(userInput!="" && is_numeric(userInput) && userInput>0 && userInput<50000))
+					throw new Error("User input is invalid\n\n Please ensure you have input a valid aetherroom.club URL or ID (e.g. https://aetherroom.club/1234 or just 1234)");
+				return userInput;
+			},
+			fetch: (userInput) => {
+				return fetch(apply_proxy_url("https://aetherroom.club/api/"+userInput,true))
+					.then(x => x.json())
+					.then(data => {
+						console.log(data);
+						temp_scenario =
+						{
+							"title":data.title?data.title:"",
+							"desc":data.description?data.description:"",
+							"opmode":2,
+							"adventure_context_mod":false,
+							"adventure_switch_mode":1,
+							"prompt":data.promptContent?data.promptContent:"",
+							"memory": data.memory?data.memory:"",
+							"authorsnote": data.authorsNote?data.authorsNote:"",
+							"worldinfo": []
+						};
+						if (data.worldInfos)
+						{
+							for (let w = 0; w < data.worldInfos.length; ++w) {
+								let keys = data.worldInfos[w].keys;
+								let entry = data.worldInfos[w].entry;
+
+								let nwi = {
+									"key": (keys ? keys : ""),
+									"keysecondary": "",
+									"keyanti": "",
+									"content": (entry ? entry : ""),
+									"comment": "",
+									"folder": null,
+									"selective": false,
+									"constant": false,
+									"probability":100
+								};
+								temp_scenario.worldinfo.push(nwi);
+							}
+						}
+						preview_temp_scenario();
+					}).catch((error) => {
+						console.error(error);
+						throw new Error("Error: Selected scenario is invalid.");
+					});
+			}
+		},
+		// Chub.ai
+		{
+			name: "characterhub.org / chub.ai",
+			urlParam: "chub",
+			inputBox: {
+				text: "Enter characterhub.org or chub.ai prompt URL",
+				placeholder: "https://characterhub.org/characters/Anonymous/example-character"
+			},
+			extraction: (userInput) => {
+				if (userInput.match(/chub\.ai\//i)) {
+					// is a URL, extract the character name
+					userInput = userInput.replace(/\/characters\//i, '/');
+					userInput = userInput.split(/chub\.ai\//i)[1].split("#")[0].split("?")[0];
+				} else if (userInput.match(/characterhub\.org\//i)) {
+					// is a URL, extract the character name
+					userInput = userInput.replace(/\/characters\//i, '/');
+					userInput = userInput.split(/characterhub\.org\//i)[1].split("#")[0].split("?")[0];
+				}
+				userInput = userInput.endsWith('/') ? userInput.slice(0, -1) : userInput;
+				return userInput;
+			},
+			fetch: (userInput) => {
+				temp_scenario = {
+					"title":"",
+					"desc": "",
+					"opmode":3,
+					"chatname": "User",
+					"chatopponent": "",
+					"gui_type":1,
+					"prompt":"",
+					"memory": "",
+					"authorsnote": "",
+					"worldinfo": [],
+				};
+
+				//try to obtain the full portrait image
+				return fetch("https://api.chub.ai/api/characters/download", {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						"format": "tavern",
+						"fullPath": userInput,
+						"version": "main"
+					}),
+					referrerPolicy: 'no-referrer',
+				})
+				.then(rb => {
+					if (rb.ok) {
+						return rb.blob();
+					} else {
+						throw new Error('Cannot fetch tavern image');
+					}
+				})
+				.then(blob => {
+					preview_temp_scenario();
+
+					readTavernPngFromBlob(blob, (obj) => {
+						load_temp_scenario_from_tavernobj(obj);
+					});
+
+					const objectURL = URL.createObjectURL(blob);
+					const compressedImg = compressImage(objectURL, (compressedImageURI, aspectratio) => {
+						temp_scenario.image = compressedImageURI;
+						temp_scenario.image_aspect = aspectratio;
+						preview_temp_scenario();
+					}, true, true, AVATAR_PX);
+				})
+				.catch(error => {
+					console.error(error);
+					throw new Error("Error fetching tavern scenario.");
+				});
+			}
+		},
+		// Pygmalion.chat
+		{
+			name: "pygmalion.chat",
+			urlParam: "pyg",
+			inputBox: {
+				text: "Enter pygmalion.chat character UUID",
+				placeholder: "d7950ca8-c241-4725-8de1-42866e389ebf",
+			},
+			extraction: (userInput) => {
+				if (userInput.match(/pygmalion\.chat\//i)) {
+					const urlParams = new URLSearchParams(userInput);
+					const cid = urlParams.get('id');
+					if(cid && cid!="")
+					{
+						userInput = cid;
+					}
+				}
+				userInput = userInput.endsWith('/') ? userInput.slice(0, -1) : userInput;
+				userInput = userInput.trim().toLowerCase().replace("https://pygmalion.chat/character/","");
+				userInput = userInput.trim().toLowerCase().replace("https://pygmalion.chat//character/","");
+				return userInput;
+			},
+			fetch: (userInput) => {
+				temp_scenario = {
+					"title":"",
+					"desc": "",
+					"opmode":3,
+					"chatname": "User",
+					"chatopponent": "",
+					"gui_type":1,
+					"prompt":"",
+					"memory": "",
+					"authorsnote": "",
+					"worldinfo": [],
+				};
+
+				let charurl = "https://server.pygmalion.chat/api/export/character/"+userInput+"/v2";
+				return fetch(apply_proxy_url(charurl,true), {
+					method: 'GET',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					referrerPolicy: 'no-referrer',
+				})
+				.then(x => {
+					if(x.ok)
+						return x.json();
+					else
+						throw new Error("Invalid HTTP status on response: " + x.status);
+				})
+				.then(data => {
+					console.log(data);
+					if(data && data.character) //if fetch was successful
+					{
+						load_temp_scenario_from_tavernobj(data.character);
+						if(data.character.data && data.character.data.avatar)
+						{
+							const compressedImg = compressImage(data.character.data.avatar, (compressedImageURI, aspectratio)=>{
+								temp_scenario.image = compressedImageURI;
+								temp_scenario.image_aspect = aspectratio;
+								preview_temp_scenario();
+							}, true, true, AVATAR_PX);
+						}
+					}else{
+						throw new Error("Selected scenario is invalid.");
+					}
+
+				}).catch((error) => {
+					console.error(error);
+					throw new Error("Selected scenario is invalid.");
+				});
+			}
+		},
+		// aicharactercards.com
+		{
+			name: "aicharactercards.com",
+			urlParam: "aicc",
+			inputBox: {
+				text: "Enter aicharactercards.com prompt URL",
+				placeholder: "https://aicharactercards.com/character-cards/work-jobs/deffcolony/lara-lightland",
+			},
+			extraction: (userInput) => {
+				if (userInput.match(/aicharactercards\.com\//i) && userInput.match(/sdm_process_download/i))
+				{
+					return userInput;
+				} else {
+					userInput = userInput.split("#")[0].split("?")[0];
+					userInput = userInput.endsWith('/') ? userInput.slice(0, -1) : userInput;
+					if (userInput.match(/aicharactercards\.com\//i) || userInput.match(/AICC\//i)) {
+						// is a URL, extract the character name
+						let tmp = userInput.split("/");
+						if(tmp.length >= 2)
+						{
+							userInput = tmp[tmp.length-2] + "/" + tmp[tmp.length-1];
+						}
+					}
+					return "https://aicharactercards.com/wp-json/pngapi/v1/image/"+userInput;
+				}
+			},
+			fetch: (userInput) => {
+				temp_scenario = {
+					"title":"",
+					"desc": "",
+					"opmode":3,
+					"chatname": "User",
+					"chatopponent": "",
+					"gui_type":1,
+					"prompt":"",
+					"memory": "",
+					"authorsnote": "",
+					"worldinfo": [],
+				};
+
+				finalurl = apply_proxy_url(userInput,true);
+				//try to obtain the full portrait image
+				return fetch(finalurl, {
+					method: 'GET',
+					redirect: 'follow',
+					referrerPolicy: 'no-referrer',
+					})
+					.then(rb => {
+						if(rb.ok)
+						{
+							return rb.blob();
+						}else{
+							throw new Error('Cannot fetch tavern image');
+						}
+					})
+					.then(blob => {
+						preview_temp_scenario();
+
+						readTavernPngFromBlob(blob,(obj)=>{
+							load_temp_scenario_from_tavernobj(obj);
+						});
+
+						const objectURL = URL.createObjectURL(blob);
+						const compressedImg = compressImage(objectURL, (compressedImageURI, aspectratio)=>{
+							temp_scenario.image = compressedImageURI;
+							temp_scenario.image_aspect = aspectratio;
+							preview_temp_scenario();
+						}, true, true, AVATAR_PX);
+					})
+					.catch(error => {
+						throw new Error("Selected scenario is invalid.");
+						console.error(error);
+					});
+			}
+		},
+	];
+
+	/**
+	 * @param {typeof scenario_sources[number]} scenario_source
+	 * @param {string} [scenario_id]
+	 */
+	function import_scenario(scenario_source, scenario_id) {
+		if(!scenario_source) return;
+
+		function extractionWrapper(userInput) {
+			try {
+				return scenario_source.extraction(userInput)
+			} catch (error) {
+				console.error(error);
+				document.getElementById("scenariodesc").innerText = "Error: Error while extracting value from input: " + (error.message ? "Unknown error": error.message);
+				temp_scenario = null;
+			}
+			return "";
+		}
+
+		function fetchWrapper(userInput) {
+			// Fetch should return a promise, so we catch it like that instead of try catch block.
+			scenario_source.fetch(userInput)
+				.catch(error => {
+					console.error(error);
+					document.getElementById("scenariodesc").innerText = "Error: Error while fetching and parsing remote values: " + (error.message ? "Unknown error": error.message);
+					temp_scenario = null;
+				});
+		}
+
+		function loadScenario(input) {
+			if(!input) return;
+			document.getElementById("scenariodesc").innerText = `Loading scenario from ${scenario_source.name}...`;
+			const extracted = extractionWrapper(input);
+			if(extracted) return fetchWrapper(extracted);
+		}
+
+		if(scenario_id) loadScenario(scenario_id);
+		else inputBox(
+			scenario_source.inputBox.text,
+			"Import from " + scenario_source.inputBox.name,
+			"",
+			scenario_source.inputBox.placeholder,
+			(value) => {
+				const input = getInputBoxValue().trim();
+				loadScenario(input);
+			}
+		);
+	}
+
 	function display_scenarios()
 	{
 		mainmenu_untab(true);
 		temp_scenario = null;
 		document.getElementById("quickstartcontainer").classList.remove("hidden");
 
-		let scenarios = `<button type="button" name="" class="scenarioitem purple btn btn-primary" onclick="get_aetherroom_scenario()">Import from<br>aetherroom.club</button>`+
-		`<button type="button" name="" class="scenarioitem purple btn btn-primary" onclick="get_chubai_scenario()">Import from<br>characterhub.org / chub.ai</button>` +
-		`<button type="button" name="" class="scenarioitem purple btn btn-primary" onclick="get_pygchat_scenario()">Import from<br>pygmalion.chat</button>` +
-		`<button type="button" name="" class="scenarioitem purple btn btn-primary" onclick="get_aicc_scenario()">Import from<br>aicharactercards.com</button>` +
-		`<button type="button" name="" class="scenarioitem purple btn btn-primary" onclick="character_creator()">New Character Creator</button>`;
+		let scenarios = ``;
+		for(let i=0;i<scenario_sources.length;++i) {
+			scenarios += `<button type="button" name="" class="scenarioitem purple btn btn-primary" onclick="import_scenario(scenario_sources[${i}])">Import from<br>${scenario_sources[i].name}</button>`
+		}
+
+		scenarios += `<button type="button" name="" class="scenarioitem purple btn btn-primary" onclick="character_creator()">New Character Creator</button>`;
 		for(let i=0;i<scenario_db.length;++i)
 		{
 			let curr = scenario_db[i];
@@ -8500,13 +8456,8 @@ Current version indicated by LITEVER below.
 		{
 			let a1 = parseFloat(document.getElementById("dynatemp_min").value);
 			let a2 = parseFloat(document.getElementById("dynatemp_max").value);
-			if (a2<a1)
-			{
-				a2 = a1;
-				document.getElementById("dynatemp_max").value = document.getElementById("dynatemp_min").value;
-			}
 			let avg = (a1+a2)*0.5;
-			let diff = Math.abs(a2 - a1)*0.5;
+			let diff = (a2 - a1)*0.5;
 			document.getElementById("dynatemp_range").value = diff.toFixed(3);
 			document.getElementById("dynatemp_outtemp").value = avg.toFixed(3);
 			document.getElementById("temperature").value = avg.toFixed(3);
@@ -8517,7 +8468,7 @@ Current version indicated by LITEVER below.
 	function confirm_dynatemp()
 	{
 		document.getElementById("dynatempcontainer").classList.add("hidden");
-		document.getElementById("dynatemp_overview").innerText = (document.getElementById("dynatemp_range").value>0?"ON":"OFF");
+		document.getElementById("dynatemp_overview").innerText = (document.getElementById("dynatemp_range").value!=0?"ON":"OFF");
 	}
 	function show_dynatemp()
 	{
@@ -8972,6 +8923,73 @@ Current version indicated by LITEVER below.
 		}
 		toggleoaichatcompl();
 	}
+	function claude_fetch_models()
+	{
+		let desired_claude_key = document.getElementById("custom_claude_key").value.trim();
+		let claude_ep = document.getElementById("custom_claude_endpoint").value.trim();
+		if(claude_ep.toLowerCase().includes("api.anthropic.com"))
+		{
+			//official API has broken cors settings
+			claude_ep = apply_proxy_url(claude_ep,true);
+		}
+		if(desired_claude_key=="")
+		{
+			msgbox("Claude requires an API key to fetch model list!");
+			return;
+		}
+
+		let dropdown = document.getElementById("custom_claude_model");
+		fetch((claude_ep + claude_models_endpoint), {
+			method: 'GET',
+			headers: {
+				'Content-Type': 'application/json',
+				'anthropic-version':'2023-06-01',
+				'x-api-key': desired_claude_key,
+			},
+			referrerPolicy: 'no-referrer',
+		})
+		.then((response) => response.json())
+		.then((data) => {
+			console.log(data);
+			if (data && data.data.length > 0)
+			{
+				for (var i = dropdown.options.length - 1; i >= 0; i--) {
+					var option = dropdown.options[i];
+					dropdown.remove(option);
+				}
+				let selidx = 0;
+				for(var i = 0; i < data.data.length; i++) {
+					var opt = data.data[i];
+					var el = document.createElement("option");
+					let optname = opt.id;
+					el.textContent = optname;
+					el.value = optname;
+					dropdown.appendChild(el);
+				}
+				dropdown.selectedIndex = selidx;
+				togglepalmmodel();
+			}
+			else
+			{
+				let errmsg = "";
+				if(data && data.error)
+				{
+					errmsg = data.error;
+				}
+				else
+				{
+					errmsg = data;
+				}
+				msgbox(JSON.stringify(errmsg),"Error Encountered",false,false);
+			}
+		})
+		.catch(error => {
+			console.log("Error: " + error);
+			msgbox("Error: " + error,"Error Encountered",false,false,()=>{
+				hide_msgbox();
+			});
+		});
+	}
 	function gemini_fetch_models()
 	{
 		let desired_gemini_key = document.getElementById("custom_palm_key").value.trim();
@@ -9136,6 +9154,13 @@ Current version indicated by LITEVER below.
 			document.getElementById("claudesystemprompt").classList.add("hidden");
 			document.getElementById("claudejailbreakprompt").classList.add("hidden");
 			document.getElementById("clauderenamecompatdiv").classList.remove("hidden");
+		}
+		if(document.getElementById("custom_claude_model").value.toLowerCase().includes("claude-3-7"))
+		{
+			document.getElementById("claudethinkingbox").classList.remove("hidden");
+		}else
+		{
+			document.getElementById("claudethinkingbox").classList.add("hidden");
 		}
 	}
 
@@ -9513,6 +9538,7 @@ Current version indicated by LITEVER below.
 									koboldcpp_has_websearch = (data.websearch?true:false);
 									koboldcpp_has_tts = (data.tts?true:false);
 									koboldcpp_admin_type = (data.admin?data.admin:0);
+									koboldcpp_has_savedatafile = (data.savedata?true:false)
 									let has_password = (data.protected?true:false);
 									let has_txt2img = (data.txt2img?true:false);
 									let no_txt_model = (mdlname=="inactive");
@@ -9992,10 +10018,67 @@ Current version indicated by LITEVER below.
 		});
 	}
 
+	var cachedsaveslotlabels = [];
+	var netsaveslotlabels = [];
+	function saveloadchangeslot(updatelist=false)
+	{
+		let selectedslot = document.getElementById("saveslotselecteddropdown").value;
+		let selectedlocation = document.getElementById("saveslotlocationdropdown").value;
+		let selectedslotlabel = null;
+		let choices = "";
+		let foundoption = false;
+		if(selectedlocation=="1") //local
+		{
+			for(let i=0;i<cachedsaveslotlabels.length;++i)
+			{
+				let testslot = cachedsaveslotlabels[i];
+				if(selectedslot==i)
+				{
+					selectedslotlabel = testslot;
+					foundoption = true;
+				}
+				let lbl = (i+1);
+				let tsdesc = (testslot.length>50)?testslot.substring(0,50)+"...":testslot;
+				let slotname = (testslot?`Local Slot `+(lbl)+` - `+tsdesc+``:`Local Slot `+(lbl)+` - [ Empty ]`);
+				choices += `<option value=${i}${(selectedslot==i)?" selected":""}>${slotname}</option>`;
+			}
+		} else if(selectedlocation=="2") { //remote saves
+			for(let i=0;i<netsaveslotlabels.length;++i)
+			{
+				let testslot = netsaveslotlabels[i];
+				if(selectedslot==i)
+				{
+					selectedslotlabel = testslot;
+					foundoption = true;
+				}
+				let lbl = (i+1);
+				let tsdesc = (testslot.length>50)?testslot.substring(0,50)+"...":testslot;
+				let slotname = (testslot?`Server Slot `+(lbl)+` - `+tsdesc+``:`Server Slot `+(lbl)+` - [ Empty ]`);
+				choices += `<option value=${i}${(selectedslot==i)?" selected":""}>${slotname}</option>`;
+			}
+		}
+		document.getElementById("loadfromslot").disabled = (selectedslotlabel?false:true);
+		document.getElementById("downloadslot").disabled = (selectedslotlabel?false:true);
+		document.getElementById("deleteslot").disabled = (selectedslotlabel?false:true);
+		if(!foundoption)
+		{
+			document.getElementById("saveslotselecteddropdown").selectedIndex = 0;
+		}
+		if(updatelist)
+		{
+			document.getElementById("saveslotselecteddropdown").innerHTML = choices;
+		}
+	}
 	function display_saveloadcontainer()
 	{
 		mainmenu_untab(true);
 		document.getElementById("saveloadcontainer").classList.remove("hidden");
+
+		if (is_using_kcpp_with_savedatafile()) {
+			document.getElementById("kcppsaveavailable").classList.remove("hidden");
+		} else {
+			document.getElementById("kcppsaveavailable").classList.add("hidden");
+		}
 
 		let slotpromises = [];
 		for(let i=0;i<SAVE_SLOTS;++i)
@@ -10004,111 +10087,277 @@ Current version indicated by LITEVER below.
 		}
 		Promise.all(slotpromises).then(slotlabels=>
 		{
-			let filetable = ``;
-			let entry = `<div style="display:flex">
-					<button type="button" style="font-size:12px; margin:2px;width:33%" name="localsave" class="btn btn-primary" onclick="hide_popups();save_file_button()">`+"💾<br>Download File"+`</button>
-					<button type="button" style="font-size:12px; margin:2px;width:33%" name="localload" class="btn btn-primary" onclick="hide_popups();load_file_button()">`+"📁<br>Open File"+`</button>
-					<button type="button" style="font-size:12px; margin:2px;width:34%" name="shareurl" class="btn btn-primary" onclick="hide_popups();share_story_button()">`+"🌐<br>Share"+`</button>
-					</div>
-					<div style="margin-top:3px; text-align: center; align-self: center; width: calc(100% - 184px);">
-					<span style="font-weight:bold;text-decoration: underline;">Temporary Browser Storage</span>
-					</div>`;
-			filetable += entry;
-
-			for(let i=0;i<slotlabels.length;++i)
-			{
-				let testslot = slotlabels[i];
-				let lbl = (i+1);
-				entry = `<div style="display:flex; height:42px;">
-					<div style="margin:3px; text-align: center; align-self: center; width: calc(100% - 184px);">
-					`+(testslot?`[ Slot `+(lbl)+` - `+testslot+` ]`:`[ Slot `+(lbl)+` - Empty ]`)+`
-					</div>
-					<div style="text-align: right; align-self: center; width: 184px;">
-					<button type="button" title="Save To Slot ${lbl}" class="btn btn-primary" onclick="save_to_slot(${i})"><img class="btnicon-save"/></button>
-					<button type="button" title="Load From Slot ${lbl}" class="btn btn-primary" onclick="load_from_slot(${i})" `+(testslot?"":"disabled")+`><img class="btnicon-load"/></button>
-					<button type="button" title="Download Slot ${lbl}" class="btn btn-primary bg_green" onclick="download_from_slot(${i})" `+(testslot?"":"disabled")+`><img class="btnicon-download"/></button>
-					<button type="button" title="Delete Slot ${lbl}" class="btn btn-primary bg_red" onclick="delete_from_slot(${i})" `+(testslot?"":"disabled")+`><img class="btnicon-delete"/></button>
-					</div></div>`;
-				filetable += entry;
-			}
+			cachedsaveslotlabels = slotlabels;
+			saveloadchangeslot(true);
 			populate_corpo_leftpanel();
-			document.getElementById("saveloadentries").innerHTML = filetable;
 		});
+		if(is_using_kcpp_with_savedatafile())
+		{
+			//grab saves
+			fetch(custom_kobold_endpoint + koboldcpp_savedata_list_endpoint, {
+			method: 'POST', // or 'PUT'
+			headers: get_kobold_header(),
+			})
+			.then((response) => response.json())
+			.then((data) => {
+				netsaveslotlabels = data;
+				saveloadchangeslot(true);
+				populate_corpo_leftpanel();
+			})
+			.catch((error) => {
+				console.error('Error:', error);
+			});
+		}
 	}
-	function save_to_slot(slot)
+	function save_to_slot(slot,islocal)
 	{
 		let defaultsavename = (localsettings.opmode==1?"Untitled Story":(localsettings.opmode==2?"Untitled Adventure":(localsettings.opmode==3?"Untitled Chat":"Untitled Instruct")));
 		let savename = defaultsavename + " " + new Date().toLocaleString();
-		let slotnumshown = (slot+1);
-		indexeddb_load("slot_"+slot+"_meta","").then(testslot=>{
+		let slotnumshown = (parseInt(slot)+1);
+		let newcompressedstory = generate_compressed_story(true, true, true);
+		if(islocal)
+		{
+			indexeddb_load("slot_"+slot+"_meta","").then(testslot=>{
+				if (testslot) {
+					savename = testslot;
+				}
+				const slotwrite = function () {
+					warn_on_quit = false;
+					inputBox("Enter a label for this Browser Storage Slot data", "Enter a label", savename, defaultsavename, () => {
+						let userinput = getInputBoxValue();
+						if (userinput.trim() == "") {
+							userinput = defaultsavename;
+						}
+						indexeddb_save("slot_" + slot + "_data", newcompressedstory)
+						indexeddb_save("slot_" + slot + "_meta", userinput).then(()=>{display_saveloadcontainer()});
+					});
+				}
+
+				if (testslot) {
+					msgboxYesNo("Overwrite existing story in Browser Storage Slot " + slotnumshown + "?", "Overwrite Browser Storage Slot " + slotnumshown, () => {
+						slotwrite();
+					}, null);
+				}
+				else {
+					slotwrite();
+				}
+			});
+		} else { //remote save
+			let testslot = (slot<netsaveslotlabels.length?netsaveslotlabels[slot]:"");
 			if (testslot) {
 				savename = testslot;
 			}
-			let newcompressedstory = generate_compressed_story(true, true, true);
-
 			const slotwrite = function () {
 				warn_on_quit = false;
-				inputBox("Enter a label for this Browser Storage Slot data", "Enter a label", savename, defaultsavename, () => {
+				inputBox("Enter a label for this Server Storage Slot data", "Enter a label", savename, defaultsavename, () => {
 					let userinput = getInputBoxValue();
 					if (userinput.trim() == "") {
 						userinput = defaultsavename;
 					}
-					indexeddb_save("slot_" + slot + "_data", newcompressedstory)
-					indexeddb_save("slot_" + slot + "_meta", userinput).then(()=>{display_saveloadcontainer()});
+					//complete remote save
+					fetch(custom_kobold_endpoint + koboldcpp_savedata_save_endpoint, {
+					method: 'POST', // or 'PUT'
+					headers: get_kobold_header(),
+					body: JSON.stringify({
+						"slot": slot,
+						"format": "kcpp_lzma_b64",
+						"title": userinput,
+						"data": newcompressedstory,
+					}),
+					})
+					.then((response) => response.json())
+					.then((data) => {
+						if(!data.success)
+						{
+							msgbox(`Save Error: ${data.error}`,"Save Failed",false,false,()=>{
+								display_saveloadcontainer();
+							});
+						}
+						else
+						{
+							display_saveloadcontainer();
+						}
+					})
+					.catch((error) => {
+						console.error('Error:', error);
+						msgbox(`Save Error: ${error}`,"Save Failed",false,false,()=>{
+							display_saveloadcontainer();
+						});
+					});
 				});
 			}
-
 			if (testslot) {
-				msgboxYesNo("Overwrite existing story in Browser Storage Slot " + slotnumshown + "?", "Overwrite Storage Slot " + slotnumshown, () => {
+				msgboxYesNo("Overwrite existing story in Server Storage Slot " + slotnumshown + "?", "Overwrite Server Storage Slot " + slotnumshown, () => {
 					slotwrite();
 				}, null);
 			}
 			else {
 				slotwrite();
 			}
-		});
+		}
 	}
-	function load_from_slot(slot)
+	function load_from_slot(slot,islocal)
 	{
-		indexeddb_load("slot_"+slot+"_data","").then(loadedstorycompressed=>{
-			if(loadedstorycompressed)
-			{
-				hide_popups();
-				import_compressed_story(loadedstorycompressed,false);
-			}else{
-				msgbox("Unable to load story from browser storage","Browser Storage Load Failed");
-			}
-		});
-	}
-	function download_from_slot(slot)
-	{
-		indexeddb_load("slot_"+slot+"_data","").then(loadedstorycompressed=>{
-			if(loadedstorycompressed)
-			{
-				tempfileobj = decompress_story(loadedstorycompressed);
-				if(tempfileobj)
+		if(islocal)
+		{
+			indexeddb_load("slot_"+slot+"_data","").then(loadedstorycompressed=>{
+				if(loadedstorycompressed)
 				{
-					save_file_button(true);
+					hide_popups();
+					import_compressed_story(loadedstorycompressed,false);
+				}else{
+					msgbox("Unable to load story from browser storage","Browser Storage Load Failed");
+				}
+			});
+		} else {
+			fetch(custom_kobold_endpoint + koboldcpp_savedata_load_endpoint, {
+			method: 'POST', // or 'PUT'
+			headers: get_kobold_header(),
+			body: JSON.stringify({
+				"slot": slot,
+			}),
+			})
+			.then((response) => response.json())
+			.then((resp) => {
+				if(!resp.success || !resp.data)
+				{
+					msgbox("Error: Unable to load story from server storage","Server Storage Load Failed");
 				}
 				else
 				{
-					tempfileobj = generate_base_storyobj();
-					msgbox("Story could not be downloaded. Try loading it first.","Browser Storage Load Failed");
+					hide_popups();
+					import_compressed_story(resp.data.data,false);
 				}
-			}else{
-				msgbox("Unable to load story from browser storage","Browser Storage Load Failed");
-			}
-		});
+			})
+			.catch((error) => {
+				console.error('Error:', error);
+				msgbox("Error: Unable to load story from server storage","Server Storage Load Failed");
+			});
+		}
 	}
-	function delete_from_slot(slot)
+	function download_from_slot(slot,islocal)
 	{
-		let slotnumshown = (slot+1);
-		msgboxYesNo("Delete story in Browser Storage Slot "+slotnumshown+"?","Delete Storage Slot "+slotnumshown,()=>{
-			indexeddb_save("slot_"+slot+"_data", "");
-			indexeddb_save("slot_"+slot+"_meta", "").then(()=>{display_saveloadcontainer()});
-		},()=>{
-			display_saveloadcontainer();
-		});
+		let ondl = function (loadedstorycompressed) {
+			if (loadedstorycompressed) {
+				tempfileobj = decompress_story(loadedstorycompressed);
+				if (tempfileobj) {
+					save_file_button(true);
+				}
+				else {
+					tempfileobj = generate_base_storyobj();
+					msgbox("Story could not be downloaded. Try loading it first.", "Download Failed");
+				}
+			} else {
+				msgbox("Unable to download story.", "Download Load Failed");
+			}
+		};
+
+		if(islocal)
+		{
+			indexeddb_load("slot_"+slot+"_data","").then(loadedstorycompressed=>{
+				ondl(loadedstorycompressed);
+			});
+		}
+		else
+		{
+			fetch(custom_kobold_endpoint + koboldcpp_savedata_load_endpoint, {
+			method: 'POST', // or 'PUT'
+			headers: get_kobold_header(),
+			body: JSON.stringify({
+				"slot": slot,
+			}),
+			})
+			.then((response) => response.json())
+			.then((resp) => {
+				if(!resp.success || !resp.data)
+				{
+					msgbox("Error: Unable to load story from server storage","Server Storage Load Failed");
+				}
+				else
+				{
+					ondl(resp.data.data);
+				}
+			})
+			.catch((error) => {
+				console.error('Error:', error);
+				msgbox("Error: Unable to load story from server storage","Server Storage Load Failed");
+			});
+		}
+	}
+	function delete_from_slot(slot,islocal)
+	{
+		let slotnumshown = (parseInt(slot)+1);
+		if (islocal) {
+			msgboxYesNo("Delete story in Browser Storage Slot " + slotnumshown + "?", "Delete Browser Storage Slot " + slotnumshown, () => {
+				indexeddb_save("slot_" + slot + "_data", "");
+				indexeddb_save("slot_" + slot + "_meta", "").then(() => { display_saveloadcontainer() });
+			}, () => {
+				display_saveloadcontainer();
+			});
+		} else {
+			msgboxYesNo("Delete story in Server Storage Slot " + slotnumshown + "?", "Delete Server Storage Slot " + slotnumshown, () => {
+				fetch(custom_kobold_endpoint + koboldcpp_savedata_save_endpoint, {
+				method: 'POST', // or 'PUT'
+				headers: get_kobold_header(),
+				body: JSON.stringify({
+					"slot": slot,
+					"format": "",
+					"title": "",
+					"data": "",
+				}),
+				})
+				.then((response) => response.json())
+				.then((data) => {
+					if(!data.success)
+					{
+						msgbox(`Delete Error: ${data.error}`,"Delete Failed",false,false,()=>{
+							display_saveloadcontainer();
+						});
+					}
+					else
+					{
+						display_saveloadcontainer();
+					}
+				})
+				.catch((error) => {
+					console.error('Error:', error);
+					msgbox(`Delete Error: ${error}`,"Delete Failed",false,false,()=>{
+						display_saveloadcontainer();
+					});
+				});
+			}, () => {
+				display_saveloadcontainer();
+			});
+		}
+	}
+
+	function save_to_curr_slot()
+	{
+		let selectedslot = document.getElementById("saveslotselecteddropdown").value;
+		let selectedlocation = document.getElementById("saveslotlocationdropdown").value;
+		let islocal = (selectedlocation=="1");
+		save_to_slot(selectedslot,islocal);
+	}
+	function load_from_curr_slot()
+	{
+		let selectedslot = document.getElementById("saveslotselecteddropdown").value;
+		let selectedlocation = document.getElementById("saveslotlocationdropdown").value;
+		let islocal = (selectedlocation=="1");
+		load_from_slot(selectedslot,islocal);
+	}
+	function download_from_curr_slot()
+	{
+		let selectedslot = document.getElementById("saveslotselecteddropdown").value;
+		let selectedlocation = document.getElementById("saveslotlocationdropdown").value;
+		let islocal = (selectedlocation=="1");
+		download_from_slot(selectedslot,islocal);
+	}
+	function delete_from_curr_slot()
+	{
+		let selectedslot = document.getElementById("saveslotselecteddropdown").value;
+		let selectedlocation = document.getElementById("saveslotlocationdropdown").value;
+		let islocal = (selectedlocation=="1");
+		delete_from_slot(selectedslot,islocal);
 	}
 
 	var cached_model_list = null;
@@ -10617,7 +10866,7 @@ Current version indicated by LITEVER below.
 		document.getElementById("dynatemp_exponent").value = localsettings.dynatemp_exponent;
 		document.getElementById("smoothing_factor").value = localsettings.smoothing_factor;
 		document.getElementById("nsigma").value = localsettings.nsigma;
-		document.getElementById("dynatemp_overview").innerText = (localsettings.dynatemp_range>0?"ON":"OFF");
+		document.getElementById("dynatemp_overview").innerText = (localsettings.dynatemp_range!=0?"ON":"OFF");
 		document.getElementById("presence_penalty").value = localsettings.presence_penalty;
 		document.getElementById("sampler_seed").value = localsettings.sampler_seed;
 		document.getElementById("top_k").value =  document.getElementById("top_k_slide").value = localsettings.top_k;
@@ -10822,7 +11071,7 @@ Current version indicated by LITEVER below.
 			document.getElementById("rep_pen_slope").value = found.rep_pen_slope;
 			document.getElementById("sampler_order").value = found.sampler_order.toString();
 			document.getElementById("presetsdesc").innerText = found.description;
-			document.getElementById("dynatemp_overview").innerText = (document.getElementById("dynatemp_range").value>0?"ON":"OFF");
+			document.getElementById("dynatemp_overview").innerText = (document.getElementById("dynatemp_range").value!=0?"ON":"OFF");
 		}else{
 			document.getElementById("presetsdesc").innerText = "";
 		}
@@ -11168,8 +11417,8 @@ Current version indicated by LITEVER below.
 		localsettings.rep_pen_slope = cleannum(localsettings.rep_pen_slope, 0, 20);
 		localsettings.top_p = cleannum(localsettings.top_p, 0.002, 1);
 		localsettings.min_p = cleannum(localsettings.min_p, 0.0, 1);
-		localsettings.dynatemp_range = cleannum(localsettings.dynatemp_range, 0.0, 5);
-		localsettings.dynatemp_range = (localsettings.dynatemp_range>localsettings.temperature?localsettings.temperature:localsettings.dynatemp_range);
+		localsettings.dynatemp_range = cleannum(localsettings.dynatemp_range, -5, 5);
+		localsettings.dynatemp_range = ((localsettings.dynatemp_range > localsettings.temperature) ? localsettings.temperature : ((localsettings.dynatemp_range < -localsettings.temperature) ? -localsettings.temperature : localsettings.dynatemp_range));
 		localsettings.dynatemp_exponent = cleannum(localsettings.dynatemp_exponent, 0.0, 10.0);
 		localsettings.smoothing_factor = cleannum(localsettings.smoothing_factor, 0.0, 10.0);
 		localsettings.nsigma = cleannum(localsettings.nsigma, 0.0, 5.0);
@@ -11618,6 +11867,7 @@ Current version indicated by LITEVER below.
 		}
 		thinking_action = parseInt(document.getElementById("thinking_action").value);
 		force_thinking_tag = document.getElementById("force_thinking_tag").checked?true:false;
+		strip_past_thinking = document.getElementById("strip_past_thinking").checked?true:false;
 		start_thinking_tag = document.getElementById("start_thinking_tag").value;
 	}
 
@@ -11972,6 +12222,7 @@ Current version indicated by LITEVER below.
 			thinking_pattern = "<think>([\\s\\S]+?)<\/think>";
 			thinking_action = 1;
 			force_thinking_tag = false;
+			strip_past_thinking = true;
 			start_thinking_tag = "<think>";
 		}
 		warn_on_quit = false;
@@ -12103,7 +12354,7 @@ Current version indicated by LITEVER below.
 				let matchiter = 0;
 				inputtxt = inputtxt.replace(/%ExpandBtn%/g, function (m) {
 					let curr = matches[matchiter];
-					let expandedhtml = `<span><button type="button" title="Show Thoughts" class="btn btn-primary" style="font-size:12px;padding:2px 2px;" onclick="toggle_hide_thinking(this)">Show Thoughts (${curr.length} characters)</button><span class="hidden">${escape_html(curr)}</span></span>`;
+					let expandedhtml = `<span><button type="button" title="Show Thoughts" class="btn btn-primary" style="font-size:12px;padding:2px 2px;" onclick="toggle_hide_thinking(this)">Show Thoughts (${curr.length} characters)</button><span class="color_lightgreen hidden"><br>${escape_html(curr)}</span></span>`;
 					++matchiter;
 					return expandedhtml;
 				});
@@ -13335,6 +13586,13 @@ Current version indicated by LITEVER below.
 			let truncated_context = concat_gametext(true, "","","",false,true); //no need to truncate if memory is empty
 			truncated_context = truncated_context.replace(/\xA0/g,' '); //replace non breaking space nbsp
 
+			//remove past thoughts
+			if(strip_past_thinking && thinking_action>0 && thinking_pattern!="") //removal of cot
+			{
+				let pat = new RegExp(thinking_pattern, "gm");
+				truncated_context = truncated_context.replace(pat, "");
+			}
+
 			let max_allowed_characters = getMaxAllowedCharacters(truncated_context, maxctxlen, maxgenamt);
 
 			//for adventure mode, inject hidden context, even more if there's nothing in memory
@@ -14266,20 +14524,37 @@ Current version indicated by LITEVER below.
 				{
 					let sysprompt = document.getElementById("claudesystemprompt").value;
 					let assistantprompt = document.getElementById("claudejailbreakprompt").value;
+					let claudethinking = (document.getElementById("claudethinking").checked?true:false);
+
 					claude_payload =
 					{
 						"model": custom_claude_model,
 						"messages": [],
 						"max_tokens": submit_payload.params.max_length,
-						"top_k": (submit_payload.params.top_k<1?300:submit_payload.params.top_k),
 						"temperature": submit_payload.params.temperature,
-						"top_p": submit_payload.params.top_p,
 					};
 					claude_payload.messages.push({"role": "user", "content": submit_payload.prompt})
 					if(sysprompt)
 					{
 						claude_payload.system = sysprompt;
 					}
+
+					if(claudethinking && custom_claude_model.toLowerCase().includes("claude-3-7"))
+					{
+						claude_payload.thinking = {
+							"type": "enabled",
+							"budget_tokens": 1024
+						}
+						claude_payload.max_tokens += 1024;
+						claude_payload.temperature = 1;
+					}
+					else
+					{
+						//unsupported with thinking
+						claude_payload.top_k = (submit_payload.params.top_k<1?300:submit_payload.params.top_k);
+						claude_payload.top_p = submit_payload.params.top_p;
+					}
+
 					if(localsettings.opmode==1)
 					{
 						claude_payload.system = "Always respond with a direct partial continuation of the story immediately from the latest word.";
@@ -14356,9 +14631,24 @@ Current version indicated by LITEVER below.
 					.then((response) => response.json())
 					.then((data) => {
 						console.log("sync finished response: " + JSON.stringify(data));
-						if(custom_claude_key != "" && data.content && data.content.length > 0 && data.content[0].text)
+						if(custom_claude_key != "" && data.content && data.content.length > 0)
 						{
-							data.completion = data.content[0].text; //for claudev3
+							let comp = "";
+							for(let i=0;i<data.content.length;++i)
+							{
+								if(data.content[i].text)
+								{
+									comp += data.content[i].text; //for claudev3
+								}
+								if(data.content[i].thinking)
+								{
+									comp += `<think>${data.content[i].thinking}</think>\n\n`; //for claudev3
+								}
+							}
+							if(comp!="")
+							{
+								data.completion = comp;
+							}
 							if(localsettings.opmode==1 && gametext_arr.length>0 && data.completion!="")
 							{
 								data.completion = cleanup_story_completion(data.completion);
@@ -18552,6 +18842,7 @@ Current version indicated by LITEVER below.
 		document.getElementById("thinking_pattern").value = thinking_pattern;
 		document.getElementById("thinking_action").value = thinking_action;
 		document.getElementById("force_thinking_tag").checked = force_thinking_tag;
+		document.getElementById("strip_past_thinking").checked = strip_past_thinking;
 		document.getElementById("start_thinking_tag").value = start_thinking_tag;
 	}
 
@@ -20213,8 +20504,38 @@ Current version indicated by LITEVER below.
 
 			<div style="overflow: auto;">
 				<div id="saveloadentries" class="menutext saveloadgrid">
+					<div style="display:flex">
+						<button type="button" style="font-size:12px; margin:2px;width:33%" name="localsave" class="btn btn-primary" onclick="hide_popups();save_file_button()">💾<br>Download File</button>
+						<button type="button" style="font-size:12px; margin:2px;width:33%" name="localload" class="btn btn-primary" onclick="hide_popups();load_file_button()">📁<br>Open File</button>
+						<button type="button" style="font-size:12px; margin:2px;width:34%" name="shareurl" class="btn btn-primary" onclick="hide_popups();share_story_button()">🌐<br>Share</button>
+					</div>
+					<div style="margin-top:3px; text-align: center; align-self: center; width: 100%">
+						<span style="font-weight:bold;text-decoration: underline;">Slot Storage Option</span>
+					</div>
+					<div style="display:flex;">
+						<div style="width: 92px; margin:8px; margin-left: 4px; margin-right: 4px; font-size: 14px;">Data Location</div>
+						<div style="margin:3px; text-align: center; align-self: center; width: calc(100% - 94px);">
+						<select title="Select Slot Location" style="padding:4px;" class="form-control" id="saveslotlocationdropdown" onchange="saveloadchangeslot(true)">
+						<option value="1">Local Browser Cache</option>
+						<option value="2" id="kcppsaveavailable" class="hidden">KoboldCpp Server Storage</option>
+						</select>
+						</div>
+					</div>
+					<div style="display:flex;">
+						<div style="width: 92px; margin:8px; margin-left: 4px; margin-right: 4px; font-size: 14px;">Selected Slot</div>
+						<div style="margin:3px; text-align: center; align-self: center; width: calc(100% - 94px);">
+						<select title="Select Save Slot" style="padding:4px;" class="form-control" id="saveslotselecteddropdown" onchange="saveloadchangeslot(false)">
+						</select>
+						</div>
+					</div>
+					<div style="width:100%;align-self: center;">
+						<button type="button" id="savetoslot" title="Save To Slot" class="btn btn-primary bg_primary" onclick="save_to_curr_slot()"><img class="btnicon-save"/> Save Slot</button>
+						<button type="button" id="loadfromslot" title="Load From Slot" class="btn btn-primary bg_primary" onclick="load_from_curr_slot()"><img class="btnicon-load"/> Load Slot</button>
+						<button type="button" id="downloadslot" title="Download Slot" class="btn btn-primary bg_green" onclick="download_from_curr_slot()"><img class="btnicon-download"/> Download</button>
+						<button type="button" id="deleteslot" title="Delete Slot" class="btn btn-primary bg_red" onclick="delete_from_curr_slot()"><img class="btnicon-delete"/> Delete Slot</button>
+					</div>
 				</div>
-				<div class="menutext"><p style="padding:6px;font-size: 10px;" class="color_red">Caution: Storage Slots are saved to a temporary cache and can be deleted by your browser. To avoid losing data, use the download file button.</p></div>
+				<div class="menutext"><p style="padding:6px;font-size: 10px;" class="color_red">Caution: Local Storage Slots are saved to a temporary cache and can be deleted by your browser. KoboldCpp remote storage will save data to a file in your KoboldCpp server. To avoid losing data, use the download file button.</p></div>
 				<div class="popupfooter">
 					<button type="button" class="btn btn-primary" id=""
 						onclick="hide_popups()">Back</button>
@@ -20441,7 +20762,7 @@ Current version indicated by LITEVER below.
 				<input class="form-control" type="text" id="custom_claude_endpoint" placeholder="Claude API URL" value="">
 				<input class="form-control" type="password" id="custom_claude_key" placeholder="Claude API Key (Required)" value="" onfocus="focus_api_keys()" onblur="blur_api_keys()"><br>
 				Model Choice:<br>
-				<select style="padding:4px;" class="form-control" id="custom_claude_model"  onload="toggleclaudemodel()"  onchange="toggleclaudemodel()">
+				<select style="padding:4px; width:calc(100% - 110px); display:inline-block" class="form-control" id="custom_claude_model"  onload="toggleclaudemodel()"  onchange="toggleclaudemodel()">
 					<option value="claude-v1">claude-v1</option>
 					<option value="claude-v1-100k">claude-v1-100k</option>
 					<option value="claude-instant-v1">claude-instant-v1</option>
@@ -20456,7 +20777,9 @@ Current version indicated by LITEVER below.
 					<option value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022</option>
 					<option value="claude-3-5-sonnet-latest" selected="selected">claude-3-5-sonnet-latest</option>
 					<option value="claude-3-5-haiku-20241022">claude-3-5-haiku-20241022</option>
+					<option value="claude-3-7-sonnet-20250219">claude-3-7-sonnet-20250219</option>
 				</select>
+				<button type="button" class="btn btn-primary" style="display:inline;width:105px;" id="claudefetchlist" onclick="claude_fetch_models()">Fetch List</button>
 				<input type="checkbox" id="claudeaddversion" onchange="" checked>
 				<div class="box-label" title="Add endpoint version">Add Endpoint Version</div>
 				<span id="clauderenamecompatdiv">
@@ -20468,6 +20791,11 @@ Current version indicated by LITEVER below.
 				value="" onload=""></textarea>
 				<textarea class="form-control hidden" rows="2" style="resize: vertical; line-height:1.1; padding:4px; display:inline; width: 100%" type="text" id="claudejailbreakprompt" placeholder="(Enter Assistant Postfix)"
 				value="" onload=""></textarea>
+
+				<div id="claudethinkingbox" class="hidden">
+				<div class="box-label" title="Enable Thinking">Enable Thinking </div>
+				<input type="checkbox" style="display:inline;" id="claudethinking">
+				</div>
 
 			</div>
 			<div id="palmcustom" class="menutext hidden">
@@ -21775,6 +22103,7 @@ Current version indicated by LITEVER below.
 						<option value="2">Hide</option>
 						<option value="3">Remove</option>
 					</select></div>
+					<div style="padding:4px" class="settinglabel justifyleft">Don't Submit Old Thoughts <input title="Do not submit Past Thoughts" type="checkbox" id="strip_past_thinking" style="margin:4px;"></div>
 					<div style="padding:4px" class="settinglabel justifyleft">Force Insert Thinking Tag <input title="Force Insert Thinking Tag" type="checkbox" id="force_thinking_tag" style="margin:4px;"><input class="settinglabel miniinput" style="margin-left:4px;width:100px;" type="text" placeholder="" value="" id="start_thinking_tag"></div>
 					<div style="padding:4px" class="settinglabel justifyleft">Note: 'Force Insert Thinking Tags' does not work with the 'Remove' option of CoT handling regex.</div>
 				</div>

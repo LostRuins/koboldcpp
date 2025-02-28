@@ -7,6 +7,8 @@
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
+// disable Nagle's algorithm
+#define CPPHTTPLIB_TCP_NODELAY true
 #include "httplib.h"
 
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
@@ -519,8 +521,13 @@ static json oaicompat_completion_params_parse(const json & body) {
         throw std::runtime_error("Only one completion choice is allowed");
     }
 
+    // Handle "echo" field
+    if (json_value(body, "echo", false)) {
+        throw std::runtime_error("Only no echo is supported");
+    }
+
     // Params supported by OAI but unsupported by llama.cpp
-    static const std::vector<std::string> unsupported_params { "best_of", "echo", "suffix" };
+    static const std::vector<std::string> unsupported_params { "best_of", "suffix" };
     for (const auto & param : unsupported_params) {
         if (body.contains(param)) {
             throw std::runtime_error("Unsupported param: " + param);
@@ -596,7 +603,7 @@ static json oaicompat_completion_params_parse(
     inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(json_value(body, "tool_choice", std::string("auto")));
     inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar               = grammar;
-    inputs.add_generation_prompt = true;
+    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.use_jinja             = use_jinja;
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
     inputs.extract_reasoning     = reasoning_format != COMMON_REASONING_FORMAT_NONE;

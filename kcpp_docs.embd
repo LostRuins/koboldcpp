@@ -141,8 +141,9 @@
                          },
                          "dynatemp_range": {
                             "default": 0,
-                            "description": "If greater than 0, uses dynamic temperature. Dynamic temperature range will be between Temp+Range and Temp-Range. If less or equal to 0 , uses static temperature.",
-                            "minimum": 0,
+                            "description": "If not equal to 0, uses dynamic temperature. Dynamic temperature range will be between Temp+Range and Temp-Range. If equal to 0 , uses static temperature.",
+                            "minimum": -5,
+                            "maximum": 5,
                             "type": "number"
                          },
                          "smoothing_factor": {
@@ -1488,6 +1489,223 @@
                       "summary": "Creates text-to-speech audio from input text.",
                       "tags": [
                          "api/extra"
+                      ]
+                   }
+                },
+                "/api/extra/data/save": {
+                   "post": {
+                      "description": "Saves data to a slot in a database file in the KoboldCpp server.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "slot": "1",
+                                  "format": "kcpp_lzma_b64",
+                                  "title": "Untitled Story",
+                                  "data": "base64_data",
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "slot": {
+                                        "type": "string",
+                                        "description": "Save slot id to save to."
+                                     },
+                                     "format": {
+                                        "type": "string",
+                                        "description": "Save format, not used currently"
+                                     },
+                                     "title": {
+                                        "type": "string",
+                                        "description": "Title of this saved file"
+                                     },
+                                     "data": {
+                                        "type": "string",
+                                        "description": "Save data text string"
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                     "success": true,
+                                     "error": ""
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        },
+                                        "error": {
+                                           "type": "string",
+                                           "description": "What went wrong."
+                                        }
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Saves data to a slot in a database file in the KoboldCpp server.",
+                      "tags": [
+                         "api/extra/data"
+                      ]
+                   }
+                },
+                "/api/extra/data/load": {
+                   "post": {
+                      "description": "Loads data from a save slot in the database file in the KoboldCpp server.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "slot": "1",
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "slot": {
+                                        "type": "string",
+                                        "description": "Save slot id"
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                     "success": true,
+                                     "data": "base64_data"
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        },
+                                        "data": {
+                                           "type": "string",
+                                           "description": "Text string containing the loaded data from server."
+                                        }
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Loads data from a save slot in the database file in the KoboldCpp server.",
+                      "tags": [
+                         "api/extra/data"
+                      ]
+                   }
+                },
+                "/api/extra/data/list": {
+                   "post": {
+                      "description": "List available saved slots from the KoboldCpp server, returns an array of strings containing their titles.",
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": ["Saved Story 1", "Saved Story 2", "", ""],
+                                  "schema": {
+                                     "type": "array",
+                                     "items": {
+                                        "type": "string"
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "List available saved slots from the KoboldCpp server.",
+                      "tags": [
+                         "api/extra/data"
+                      ]
+                   }
+                },
+                "/api/admin/list_options": {
+                   "get": {
+                      "summary": "List available .kcpps files to load.",
+                      "description": "List available .kcpps files to load.",
+                      "tags": [
+                         "api/admin"
+                      ],
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": ["file1.kcpps","file2.kcpps"],
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                   }
+                },
+                "/api/admin/reload_config": {
+                   "post": {
+                      "description": "Switches the loaded config, along with any settings and model file changes.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "filename": "file1.kcpps",
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "filename": {
+                                        "type": "string",
+                                        "description": "Filename of the .kcpps config to be loaded. Any associated files and models will be automatically swapped in."
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                                 "application/json": {
+                                  "example": {
+                                     "success": true
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        }
+                                     }
+                                  }
+                               }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Switches the currently loaded .kcpps config, and reloads any changed files or models.",
+                      "tags": [
+                         "api/admin"
                       ]
                    }
                 },

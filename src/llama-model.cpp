@@ -1439,6 +1439,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
             }
 
+            // skip unused tensors
+            if (info.op == GGML_OP_NONE) {
+                LLAMA_LOG_WARN("model has unused tensor %s -- ignoring\n", tn.str().c_str());
+                ml.n_created++;
+
+                return nullptr;
+            }
+
             // tensors with "bias" suffix are always used with GGML_OP_ADD
             ggml_op op;
             bool bias = tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0;
@@ -3927,6 +3935,10 @@ int32_t llama_model_n_layer(const struct llama_model * model) {
 
 int32_t llama_model_n_head(const struct llama_model * model) {
     return model->hparams.n_head();
+}
+
+int32_t llama_model_n_head_kv(const struct llama_model * model) {
+    return model->hparams.n_head_kv();
 }
 
 // deprecated
