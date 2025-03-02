@@ -1439,7 +1439,7 @@ void sample_top_n_sigma(llama_token_data_array * cur_p, float nsigma) {
     sample_softmax(cur_p);
 }
 
-void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val, float smoothing_factor) {
+void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val, float smoothing_factor, float nsigma) {
     // no need to do anything if there is only one (or zero) candidates
     if (cur_p->size <= 1) {
         return;
@@ -1485,7 +1485,7 @@ void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_te
     }
 
     // Only apply smoothing if smoothing_factor is > 0. Do not change base implementation otherwise.
-    if (smoothing_factor > 0 && cur_p->size > 1) {
+    if (smoothing_factor > 0 && cur_p->size > 1 && nsigma <= 0) {
         sample_softmax(cur_p);
         float h = cur_p->data[0].logit; // Find the maximum logit for h to be added after the transformation
         // Apply quadratic transformation using the smoothing_factor
@@ -1499,7 +1499,7 @@ void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_te
 
 }
 
-void sample_temperature(llama_token_data_array * candidates_p, float temp, float smoothing_factor)
+void sample_temperature(llama_token_data_array * candidates_p, float temp, float smoothing_factor, float nsigma)
 {
     bool isgreedy = false;
     if (temp <= 0)
@@ -1514,7 +1514,7 @@ void sample_temperature(llama_token_data_array * candidates_p, float temp, float
         candidates_p->data[i].logit /= temp;
     }
     // Only apply smoothing if smoothing_factor is > 0. Do not change base implementation otherwise.
-    if (smoothing_factor > 0 && candidates_p->size > 1) {
+    if (smoothing_factor > 0 && candidates_p->size > 1 && nsigma <= 0) {
         sample_softmax(candidates_p);
         float h = candidates_p->data[0].logit; // Find the maximum logit for h to be added after the transformation
         // Apply quadratic transformation using the smoothing_factor
@@ -1606,7 +1606,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         static float mirostat_mu = 2.0f * mirostat_tau;
         const int mirostat_m = 100;
         sample_rep_pen(n_ctx, rep_pen_range, rep_pen, rep_pen_slope, presence_penalty, &candidates_p);
-        sample_temperature(&candidates_p, temp, smoothing_factor);
+        sample_temperature(&candidates_p, temp, smoothing_factor, 0.0f);
         if (mirostat == 1)
         {
             id = sample_token_mirostat(n_vocab, &candidates_p, rng, mirostat_tau, mirostat_eta, mirostat_m, &mirostat_mu);
@@ -1626,9 +1626,9 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
             dynatemp_min       = dynatemp_min < 0 ? 0 : dynatemp_min;
             dynatemp_max       = dynatemp_max < 0 ? 0 : dynatemp_max;
             dynatemp_exponent  = dynatemp_exponent < 0 ? 0 : dynatemp_exponent;
-            sample_entropy(&candidates_p, dynatemp_min, dynatemp_max, dynatemp_exponent, smoothing_factor);
+            sample_entropy(&candidates_p, dynatemp_min, dynatemp_max, dynatemp_exponent, smoothing_factor, nsigma);
         } else {
-            sample_temperature(&candidates_p, temp, smoothing_factor);
+            sample_temperature(&candidates_p, temp, smoothing_factor, nsigma);
         }
         sample_top_n_sigma(&candidates_p, nsigma);
         sample_rep_pen(n_ctx, rep_pen_range, rep_pen, rep_pen_slope, presence_penalty, &candidates_p);
@@ -1666,11 +1666,11 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                         dynatemp_min = dynatemp_min<0?0:dynatemp_min;
                         dynatemp_max = dynatemp_max<0?0:dynatemp_max;
                         dynatemp_exponent = dynatemp_exponent<0?0:dynatemp_exponent;
-                        sample_entropy(&candidates_p, dynatemp_min, dynatemp_max, dynatemp_exponent, smoothing_factor);
+                        sample_entropy(&candidates_p, dynatemp_min, dynatemp_max, dynatemp_exponent, smoothing_factor, 0.0f);
                     }
                     else
                     {
-                        sample_temperature(&candidates_p, temp, smoothing_factor);
+                        sample_temperature(&candidates_p, temp, smoothing_factor, 0.0f);
                     }
                     break;
                 case KCPP_SAMPLER_REP_PEN:
