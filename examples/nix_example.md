@@ -29,7 +29,7 @@ hardware.graphics.enable = true;
 - Set your GPU architecture:
 
 ```nix
-nixpkgs.config.cudaArches = [ "sm_75" ];  # Example for RTX 2080
+nixpkgs.config.cudaCapabilities = [ "sm_75" ];  # Example for RTX 2080
 ```
 
 To find your GPU's architecture code:
@@ -50,7 +50,7 @@ To find your GPU's architecture code:
 nixpkgs.config = {
   allowUnfree = true;
   cudaSupport = true;
-  cudaArches = [ "sm_75" ];
+  cudaCapabilities = [ "sm_75" ];
 };
 # NixOS 24.05
 hardware.opengl.enable = true;
