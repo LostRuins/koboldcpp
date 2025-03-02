@@ -1631,6 +1631,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
             sample_temperature(&candidates_p, temp, smoothing_factor);
         }
         sample_top_n_sigma(&candidates_p, nsigma);
+        sample_rep_pen(n_ctx, rep_pen_range, rep_pen, rep_pen_slope, presence_penalty, &candidates_p);
         sample_xtc(&candidates_p, xtc_threshold, xtc_probability, rng);
         id = sample_token(&candidates_p, rng);
     }
