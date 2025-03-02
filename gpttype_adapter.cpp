@@ -1619,6 +1619,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
     else if (nsigma > 0.0f)
     {
         sample_top_k(&candidates_p, top_k);
+        sample_min_p(&candidates_p, min_p, 1);
         if (dynatemp_range != 0) {
             float dynatemp_min = temp - dynatemp_range;
             float dynatemp_max = temp + dynatemp_range;
