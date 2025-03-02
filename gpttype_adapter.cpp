@@ -1191,7 +1191,7 @@ void sample_rep_pen(int n_ctx, int rep_pen_range, float rep_pen, float rep_pen_s
     // Create a frequency map to count occurrences of each token in last_tokens
     std::unordered_set<llama_token> tokens_near(last_tokens + last_n_repeat / 2, last_tokens + last_n_repeat);
     std::unordered_set<llama_token> tokens_far(last_tokens, last_tokens + last_n_repeat / 2);
-    
+
     float rep_pen_reduced = rep_pen;
     if(rep_pen_reduced>1.0f)
     {
@@ -3535,7 +3535,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
 
             if (!evalres)
             {
-                fprintf(stderr, "\nFailed to predict at %d! Check your context buffer sizes!\n",n_past);
+                fprintf(stderr, "\nFailed to predict at token position %d! Check your context buffer sizes!\n",n_past);
                 output.text = nullptr;
                 output.status = 0;
                 output.prompt_tokens = output.completion_tokens = 0;
