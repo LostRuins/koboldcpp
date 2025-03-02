@@ -40,7 +40,7 @@ To find your GPU's architecture code:
 
 ## Hardware Support
 
-- ✅ Vulkan: Enabled by default on Linux and macOS
+- ✅ Vulkan: Enabled by default on Linux
 - ✅ Metal: Enabled by default on macOS
 - ❌ ROCm: Not currently available
 
