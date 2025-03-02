@@ -16,16 +16,6 @@ nixpkgs.config.allowUnfree = true;    # Allow proprietary software
 nixpkgs.config.cudaSupport = true;    # Enable CUDA functionality
 ```
 
-- Enable graphics support based on your NixOS version:
-
-```nix
-# For NixOS 24.05:
-hardware.opengl.enable = true;
-
-# For NixOS 24.11 or unstable:
-hardware.graphics.enable = true;
-```
-
 - Set your GPU architecture:
 
 ```nix
@@ -52,10 +42,6 @@ nixpkgs.config = {
   cudaSupport = true;
   cudaCapabilities = [ "sm_75" ];
 };
-# NixOS 24.05
-hardware.opengl.enable = true;
-# NixOS 24.11 or unstable
-# hardware.graphics.enable = true;
 environment.systemPackages = [ pkgs.koboldcpp ];
 # If you're using home-manager to install KoboldCpp
 # home.packages = [ pkgs.koboldcpp ];
