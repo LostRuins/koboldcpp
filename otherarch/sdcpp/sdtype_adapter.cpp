@@ -277,6 +277,54 @@ std::string clean_input_prompt(const std::string& input) {
     return result;
 }
 
+static const char* sample_method_str[] = {
+    "euler_a",
+    "euler",
+    "heun",
+    "dpm2",
+    "dpm++2s_a",
+    "dpm++2m",
+    "dpm++2mv2",
+    "ipndm",
+    "ipndm_v",
+    "lcm",
+};
+
+static const char* rng_type_to_str[] = {
+    "std_default",
+    "cuda",
+};
+
+static std::string get_image_params(const SDParams& params, int64_t seed) {
+    std::string parameter_string = params.prompt + "\n";
+    if (params.negative_prompt.size() != 0) {
+        parameter_string += "Negative prompt: " + params.negative_prompt + "\n";
+    }
+    parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
+    parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
+    if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
+        parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
+        parameter_string += "Skip layers: [";
+        for (const auto& layer : params.skip_layers) {
+            parameter_string += std::to_string(layer) + ", ";
+        }
+        parameter_string += "], ";
+        parameter_string += "Skip layer start: " + std::to_string(params.skip_layer_start) + ", ";
+        parameter_string += "Skip layer end: " + std::to_string(params.skip_layer_end) + ", ";
+    }
+    parameter_string += "Guidance: " + std::to_string(params.guidance) + ", ";
+    parameter_string += "Seed: " + std::to_string(seed) + ", ";
+    parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
+    parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
+    parameter_string += "RNG: " + std::string(rng_type_to_str[params.rng_type]) + ", ";
+    parameter_string += "Sampler: " + std::string(sample_method_str[params.sample_method]);
+    if (params.schedule == KARRAS) {
+        parameter_string += " karras";
+    }
+    parameter_string += ", ";
+    parameter_string += "Version: KoboldCpp";
+    return parameter_string;
+}
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
@@ -528,7 +576,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
 
         int out_data_len;
-        unsigned char * png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, "");
+        unsigned char * png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(*sd_params, sd_params->seed + i).c_str());
         if (png != NULL)
         {
             recent_data = kcpp_base64_encode(png,out_data_len);
