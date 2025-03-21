@@ -1,0 +1,1 @@
+#define SLANG_TAG_VERSION "2024.13"

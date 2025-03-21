@@ -35,6 +35,7 @@ extern "C"
         lora_filename = inputs.lora_filename;
         lora_base = inputs.lora_base;
         mmproj_filename = inputs.mmproj_filename;
+        draftmodel_filename = inputs.draftmodel_filename;
 
         int forceversion = inputs.forceversion;
 
@@ -237,6 +238,15 @@ extern "C"
         return whispertype_generate(inputs);
     }
 
+    bool tts_load_model(const tts_load_model_inputs inputs)
+    {
+        return ttstype_load_model(inputs);
+    }
+    tts_generation_outputs tts_generate(const tts_generation_inputs inputs)
+    {
+        return ttstype_generate(inputs);
+    }
+
     const char * new_token(int idx) {
         if (generated_tokens.size() <= idx || idx < 0) return nullptr;
 
@@ -264,6 +274,14 @@ extern "C"
     {
         return last_seed;
     }
+    int get_last_draft_success()
+    {
+        return last_draft_success;
+    }
+     int get_last_draft_failed()
+    {
+        return last_draft_failed;
+    }
     int get_total_gens() {
         return total_gens;
     }
@@ -271,8 +289,22 @@ extern "C"
     {
         return total_img_gens;
     }
+    int get_total_tts_gens()
+    {
+        return total_tts_gens;
+    }
+     int get_total_transcribe_gens()
+    {
+        return total_transcribe_gens;
+    }
     int get_last_stop_reason() {
         return (int)last_stop_reason;
+    }
+
+    static std::string chat_template = "";
+    const char* get_chat_template() {
+        chat_template = gpttype_get_chat_template();
+        return chat_template.c_str();
     }
 
     const char* get_pending_output() {
@@ -291,6 +323,44 @@ extern "C"
         toks = gpttype_get_token_arr(inputstr,addbos);
         output.count = toks.size();
         output.ids = toks.data(); //this may be slightly unsafe
+        return output;
+    }
+
+    static std::string detokenized_str = ""; //just share a static object for detokenizing
+    const char * detokenize(const token_count_outputs input)
+    {
+        std::vector<int> input_arr;
+        for(int i=0;i<input.count;++i)
+        {
+            input_arr.push_back(input.ids[i]);
+        }
+        detokenized_str = gpttype_detokenize(input_arr,false);
+        return detokenized_str.c_str();
+    }
+
+    static std::vector<TopPicksData> last_logprob_toppicks;
+    static std::vector<logprob_item> last_logprob_items;
+    last_logprobs_outputs last_logprobs()
+    {
+        last_logprobs_outputs output;
+        last_logprob_items.clear();
+        last_logprob_toppicks.clear();
+        last_logprob_toppicks = gpttype_get_top_picks_data(); //copy top picks
+        for(int i=0;i<last_logprob_toppicks.size();++i)
+        {
+            logprob_item itm;
+            itm.option_count = last_logprob_toppicks[i].tokenid.size();
+            itm.selected_token = last_logprob_toppicks[i].selected_token.c_str();
+            itm.selected_logprob = last_logprob_toppicks[i].selected_logprob;
+            itm.logprobs = last_logprob_toppicks[i].logprobs.data();
+            for(int j=0;j<itm.option_count && j<logprobs_max;++j)
+            {
+                itm.tokens[j] = last_logprob_toppicks[i].tokens[j].c_str();
+            }
+            last_logprob_items.push_back(itm);
+        }
+        output.count = last_logprob_items.size();
+        output.logprob_items = last_logprob_items.data();
         return output;
     }
 

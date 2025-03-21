@@ -7,6 +7,7 @@
 #include <vector>
 
 // #include "preprocessing.hpp"
+#include "flux.hpp"
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -15,6 +16,9 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
 #include "stb_image_write.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize.h"
 
 const char* rng_type_to_str[] = {
     "std_default",
@@ -30,6 +34,8 @@ const char* sample_method_str[] = {
     "dpm++2s_a",
     "dpm++2m",
     "dpm++2mv2",
+    "ipndm",
+    "ipndm_v",
     "lcm",
 };
 
@@ -38,6 +44,9 @@ const char* schedule_str[] = {
     "default",
     "discrete",
     "karras",
+    "exponential",
+    "ays",
+    "gits",
 };
 
 const char* modes_str[] = {
@@ -58,13 +67,18 @@ enum SDMode {
 struct SDParams {
     int n_threads = -1;
     SDMode mode   = TXT2IMG;
-
     std::string model_path;
+    std::string clip_l_path;
+    std::string clip_g_path;
+    std::string t5xxl_path;
+    std::string diffusion_model_path;
     std::string vae_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string controlnet_path;
     std::string embeddings_path;
+    std::string stacked_id_embeddings_path;
+    std::string input_id_images_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
@@ -73,12 +87,14 @@ struct SDParams {
 
     std::string prompt;
     std::string negative_prompt;
-    float min_cfg   = 1.0f;
-    float cfg_scale = 7.0f;
-    int clip_skip   = -1;  // <= 0 represents unspecified
-    int width       = 512;
-    int height      = 512;
-    int batch_count = 1;
+    float min_cfg     = 1.0f;
+    float cfg_scale   = 7.0f;
+    float guidance    = 3.5f;
+    float style_ratio = 20.f;
+    int clip_skip     = -1;  // <= 0 represents unspecified
+    int width         = 512;
+    int height        = 512;
+    int batch_count   = 1;
 
     int video_frames         = 6;
     int motion_bucket_id     = 127;
@@ -95,8 +111,18 @@ struct SDParams {
     bool verbose                  = false;
     bool vae_tiling               = false;
     bool control_net_cpu          = false;
+    bool normalize_input          = false;
+    bool clip_on_cpu              = false;
+    bool vae_on_cpu               = false;
+    bool diffusion_flash_attn     = false;
     bool canny_preprocess         = false;
+    bool color                    = false;
     int upscale_repeats           = 1;
+
+    std::vector<int> skip_layers = {7, 8, 9};
+    float slg_scale              = 0.;
+    float skip_layer_start       = 0.01;
+    float skip_layer_end         = 0.2;
 };
 
 void print_params(SDParams params) {
@@ -105,20 +131,33 @@ void print_params(SDParams params) {
     printf("    mode:              %s\n", modes_str[params.mode]);
     printf("    model_path:        %s\n", params.model_path.c_str());
     printf("    wtype:             %s\n", params.wtype < SD_TYPE_COUNT ? sd_type_name(params.wtype) : "unspecified");
+    printf("    clip_l_path:       %s\n", params.clip_l_path.c_str());
+    printf("    clip_g_path:       %s\n", params.clip_g_path.c_str());
+    printf("    t5xxl_path:        %s\n", params.t5xxl_path.c_str());
+    printf("    diffusion_model_path:   %s\n", params.diffusion_model_path.c_str());
     printf("    vae_path:          %s\n", params.vae_path.c_str());
     printf("    taesd_path:        %s\n", params.taesd_path.c_str());
     printf("    esrgan_path:       %s\n", params.esrgan_path.c_str());
     printf("    controlnet_path:   %s\n", params.controlnet_path.c_str());
     printf("    embeddings_path:   %s\n", params.embeddings_path.c_str());
+    printf("    stacked_id_embeddings_path:   %s\n", params.stacked_id_embeddings_path.c_str());
+    printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
+    printf("    style ratio:       %.2f\n", params.style_ratio);
+    printf("    normalize input image :  %s\n", params.normalize_input ? "true" : "false");
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
+    printf("    clip on cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
+    printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
+    printf("    diffusion flash attention:%s\n", params.diffusion_flash_attn ? "true" : "false");
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
     printf("    min_cfg:           %.2f\n", params.min_cfg);
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
+    printf("    slg_scale:         %.2f\n", params.slg_scale);
+    printf("    guidance:          %.2f\n", params.guidance);
     printf("    clip_skip:         %d\n", params.clip_skip);
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
@@ -139,17 +178,24 @@ void print_usage(int argc, const char* argv[]) {
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
     printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
-    printf("  -t, --threads N                    number of threads to use during computation (default: -1).\n");
+    printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
-    printf("  -m, --model [MODEL]                path to model\n");
+    printf("  -m, --model [MODEL]                path to full model\n");
+    printf("  --diffusion-model                  path to the standalone diffusion model\n");
+    printf("  --clip_l                           path to the clip-l text encoder\n");
+    printf("  --clip_g                           path to the clip-g text encoder\n");
+    printf("  --t5xxl                            path to the the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
-    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
-    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
+    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
+    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings\n");
+    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir\n");
+    printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
+    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
-    printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
-    printf("                                     If not specified, the default is the type of the weight file.\n");
+    printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
+    printf("                                     If not specified, the default is the type of the weight file\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
@@ -157,23 +203,36 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
+    printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
+    printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
+    printf("  --skip_layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
+    printf("  --skip_layer_start START           SLG enabling point: (default: 0.01)\n");
+    printf("  --skip_layer_end END               SLG disabling point: (default: 0.2)\n");
+    printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
+    printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%%)\n");
     printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
-    printf("  -b, --batch-count COUNT            number of images to generate.\n");
-    printf("  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)\n");
+    printf("  -b, --batch-count COUNT            number of images to generate\n");
+    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
+    printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
+    printf("  --clip-on-cpu                      keep clip in cpu (for low vram)\n");
+    printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
+    printf("                                     Might lower quality, since it implies converting k and v to f16.\n");
+    printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
+    printf("  --color                            Colors the logging tags according to level\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -214,6 +273,30 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.model_path = argv[i];
+        } else if (arg == "--clip_l") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.clip_l_path = argv[i];
+        } else if (arg == "--clip_g") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.clip_g_path = argv[i];
+        } else if (arg == "--t5xxl") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.t5xxl_path = argv[i];
+        } else if (arg == "--diffusion-model") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.diffusion_model_path = argv[i];
         } else if (arg == "--vae") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -244,29 +327,47 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.embeddings_path = argv[i];
+        } else if (arg == "--stacked-id-embd-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.stacked_id_embeddings_path = argv[i];
+        } else if (arg == "--input-id-images-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.input_id_images_path = argv[i];
         } else if (arg == "--type") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            std::string type = argv[i];
-            if (type == "f32") {
-                params.wtype = SD_TYPE_F32;
-            } else if (type == "f16") {
-                params.wtype = SD_TYPE_F16;
-            } else if (type == "q4_0") {
-                params.wtype = SD_TYPE_Q4_0;
-            } else if (type == "q4_1") {
-                params.wtype = SD_TYPE_Q4_1;
-            } else if (type == "q5_0") {
-                params.wtype = SD_TYPE_Q5_0;
-            } else if (type == "q5_1") {
-                params.wtype = SD_TYPE_Q5_1;
-            } else if (type == "q8_0") {
-                params.wtype = SD_TYPE_Q8_0;
-            } else {
-                fprintf(stderr, "error: invalid weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0]\n",
-                        type.c_str());
+            std::string type        = argv[i];
+            bool found              = false;
+            std::string valid_types = "";
+            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+                auto trait = ggml_get_type_traits((ggml_type)i);
+                std::string name(trait->type_name);
+                if (name == "f32" || trait->to_float && trait->type_size) {
+                    if (i)
+                        valid_types += ", ";
+                    valid_types += name;
+                    if (type == name) {
+                        if (ggml_quantize_requires_imatrix((ggml_type)i)) {
+                            printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
+                        }
+                        params.wtype = (enum sd_type_t)i;
+                        found        = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
+                        type.c_str(),
+                        valid_types.c_str());
                 exit(1);
             }
         } else if (arg == "--lora-model-dir") {
@@ -321,12 +422,24 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.cfg_scale = std::stof(argv[i]);
+        } else if (arg == "--guidance") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.guidance = std::stof(argv[i]);
         } else if (arg == "--strength") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
             params.strength = std::stof(argv[i]);
+        } else if (arg == "--style-ratio") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.style_ratio = std::stof(argv[i]);
         } else if (arg == "--control-strength") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -361,6 +474,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.vae_tiling = true;
         } else if (arg == "--control-net-cpu") {
             params.control_net_cpu = true;
+        } else if (arg == "--normalize-input") {
+            params.normalize_input = true;
+        } else if (arg == "--clip-on-cpu") {
+            params.clip_on_cpu = true;  // will slow down get_learned_condiotion but necessary for low MEM GPUs
+        } else if (arg == "--vae-on-cpu") {
+            params.vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
+        } else if (arg == "--diffusion-fa") {
+            params.diffusion_flash_attn = true;  // can reduce MEM significantly
         } else if (arg == "--canny") {
             params.canny_preprocess = true;
         } else if (arg == "-b" || arg == "--batch-count") {
@@ -428,6 +549,63 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             exit(0);
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
+        } else if (arg == "--color") {
+            params.color = true;
+        } else if (arg == "--slg-scale") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.slg_scale = std::stof(argv[i]);
+        } else if (arg == "--skip-layers") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            if (argv[i][0] != '[') {
+                invalid_arg = true;
+                break;
+            }
+            std::string layers_str = argv[i];
+            while (layers_str.back() != ']') {
+                if (++i >= argc) {
+                    invalid_arg = true;
+                    break;
+                }
+                layers_str += " " + std::string(argv[i]);
+            }
+            layers_str = layers_str.substr(1, layers_str.size() - 2);
+
+            std::regex regex("[, ]+");
+            std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
+            std::sregex_token_iterator end;
+            std::vector<std::string> tokens(iter, end);
+            std::vector<int> layers;
+            for (const auto& token : tokens) {
+                try {
+                    layers.push_back(std::stoi(token));
+                } catch (const std::invalid_argument& e) {
+                    invalid_arg = true;
+                    break;
+                }
+            }
+            params.skip_layers = layers;
+
+            if (invalid_arg) {
+                break;
+            }
+        } else if (arg == "--skip-layer-start") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.skip_layer_start = std::stof(argv[i]);
+        } else if (arg == "--skip-layer-end") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.skip_layer_end = std::stof(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -449,8 +627,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.model_path.length() == 0) {
-        fprintf(stderr, "error: the following arguments are required: model_path\n");
+    if (params.model_path.length() == 0 && params.diffusion_model_path.length() == 0) {
+        fprintf(stderr, "error: the following arguments are required: model_path/diffusion_model\n");
         print_usage(argc, argv);
         exit(1);
     }
@@ -518,6 +696,17 @@ std::string get_image_params(SDParams params, int64_t seed) {
     }
     parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
+    if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
+        parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
+        parameter_string += "Skip layers: [";
+        for (const auto& layer : params.skip_layers) {
+            parameter_string += std::to_string(layer) + ", ";
+        }
+        parameter_string += "], ";
+        parameter_string += "Skip layer start: " + std::to_string(params.skip_layer_start) + ", ";
+        parameter_string += "Skip layer end: " + std::to_string(params.skip_layer_end) + ", ";
+    }
+    parameter_string += "Guidance: " + std::to_string(params.guidance) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
@@ -531,23 +720,52 @@ std::string get_image_params(SDParams params, int64_t seed) {
     return parameter_string;
 }
 
+/* Enables Printing the log level tag in color using ANSI escape codes */
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     SDParams* params = (SDParams*)data;
-    if (!params->verbose && level <= SD_LOG_DEBUG) {
+    int tag_color;
+    const char* level_str;
+    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
+
+    if (!log || (!params->verbose && level <= SD_LOG_DEBUG)) {
         return;
     }
-    if (level <= SD_LOG_INFO) {
-        fputs(log, stdout);
-        fflush(stdout);
-    } else {
-        fputs(log, stderr);
-        fflush(stderr);
+
+    switch (level) {
+        case SD_LOG_DEBUG:
+            tag_color = 37;
+            level_str = "DEBUG";
+            break;
+        case SD_LOG_INFO:
+            tag_color = 34;
+            level_str = "INFO";
+            break;
+        case SD_LOG_WARN:
+            tag_color = 35;
+            level_str = "WARN";
+            break;
+        case SD_LOG_ERROR:
+            tag_color = 31;
+            level_str = "ERROR";
+            break;
+        default: /* Potential future-proofing */
+            tag_color = 33;
+            level_str = "?????";
+            break;
     }
+
+    if (params->color == true) {
+        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
+    } else {
+        fprintf(out_stream, "[%-5s] ", level_str);
+    }
+    fputs(log, out_stream);
+    fflush(out_stream);
 }
 
-//concedo notes: if it crashes, make sure you specify --type!
 int main(int argc, const char* argv[]) {
     SDParams params;
+
     parse_args(argc, argv, params);
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
@@ -580,40 +798,72 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
-    bool vae_decode_only        = true;
-    uint8_t* input_image_buffer = NULL;
+    bool vae_decode_only          = true;
+    uint8_t* input_image_buffer   = NULL;
+    uint8_t* control_image_buffer = NULL;
     if (params.mode == IMG2IMG || params.mode == IMG2VID) {
         vae_decode_only = false;
 
         int c              = 0;
-        input_image_buffer = stbi_load(params.input_path.c_str(), &params.width, &params.height, &c, 3);
+        int width          = 0;
+        int height         = 0;
+        input_image_buffer = stbi_load(params.input_path.c_str(), &width, &height, &c, 3);
         if (input_image_buffer == NULL) {
             fprintf(stderr, "load image from '%s' failed\n", params.input_path.c_str());
             return 1;
         }
-        if (c != 3) {
-            fprintf(stderr, "input image must be a 3 channels RGB image, but got %d channels\n", c);
+        if (c < 3) {
+            fprintf(stderr, "the number of channels for the input image must be >= 3, but got %d channels\n", c);
             free(input_image_buffer);
             return 1;
         }
-        if (params.width <= 0 || params.width % 64 != 0) {
-            fprintf(stderr, "error: the width of image must be a multiple of 64\n");
+        if (width <= 0) {
+            fprintf(stderr, "error: the width of image must be greater than 0\n");
             free(input_image_buffer);
             return 1;
         }
-        if (params.height <= 0 || params.height % 64 != 0) {
-            fprintf(stderr, "error: the height of image must be a multiple of 64\n");
+        if (height <= 0) {
+            fprintf(stderr, "error: the height of image must be greater than 0\n");
             free(input_image_buffer);
             return 1;
+        }
+
+        // Resize input image ...
+        if (params.height != height || params.width != width) {
+            printf("resize input image from %dx%d to %dx%d\n", width, height, params.width, params.height);
+            int resized_height = params.height;
+            int resized_width  = params.width;
+
+            uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * 3);
+            if (resized_image_buffer == NULL) {
+                fprintf(stderr, "error: allocate memory for resize input image\n");
+                free(input_image_buffer);
+                return 1;
+            }
+            stbir_resize(input_image_buffer, width, height, 0,
+                         resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
+                         3 /*RGB channel*/, STBIR_ALPHA_CHANNEL_NONE, 0,
+                         STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
+                         STBIR_FILTER_BOX, STBIR_FILTER_BOX,
+                         STBIR_COLORSPACE_SRGB, nullptr);
+
+            // Save resized result
+            free(input_image_buffer);
+            input_image_buffer = resized_image_buffer;
         }
     }
 
     sd_ctx_t* sd_ctx = new_sd_ctx(params.model_path.c_str(),
+                                  params.clip_l_path.c_str(),
+                                  params.clip_g_path.c_str(),
+                                  params.t5xxl_path.c_str(),
+                                  params.diffusion_model_path.c_str(),
                                   params.vae_path.c_str(),
                                   params.taesd_path.c_str(),
                                   params.controlnet_path.c_str(),
                                   params.lora_model_dir.c_str(),
                                   params.embeddings_path.c_str(),
+                                  params.stacked_id_embeddings_path.c_str(),
                                   vae_decode_only,
                                   params.vae_tiling,
                                   true,
@@ -621,43 +871,48 @@ int main(int argc, const char* argv[]) {
                                   params.wtype,
                                   params.rng_type,
                                   params.schedule,
-                                  params.control_net_cpu);
+                                  params.clip_on_cpu,
+                                  params.control_net_cpu,
+                                  params.vae_on_cpu,
+                                  params.diffusion_flash_attn);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
         return 1;
     }
 
+    sd_image_t* control_image = NULL;
+    if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
+        int c                = 0;
+        control_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
+        if (control_image_buffer == NULL) {
+            fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
+            return 1;
+        }
+        control_image = new sd_image_t{(uint32_t)params.width,
+                                       (uint32_t)params.height,
+                                       3,
+                                       control_image_buffer};
+        if (params.canny_preprocess) {  // apply preprocessor
+            control_image->data = preprocess_canny(control_image->data,
+                                                   control_image->width,
+                                                   control_image->height,
+                                                   0.08f,
+                                                   0.08f,
+                                                   0.8f,
+                                                   1.0f,
+                                                   false);
+        }
+    }
+
     sd_image_t* results;
     if (params.mode == TXT2IMG) {
-        sd_image_t* control_image = NULL;
-        if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
-            int c              = 0;
-            input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
-            if (input_image_buffer == NULL) {
-                fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
-                return 1;
-            }
-            control_image = new sd_image_t{(uint32_t)params.width,
-                                           (uint32_t)params.height,
-                                           3,
-                                           input_image_buffer};
-            if (params.canny_preprocess) {  // apply preprocessor
-                control_image->data = preprocess_canny(control_image->data,
-                                                       control_image->width,
-                                                       control_image->height,
-                                                       0.08f,
-                                                       0.08f,
-                                                       0.8f,
-                                                       1.0f,
-                                                       false);
-            }
-        }
         results = txt2img(sd_ctx,
                           params.prompt.c_str(),
                           params.negative_prompt.c_str(),
                           params.clip_skip,
                           params.cfg_scale,
+                          params.guidance,
                           params.width,
                           params.height,
                           params.sample_method,
@@ -665,7 +920,15 @@ int main(int argc, const char* argv[]) {
                           params.seed,
                           params.batch_count,
                           control_image,
-                          params.control_strength);
+                          params.control_strength,
+                          params.style_ratio,
+                          params.normalize_input,
+                          params.input_id_images_path.c_str(),
+                          params.skip_layers.data(),
+                          params.skip_layers.size(),
+                          params.slg_scale,
+                          params.skip_layer_start,
+                          params.skip_layer_end);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -715,13 +978,24 @@ int main(int argc, const char* argv[]) {
                               params.negative_prompt.c_str(),
                               params.clip_skip,
                               params.cfg_scale,
+                              params.guidance,
                               params.width,
                               params.height,
                               params.sample_method,
                               params.sample_steps,
                               params.strength,
                               params.seed,
-                              params.batch_count);
+                              params.batch_count,
+                              control_image,
+                              params.control_strength,
+                              params.style_ratio,
+                              params.normalize_input,
+                              params.input_id_images_path.c_str(),
+                              params.skip_layers.data(),
+                              params.skip_layers.size(),
+                              params.slg_scale,
+                              params.skip_layer_start,
+                              params.skip_layer_end);
         }
     }
 
@@ -734,8 +1008,7 @@ int main(int argc, const char* argv[]) {
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (params.esrgan_path.size() > 0 && params.upscale_repeats > 0) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
-                                                        params.n_threads,
-                                                        params.wtype);
+                                                        params.n_threads);
 
         if (upscaler_ctx == NULL) {
             printf("new_upscaler_ctx failed\n");
@@ -774,6 +1047,8 @@ int main(int argc, const char* argv[]) {
     }
     free(results);
     free_sd_ctx(sd_ctx);
+    free(control_image_buffer);
+    free(input_image_buffer);
 
     return 0;
 }

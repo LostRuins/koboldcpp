@@ -4414,3 +4414,16 @@ static void llama_v3_log_callback_default(llama_v3_log_level level, const char *
     fputs(text, stderr);
     fflush(stderr);
 }
+
+//// stuff this here since it's just some obsolete junk ////
+static std::vector<uint8_t> kcpp_compute_buf;
+void kcpp_graph_compute_helper(struct ggml_v3_cgraph *graph, int n_threads)
+{
+    struct ggml_v3_cplan plan = ggml_v3_graph_plan(graph, n_threads);
+    if (plan.work_size > 0)
+    {
+        kcpp_compute_buf.resize(plan.work_size);
+        plan.work_data = kcpp_compute_buf.data();
+    }
+    ggml_v3_graph_compute(graph, &plan);
+}

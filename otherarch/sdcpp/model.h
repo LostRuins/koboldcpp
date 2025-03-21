@@ -7,6 +7,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "ggml-backend.h"
@@ -17,17 +18,47 @@
 #define SD_MAX_DIMS 5
 
 enum SDVersion {
-    VERSION_1_x,
-    VERSION_2_x,
-    VERSION_XL,
+    VERSION_SD1,
+    VERSION_SD2,
+    VERSION_SDXL,
     VERSION_SVD,
+    VERSION_SD3,
+    VERSION_FLUX,
     VERSION_COUNT,
+};
+
+static inline bool sd_version_is_flux(SDVersion version) {
+    if (version == VERSION_FLUX) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_sd3(SDVersion version) {
+    if (version == VERSION_SD3) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_dit(SDVersion version) {
+    if (sd_version_is_flux(version) || sd_version_is_sd3(version)) {
+        return true;
+    }
+    return false;
+}
+
+enum PMVersion {
+    PM_VERSION_1,
+    PM_VERSION_2,
 };
 
 struct TensorStorage {
     std::string name;
     ggml_type type          = GGML_TYPE_F32;
     bool is_bf16            = false;
+    bool is_f8_e4m3         = false;
+    bool is_f8_e5m2         = false;
     int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
     int n_dims              = 0;
 
@@ -57,7 +88,7 @@ struct TensorStorage {
     }
 
     int64_t nbytes_to_read() const {
-        if (is_bf16) {
+        if (is_bf16 || is_f8_e4m3 || is_f8_e5m2) {
             return nbytes() / 2;
         } else {
             return nbytes();
@@ -105,6 +136,10 @@ struct TensorStorage {
         const char* type_name = ggml_type_name(type);
         if (is_bf16) {
             type_name = "bf16";
+        } else if (is_f8_e4m3) {
+            type_name = "f8_e4m3";
+        } else if (is_f8_e5m2) {
+            type_name = "f8_e5m2";
         }
         ss << name << " | " << type_name << " | ";
         ss << n_dims << " [";
@@ -131,7 +166,7 @@ protected:
                         zip_t* zip,
                         std::string dir,
                         size_t file_index,
-                        const std::string& prefix);
+                        const std::string prefix);
 
     bool init_from_gguf_file(const std::string& file_path, const std::string& prefix = "");
     bool init_from_safetensors_file(const std::string& file_path, const std::string& prefix = "");
@@ -139,16 +174,28 @@ protected:
     bool init_from_diffusers_file(const std::string& file_path, const std::string& prefix = "");
 
 public:
+    std::map<std::string, enum ggml_type> tensor_storages_types;
+
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
+    bool has_diffusion_model_tensors();
     SDVersion get_sd_version();
     ggml_type get_sd_wtype();
-    std::string load_merges();
+    ggml_type get_conditioner_wtype();
+    ggml_type get_diffusion_model_wtype();
+    ggml_type get_vae_wtype();
+    void set_wtype_override(ggml_type wtype, std::string prefix = "");
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,
                       std::set<std::string> ignore_tensors = {});
+
     bool save_to_gguf_file(const std::string& file_path, ggml_type type);
+    bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;
+
+    static std::string load_merges();
+    static std::string load_t5_tokenizer_json();
 };
+
 #endif  // __MODEL_H__

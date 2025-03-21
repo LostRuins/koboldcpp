@@ -7,7 +7,7 @@ env:
 
 jobs:
   linux:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Clone
         id: checkout
@@ -27,7 +27,7 @@ jobs:
           ./koboldcpp.sh dist
 
       - name: Save artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: kcpp_linux_binary
           path: dist/

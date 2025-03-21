@@ -2,7 +2,7 @@
 
 #include "ggml_v3.h"
 
-#ifdef GGML_USE_HIPBLAS
+#ifdef GGML_USE_HIP
 #define GGML_V3_CUDA_NAME "ROCm"
 #define GGML_V3_CUBLAS_NAME "hipBLAS"
 #else

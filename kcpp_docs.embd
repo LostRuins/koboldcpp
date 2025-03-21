@@ -89,7 +89,7 @@
                             "type": "integer"
                          },
                          "stop_sequence": {
-                            "description": "An array of string sequences where the API will stop generating further tokens. The returned text WILL contain the stop sequence.",
+                            "description": "An array of string sequences where the API will stop generating further tokens. The returned text WILL contain the stop sequence if trim_stop is false.",
                             "items": {
                                "type": "string"
                             },
@@ -141,8 +141,9 @@
                          },
                          "dynatemp_range": {
                             "default": 0,
-                            "description": "If greater than 0, uses dynamic temperature. Dynamic temperature range will be between Temp+Range and Temp-Range. If less or equal to 0 , uses static temperature.",
-                            "minimum": 0,
+                            "description": "If not equal to 0, uses dynamic temperature. Dynamic temperature range will be between Temp+Range and Temp-Range. If equal to 0 , uses static temperature.",
+                            "minimum": -5,
+                            "maximum": 5,
                             "type": "number"
                          },
                          "smoothing_factor": {
@@ -191,11 +192,14 @@
                          },
                          "images": {
                             "description": "KoboldCpp ONLY. If set, takes an array of base64 encoded strings, each one representing an image to be processed.",
-                            "type": "array"
+                            "type": "array",
+                            "items": {
+                               "type": "string"
+                            }
                          },
                          "trim_stop": {
-                            "default": false,
-                            "description": "KoboldCpp ONLY. If true, also removes detected stop_sequences from the output and truncates all text after them.",
+                            "default": true,
+                            "description": "KoboldCpp ONLY. If true, also removes detected stop_sequences from the output and truncates all text after them. If false, output will also include stop sequence and potentially a few additional characters.",
                             "type": "boolean"
                          },
                          "render_special": {
@@ -209,7 +213,7 @@
                             "type": "boolean"
                          },
                          "banned_tokens": {
-                            "description": "An array of string sequences to remove from model vocab. All matching tokens with matching substrings are removed.",
+                            "description": "An array of string sequences, each entry represents a word or phrase prevented from being generated, either modifying model vocab or by backtracking and regenerating when they appear.",
                             "items": {
                                "type": "string"
                             },
@@ -256,6 +260,11 @@
                             "description": "KoboldCpp ONLY. XTC probability. Set to above 0 to enable XTC.",
                             "minimum": 0,
                             "type": "number"
+                         },
+                         "logprobs": {
+                            "default": false,
+                            "description": "If true, return up to 5 top logprobs for generated tokens. Incurs performance overhead.",
+                            "type": "boolean"
                          },
                       },
                       "required": [
@@ -386,7 +395,7 @@
                          },
                          "hordeexitcounter": {
                             "type": "integer",
-                            "description": "Status of embedded horde worker. If it's too high, may have crashed."
+                            "description": "Status of embedded horde worker, if applicable. If it's too high, may have crashed."
                          },
                           "uptime": {
                             "type": "integer",
@@ -403,7 +412,7 @@
              "info": {
                 "title": "KoboldCpp API",
                 "description": "For swagger.json, <a href=\"?json=1\">click here</a>.",
-                "version": "1.61"
+                "version": "2025.01.08"
              },
              "openapi": "3.0.3",
              "paths": {
@@ -424,7 +433,7 @@
                             "description": "Successful request"
                          }
                       },
-                      "summary": "Retrieve the current max context length setting value that horde sees",
+                      "summary": "Retrieve the current max context length setting value that public backends see",
                       "tags": [
                          "api/v1"
                       ]
@@ -602,10 +611,14 @@
                                "application/json": {
                                   "example": {
                                      "result": "KoboldCpp",
-                                     "version": "1.61",
+                                     "version": "2025.01.08",
                                      "protected": false,
                                      "txt2img": false,
-                                     "vision": false
+                                     "vision": false,
+                                     "transcribe":false,
+                                     "multiplayer": false,
+                                     "websearch":false,
+                                     "tts":false,
                                   },
                                   "schema": {
                                      "$ref": "#/components/schemas/KcppVersion"
@@ -671,6 +684,147 @@
                       },
                       "description": "Retrieve the KoboldCpp recent performance information",
                       "summary": "Retrieve the KoboldCpp recent performance information",
+                      "tags": [
+                         "api/extra"
+                      ]
+                   }
+                },
+                "/api/extra/multiplayer/status": {
+                   "post": {
+                     "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "sender": "KCPP_1234",
+                                  "senderbusy": true,
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "senderbusy": {
+                                        "type": "boolean"
+                                     },
+                                     "sender": {
+                                        "type": "string"
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": false
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {"turn_major": 0, "turn_minor": 0, "idle": 1, "data_format":""},
+                                  "schema": {
+                                    "properties": {
+                                       "turn_major": {"type": "string"},
+                                       "turn_minor": {"type": "string"},
+                                       "idle": {"type": "number"},
+                                       "data_format": {"type": "string"},
+                                    },
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "description": "Fetches the current multiplayer turn information. Only useful for Multiplayer sessions in KoboldAI Lite.",
+                      "summary": "Fetches the current multiplayer turn information.",
+                      "tags": [
+                         "api/extra"
+                      ]
+                   }
+                },
+                "/api/extra/multiplayer/getstory": {
+                   "post": {
+                      "responses": {
+                         "200": {
+                            "content": {
+                              "text/plain": {
+                                 "schema": {
+                                    "type": "string",
+                                    "example": "base64_lzma_str"
+                                 }
+                              }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "description": "Fetches the current multiplayer story data, LZMA compressed encoded base64. Data is usually in the same format is KAI Lite compressed savefiles.",
+                      "summary": "Fetches the current multiplayer story data, LZMA compressed encoded base64",
+                      "tags": [
+                         "api/extra"
+                      ]
+                   }
+                },
+                "/api/extra/multiplayer/setstory": {
+                   "post": {
+                      "description": "Sets the current multiplayer story and increments the turn.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "full_update": true,
+                                  "sender": "LITE_UID_123456",
+                                  "data_format": "kcpp_lzma_b64",
+                                  "data": "base64_lzma_str",
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "full_update": {
+                                        "type": "boolean"
+                                     },
+                                     "sender": {
+                                        "type": "string"
+                                     },
+                                     "data_format": {
+                                        "type": "string"
+                                     },
+                                     "data": {
+                                        "type": "string"
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": false
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                     "results": [
+                                        {
+                                          "success": true,
+                                          "turn_major": 1,
+                                          "turn_minor": 0,
+                                          "idle": 1,
+                                          "data_format":"",
+                                        }
+                                     ]
+                                  },
+                                  "schema": {
+                                    "properties": {
+                                       "success": {"type": "boolean"},
+                                       "turn_major": {"type": "string"},
+                                       "turn_minor": {"type": "string"},
+                                       "idle": {"type": "number"},
+                                       "data_format": {"type": "string"},
+                                    },
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Sets the current multiplayer story and increments the turn.",
                       "tags": [
                          "api/extra"
                       ]
@@ -808,9 +962,218 @@
                       ]
                    }
                 },
+                "/api/extra/last_logprobs": {
+                   "post": {
+                      "description": "Obtains the token logprobs of the most recent request. A unique genkey previously submitted is required in multiuser mode.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "genkey": "KCPP2342"
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "genkey": {
+                                        "type": "string",
+                                        "description": "A unique key used to identify the previous generation."
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": false
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                     "logprobs": {
+                                       "content": [
+                                          {
+                                             "token": "Hello",
+                                             "logprob": -0.31725305,
+                                             "bytes": [72, 101, 108, 108, 111],
+                                             "top_logprobs": [
+                                             {
+                                                "token": "Hello",
+                                                "logprob": -0.31725305,
+                                                "bytes": [72, 101, 108, 108, 111]
+                                             },
+                                             {
+                                                "token": "Hi",
+                                                "logprob": -1.3190403,
+                                                "bytes": [72, 105]
+                                             }
+                                             ]
+                                          },
+                                          {
+                                             "token": "!",
+                                             "logprob": -0.02380986,
+                                             "bytes": [
+                                             33
+                                             ],
+                                             "top_logprobs": [
+                                             {
+                                                "token": "!",
+                                                "logprob": -0.02380986,
+                                                "bytes": [33]
+                                             },
+                                             {
+                                                "token": " there",
+                                                "logprob": -3.787621,
+                                                "bytes": [32, 116, 104, 101, 114, 101]
+                                             }
+                                             ]
+                                          },
+                                          {
+                                             "token": " How",
+                                             "logprob": -0.000054669687,
+                                             "bytes": [32, 72, 111, 119],
+                                             "top_logprobs": [
+                                             {
+                                                "token": " How",
+                                                "logprob": -0.000054669687,
+                                                "bytes": [32, 72, 111, 119]
+                                             },
+                                             {
+                                                "token": "<|end|>",
+                                                "logprob": -10.953937,
+                                                "bytes": null
+                                             }
+                                             ]
+                                          },
+                                          {
+                                             "token": " can",
+                                             "logprob": -0.015801601,
+                                             "bytes": [32, 99, 97, 110],
+                                             "top_logprobs": [
+                                             {
+                                                "token": " can",
+                                                "logprob": -0.015801601,
+                                                "bytes": [32, 99, 97, 110]
+                                             },
+                                             {
+                                                "token": " may",
+                                                "logprob": -4.161023,
+                                                "bytes": [32, 109, 97, 121]
+                                             }
+                                             ]
+                                          },
+                                          {
+                                             "token": " I",
+                                             "logprob": -3.7697225e-6,
+                                             "bytes": [
+                                             32,
+                                             73
+                                             ],
+                                             "top_logprobs": [
+                                             {
+                                                "token": " I",
+                                                "logprob": -3.7697225e-6,
+                                                "bytes": [32, 73]
+                                             },
+                                             {
+                                                "token": " assist",
+                                                "logprob": -13.596657,
+                                                "bytes": [32, 97, 115, 115, 105, 115, 116]
+                                             }
+                                             ]
+                                          },
+                                          {
+                                             "token": " assist",
+                                             "logprob": -0.04571125,
+                                             "bytes": [32, 97, 115, 115, 105, 115, 116],
+                                             "top_logprobs": [
+                                             {
+                                                "token": " assist",
+                                                "logprob": -0.04571125,
+                                                "bytes": [32, 97, 115, 115, 105, 115, 116]
+                                             },
+                                             {
+                                                "token": " help",
+                                                "logprob": -3.1089056,
+                                                "bytes": [32, 104, 101, 108, 112]
+                                             }
+                                             ]
+                                          },
+                                          {
+                                             "token": " you",
+                                             "logprob": -5.4385737e-6,
+                                             "bytes": [32, 121, 111, 117],
+                                             "top_logprobs": [
+                                             {
+                                                "token": " you",
+                                                "logprob": -5.4385737e-6,
+                                                "bytes": [32, 121, 111, 117]
+                                             },
+                                             {
+                                                "token": " today",
+                                                "logprob": -12.807695,
+                                                "bytes": [32, 116, 111, 100, 97, 121]
+                                             }
+                                             ]
+                                          },
+                                          {
+                                             "token": " today",
+                                             "logprob": -0.0040071653,
+                                             "bytes": [32, 116, 111, 100, 97, 121],
+                                             "top_logprobs": [
+                                             {
+                                                "token": " today",
+                                                "logprob": -0.0040071653,
+                                                "bytes": [32, 116, 111, 100, 97, 121]
+                                             },
+                                             {
+                                                "token": "?",
+                                                "logprob": -5.5247097,
+                                                "bytes": [63]
+                                             }
+                                             ]
+                                          },
+                                          {
+                                             "token": "?",
+                                             "logprob": -0.0008108172,
+                                             "bytes": [63],
+                                             "top_logprobs": [
+                                             {
+                                                "token": "?",
+                                                "logprob": -0.0008108172,
+                                                "bytes": [63]
+                                             },
+                                             {
+                                                "token": "?\n",
+                                                "logprob": -7.184561,
+                                                "bytes": [63, 10]
+                                             }
+                                             ]
+                                          }
+                                       ]
+                                    }
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "logprobs": {
+                                           "type": "object",
+                                           "description": "A logprobs object in the same format as OpenAI API."
+                                        }
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Obtains the token logprobs of the most recent request.",
+                      "tags": [
+                         "api/extra"
+                      ]
+                   }
+                },
                 "/api/extra/tokencount": {
                    "post": {
-                      "description": "Counts the number of tokens in a string.",
+                      "description": "Counts the number of tokens in a string, and returns their token IDs. Also aliased to /api/extra/tokenize",
                       "requestBody": {
                          "content": {
                             "application/json": {
@@ -849,14 +1212,80 @@
                                      ]
                                   },
                                   "schema": {
-                                     "$ref": "#/components/schemas/ValueResult"
-                                  }
+                                    "properties": {
+                                       "value": {
+                                          "type": "number"
+                                       },
+                                       "ids": {
+                                          "type": "array",
+                                          "items": {
+                                             "type": "integer"
+                                          }
+                                       }
+                                    },
+                                    "type": "object"
+                                 }
                                }
                             },
                             "description": "Successful request"
                          }
                       },
                       "summary": "Counts the number of tokens in a string.",
+                      "tags": [
+                         "api/extra"
+                      ]
+                   }
+                },
+                "/api/extra/detokenize": {
+                   "post": {
+                      "description": "Converts an array of token IDs into a string.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "ids": [529,29989,5205,29989,29958,13]
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "ids": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "number"
+                                       }
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                     "result": "<|system|>\n",
+                                     "success": true
+                                  },
+                                  "schema": {
+                                    "properties": {
+                                       "result": {
+                                          "type": "string",
+                                          "description": "The detokenized string."
+                                       },
+                                       "success": {
+                                          "type": "boolean"
+                                       }
+                                    },
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Converts an array of token IDs into a string.",
                       "tags": [
                          "api/extra"
                       ]
@@ -918,6 +1347,8 @@
                             "application/json": {
                                "example": {
                                   "prompt": "",
+                                  "suppress_non_speech" : false,
+                                  "langcode": "en",
                                   "audio_data": "base64_wav_data",
                                },
                                "schema": {
@@ -925,6 +1356,18 @@
                                      "audio_data": {
                                         "type": "string",
                                         "description": "Base64 respresentation of a 16-bit 16kHz wave file to be transcribed to text."
+                                     },
+                                     "prompt": {
+                                        "type": "string",
+                                        "description": "Prompt to steer the transcription."
+                                     },
+                                     "langcode": {
+                                        "type": "string",
+                                        "description": "Two letter language code, or use auto to autodetect."
+                                     },
+                                     "suppress_non_speech": {
+                                        "type": "boolean",
+                                        "description": "Prevent noise tokens, always generate words for speech."
                                      }
                                   },
                                   "type": "object"
@@ -951,6 +1394,370 @@
                       "summary": "Uses Whisper to perform a Speech-To-Text transcription.",
                       "tags": [
                          "api/extra"
+                      ]
+                   }
+                },
+                "/api/extra/websearch": {
+                   "post": {
+                      "description": "Searches the web using DuckDuckGo and returns the top 3 results.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "q": "What is KoboldCpp"
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "q": {
+                                        "type": "string",
+                                        "description": "The search query string"
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": [
+                                       {
+                                          "title": "KoboldCpp Wiki",
+                                          "url": "https://github.com/LostRuins/koboldcpp/wiki",
+                                          "desc": "KoboldCpp is a program to run LLMs",
+                                          "content": "KoboldCpp is a program to run LLMs using GGUF files"
+                                       }
+                                    ],
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Searches the web using DuckDuckGo and returns the top 3 results.",
+                      "tags": [
+                         "api/extra"
+                      ]
+                   }
+                },
+                "/api/extra/tts": {
+                   "post": {
+                      "description": "Creates text-to-speech audio from input text.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "input": "hello world, how are you today?",
+                                  "voice": "kobo",
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "input": {
+                                        "type": "string",
+                                        "description": "The text to generate audio for. Try to keep it short."
+                                     },
+                                     "voice": {
+                                        "type": "string",
+                                        "description": "The voice to use when generating the audio. You can enter anything you like, a unique speaker will be generated. There are a few preset voices you can use: kobo,cheery,sleepy,shouty,chatty"
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                                 "audio/wav": {
+                                    "schema": {
+                                       "type": "string",
+                                       "format": "binary"
+                                    }
+                                 }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Creates text-to-speech audio from input text.",
+                      "tags": [
+                         "api/extra"
+                      ]
+                   }
+                },
+                "/api/extra/data/save": {
+                   "post": {
+                      "description": "Saves data to a slot in a database file in the KoboldCpp server.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "slot": "1",
+                                  "format": "kcpp_lzma_b64",
+                                  "title": "Untitled Story",
+                                  "data": "base64_data",
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "slot": {
+                                        "type": "string",
+                                        "description": "Save slot id to save to."
+                                     },
+                                     "format": {
+                                        "type": "string",
+                                        "description": "Save format, not used currently"
+                                     },
+                                     "title": {
+                                        "type": "string",
+                                        "description": "Title of this saved file"
+                                     },
+                                     "data": {
+                                        "type": "string",
+                                        "description": "Save data text string"
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                     "success": true,
+                                     "error": ""
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        },
+                                        "error": {
+                                           "type": "string",
+                                           "description": "What went wrong."
+                                        }
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Saves data to a slot in a database file in the KoboldCpp server.",
+                      "tags": [
+                         "api/extra/data"
+                      ]
+                   }
+                },
+                "/api/extra/data/load": {
+                   "post": {
+                      "description": "Loads data from a save slot in the database file in the KoboldCpp server.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "slot": "1",
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "slot": {
+                                        "type": "string",
+                                        "description": "Save slot id"
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                     "success": true,
+                                     "data": "base64_data"
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        },
+                                        "data": {
+                                           "type": "string",
+                                           "description": "Text string containing the loaded data from server."
+                                        }
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Loads data from a save slot in the database file in the KoboldCpp server.",
+                      "tags": [
+                         "api/extra/data"
+                      ]
+                   }
+                },
+                "/api/extra/data/list": {
+                   "post": {
+                      "description": "List available saved slots from the KoboldCpp server, returns an array of strings containing their titles.",
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": ["Saved Story 1", "Saved Story 2", "", ""],
+                                  "schema": {
+                                     "type": "array",
+                                     "items": {
+                                        "type": "string"
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "List available saved slots from the KoboldCpp server.",
+                      "tags": [
+                         "api/extra/data"
+                      ]
+                   }
+                },
+                "/api/admin/list_options": {
+                   "get": {
+                      "summary": "List available .kcpps files to load.",
+                      "description": "List available .kcpps files to load.",
+                      "tags": [
+                         "api/admin"
+                      ],
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": ["file1.kcpps","file2.kcpps"],
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                   }
+                },
+                "/api/admin/reload_config": {
+                   "post": {
+                      "description": "Switches the loaded config, along with any settings and model file changes.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "filename": "file1.kcpps",
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "filename": {
+                                        "type": "string",
+                                        "description": "Filename of the .kcpps config to be loaded. Any associated files and models will be automatically swapped in."
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                                 "application/json": {
+                                  "example": {
+                                     "success": true
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        }
+                                     }
+                                  }
+                               }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Switches the currently loaded .kcpps config, and reloads any changed files or models.",
+                      "tags": [
+                         "api/admin"
+                      ]
+                   }
+                },
+                "/props": {
+                   "get": {
+                      "summary": "Returns the Jinja template stored in the GGUF model, if found.",
+                      "description": "Returns the Jinja template stored in the GGUF model, if found.",
+                      "tags": [
+                         "serviceinfo"
+                      ],
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                    "chat_template": "string",
+                                    "total_slots": 1,
+                                    "default_generation_settings": {
+                                       "n_ctx": 2048,
+                                    },
+                                 },
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                   }
+                },
+                "/.well-known/serviceinfo": {
+                   "get": {
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {"version":"0.2","software":{"name":"KoboldCpp","version":1.77,"repository":"https://github.com/LostRuins/koboldcpp","homepage":"https://github.com/LostRuins/koboldcpp","logo":"https://raw.githubusercontent.com/LostRuins/koboldcpp/refs/heads/concedo/niko.ico"},"api":{"koboldai":{"name":"KoboldAI API","rel_url":"/api","documentation":"https://lite.koboldai.net/koboldcpp_api","version":1.77},"openai":{"name":"OpenAI API","rel_url ":"/v1","documentation":"https://openai.com/documentation/api","version":1.77}}},
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "description": "Retrieve the common API identity provider",
+                      "summary": "Retrieve the common API identity provider",
+                      "tags": [
+                         "serviceinfo"
                       ]
                    }
                 },
@@ -1032,6 +1839,7 @@
                                   "width": 512,
                                   "height": 512,
                                   "seed": -1,
+                                  "clip_skip": -1,
                                   "sampler_name": "Euler a"
                                },
                                "schema": {
@@ -1055,6 +1863,9 @@
                                         "type": "number"
                                      },
                                      "seed": {
+                                        "type": "number"
+                                     },
+                                     "clip_skip": {
                                         "type": "number"
                                      },
                                      "sampler_name": {
@@ -1116,6 +1927,7 @@
                                   "width": 512,
                                   "height": 512,
                                   "seed": -1,
+                                  "clip_skip": -1,
                                   "sampler_name": "Euler a",
                                   "denoising_strength": 0.6,
                                   "init_images":["base64_image_data"],
@@ -1143,6 +1955,9 @@
                                      "seed": {
                                         "type": "number"
                                      },
+                                     "clip_skip": {
+                                        "type": "number"
+                                     },
                                      "sampler_name": {
                                         "type": "string"
                                      },
@@ -1150,7 +1965,10 @@
                                         "type": "number"
                                      },
                                      "init_images": {
-                                        "type": "array"
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                       }
                                      },
                                   },
                                   "type": "object"
@@ -1288,6 +2106,16 @@
                       "responses": {"default": {"description": ""}}
                    }
                 },
+                "/v1/audio/speech": {
+                   "post": {
+                      "summary": "Generates Text-To-Speech audio from input text. Please refer to OpenAI documentation",
+                      "description": "Generates Text-To-Speech audio from input text.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://platform.openai.com/docs/api-reference/audio/createSpeech](https://platform.openai.com/docs/api-reference/audio/createSpeech)",
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
              },
              "servers": [
                 {
@@ -1304,6 +2132,10 @@
                    "name": "api/extra"
                 },
                 {
+                   "description": "Common identity API for LLM services",
+                   "name": "serviceinfo"
+                },
+                {
                    "description": "Image Generation API (A1111 compatible)",
                    "name": "sdapi/v1"
                 },
@@ -1314,7 +2146,6 @@
              ]
           };
    </script>
-
 
    <script>
       //self destruct into json if requested

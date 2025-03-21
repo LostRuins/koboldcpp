@@ -36,6 +36,7 @@
 #include <unistd.h>
 #endif
 
+#define USE_EXTERNAL_MZCRC
 #include "miniz.h"
 #include "zip.h"
 
@@ -1833,4 +1834,235 @@ int zip_extract(const char *zipname, const char *dir,
   }
 
   return zip_archive_extract(&zip_archive, dir, on_extract, arg);
+}
+
+#if defined(__SSE4_2__) || defined(__AVX512F__)
+#include <immintrin.h>
+#endif
+
+// Phil Katz 32-Bit Cyclic Redundancy Check Uber Alles
+// Goes 73 GiB/s on an AMD Ryzen Threadripper PRO 7995WX
+// "Fast CRC Computation for Generic Polynomials Using PCLMULQDQ Instruction"
+//  V. Gopal, E. Ozturk, et al., 2009, http://intel.ly/2ySEwL0
+mz_ulong mz_crc32(mz_ulong init, const uint8_t *buf, size_t len) {
+  uint32_t crc = ~init;
+#if defined(__AVX512F__) && defined(__VPCLMULQDQ__) && defined(__PCLMUL__)
+  if (len >= 256) {
+    _Alignas(__m512) static const uint64_t k1k2[] = {
+        0x011542778a, 0x01322d1430, 0x011542778a, 0x01322d1430,
+        0x011542778a, 0x01322d1430, 0x011542778a, 0x01322d1430,
+    };
+    _Alignas(__m512) static const uint64_t k3k4[] = {
+        0x0154442bd4, 0x01c6e41596, 0x0154442bd4, 0x01c6e41596,
+        0x0154442bd4, 0x01c6e41596, 0x0154442bd4, 0x01c6e41596,
+    };
+    _Alignas(__m512) static const uint64_t k5k6[] = {
+        0x01751997d0,
+        0x00ccaa009e,
+    };
+    _Alignas(__m512) static const uint64_t k7k8[] = {
+        0x0163cd6124,
+        0x0000000000,
+    };
+    _Alignas(__m512) static const uint64_t poly[] = {
+        0x01db710641,
+        0x01f7011641,
+    };
+    __m512i x0, x1, x2, x3, x4, x5, x6, x7, x8, y5, y6, y7, y8;
+    __m128i a0, a1, a2, a3;
+    x1 = _mm512_loadu_si512((__m512i *)(buf + 0x00));
+    x2 = _mm512_loadu_si512((__m512i *)(buf + 0x40));
+    x3 = _mm512_loadu_si512((__m512i *)(buf + 0x80));
+    x4 = _mm512_loadu_si512((__m512i *)(buf + 0xC0));
+    x1 = _mm512_xor_si512(x1, _mm512_castsi128_si512(_mm_cvtsi32_si128(crc)));
+    x0 = _mm512_load_si512((__m512i *)k1k2);
+    buf += 256;
+    len -= 256;
+    while (len >= 256) {
+      x5 = _mm512_clmulepi64_epi128(x1, x0, 0x00);
+      x6 = _mm512_clmulepi64_epi128(x2, x0, 0x00);
+      x7 = _mm512_clmulepi64_epi128(x3, x0, 0x00);
+      x8 = _mm512_clmulepi64_epi128(x4, x0, 0x00);
+      x1 = _mm512_clmulepi64_epi128(x1, x0, 0x11);
+      x2 = _mm512_clmulepi64_epi128(x2, x0, 0x11);
+      x3 = _mm512_clmulepi64_epi128(x3, x0, 0x11);
+      x4 = _mm512_clmulepi64_epi128(x4, x0, 0x11);
+      y5 = _mm512_loadu_si512((__m512i *)(buf + 0x00));
+      y6 = _mm512_loadu_si512((__m512i *)(buf + 0x40));
+      y7 = _mm512_loadu_si512((__m512i *)(buf + 0x80));
+      y8 = _mm512_loadu_si512((__m512i *)(buf + 0xC0));
+      x1 = _mm512_xor_si512(x1, x5);
+      x2 = _mm512_xor_si512(x2, x6);
+      x3 = _mm512_xor_si512(x3, x7);
+      x4 = _mm512_xor_si512(x4, x8);
+      x1 = _mm512_xor_si512(x1, y5);
+      x2 = _mm512_xor_si512(x2, y6);
+      x3 = _mm512_xor_si512(x3, y7);
+      x4 = _mm512_xor_si512(x4, y8);
+      buf += 256;
+      len -= 256;
+    }
+    x0 = _mm512_load_si512((__m512i *)k3k4);
+    x5 = _mm512_clmulepi64_epi128(x1, x0, 0x00);
+    x1 = _mm512_clmulepi64_epi128(x1, x0, 0x11);
+    x1 = _mm512_xor_si512(x1, x2);
+    x1 = _mm512_xor_si512(x1, x5);
+    x5 = _mm512_clmulepi64_epi128(x1, x0, 0x00);
+    x1 = _mm512_clmulepi64_epi128(x1, x0, 0x11);
+    x1 = _mm512_xor_si512(x1, x3);
+    x1 = _mm512_xor_si512(x1, x5);
+    x5 = _mm512_clmulepi64_epi128(x1, x0, 0x00);
+    x1 = _mm512_clmulepi64_epi128(x1, x0, 0x11);
+    x1 = _mm512_xor_si512(x1, x4);
+    x1 = _mm512_xor_si512(x1, x5);
+    while (len >= 64) {
+      x2 = _mm512_loadu_si512((__m512i *)buf);
+      x5 = _mm512_clmulepi64_epi128(x1, x0, 0x00);
+      x1 = _mm512_clmulepi64_epi128(x1, x0, 0x11);
+      x1 = _mm512_xor_si512(x1, x2);
+      x1 = _mm512_xor_si512(x1, x5);
+      buf += 64;
+      len -= 64;
+    }
+    a0 = _mm_load_si128((__m128i *)k5k6);
+    a1 = _mm512_extracti32x4_epi32(x1, 0);
+    a2 = _mm512_extracti32x4_epi32(x1, 1);
+    a3 = _mm_clmulepi64_si128(a1, a0, 0x00);
+    a1 = _mm_clmulepi64_si128(a1, a0, 0x11);
+    a1 = _mm_xor_si128(a1, a3);
+    a1 = _mm_xor_si128(a1, a2);
+    a2 = _mm512_extracti32x4_epi32(x1, 2);
+    a3 = _mm_clmulepi64_si128(a1, a0, 0x00);
+    a1 = _mm_clmulepi64_si128(a1, a0, 0x11);
+    a1 = _mm_xor_si128(a1, a3);
+    a1 = _mm_xor_si128(a1, a2);
+    a2 = _mm512_extracti32x4_epi32(x1, 3);
+    a3 = _mm_clmulepi64_si128(a1, a0, 0x00);
+    a1 = _mm_clmulepi64_si128(a1, a0, 0x11);
+    a1 = _mm_xor_si128(a1, a3);
+    a1 = _mm_xor_si128(a1, a2);
+    a2 = _mm_clmulepi64_si128(a1, a0, 0x10);
+    a3 = _mm_setr_epi32(~0, 0, ~0, 0);
+    a1 = _mm_srli_si128(a1, 8);
+    a1 = _mm_xor_si128(a1, a2);
+    a0 = _mm_loadl_epi64((__m128i *)k7k8);
+    a2 = _mm_srli_si128(a1, 4);
+    a1 = _mm_and_si128(a1, a3);
+    a1 = _mm_clmulepi64_si128(a1, a0, 0x00);
+    a1 = _mm_xor_si128(a1, a2);
+    a0 = _mm_load_si128((__m128i *)poly);
+    a2 = _mm_and_si128(a1, a3);
+    a2 = _mm_clmulepi64_si128(a2, a0, 0x10);
+    a2 = _mm_and_si128(a2, a3);
+    a2 = _mm_clmulepi64_si128(a2, a0, 0x00);
+    a1 = _mm_xor_si128(a1, a2);
+    crc = _mm_extract_epi32(a1, 1);
+  }
+#endif
+#if defined(__SSE4_2__) && defined(__PCLMUL__)
+  if (len >= 64) {
+    _Alignas(__m128) static const uint64_t k1k2[] = {
+        0x0154442bd4,
+        0x01c6e41596,
+    };
+    _Alignas(__m128) static const uint64_t k3k4[] = {
+        0x01751997d0,
+        0x00ccaa009e,
+    };
+    _Alignas(__m128) static const uint64_t k5k0[] = {
+        0x0163cd6124,
+        0x0000000000,
+    };
+    _Alignas(__m128) static const uint64_t poly[] = {
+        0x01db710641,
+        0x01f7011641,
+    };
+    __m128i x0, x1, x2, x3, x4, x5, x6, x7, x8, y5, y6, y7, y8;
+    x1 = _mm_loadu_si128((__m128i *)(buf + 0x00));
+    x2 = _mm_loadu_si128((__m128i *)(buf + 0x10));
+    x3 = _mm_loadu_si128((__m128i *)(buf + 0x20));
+    x4 = _mm_loadu_si128((__m128i *)(buf + 0x30));
+    x1 = _mm_xor_si128(x1, _mm_cvtsi32_si128(crc));
+    x0 = _mm_load_si128((__m128i *)k1k2);
+    buf += 64;
+    len -= 64;
+    while (len >= 64) {
+      x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+      x6 = _mm_clmulepi64_si128(x2, x0, 0x00);
+      x7 = _mm_clmulepi64_si128(x3, x0, 0x00);
+      x8 = _mm_clmulepi64_si128(x4, x0, 0x00);
+      x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+      x2 = _mm_clmulepi64_si128(x2, x0, 0x11);
+      x3 = _mm_clmulepi64_si128(x3, x0, 0x11);
+      x4 = _mm_clmulepi64_si128(x4, x0, 0x11);
+      y5 = _mm_loadu_si128((__m128i *)(buf + 0x00));
+      y6 = _mm_loadu_si128((__m128i *)(buf + 0x10));
+      y7 = _mm_loadu_si128((__m128i *)(buf + 0x20));
+      y8 = _mm_loadu_si128((__m128i *)(buf + 0x30));
+      x1 = _mm_xor_si128(x1, x5);
+      x2 = _mm_xor_si128(x2, x6);
+      x3 = _mm_xor_si128(x3, x7);
+      x4 = _mm_xor_si128(x4, x8);
+      x1 = _mm_xor_si128(x1, y5);
+      x2 = _mm_xor_si128(x2, y6);
+      x3 = _mm_xor_si128(x3, y7);
+      x4 = _mm_xor_si128(x4, y8);
+      buf += 64;
+      len -= 64;
+    }
+    x0 = _mm_load_si128((__m128i *)k3k4);
+    x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+    x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+    x1 = _mm_xor_si128(x1, x2);
+    x1 = _mm_xor_si128(x1, x5);
+    x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+    x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+    x1 = _mm_xor_si128(x1, x3);
+    x1 = _mm_xor_si128(x1, x5);
+    x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+    x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+    x1 = _mm_xor_si128(x1, x4);
+    x1 = _mm_xor_si128(x1, x5);
+    while (len >= 16) {
+      x2 = _mm_loadu_si128((__m128i *)buf);
+      x5 = _mm_clmulepi64_si128(x1, x0, 0x00);
+      x1 = _mm_clmulepi64_si128(x1, x0, 0x11);
+      x1 = _mm_xor_si128(x1, x2);
+      x1 = _mm_xor_si128(x1, x5);
+      buf += 16;
+      len -= 16;
+    }
+    x2 = _mm_clmulepi64_si128(x1, x0, 0x10);
+    x3 = _mm_setr_epi32(~0, 0, ~0, 0);
+    x1 = _mm_srli_si128(x1, 8);
+    x1 = _mm_xor_si128(x1, x2);
+    x0 = _mm_loadl_epi64((__m128i *)k5k0);
+    x2 = _mm_srli_si128(x1, 4);
+    x1 = _mm_and_si128(x1, x3);
+    x1 = _mm_clmulepi64_si128(x1, x0, 0x00);
+    x1 = _mm_xor_si128(x1, x2);
+    x0 = _mm_load_si128((__m128i *)poly);
+    x2 = _mm_and_si128(x1, x3);
+    x2 = _mm_clmulepi64_si128(x2, x0, 0x10);
+    x2 = _mm_and_si128(x2, x3);
+    x2 = _mm_clmulepi64_si128(x2, x0, 0x00);
+    x1 = _mm_xor_si128(x1, x2);
+    crc = _mm_extract_epi32(x1, 1);
+  }
+#endif
+  static uint32_t tab[256];
+  if (!tab[255]) {
+    // generates table for byte-wise crc calculation on the polynomial
+    // x^32+x^26+x^23+x^22+x^16+x^12+x^11+x^10+x^8+x^7+x^5+x^4+x^2+x+1
+    uint32_t polynomial = 0xedb88320;  // bits are reversed
+    for (int d = 0; d < 256; ++d) {
+      uint32_t r = d;
+      for (int i = 0; i < 8; ++i)
+        r = r >> 1 ^ (r & 1 ? polynomial : 0);
+      tab[d] = r;
+    }
+  }
+  for (size_t i = 0; i < len; ++i)
+    crc = crc >> 8 ^ tab[(crc & 255) ^ buf[i]];
+  return ~crc & 0xffffffff;
 }

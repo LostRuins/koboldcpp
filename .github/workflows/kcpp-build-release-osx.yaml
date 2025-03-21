@@ -3,7 +3,6 @@ name: Koboldcpp Mac
 on: workflow_dispatch
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-  NOAVX2: 1
 
 jobs:
   osx:
@@ -24,7 +23,9 @@ jobs:
         id: make_build
         run: |
           make LLAMA_METAL=1 LLAMA_PORTABLE=1
-          pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all psutil --add-data './koboldcpp_default.so:.' --add-data './ggml-metal-merged.metal:.' --add-data './kcpp_adapters:./kcpp_adapters' --add-data './klite.embd:.' --add-data './kcpp_docs.embd:.' --add-data './kcpp_sdui.embd:.' --add-data './taesd.embd:.' --add-data './taesd_xl.embd:.' --add-data './rwkv_vocab.embd:.' --add-data './rwkv_world_vocab.embd:.' --clean --console koboldcpp.py -n "koboldcpp-mac-arm64"
+          chmod +x './create_ver_file.sh'
+          . create_ver_file.sh
+          pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all psutil --add-data './koboldcpp_default.so:.' --add-data './ggml-metal-merged.metal:.' --add-data './kcpp_adapters:./kcpp_adapters' --add-data './koboldcpp.py:.' --add-data './klite.embd:.' --add-data './kcpp_docs.embd:.' --add-data './kcpp_sdui.embd:.' --add-data './taesd.embd:.' --add-data './taesd_xl.embd:.' --add-data './taesd_f.embd:.' --add-data './taesd_3.embd:.' --add-data './rwkv_vocab.embd:.' --add-data './rwkv_world_vocab.embd:.' --version-file './version.txt' --clean --console koboldcpp.py -n "koboldcpp-mac-arm64"
 
       - name: Test
         id: test
@@ -33,7 +34,7 @@ jobs:
           dist/koboldcpp-mac-arm64 --model baby_llama.gguf --gpulayers 99 --benchmark --prompt 'Hi, my name is'
 
       - name: Save artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: kcpp_mac_binary
           path: dist/

@@ -8,6 +8,7 @@
 #include <random>
 #include <thread>
 #include "ggml_v3.h"
+#include "llama.h"
 
 //
 // CLI argument parsing
@@ -52,8 +53,25 @@ void gpt_split_words(std::string str, std::vector<std::string>& words);
 //
 std::vector<gpt_vocab::id> gpt_tokenize(const gpt_vocab & vocab, const std::string & text);
 
-
 bool should_transpose_layer(std::string name);
 void kcpp_graph_compute_helper(ggml_v3_cgraph * graph, int n_threads);
 
 std::vector<uint8_t> kcpp_base64_decode(const std::string & encoded_string);
+std::string kcpp_base64_encode(const unsigned char* data, unsigned int data_length);
+std::string kcpp_base64_encode(const std::string &data);
+
+std::string get_timestamp_str();
+std::vector<float> resample_wav(const std::vector<float>& input, uint32_t input_rate, uint32_t output_rate);
+
+int32_t kcpp_quick_sample(float * logits, const int n_logits, const std::vector<int32_t> & last_n_tokens, float rep_pen, float top_p, int top_k, float temp, std::mt19937 & rng);
+
+struct kcpp_embd_batch { //duplcated from llava_embd_batch
+    std::vector<int32_t> pos;
+    std::vector<int32_t> n_seq_id;
+    std::vector<int32_t> seq_id_0;
+    std::vector<int32_t *> seq_ids;
+    std::vector<int8_t> logits;
+    llama_batch batch;
+    kcpp_embd_batch(float * embd, int32_t n_tokens, int32_t npast, bool use_mrope);
+    kcpp_embd_batch(std::vector<llama_token> & tokens, int32_t npast, bool use_mrope, bool return_all_logits);
+};

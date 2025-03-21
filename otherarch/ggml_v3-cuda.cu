@@ -11,7 +11,7 @@
 #include <vector>
 
 
-#if defined(GGML_USE_HIPBLAS)
+#if defined(GGML_USE_HIP)
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 #include <hip/hip_fp16.h>
@@ -110,7 +110,7 @@
 #define cublasComputeType_t cudaDataType_t
 #endif // CUDART_VERSION < 11020
 
-#endif // defined(GGML_USE_HIPBLAS)
+#endif // defined(GGML_USE_HIP)
 
 #include "ggml_v3-cuda.h"
 #include "ggml_v3.h"
@@ -144,7 +144,7 @@
 // max batch size to use MMQ kernels when tensor cores are available
 #define MMQ_MAX_BATCH_SIZE 32
 
-#if defined(GGML_USE_HIPBLAS)
+#if defined(GGML_USE_HIP)
 #define __CUDA_ARCH__ 1300
 
 #if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || \
@@ -208,7 +208,7 @@ static __device__ __forceinline__ int __dp4a(const int a, const int b, int c) {
 #endif
     return c;
 }
-#endif // defined(GGML_USE_HIPBLAS)
+#endif // defined(GGML_USE_HIP)
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -261,7 +261,7 @@ static void ggml_v3_cuda_error(const char * stmt, const char * func, const char 
 
 #define CUBLAS_CHECK(err) CUDA_CHECK_GEN(err, CUBLAS_STATUS_SUCCESS, cublas_get_error_str)
 
-#if !defined(GGML_USE_HIPBLAS)
+#if !defined(GGML_USE_HIP)
 static const char * cu_get_error_str(CUresult err) {
     const char * err_str;
     cuGetErrorString(err, &err_str);
@@ -607,7 +607,7 @@ static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
 }
 
 static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
-#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL
+#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1) {
         a = __hadd2(a, __shfl_xor_sync(0xffffffff, a, mask, 32));
@@ -616,7 +616,7 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 #else
     (void) a;
     bad_arch();
-#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL
+#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL
 }
 
 static __device__ __forceinline__ float warp_reduce_max(float x) {
@@ -628,7 +628,7 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
 }
 
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
-#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL && CUDART_VERSION >= CUDART_HMAX
+#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL && CUDART_VERSION >= CUDART_HMAX
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1) {
         x = __hmax2(x, __shfl_xor_sync(0xffffffff, x, mask, 32));
@@ -637,7 +637,7 @@ static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
 #else
     (void) x;
     bad_arch();
-#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL && CUDART_VERSION >= CUDART_HMAX
+#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL && CUDART_VERSION >= CUDART_HMAX
 }
 
 static __device__ __forceinline__ float op_repeat(const float a, const float b) {
@@ -4362,16 +4362,16 @@ static __device__ __forceinline__ void mul_mat_q(
 #define NWARPS_Q4_0_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q4_0_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
     mul_mat_q4_0(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q4_0_RDNA2;
     const int mmq_y  =  MMQ_Y_Q4_0_RDNA2;
@@ -4429,7 +4429,7 @@ template <bool need_check> static __global__ void
 #define NWARPS_Q4_1_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q4_1_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
@@ -4440,7 +4440,7 @@ template <bool need_check> static __global__ void
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q4_1_RDNA2;
     const int mmq_y  =  MMQ_Y_Q4_1_RDNA2;
@@ -4498,16 +4498,16 @@ template <bool need_check> static __global__ void
 #define NWARPS_Q5_0_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q5_0_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
     mul_mat_q5_0(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q5_0_RDNA2;
     const int mmq_y  =  MMQ_Y_Q5_0_RDNA2;
@@ -4565,16 +4565,16 @@ template <bool need_check> static __global__ void
 #define NWARPS_Q5_1_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q5_1_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 mul_mat_q5_1(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q5_1_RDNA2;
     const int mmq_y  =  MMQ_Y_Q5_1_RDNA2;
@@ -4632,16 +4632,16 @@ mul_mat_q5_1(
 #define NWARPS_Q8_0_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q8_0_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
     mul_mat_q8_0(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q8_0_RDNA2;
     const int mmq_y  =  MMQ_Y_Q8_0_RDNA2;
@@ -4699,16 +4699,16 @@ template <bool need_check> static __global__ void
 #define NWARPS_Q2_K_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q2_K_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 mul_mat_q2_K(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q2_K_RDNA2;
     const int mmq_y  =  MMQ_Y_Q2_K_RDNA2;
@@ -4766,7 +4766,7 @@ mul_mat_q2_K(
 #define NWARPS_Q3_K_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q3_K_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
@@ -4777,7 +4777,7 @@ template <bool need_check> static __global__ void
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q3_K_RDNA2;
     const int mmq_y  =  MMQ_Y_Q3_K_RDNA2;
@@ -4835,7 +4835,7 @@ template <bool need_check> static __global__ void
 #define NWARPS_Q4_K_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q4_K_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
@@ -4846,7 +4846,7 @@ template <bool need_check> static __global__ void
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q4_K_RDNA2;
     const int mmq_y  =  MMQ_Y_Q4_K_RDNA2;
@@ -4904,16 +4904,16 @@ template <bool need_check> static __global__ void
 #define NWARPS_Q5_K_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q5_K_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 mul_mat_q5_K(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q5_K_RDNA2;
     const int mmq_y  =  MMQ_Y_Q5_K_RDNA2;
@@ -4971,7 +4971,7 @@ mul_mat_q5_K(
 #define NWARPS_Q6_K_PASCAL 8
 
 template <bool need_check> static __global__ void
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     __launch_bounds__(WARP_SIZE*NWARPS_Q6_K_RDNA2, 2)
 #endif // defined(RDNA3) || defined(RDNA2)
@@ -4982,7 +4982,7 @@ template <bool need_check> static __global__ void
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #if defined(RDNA3) || defined(RDNA2)
     const int mmq_x  =  MMQ_X_Q6_K_RDNA2;
     const int mmq_y  =  MMQ_Y_Q6_K_RDNA2;
@@ -5615,7 +5615,7 @@ static __global__ void diag_mask_inf_f32(const float * x, float * dst, const int
 
 template <bool vals_smem, int ncols_template, int block_size_template, bool need_check>
 static __global__ void soft_max_f16(const float * x, const float * y, float * dst, const int ncols_par, const int nrows_y, const float scale) {
-#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL && CUDART_VERSION >= CUDART_HMAX
+#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL && CUDART_VERSION >= CUDART_HMAX
     const int ncols_data = ncols_template == 0 ? ncols_par : ncols_template;
     const int ncols_smem = GGML_V3_PAD(ncols_data, 2*WARP_SIZE)/2;
 
@@ -5740,7 +5740,7 @@ static __global__ void soft_max_f16(const float * x, const float * y, float * ds
 #else
     (void) x; (void) y; (void) dst; (void) ncols_par; (void) nrows_y; (void) scale;
     bad_arch();
-#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL && CUDART_VERSION >= CUDART_HMAX
+#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_PASCAL && CUDART_VERSION >= CUDART_HMAX
 }
 
 template <bool vals_smem, int ncols_template, int block_size_template>
@@ -7350,7 +7350,7 @@ static void ggml_v3_cuda_pool_free_leg(int device, void * ptr, size_t size) {
     g_cuda_pool_size_v3[device] -= size;
 }
 
-#if !defined(GGML_USE_HIPBLAS)
+#if !defined(GGML_USE_HIP)
 // pool with virtual memory
 static CUdeviceptr g_cuda_pool_addr_v3[GGML_V3_CUDA_MAX_DEVICES] = {0};
 static size_t g_cuda_pool_used_v3[GGML_V3_CUDA_MAX_DEVICES] = {0};
@@ -7451,7 +7451,7 @@ static void ggml_v3_cuda_pool_free(int device, void * ptr, size_t size) {
 #else
 #define ggml_v3_cuda_pool_malloc ggml_v3_cuda_pool_malloc_leg
 #define ggml_v3_cuda_pool_free ggml_v3_cuda_pool_free_leg
-#endif // !defined(GGML_USE_HIPBLAS)
+#endif // !defined(GGML_USE_HIP)
 
 template<typename T>
 struct cuda_pool_alloc_v3 {
@@ -7520,7 +7520,7 @@ void ggml_v3_init_cublas() {
         for (int id = 0; id < g_device_count_v3; ++id) {
             int device_vmm = 0;
 
-#if !defined(GGML_USE_HIPBLAS)
+#if !defined(GGML_USE_HIP)
             CUdevice device;
             CU_CHECK(cuDeviceGet(&device, id));
             CU_CHECK(cuDeviceGetAttribute(&device_vmm, CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED, device));
@@ -7532,7 +7532,7 @@ void ggml_v3_init_cublas() {
                 alloc_prop.location.id = id;
                 CU_CHECK(cuMemGetAllocationGranularity(&g_device_caps_v3[id].vmm_granularity, &alloc_prop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
             }
-#endif // !defined(GGML_USE_HIPBLAS)
+#endif // !defined(GGML_USE_HIP)
             g_device_caps_v3[id].vmm = !!device_vmm;
 
             cudaDeviceProp prop;
@@ -7541,11 +7541,11 @@ void ggml_v3_init_cublas() {
 
             g_tensor_split_v3[id] = total_vram;
             total_vram += prop.totalGlobalMem;
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
             g_device_caps_v3[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_AMD;
 #else
             g_device_caps_v3[id].cc = 100*prop.major + 10*prop.minor;
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
             g_device_caps_v3[id].smpb = prop.sharedMemPerBlock;
         }
         for (int id = 0; id < g_device_count_v3; ++id) {
@@ -8062,7 +8062,7 @@ static int64_t get_row_rounding(ggml_v3_type type) {
         }
     }
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
     switch(type) {
         case GGML_V3_TYPE_Q4_0:
         case GGML_V3_TYPE_Q4_1:
@@ -8110,7 +8110,7 @@ static int64_t get_row_rounding(ggml_v3_type type) {
         default:
             GGML_V3_ASSERT(false);
     }
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 }
 
 static void ggml_v3_cuda_op_mul_mat_vec_q(
@@ -8567,7 +8567,7 @@ static void ggml_v3_cuda_op_soft_max(
     float scale = 1.0f;
     memcpy(&scale, dst->op_params, sizeof(float));
 
-#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && CUDART_VERSION >= CUDART_HMAX
+#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && CUDART_VERSION >= CUDART_HMAX
 #ifdef GGML_V3_CUDA_F16
     const bool use_f16_soft_max = true;
 #else
@@ -8575,7 +8575,7 @@ static void ggml_v3_cuda_op_soft_max(
 #endif // GGML_V3_CUDA_F16
 #else
     const bool use_f16_soft_max = false;
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && CUDART_VERSION >= CUDART_HMAX
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__) && CUDART_VERSION >= CUDART_HMAX
 
     if (use_f16_soft_max) {
         soft_max_f16_cuda(src0_dd, src1 ? src1_dd : nullptr, dst_dd, ne00, nrows_x, nrows_y, scale, main_stream);
@@ -8972,7 +8972,7 @@ static void ggml_v3_cuda_op_mul_mat(
                         float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
                         GGML_V3_ASSERT(dst->nb[1] == ne0*sizeof(float));
                         dhf_dst_i += src1_col_0*ne0 + dev[id].row_low;
-#if !defined(GGML_USE_HIPBLAS)
+#if !defined(GGML_USE_HIP)
                         if (kind == cudaMemcpyDeviceToDevice) {
                             // cudaMemcpy2DAsync may fail with copies between vmm pools of different devices
                             cudaMemcpy3DPeerParms p = {};
@@ -9370,7 +9370,7 @@ static void ggml_v3_cuda_mul_mat(const ggml_v3_tensor * src0, const ggml_v3_tens
         }
     }
 
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 
     const bool fp16_performance_good = min_compute_capability >= CC_RDNA1;
     bool               use_mul_mat_q = ggml_v3_is_quantized(src0->type);
@@ -9393,7 +9393,7 @@ static void ggml_v3_cuda_mul_mat(const ggml_v3_tensor * src0, const ggml_v3_tens
         use_mul_mat_q = use_mul_mat_q && !(fp16_performance_good && src1->ne[1] > MMQ_MAX_BATCH_SIZE);
     }
 
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 
     use_mul_mat_q = use_mul_mat_q && ggml_v3_cuda_supports_mmq(src0->type);
     const bool use_tensor_cores = fp16_performance_good && !g_mul_mat_q_v3;
@@ -9419,11 +9419,8 @@ static void ggml_v3_cuda_mul_mat(const ggml_v3_tensor * src0, const ggml_v3_tens
         ggml_v3_cuda_op_mul_mat(src0, src1, dst, ggml_v3_cuda_op_mul_mat_cublas, false);
     } else if (ggml_v3_is_quantized(src0->type) || src0->type == GGML_V3_TYPE_F16) {
         if (src1->ne[1] == 1 && src0->ne[0] % GGML_V3_CUDA_DMMV_X == 0 && src1->type == GGML_V3_TYPE_F32) {
-#ifdef GGML_V3_CUDA_FORCE_DMMV
-            const bool use_mul_mat_vec_q = false;
-#else
+
             const bool use_mul_mat_vec_q = min_compute_capability >= MIN_CC_DP4A && ggml_v3_is_quantized(src0->type) && ggml_v3_nrows(src1) == 1;
-#endif // GGML_V3_CUDA_FORCE_DMMV
 
             if (use_mul_mat_vec_q) {
                 // NOTE: this kernel does not support ggml_v3_nrows(src1) > 1
