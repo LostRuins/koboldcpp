@@ -983,7 +983,12 @@ def fetch_gpu_properties(testCL,testCU,testVK):
 
     if testVK:
         try: # Get Vulkan names
-            output = subprocess.run(['vulkaninfo','--summary'], capture_output=True, text=True, check=True, encoding='utf-8').stdout
+            output = subprocess.run(['vulkaninfo','--summary'],
+                                    capture_output=True,
+                                    text=True,
+                                    check=True,
+                                    encoding='utf-8',
+                                    timeout=5).stdout
             devicelist = [line.split("=")[1].strip() for line in output.splitlines() if "deviceName" in line]
             devicetypes = [line.split("=")[1].strip() for line in output.splitlines() if "deviceType" in line]
             idx = 0
