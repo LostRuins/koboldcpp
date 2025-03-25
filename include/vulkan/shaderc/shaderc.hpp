@@ -353,12 +353,19 @@ class CompileOptions {
     shaderc_compile_options_set_hlsl_16bit_types(options_, enable);
   }
 
+  // Enables or disables relaxed Vulkan rules.
+  //
+  // This allows most OpenGL shaders to compile under Vulkan semantics.
+  void SetVulkanRulesRelaxed(bool enable) {
+    shaderc_compile_options_set_vulkan_rules_relaxed(options_, enable);
+  }
+
   // Sets whether the compiler should invert position.Y output in vertex shader.
   void SetInvertY(bool enable) {
     shaderc_compile_options_set_invert_y(options_, enable);
   }
 
-  // Sets whether the compiler should generates code for max an min which,
+  // Sets whether the compiler should generate code for max and min which,
   // if given a NaN operand, will return the other operand. Similarly, the
   // clamp builtin will favour the non-NaN operands, as if clamp were
   // implemented as a composition of max and min.

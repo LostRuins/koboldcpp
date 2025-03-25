@@ -1,5 +1,6 @@
 #include "utils.h"
 #include "common.h"
+#include "llama.h"
 
 #include <cmath>
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <locale>
 #include <codecvt>
 #include <sstream>
+#include <ctime>
 
 
 void utreplace(std::string & str, const std::string & needle, const std::string & replacement) {
@@ -223,18 +225,6 @@ bool should_transpose_layer(std::string name)
     return false;
 }
 
-static std::vector<uint8_t> kcpp_compute_buf;
-void kcpp_graph_compute_helper(struct ggml_v3_cgraph *graph, int n_threads)
-{
-    struct ggml_v3_cplan plan = ggml_v3_graph_plan(graph, n_threads);
-    if (plan.work_size > 0)
-    {
-        kcpp_compute_buf.resize(plan.work_size);
-        plan.work_data = kcpp_compute_buf.data();
-    }
-    ggml_v3_graph_compute(graph, &plan);
-}
-
 static const std::string kcpp_base64_chars =
              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
              "abcdefghijklmnopqrstuvwxyz"
@@ -301,4 +291,255 @@ std::vector<uint8_t> kcpp_base64_decode(const std::string & encoded_string)
     }
 
     return ret;
+}
+std::string kcpp_base64_encode(const unsigned char* data, unsigned int data_length) {
+    const std::string base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    encoded.reserve(((data_length + 2) / 3) * 4);
+    for (unsigned int i = 0; i < data_length; i += 3) {
+        unsigned int triple = (data[i] << 16) + (i + 1 < data_length ? data[i + 1] << 8 : 0) + (i + 2 < data_length ? data[i + 2] : 0);
+        encoded.push_back(base64_chars[(triple >> 18) & 0x3F]);
+        encoded.push_back(base64_chars[(triple >> 12) & 0x3F]);
+        if (i + 1 < data_length) {
+            encoded.push_back(base64_chars[(triple >> 6) & 0x3F]);
+        } else {
+            encoded.push_back('=');
+        }
+        if (i + 2 < data_length) {
+            encoded.push_back(base64_chars[triple & 0x3F]);
+        } else {
+            encoded.push_back('=');
+        }
+    }
+    return encoded;
+}
+std::string kcpp_base64_encode(const std::string &data) {
+    static const char lookup[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    int val = 0, valb = -6;
+    for (unsigned char c : data) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            encoded.push_back(lookup[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6) {
+        encoded.push_back(lookup[((val << 8) >> (valb + 8)) & 0x3F]);
+    }
+    while (encoded.size() % 4) {
+        encoded.push_back('=');
+    }
+    return encoded;
+}
+
+std::string get_timestamp_str()
+{
+    std::time_t t = std::time(nullptr);
+    std::tm* now = std::localtime(&t);
+    char buffer[16]; // Buffer to hold "hh:mm:ss" and null terminator
+    std::sprintf(buffer, "%02d:%02d:%02d", now->tm_hour, now->tm_min, now->tm_sec);
+    // Convert the buffer to a std::string
+    std::string timestamp(buffer);
+    return timestamp;
+}
+
+std::vector<float> resample_wav(const std::vector<float>& input, uint32_t input_rate, uint32_t output_rate) {
+
+    size_t input_size = input.size();
+
+    double ratio = static_cast<double>(output_rate) / input_rate;
+    size_t newLength = static_cast<size_t>(input.size() * ratio);
+    std::vector<float> output(newLength);
+
+    // Perform simple linear interpolation resampling
+    for (size_t i = 0; i < newLength; ++i) {
+        double srcIndex = i / ratio;
+        size_t srcIndexInt = static_cast<size_t>(srcIndex);
+        double frac = srcIndex - srcIndexInt;
+        if (srcIndexInt + 1 < input_size) {
+            output[i] = static_cast<float>(input[srcIndexInt] * (1 - frac) + input[srcIndexInt + 1] * frac);
+        } else {
+            output[i] = input[srcIndexInt];
+        }
+    }
+
+    return output;
+}
+
+//a very rudimentary all in one sampling function which has no dependencies
+int32_t kcpp_quick_sample(float * logits, const int n_logits, const std::vector<int32_t> & last_n_tokens, float rep_pen, float top_p, int top_k, float temp, std::mt19937 & rng)
+{
+    if (temp <= 0) {
+        // select the token with the highest logit directly
+        float max_logit = logits[0];
+        int32_t max_id = 0;
+        for (int i = 1; i < n_logits; ++i) {
+            if (logits[i] > max_logit) {
+                max_logit = logits[i];
+                max_id = i;
+            }
+        }
+        return max_id;
+    }
+
+    top_k = (top_k<=0 || top_k>300)?300:top_k;
+    top_k = std::min(top_k, n_logits);
+
+    std::vector<std::pair<float, int32_t>> logits_id;
+    logits_id.reserve(n_logits);
+
+    //temperature sample
+    const float scale = 1.0f/temp;
+
+    //sample rep pen
+    for (int i = 0; i < n_logits; ++i) {
+        if (rep_pen>1.0f && std::find(last_n_tokens.begin(), last_n_tokens.end(), i) != last_n_tokens.end()) {
+            // if score < 0 then repetition penalty has to multiplied to reduce the previous token probability
+            if (logits[i] < 0.0f) {
+                logits_id.push_back(std::make_pair((logits[i]*scale)*rep_pen, i));
+            } else {
+                logits_id.push_back(std::make_pair((logits[i]*scale)/rep_pen, i));
+            }
+        } else {
+            logits_id.push_back(std::make_pair(logits[i]*scale, i));
+        }
+    }
+
+    //sample top_k
+    std::partial_sort(
+            logits_id.begin(),
+            logits_id.begin() + top_k, logits_id.end(),
+            [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
+        return a.first > b.first;
+    });
+    logits_id.resize(top_k);
+
+    // compute probs for the top k tokens
+    std::vector<float> probs;
+    probs.reserve(logits_id.size());
+    float maxl = logits_id[0].first;
+    double sum = 0.0;
+    for (const auto & kv : logits_id) {
+        const float p = expf(kv.first - maxl);
+        probs.push_back(p);
+        sum += p;
+    }
+
+    // normalize the probs
+    for (auto & p : probs) {
+        p /= sum;
+    }
+
+    //apply top p
+    if (top_p < 1.0) {
+        double cumsum = 0.0;
+        for (int i = 0; i < (int) probs.size(); i++) {
+            cumsum += probs[i];
+            if (cumsum >= top_p) {
+                probs.resize(i + 1);
+                logits_id.resize(i + 1);
+                break;
+            }
+        }
+    }
+
+    // normalize the probs
+    for (auto & p : probs) {
+        p /= sum;
+    }
+
+    std::discrete_distribution<> dist(probs.begin(), probs.end());
+    int idx = dist(rng);
+
+    return logits_id[idx].second;
+}
+
+kcpp_embd_batch::kcpp_embd_batch(float * embd, int32_t n_tokens, int32_t npast, bool use_mrope)
+{
+     int32_t seq_id = 0;
+        pos.resize(n_tokens * (use_mrope?4:1));
+        std::fill(pos.begin(), pos.end(), 0);
+        n_seq_id.resize(n_tokens);
+        seq_ids.resize(n_tokens + 1);
+        logits.resize(n_tokens);
+        seq_id_0.resize(1);
+        seq_id_0[0] = seq_id;
+        seq_ids [n_tokens] = nullptr;
+        batch = {
+            /*n_tokens       =*/ n_tokens,
+            /*tokens         =*/ nullptr,
+            /*embd           =*/ embd,
+            /*pos            =*/ pos.data(),
+            /*n_seq_id       =*/ n_seq_id.data(),
+            /*seq_id         =*/ seq_ids.data(),
+            /*logits         =*/ logits.data(),
+        };
+
+        if(!use_mrope)
+        {
+           for (int i = 0; i < n_tokens; i++) {
+                batch.pos     [i] = npast + i;
+                batch.n_seq_id[i] = 1;
+                batch.seq_id  [i] = seq_id_0.data();
+                batch.logits  [i] = false;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < n_tokens; i++) {
+                batch.n_seq_id[i] = 1;
+                batch.seq_id  [i] = seq_id_0.data();
+                batch.logits  [i] = false;
+            }
+             for (int j = 0; j < batch.n_tokens * 3; j++) {
+                batch.pos[j] = npast + (j % batch.n_tokens);
+            }
+        }
+}
+
+kcpp_embd_batch::kcpp_embd_batch(std::vector<llama_token> & tokens, int32_t npast, bool use_mrope, bool return_all_logits)
+{
+       int32_t seq_id = 0;
+        int32_t n_tokens = tokens.size();
+        pos.resize(n_tokens * (use_mrope?4:1));
+        std::fill(pos.begin(), pos.end(), 0);
+        n_seq_id.resize(n_tokens);
+        seq_ids.resize(n_tokens + 1);
+        logits.resize(n_tokens);
+        seq_id_0.resize(1);
+        seq_id_0[0] = seq_id;
+        seq_ids[n_tokens] = nullptr;
+        batch = {
+            /*n_tokens       =*/ n_tokens,
+            /*tokens         =*/ tokens.data(),
+            /*embd           =*/ nullptr,
+            /*pos            =*/ pos.data(),
+            /*n_seq_id       =*/ n_seq_id.data(),
+            /*seq_id         =*/ seq_ids.data(),
+            /*logits         =*/ logits.data(),
+        };
+
+        if(!use_mrope)
+        {
+           for (int i = 0; i < n_tokens; i++) {
+                batch.pos     [i] = npast + i;
+                batch.n_seq_id[i] = 1;
+                batch.seq_id  [i] = seq_id_0.data();
+                batch.logits  [i] = (return_all_logits?true:false);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < n_tokens; i++) {
+                batch.n_seq_id[i] = 1;
+                batch.seq_id  [i] = seq_id_0.data();
+                batch.logits  [i] = (return_all_logits?true:false);
+            }
+             for (int j = 0; j < batch.n_tokens * 3; j++) {
+                batch.pos[j] = npast + (j % batch.n_tokens);
+            }
+        }
+        batch.logits[n_tokens - 1] = true;
 }

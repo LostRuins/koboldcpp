@@ -33,10 +33,25 @@ jobs:
         run: |
           echo "$(Get-Location)\w64devkit\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
 
+      - name: Print System Environment Variables
+        id: printvars
+        run: |
+          echo "Number of processors: ${env:NUMBER_OF_PROCESSORS}"
+          echo "Processor Architecture: ${env:PROCESSOR_ARCHITECTURE}"
+          echo "Computer Name: ${env:COMPUTERNAME}"
+          wmic cpu get name
+          wmic os get TotalVisibleMemorySize, FreePhysicalMemory
+
+      - name: Rebuild Vulkan Shaders
+        id: make_vk_shaders
+        run: |
+          make vulkan-shaders-gen -j ${env:NUMBER_OF_PROCESSORS}
+          echo "Vulkan Shaders Rebuilt"
+
       - name: Build Non-CUDA
         id: make_build
         run: |
-          make -j ${env:NUMBER_OF_PROCESSORS} LLAMA_NOAVX2=1
+          make LLAMA_CLBLAST=1 LLAMA_VULKAN=1 LLAMA_PORTABLE=1 -j ${env:NUMBER_OF_PROCESSORS} LLAMA_NOAVX2=1
 
       - uses: Jimver/cuda-toolkit@v0.2.15
         id: cuda-toolkit
@@ -49,8 +64,7 @@ jobs:
           mkdir build
           cd build
           cmake .. -DLLAMA_CUBLAS=ON -DLLAMA_AVX2=OFF -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
-          cmake --build . --config Release -j ${env:NUMBER_OF_PROCESSORS}
-          mv bin/Release/koboldcpp_cublas.dll ../koboldcpp_cublas.dll
+          cmake --build . --config Release -j 2
           cd ..
 
       # note: The libraries that come from the github cuda directory seem to be larger, so they are not recommended
@@ -71,7 +85,7 @@ jobs:
           ./make_pyinstaller_cuda_oldcpu.bat
 
       - name: Save artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: kcpp_windows_pyinstallers
           path: dist/

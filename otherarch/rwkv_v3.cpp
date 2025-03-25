@@ -39,7 +39,7 @@
 
 #ifndef NDEBUG
 #include <intrin.h>
-#define RWKV_MAYBE_BREAK __debugbreak()
+// #define RWKV_MAYBE_BREAK __debugbreak()
 #endif
 #else
 #if !defined(__APPLE__)

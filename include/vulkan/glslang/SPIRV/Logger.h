@@ -37,22 +37,15 @@
 
 #include <string>
 #include <vector>
+#include "glslang/Include/visibility.h"
 
 namespace spv {
 
 // A class for holding all SPIR-V build status messages, including
 // missing/TBD functionalities, warnings, and errors.
-class SpvBuildLogger {
+class GLSLANG_EXPORT SpvBuildLogger {
 public:
     SpvBuildLogger() {}
-
-#ifdef GLSLANG_WEB
-    void tbdFunctionality(const std::string& f) { }
-    void missingFunctionality(const std::string& f) { }
-    void warning(const std::string& w) { }
-    void error(const std::string& e) { errors.push_back(e); }
-    std::string getAllMessages() { return ""; }
-#else
 
     // Registers a TBD functionality.
     void tbdFunctionality(const std::string& f);
@@ -67,7 +60,6 @@ public:
     // Returns all messages accumulated in the order of:
     // TBD functionalities, missing functionalities, warnings, errors.
     std::string getAllMessages() const;
-#endif
 
 private:
     SpvBuildLogger(const SpvBuildLogger&);

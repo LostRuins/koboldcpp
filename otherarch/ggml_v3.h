@@ -188,13 +188,8 @@
 #endif
 
 // TODO: support for clang
-#ifdef __GNUC__
-#    define GGML_V3_DEPRECATED(func, hint) func __attribute__((deprecated(hint)))
-#elif defined(_MSC_VER)
-#    define GGML_V3_DEPRECATED(func, hint) __declspec(deprecated(hint)) func
-#else
 #    define GGML_V3_DEPRECATED(func, hint) func
-#endif
+
 
 #ifndef __GNUC__
 #    define GGML_V3_ATTRIBUTE_FORMAT(...)

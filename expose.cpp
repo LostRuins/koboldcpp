@@ -35,6 +35,7 @@ extern "C"
         lora_filename = inputs.lora_filename;
         lora_base = inputs.lora_base;
         mmproj_filename = inputs.mmproj_filename;
+        draftmodel_filename = inputs.draftmodel_filename;
 
         int forceversion = inputs.forceversion;
 
@@ -78,7 +79,7 @@ extern "C"
 
         if(file_format==FileFormat::GPTJ_1 || file_format==FileFormat::GPTJ_2 || file_format==FileFormat::GPTJ_3 || file_format==FileFormat::GPTJ_4  || file_format==FileFormat::GPTJ_5)
         {
-            printf("\n---\nIdentified as GPT-J model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+            printf("\n---\nIdentified as Legacy GPT-J model: (ver %d)\nAttempting to Load...\n---\n", file_format);
             ModelLoadResult lr = gpttype_load_model(inputs, file_format, file_format_meta);
             if (lr == ModelLoadResult::RETRY_LOAD)
             {
@@ -87,14 +88,14 @@ extern "C"
                     //if we tried 1 first, then try 3 and lastly 2
                     //otherwise if we tried 3 first, then try 2
                     file_format = FileFormat::GPTJ_4;
-                    printf("\n---\nRetrying as GPT-J model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                    printf("\n---\nRetrying as Legacy GPT-J model: (ver %d)\nAttempting to Load...\n---\n", file_format);
                     lr = gpttype_load_model(inputs, file_format, file_format_meta);
                 }
 
                 if (lr == ModelLoadResult::RETRY_LOAD)
                 {
                     file_format = FileFormat::GPTJ_3;
-                    printf("\n---\nRetrying as GPT-J model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                    printf("\n---\nRetrying as Legacy GPT-J model: (ver %d)\nAttempting to Load...\n---\n", file_format);
                     lr = gpttype_load_model(inputs, file_format, file_format_meta);
                 }
 
@@ -102,7 +103,7 @@ extern "C"
                 if (lr == ModelLoadResult::RETRY_LOAD)
                 {
                     file_format = FileFormat::GPTJ_2;
-                    printf("\n---\nRetrying as GPT-J model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                    printf("\n---\nRetrying as Legacy GPT-J model: (ver %d)\nAttempting to Load...\n---\n", file_format);
                     lr = gpttype_load_model(inputs, file_format, file_format_meta);
                 }
             }
@@ -118,18 +119,18 @@ extern "C"
         }
         else if(file_format==FileFormat::GPT2_1||file_format==FileFormat::GPT2_2||file_format==FileFormat::GPT2_3||file_format==FileFormat::GPT2_4)
         {
-            printf("\n---\nIdentified as GPT-2 model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+            printf("\n---\nIdentified as Legacy GPT-2 model: (ver %d)\nAttempting to Load...\n---\n", file_format);
             ModelLoadResult lr = gpttype_load_model(inputs, file_format, file_format_meta);
             if (lr == ModelLoadResult::RETRY_LOAD)
             {
                 file_format = FileFormat::GPT2_3;
-                printf("\n---\nRetrying as GPT-2 model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                printf("\n---\nRetrying as Legacy GPT-2 model: (ver %d)\nAttempting to Load...\n---\n", file_format);
                 lr = gpttype_load_model(inputs, file_format, file_format_meta);
             }
             if (lr == ModelLoadResult::RETRY_LOAD)
             {
                 file_format = FileFormat::GPT2_2;
-                printf("\n---\nRetrying as GPT-2 model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                printf("\n---\nRetrying as Legacy GPT-2 model: (ver %d)\nAttempting to Load...\n---\n", file_format);
                 lr = gpttype_load_model(inputs, file_format, file_format_meta);
             }
             if (lr == ModelLoadResult::FAIL || lr == ModelLoadResult::RETRY_LOAD)
@@ -143,27 +144,27 @@ extern "C"
         }
         else if(file_format==FileFormat::NEOX_1 || file_format==FileFormat::NEOX_2 || file_format==FileFormat::NEOX_3 || file_format==FileFormat::NEOX_4 || file_format==FileFormat::NEOX_5 || file_format==FileFormat::NEOX_6 || file_format==FileFormat::NEOX_7)
         {
-            printf("\n---\nIdentified as GPT-NEO-X model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+            printf("\n---\nIdentified as Legacy GPT-NEO-X model: (ver %d)\nAttempting to Load...\n---\n", file_format);
             ModelLoadResult lr = gpttype_load_model(inputs, file_format, file_format_meta);
             if (lr == ModelLoadResult::RETRY_LOAD)
             {
                 if(file_format==FileFormat::NEOX_2)
                 {
                     file_format = FileFormat::NEOX_3;
-                    printf("\n---\nRetrying as GPT-NEO-X model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                    printf("\n---\nRetrying as Legacy GPT-NEO-X model: (ver %d)\nAttempting to Load...\n---\n", file_format);
                     lr = gpttype_load_model(inputs, file_format, file_format_meta);
                 }
                 else
                 {
                     file_format = FileFormat::NEOX_5;
-                    printf("\n---\nRetrying as GPT-NEO-X model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                    printf("\n---\nRetrying as Legacy GPT-NEO-X model: (ver %d)\nAttempting to Load...\n---\n", file_format);
                     lr = gpttype_load_model(inputs, file_format, file_format_meta);
                 }
             }
             if (lr == ModelLoadResult::RETRY_LOAD)
             {
                 file_format = FileFormat::NEOX_1;
-                printf("\n---\nRetrying as GPT-NEO-X model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                printf("\n---\nRetrying as Legacy GPT-NEO-X model: (ver %d)\nAttempting to Load...\n---\n", file_format);
                 lr = gpttype_load_model(inputs, file_format, file_format_meta);
             }
             if (lr == ModelLoadResult::FAIL || lr == ModelLoadResult::RETRY_LOAD)
@@ -179,21 +180,30 @@ extern "C"
         {
             if(file_format==FileFormat::MPT_1)
             {
-                printf("\n---\nIdentified as MPT model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                printf("\n---\nIdentified as Legacy MPT model: (ver %d)\nAttempting to Load...\n---\n", file_format);
             }
             else if(file_format==FileFormat::RWKV_1 || file_format==FileFormat::RWKV_2)
             {
-                printf("\n---\nIdentified as RWKV model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                printf("\n---\nIdentified as Legacy RWKV model: (ver %d)\nAttempting to Load...\n---\n", file_format);
             }
             else if(file_format==FileFormat::GGUF_GENERIC)
             {
                 printf("\n---\nIdentified as GGUF model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+            }
+            else if(file_format==FileFormat::GGML || file_format==FileFormat::GGHF || file_format==FileFormat::GGJT || file_format==FileFormat::GGJT_2 || file_format==FileFormat::GGJT_3)
+            {
+                printf("\n---\nIdentified as Legacy GGML model: (ver %d)\n======\nGGML Models are Outdated: You are STRONGLY ENCOURAGED to obtain a newer GGUF model!\n======\nAttempting to Load...\n---\n", file_format);
             }
             else
             {
                 printf("\n---\nUnidentified Model Encountered: (ver %d)\n---\n", file_format);
             }
             ModelLoadResult lr = gpttype_load_model(inputs, file_format, file_format_meta);
+            if(file_format==FileFormat::GGML || file_format==FileFormat::GGHF || file_format==FileFormat::GGJT || file_format==FileFormat::GGJT_2 || file_format==FileFormat::GGJT_3)
+            {
+                //warn a second time
+                printf("\n======\nGGML Models are Outdated: You are STRONGLY ENCOURAGED to obtain a newer GGUF model!\n======\n");
+            }
             if (lr == ModelLoadResult::FAIL || lr == ModelLoadResult::RETRY_LOAD)
             {
                 return false;
@@ -228,6 +238,15 @@ extern "C"
         return whispertype_generate(inputs);
     }
 
+    bool tts_load_model(const tts_load_model_inputs inputs)
+    {
+        return ttstype_load_model(inputs);
+    }
+    tts_generation_outputs tts_generate(const tts_generation_inputs inputs)
+    {
+        return ttstype_generate(inputs);
+    }
+
     const char * new_token(int idx) {
         if (generated_tokens.size() <= idx || idx < 0) return nullptr;
 
@@ -255,6 +274,14 @@ extern "C"
     {
         return last_seed;
     }
+    int get_last_draft_success()
+    {
+        return last_draft_success;
+    }
+     int get_last_draft_failed()
+    {
+        return last_draft_failed;
+    }
     int get_total_gens() {
         return total_gens;
     }
@@ -262,8 +289,22 @@ extern "C"
     {
         return total_img_gens;
     }
+    int get_total_tts_gens()
+    {
+        return total_tts_gens;
+    }
+     int get_total_transcribe_gens()
+    {
+        return total_transcribe_gens;
+    }
     int get_last_stop_reason() {
         return (int)last_stop_reason;
+    }
+
+    static std::string chat_template = "";
+    const char* get_chat_template() {
+        chat_template = gpttype_get_chat_template();
+        return chat_template.c_str();
     }
 
     const char* get_pending_output() {
@@ -282,6 +323,44 @@ extern "C"
         toks = gpttype_get_token_arr(inputstr,addbos);
         output.count = toks.size();
         output.ids = toks.data(); //this may be slightly unsafe
+        return output;
+    }
+
+    static std::string detokenized_str = ""; //just share a static object for detokenizing
+    const char * detokenize(const token_count_outputs input)
+    {
+        std::vector<int> input_arr;
+        for(int i=0;i<input.count;++i)
+        {
+            input_arr.push_back(input.ids[i]);
+        }
+        detokenized_str = gpttype_detokenize(input_arr,false);
+        return detokenized_str.c_str();
+    }
+
+    static std::vector<TopPicksData> last_logprob_toppicks;
+    static std::vector<logprob_item> last_logprob_items;
+    last_logprobs_outputs last_logprobs()
+    {
+        last_logprobs_outputs output;
+        last_logprob_items.clear();
+        last_logprob_toppicks.clear();
+        last_logprob_toppicks = gpttype_get_top_picks_data(); //copy top picks
+        for(int i=0;i<last_logprob_toppicks.size();++i)
+        {
+            logprob_item itm;
+            itm.option_count = last_logprob_toppicks[i].tokenid.size();
+            itm.selected_token = last_logprob_toppicks[i].selected_token.c_str();
+            itm.selected_logprob = last_logprob_toppicks[i].selected_logprob;
+            itm.logprobs = last_logprob_toppicks[i].logprobs.data();
+            for(int j=0;j<itm.option_count && j<logprobs_max;++j)
+            {
+                itm.tokens[j] = last_logprob_toppicks[i].tokens[j].c_str();
+            }
+            last_logprob_items.push_back(itm);
+        }
+        output.count = last_logprob_items.size();
+        output.logprob_items = last_logprob_items.data();
         return output;
     }
 

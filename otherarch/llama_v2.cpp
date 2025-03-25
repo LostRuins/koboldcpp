@@ -436,19 +436,23 @@ struct llama_v2_file_loader {
         uint32_t magic = file.read_u32();
         uint32_t version = 0;
 
-        if (magic != 'ggml') {
+        uint32_t magic_ggjt = 0x67676a74u; // 'ggjt'
+        uint32_t magic_ggmf = 0x67676d66u; // 'ggmf'
+        uint32_t magic_ggml = 0x67676d6cu; // 'ggml'
+
+        if (magic != magic_ggml) {
             version = file.read_u32();
         }
 
-        if (magic == 'ggml' && version == 0) {
+        if (magic == magic_ggml && version == 0) {
             file_version = LLAMA_V2_FILE_VERSION_GGML;
-        } else if (magic == 'ggmf' && version == 1) {
+        } else if (magic == magic_ggmf && version == 1) {
             file_version = LLAMA_V2_FILE_VERSION_GGMF_V1;
-        } else if (magic == 'ggjt' && version == 1) {
+        } else if (magic == magic_ggjt && version == 1) {
             file_version = LLAMA_V2_FILE_VERSION_GGJT_V1;
-        } else if (magic == 'ggjt' && version == 2) {
+        } else if (magic == magic_ggjt && version == 2) {
             file_version = LLAMA_V2_FILE_VERSION_GGJT_V2;
-        } else if (magic == 'ggjt' && version == 3) {
+        } else if (magic == magic_ggjt && version == 3) {
             file_version = LLAMA_V2_FILE_VERSION_GGJT_V3;
         } else {
             throw format_old("unknown (magic, version) combination: %08x, %08x; is this really a GGML file?",
@@ -553,7 +557,8 @@ struct llama_v2_file_saver {
         write_vocab();
     }
     void write_magic() {
-        file.write_u32(LLAMA_V2_FILE_MAGIC);   // magic
+        uint32_t magic_ggjt = 0x67676a74u; // 'ggjt'
+        file.write_u32(magic_ggjt);   // magic
         file.write_u32(LLAMA_V2_FILE_VERSION); // version
     }
     void write_hparams(enum llama_v2_ftype new_ftype) {
@@ -2308,7 +2313,8 @@ int llama_v2_apply_lora_from_file_internal(struct llama_v2_context * ctx, const 
     {
         uint32_t magic;
         fin.read((char *) &magic, sizeof(magic));
-        if (magic != 'ggla') {
+        uint32_t magic_ggla = 0x67676c61u; // 'ggla'
+        if (magic != magic_ggla) {
             fprintf(stderr, "%s: bad file magic\n", __func__);
             return 1;
         }
@@ -2798,85 +2804,6 @@ size_t llama_v2_set_state_data(struct llama_v2_context * ctx, const uint8_t * sr
     LLAMA_V2_ASSERT(nread <= max_size);
 
     return nread;
-}
-
-bool llama_v2_load_session_file(struct llama_v2_context * ctx, const char * path_session, llama_v2_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
-    llama_v2_file file(path_session, "rb");
-
-    // sanity checks
-    {
-        const uint32_t magic   = file.read_u32();
-        const uint32_t version = file.read_u32();
-
-        if (magic != LLAMA_V2_SESSION_MAGIC || version != LLAMA_V2_SESSION_VERSION) {
-            fprintf(stderr, "%s : unknown (magic, version) for session file: %08x, %08x\n", __func__, magic, version);
-            return false;
-        }
-
-        llama_v2_hparams session_hparams;
-        file.read_raw(&session_hparams, sizeof(llama_v2_hparams));
-
-        if (session_hparams != ctx->model.hparams) {
-            fprintf(stderr, "%s : model hparams didn't match from session file!\n", __func__);
-            return false;
-        }
-    }
-
-    // load the prompt
-    {
-        const uint32_t n_token_count = file.read_u32();
-
-        if (n_token_count > n_token_capacity) {
-            fprintf(stderr, "%s : token count in session file exceeded capacity! %u > %zu\n", __func__, n_token_count, n_token_capacity);
-            return false;
-        }
-
-        file.read_raw(tokens_out, sizeof(llama_v2_token) * n_token_count);
-        *n_token_count_out = n_token_count;
-    }
-
-    // restore the context state
-    {
-        const size_t n_state_size_cur = file.size - file.tell();
-        const size_t n_state_size_max = llama_v2_get_state_size(ctx);
-
-        if (n_state_size_cur > n_state_size_max) {
-            fprintf(stderr, "%s : the state size in session file is too big! max %zu, got %zu\n", __func__, n_state_size_max, n_state_size_cur);
-            return false;
-        }
-
-        std::vector<uint8_t> state_data(n_state_size_max);
-        file.read_raw(state_data.data(), n_state_size_cur);
-
-        llama_v2_set_state_data(ctx, state_data.data());
-    }
-
-    return true;
-}
-
-bool llama_v2_save_session_file(struct llama_v2_context * ctx, const char * path_session, const llama_v2_token * tokens, size_t n_token_count) {
-    llama_v2_file file(path_session, "wb");
-
-    file.write_u32(LLAMA_V2_SESSION_MAGIC);
-    file.write_u32(LLAMA_V2_SESSION_VERSION);
-
-    file.write_raw(&ctx->model.hparams, sizeof(llama_v2_hparams));
-
-    // save the prompt
-    file.write_u32((uint32_t) n_token_count);
-    file.write_raw(tokens, sizeof(llama_v2_token) * n_token_count);
-
-    // save the context state
-    {
-        const size_t n_state_size_max = llama_v2_get_state_size(ctx);
-
-        std::vector<uint8_t> state_data(n_state_size_max);
-        const size_t n_state_size_cur = llama_v2_copy_state_data(ctx, state_data.data());
-
-        file.write_raw(state_data.data(), n_state_size_cur);
-    }
-
-    return true;
 }
 
 int llama_v2_eval(

@@ -140,10 +140,6 @@ extern "C" {
     // Returns the number of bytes read
     LLAMA_V2_API size_t llama_v2_set_state_data(struct llama_v2_context * ctx, const uint8_t * src);
 
-    // Save/load session file
-    LLAMA_V2_API bool llama_v2_load_session_file(struct llama_v2_context * ctx, const char * path_session, llama_v2_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out);
-    LLAMA_V2_API bool llama_v2_save_session_file(struct llama_v2_context * ctx, const char * path_session, const llama_v2_token * tokens, size_t n_token_count);
-
     // Run the llama inference to obtain the logits and probabilities for the next token.
     // tokens + n_tokens is the provided batch of new tokens to process
     // n_past is the number of tokens to use from previous eval calls
@@ -167,7 +163,7 @@ extern "C" {
                              int   n_max_tokens,
                             bool   add_bos);
 
-    
+
     std::vector<llama_v2_token> legacy_llama_v2_tokenize(struct llama_v2_context * ctx, const std::string & text, bool add_bos);
 
     LLAMA_V2_API int llama_v2_n_vocab(const struct llama_v2_context * ctx);

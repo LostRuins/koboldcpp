@@ -1,0 +1,144 @@
+[
+{
+    "search": ["<|im_start|>assistant", "<|im_end|>", "<|im_sep|>"],
+    "name": "ChatML (Phi 4)",
+    "adapter": {
+        "system_start": "<|im_start|>system<|im_sep|>",
+        "system_end": "<|im_end|>",
+        "user_start": "<|im_start|>user<|im_sep|>",
+        "user_end": "<|im_end|>",
+        "assistant_start": "<|im_start|>assistant<|im_sep|>",
+        "assistant_end": "<|im_end|>"
+    }
+}, {
+    "search": ["<|im_start|>assistant", "<|im_end|>", "You are provided with function signatures within <tools>"],
+    "name": "ChatML (Qwen 2.5 based).",
+    "adapter": {
+        "system_start": "<|im_start|>system\n\n",
+        "system_end": "<|im_end|>\n\n",
+        "user_start": "<|im_start|>user\n\n",
+        "user_end": "<|im_end|>\n\n",
+        "assistant_start": "<|im_start|>assistant\n\n",
+        "assistant_end": "<|im_end|>\n\n",
+        "tools_start": "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n\n<tools>\n",
+        "tools_end": "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n"
+    }
+}, {
+    "search": ["<|im_start|>assistant", "<|im_end|>"],
+    "name": "ChatML (Generic).",
+    "adapter": {
+        "system_start": "<|im_start|>system\n\n",
+        "system_end": "<|im_end|>\n\n",
+        "user_start": "<|im_start|>user\n\n",
+        "user_end": "<|im_end|>\n\n",
+        "assistant_start": "<|im_start|>assistant\n\n",
+        "assistant_end": "<|im_end|>\n\n"
+    }
+}, {
+    "search": ["System role not supported", "<start_of_turn>"],
+    "name": "Google Gemma 2.",
+    "adapter": {
+        "user_start": "<start_of_turn>user\n",
+        "user_end": "<end_of_turn>\n",
+        "assistant_start": "<start_of_turn>model\n",
+        "assistant_end": "<end_of_turn>\n"
+    }
+}, {
+    "search": ["<start_of_image>", "<start_of_turn>", "<end_of_turn>"],
+    "name": "Google Gemma 3.",
+    "adapter": {
+        "user_start": "<start_of_turn>user\n",
+        "user_end": "<end_of_turn>\n",
+        "assistant_start": "<start_of_turn>model\n",
+        "assistant_end": "<end_of_turn>\n"
+    }
+}, {
+    "search": ["<|start_header_id|>system"],
+    "name": "Llama 3.x.",
+    "adapter": {
+        "system_start": "<|start_header_id|>system<|end_header_id|>\n\n",
+        "system_end": "<|eot_id|>\n\n",
+        "user_start": "<|start_header_id|>user<|end_header_id|>\n\n",
+        "user_end": "<|eot_id|>\n\n",
+        "assistant_start": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "assistant_end": "<|eot_id|>\n\n"
+    }
+}, {
+    "search": ["[/INST]", "[SYSTEM_PROMPT]"],
+    "name": "Mistral V7 (with system prompt)",
+    "adapter": {
+        "system_start": "[SYSTEM_PROMPT] ",
+        "system_end": "[/SYSTEM_PROMPT]",
+        "user_start": "[INST] ",
+        "user_end": "[/INST]",
+        "assistant_start": " ",
+        "assistant_end": "</s>"
+    }
+}, {
+    "search": ["[/INST]", "\"[INST] \" + system_message"],
+    "name": "Mistral V3",
+    "adapter": {
+        "system_start": "[INST] ",
+        "system_end": "[/INST] ",
+        "user_start": "[INST] ",
+        "user_end": "[/INST] ",
+        "assistant_start": "",
+        "assistant_end": "</s>"
+    }
+}, {
+    "search": ["[/INST]"],
+    "name": "Mistral (Generic)",
+    "adapter": {
+        "system_start": "[INST]",
+        "system_end": "[/INST]\n",
+        "user_start": "[INST]",
+        "user_end": "[/INST]\n",
+        "assistant_start": "",
+        "assistant_end": "</s>"
+    }
+}, {
+    "search": ["<|system|>", "<|user|>"],
+    "name": "Phi 3.5",
+    "adapter": {
+        "system_start": "<|system|>\n",
+        "system_end": "<|end|>\n",
+        "user_start": "<|user|>\n",
+        "user_end": "<|end|>\n",
+        "assistant_start": "<|assistant|>\n",
+        "assistant_end": "<|end|>\n"
+    }
+}, {
+    "search": ["'<|' + message['role'] + '|>'"],
+    "name": "Phi 4 (mini)",
+    "adapter": {
+        "system_start": "<|system|>\n",
+        "system_end": "<|end|>\n",
+        "user_start": "<|user|>\n",
+        "user_end": "<|end|>\n",
+        "assistant_start": "<|assistant|>\n",
+        "assistant_end": "<|end|>\n"
+    }
+}, {
+    "search": ["<|START_OF_TURN_TOKEN|>"],
+    "name": "Cohere (Aya Expanse 32B based)",
+    "adapter": {
+        "system_start": "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>",
+        "system_end": "<|END_OF_TURN_TOKEN|>",
+        "user_start": "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>",
+        "user_end": "<|END_OF_TURN_TOKEN|>",
+        "assistant_start": "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>",
+        "assistant_end": "<|END_OF_TURN_TOKEN|>"
+    }
+}, {
+    "search": ["<｜User｜>"],
+    "name": "DeepSeek V2.5",
+    "adapter": {
+        "system_start": "",
+        "system_end": "",
+        "user_start": "<｜User｜>",
+        "user_end": "",
+        "assistant_start": "<｜Assistant｜>",
+        "assistant_end": "<｜end▁of▁sentence｜>"
+    }
+}
+]

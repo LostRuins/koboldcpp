@@ -11,8 +11,6 @@ dependencies:
   - gxx=10
   - pip
   - git=2.35.1
-  - libopenblas
-  - openblas
   - clblast
   - ninja
   - make
@@ -21,5 +19,6 @@ dependencies:
   - libcblas
   - ocl-icd-system
   - libvulkan-loader
+  - tk=*=xft_*
   - pip:
     - customtkinter

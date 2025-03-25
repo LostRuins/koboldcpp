@@ -58,6 +58,9 @@ enum GGUFArch
     ARCH_MAMBA = 3,
     ARCH_SOLAR = 4,
     ARCH_QWEN2 = 5,
+    ARCH_RWKV = 6,
+    ARCH_QWEN2VL = 7,
+    ARCH_GEMMA3 = 8,
 };
 
 struct FileFormatExtraMeta
@@ -66,6 +69,19 @@ struct FileFormatExtraMeta
     int fileversion = 0;
     GGUFArch model_architecture = GGUFArch::ARCH_DEFAULT;
     int n_expert_count = 0;
+    std::string model_architecture_str = "";
+};
+
+struct TopPicksData
+{
+    std::string selected_token;
+    int32_t selected_tokenid;
+    float selected_logprob;
+    float selected_probability;
+    std::vector<std::string> tokens;
+    std::vector<int> tokenid;
+    std::vector<float> logprobs;
+    std::vector<float> p;
 };
 
 enum ModelLoadResult
@@ -78,14 +94,21 @@ enum ModelLoadResult
 ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in_file_format, FileFormatExtraMeta file_format_meta);
 generation_outputs gpttype_generate(const generation_inputs inputs);
 bool gpttype_generate_abort();
+std::string gpttype_get_chat_template();
+
 const std::string & gpttype_get_pending_output();
 std::vector<int> gpttype_get_token_arr(const std::string & input, bool addbos);
+std::string gpttype_detokenize(const std::vector<int> & input, bool render_special);
+const std::vector<TopPicksData> gpttype_get_top_picks_data();
 
 bool sdtype_load_model(const sd_load_model_inputs inputs);
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs);
 
 bool whispertype_load_model(const whisper_load_model_inputs inputs);
 whisper_generation_outputs whispertype_generate(const whisper_generation_inputs inputs);
+
+bool ttstype_load_model(const tts_load_model_inputs inputs);
+tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs);
 
 void timer_start();
 double timer_check();

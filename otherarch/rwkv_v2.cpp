@@ -126,7 +126,7 @@ struct rwkv_v2_model {
 
 // Finds model parameter by key and sets it into dest.
 // If the parameter was not found, returns false.
-bool rwkv_v2_set_parameter(std::unordered_map<std::string, struct ggml_v2_tensor *> * parameters, char * key, struct ggml_v2_tensor ** dest) {
+bool rwkv_v2_set_parameter(std::unordered_map<std::string, struct ggml_v2_tensor *> * parameters, const char * key, struct ggml_v2_tensor ** dest) {
     struct ggml_v2_tensor * parameter = (*parameters)[key];
     RWKV_V2_ASSERT_FALSE(parameter != NULL, "Parameter %s not found in model file", key);
     *dest = parameter;
@@ -135,7 +135,7 @@ bool rwkv_v2_set_parameter(std::unordered_map<std::string, struct ggml_v2_tensor
 
 // Finds block parameter by block index and key and sets it into dest.
 // If the parameter was not found, returns false.
-bool rwkv_v2_set_block_parameter(std::unordered_map<std::string, struct ggml_v2_tensor *> * parameters, int32_t block_index, char * key, struct ggml_v2_tensor ** dest) {
+bool rwkv_v2_set_block_parameter(std::unordered_map<std::string, struct ggml_v2_tensor *> * parameters, int32_t block_index, const char * key, struct ggml_v2_tensor ** dest) {
     char full_key[128];
     sprintf(full_key, "blocks.%d.%s", block_index, key);
     return rwkv_v2_set_parameter(parameters, full_key, dest);

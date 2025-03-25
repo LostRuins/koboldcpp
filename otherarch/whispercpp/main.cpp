@@ -1,7 +1,6 @@
 #include "common.h"
 
 #include "whisper.h"
-#include "grammar-parser.h"
 #define DR_WAV_IMPLEMENTATION
 #include "dr_wav.h"
 
@@ -219,7 +218,7 @@ struct whisper_params {
     std::vector<std::string> fname_inp = {};
     std::vector<std::string> fname_out = {};
 
-    grammar_parser::parse_state grammar_parsed;
+    //grammar_parser::parse_state grammar_parsed;
 };
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -1143,28 +1142,28 @@ int main(int argc, char ** argv) {
     // initialize openvino encoder. this has no effect on whisper.cpp builds that don't have OpenVINO configured
     whisper_ctx_init_openvino_encoder(ctx, nullptr, params.openvino_encode_device.c_str(), nullptr);
 
-    if (!params.grammar.empty()) {
-        auto & grammar = params.grammar_parsed;
-        if (is_file_exist(params.grammar.c_str())) {
-            // read grammar from file
-            std::ifstream ifs(params.grammar.c_str());
-            const std::string txt = std::string((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-            grammar = grammar_parser::parse(txt.c_str());
-        } else {
-            // read grammar from string
-            grammar = grammar_parser::parse(params.grammar.c_str());
-        }
+    // if (!params.grammar.empty()) {
+    //     auto & grammar = params.grammar_parsed;
+    //     if (is_file_exist(params.grammar.c_str())) {
+    //         // read grammar from file
+    //         std::ifstream ifs(params.grammar.c_str());
+    //         const std::string txt = std::string((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    //         grammar = grammar_parser::parse(txt.c_str());
+    //     } else {
+    //         // read grammar from string
+    //         grammar = grammar_parser::parse(params.grammar.c_str());
+    //     }
 
-        // will be empty (default) if there are parse errors
-        if (grammar.rules.empty()) {
-            fprintf(stderr, "error: failed to parse grammar \"%s\"\n", params.grammar.c_str());
-            return 4;
-        } else {
-            fprintf(stderr, "%s: grammar:\n", __func__);
-            grammar_parser::print_grammar(stderr, grammar);
-            fprintf(stderr, "\n");
-        }
-    }
+    //     // will be empty (default) if there are parse errors
+    //     if (grammar.rules.empty()) {
+    //         fprintf(stderr, "error: failed to parse grammar \"%s\"\n", params.grammar.c_str());
+    //         return 4;
+    //     } else {
+    //         fprintf(stderr, "%s: grammar:\n", __func__);
+    //         grammar_parser::print_grammar(stderr, grammar);
+    //         fprintf(stderr, "\n");
+    //     }
+    // }
 
     for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
         const auto fname_inp = params.fname_inp[f];
@@ -1212,7 +1211,7 @@ int main(int argc, char ** argv) {
         {
             whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
 
-            const bool use_grammar = (!params.grammar_parsed.rules.empty() && !params.grammar_rule.empty());
+            const bool use_grammar = false;// (!params.grammar_parsed.rules.empty() && !params.grammar_rule.empty());
             wparams.strategy = (params.beam_size > 1 || use_grammar) ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY;
 
             wparams.print_realtime   = false;
@@ -1255,7 +1254,7 @@ int main(int argc, char ** argv) {
 
             whisper_print_user_data user_data = { &params, &pcmf32s, 0 };
 
-            const auto & grammar_parsed = params.grammar_parsed;
+            //const auto & grammar_parsed = params.grammar_parsed;
             // auto grammar_rules = grammar_parsed.c_rules();
 
             // if (use_grammar) {
