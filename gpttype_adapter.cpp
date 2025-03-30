@@ -711,11 +711,15 @@ void sample_softmax(llama_token_data_array * cur_p) {
     }
 }
 
-void sample_top_k(llama_token_data_array * cur_p, int32_t k) {
+void sample_top_k(llama_token_data_array * cur_p, int32_t k, float min_p, float nsigma) {
     // TODO: move bucket sort to separate function so that top_p/tail_free/typical/softmax first is equally fast
     // if (k >= (int32_t)cur_p->size) {
     //     return;
     // }
+
+    if (min_p > 0.0f && nsigma > 0.0f) {
+        return;
+    }
 
     if (k <= 0) {
         k = cur_p->size;
@@ -847,7 +851,7 @@ llama_token sample_token_mirostat(int n_vocab, llama_token_data_array * candidat
     float epsilon_hat = s_hat - 1;
     float k = powf((epsilon_hat * powf(2, *mu)) / (1 - powf(N, -epsilon_hat)), 1 / s_hat);
     // Sample the next word X using top-k sampling
-    sample_top_k(candidates, int(k));
+    sample_top_k(candidates, int(k), 0.0f, 0.0f);
     llama_token X = sample_token(candidates, rng);    // Compute error as the difference between observed surprise and target surprise value
     size_t X_idx = std::distance(candidates->data, std::find_if(candidates->data, candidates->data + candidates->size, [&](const llama_token_data & candidate) {
         return candidate.id == X;
@@ -1249,7 +1253,7 @@ void sample_top_p(llama_token_data_array * cur_p, float p, size_t min_keep) {
     cur_p->size = last_idx;
 }
 
-void sample_min_p(llama_token_data_array * cur_p, float p, size_t min_keep) {
+void sample_min_p(llama_token_data_array * cur_p, float p, size_t min_keep, int32_t top_k, float nsigma) {
     if (p <= 0.0f || !cur_p->size) {
         return;
     }
@@ -1257,7 +1261,7 @@ void sample_min_p(llama_token_data_array * cur_p, float p, size_t min_keep) {
     bool min_p_applied = false;
 
     // if the cur_p aren't sorted, try the unsorted implementation first
-    if (!cur_p->sorted) {
+    if (!cur_p->sorted && ((top_k > 1 || top_k <201) && nsigma > 0.0f)) {
         std::vector<llama_token_data> filtered_tokens;
 
         float max_logit = -FLT_MAX;
@@ -1300,7 +1304,11 @@ void sample_min_p(llama_token_data_array * cur_p, float p, size_t min_keep) {
         }
 
         // Resize the output vector to keep only the matching tokens
-        cur_p->size = i;
+        if ((top_k > 1 && top_k < 201) && nsigma > 0.0f) {
+            cur_p->size = i + top_k;
+        } else {
+            cur_p->size = i;
+        }
     }
 }
 
@@ -1531,7 +1539,7 @@ void sample_temperature(llama_token_data_array * candidates_p, float temp, float
 
     if(isgreedy)
     {
-        sample_top_k(candidates_p, 1); //only want first candidate
+        sample_top_k(candidates_p, 1, 0.0f, 0.0f); //only want first candidate
     }
 }
 
@@ -1602,7 +1610,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
     sample_dry(n_ctx, dry_penalty_last_n, dry_multiplier, dry_base, dry_allowed_length, dry_sequence_breakers, &candidates_p);
 
     //prefilter to top 3k tokens for improved speed
-    sample_top_k(&candidates_p, 3000);
+    sample_top_k(&candidates_p, 3000, 0.0f, 0.0f);
 
     if (mirostat == 1 || mirostat == 2)
     {
@@ -1626,14 +1634,14 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
             switch (sampler_order[i])
             {
                 case KCPP_SAMPLER_TOP_K:
-                    sample_top_k(&candidates_p, top_k);
+                    sample_top_k(&candidates_p, top_k, min_p, nsigma);
                     break;
                 case KCPP_SAMPLER_TOP_A:
                     sample_top_a(&candidates_p, top_a, 1);
                     break;
                 case KCPP_SAMPLER_TOP_P:
                     sample_top_p(&candidates_p, top_p, 1);
-                    sample_min_p(&candidates_p, min_p, 1);
+                    sample_min_p(&candidates_p, min_p, 1, top_k, nsigma);
                     break;
                 case KCPP_SAMPLER_TFS:
                     sample_tail_free(&candidates_p, tfs, 1);
