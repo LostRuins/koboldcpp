@@ -2018,27 +2018,29 @@ def transform_genparams(genparams, api_format):
                         #if auto mode, determine whether a tool is needed
                         tools_string = json.dumps(tools_array, indent=0)
                         should_use_tools = True
+                        user_start = adapter_obj.get("user_start", "### Instruction:\n\n")
+                        user_end = adapter_obj.get("user_end", "\n\n### Response:\n\n")
                         if chosen_tool=="auto":
                             temp_poll = {
-                                "prompt": f"{messages_string}\n\nAvailable Tools:\n{tools_string}\n\nBased on the above, answer in one word only (yes or no): Should a tool be used?\n\nAnswer:\n",
+                                "prompt": f"{user_start}User query:\n\n{messages_string}\n\nTool Code:\n{tools_string}Determine from the provided tool code if the user query would be best answered by a listed tool (One word: yes / no):{user_end}",
                                 "max_length":4,
-                                "temperature":0.2,
-                                "top_k":10,
+                                "temperature":0.1,
+                                "top_k":1,
                                 "rep_pen":1,
                                 "ban_eos_token":False
                                 }
                             temp_poll_result = generate(genparams=temp_poll)
-                            if temp_poll_result and "no" in temp_poll_result['text'].lower():
+                            if temp_poll_result and not "yes" in temp_poll_result['text'].lower():
                                 should_use_tools = False
                             if not args.quiet:
-                                print(f"\nDeciding if we should use a tool: {temp_poll_result['text']} ({should_use_tools})")
+                                print(f"\nRelevant tool is listed: {temp_poll_result['text']} ({should_use_tools})")
 
                         if should_use_tools:
                             messages_string += tools_string
                             messages_string += tool_json_formatting_instruction
 
                             # Set temperature low automatically if function calling
-                            genparams["temperature"] = 0.2
+                            genparams["temperature"] = 0.1
                             genparams["using_openai_tools"] = True
 
                             # Set grammar to llamacpp example grammar to force json response (see https://github.com/ggerganov/llama.cpp/blob/master/grammars/json_arr.gbnf)
