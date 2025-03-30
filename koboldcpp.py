@@ -2267,6 +2267,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 tool_calls = extract_json_from_string(recvtxt)
                 if tool_calls and len(tool_calls)>0:
                     recvtxt = None
+                    currfinishreason = "tool_calls"
             res = {"id": "chatcmpl-A1", "object": "chat.completion", "created": int(time.time()), "model": friendlymodelname,
                    "usage": {"prompt_tokens": prompttokens, "completion_tokens": comptokens, "total_tokens": (prompttokens+comptokens)},
                    "choices": [{"index": 0, "message": {"role": "assistant", "content": recvtxt, "tool_calls": tool_calls}, "finish_reason": currfinishreason, "logprobs":logprobsdict}]}
