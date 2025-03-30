@@ -3146,6 +3146,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     int32_t nctx = kcpp_data->n_ctx;
 
     TokenizeString(kcpp_data->prompt, embd_inp, file_format, add_bos_token);
+    bool use_mrope = (file_format == FileFormat::GGUF_GENERIC && file_format_meta.model_architecture == GGUFArch::ARCH_QWEN2VL);
     TokenizeString("\n\n", llava_sep, file_format, false);
 
     if(llava_composite_image_signature=="")
@@ -3446,7 +3447,6 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 if(embd.size()!=1 || draft_ctx==nullptr || remaining_tokens<=speculative_chunk_amt || grammar!=nullptr || startedsampling==false) //for large batch, or if no draft model, PP/TG as usual
                 {
                     draft_used = false;
-                    bool use_mrope = (file_format==FileFormat::GGUF_GENERIC && file_format_meta.model_architecture == GGUFArch::ARCH_QWEN2VL);
                     kcpp_embd_batch batch = kcpp_embd_batch(embd, n_past, use_mrope, false);
                     evalres = (llama_decode(llama_ctx_v4, batch.batch)==0);
                     if(draft_ctx)
@@ -3871,7 +3871,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     {
                         PrepareLlavaEmbds(nctx, llava_sep);
                         llava_embds_built = true;
-                        printf("\nSomehow vision embd was not prepared, rebuilting it...\n");
+                        printf("\nSomehow vision embd was not prepared (maybe no fast forward), rebuilding it...\n");
                     }
 
                     //if partial batch, dispatch existing first
@@ -3902,7 +3902,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                             if(i>0 && sepsize>0)
                             {
                                 //add a separator between each image
-                                auto evr = llama_decode(llama_ctx_v4, llama_batch_get_one(llava_sep.data(), sepsize));
+                                kcpp_embd_batch batch = kcpp_embd_batch(llava_sep, n_past, use_mrope, false);
+                                auto evr = llama_decode(llama_ctx_v4, batch.batch);
                                 if(evr!=0)
                                 {
                                     printf("\nError when appending llava separator: %d\n",evr);

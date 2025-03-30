@@ -418,6 +418,11 @@ add_library(ggml
             ggml/src/ggml-cpu/ggml-cpu-aarch64.h
             ggml/src/ggml-cpu/ggml-cpu-quants.c
             ggml/src/ggml-cpu/ggml-cpu-quants.h
+            ggml/src/ggml-cpu/common.h
+            ggml/src/ggml-cpu/binary-ops.h
+            ggml/src/ggml-cpu/binary-ops.cpp
+            ggml/src/ggml-cpu/unary-ops.h
+            ggml/src/ggml-cpu/unary-ops.cpp
             ggml/src/ggml-backend-reg.cpp
             ggml/include/gguf.h
             ggml/src/gguf.cpp
