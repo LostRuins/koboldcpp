@@ -619,6 +619,7 @@
                                      "multiplayer": false,
                                      "websearch":false,
                                      "tts":false,
+                                     "embeddings":false,
                                   },
                                   "schema": {
                                      "$ref": "#/components/schemas/KcppVersion"
@@ -1465,6 +1466,10 @@
                                      "voice": {
                                         "type": "string",
                                         "description": "The voice to use when generating the audio. You can enter anything you like, a unique speaker will be generated. There are a few preset voices you can use: kobo,cheery,sleepy,shouty,chatty"
+                                     },
+                                     "speaker_json": {
+                                        "type": "string",
+                                        "description": "Custom speaker JSON. More info at https://github.com/LostRuins/koboldcpp/tree/concedo/examples/outetts"
                                      }
                                   },
                                   "type": "object"
@@ -2095,7 +2100,7 @@
                       "requestBody": {
                          "content": {
                             "application/json": {
-                               "example": {},
+                               "example": {"model":"kcpp","prompt": "Hi, my name is Kobo and", "temperature": 0.8,"max_tokens": 64},
                                "schema": {
                                   "properties": {},
                                   "type": "object"
@@ -2117,7 +2122,7 @@
                       "requestBody": {
                          "content": {
                             "application/json": {
-                               "example": {},
+                               "example": {"model":"kcpp","messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Tell me a joke about Kobolds."}],  "temperature": 0.7},
                                "schema": {
                                   "properties": {},
                                   "type": "object"
@@ -2159,7 +2164,7 @@
                       "requestBody": {
                          "content": {
                             "application/json": {
-                               "example": {},
+                               "example": {"model":"kcpp","input": "Hello, my name is Kobold and I love to play.", "voice": "alloy"},
                                "schema": {
                                   "properties": {},
                                   "type": "object"
@@ -2181,7 +2186,7 @@
                       "requestBody": {
                          "content": {
                             "application/json": {
-                               "example": {},
+                               "example": {"model": "kcpp", "input": "Niko the Kobold is in town today."},
                                "schema": {
                                   "properties": {},
                                   "type": "object"
