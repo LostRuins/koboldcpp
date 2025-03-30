@@ -1261,7 +1261,7 @@ void sample_min_p(llama_token_data_array * cur_p, float p, size_t min_keep, int3
     bool min_p_applied = false;
 
     // if the cur_p aren't sorted, try the unsorted implementation first
-    if (!cur_p->sorted && ((top_k > 0 || top_k <= 200) && nsigma > 0.0f)) {
+    if (!cur_p->sorted && ((top_k <= 0 || top_k > 200) && nsigma < 0.0f)) {
         std::vector<llama_token_data> filtered_tokens;
 
         float max_logit = -FLT_MAX;
