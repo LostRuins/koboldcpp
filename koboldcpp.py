@@ -1964,7 +1964,7 @@ def transform_genparams(genparams, api_format):
             # tools handling
             tools_array = genparams.get('tools', [])
             chosen_tool = genparams.get('tool_choice', "auto")
-            tool_json_formatting_instruction = " Use this style of JSON object formatting to give your answer if you think the user is asking you to perform an action: " + json.dumps([{"id": "insert an id for the response", "type": "function", "function": {"name": "insert the name of the function you want to call", "arguments": {"first property key": "first property value", "second property key": "second property value"}}}], indent=0)
+            tool_json_formatting_instruction = " Use this style of JSON object formatting to give your answer if you think the user is asking you to perform an action: " + json.dumps([{"id": "insert an id for the response", "type": "function", "function": {"name": "insert the name of the function you want to call", "arguments": "{\"first property key\": \"first property value\", \"second property key\": \"second property value\"}"}}], indent=0)
             if tools_array and len(tools_array) > 0 and chosen_tool is not None:
                 try:
                     specified_function = ""
@@ -1981,7 +1981,7 @@ def transform_genparams(genparams, api_format):
                     if located_tooljson:
                         tools_array = []
                         tools_array.append(located_tooljson)
-                        tool_json_formatting_instruction = f"The user is asking you to use the style of this JSON object formatting to complete the parameters for the specific function named {specified_function} in the following format: " + json.dumps([{"id": "insert an id for the response", "type": "function", "function": {"name": f"{specified_function}", "arguments": {"first property key": "first property value", "second property key": "second property value"}}}], indent=0)
+                        tool_json_formatting_instruction = f"The user is asking you to use the style of this JSON object formatting to complete the parameters for the specific function named {specified_function} in the following format: " + json.dumps([{"id": "insert an id for the response", "type": "function", "function": {"name": f"{specified_function}", "arguments": "{\"first property key\": \"first property value\", \"second property key\": \"second property value\"}"}}], indent=0)
                 except Exception:
                     # In case of any issues, just revert back to no specified function
                     pass
