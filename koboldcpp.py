@@ -3509,11 +3509,16 @@ def zenity(typ, filetypes=None, initialdir="", initialfile="", **kwargs) -> Tupl
     initialpath = os.path.join(initialdir, initialfile)
     args.append(f'--filename={initialpath}')
 
+    clean_env = os.environ.copy()
+    clean_env.pop("LD_LIBRARY_PATH", None)
+    clean_env["PATH"] = "/usr/bin:/bin"
+
     proc = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        shell=False
+        shell=False,
+        env=clean_env
     )
     stdout, _ = proc.communicate()
 
