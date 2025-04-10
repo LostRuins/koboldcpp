@@ -29,6 +29,7 @@ import html
 import urllib.parse as urlparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Tuple
 
 # constants
 sampler_order_max = 7
@@ -615,9 +616,8 @@ def unpack_to_dir(destpath = ""):
     print("Attempt to unpack KoboldCpp into directory...")
 
     if not cliunpack:
-        from tkinter.filedialog import askdirectory
         from tkinter import messagebox
-        destpath = askdirectory(title='Select an empty folder to unpack KoboldCpp')
+        destpath = zentk_askdirectory(title='Select an empty folder to unpack KoboldCpp')
         if not destpath:
             return
 
@@ -3455,19 +3455,118 @@ def RunServerMultiThreaded(addr, port, server_handler):
                 threadArr[i].stop()
             sys.exit(0)
 
+# Based on https://github.com/mathgeniuszach/xdialog/blob/main/xdialog/zenity_dialogs.py - MIT license | - Expanded version by Henk717
+
+def zenity_clean(txt: str):
+    return txt\
+        .replace("\\", "\\\\")\
+        .replace("$", "\\$")\
+        .replace("!", "\\!")\
+        .replace("*", "\\*")\
+        .replace("?", "\\?")\
+        .replace("&", "&amp;")\
+        .replace("|", "&#124;")\
+        .replace("<", "&lt;")\
+        .replace(">", "&gt;")\
+        .replace("(", "\\(")\
+        .replace(")", "\\)")\
+        .replace("[", "\\[")\
+        .replace("]", "\\]")\
+        .replace("{", "\\{")\
+        .replace("}", "\\}")\
+
+def zenity(typ, filetypes=None, initialdir="", initialfile="", **kwargs) -> Tuple[int, str]:
+    import shutil, subprocess, os, platform
+    if not platform.system() == "Linux":
+        raise Exception("This feature should only be used on Linux, if you see this error there is no TK fallback implemented in the code.")
+    zenity_bin = shutil.which("zenity")
+    if not zenity_bin:
+            zenity_bin = shutil.which("yad")
+    if not zenity_bin:
+            raise Exception("Zenity not present")
+
+    # Build args based on keywords
+    args = [zenity_bin, '--'+typ]
+    for k, v in kwargs.items():
+        if v is True:
+            args.append(f'--{k.replace("_", "-").strip("-")}')
+        elif isinstance(v, str):
+            cv = zenity_clean(v) if k != "title" else v
+            args.append(f'--{k.replace("_", "-").strip("-")}={cv}')
+
+    # Build filetypes specially if specified
+    if filetypes:
+        for name, globs in filetypes:
+            if name:
+                globlist = globs.split()
+                args.append(f'--file-filter={name.replace("|", "")} ({", ".join(t for t in globlist)})|{globs}')
+
+    # Default filename and folder
+    if initialdir is None:
+        initialdir=os.getcwd()
+    if initialfile is None:
+        initialfile=""
+    initialpath = os.path.join(initialdir, initialfile)
+    args.append(f'--filename={initialpath}')
+
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        shell=False
+    )
+    stdout, _ = proc.communicate()
+
+    return (proc.returncode, stdout.decode('utf-8').strip())
+
+# note: In this section we wrap around file dialogues to allow for zenity
+
+def zentk_askopenfilename(**options):
+    try:
+        result = zenity('file-selection', filetypes=options.get("filetypes"), initialdir=options.get("initialdir"), title=options.get("title"))[1]
+    except:
+        from tkinter.filedialog import askopenfilename
+        result = askopenfilename(**options)
+    return result
+
+def zentk_askopenmultiplefilenames(**options):
+    try:
+        from os.path import isfile
+        files = zenity('file-selection', filetypes=options.get("filetypes"), initialdir=options.get("initialdir"), title=options.get("title"), multiple=True, separator="\n")[1].splitlines()
+        result = tuple(filter(isfile, files))
+    except:
+        from tkinter.filedialog import askopenfilenames
+        result = askopenfilenames(**options)
+    return result
+
+def zentk_askdirectory(**options):
+    try:
+        result = zenity('file-selection', initialdir=options.get("initialdir"), title=options.get("title"), directory=True)[1]
+    except:
+        from tkinter.filedialog import askdirectory
+        result = askdirectory(**options)
+    return result
+
+def zentk_asksaveasfilename(**options):
+    try:
+        result = zenity('file-selection', filetypes=options.get("filetypes"), initialdir=options.get("initialdir"), initialfile=options.get("initialfile"), title=options.get("title"), save=True)[1]
+    except:
+        from tkinter.filedialog import asksaveasfilename
+        result = asksaveasfilename(**options)
+    return result
+### End of MIT license
+
 # note: customtkinter-5.2.0
 def show_gui():
     global using_gui_launcher
     using_gui_launcher = True
-    from tkinter.filedialog import askopenfilename, askdirectory
-    from tkinter.filedialog import asksaveasfilename
 
     # if args received, launch
     if len(sys.argv) != 1 and not args.showgui:
         import tkinter as tk
         root = tk.Tk() #we dont want the useless window to be visible, but we want it in taskbar
         root.attributes("-alpha", 0)
-        args.model_param = askopenfilename(title="Select ggml model .bin or .gguf file or .kcpps config")
+        args.model_param = zentk_askopenfilename(title="Select ggml model .bin or .gguf file or .kcpps config")
         root.withdraw()
         root.quit()
         if args.model_param and args.model_param!="" and (args.model_param.lower().endswith('.kcpps') or args.model_param.lower().endswith('.kcppt') or args.model_param.lower().endswith('.kcpps?download=true') or args.model_param.lower().endswith('.kcppt?download=true')):
@@ -3770,16 +3869,16 @@ def show_gui():
             initialDir = initialDir if os.path.isdir(initialDir) else None
             fnam = None
             if dialog_type==2:
-                fnam = askdirectory(title=text, mustexist=True, initialdir=initialDir)
+                fnam = zentk_askdirectory(title=text, mustexist=True, initialdir=initialDir)
             elif dialog_type==1:
-                fnam = asksaveasfilename(title=text, filetypes=filetypes, defaultextension=filetypes, initialdir=initialDir)
+                fnam = zentk_asksaveasfilename(title=text, filetypes=filetypes, defaultextension=filetypes, initialdir=initialDir)
                 if not fnam:
                     fnam = ""
                 else:
                     fnam = str(fnam).strip()
                     fnam = f"{fnam}.jsondb" if ".jsondb" not in fnam.lower() else fnam
             else:
-                fnam = askopenfilename(title=text,filetypes=filetypes, initialdir=initialDir)
+                fnam = zentk_askopenfilename(title=text,filetypes=filetypes, initialdir=initialDir)
             if fnam:
                 var.set(fnam)
                 if onchoosefile:
@@ -4181,7 +4280,7 @@ def show_gui():
     def pickpremadetemplate():
         initialDir = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'kcpp_adapters')
         initialDir = initialDir if os.path.isdir(initialDir) else None
-        fnam = askopenfilename(title="Pick Premade ChatCompletions Adapter",filetypes=[("JSON Adapter", "*.json")], initialdir=initialDir)
+        fnam = zentk_askopenfilename(title="Pick Premade ChatCompletions Adapter",filetypes=[("JSON Adapter", "*.json")], initialdir=initialDir)
         if fnam:
             chatcompletionsadapter_var.set(fnam)
     ctk.CTkButton(model_tab, 64, text="Pick Premade", command=pickpremadetemplate).grid(row=25, column=0, padx=322, stick="nw")
@@ -4311,7 +4410,7 @@ def show_gui():
         file_type = [("KoboldCpp LaunchTemplate", "*.kcppt")]
         #remove blacklisted fields
         savdict = convert_args_to_template(savdict)
-        filename = asksaveasfilename(filetypes=file_type, defaultextension=".kcppt")
+        filename = zentk_asksaveasfilename(filetypes=file_type, defaultextension=".kcppt")
         if not filename:
             return
         filenamestr = str(filename).strip()
@@ -4335,7 +4434,7 @@ def show_gui():
     # launch
     def guilaunch():
         if model_var.get() == "" and sd_model_var.get() == "" and whisper_model_var.get() == "" and tts_model_var.get() == "" and embeddings_model_var.get() == "" and nomodel.get()!=1:
-            tmp = askopenfilename(title="Select ggml model .bin or .gguf file")
+            tmp = zentk_askopenfilename(title="Select ggml model .bin or .gguf file")
             model_var.set(tmp)
         nonlocal nextstate
         nextstate = 1
@@ -4713,7 +4812,7 @@ def show_gui():
         export_vars()
         savdict = json.loads(json.dumps(args.__dict__))
         file_type = [("KoboldCpp Settings", "*.kcpps")]
-        filename = asksaveasfilename(filetypes=file_type, defaultextension=".kcpps")
+        filename = zentk_asksaveasfilename(filetypes=file_type, defaultextension=".kcpps")
         if not filename:
             return
         filenamestr = str(filename).strip()
@@ -4727,7 +4826,7 @@ def show_gui():
     def load_config_gui(): #this is used to populate the GUI with a config file, whereas load_config_cli simply overwrites cli args
         file_type = [("KoboldCpp Settings", "*.kcpps *.kcppt")]
         global runmode_untouched
-        filename = askopenfilename(filetypes=file_type, defaultextension=".kcppt", initialdir=None)
+        filename = zentk_askopenfilename(filetypes=file_type, defaultextension=".kcppt", initialdir=None)
         if not filename or filename=="":
             return
         runmode_untouched = False
@@ -5371,8 +5470,7 @@ def analyze_gguf_model(args,filename):
 def analyze_gguf_model_wrapper(filename=""):
     if not filename or filename=="":
         try:
-            from tkinter.filedialog import askopenfilename
-            filename = askopenfilename(title="Select GGUF to analyze")
+            filename = zentk_askopenfilename(title="Select GGUF to analyze")
         except Exception as e:
             print(f"Cannot select file to analyze: {e}")
     if not filename or filename=="" or not os.path.exists(filename):
