@@ -423,11 +423,11 @@ add_library(ggml
             ggml/src/ggml-cpu/binary-ops.cpp
             ggml/src/ggml-cpu/unary-ops.h
             ggml/src/ggml-cpu/unary-ops.cpp
-            ggml-cpu/simd-mappings.h
-            ggml-cpu/vec.h
-            ggml-cpu/vec.cpp
-            ggml-cpu/ops.h
-            ggml-cpu/ops.cpp
+            ggml/src/ggml-cpu/simd-mappings.h
+            ggml/src/ggml-cpu/vec.h
+            ggml/src/ggml-cpu/vec.cpp
+            ggml/src/ggml-cpu/ops.h
+            ggml/src/ggml-cpu/ops.cpp
             ggml/src/ggml-backend-reg.cpp
             ggml/include/gguf.h
             ggml/src/gguf.cpp
