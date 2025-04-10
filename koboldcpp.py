@@ -3486,7 +3486,7 @@ def zenity(typ, filetypes=None, initialdir="", initialfile="", **kwargs) -> Tupl
             raise Exception("Zenity not present")
 
     # Build args based on keywords
-    args = [zenity_bin, '--'+typ]
+    args = ['/usr/bin/env', zenity_bin, '--'+typ]
     for k, v in kwargs.items():
         if v is True:
             args.append(f'--{k.replace("_", "-").strip("-")}')
