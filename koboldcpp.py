@@ -4424,7 +4424,7 @@ def show_gui():
             return
         filenamestr = str(filename).strip()
         if not filenamestr.endswith(".kcppt"):
-            filenamestr += ".kcpps"
+            filenamestr += ".kcppt"
         file = open(filenamestr, 'w')
         file.write(json.dumps(savdict))
         file.close()
