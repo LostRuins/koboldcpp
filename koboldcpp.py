@@ -3528,7 +3528,11 @@ def zenity(typ, filetypes=None, initialdir="", initialfile="", **kwargs) -> Tupl
 
 def zentk_askopenfilename(**options):
     try:
+        from os.path import isfile
         result = zenity('file-selection', filetypes=options.get("filetypes"), initialdir=options.get("initialdir"), title=options.get("title"))[1]
+        if result and not isfile(result):
+            print("A folder was selected while we need a file, ignoring selection.")
+            return ''
     except:
         from tkinter.filedialog import askopenfilename
         result = askopenfilename(**options)
