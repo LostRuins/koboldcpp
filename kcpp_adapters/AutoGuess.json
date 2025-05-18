@@ -85,8 +85,8 @@
         "system_start": "[SYSTEM_PROMPT] ",
         "system_end": "[/SYSTEM_PROMPT]",
         "user_start": "[INST] ",
-        "user_end": "[/INST]",
-        "assistant_start": " ",
+        "user_end": "[/INST] ",
+        "assistant_start": "",
         "assistant_end": "</s>"
     }
 }, {
