@@ -301,6 +301,7 @@ static std::string get_image_params(const SDParams& params) {
     parameter_string += "Seed: " + std::to_string(params.seed) + " | ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + " | ";
     parameter_string += "Sampler: " + std::to_string((int)sd_params->sample_method) + " | ";
+    parameter_string += "Clip skip: " + std::to_string((int)sd_params->clip_skip) + " | ";
     parameter_string += "Model: " + sdmodelfilename + " | ";
     parameter_string += "Version: KoboldCpp";
     return parameter_string;
