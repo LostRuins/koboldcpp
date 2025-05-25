@@ -18,7 +18,7 @@ if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA != "rocm" || $1 == "rebui
 	echo rm environment.tmp.yaml
 fi
 
-if [[ $KCPP_CUDA == "rocm" ]]; then
+if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA == "rocm" || $1 == "rebuild" && $KCPP_CUDA == "rocm" ]]; then
 	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f environment-nocuda.yaml -y
 	bin/micromamba run -r conda -p conda/envs/linux make clean
 	echo "rocm" > conda/envs/linux/cudaver
