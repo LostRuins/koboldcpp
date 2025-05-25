@@ -52,7 +52,7 @@ fi
 bin/micromamba run -r conda -p conda/envs/linux chmod +x "./create_ver_file.sh"
 bin/micromamba run -r conda -p conda/envs/linux ./create_ver_file.sh
 
-if [[ $1 == "rebuild" ]]; then
+if [[ $1 == "rebuild" || $1 == "rocm" ]]; then
 	echo Rebuild complete, you can now try to launch Koboldcpp.
 elif [[ $1 == "dist" ]]; then
 	bin/micromamba remove --no-rc -r conda -p conda/envs/linux --force ocl-icd -y
