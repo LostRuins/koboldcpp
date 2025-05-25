@@ -16,6 +16,9 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:22.04
+      options: --privileged
     steps:          
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
