@@ -12,6 +12,7 @@ env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   NOAVX2: 1
   ARCHES_CU11: 1
+  KCPP_CUDA: 11.5.0
 
 jobs:
   linux:
@@ -49,7 +50,7 @@ jobs:
       - name: Build
         id: make_build
         run: |
-          KCPP_CUDA=11.5.0 ./koboldcpp.sh dist
+          ./koboldcpp.sh dist
 
       - name: Save artifact
         uses: actions/upload-artifact@v4
