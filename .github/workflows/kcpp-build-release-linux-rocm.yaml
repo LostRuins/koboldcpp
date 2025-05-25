@@ -46,6 +46,7 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
+          rm /var/lib/apt/lists/lock
           apt-get update
           apt-get install -y sudo
           export DEBIAN_FRONTEND=noninteractive
