@@ -16,12 +16,7 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-22.04
-    steps:
-      - name: apt update
-        id: aptupdate
-        run: |
-          apt-get update
-          
+    steps:          
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
