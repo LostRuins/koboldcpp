@@ -4,7 +4,7 @@ if [ ! -f "bin/micromamba" ]; then
 	curl -Ls https://anaconda.org/conda-forge/micromamba/1.5.3/download/linux-64/micromamba-1.5.3-0.tar.bz2 | tar -xvj bin/micromamba
 fi
 
-if [[ ! -f "conda/envs/linux/bin/python" && $1 != "rocm" || $1 == "rebuild" && $1 != "rocm" ]]; then
+if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA != "rocm" || $1 == "rebuild" && $KCPP_CUDA != "rocm" ]]; then
 	cp environment.yaml environment.tmp.yaml
 	if [ -n "$KCPP_CUDA" ]; then
 		sed -i -e "s/nvidia\/label\/cuda-12.1.0/nvidia\/label\/cuda-$KCPP_CUDA/g" environment.tmp.yaml
@@ -18,7 +18,7 @@ if [[ ! -f "conda/envs/linux/bin/python" && $1 != "rocm" || $1 == "rebuild" && $
 	echo rm environment.tmp.yaml
 fi
 
-if [[ $1 == "rocm" ]]; then
+if [[ $KCPP_CUDA == "rocm" ]]; then
 	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f environment-nocuda.yaml -y
 	bin/micromamba run -r conda -p conda/envs/linux make clean
 	echo "rocm" > conda/envs/linux/cudaver
@@ -52,7 +52,7 @@ fi
 bin/micromamba run -r conda -p conda/envs/linux chmod +x "./create_ver_file.sh"
 bin/micromamba run -r conda -p conda/envs/linux ./create_ver_file.sh
 
-if [[ $1 == "rebuild" || $1 == "rocm" ]]; then
+if [[ $1 == "rebuild" ]]; then
 	echo Rebuild complete, you can now try to launch Koboldcpp.
 elif [[ $1 == "dist" ]]; then
 	bin/micromamba remove --no-rc -r conda -p conda/envs/linux --force ocl-icd -y
