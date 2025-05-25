@@ -16,9 +16,6 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-22.04
-    container:
-      image: ubuntu:22.04
-      options: --privileged
     steps:          
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -49,7 +46,7 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          apt-get install -y sudo
+          sudo apt update
           export DEBIAN_FRONTEND=noninteractive
           sudo ln -fs /usr/share/zoneinfo/UTC /etc/localtime
           echo "tzdata tzdata/Areas select Etc" | sudo debconf-set-selections
