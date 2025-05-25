@@ -17,6 +17,11 @@ jobs:
   linux:
     runs-on: ubuntu-22.04
     steps:
+      - name: apt update
+        id: aptupdate
+        run: |
+          apt-get update
+          
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
@@ -46,8 +51,6 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          rm /var/lib/apt/lists/lock
-          apt-get update
           apt-get install -y sudo
           export DEBIAN_FRONTEND=noninteractive
           sudo ln -fs /usr/share/zoneinfo/UTC /etc/localtime
