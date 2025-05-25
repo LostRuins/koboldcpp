@@ -1,6 +1,8 @@
 *.o
 *.a
 *.bin
+*.tmp.yml
+
 .DS_Store
 .build/
 .cache/
