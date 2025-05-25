@@ -1,0 +1,2 @@
+export HCC_AMDGPU_TARGET="gfx803,gfx900,gfx906,gfx908,gfx90a,gfx1010,gfx1030,gfx1031,gfx1032,gfx1100,gfx1101,gfx1102"
+make LLAMA_HIPBLAS=1 LLAMA_PORTABLE=1 -j$(nproc)
