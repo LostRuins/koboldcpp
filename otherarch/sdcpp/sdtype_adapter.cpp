@@ -368,6 +368,17 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     bool dotile = (sd_params->width>768 || sd_params->height>768) && !notiling;
     set_sd_vae_tiling(sd_ctx,dotile); //changes vae tiling, prevents memory related crash/oom
 
+    if (sd_params->clip_skip <= 0) {
+        // workaround for clip_skip being "stuck" at the previous requested value
+        // 2 is the default for all recent base models (SD2, SDXL, Flux, SD3)
+        if (sd_version_is_sd1((SDVersion)loadedsdver)) {
+            sd_params->clip_skip = 1;
+        }
+        else {
+            sd_params->clip_skip = 2;
+        }
+    }
+
     //for img2img
     sd_image_t input_image = {0,0,0,nullptr};
     std::vector<uint8_t> image_buffer;
