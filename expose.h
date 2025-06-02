@@ -169,6 +169,7 @@ struct sd_load_model_inputs
     const char * vae_filename = nullptr;
     const char * lora_filename = nullptr;
     const float lora_multiplier = 1.0f;
+    const char * embeddings_dir = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
 };

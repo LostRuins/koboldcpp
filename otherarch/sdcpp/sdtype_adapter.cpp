@@ -132,6 +132,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     std::string t5xxl_filename = inputs.t5xxl_filename;
     std::string clipl_filename = inputs.clipl_filename;
     std::string clipg_filename = inputs.clipg_filename;
+    std::string embeddings_dir = inputs.embeddings_dir;
     notiling = inputs.notile;
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
 
@@ -159,6 +160,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(clipg_filename!="")
     {
         printf("With Custom Clip-G Model: %s\n",clipg_filename.c_str());
+    }
+    if(embeddings_dir!="")
+    {
+        printf("Loading Embeddings from: %s\n",embeddings_dir.c_str());
     }
     if(inputs.quant)
     {
@@ -209,6 +214,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         sd_params->diffusion_model_path = sd_params->model_path;
         sd_params->model_path = "";
     }
+    sd_params->embeddings_path = embeddings_dir;
 
     sddebugmode = inputs.debugmode;
 

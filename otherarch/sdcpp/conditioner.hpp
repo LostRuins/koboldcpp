@@ -115,6 +115,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         return buffer_size;
     }
 
+    void reset_custom_embeddings() {
+        num_custom_embeddings = 0;
+        num_custom_embeddings_2 = 0;
+        token_embed_custom.resize(0);
+        readed_embeddings.resize(0);
+    }
+
     bool load_embedding(std::string embd_name, std::string embd_path, std::vector<int32_t>& bpe_tokens) {
         // the order matters
         ModelLoader model_loader;
@@ -563,6 +570,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                        int num_input_imgs,
                                        int adm_in_channels        = -1,
                                        bool force_zero_embeddings = false) {
+        reset_custom_embeddings();
         auto image_tokens = convert_token_to_id(trigger_word);
         // if(image_tokens.size() == 1){
         //     printf(" image token id is: %d \n", image_tokens[0]);
@@ -607,6 +615,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       int height,
                                       int adm_in_channels        = -1,
                                       bool force_zero_embeddings = false) {
+        reset_custom_embeddings();
         auto tokens_and_weights     = tokenize(text, true);
         std::vector<int>& tokens    = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
