@@ -339,8 +339,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->clip_skip = inputs.clip_skip;
     sd_params->mode = (img2img_data==""?SDMode::TXT2IMG:SDMode::IMG2IMG);
 
-    //ensure unsupported dimensions are fixed
-    int biggestdim = (sd_params->width>sd_params->height?sd_params->width:sd_params->height);
     auto loadedsdver = get_loaded_sd_version(sd_ctx);
     if (loadedsdver == SDVersion::VERSION_FLUX)
     {
@@ -351,21 +349,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             sampler = "euler";  //euler a broken on flux
         }
     }
-    int reslimit = (loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024;
-    if(biggestdim > reslimit)
-    {
-        float scaler = (float)biggestdim / (float)reslimit;
-        int newwidth = (int)((float)sd_params->width / scaler);
-        int newheight = (int)((float)sd_params->height / scaler);
-        newwidth = newwidth - (newwidth%64);
-        newheight = newheight - (newheight%64);
-        sd_params->width = newwidth;
-        sd_params->height = newheight;
-        if(!sd_is_quiet && sddebugmode==1)
-        {
-            printf("\nDownscale to %dx%d as %d > %d\n",newwidth,newheight,biggestdim,reslimit);
-        }
-    }
+
     bool dotile = (sd_params->width>768 || sd_params->height>768) && !notiling;
     set_sd_vae_tiling(sd_ctx,dotile); //changes vae tiling, prevents memory related crash/oom
 

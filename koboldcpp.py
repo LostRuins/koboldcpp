@@ -1611,27 +1611,34 @@ def sd_generate(genparams):
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
 
     #clean vars
-    width = width - (width%64)
-    height = height - (height%64)
     cfg_scale = (1 if cfg_scale < 1 else (25 if cfg_scale > 25 else cfg_scale))
     sample_steps = (1 if sample_steps < 1 else (forced_steplimit if sample_steps > forced_steplimit else sample_steps))
-    reslimit = 1024
+
     width = (64 if width < 64 else width)
     height = (64 if height < 64 else height)
+
+    scaler = 1.0
 
     if args.sdclamped:
         sample_steps = (40 if sample_steps > 40 else sample_steps)
         reslimit = int(args.sdclamped)
         reslimit = (512 if reslimit<512 else reslimit)
         print(f"\nImgGen: Clamped Mode (For Shared Use). Step counts and resolution are clamped to {reslimit}x{reslimit}.")
+        biggest = max(width,height)
+        if biggest > reslimit:
+            scaler = biggest / reslimit
 
-    biggest = max(width,height)
-    if biggest > reslimit:
-        scaler = biggest / reslimit
+    sizelimit = max(min(args.sdsizelimit, 4), 0.004) * 1000000
+    if width * height > sizelimit * scaler * scaler:
+        scaler *= math.sqrt(width * height / sizelimit);
+        print(f"\nImgGen: Scaling down image by a factor of {scaler:.3} to stay below {args.sdsizelimit}MP.")
+
+    if scaler > 1.0:
         width = int(width / scaler)
         height = int(height / scaler)
-        width = width - (width%64)
-        height = height - (height%64)
+
+    width = width - (width%64)
+    height = height - (height%64)
 
     inputs = sd_generation_inputs()
     inputs.prompt = prompt.encode("UTF-8")
@@ -4260,6 +4267,7 @@ def show_gui():
     sd_vaeauto_var = ctk.IntVar(value=0)
     sd_notile_var = ctk.IntVar(value=0)
     sd_clamped_var = ctk.StringVar(value="0")
+    sd_size_limit_var = ctk.StringVar(value="0.7")
     sd_threads_var = ctk.StringVar(value=str(default_threads))
     sd_quant_var = ctk.IntVar(value=0)
 
@@ -4954,6 +4962,9 @@ def show_gui():
     makelabelentry(images_tab, "Clamped Mode (Limit Resolution):", sd_clamped_var, row, 50, padx=290,singleline=True,tooltip="Limit generation steps and resolution settings for shared use.\nSet to 0 to disable, otherwise value is the size limit (min 512px).")
     row += 2
 
+    makelabelentry(images_tab, "Size Limit:", sd_size_limit_var, row, 50, padx=290,singleline=True,tooltip="Image size limit, in megapixels. Protects against reaching backend limits, which could cause a server crash.")
+    row += 2
+
     makelabelentry(images_tab, "Image Threads:" , sd_threads_var, row, 50,padx=290,singleline=True,tooltip="How many threads to use during image generation.\nIf left blank, uses same value as threads.")
     row += 2
     sd_model_var.trace("w", gui_changed_modelfile)
@@ -5221,6 +5232,7 @@ def show_gui():
 
         args.sdthreads = (0 if sd_threads_var.get()=="" else int(sd_threads_var.get()))
         args.sdclamped = (0 if int(sd_clamped_var.get())<=0 else int(sd_clamped_var.get()))
+        args.sdsizelimit = (float(sd_size_limit_var.get()) if sd_size_limit_var.get()!="" else 0.7)
         args.sdnotile = (True if sd_notile_var.get()==1 else False)
         if sd_vaeauto_var.get()==1:
             args.sdvaeauto = True
@@ -5427,6 +5439,7 @@ def show_gui():
 
         sd_model_var.set(dict["sdmodel"] if ("sdmodel" in dict and dict["sdmodel"]) else "")
         sd_clamped_var.set(int(dict["sdclamped"]) if ("sdclamped" in dict and dict["sdclamped"]) else 0)
+        sd_size_limit_var.set(int(dict["sdsizelimit"]) if ("sdsizelimit" in dict and dict["sdsizelimit"]) else 0.7)
         sd_threads_var.set(str(dict["sdthreads"]) if ("sdthreads" in dict and dict["sdthreads"]) else str(default_threads))
         sd_quant_var.set(1 if ("sdquant" in dict and dict["sdquant"]) else 0)
         sd_vae_var.set(dict["sdvae"] if ("sdvae" in dict and dict["sdvae"]) else "")
@@ -7161,6 +7174,7 @@ if __name__ == '__main__':
     sdparsergroup = parser.add_argument_group('Image Generation Commands')
     sdparsergroup.add_argument("--sdmodel", metavar=('[filename]'), help="Specify an image generation safetensors or gguf model to enable image generation.", default="")
     sdparsergroup.add_argument("--sdthreads", metavar=('[threads]'), help="Use a different number of threads for image generation if specified. Otherwise, has the same value as --threads.", type=int, default=0)
+    sdparsergroup.add_argument("--sdsizelimit", metavar=('[limit]'), help="If specified, limit image size to this value, in megapixels (eg. 0.41 would allow images up to 512x768 or 640x640). Values above 0.7MP are usually not recommended due to backend limitations, and may cause a server crash.", type=float, default=0.7)
     sdparsergroup.add_argument("--sdclamped", metavar=('[maxres]'), help="If specified, limit generation steps and resolution settings for shared use. Accepts an extra optional parameter that indicates maximum resolution (eg. 768 clamps to 768x768, min 512px, disabled if 0).", nargs='?', const=512, type=int, default=0)
     sdparsergroup.add_argument("--sdt5xxl", metavar=('[filename]'), help="Specify a T5-XXL safetensors model for use in SD3 or Flux. Leave blank if prebaked or unused.", default="")
     sdparsergroup.add_argument("--sdclipl", metavar=('[filename]'), help="Specify a Clip-L safetensors model for use in SD3 or Flux. Leave blank if prebaked or unused.", default="")
