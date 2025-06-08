@@ -1574,6 +1574,75 @@ def sd_comfyui_tranform_params(genparams):
         print("Warning: ComfyUI Payload Missing!")
     return genparams
 
+
+def sd_apply_resolution_limits(width, height, sdclamped, sdsizelimit):
+    small = max(width, 64)
+    big = max(height, 64)
+    landscape = (width > height)
+    if landscape:
+        small, big = big, small
+    ratio = big / small
+
+    def rounddown_64(n):
+        return n - (n % 64)
+
+    def roundup_64(n):
+        return rounddown_64(n + 63)
+
+    small = rounddown_64(small)
+    big = rounddown_64(big)
+
+    if sdclamped:
+        reslimit = int(sdclamped)
+        reslimit = (512 if reslimit<512 else reslimit)
+        reslimit = rounddown_64(reslimit)
+        print(f"\nImgGen: Clamped Mode (For Shared Use). Step counts and resolution are clamped to {reslimit}x{reslimit}.")
+        if big > reslimit:
+            small = int(small * reslimit / big)
+            big = reslimit
+            if small < 64:
+                small = 64
+            else:
+                # round the smaller dimension minimizing the difference
+                # to the requested ratio
+                small_down = rounddown_64(small)
+                small_up = roundup_64(small)
+                if (big / small_down - ratio) < (ratio - big / small_up):
+                    small = small_down
+                else:
+                    small = small_up
+
+    sizelimit = max(min(int(sdsizelimit * 1000000), 2048*2048), 64*64)
+    if small * big > sizelimit:
+        print(f"\nImgGen: Scaling down image to stay below {sdsizelimit}MP.")
+        scale = math.sqrt(sizelimit / (small * big))
+        newsmall = int(small * scale)
+        if newsmall < 64:
+            small = 64
+            big = rounddown_64(int(sizelimit / small))
+        else:
+            newbig = int(big * scale)
+            newbig_down = rounddown_64(newbig)
+            newsmall_down = rounddown_64(newsmall)
+            big, small = newbig_down, newsmall_down
+
+            # check if we can get a ratio closer to the requested one by
+            # rounding one of the dimensions up instead of down
+            rdiff = math.fabs(newbig_down / newsmall_down - ratio)
+            newbig_up = roundup_64(newbig)
+            newsmall_up = roundup_64(newsmall)
+            if newbig_down * newsmall_up < sizelimit:
+                newrdiff = math.fabs(newbig_down / newsmall_up - ratio)
+                if newrdiff < rdiff:
+                    big, small, rdiff = newbig_down, newsmall_up, newrdiff
+            if newbig_up * newsmall_down < sizelimit:
+                newrdiff = math.fabs(newbig_up / newsmall_down - ratio)
+                if newrdiff < rdiff:
+                    big, small, rdiff = newbig_up, newsmall_down, newrdiff
+
+    width, height = ((big, small) if landscape else (small, big))
+    return width, height
+
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
 
@@ -1614,31 +1683,10 @@ def sd_generate(genparams):
     cfg_scale = (1 if cfg_scale < 1 else (25 if cfg_scale > 25 else cfg_scale))
     sample_steps = (1 if sample_steps < 1 else (forced_steplimit if sample_steps > forced_steplimit else sample_steps))
 
-    width = (64 if width < 64 else width)
-    height = (64 if height < 64 else height)
-
-    scaler = 1.0
+    width, height = sd_apply_resolution_limits(width, height, args.sdclamped, args.sdsizelimit)
 
     if args.sdclamped:
         sample_steps = (40 if sample_steps > 40 else sample_steps)
-        reslimit = int(args.sdclamped)
-        reslimit = (512 if reslimit<512 else reslimit)
-        print(f"\nImgGen: Clamped Mode (For Shared Use). Step counts and resolution are clamped to {reslimit}x{reslimit}.")
-        biggest = max(width,height)
-        if biggest > reslimit:
-            scaler = biggest / reslimit
-
-    sizelimit = max(min(args.sdsizelimit, 4), 0.004) * 1000000
-    if width * height > sizelimit * scaler * scaler:
-        scaler *= math.sqrt(width * height / sizelimit);
-        print(f"\nImgGen: Scaling down image by a factor of {scaler:.3} to stay below {args.sdsizelimit}MP.")
-
-    if scaler > 1.0:
-        width = int(width / scaler)
-        height = int(height / scaler)
-
-    width = width - (width%64)
-    height = height - (height%64)
 
     inputs = sd_generation_inputs()
     inputs.prompt = prompt.encode("UTF-8")
