@@ -1288,21 +1288,6 @@ struct PixArtCLIPEmbedder : public Conditioner {
         return {t5_tokens, t5_weights, t5_mask};
     }
 
-    void modify_mask_to_attend_padding(struct ggml_tensor* mask, int max_seq_length, int num_extra_padding = 8) {
-        float* mask_data = (float*)mask->data;
-        int num_pad      = 0;
-        for (int64_t i = 0; i < max_seq_length; i++) {
-            if (num_pad >= num_extra_padding) {
-                break;
-            }
-            if (std::isinf(mask_data[i])) {
-                mask_data[i] = 0;
-                ++num_pad;
-            }
-        }
-        // LOG_DEBUG("PAD: %d", num_pad);
-    }
-
     SDCondition get_learned_condition_common(ggml_context* work_ctx,
                                              int n_threads,
                                              std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> token_and_weights,
@@ -1389,21 +1374,6 @@ struct PixArtCLIPEmbedder : public Conditioner {
             hidden_states = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 4096, 256);
             ggml_set_f32(hidden_states, 0.f);
         }
-
-        int mask_pad                            = 1;
-        const char* SD_CHROMA_MASK_PAD_OVERRIDE = getenv("SD_CHROMA_MASK_PAD_OVERRIDE");
-        if (SD_CHROMA_MASK_PAD_OVERRIDE != nullptr) {
-            std::string mask_pad_str = SD_CHROMA_MASK_PAD_OVERRIDE;
-            try {
-                mask_pad = std::stoi(mask_pad_str);
-            } catch (const std::invalid_argument&) {
-                LOG_WARN("SD_CHROMA_MASK_PAD_OVERRIDE environment variable is not a valid integer (%s). Falling back to default (%d)", SD_CHROMA_MASK_PAD_OVERRIDE, mask_pad);
-            } catch (const std::out_of_range&) {
-                LOG_WARN("SD_CHROMA_MASK_PAD_OVERRIDE environment variable value is out of range for `int` type (%s). Falling back to default (%d)", SD_CHROMA_MASK_PAD_OVERRIDE, mask_pad);
-            }
-        }
-        modify_mask_to_attend_padding(t5_attn_mask, ggml_nelements(t5_attn_mask), mask_pad);
-
         return SDCondition(hidden_states, t5_attn_mask, NULL);
     }
 
