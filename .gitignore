@@ -2,6 +2,7 @@
 *.a
 *.bin
 *.tmp.yaml
+*.Identifier
 
 .DS_Store
 .build/

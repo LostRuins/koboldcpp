@@ -53,7 +53,7 @@ logit_bias_max = 512
 dry_seq_break_max = 128
 
 # global vars
-KcppVersion = "1.93.1"
+KcppVersion = "1.93"
 showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False}
@@ -651,6 +651,9 @@ def unpack_to_dir(destpath = ""):
         if not destpath:
             return
 
+    if not os.path.isdir(destpath):
+        os.makedirs(destpath)        
+    
     if os.path.isdir(srcpath) and os.path.isdir(destpath) and not os.listdir(destpath):
         try:
             if cliunpack:
@@ -660,12 +663,14 @@ def unpack_to_dir(destpath = ""):
             for item in os.listdir(srcpath):
                 s = os.path.join(srcpath, item)
                 d = os.path.join(destpath, item)
-                if item.endswith('.pyd'):  # Skip .pyd files
-                    continue
-                if os.path.isdir(s):
-                    shutil.copytree(s, d, False, None)
-                else:
+                intpath = os.path.join(destpath, "_internal")
+                os.makedirs(intpath, exist_ok=True)
+                if item.startswith('koboldcpp-launcher'):  # Move koboldcpp-launcher to its intended location
                     shutil.copy2(s, d)
+                if os.path.isdir(s):
+                    shutil.copytree(s, os.path.join(intpath, item), False, None)
+                else:
+                    shutil.copy2(s, shutil.copy2(s, os.path.join(intpath, item)))
             if cliunpack:
                 print(f"KoboldCpp successfully extracted to {destpath}")
             else:
