@@ -56,7 +56,7 @@ if [[ $1 == "rebuild" ]]; then
 	echo Rebuild complete, you can now try to launch Koboldcpp.
 elif [[ $1 == "dist" ]]; then
 	bin/micromamba remove --no-rc -r conda -p conda/envs/linux --force ocl-icd -y
-	bin/micromamba run -r conda -p conda/envs/linux pyinstaller --noconfirm --onedir --collect-all customtkinter --collect-all psutil --add-data './koboldcpp.py:.' --add-data './json_to_gbnf.py:.' --version-file './version.txt' --clean --console koboldcpp.py -n "koboldcpp-launcher"
+	bin/micromamba run -r conda -p conda/envs/linux pyinstaller --noconfirm --onedir --contents-directory"." --collect-all customtkinter --collect-all psutil --add-data './koboldcpp.py:.' --add-data './json_to_gbnf.py:.' --version-file './version.txt' --clean --console koboldcpp.py -n "koboldcpp-launcher"
 	if [ "$KCPP_CUDA" = "rocm" ]; then
 		if [ ! -n "$ROCM_PATH" ]; then
 			ROCM_PATH=/opt/rocm
