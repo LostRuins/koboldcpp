@@ -654,6 +654,9 @@ def unpack_to_dir(destpath = ""):
         if not destpath:
             return
 
+    if not os.path.isdir(destpath):
+        os.makedirs(destpath)  
+        
     if os.path.isdir(srcpath) and os.path.isdir(destpath) and not os.listdir(destpath):
         try:
             if cliunpack:
