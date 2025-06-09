@@ -48,7 +48,6 @@ default_ttsmaxlen = 4096
 default_visionmaxres = 1024
 net_save_slots = 10
 savestate_limit = 3 #3 savestate slots
-default_sdsizelimit = 0.7 # megapixels
 
 # abuse prevention
 stop_token_max = 256
@@ -66,7 +65,7 @@ using_gui_launcher = False
 handle = None
 friendlymodelname = "inactive"
 friendlysdmodelname = "inactive"
-sdmodelversion = ""
+sdmodelversion = "inactive"
 friendlyembeddingsmodelname = "inactive"
 lastgeneratedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
@@ -1618,10 +1617,18 @@ def sd_apply_resolution_limits(width, height, sdclamped, sdsizelimit):
                 else:
                     small = small_up
 
-    sdsizelimit = sdsizelimit or default_sdsizelimit
-    sizelimit = max(min(int(sdsizelimit * 1000000), 2048*2048), 64*64)
+    if sdsizelimit:
+        sizelimit = max(min(int(sdsizelimit * 1000000), 2048*2048), 64*64)
+        print(f"\nImgGen: Using requested {sizelimit}px image size limit.")
+    elif sdmodelversion in ["SD 1.x", "SD 1.x Inpaint", "SD 2.x", "SD 2.x Inpaint"]:
+        print(f"\nImgGen: Using default {sdmodelversion} 832x832 image size limit.")
+        sizelimit = 832*832
+    else:
+        print(f"\nImgGen: Using default {sdmodelversion} 1024x1024 image size limit.")
+        sizelimit = 1024*1024
+
     if small * big > sizelimit:
-        print(f"\nImgGen: Scaling down image to stay below {sdsizelimit}MP.")
+        print(f"\nImgGen: Scaling down image to stay below {sizelimit} pixels.")
         scale = math.sqrt(sizelimit / (small * big))
         newsmall = int(small * scale)
         if newsmall < 64:
@@ -1647,8 +1654,10 @@ def sd_apply_resolution_limits(width, height, sdclamped, sdsizelimit):
                 if newrdiff < rdiff:
                     big, small, rdiff = newbig_up, newsmall_down, newrdiff
 
-    width, height = ((big, small) if landscape else (small, big))
-    return width, height
+    newwidth, newheight = ((big, small) if landscape else (small, big))
+    if (newwidth, newheight) != (width, height):
+        print(f"\nImgGen: Dimensions changed from {width}x{height} to {newwidth}x{newheight}\n")
+    return newwidth, newheight
 
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
@@ -5017,7 +5026,7 @@ def show_gui():
     makelabelentry(images_tab, "Clamped Mode (Limit Resolution):", sd_clamped_var, row, 50, padx=290,singleline=True,tooltip="Limit generation steps and resolution settings for shared use.\nSet to 0 to disable, otherwise value is the size limit (min 512px).")
     row += 2
 
-    makelabelentry(images_tab, "Size Limit:", sd_size_limit_var, row, 50, padx=290,singleline=True,tooltip=f"Image size limit, in megapixels. Protects against reaching backend limits,\nwhich could cause a server crash. Leave at 0.0 for the default value ({default_sdsizelimit}MP)")
+    makelabelentry(images_tab, "Size Limit:", sd_size_limit_var, row, 50, padx=290,singleline=True,tooltip=f"Image size limit, in megapixels. Protects against reaching backend limits,\nwhich could cause a server crash. Leave at 0.0 for a model-specific default value.")
     row += 2
 
     makelabelentry(images_tab, "Image Threads:" , sd_threads_var, row, 50,padx=290,singleline=True,tooltip="How many threads to use during image generation.\nIf left blank, uses same value as threads.")
@@ -6771,7 +6780,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
     #handle loading image model
     if args.sdmodel and args.sdmodel!="":
+        global sdmodelversion
         imgmodel = args.sdmodel
+        sdmodelversion = "inactive"
         if not imgmodel or not os.path.exists(imgmodel):
             if args.ignoremissing:
                 print(f"Ignoring missing img model file: {imgmodel}")
@@ -7232,7 +7243,7 @@ if __name__ == '__main__':
     sdparsergroup = parser.add_argument_group('Image Generation Commands')
     sdparsergroup.add_argument("--sdmodel", metavar=('[filename]'), help="Specify an image generation safetensors or gguf model to enable image generation.", default="")
     sdparsergroup.add_argument("--sdthreads", metavar=('[threads]'), help="Use a different number of threads for image generation if specified. Otherwise, has the same value as --threads.", type=int, default=0)
-    sdparsergroup.add_argument("--sdsizelimit", metavar=('[limit]'), help=f"If specified, limit image size to this value, in megapixels (eg. 0.41 would allow images up to 512x768 or 640x640). Values above {default_sdsizelimit}MP (the default) are usually not recommended due to backend limitations, and may cause a server crash. If 0, use the default value.", type=float, default=0.0)
+    sdparsergroup.add_argument("--sdsizelimit", metavar=('[limit]'), help=f"If specified, limit image size to this value, in megapixels (eg. 0.41 would allow images up to 512x768 or 640x640). Values above 0.7MP are usually not recommended due to backend limitations, and may cause a server crash. If 0, use a model-specific default value.", type=float, default=0.0)
     sdparsergroup.add_argument("--sdclamped", metavar=('[maxres]'), help="If specified, limit generation steps and resolution settings for shared use. Accepts an extra optional parameter that indicates maximum resolution (eg. 768 clamps to 768x768, min 512px, disabled if 0).", nargs='?', const=512, type=int, default=0)
     sdparsergroup.add_argument("--sdt5xxl", metavar=('[filename]'), help="Specify a T5-XXL safetensors model for use in SD3 or Flux. Leave blank if prebaked or unused.", default="")
     sdparsergroup.add_argument("--sdclipl", metavar=('[filename]'), help="Specify a Clip-L safetensors model for use in SD3 or Flux. Leave blank if prebaked or unused.", default="")
