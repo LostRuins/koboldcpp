@@ -219,7 +219,7 @@ extern "C"
         return gpttype_generate(inputs);
     }
 
-    bool sd_load_model(const sd_load_model_inputs inputs)
+    sd_load_model_outputs sd_load_model(const sd_load_model_inputs inputs)
     {
         return sdtype_load_model(inputs);
     }

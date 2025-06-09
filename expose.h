@@ -172,6 +172,11 @@ struct sd_load_model_inputs
     const bool quiet = false;
     const int debugmode = 0;
 };
+struct sd_load_model_outputs
+{
+    int status = -1;
+    const char * model_version = ""; // SDVersion
+};
 struct sd_generation_inputs
 {
     const char * prompt = nullptr;
