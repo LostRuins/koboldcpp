@@ -93,6 +93,7 @@ jobs:
       - name: Package PyInstallers
         id: make_pyinstaller
         run: |
+          ./make_pyinstaller.bat
           ./make_pyinstaller_cuda.bat
 
       - name: Save artifact

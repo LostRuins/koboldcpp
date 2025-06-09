@@ -28,10 +28,13 @@ import threading
 import html
 import random
 import hashlib
-import urllib.parse as urlparse
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Tuple
+import shutil
+import subprocess
 
 # constants
 sampler_order_max = 7
@@ -640,7 +643,6 @@ def is_incomplete_utf8_sequence(byte_seq): #note, this will only flag INCOMPLETE
         return False #invalid sequence, but not incomplete
 
 def unpack_to_dir(destpath = ""):
-    import shutil
     srcpath = os.path.abspath(os.path.dirname(__file__))
     cliunpack = False if destpath == "" else True
     print("Attempt to unpack KoboldCpp into directory...")
@@ -1041,8 +1043,6 @@ def autoset_gpu_layers(ctxsize, sdquanted, bbs, qkv_level): #shitty algo to dete
         return 0
 
 def fetch_gpu_properties(testCL,testCU,testVK):
-    import subprocess
-
     gpumem_ignore_limit_min = 1024*1024*600 #600 mb min
     gpumem_ignore_limit_max = 1024*1024*1024*300 #300 gb max
 
@@ -1817,11 +1817,8 @@ def websearch(query):
     if query==websearch_lastquery:
         print("Returning cached websearch...")
         return websearch_lastresponse
-    import urllib.parse
-    import urllib.request
     import difflib
     from html.parser import HTMLParser
-    from concurrent.futures import ThreadPoolExecutor
     num_results = 3
     searchresults = []
     utfprint("Performing new websearch...",1)
@@ -1982,7 +1979,6 @@ def websearch(query):
 
 def is_port_in_use(portNum):
     try:
-        import socket
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(('localhost', portNum)) == 0
     except Exception:
@@ -2431,7 +2427,6 @@ ws ::= | " " | "\n" [ \t]{0,20}
 def LaunchWebbrowser(target_url, failedmsg):
     try:
         if os.name == "posix" and "DISPLAY" in os.environ:  # UNIX-like systems
-            import subprocess
             clean_env = os.environ.copy()
             clean_env.pop("LD_LIBRARY_PATH", None)
             clean_env["PATH"] = "/usr/bin:/bin"
@@ -2749,8 +2744,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def noscript_webui(self):
         global modelbusy, sslvalid
-        parsed_url = urlparse.urlparse(self.path)
-        parsed_dict = urlparse.parse_qs(parsed_url.query)
+        parsed_url = urllib.parse.urlparse(self.path)
+        parsed_dict = urllib.parse.parse_qs(parsed_url.query)
         reply = ""
         status = str(parsed_dict['status'][0]) if 'status' in parsed_dict else "Ready To Generate"
         prompt = str(parsed_dict['prompt'][0]) if 'prompt' in parsed_dict else ""
@@ -2821,7 +2816,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             parsed_dict["status"] = status
             parsed_dict["chatmode"] = ("1" if chatmode else "0")
             parsed_dict["imgmode"] = ("1" if imgmode else "0")
-            updated_query_string = urlparse.urlencode(parsed_dict, doseq=True)
+            updated_query_string = urllib.parse.urlencode(parsed_dict, doseq=True)
             updated_path = parsed_url._replace(query=updated_query_string).geturl()
             self.path = updated_path
             time.sleep(0.5) #short delay
@@ -3907,8 +3902,6 @@ def RunServerMultiThreaded(addr, port, server_handler):
 
 # Based on https://github.com/mathgeniuszach/xdialog/blob/main/xdialog/zenity_dialogs.py - MIT license | - Expanded version by Henk717
 def zenity(filetypes=None, initialdir="", initialfile="", **kwargs) -> Tuple[int, str]:
-    import shutil
-    import subprocess
     global zenity_recent_dir, zenity_permitted
 
     if not zenity_permitted:
@@ -4450,8 +4443,8 @@ def show_gui():
                 searchbase = model_search.get()
                 if searchbase.strip()=="":
                     return
-                urlcode = urlparse.urlencode({"search":( "GGUF " + searchbase),"limit":10}, doseq=True)
-                urlcode2 = urlparse.urlencode({"search":searchbase,"limit":6}, doseq=True)
+                urlcode = urllib.parse.urlencode({"search":( "GGUF " + searchbase),"limit":10}, doseq=True)
+                urlcode2 = urllib.parse.urlencode({"search":searchbase,"limit":6}, doseq=True)
                 resp = make_url_request(f"https://huggingface.co/api/models?{urlcode}",None,'GET',{},10)
                 for m in resp:
                     searchedmodels.append(m["id"])
@@ -5546,7 +5539,6 @@ def print_with_time(txt):
     print(f"{datetime.now().strftime('[%H:%M:%S]')} " + txt, flush=True)
 
 def make_url_request(url, data, method='POST', headers={}, timeout=300):
-    import urllib.request
     global nocertify
     try:
         request = None
@@ -5577,7 +5569,6 @@ def make_url_request(url, data, method='POST', headers={}, timeout=300):
 
 #A very simple and stripped down embedded horde worker with no dependencies
 def run_horde_worker(args, api_key, worker_name):
-    import random
     global friendlymodelname, maxhordectx, maxhordelen, exitcounter, punishcounter, modelbusy, session_starttime, sslvalid
     httpsaffix = ("https" if sslvalid else "http")
     epurl = f"{httpsaffix}://localhost:{args.port}"
@@ -5774,8 +5765,6 @@ def setuptunnel(global_memory, has_sd):
     # This script will help setup a cloudflared tunnel for accessing KoboldCpp over the internet
     # It should work out of the box on both linux and windows
     try:
-        import subprocess
-        import re
         global sslvalid
         httpsaffix = ("https" if sslvalid else "http")
         ssladd = (" --no-tls-verify" if sslvalid else "")
@@ -5940,9 +5929,6 @@ def delete_old_pyinstaller():
     if not base_path:
         return
 
-    import time
-    import os
-    import shutil
     selfdirpath = os.path.abspath(base_path)
     temp_parentdir_path = os.path.abspath(os.path.join(base_path, '..'))
     for dirname in os.listdir(temp_parentdir_path):
@@ -5964,15 +5950,10 @@ def delete_old_pyinstaller():
 
 def sanitize_string(input_string):
     # alphanumeric characters, dots, dashes, and underscores
-    import re
     sanitized_string = re.sub( r'[^\w\d\.\-_]', '', input_string)
     return sanitized_string
 
 def downloader_internal(input_url, output_filename, capture_output, min_file_size=64): # 64 bytes required by default
-    import shutil
-    import subprocess
-    import os
-
     if "https://huggingface.co/" in input_url and "/blob/main/" in input_url:
         input_url = input_url.replace("/blob/main/", "/resolve/main/")
     if output_filename == "auto":
@@ -6906,7 +6887,6 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     #if post-ready script specified, execute it
     if args.onready:
         def onready_subprocess():
-            import subprocess
             print("Starting Post-Load subprocess...")
             subprocess.run(args.onready[0], shell=True)
         timer_thread = threading.Timer(1, onready_subprocess) #1 second delay
@@ -7031,7 +7011,6 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             print("Server was not started, main function complete. Idling.", flush=True)
 
 if __name__ == '__main__':
-    import multiprocessing
     multiprocessing.freeze_support()
 
     def check_range(value_type, min_value, max_value):
