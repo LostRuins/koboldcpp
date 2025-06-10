@@ -660,15 +660,19 @@ def unpack_to_dir(destpath = ""):
                 print(f"KoboldCpp will be extracted to {destpath}\nThis process may take several seconds to complete.")
             else:
                 messagebox.showinfo("Unpack Starting", f"KoboldCpp will be extracted to {destpath}\nThis process may take several seconds to complete.")
+            pyds_dir = os.path.join(destpath, 'pyds')
+            os.makedirs(pyds_dir, exist_ok=True)
             for item in os.listdir(srcpath):
                 s = os.path.join(srcpath, item)
                 d = os.path.join(destpath, item)
-                if item.endswith('.pyd'):  # Skip .pyd files
-                    continue
-                if os.path.isdir(s):
-                    shutil.copytree(s, d, False, None)
-                else:
+                if item.endswith('.pyd'):  # relocate pyds files to subdirectory
+                    d = os.path.join(pyds_dir, item)
                     shutil.copy2(s, d)
+                else:
+                    if os.path.isdir(s):
+                        shutil.copytree(s, d, False, None)
+                    else:
+                        shutil.copy2(s, d)
             if cliunpack:
                 print(f"KoboldCpp successfully extracted to {destpath}")
             else:
