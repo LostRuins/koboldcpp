@@ -665,17 +665,24 @@ def unpack_to_dir(destpath = ""):
                 messagebox.showinfo("Unpack Starting", f"KoboldCpp will be extracted to {destpath}\nThis process may take several seconds to complete.")
             pyds_dir = os.path.join(destpath, 'pyds')
             os.makedirs(pyds_dir, exist_ok=True)
+            using_pyinstaller_6 = os.path.exists(os.path.join(srcpath, "_internal")) #if this dir exists, we were using pyinstaller 6
             for item in os.listdir(srcpath):
                 s = os.path.join(srcpath, item)
                 d = os.path.join(destpath, item)
-                if item.endswith('.pyd'):  # relocate pyds files to subdirectory
-                    d = os.path.join(pyds_dir, item)
+                d2 = d  #this will be modified for pyinstaller 6 and unmodified for pyinstaller 5
+                if using_pyinstaller_6:
+                    d2 = os.path.join(os.path.join(destpath, "_internal"), item)
+                if using_pyinstaller_6 and item.startswith('koboldcpp-launcher'):  # Move koboldcpp-launcher to its intended location
                     shutil.copy2(s, d)
+                    continue
+                if item.endswith('.pyd'):  # relocate pyds files to subdirectory
+                    pyd = os.path.join(pyds_dir, item)
+                    shutil.copy2(s, pyd)
+                    continue
+                if os.path.isdir(s):
+                    shutil.copytree(s, d2, False, None)
                 else:
-                    if os.path.isdir(s):
-                        shutil.copytree(s, d, False, None)
-                    else:
-                        shutil.copy2(s, d)
+                    shutil.copy2(s, d2)
             if cliunpack:
                 print(f"KoboldCpp successfully extracted to {destpath}")
             else:
