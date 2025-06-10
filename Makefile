@@ -252,7 +252,11 @@ endif
 	HCXX        := $(ROCM_PATH)/bin/hipcc
 else
 	ROCM_PATH   ?= /opt/rocm
+ifdef LLAMA_PORTABLE
 	GPU_TARGETS ?= gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(shell $(ROCM_PATH)/llvm/bin/amdgpu-arch)
+else
+	GPU_TARGETS ?= $(shell $(ROCM_PATH)/llvm/bin/amdgpu-arch)
+endif
 	HCC         := $(ROCM_PATH)/llvm/bin/clang
 	HCXX        := $(ROCM_PATH)/llvm/bin/clang++
 endif

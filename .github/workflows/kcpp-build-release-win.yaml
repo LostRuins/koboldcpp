@@ -40,6 +40,34 @@ jobs:
           & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format json
         shell: pwsh
 
+      - name: Visual Studio 2019 Reinstall
+        shell: cmd
+        run: |
+          @echo off
+          echo Preparing setup
+          curl -fLO https://download.visualstudio.microsoft.com/download/pr/1fbe074b-8ae1-4e9b-8e83-d1ce4200c9d1/61098e228df7ba3a6a8b4e920a415ad8878d386de6dd0f23f194fe1a55db189a/vs_Enterprise.exe
+          vs_Enterprise.exe --quiet --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.CLI.Support --add Microsoft.VisualStudio.Component.Windows10SDK.19041 --add Microsoft.VisualStudio.Workload.UniversalBuildTools --add Microsoft.VisualStudio.Component.VC.CMake.Project
+          echo Waiting for VS2019 setup
+          set "ProcessName=setup.exe"
+          :CheckProcess
+          tasklist /FI "IMAGENAME eq %ProcessName%" | find /I "%ProcessName%" >nul
+          if %errorlevel%==0 (
+              ping 127.0.0.1 /n 5 >nul
+              goto CheckProcess
+          )
+          echo VS2019 Setup completed
+          exit /b 0
+
+      - name: Disable Visual Studio 2022 by Renaming
+        run: |
+          Rename-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" "Enterprise_DISABLED"
+        shell: pwsh
+
+      - name: Display full Visual Studio info After
+        run: |
+          & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format json
+        shell: pwsh
+
       - name: Download and install win64devkit
         run: |
           curl -L https://github.com/skeeto/w64devkit/releases/download/v1.22.0/w64devkit-1.22.0.zip --output w64devkit.zip
@@ -63,11 +91,42 @@ jobs:
         run: |
           make LLAMA_CLBLAST=1 LLAMA_VULKAN=1 LLAMA_PORTABLE=1 -j ${env:NUMBER_OF_PROCESSORS}
 
-      - uses: Jimver/cuda-toolkit@v0.2.15
+      - name: Install Cuda Toolkit 12.4
         id: cuda-toolkit
-        with:
-          cuda: '12.4.0'
-          use-github-cache: false
+        shell: pwsh
+        run: |
+          $CudaDir = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4"
+          mkdir -p $CudaDir
+
+          echo "Downloading CUDA archives..."
+          $archives = @(
+            "cuda_cudart-windows-x86_64-12.4.127-archive.zip",
+            "cuda_nvcc-windows-x86_64-12.4.131-archive.zip",
+            "cuda_nvrtc-windows-x86_64-12.4.127-archive.zip",
+            "libcublas-windows-x86_64-12.4.5.8-archive.zip",
+            "cuda_nvtx-windows-x86_64-12.4.127-archive.zip",
+            "cuda_profiler_api-windows-x86_64-12.4.127-archive.zip",
+            "visual_studio_integration-windows-x86_64-12.4.127-archive.zip",
+            "cuda_nvprof-windows-x86_64-12.4.127-archive.zip",
+            "cuda_cccl-windows-x86_64-12.4.127-archive.zip"
+          )
+
+          foreach ($archive in $archives) {
+            curl -LO "https://developer.download.nvidia.com/compute/cuda/redist/$($archive -replace('-.*',''))/windows-x86_64/$archive"
+          }
+
+          echo "Unzipping CUDA archives..."
+          foreach ($archive in $archives) {
+            $folder = ($archive -replace '\.zip$', '')
+            Expand-Archive -Path $archive -DestinationPath $folder
+            xcopy "$folder\*" "$CudaDir" /E /I /H /Y
+          }
+
+          echo "$CudaDir\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "$CudaDir\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CUDA_PATH=$CudaDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CUDA_PATH_V12_4=$CudaDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CUDA Install Done."
 
       - name: Build CUDA
         id: cmake_build
