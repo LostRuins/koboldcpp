@@ -257,6 +257,7 @@ struct embeddings_load_model_inputs
     const int gpulayers = 0;
     const bool flash_attention = false;
     const bool use_mmap = false;
+    const int embeddingsmaxctx = 0;
     const bool quiet = false;
     const int debugmode = 0;
 };

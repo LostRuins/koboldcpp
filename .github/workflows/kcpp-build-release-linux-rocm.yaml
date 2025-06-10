@@ -12,7 +12,6 @@ env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   KCPP_CUDA: rocm
   ARCHES_CU12: 1
-  NO_WMMA: 1
 
 jobs:
   linux:

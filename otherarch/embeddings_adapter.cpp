@@ -34,7 +34,7 @@ static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & toke
     }
 }
 
-static void batch_encode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd, int embd_norm) {
+static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd, int embd_norm) {
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
     const struct llama_model * model = llama_get_model(ctx);
 
@@ -48,7 +48,7 @@ static void batch_encode(llama_context * ctx, llama_batch & batch, float * outpu
     }
 
     // run model
-    if (llama_encode(ctx, batch) < 0) {
+    if (llama_decode(ctx, batch) < 0) {
         printf("%s : failed to process\n", __func__);
     }
 
@@ -125,7 +125,8 @@ bool embeddingstype_load_model(const embeddings_load_model_inputs inputs)
     llama_model * embeddingsmodel = llama_model_load_from_file(modelfile.c_str(), model_params);
     const int n_ctx_train = llama_model_n_ctx_train(embeddingsmodel);
 
-    max_batchsize = n_ctx_train;
+    max_batchsize = (inputs.embeddingsmaxctx>0?inputs.embeddingsmaxctx:n_ctx_train);
+    max_batchsize = (max_batchsize>n_ctx_train?n_ctx_train:max_batchsize);
     ctx_params.embeddings = true;
     ctx_params.n_ubatch = max_batchsize; //max size, must fit
     ctx_params.n_ctx = max_batchsize;
@@ -144,7 +145,7 @@ bool embeddingstype_load_model(const embeddings_load_model_inputs inputs)
 
     std::vector<int> tmp = {1, 2, 3, 4};
     llama_kv_self_clear(embeddings_ctx);
-    auto er = llama_encode(embeddings_ctx, llama_batch_get_one(tmp.data(), tmp.size()));
+    auto er = llama_decode(embeddings_ctx, llama_batch_get_one(tmp.data(), tmp.size()));
     if(er!=0)
     {
         printf("\nEmbeddings Model Eval returned nonzero: %d\n",er);
@@ -259,7 +260,7 @@ embeddings_generation_outputs embeddingstype_generate(const embeddings_generatio
         // encode if at capacity
         if (batch.n_tokens + n_toks > n_batch) {
             float * out = emb + e * n_embd;
-            batch_encode(embeddings_ctx, batch, out, s, n_embd, embd_normalize);
+            batch_decode(embeddings_ctx, batch, out, s, n_embd, embd_normalize);
             e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
             s = 0;
             common_batch_clear(batch);
@@ -271,7 +272,7 @@ embeddings_generation_outputs embeddingstype_generate(const embeddings_generatio
 
     // final batch
     float * out = emb + e * n_embd;
-    batch_encode(embeddings_ctx, batch, out, s, n_embd, embd_normalize);
+    batch_decode(embeddings_ctx, batch, out, s, n_embd, embd_normalize);
 
     std::string outputarray = "[";
     for (int i = 0; i < n_embd; i++) {
