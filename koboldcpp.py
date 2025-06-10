@@ -655,8 +655,8 @@ def unpack_to_dir(destpath = ""):
             return
 
     if not os.path.isdir(destpath):
-        os.makedirs(destpath)  
-        
+        os.makedirs(destpath)
+
     if os.path.isdir(srcpath) and os.path.isdir(destpath) and not os.listdir(destpath):
         try:
             if cliunpack:
@@ -664,8 +664,18 @@ def unpack_to_dir(destpath = ""):
             else:
                 messagebox.showinfo("Unpack Starting", f"KoboldCpp will be extracted to {destpath}\nThis process may take several seconds to complete.")
             pyds_dir = os.path.join(destpath, 'pyds')
+            using_pyinstaller_6 = False
+            try:
+                import pkg_resources
+                piver = pkg_resources.get_distribution("pyinstaller").version
+                print(f"PyInstaller Version: {piver}")
+                if piver.startswith("6."):
+                    using_pyinstaller_6 = True
+                    os.makedirs(os.path.join(destpath, "_internal"), exist_ok=True)
+                    pyds_dir = os.path.join(os.path.join(destpath, "_internal"), 'pyds')
+            except Exception:
+                pass
             os.makedirs(pyds_dir, exist_ok=True)
-            using_pyinstaller_6 = os.path.exists(os.path.join(srcpath, "_internal")) #if this dir exists, we were using pyinstaller 6
             for item in os.listdir(srcpath):
                 s = os.path.join(srcpath, item)
                 d = os.path.join(destpath, item)
