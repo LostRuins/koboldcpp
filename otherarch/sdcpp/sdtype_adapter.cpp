@@ -106,27 +106,6 @@ struct SDParams {
     float skip_layer_end         = 0.2f;
 };
 
-static const char * sdversion_name (enum SDVersion version)
-{
-    // TODO: stable-diffusion.h should expose model_version_to_str or equivalent
-    static const char * model_version_to_str[] = {
-        "SD 1.x",
-        "SD 1.x Inpaint",
-        "SD 2.x",
-        "SD 2.x Inpaint",
-        "SDXL",
-        "SDXL Inpaint",
-        "SVD",
-        "SD3.x",
-        "Flux",
-        "Flux Fill"
-    };
-    unsigned int idx = (unsigned int) version;
-    if (idx < (sizeof model_version_to_str / sizeof model_version_to_str[0]))
-        return model_version_to_str[idx];
-    return "UNKNOWN";
-}
-
 //shared
 int total_img_gens = 0;
 
@@ -145,9 +124,7 @@ static int cfg_side_limit = 0;
 static bool sd_is_quiet = false;
 static std::string sdmodelfilename = "";
 
-sd_load_model_outputs sdtype_load_model(const sd_load_model_inputs inputs) {
-    sd_load_model_outputs output;
-
+bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
     executable_path = inputs.executable_path;
@@ -287,7 +264,7 @@ sd_load_model_outputs sdtype_load_model(const sd_load_model_inputs inputs) {
 
     if (sd_ctx == NULL) {
         printf("\nError: KCPP SD Failed to create context!\nIf using Flux/SD3.5, make sure you have ALL files required (e.g. VAE, T5, Clip...) or baked in!\n");
-        return output;
+        return false;
     }
 
     std::filesystem::path mpath(inputs.model_filename);
@@ -300,9 +277,7 @@ sd_load_model_outputs sdtype_load_model(const sd_load_model_inputs inputs) {
         sd_ctx->sd->apply_lora_from_file(lorafilename,inputs.lora_multiplier);
     }
 
-    output.status = 0;
-    output.model_version = sdversion_name(sd_ctx->sd->version);
-    return output;
+    return true;
 
 }
 

@@ -65,7 +65,6 @@ using_gui_launcher = False
 handle = None
 friendlymodelname = "inactive"
 friendlysdmodelname = "inactive"
-sdmodelversion = "inactive"
 friendlyembeddingsmodelname = "inactive"
 lastgeneratedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
@@ -279,10 +278,6 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("square_limit", ctypes.c_int),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]
-
-class sd_load_model_outputs(ctypes.Structure):
-    _fields_ = [("status", ctypes.c_int),
-                ("model_version", ctypes.c_char_p)]
 
 class sd_generation_inputs(ctypes.Structure):
     _fields_ = [("prompt", ctypes.c_char_p),
@@ -546,7 +541,7 @@ def init_library():
     handle.load_state_kv.restype = ctypes.c_bool
     handle.clear_state_kv.restype = ctypes.c_bool
     handle.sd_load_model.argtypes = [sd_load_model_inputs]
-    handle.sd_load_model.restype = sd_load_model_outputs
+    handle.sd_load_model.restype = ctypes.c_bool
     handle.sd_generate.argtypes = [sd_generation_inputs]
     handle.sd_generate.restype = sd_generation_outputs
     handle.whisper_load_model.argtypes = [whisper_load_model_inputs]
@@ -6704,9 +6699,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
     #handle loading image model
     if args.sdmodel and args.sdmodel!="":
-        global sdmodelversion
         imgmodel = args.sdmodel
-        sdmodelversion = "inactive"
         if not imgmodel or not os.path.exists(imgmodel):
             if args.ignoremissing:
                 print(f"Ignoring missing img model file: {imgmodel}")
@@ -6751,14 +6744,11 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             friendlysdmodelname = os.path.basename(imgmodel)
             friendlysdmodelname = os.path.splitext(friendlysdmodelname)[0]
             friendlysdmodelname = sanitize_string(friendlysdmodelname)
-            ret = sd_load_model(imgmodel,imgvae,imglora,imgt5xxl,imgclipl,imgclipg)
-            loadok = (ret.status == 0)
-            sdmodelversion = ret.model_version.decode("UTF-8","ignore")
+            loadok = sd_load_model(imgmodel,imgvae,imglora,imgt5xxl,imgclipl,imgclipg)
             print("Load Image Model OK: " + str(loadok))
             if not loadok:
                 exitcounter = 999
                 exit_with_error(3,"Could not load image model: " + imgmodel)
-            print("Image Model Type: " + sdmodelversion)
 
     #handle whisper model
     if args.whispermodel and args.whispermodel!="":
