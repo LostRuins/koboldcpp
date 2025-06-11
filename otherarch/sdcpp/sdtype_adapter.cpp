@@ -483,17 +483,24 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     int tiled_vae_threshold;
+    bool dotile;
     if (cfg_tiled_vae_threshold == 0) {
+        // Legacy behavior: limit by image dimensions
         tiled_vae_threshold = 768;
+        dotile = (sd_params->width>tiled_vae_threshold || sd_params->height>tiled_vae_threshold);
     } else {
         if (cfg_tiled_vae_threshold > 0) {
             tiled_vae_threshold = cfg_tiled_vae_threshold;
         } else {
             tiled_vae_threshold = 8192; // effectively avoids tiling
         }
+        // when explicitely set, limit by image area
+        // on the Vulkan backend, typically limited at 4G for a single allocation,
+        // the memory used for the VAE buffer is 6656 bytes per image pixel; a
+        // 768x768 square image (and all resolutions with the same area) stays a
+        // bit below that limit, at 3.66G.
+        dotile = (sd_params->width*sd_params->height > tiled_vae_threshold*tiled_vae_threshold);
     }
-
-    bool dotile = (sd_params->width>tiled_vae_threshold || sd_params->height>tiled_vae_threshold);
     set_sd_vae_tiling(sd_ctx,dotile); //changes vae tiling, prevents memory related crash/oom
 
     if (sd_params->clip_skip <= 0) {
