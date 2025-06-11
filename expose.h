@@ -162,7 +162,7 @@ struct sd_load_model_inputs
     const int threads = 0;
     const int quant = 0;
     const bool taesd = false;
-    const bool notile = false;
+    const int tiled_vae_threshold = 0;
     const char * t5xxl_filename = nullptr;
     const char * clipl_filename = nullptr;
     const char * clipg_filename = nullptr;
