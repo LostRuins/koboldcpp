@@ -140,6 +140,8 @@ static uint8_t * input_mask_buffer = NULL;
 
 static std::string sdplatformenv, sddeviceenv, sdvulkandeviceenv;
 static bool notiling = false;
+static int cfg_square_limit = 0;
+static int cfg_side_limit = 0;
 static bool sd_is_quiet = false;
 static std::string sdmodelfilename = "";
 
@@ -156,6 +158,8 @@ sd_load_model_outputs sdtype_load_model(const sd_load_model_inputs inputs) {
     std::string clipl_filename = inputs.clipl_filename;
     std::string clipg_filename = inputs.clipg_filename;
     notiling = inputs.notile;
+    cfg_side_limit = inputs.side_limit;
+    cfg_square_limit = inputs.square_limit;
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
 
     if(lorafilename!="")
@@ -332,6 +336,110 @@ static std::string get_image_params(const SDParams& params) {
     return parameter_string;
 }
 
+static inline int rounddown_64(int n) {
+    return n - n % 64;
+}
+
+static inline int roundup_64(int n) {
+    return rounddown_64(n + 63);
+}
+
+static void sd_fix_resolution(int &width, int &height, int side_limit, int square_limit) {
+
+    // sanitize the original values
+    width = std::max(std::min(width, 8192), 64);
+    height = std::max(std::min(height, 8192), 64);
+
+    int big, small;
+    bool landscape = (width > height);
+    if (landscape) {
+        big = width;
+        small = height;
+    } else {
+        big = height;
+        small = width;
+    }
+
+    float ratio = static_cast<float>(big) / small;
+
+    // for the initial rounding, don't bother comparing to the original
+    // requested ratio, since the user can choose those values directly
+    big = rounddown_64(big);
+    small = rounddown_64(small);
+
+    side_limit = rounddown_64(side_limit);
+    if (big > side_limit) {
+        small = static_cast<int>(small * side_limit / static_cast<float>(big));
+        big = side_limit;
+
+        if (small <= 64) {
+            small = 64;
+        } else {
+            int small_down = rounddown_64(small);
+            int small_up = roundup_64(small);
+
+            // minimizes the difference to the original ratio (|newratio-ratio|)
+            // big is fixed, so a 'smaller small' means a higher ratio; we don't need fabs here
+            float bigf = static_cast<float>(big);
+            if ((bigf/small_down - ratio) < (ratio - bigf/small_up)) {
+                small = small_down;
+            } else {
+                small = small_up;
+            }
+        }
+    }
+
+    int area_limit = square_limit * square_limit;
+    if (big * small > area_limit) {
+        float scale = std::sqrt(static_cast<float>(area_limit) / (big * small));
+        int newsmall = static_cast<int>(small * scale);
+
+        if (newsmall <= 64) {
+            small = 64;
+            big = rounddown_64(area_limit / small);
+        } else {
+            int newbig = static_cast<int>(big * scale);
+            int newbig_down = rounddown_64(newbig);
+            int newsmall_down = rounddown_64(newsmall);
+
+            big = newbig_down;
+            small = newsmall_down;
+
+            // we may get a ratio closer to the original if we still stay below the
+            // limit when rounding up one of the dimensions, so check both cases
+
+            float rdiff = std::fabs(static_cast<float>(newbig_down) / newsmall_down - ratio);
+
+            int newsmall_up = roundup_64(newsmall);
+            if (newbig_down * newsmall_up < area_limit) {
+                float newrdiff = std::fabs(static_cast<float>(newbig_down) / newsmall_up - ratio);
+                if (newrdiff < rdiff) {
+                    big = newbig_down;
+                    small = newsmall_up;
+                    rdiff = newrdiff;
+                }
+            }
+
+            int newbig_up = roundup_64(newbig);
+            if (newbig_up * newsmall_down < area_limit) {
+                float newrdiff = std::fabs(static_cast<float>(newbig_up) / newsmall_down - ratio);
+                if (newrdiff < rdiff) {
+                    big = newbig_up;
+                    small = newsmall_down;
+                }
+            }
+        }
+    }
+
+    if (landscape) {
+        width = big;
+        height = small;
+    } else {
+        width = small;
+        height = big;
+    }
+}
+
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
     sd_generation_outputs output;
@@ -373,6 +481,28 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         if (sampler == "euler a" || sampler == "k_euler_a" || sampler == "euler_a") {
             sampler = "euler";  //euler a broken on flux
         }
+    }
+
+    int huge_value = 32767; // arbitrary, just to simplify the code
+
+    int side_limit = huge_value;
+    if (cfg_side_limit > 0) {
+        side_limit = std::max(std::min(cfg_side_limit, huge_value), 64);
+    }
+
+    int square_limit = huge_value;
+    if (cfg_square_limit > 0) {
+        square_limit = std::max(std::min(cfg_square_limit, huge_value), 64);
+    }
+    else if (cfg_square_limit == 0) {
+        // default value: avoid crashes due to bugs/limitations on certain models
+        square_limit = (loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024;
+    }
+
+    sd_fix_resolution(sd_params->width, sd_params->height, side_limit, square_limit);
+    if (inputs.width != sd_params->width || inputs.height != sd_params->height) {
+        printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n",
+            inputs.width, inputs.height, sd_params->width, sd_params->height);
     }
 
     bool dotile = (sd_params->width>768 || sd_params->height>768) && !notiling;

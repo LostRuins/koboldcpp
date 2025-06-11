@@ -275,6 +275,8 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("vae_filename", ctypes.c_char_p),
                 ("lora_filename", ctypes.c_char_p),
                 ("lora_multiplier", ctypes.c_float),
+                ("side_limit", ctypes.c_int),
+                ("square_limit", ctypes.c_int),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]
 
@@ -1537,6 +1539,8 @@ def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clipl
     inputs.t5xxl_filename = t5xxl_filename.encode("UTF-8")
     inputs.clipl_filename = clipl_filename.encode("UTF-8")
     inputs.clipg_filename = clipg_filename.encode("UTF-8")
+    inputs.size_limit = args.sdclamped
+    inputs.square_limit = args.sdrestrictsquare
     inputs = set_backend_props(inputs)
     ret = handle.sd_load_model(inputs)
     return ret
@@ -1580,86 +1584,6 @@ def sd_comfyui_tranform_params(genparams):
     return genparams
 
 
-def sd_apply_resolution_limits(width, height, sdclamped, sdrestrictsquare):
-    small = max(width, 64)
-    big = max(height, 64)
-    landscape = (width > height)
-    if landscape:
-        small, big = big, small
-    ratio = big / small
-
-    def rounddown_64(n):
-        return n - (n % 64)
-
-    def roundup_64(n):
-        return rounddown_64(n + 63)
-
-    small = rounddown_64(small)
-    big = rounddown_64(big)
-
-    if sdclamped:
-        reslimit = int(sdclamped)
-        reslimit = (512 if reslimit<512 else reslimit)
-        reslimit = rounddown_64(reslimit)
-        print(f"\nImgGen: Clamped Mode (For Shared Use). Step counts and resolution are clamped to {reslimit}x{reslimit}.")
-        if big > reslimit:
-            small = int(small * reslimit / big)
-            big = reslimit
-            if small < 64:
-                small = 64
-            else:
-                # round the smaller dimension minimizing the difference
-                # to the requested ratio
-                small_down = rounddown_64(small)
-                small_up = roundup_64(small)
-                if (big / small_down - ratio) < (ratio - big / small_up):
-                    small = small_down
-                else:
-                    small = small_up
-
-    if sdrestrictsquare > 0:
-        squarelimit = max(min(sdrestrictsquare, 2048), 64)
-        sizelimit = squarelimit*squarelimit
-        print(f"\nImgGen: Using requested {squarelimit}x{squarelimit} square restriction.")
-    else:
-        squarelimit = 1024
-        if sdmodelversion in ["SD 1.x", "SD 1.x Inpaint", "SD 2.x", "SD 2.x Inpaint"]:
-            squarelimit = 832
-        print(f"\nImgGen: Using default {squarelimit}x{squarelimit} square restriction for {sdmodelversion}.")
-        sizelimit = squarelimit*squarelimit
-
-    if small * big > sizelimit:
-        print(f"\nImgGen: Scaling down image to stay below {sizelimit} pixels.")
-        scale = math.sqrt(sizelimit / (small * big))
-        newsmall = int(small * scale)
-        if newsmall < 64:
-            small = 64
-            big = rounddown_64(int(sizelimit / small))
-        else:
-            newbig = int(big * scale)
-            newbig_down = rounddown_64(newbig)
-            newsmall_down = rounddown_64(newsmall)
-            big, small = newbig_down, newsmall_down
-
-            # check if we can get a ratio closer to the requested one by
-            # rounding one of the dimensions up instead of down
-            rdiff = math.fabs(newbig_down / newsmall_down - ratio)
-            newbig_up = roundup_64(newbig)
-            newsmall_up = roundup_64(newsmall)
-            if newbig_down * newsmall_up < sizelimit:
-                newrdiff = math.fabs(newbig_down / newsmall_up - ratio)
-                if newrdiff < rdiff:
-                    big, small, rdiff = newbig_down, newsmall_up, newrdiff
-            if newbig_up * newsmall_down < sizelimit:
-                newrdiff = math.fabs(newbig_up / newsmall_down - ratio)
-                if newrdiff < rdiff:
-                    big, small, rdiff = newbig_up, newsmall_down, newrdiff
-
-    newwidth, newheight = ((big, small) if landscape else (small, big))
-    if (newwidth, newheight) != (width, height):
-        print(f"\nImgGen: Dimensions changed from {width}x{height} to {newwidth}x{newheight}\n")
-    return newwidth, newheight
-
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
 
@@ -1699,8 +1623,6 @@ def sd_generate(genparams):
     #clean vars
     cfg_scale = (1 if cfg_scale < 1 else (25 if cfg_scale > 25 else cfg_scale))
     sample_steps = (1 if sample_steps < 1 else (forced_steplimit if sample_steps > forced_steplimit else sample_steps))
-
-    width, height = sd_apply_resolution_limits(width, height, args.sdclamped, args.sdrestrictsquare)
 
     if args.sdclamped:
         sample_steps = (40 if sample_steps > 40 else sample_steps)
