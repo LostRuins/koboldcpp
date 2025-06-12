@@ -1569,9 +1569,10 @@ void sample_grammar(FileFormat file_format, int32_t n_vocab, llama_token_data_ar
     }
 
     const std::vector<llama_token> eog_tokens = GetEogIDs(file_format,n_vocab);
-
-    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> candidates_decoded;
-    std::vector<llama_grammar_candidate>                              candidates_grammar;
+    std::vector<llama_grammar_candidate> candidates_grammar;
+    candidates_grammar.reserve(candidates->size);
+    std::vector<uint8_t> reject_map;
+    reject_map.assign(n_vocab, false);
 
     for (size_t i = 0; i < candidates->size; ++i) {
         const llama_token id    = candidates->data[i].id;
@@ -1579,21 +1580,27 @@ void sample_grammar(FileFormat file_format, int32_t n_vocab, llama_token_data_ar
         bool found_eog = std::find(eog_tokens.begin(), eog_tokens.end(), id) != eog_tokens.end();
         if (found_eog) {
             if (!allow_eos) {
-                candidates->data[i].logit = -INFINITY;
+                reject_map[candidates->data[i].id] = true;
             }
         } else if (piece.empty() || piece[0] == 0) {
-            candidates->data[i].logit = -INFINITY;
+            reject_map[candidates->data[i].id] = true;
         } else {
-            candidates_decoded.push_back(decode_utf8(piece.c_str(), grammar->partial_utf8));
-            candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second });
+            auto candidate = decode_utf8(piece.c_str(), grammar->partial_utf8);
+            candidates_grammar.push_back({ i, candidate.first.data(), candidate.second });
         }
     }
 
-    const auto rejects = llama_grammar_reject_candidates(grammar->rules, grammar->stacks, candidates_grammar);
-    for (const auto & reject : rejects) {
-        candidates->data[reject.index].logit = -INFINITY;
+    const llama_grammar_candidates rejects = llama_grammar_reject_candidates(grammar->rules, grammar->stacks, candidates_grammar);
+    
+    for (const &reject: rejects) {
+        reject_map[candidates[reject.index].id] = true;
     }
-
+        
+    auto first = candidates->data;
+    auto last  = first + candidates->size;
+    last = std::remove_if(first, last,
+                        [&](auto& tk){ return reject_map[tk.id]; });
+    candidates->size = last - first;
 }
 
 void sample_guidance(struct llama_context * ctx, struct llama_context * guidance_ctx, int n_vocab, float scale)
@@ -1643,15 +1650,26 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
 
     llama_token_data_array candidates_p = { candidates.data(), candidates.size(), false };
 
-    if (grammar != nullptr) {
-        sample_grammar(file_format, n_vocab, &candidates_p, grammar);
-    }
-
     //dry always first as logits cannot be resorted
     sample_dry(n_ctx, dry_penalty_last_n, dry_multiplier, dry_base, dry_allowed_length, dry_sequence_breakers, &candidates_p);
-
+    
     //prefilter to top 3k tokens for improved speed
+    bool use_grammar = grammar != nullptr;
+    size_t n_pre_cull = candidates_p.size();
+    
     sample_top_k(&candidates_p, 3000);
+    
+    if (use_grammar) {
+        sample_grammar(file_format, n_vocab, &candidates_p, grammar);
+
+        // if top_k 3000 doesn't contain a valid candidate for this grammar, try again pre-cull
+        if (candidates_p.size <= 0) {
+            candidates_p.size = n_pre_cull;
+            candidates_p.sorted = false;
+            sample_grammar(file_format, n_vocab, &candidates_p, grammar);
+            sample_top_k(&candidates_p, 3000);
+        }
+    }
 
     if (mirostat == 1 || mirostat == 2)
     {
