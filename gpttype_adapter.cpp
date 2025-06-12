@@ -1592,8 +1592,8 @@ void sample_grammar(FileFormat file_format, int32_t n_vocab, llama_token_data_ar
 
     const llama_grammar_candidates rejects = llama_grammar_reject_candidates(grammar->rules, grammar->stacks, candidates_grammar);
     
-    for (const &reject: rejects) {
-        reject_map[candidates[reject.index].id] = true;
+    for (const auto &reject: rejects) {
+        reject_map[candidates->data[reject.index].id] = true;
     }
         
     auto first = candidates->data;
@@ -1655,7 +1655,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
     
     //prefilter to top 3k tokens for improved speed
     bool use_grammar = grammar != nullptr;
-    size_t n_pre_cull = candidates_p.size();
+    size_t n_pre_cull = candidates_p.size;
     
     sample_top_k(&candidates_p, 3000);
     
