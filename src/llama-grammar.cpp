@@ -1148,7 +1148,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
             cur_p->data[i].logit = -INFINITY;
         } else {
             candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
-            candidates_grammar.push_back({ id, candidates_decoded.back().first.data(), candidates_decoded.back().second });
+            candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second });
         }
     }
 

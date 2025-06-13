@@ -49,7 +49,7 @@ struct llama_partial_utf8 {
 };
 
 struct llama_grammar_candidate {
-    llama_token          index;
+    size_t               index;
     const uint32_t     * code_points;
     llama_partial_utf8   partial_utf8;
 };
