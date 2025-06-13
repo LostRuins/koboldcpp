@@ -462,7 +462,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     if (cfg_square_limit > 0) {
         square_limit = std::max(std::min(cfg_square_limit, default_res_limit), 64);
     }
-    square_limit = std::min(hard_megapixel_res_limit,square_limit);
+
+    if (cfg_square_limit > 0 && sddebugmode == 1) {
+        square_limit = std::min(hard_megapixel_res_limit * 2, square_limit);  //double the limit for debugmode if cfg_square_limit is set
+    } else {
+        square_limit = std::min(hard_megapixel_res_limit, square_limit);
+    }
 
     sd_fix_resolution(sd_params->width, sd_params->height, side_limit, square_limit);
     if (inputs.width != sd_params->width || inputs.height != sd_params->height) {
