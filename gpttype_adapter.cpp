@@ -1653,7 +1653,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
 
     //prefilter to top 3k tokens for improved speed
     bool use_grammar = grammar != nullptr;
-    size_t n_pre_cull = candidates_p.size;
+    std::vector<llama_token_data> precache = (use_grammar ? std::vector<llama_token_data>(candidates) : std::vector<llama_token_data>(0));
 
     sample_top_k(&candidates_p, 3000);
 
@@ -1661,7 +1661,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         sample_grammar(file_format, n_vocab, &candidates_p, grammar);
         // if top_k 3000 doesn't contain a valid candidate for this grammar, try again pre-cull
         if (candidates_p.size <= 0) {
-            candidates_p.size = n_pre_cull;
+            candidates_p = { precache.data(), precache.size(), false };
             sample_grammar(file_format, n_vocab, &candidates_p, grammar);
             sample_top_k(&candidates_p, 3000);
         }
