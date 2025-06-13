@@ -316,102 +316,91 @@ static inline int rounddown_64(int n) {
 }
 
 static inline int roundup_64(int n) {
-    return rounddown_64(n + 63);
+    return ((n + 63) / 64) * 64;
 }
 
+//scale dimensions to ensure width and height stay within limits
+//side_limit = sdclamped, hard size limit per side, no side can exceed this
+//square limit = total NxN resolution based limit to also apply
 static void sd_fix_resolution(int &width, int &height, int side_limit, int square_limit) {
 
     // sanitize the original values
     width = std::max(std::min(width, 8192), 64);
     height = std::max(std::min(height, 8192), 64);
 
-    int big, small;
-    bool landscape = (width > height);
-    if (landscape) {
-        big = width;
-        small = height;
-    } else {
-        big = height;
-        small = width;
-    }
-
-    float ratio = static_cast<float>(big) / small;
+    bool is_landscape = (width > height);
+    int long_side = is_landscape ? width : height;
+    int short_side = is_landscape ? height : width;
+    float original_ratio = static_cast<float>(long_side) / short_side;
 
     // for the initial rounding, don't bother comparing to the original
     // requested ratio, since the user can choose those values directly
-    big = rounddown_64(big);
-    small = rounddown_64(small);
-
+    long_side = rounddown_64(long_side);
+    short_side = rounddown_64(short_side);
     side_limit = rounddown_64(side_limit);
-    if (big > side_limit) {
-        small = static_cast<int>(small * side_limit / static_cast<float>(big));
-        big = side_limit;
 
-        if (small <= 64) {
-            small = 64;
+    //enforce sdclamp side limit
+    if (long_side > side_limit) {
+        short_side = static_cast<int>(short_side * side_limit / static_cast<float>(long_side));
+        long_side = side_limit;
+        if (short_side <= 64) {
+            short_side = 64;
         } else {
-            int small_down = rounddown_64(small);
-            int small_up = roundup_64(small);
-
-            // minimizes the difference to the original ratio (|newratio-ratio|)
-            // big is fixed, so a 'smaller small' means a higher ratio; we don't need fabs here
-            float bigf = static_cast<float>(big);
-            if ((bigf/small_down - ratio) < (ratio - bigf/small_up)) {
-                small = small_down;
-            } else {
-                small = small_up;
-            }
+            int down = rounddown_64(short_side);
+            int up = roundup_64(short_side);
+            float longf = static_cast<float>(long_side);
+            // Choose better ratio match between rounding up or down
+            short_side = (longf / down - original_ratio < original_ratio - longf / up) ? down : up;
         }
     }
 
+    //enforce sd_restrict_square area limit
     int area_limit = square_limit * square_limit;
-    if (big * small > area_limit) {
-        float scale = std::sqrt(static_cast<float>(area_limit) / (big * small));
-        int newsmall = static_cast<int>(small * scale);
+    if (long_side * short_side > area_limit) {
+        float scale = std::sqrt(static_cast<float>(area_limit) / (long_side * short_side));
+        int new_short = static_cast<int>(short_side * scale);
+        int new_long = static_cast<int>(long_side * scale);
 
-        if (newsmall <= 64) {
-            small = 64;
-            big = rounddown_64(area_limit / small);
+        if (new_short <= 64) {
+            short_side = 64;
+            long_side = rounddown_64(area_limit / short_side);
         } else {
-            int newbig = static_cast<int>(big * scale);
-            int newbig_down = rounddown_64(newbig);
-            int newsmall_down = rounddown_64(newsmall);
-
-            big = newbig_down;
-            small = newsmall_down;
+            int new_long_down = rounddown_64(new_long);
+            int new_short_down = rounddown_64(new_short);
+            int new_short_up = roundup_64(new_short);
+            int new_long_up = roundup_64(new_long);
+            long_side = new_long_down;
+            short_side = new_short_down;
 
             // we may get a ratio closer to the original if we still stay below the
             // limit when rounding up one of the dimensions, so check both cases
+            float rdiff = std::fabs(static_cast<float>(new_long_down) / new_short_down - original_ratio);
 
-            float rdiff = std::fabs(static_cast<float>(newbig_down) / newsmall_down - ratio);
-
-            int newsmall_up = roundup_64(newsmall);
-            if (newbig_down * newsmall_up < area_limit) {
-                float newrdiff = std::fabs(static_cast<float>(newbig_down) / newsmall_up - ratio);
+            if (new_long_down * new_short_up < area_limit) {
+                float newrdiff = std::fabs(static_cast<float>(new_long_down) / new_short_up - original_ratio);
                 if (newrdiff < rdiff) {
-                    big = newbig_down;
-                    small = newsmall_up;
+                    long_side = new_long_down;
+                    short_side = new_short_up;
                     rdiff = newrdiff;
                 }
             }
 
-            int newbig_up = roundup_64(newbig);
-            if (newbig_up * newsmall_down < area_limit) {
-                float newrdiff = std::fabs(static_cast<float>(newbig_up) / newsmall_down - ratio);
+            if (new_long_up * new_short_down < area_limit) {
+                float newrdiff = std::fabs(static_cast<float>(new_long_up) / new_short_down - original_ratio);
                 if (newrdiff < rdiff) {
-                    big = newbig_up;
-                    small = newsmall_down;
+                    long_side = new_long_up;
+                    short_side = new_short_down;
                 }
             }
         }
     }
 
-    if (landscape) {
-        width = big;
-        height = small;
+    if (is_landscape) {
+        width = long_side;
+        height = short_side;
     } else {
-        width = small;
-        height = big;
+        width = short_side;
+        height = long_side;
     }
 }
 
@@ -458,26 +447,26 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    int huge_value = 32767; // arbitrary, just to simplify the code
+    const int default_res_limit = 8192; // arbitrary, just to simplify the code
+    // avoid crashes due to bugs/limitations on certain models
+    // although it can be possible for a single side to exceed 1024, the total resolution of the image
+    // cannot exceed (832x832) for sd1/sd2 or (1024x1024) for sdxl/sd3/flux, to prevent crashing the server
+    const int hard_megapixel_res_limit = (loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024;
 
-    int side_limit = huge_value;
+    int side_limit = default_res_limit;
     if (cfg_side_limit > 0) {
-        side_limit = std::max(std::min(cfg_side_limit, huge_value), 64);
+        side_limit = std::max(std::min(cfg_side_limit, default_res_limit), 64);
     }
 
-    int square_limit = huge_value;
+    int square_limit = default_res_limit;
     if (cfg_square_limit > 0) {
-        square_limit = std::max(std::min(cfg_square_limit, huge_value), 64);
+        square_limit = std::max(std::min(cfg_square_limit, default_res_limit), 64);
     }
-    else if (cfg_square_limit == 0) {
-        // default value: avoid crashes due to bugs/limitations on certain models
-        square_limit = (loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024;
-    }
+    square_limit = std::min(hard_megapixel_res_limit,square_limit);
 
     sd_fix_resolution(sd_params->width, sd_params->height, side_limit, square_limit);
     if (inputs.width != sd_params->width || inputs.height != sd_params->height) {
-        printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n",
-            inputs.width, inputs.height, sd_params->width, sd_params->height);
+        printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n", inputs.width, inputs.height, sd_params->width, sd_params->height);
     }
 
     bool dotile = (sd_params->width>768 || sd_params->height>768) && !notiling;

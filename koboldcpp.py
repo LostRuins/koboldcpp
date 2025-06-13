@@ -1534,7 +1534,7 @@ def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clipl
     inputs.t5xxl_filename = t5xxl_filename.encode("UTF-8")
     inputs.clipl_filename = clipl_filename.encode("UTF-8")
     inputs.clipg_filename = clipg_filename.encode("UTF-8")
-    inputs.size_limit = args.sdclamped
+    inputs.side_limit = args.sdclamped
     inputs.square_limit = args.sdrestrictsquare
     inputs = set_backend_props(inputs)
     ret = handle.sd_load_model(inputs)
@@ -1577,7 +1577,6 @@ def sd_comfyui_tranform_params(genparams):
     else:
         print("Warning: ComfyUI Payload Missing!")
     return genparams
-
 
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
@@ -4937,39 +4936,24 @@ def show_gui():
     # Image Gen Tab
 
     images_tab = tabcontent["Image Gen"]
-    row = 1
-    makefileentry(images_tab, "Image Gen. Model (safetensors/gguf):", "Select Image Gen Model File", sd_model_var, row, width=280, singlecol=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")], tooltiptxt="Select a .safetensors or .gguf Image Generation model file on disk to be loaded.")
-    row += 3
-
-    makelabelentry(images_tab, "Clamped Mode (Limit Resolution):", sd_clamped_var, row, 50, padx=290,singleline=True,tooltip=
-        "Limit generation steps and resolution settings for shared use.\nSet to 0 to disable, otherwise value is the size limit (min 512px).")
-    row += 2
-
-    makelabelentry(images_tab, "Restrict Square Size:", sd_restrict_square_var, row, 50, padx=290,singleline=True,tooltip="Square image size restriction, to protect the server against memory crashes.\nAllows width-height tradeoffs, eg. 640 allows 640x640 and 512x768\nLeave at 0 for the default value: 832 for SD1.5/SD2, 1024 otherwise.")
-    row += 2
-
-    makelabelentry(images_tab, "Image Threads:" , sd_threads_var, row, 50,padx=290,singleline=True,tooltip="How many threads to use during image generation.\nIf left blank, uses same value as threads.")
-    row += 2
+    makefileentry(images_tab, "Image Gen. Model (safetensors/gguf):", "Select Image Gen Model File", sd_model_var, 1, width=280, singlecol=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")], tooltiptxt="Select a .safetensors or .gguf Image Generation model file on disk to be loaded.")
+    makelabelentry(images_tab, "Clamped Mode (Limit Resolution):", sd_clamped_var, 4, 50, padx=290,singleline=True,tooltip="Limit generation steps and resolution settings for shared use.\nSet to 0 to disable, otherwise value is the size limit (min 512px).")
+    makelabelentry(images_tab, "Restrict Square Size:", sd_restrict_square_var, 6, 50, padx=290,singleline=True,tooltip="Square image size restriction, to protect the server against memory crashes.\nAllows width-height tradeoffs, eg. 640 allows 640x640 and 512x768\nLeave at 0 for the default value: 832 for SD1.5/SD2, 1024 otherwise.")
+    makelabelentry(images_tab, "Image Threads:" , sd_threads_var, 8, 50,padx=290,singleline=True,tooltip="How many threads to use during image generation.\nIf left blank, uses same value as threads.")
     sd_model_var.trace("w", gui_changed_modelfile)
-
-    makecheckbox(images_tab, "Compress Weights (Saves Memory)", sd_quant_var, row,tooltiptxt="Quantizes the SD model weights to save memory. May degrade quality.")
-    row += 2
+    makecheckbox(images_tab, "Compress Weights (Saves Memory)", sd_quant_var, 10,tooltiptxt="Quantizes the SD model weights to save memory. May degrade quality.")
     sd_quant_var.trace("w", changed_gpulayers_estimate)
 
-    makefileentry(images_tab, "Image LoRA (safetensors/gguf):", "Select SD lora file",sd_lora_var, row, width=280, singlecol=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select a .safetensors or .gguf SD LoRA model file to be loaded. Should be unquantized!")
-    row += 2
-    makelabelentry(images_tab, "Image LoRA Multiplier:" , sd_loramult_var, row, 50,padx=290,singleline=True,tooltip="What mutiplier value to apply the SD LoRA with.")
-    row += 2
+    makefileentry(images_tab, "Image LoRA (safetensors/gguf):", "Select SD lora file",sd_lora_var, 20, width=280, singlecol=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select a .safetensors or .gguf SD LoRA model file to be loaded. Should be unquantized!")
+    makelabelentry(images_tab, "Image LoRA Multiplier:" , sd_loramult_var, 22, 50,padx=290,singleline=True,tooltip="What mutiplier value to apply the SD LoRA with.")
 
-    makefileentry(images_tab, "T5-XXL File:", "Select Optional T5-XXL model file (SD3 or flux)",sd_t5xxl_var, row, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors t5xxl file to be loaded.")
-    row += 2
-    makefileentry(images_tab, "Clip-L File:", "Select Optional Clip-L model file (SD3 or flux)",sd_clipl_var, row, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors t5xxl file to be loaded.")
-    row += 2
-    makefileentry(images_tab, "Clip-G File:", "Select Optional Clip-G model file (SD3)",sd_clipg_var, row, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors t5xxl file to be loaded.")
-    row += 2
 
-    sdvaeitem1,sdvaeitem2,sdvaeitem3 = makefileentry(images_tab, "Image VAE:", "Select Optional SD VAE file",sd_vae_var, row, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select a .safetensors or .gguf SD VAE file to be loaded.")
-    row += 2
+
+    makefileentry(images_tab, "T5-XXL File:", "Select Optional T5-XXL model file (SD3 or flux)",sd_t5xxl_var, 24, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors t5xxl file to be loaded.")
+    makefileentry(images_tab, "Clip-L File:", "Select Optional Clip-L model file (SD3 or flux)",sd_clipl_var, 26, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors t5xxl file to be loaded.")
+    makefileentry(images_tab, "Clip-G File:", "Select Optional Clip-G model file (SD3)",sd_clipg_var, 28, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors t5xxl file to be loaded.")
+
+    sdvaeitem1,sdvaeitem2,sdvaeitem3 = makefileentry(images_tab, "Image VAE:", "Select Optional SD VAE file",sd_vae_var, 30, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select a .safetensors or .gguf SD VAE file to be loaded.")
     def toggletaesd(a,b,c):
         if sd_vaeauto_var.get()==1:
             sdvaeitem1.grid_remove()
@@ -4980,10 +4964,8 @@ def show_gui():
                 sdvaeitem1.grid()
                 sdvaeitem2.grid()
                 sdvaeitem3.grid()
-    makecheckbox(images_tab, "Use TAE SD (AutoFix Broken VAE)", sd_vaeauto_var, row,command=toggletaesd,tooltiptxt="Replace VAE with TAESD. May fix bad VAE.")
-    row += 2
-    makecheckbox(images_tab, "No VAE Tiling", sd_notile_var, row, tooltiptxt="Disables VAE tiling, may not work for large images.")
-    row += 2
+    makecheckbox(images_tab, "Use TAE SD (AutoFix Broken VAE)", sd_vaeauto_var, 32,command=toggletaesd,tooltiptxt="Replace VAE with TAESD. May fix bad VAE.")
+    makecheckbox(images_tab, "No VAE Tiling", sd_notile_var, 24,tooltiptxt="Disables VAE tiling, may not work for large images.")
 
     # audio tab
     audio_tab = tabcontent["Audio"]
@@ -5215,7 +5197,7 @@ def show_gui():
 
         args.sdthreads = (0 if sd_threads_var.get()=="" else int(sd_threads_var.get()))
         args.sdclamped = (0 if int(sd_clamped_var.get())<=0 else int(sd_clamped_var.get()))
-        args.sdrestrictsquare = (0 if int(sd_restrict_square_var.get())<=0 else int(sd_restrict_square.get()))
+        args.sdrestrictsquare = (0 if int(sd_restrict_square_var.get())<=0 else int(sd_restrict_square_var.get()))
         args.sdnotile = (True if sd_notile_var.get()==1 else False)
         if sd_vaeauto_var.get()==1:
             args.sdvaeauto = True
@@ -7158,7 +7140,7 @@ if __name__ == '__main__':
     sdparsergroup.add_argument("--sdmodel", metavar=('[filename]'), help="Specify an image generation safetensors or gguf model to enable image generation.", default="")
     sdparsergroup.add_argument("--sdthreads", metavar=('[threads]'), help="Use a different number of threads for image generation if specified. Otherwise, has the same value as --threads.", type=int, default=0)
     sdparsergroup.add_argument("--sdclamped", metavar=('[maxres]'), help="If specified, limit generation steps and resolution settings for shared use. Accepts an extra optional parameter that indicates maximum resolution (eg. 768 clamps to 768x768, min 512px, disabled if 0).", nargs='?', const=512, type=int, default=0)
-    sdparsergroup.add_argument("--sdrestrictsquare", metavar=('[maxres]'), help=f"If specified, restrict square image sides to this value, in pixels, to avoid server crashes related to excessive memory usage. Similar to --sdclamped, but allows trade-offs between width and height (e.g. 640 would allow 640x640, 512x768 and 768x512 images). If 0 or unspecified, use a model-specific safe value: 832 for SD1.5/SD2, 1024 otherwise.", type=int, default=0)
+    sdparsergroup.add_argument("--sdrestrictsquare", metavar=('[maxres]'), help="If specified, restrict square image sides to this value, in pixels, to avoid server crashes related to excessive memory usage. Similar to --sdclamped, but allows trade-offs between width and height (e.g. 640 would allow 640x640, 512x768 and 768x512 images). If 0 or unspecified, use a model-specific safe value: 832 for SD1.5/SD2, 1024 otherwise.", type=int, default=0)
     sdparsergroup.add_argument("--sdt5xxl", metavar=('[filename]'), help="Specify a T5-XXL safetensors model for use in SD3 or Flux. Leave blank if prebaked or unused.", default="")
     sdparsergroup.add_argument("--sdclipl", metavar=('[filename]'), help="Specify a Clip-L safetensors model for use in SD3 or Flux. Leave blank if prebaked or unused.", default="")
     sdparsergroup.add_argument("--sdclipg", metavar=('[filename]'), help="Specify a Clip-G safetensors model for use in SD3. Leave blank if prebaked or unused.", default="")
