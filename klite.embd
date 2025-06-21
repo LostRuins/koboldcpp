@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 
 <script>
-	const LITEVER = 255;
+	const LITEVER = 256;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -3326,7 +3326,7 @@ Current version indicated by LITEVER below.
 		img_gen_from_instruct: true,
 		img_autogen_type: 0, //0 is off, 1 is on, 2 is smart
 		img_allownsfw: true,
-		img_cfgscale: 7,
+		img_cfgscale: 6,
 		img_allowhd: true,
 		img_crop: false,
 		img_newturn: false,
@@ -9162,6 +9162,11 @@ Current version indicated by LITEVER below.
 						final = final.includes("+")?("+"+final.split("+")[1]):final;
 						return `https://char-archive.evulid.cc/api/archive/v1/${parts[0]}/image/character/${final}?definition=true`;
 					}
+					if (parts.length == 2 || parts[0] == 'generic') {
+						let final = parts[1];
+						final = final.includes("+")?(final.split("+")[1]):final;
+						return `https://char-archive.evulid.cc/api/archive/v1/${parts[0]}/image/character/${final}?definition=true`;
+					}
 					if (parts.length !== 4 || parts[2] !== 'character') {
 						//bad format, return original
 						return userInput;
@@ -13944,11 +13949,18 @@ Current version indicated by LITEVER below.
 
 	function sanitize_css(input)
 	{
-		input = input.replace(/<\s*\/?\s*\w+\s*[^>]*>/gi, "");
-		input = input.replace(/</g, "");
-		input = input.replace(/(?:javascript|vbscript|file):/gi, "");
-		//remove all data elements that aren't jpg, png, gif, webp;base64
-		input = input.replace(/data:(?!image\/(jpeg|jpg|png|gif|webp);base64,)[^;\s]*(?:;[^,\s]*)*(?:,[^)\s'"]*)?/gi, "");
+		let safeImages = [];
+		let counter = 0;
+		input = input.replace(/<\s*\/?\s*\w+\s*[^>]*>/gi, ""); //replace html tags
+		input = input.replace(/</g, "");  // Remove any remaining `<` characters
+		input = input.replace(/data:image\/(jpeg|jpg|png|gif|webp);base64,[A-Za-z0-9+\/=]+/gi, function(match) {
+			safeImages.push(match);
+			return "__SAFE_IMG_" + (counter++) + "__";
+		});
+		input = input.replace(/(?:javascript|data|vbscript|file):/gi, "");
+		for(let i = 0; i < safeImages.length; i++) {
+			input = input.replace("__SAFE_IMG_" + i + "__", safeImages[i]);
+		}
 		return input;
 	}
 	function apply_custom_css()
@@ -16070,18 +16082,30 @@ Current version indicated by LITEVER below.
 				//insert authors note 80 tokens before the ending (320 characters).
 				let anote_dist = anote_strength;
 				let anote_insert_idx = truncated_context.length - anote_dist;
+				anote_insert_idx = clamp(anote_insert_idx, 0, truncated_context.length);
 				//try to align anote with a word boundary
-				for(let i=0;i<15;++i)
-				{
-					if(anote_insert_idx>=0 && anote_insert_idx<truncated_context.length
-					&& truncated_context[anote_insert_idx]!=" " && truncated_context[anote_insert_idx]!="."
-					&& truncated_context[anote_insert_idx]!="!" && truncated_context[anote_insert_idx]!="?"
-					&& truncated_context[anote_insert_idx]!="," && truncated_context[anote_insert_idx]!="\n")
-					{
-						++anote_insert_idx;
-					}else{
+				const maxLookahead = 30;
+				let best_insert_idx = anote_insert_idx;
+				let insert_preference = 0;
+				for (let i = 0; i < maxLookahead && anote_insert_idx + i < truncated_context.length; ++i) {
+					const char = truncated_context[anote_insert_idx + i];
+					if (char == "\n") {
+						best_insert_idx = anote_insert_idx + i + 1;
+						insert_preference = 3;
 						break;
 					}
+					if (insert_preference<=1 && (char == "," || char == "!" || char == "." || char == "?")) {
+						best_insert_idx = anote_insert_idx + i + 1;
+						insert_preference = 2;
+					}
+					if (insert_preference==0 && (char == " ")) {
+						best_insert_idx = anote_insert_idx + i + 1;
+						insert_preference = 1;
+					}
+				}
+				if(insert_preference>0)
+				{
+					anote_insert_idx = best_insert_idx;
 				}
 				anote_insert_idx = clamp(anote_insert_idx, 0, truncated_context.length);
 				truncated_context = truncated_context.slice(0, anote_insert_idx) + truncated_anote + truncated_context.slice(anote_insert_idx);

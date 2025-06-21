@@ -166,5 +166,16 @@
         "assistant_start": "<｜Assistant｜>",
         "assistant_end": "<｜end▁of▁sentence｜>"
     }
+}, {
+    "search": ["rwkv-world"],
+    "name": "RWKV World",
+    "adapter": {
+        "system_start": "",
+        "system_end": "\n\n",
+        "user_start": "USER: ",
+        "user_end": "\n",
+        "assistant_start": "ASSISTANT: ",
+        "assistant_end": "</s>\n"
+    }
 }
 ]

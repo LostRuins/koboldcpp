@@ -151,7 +151,7 @@ public:
                         const std::string& vae_path,
                         const std::string control_net_path,
                         const std::string embeddings_path,
-                        const std::string id_embeddings_path,
+                        const std::string id_embeddings_path_original,
                         const std::string& taesd_path,
                         bool vae_tiling_,
                         ggml_type wtype,
@@ -163,6 +163,7 @@ public:
         use_tiny_autoencoder = taesd_path.size() > 0;
         std::string taesd_path_fixed = taesd_path;
         is_loaded_chroma = false;
+        std::string id_embeddings_path = id_embeddings_path_original;
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
@@ -256,6 +257,12 @@ public:
         }
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
+
+        if(id_embeddings_path!="" && version!=VERSION_SDXL)
+        {
+            printf("\n!!!!\nWARNING: PhotoMaker is only compatible with SDXL models. PhotoMaker will be disabled!\n!!!!\n");
+            id_embeddings_path = "";
+        }
 
         if(use_tiny_autoencoder)
         {

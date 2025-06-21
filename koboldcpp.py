@@ -2408,7 +2408,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
         genparams["prompt"] = ollamasysprompt + ollamabodyprompt
 
     #final transformations (universal template replace)
-    replace_instruct_placeholders = genparams.get('replace_instruct_placeholders', False)
+    replace_instruct_placeholders = genparams.get('replace_instruct_placeholders', True)
     stop_sequence = (genparams.get('stop_sequence', []) if genparams.get('stop_sequence', []) is not None else [])
     stop_sequence = stop_sequence[:stop_token_max]
     if replace_instruct_placeholders:

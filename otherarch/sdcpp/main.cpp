@@ -964,7 +964,8 @@ int main(int argc, const char* argv[]) {
                           params.skip_layers.size(),
                           params.slg_scale,
                           params.skip_layer_start,
-                          params.skip_layer_end);
+                          params.skip_layer_end,
+                          nullptr);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -1033,7 +1034,8 @@ int main(int argc, const char* argv[]) {
                               params.skip_layers.size(),
                               params.slg_scale,
                               params.skip_layer_start,
-                              params.skip_layer_end);
+                              params.skip_layer_end,
+                              nullptr);
         }
     }
 

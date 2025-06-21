@@ -144,4 +144,36 @@ jobs:
             ggml/src/ggml-vulkan-shaders.hpp
             vulkan-readme.txt
 
+      - name: Build Tools
+        id: make_tools
+        run: |
+          make tools -j 4
+          New-Item -ItemType Directory -Path legacy
+          Copy-Item quantize_gpt2.exe -Destination legacy
+          Copy-Item quantize_gptj.exe -Destination legacy
+          Copy-Item quantize_mpt.exe -Destination legacy
+          Copy-Item quantize_neox.exe -Destination legacy
+          Copy-Item otherarch/tools/convert_hf_gpt2.py -Destination legacy
+          Copy-Item otherarch/tools/convert_hf_gptj.py -Destination legacy
+          Copy-Item otherarch/tools/convert_hf_mpt.py -Destination legacy
+          Copy-Item otherarch/tools/convert_hf_neox.py -Destination legacy
+          Copy-Item otherarch/tools/convert_llama_ggml_to_gguf.py -Destination legacy
+          Copy-Item otherarch/tools/convert_pt_rwkv.py -Destination legacy
+        shell: pwsh
 
+      - name: Upload Tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: koboldcpp_tools
+          path: |
+            gguf-split.exe
+            quantize_clip.exe
+            quantize_gguf.exe
+            whispermain.exe
+            sdmain.exe
+            ttsmain.exe
+            whispermain.exe
+            convert_hf_to_gguf.py
+            convert_hf_to_gguf_update.py
+            gguf-py
+            legacy
