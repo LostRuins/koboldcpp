@@ -8,9 +8,25 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include <iostream>
+#include <string_view>
+#include <unordered_set>
+
 //
 // helpers
 //
+
+using bytes = std::pair<const char*, size_t>;
+using hash_entry_size = std::pair<size_t, size_t>;
+
+template <>
+struct std::hash<bytes>
+{
+    std::size_t operator()(const bytes& x) const noexcept
+    {
+        return std::hash<std::string_view>{}({x.first, x.second});
+    }
+};
 
 // NOTE: assumes valid utf8 (but checks for overrun)
 static std::pair<uint32_t, const char *> decode_utf8(const char * src) {
@@ -864,6 +880,40 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         }
         return rejects;
     }
+    
+    
+    using candidates_memos = std::unordered_map<size_t, llama_grammar_candidates>;
+    using stack_memos = std::unordered_map<size_t, candidates_memos>;
+    static stack_memos memo_cache;
+    
+    auto stack_hash_start = reinterpret_cast<const char *>(stack.data());
+    auto stack_hash_size  = sizeof(stack[0]) * stack.size();
+    auto stack_hash       = std::hash<bytes>{}({ stack_hash_start, stack_hash_size });
+
+    llama_grammar_candidates* cache_target = nullptr;
+    
+    // Only check stash hash first - these are usually ~24b, and almost always under 64b
+    if (auto& cache_hit = memo_cache.find(stack_hash); cache_hit != memo_cache.end()) {
+        // Only attempt to memoize candidate lists under 1280
+        // >75% of candidate lists are under 1280 and 50% are under 640b. Most 'problem' loops are under 24b
+        // However, candidate lists can be over 72k, so we need to limit our checks
+        auto candidates_hash_size  = sizeof(candidates[0]) * candidates.size();
+        if (candidates_hash_size < 1280) {
+            auto& candidates_memos = cache_hit->second;
+            auto candidates_hash_start = reinterpret_cast<const char *>(candidates.data());
+            auto candidates_hash       = std::hash<bytes>{}({ candidates_hash_start, candidates_hash_size });
+            if (auto& cache_hit2 = candidates_memos.find(candidates_hash); cache_hit2 != candidates_memos.end()) {
+                return cache_hit2->second;
+            }
+            else {
+                cache_target = &(candidates_memos[candidates_hash]);
+            }
+        }
+    }
+    else {
+        memo_cache[stack_hash];
+    }
+
 
     const llama_grammar_element * stack_pos = stack.back();
 
@@ -900,6 +950,9 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         rejects.push_back({ tok.index, tok.code_points - 1, tok.partial_utf8 });
     }
 
+    if (cache_target) {
+        *cache_target = rejects;
+    }
     return rejects;
 }
 
