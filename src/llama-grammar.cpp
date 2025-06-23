@@ -892,9 +892,12 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
 
     llama_grammar_candidates * cache_target = nullptr;
 
-    // Only attempt to memoize candidate lists under 1280
-    // >75% of candidate lists are under 1280 and 50% are under 640b. Most 'problem' loops are under 24b
-    // However, candidate lists can be over 72k, so we need to limit our checks
+    // Tests show that >75% of candidate lists are under 1280 and 50% are under 640b.
+    // Most 'problem' loops are under 24b. However, candidate lists can be over 72k,
+    // so we need to limit our checks.
+
+
+    // We'll only attempt to memoize candidate lists under 80b
     // Doing an over-aggressive size cutoff first befor any other processing 'saves' easy cases
     // extra processing but still rescues 'hard' cases from slow down or hangs.
     // This leads to a speed up of both easy and hard cases.
