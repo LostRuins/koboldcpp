@@ -28,6 +28,14 @@ struct std::hash<bytes>
     }
 };
 
+using candidates_memos = std::unordered_map<size_t, llama_grammar_candidates>;
+using stack_memos = std::unordered_map<size_t, candidates_memos>;
+static stack_memos memo_cache;
+
+static void llama_grammar_reset_memos() {
+    memo_cache.clear();
+}
+
 // NOTE: assumes valid utf8 (but checks for overrun)
 static std::pair<uint32_t, const char *> decode_utf8(const char * src) {
     static const int lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4 };
@@ -880,11 +888,6 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         }
         return rejects;
     }
-    
-    
-    using candidates_memos = std::unordered_map<size_t, llama_grammar_candidates>;
-    using stack_memos = std::unordered_map<size_t, candidates_memos>;
-    static stack_memos memo_cache;
     
     auto stack_hash_start = reinterpret_cast<const char *>(stack.data());
     auto stack_hash_size  = sizeof(stack[0]) * stack.size();

@@ -1773,6 +1773,7 @@ static void load_grammar(const std::string & gammarstr)
 {
     if(grammar!=nullptr) //on demand free when next grammar is loaded
     {
+        llama_grammar_reset_memos();
         llama_grammar_free_impl(grammar);
         grammar = nullptr;
     }
