@@ -890,30 +890,31 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     auto stack_hash_size  = sizeof(stack[0]) * stack.size();
     auto stack_hash       = std::hash<bytes>{}({ stack_hash_start, stack_hash_size });
 
-    llama_grammar_candidates* cache_target = nullptr;
-    
-    // Only check stash hash first - these are usually ~24b, and almost always under 64b
-    if (auto& cache_hit = memo_cache.find(stack_hash); cache_hit != memo_cache.end()) {
-        // Only attempt to memoize candidate lists under 1280
-        // >75% of candidate lists are under 1280 and 50% are under 640b. Most 'problem' loops are under 24b
-        // However, candidate lists can be over 72k, so we need to limit our checks
-        auto candidates_hash_size  = sizeof(candidates[0]) * candidates.size();
-        if (candidates_hash_size < 1280) {
-            auto& candidates_memos = cache_hit->second;
-            auto candidates_hash_start = reinterpret_cast<const char *>(candidates.data());
-            auto candidates_hash       = std::hash<bytes>{}({ candidates_hash_start, candidates_hash_size });
-            if (auto& cache_hit2 = candidates_memos.find(candidates_hash); cache_hit2 != candidates_memos.end()) {
+    llama_grammar_candidates * cache_target = nullptr;
+
+    // Only attempt to memoize candidate lists under 1280
+    // >75% of candidate lists are under 1280 and 50% are under 640b. Most 'problem' loops are under 24b
+    // However, candidate lists can be over 72k, so we need to limit our checks
+    // Doing an over-aggressive size cutoff first befor any other processing 'saves' easy cases
+    // extra processing but still rescues 'hard' cases from slow down or hangs.
+    // This leads to a speed up of both easy and hard cases.
+    const size_t hash_cutoff          = 80;
+    auto         candidates_hash_size = sizeof(candidates[0]) * candidates.size();
+    if (candidates_hash_size < hash_cutoff) {
+        // Only check stash hash first - these are usually ~24b, and almost always under 64b
+        if (auto & cache_hit = memo_cache.find(stack_hash); cache_hit != memo_cache.end()) {
+            auto & candidates_memos      = cache_hit->second;
+            auto   candidates_hash_start = reinterpret_cast<const char *>(candidates.data());
+            auto   candidates_hash       = std::hash<bytes>{}({ candidates_hash_start, candidates_hash_size });
+            if (auto & cache_hit2 = candidates_memos.find(candidates_hash); cache_hit2 != candidates_memos.end()) {
                 return cache_hit2->second;
-            }
-            else {
+            } else {
                 cache_target = &(candidates_memos[candidates_hash]);
             }
+        } else {
+            memo_cache[stack_hash];
         }
     }
-    else {
-        memo_cache[stack_hash];
-    }
-
 
     const llama_grammar_element * stack_pos = stack.back();
 
