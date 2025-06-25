@@ -899,7 +899,6 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     // Most 'problem' loops are under 24b. However, candidate lists can be over 72k,
     // so we need to limit our checks.
 
-
     // We'll only attempt to memoize candidate lists under 80b
     // Doing an over-aggressive size cutoff first befor any other processing 'saves' easy cases
     // extra processing but still rescues 'hard' cases from slow down or hangs.
@@ -908,11 +907,11 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     auto         candidates_hash_size = sizeof(candidates[0]) * candidates.size();
     if (candidates_hash_size < hash_cutoff) {
         // Only check stash hash first - these are usually ~24b, and almost always under 64b
-        if (auto & cache_hit = memo_cache.find(stack_hash); cache_hit != memo_cache.end()) {
+        if (auto cache_hit = memo_cache.find(stack_hash); cache_hit != memo_cache.end()) {
             auto & candidates_memos      = cache_hit->second;
             auto   candidates_hash_start = reinterpret_cast<const char *>(candidates.data());
             auto   candidates_hash       = std::hash<bytes>{}({ candidates_hash_start, candidates_hash_size });
-            if (auto & cache_hit2 = candidates_memos.find(candidates_hash); cache_hit2 != candidates_memos.end()) {
+            if (auto cache_hit2 = candidates_memos.find(candidates_hash); cache_hit2 != candidates_memos.end()) {
                 return cache_hit2->second;
             } else {
                 cache_target = &(candidates_memos[candidates_hash]);
