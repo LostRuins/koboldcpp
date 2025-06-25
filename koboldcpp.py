@@ -4470,7 +4470,7 @@ def show_gui():
     def makecheckbox(parent, text, variable=None, row=0, column=0, command=None, padx=8,tooltiptxt=""):
         temp = ctk.CTkCheckBox(parent, text=text,variable=variable, onvalue=1, offvalue=0)
         if command is not None and variable is not None:
-            variable.trace("w", command)
+            variable.trace_add("write", command)
         temp.grid(row=row,column=column, padx=padx, pady=1, stick="nw")
         if tooltiptxt!="":
             temp.bind("<Enter>", lambda event: show_tooltip(event, tooltiptxt))
@@ -4491,7 +4491,7 @@ def show_gui():
 
         def sliderUpdate(a,b,c):
             sliderLabel.configure(text = options[int(var.get())])
-        var.trace("w", sliderUpdate)
+        var.trace_add("write", sliderUpdate)
         slider = ctk.CTkSlider(parent, from_=from_, to=to, variable = var, width = width, height=height, border_width=5,number_of_steps=len(options) - 1)
         slider.grid(row=row+1,  column=0, padx = 8, stick="w", columnspan=2)
         slider.set(set)
@@ -4657,8 +4657,8 @@ def show_gui():
         ctk.CTkLabel(popup, text="Selected Quant:").pack(pady=(10, 0))
         searchbox2 = ctk.CTkComboBox(popup, values=[], width=340, variable=modelsearch2_var, state="readonly")
         searchbox2.pack(pady=5)
-        modelsearch1_var.trace("w", fetch_search_quants)
-        modelsearch2_var.trace("w", update_search_quant_file_size)
+        modelsearch1_var.trace_add("write", fetch_search_quants)
+        modelsearch2_var.trace_add("write", update_search_quant_file_size)
         ctk.CTkLabel(popup, text="", textvariable=fileinfotxt_var, text_color="#ffff00").pack(pady=(10, 0))
         ctk.CTkButton(popup, text="Confirm Selection", command=confirm_search_model_choice).pack(pady=5)
 
@@ -4792,8 +4792,8 @@ def show_gui():
             quick_gpuname_label.configure(text="(dGPUs only, tensor split sets ratio)")
             gpuname_label.configure(text="(dGPUs only, tensor split sets ratio)")
 
-    gpu_choice_var.trace("w", changed_gpu_choice_var)
-    gpulayers_var.trace("w", changed_gpulayers_estimate)
+    gpu_choice_var.trace_add("write", changed_gpu_choice_var)
+    gpulayers_var.trace_add("write", changed_gpulayers_estimate)
 
     def toggleswa(a,b,c):
         if swa_var.get()==1:
@@ -4949,7 +4949,7 @@ def show_gui():
 
     # load model
     makefileentry(quick_tab, "GGUF Text Model:", "Select GGUF or GGML Model File", model_var, 40, 280, onchoosefile=on_picked_model_file,tooltiptxt="Select a GGUF or GGML model file on disk to be loaded.")
-    model_var.trace("w", gui_changed_modelfile)
+    model_var.trace_add("write", gui_changed_modelfile)
     ctk.CTkButton(quick_tab, width=70, text = "HF Search", command = model_searcher ).grid(row=41,column=1, stick="sw", padx= 202, pady=2)
 
     # Hardware Tab
@@ -5003,7 +5003,7 @@ def show_gui():
     makelabelentry(hardware_tab, "BLAS threads:" , blas_threads_var, 14, 50,tooltip="How many threads to use during BLAS processing.\nIf left blank, uses same value as regular thread count.")
     # blas batch size
     makeslider(hardware_tab, "BLAS Batch Size:", blasbatchsize_text, blas_size_var, 0, len(blasbatchsize_values)-1, 16,width=200, set=6,tooltip="How many tokens to process at once per batch.\nLarger values use more memory.")
-    blas_size_var.trace("w", changed_gpulayers_estimate)
+    blas_size_var.trace_add("write", changed_gpulayers_estimate)
 
     # force version
     makelabelentry(hardware_tab, "Force Version:" , version_var, 100, 50,tooltip="If the autodetected version is wrong, you can change it here.\nLeave as 0 for default.")
@@ -5020,7 +5020,7 @@ def show_gui():
 
     # context size
     makeslider(tokens_tab, "Context Size:",contextsize_text, context_var, 0, len(contextsize_text)-1, 18, width=280, set=5,tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
-    context_var.trace("w", changed_gpulayers_estimate)
+    context_var.trace_add("write", changed_gpulayers_estimate)
     makelabelentry(tokens_tab, "Default Gen Amt:", defaultgenamt_var, row=20, padx=120, singleline=True, tooltip="How many tokens to generate by default, if not specified. Must be smaller than context size. Usually, your frontend GUI will override this.")
 
     customrope_scale_entry, customrope_scale_label = makelabelentry(tokens_tab, "RoPE Scale:", customrope_scale, row=23, padx=100, singleline=True, tooltip="For Linear RoPE scaling. RoPE frequency scale.")
@@ -5037,7 +5037,7 @@ def show_gui():
     noqkvlabel = makelabel(tokens_tab,"(Note: QuantKV works best with flash attention)",28,0,"Only K cache can be quantized, and performance can suffer.\nIn some cases, it might even use more VRAM when doing a full offload.",padx=160)
     noqkvlabel.configure(text_color="#ff5555")
     qkvslider,qkvlabel,qkvtitle = makeslider(tokens_tab, "Quantize KV Cache:", quantkv_text, quantkv_var, 0, 2, 30, set=0,tooltip="Enable quantization of KV cache.\nRequires FlashAttention for full effect, otherwise only K cache is quantized.")
-    quantkv_var.trace("w", toggleflashattn)
+    quantkv_var.trace_add("write", toggleflashattn)
     makecheckbox(tokens_tab, "No BOS Token", nobostoken_var, 43, tooltiptxt="Prevents BOS token from being added at the start of any prompt. Usually NOT recommended for most models.")
     makecheckbox(tokens_tab, "Enable Guidance", enableguidance_var, 43,padx=140, tooltiptxt="Enables the use of Classifier-Free-Guidance, which allows the use of negative prompts. Has performance and memory impact.")
     makelabelentry(tokens_tab, "MoE Experts:", moeexperts_var, row=55, padx=120, singleline=True, tooltip="Override number of MoE experts.")
@@ -5061,7 +5061,7 @@ def show_gui():
     makefileentry(model_tab, "Embeds Model:", "Select Embeddings Model File", embeddings_model_var, 15, width=130,singlerow=True, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select an embeddings GGUF model that can be used to generate embedding vectors.")
     makelabelentry(model_tab, "ECtx: ", embeddings_ctx_var, 15, 50,padx=335,singleline=True,tooltip="If set above 0, limits max context for embedding model to save memory.", labelpadx=302)
     makecheckbox(model_tab, "GPU", embeddings_gpu_var, 15, 0,padx=390,tooltiptxt="Uses the GPU for TTS.")
-    embeddings_gpu_var.trace("w", gui_changed_modelfile)
+    embeddings_gpu_var.trace_add("write", gui_changed_modelfile)
     makefileentry(model_tab, "Preload Story:", "Select Preloaded Story File", preloadstory_var, 17,width=280,singlerow=True,tooltiptxt="Select an optional KoboldAI JSON savefile \nto be served on launch to any client.")
     makefileentry(model_tab, "SaveData File:", "Select or Create New SaveData Database File", savedatafile_var, 19,width=280,filetypes=[("KoboldCpp SaveDB", "*.jsondb")],singlerow=True,dialog_type=1,tooltiptxt="Selecting a file will allow data to be loaded and saved persistently to this KoboldCpp server remotely. File is created if it does not exist.")
     makefileentry(model_tab, "ChatCompletions Adapter:", "Select ChatCompletions Adapter File", chatcompletionsadapter_var, 24, width=250, filetypes=[("JSON Adapter", "*.json")], tooltiptxt="Select an optional ChatCompletions Adapter JSON file to force custom instruct tags.")
@@ -5073,8 +5073,8 @@ def show_gui():
             chatcompletionsadapter_var.set(fnam)
     ctk.CTkButton(model_tab, 64, text="Pick Premade", command=pickpremadetemplate).grid(row=25, column=0, padx=322, pady=2, stick="nw")
 
-    mmproj_var.trace("w", gui_changed_modelfile)
-    draftmodel_var.trace("w", gui_changed_modelfile)
+    mmproj_var.trace_add("write", gui_changed_modelfile)
+    draftmodel_var.trace_add("write", gui_changed_modelfile)
     makecheckbox(model_tab, "Allow Launch Without Models", nomodel, 27, tooltiptxt="Allows running the WebUI with no model loaded.")
 
     # Network Tab
@@ -5132,9 +5132,9 @@ def show_gui():
     makelabelentry(images_tab, "Clamp Resolution Limit (Hard):", sd_clamped_var, 4, 50, padx=190,singleline=True,tooltip="Limit generation steps and output image size for shared use.\nSet to 0 to disable, otherwise value is clamped to the max size limit (min 512px).")
     makelabelentry(images_tab, "(Soft):", sd_clamped_soft_var, 4, 50, padx=290,singleline=True,tooltip="Square image size restriction, to protect the server against memory crashes.\nAllows width-height tradeoffs, eg. 640 allows 640x640 and 512x768\nLeave at 0 for the default value: 832 for SD1.5/SD2, 1024 otherwise.",labelpadx=250)
     makelabelentry(images_tab, "Image Threads:" , sd_threads_var, 8, 50,padx=290,singleline=True,tooltip="How many threads to use during image generation.\nIf left blank, uses same value as threads.")
-    sd_model_var.trace("w", gui_changed_modelfile)
+    sd_model_var.trace_add("write", gui_changed_modelfile)
     makecheckbox(images_tab, "Compress Weights (Saves Memory)", sd_quant_var, 10,tooltiptxt="Quantizes the SD model weights to save memory. May degrade quality.")
-    sd_quant_var.trace("w", changed_gpulayers_estimate)
+    sd_quant_var.trace_add("write", changed_gpulayers_estimate)
 
     makefileentry(images_tab, "Image LoRA (safetensors/gguf):", "Select SD lora file",sd_lora_var, 20, width=280, singlecol=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select a .safetensors or .gguf SD LoRA model file to be loaded. Should be unquantized!")
     makelabelentry(images_tab, "Image LoRA Multiplier:" , sd_loramult_var, 22, 50,padx=290,singleline=True,tooltip="What mutiplier value to apply the SD LoRA with.")
@@ -5161,15 +5161,15 @@ def show_gui():
     # audio tab
     audio_tab = tabcontent["Audio"]
     makefileentry(audio_tab, "Whisper Model (Speech-To-Text):", "Select Whisper .bin Model File", whisper_model_var, 1, width=280, filetypes=[("*.bin","*.bin")], tooltiptxt="Select a Whisper .bin model file on disk to be loaded for Voice Recognition.")
-    whisper_model_var.trace("w", gui_changed_modelfile)
+    whisper_model_var.trace_add("write", gui_changed_modelfile)
     makefileentry(audio_tab, "OuteTTS Model (Text-To-Speech Required):", "Select OuteTTS GGUF Model File", tts_model_var, 3, width=280, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a OuteTTS GGUF model file on disk to be loaded for Narration.")
-    tts_model_var.trace("w", gui_changed_modelfile)
+    tts_model_var.trace_add("write", gui_changed_modelfile)
     makelabelentry(audio_tab, "OuteTTS Threads:" , tts_threads_var, 5, 50,padx=290,singleline=True,tooltip="How many threads to use during TTS generation.\nIf left blank, uses same value as threads.")
     makelabelentry(audio_tab, "OuteTTS Max Tokens:" , ttsmaxlen_var, 7, 50,padx=290,singleline=True,tooltip="Max allowed audiotokens to generate per TTS request.")
     makecheckbox(audio_tab, "TTS Use GPU", ttsgpu_var, 9, 0,tooltiptxt="Uses the GPU for TTS.")
-    ttsgpu_var.trace("w", gui_changed_modelfile)
+    ttsgpu_var.trace_add("write", gui_changed_modelfile)
     makefileentry(audio_tab, "WavTokenizer Model (Text-To-Speech Required):", "Select WavTokenizer GGUF Model File", wavtokenizer_var, 11, width=280, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a WavTokenizer GGUF model file on disk to be loaded for Narration.")
-    wavtokenizer_var.trace("w", gui_changed_modelfile)
+    wavtokenizer_var.trace_add("write", gui_changed_modelfile)
 
     admin_tab = tabcontent["Admin"]
     def toggleadmin(a,b,c):
@@ -5221,10 +5221,10 @@ def show_gui():
             global zenity_permitted
             zenity_permitted = (nozenity_var.get()==0)
         makecheckbox(extra_tab, "Use Classic FilePicker", nozenity_var, 20, tooltiptxt="Use the classic TKinter file picker instead.")
-        nozenity_var.trace("w", togglezenity)
+        nozenity_var.trace_add("write", togglezenity)
 
     # refresh
-    runopts_var.trace('w', changerunmode)
+    runopts_var.trace_add("write", changerunmode)
     changerunmode(1,1,1)
     global runmode_untouched
     runmode_untouched = True
