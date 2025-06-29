@@ -183,10 +183,32 @@
     "adapter": {
         "system_start": "",
         "system_end": "\n\n",
+        "user_start": "User: ",
+        "user_end": "\n\n",
+        "assistant_start": "Assistant:",
+        "assistant_end": "\n\n"
+    }
+}, {
+    "search": ["USER: ", "ASSISTANT: "],
+    "name": "Vicuna",
+    "adapter": {
+        "system_start": "",
+        "system_end": "\n\n",
         "user_start": "USER: ",
         "user_end": "\n",
         "assistant_start": "ASSISTANT: ",
         "assistant_end": "</s>\n"
+    }
+}, {
+    "search": ["<|endofsystem|>", "<|endofuserprompt|>", "<|endofresponse|>"],
+    "name": "Dots LLM",
+    "adapter": {
+        "system_start": "<|system|>",
+        "system_end": "<|endofsystem|>",
+        "user_start": "<|userprompt|>",
+        "user_end": "<|endofuserprompt|>",
+        "assistant_start": "<|response|>",
+        "assistant_end": "<|endofresponse|>"
     }
 }
 ]
