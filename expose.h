@@ -161,6 +161,7 @@ struct sd_load_model_inputs
     const char * vulkan_info = nullptr;
     const int threads = 0;
     const int quant = 0;
+    const bool flash_attention = false;
     const bool taesd = false;
     const int tiled_vae_threshold = 0;
     const char * t5xxl_filename = nullptr;

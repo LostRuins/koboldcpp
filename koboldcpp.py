@@ -273,6 +273,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("vulkan_info", ctypes.c_char_p),
                 ("threads", ctypes.c_int),
                 ("quant", ctypes.c_int),
+                ("flash_attention", ctypes.c_bool),
                 ("taesd", ctypes.c_bool),
                 ("tiled_vae_threshold", ctypes.c_int),
                 ("t5xxl_filename", ctypes.c_char_p),
@@ -1624,6 +1625,7 @@ def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clipl
 
     inputs.threads = thds
     inputs.quant = quant
+    inputs.flash_attention = args.flashattention
     inputs.taesd = True if args.sdvaeauto else False
     inputs.tiled_vae_threshold = args.sdtiledvae
     inputs.vae_filename = vae_filename.encode("UTF-8")

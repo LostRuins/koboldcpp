@@ -179,6 +179,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("With PhotoMaker Model: %s\n",photomaker_filename.c_str());
         photomaker_enabled = true;
     }
+    if(inputs.flash_attention)
+    {
+        printf("Flash Attention is enabled\n");
+    }
     if(inputs.quant)
     {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
@@ -213,6 +217,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->model_path = inputs.model_filename;
     sd_params->wtype = (inputs.quant==0?SD_TYPE_COUNT:SD_TYPE_Q4_0);
     sd_params->n_threads = inputs.threads; //if -1 use physical cores
+    sd_params->diffusion_flash_attn = inputs.flash_attention;
     sd_params->input_path = ""; //unused
     sd_params->batch_count = 1;
     sd_params->vae_path = vaefilename;
