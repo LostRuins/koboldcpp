@@ -146,6 +146,10 @@ VKIsDGPU = [0,0,0,0]
 MaxMemory = [0]
 MaxFreeMemory = [0]
 
+server_process: subprocess.Popen | None = None
+is_proxy = "KOBOLDCPP_SERVER" not in os.environ
+current_model = None
+
 class logit_bias(ctypes.Structure):
     _fields_ = [("token_id", ctypes.c_int32),
                 ("bias", ctypes.c_float)]
@@ -1343,7 +1347,19 @@ def auto_set_backend_cli():
     if not found_new_backend:
         print(f"Auto Selected Default Backend (flag={cpusupport})\n")
 
+def get_models():
+    if args.admin and args.admindir and os.path.exists(args.admindir):
+        from pathlib import Path
+        return [path for path in Path(args.admindir).iterdir() if (path.suffix in [".kcpps", ".kcppt", ".gguf"] and path.is_file())]
+    else:
+        return []
+
 def load_model(model_filename):
+    if is_proxy:
+        current_model = model_filename
+        print("Deferred model loading.", current_model)
+        return True
+
     global args
     inputs = load_model_inputs()
     inputs.model_filename = model_filename.encode("UTF-8")
@@ -3260,9 +3276,8 @@ Change Mode<br>
 
         elif self.path.endswith(('/api/admin/list_options')): #used by admin to get info about a kcpp instance
             opts = []
-            if args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
-                dirpath = os.path.abspath(args.admindir)
-                opts = [f for f in sorted(os.listdir(dirpath)) if (f.endswith(".kcpps") or f.endswith(".kcppt") or f.endswith(".gguf")) and os.path.isfile(os.path.join(dirpath, f))]
+            if self.check_header_password(args.adminpassword):
+                opts = [path.name for path in get_models()]
                 opts.append("unload_model")
             response_body = (json.dumps(opts).encode())
 
@@ -3332,7 +3347,7 @@ Change Mode<br>
             response_body = (json.dumps({"logprobs":logprobsdict}).encode())
 
         elif self.path.endswith('/v1/models'):
-            response_body = (json.dumps({"object":"list","data":[{"id":friendlymodelname,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"}]}).encode())
+            response_body = (json.dumps({"object":"list","data":[{"id":path.stem,"object":"model","created":path.stat().st_mtime,"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"} for path in get_models()]}).encode())
 
         elif self.path.endswith('/sdapi/v1/sd-models'):
             if friendlysdmodelname=="inactive" or fullsdmodelpath=="":
@@ -3799,7 +3814,7 @@ Change Mode<br>
                     else:
                         dirpath = os.path.abspath(args.admindir)
                         targetfilepath = os.path.join(dirpath, targetfile)
-                        opts = [f for f in os.listdir(dirpath) if (f.lower().endswith(".kcpps") or f.lower().endswith(".kcppt") or f.lower().endswith(".gguf")) and os.path.isfile(os.path.join(dirpath, f))]
+                        opts = [str(path) for path in get_models()]
                         if targetfile in opts and os.path.exists(targetfilepath):
                             global_memory["restart_override_config_target"] = ""
                             if targetfile.lower().endswith(".gguf") and overrideconfig:
@@ -4019,6 +4034,70 @@ Change Mode<br>
 
                 if args.foreground:
                     bring_terminal_to_foreground()
+
+                # Proxy
+                if is_proxy:
+                    global server_process
+                    global current_model
+
+                    model = genparams["model"]
+                    if server_process is not None and current_model != model:
+                        import psutil
+                        parent = psutil.Process(server_process.pid)
+                        processes = parent.children(recursive=True) + [parent]
+                        for process in processes:
+                            process.terminate()
+                        for process in processes:
+                            process.wait()
+
+                        server_process = None
+
+                    if server_process is None:
+                        current_model = model
+
+                        model_path = next((str(path) for path in get_models() if path.stem == model), None)
+                        if model_path is None:
+                            self.send_response(404)
+                            self.end_headers(content_type='application/json')
+                            self.wfile.write(json.dumps({"detail": {
+                                    "error": "Model Not Found",
+                                    "msg": f"Model file {model} not found.",
+                                    "type": "bad_input",
+                                }}).encode())
+                            return
+
+                        server_process = subprocess.Popen([sys.executable] + sys.argv + ["--port", str(args.port + 1), "--model", model_path], env={
+                            "KOBOLDCPP_SERVER": "True"
+                        })
+
+                    # Poke the server until it's alive
+                    while True:
+                        try:
+                            with urllib.request.urlopen(urllib.request.Request(f"http://localhost:{args.port + 1}", method="HEAD"), timeout=1000) as response:
+                                if response.status == 200:
+                                    break
+
+                                time.sleep(1)
+                        except Exception:
+                            time.sleep(1)
+
+
+                    request = urllib.request.Request(f"http://localhost:{args.port + 1}" + self.path, data=body, headers=dict(self.headers), method="POST")
+                    with urllib.request.urlopen(request) as response:
+                        self.send_response_only(response.status)
+                        for keyword, value in response.headers.items():
+                            self.send_header(keyword, value)
+                        super(KcppServerRequestHandler, self).end_headers()
+
+                        while True:
+                            chunk = response.read()
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+
+                        self.wfile.flush()
+                        self.close_connection = True
+                    return
 
                 if api_format > 0: #text gen
                     # Check if streaming chat completions, if so, set stream mode to true
