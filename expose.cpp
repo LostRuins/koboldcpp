@@ -33,7 +33,6 @@ extern "C"
     {
         std::string model = inputs.model_filename;
         lora_filename = inputs.lora_filename;
-        lora_base = inputs.lora_base;
         mmproj_filename = inputs.mmproj_filename;
         draftmodel_filename = inputs.draftmodel_filename;
 
@@ -188,7 +187,7 @@ extern "C"
             }
             else if(file_format==FileFormat::GGUF_GENERIC)
             {
-                printf("\n---\nIdentified as GGUF model: (ver %d)\nAttempting to Load...\n---\n", file_format);
+                printf("\n---\nIdentified as GGUF model.\nAttempting to Load...\n---\n", file_format);
             }
             else if(file_format==FileFormat::GGML || file_format==FileFormat::GGHF || file_format==FileFormat::GGJT || file_format==FileFormat::GGJT_2 || file_format==FileFormat::GGJT_3)
             {
@@ -247,6 +246,15 @@ extern "C"
         return ttstype_generate(inputs);
     }
 
+    bool embeddings_load_model(const embeddings_load_model_inputs inputs)
+    {
+        return embeddingstype_load_model(inputs);
+    }
+    embeddings_generation_outputs embeddings_generate(const embeddings_generation_inputs inputs)
+    {
+        return embeddingstype_generate(inputs);
+    }
+
     const char * new_token(int idx) {
         if (generated_tokens.size() <= idx || idx < 0) return nullptr;
 
@@ -269,6 +277,9 @@ extern "C"
     }
     int get_last_token_count() {
         return last_token_count;
+    }
+    int get_last_input_count() {
+        return last_input_count;
     }
     int get_last_seed()
     {
@@ -364,5 +375,32 @@ extern "C"
         return output;
     }
 
-
+    size_t calc_new_state_kv() // returns how much memory a new savestate will cost
+    {
+        return gpttype_calc_new_state_kv();
+    }
+    size_t calc_new_state_tokencount()
+    {
+        return gpttype_calc_new_state_tokencount();
+    }
+    size_t calc_old_state_kv(int slot) //returns how much memory current savestate is using
+    {
+        return gpttype_calc_old_state_kv(slot);
+    }
+    size_t calc_old_state_tokencount(int slot)
+    {
+        return gpttype_calc_old_state_tokencount(slot);
+    }
+    size_t save_state_kv(int slot) //triggers the save kv state of current ctx to memory
+    {
+        return gpttype_save_state_kv(slot);
+    }
+    bool load_state_kv(int slot) //triggers the load kv state of current ctx to memory
+    {
+        return gpttype_load_state_kv(slot);
+    }
+    bool clear_state_kv()
+    {
+        return gpttype_clear_state_kv(true);
+    }
 }

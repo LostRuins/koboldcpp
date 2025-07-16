@@ -56,7 +56,7 @@ public:
         // x: [N, channels, h, w]
         auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-        x = ggml_upscale(ctx, x, 2);  // [N, channels, h*2, w*2]
+        x = ggml_upscale(ctx, x, 2, ggml_scale_mode::GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
         x = conv->forward(ctx, x);    // [N, out_channels, h*2, w*2]
         return x;
     }

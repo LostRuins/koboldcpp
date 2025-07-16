@@ -1,0 +1,52 @@
+name: Koboldcpp Mac
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Optional commit hash to build from'
+        required: false
+        default: ''
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+jobs:
+  osx:
+    runs-on: macos-latest
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
+
+      - name: Show Commit Used
+        run: |
+          echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
+
+      - name: Dependencies
+        id: depends
+        run: |
+          pip install customtkinter pyinstaller tk
+
+      - name: Build
+        id: make_build
+        run: |
+          make LLAMA_METAL=1 LLAMA_PORTABLE=1
+          chmod +x './create_ver_file.sh'
+          . create_ver_file.sh
+          pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all psutil --add-data './koboldcpp_default.so:.' --add-data './ggml-metal-merged.metal:.' --add-data './kcpp_adapters:./kcpp_adapters' --add-data './koboldcpp.py:.' --add-data './json_to_gbnf.py:.' --add-data './LICENSE.md:.' --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' --add-data './klite.embd:.' --add-data './kcpp_docs.embd:.' --add-data './kcpp_sdui.embd:.' --add-data './taesd.embd:.' --add-data './taesd_xl.embd:.' --add-data './taesd_f.embd:.' --add-data './taesd_3.embd:.' --add-data './rwkv_vocab.embd:.' --add-data './rwkv_world_vocab.embd:.' --version-file './version.txt' --clean --console koboldcpp.py -n "koboldcpp-mac-arm64"
+
+      - name: Test
+        id: test
+        run: |
+          wget https://huggingface.co/concedo/koboldcpp/resolve/main/baby_llama.gguf
+          dist/koboldcpp-mac-arm64 --model baby_llama.gguf --gpulayers 99 --benchmark --prompt 'Hi, my name is'
+
+      - name: Save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcpp_mac_binary
+          path: dist/
+

@@ -329,21 +329,21 @@ const std::vector<std::vector<float>> GITS_NOISE_1_50 = {
 };
 
 const std::vector<const std::vector<std::vector<float>>*> GITS_NOISE = {
-    { &GITS_NOISE_0_80 },
-    { &GITS_NOISE_0_85 },
-    { &GITS_NOISE_0_90 },
-    { &GITS_NOISE_0_95 },
-    { &GITS_NOISE_1_00 },
-    { &GITS_NOISE_1_05 },
-    { &GITS_NOISE_1_10 },
-    { &GITS_NOISE_1_15 },
-    { &GITS_NOISE_1_20 },
-    { &GITS_NOISE_1_25 },
-    { &GITS_NOISE_1_30 },
-    { &GITS_NOISE_1_35 },
-    { &GITS_NOISE_1_40 },
-    { &GITS_NOISE_1_45 },
-    { &GITS_NOISE_1_50 }
+    &GITS_NOISE_0_80,
+    &GITS_NOISE_0_85,
+    &GITS_NOISE_0_90,
+    &GITS_NOISE_0_95,
+    &GITS_NOISE_1_00,
+    &GITS_NOISE_1_05,
+    &GITS_NOISE_1_10,
+    &GITS_NOISE_1_15,
+    &GITS_NOISE_1_20,
+    &GITS_NOISE_1_25,
+    &GITS_NOISE_1_30,
+    &GITS_NOISE_1_35,
+    &GITS_NOISE_1_40,
+    &GITS_NOISE_1_45,
+    &GITS_NOISE_1_50
 };
 
 #endif // GITS_NOISE_INL

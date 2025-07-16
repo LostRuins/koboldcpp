@@ -126,6 +126,17 @@ class SPIRV_TOOLS_EXPORT ValidatorOptions {
     spvValidatorOptionsSetAllowLocalSizeId(options_, val);
   }
 
+  // Allow Offset (in addition to ConstOffset) for texture
+  // operations. Was added for VK_KHR_maintenance8
+  void SetAllowOffsetTextureOperand(bool val) {
+    spvValidatorOptionsSetAllowOffsetTextureOperand(options_, val);
+  }
+
+  // Allow base operands of some bit operations to be non-32-bit wide.
+  void SetAllowVulkan32BitBitwise(bool val) {
+    spvValidatorOptionsSetAllowVulkan32BitBitwise(options_, val);
+  }
+
   // Records whether or not the validator should relax the rules on pointer
   // usage in logical addressing mode.
   //

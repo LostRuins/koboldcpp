@@ -474,6 +474,7 @@ static int last_generation_settings_speaker_seed;
 static int last_generation_settings_audio_seed;
 static std::vector<llama_token> last_speaker_codes; //will store cached speaker
 static int last_speaker_seed = -999;
+static std::string last_speaker_data = "";
 static int cts_offset = 151672;
 static int space_id = 151670;
 static int code_terminate_id = 151670;
@@ -532,7 +533,6 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     tts_model_params.n_gpu_layers = inputs.gpulayers; //offload if possible
     tts_model_params.split_mode = llama_split_mode::LLAMA_SPLIT_MODE_LAYER;
     tts_ctx_params.n_ctx = 8192;
-    tts_ctx_params.logits_all = false;
     tts_ctx_params.offload_kqv = true;
     tts_ctx_params.n_batch = 8192;
     tts_ctx_params.n_ubatch = 512;
@@ -541,7 +541,7 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     tts_ctx_params.flash_attn = inputs.flash_attention;
 
     llama_model * ttcmodel = llama_model_load_from_file(modelfile_ttc.c_str(), tts_model_params);
-    ttc_ctx = llama_new_context_with_model(ttcmodel, tts_ctx_params);
+    ttc_ctx = llama_init_from_model(ttcmodel, tts_ctx_params);
 
     if (ttc_ctx == nullptr) {
         printf("\nTTS Load Error: Failed to initialize ttc context!\n");
@@ -551,7 +551,8 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     llama_model * ctsmodel = llama_model_load_from_file(modelfile_cts.c_str(), tts_model_params);
 
     tts_ctx_params.embeddings = true; //this requires embeddings instead
-    cts_ctx = llama_new_context_with_model(ctsmodel, tts_ctx_params);
+    tts_ctx_params.n_ubatch = tts_ctx_params.n_batch;
+    cts_ctx = llama_init_from_model(ctsmodel, tts_ctx_params);
 
     if (cts_ctx == nullptr) {
         printf("\nTTS Load Error: Failed to initialize cts context!\n");
@@ -559,7 +560,7 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     }
 
     std::vector<int> tmp = {1, 2, 3, 4};
-    llama_kv_cache_clear(ttc_ctx);
+    llama_memory_clear(llama_get_memory(ttc_ctx),true);
     auto er = llama_decode(ttc_ctx, llama_batch_get_one(tmp.data(), tmp.size()));
     if(er!=0)
     {
@@ -613,11 +614,13 @@ tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
     const llama_vocab * ctsvocab = llama_model_get_vocab(model_cts);
     const int ttc_n_vocab = llama_vocab_n_tokens(ttcvocab);
     std::string prompt = inputs.prompt;
-    const std::string sampletext = process_text("but that is what it is",ttsver);
+    std::string custom_speaker_text = inputs.custom_speaker_text;
+    std::string custom_speaker_data = inputs.custom_speaker_data;
+    const std::string sampletext = (custom_speaker_text=="")?process_text("but that is what it is",ttsver):process_text(custom_speaker_text,ttsver);
 
     // process prompt and generate voice codes
-    llama_kv_cache_clear(ttc_ctx);
-    llama_kv_cache_clear(cts_ctx);
+    llama_memory_clear(llama_get_memory(ttc_ctx),true);
+    llama_memory_clear(llama_get_memory(cts_ctx),true);
     std::vector<llama_token> prompt_inp;
     prompt_init(prompt_inp, ttcvocab);
 
@@ -681,12 +684,20 @@ tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
     if(speaker_seed>0) //first pass
     {
         //if we have a cached speaker, reuse it
-        if(last_speaker_seed==speaker_seed && !last_speaker_codes.empty())
+        if(last_speaker_seed==speaker_seed && !last_speaker_codes.empty() && custom_speaker_data==last_speaker_data)
         {
             //able to proceed, do nothing
             if(!tts_is_quiet && ttsdebugmode==1)
             {
                 printf("\nReuse speaker ID=%d (%d tokens)...", last_speaker_seed, last_speaker_codes.size());
+            }
+        } else if (custom_speaker_data!="" && custom_speaker_text!="") { //custom speaker json
+            std::string speaker = format_audiotokens(custom_speaker_data,ttsver);
+            last_speaker_codes = common_tokenize(ttcvocab, speaker, false, true);
+            last_speaker_seed = speaker_seed;
+            if(!tts_is_quiet && ttsdebugmode==1)
+            {
+                printf("\nCustom Speaker JSON (%d tokens)...", last_speaker_seed, last_speaker_codes.size());
             }
         } else if (speaker_seed>=1 && speaker_seed<=5){ //special seeds
             std::string speaker = "";
@@ -699,7 +710,7 @@ tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
                 speaker = format_audiotokens("but<|t_0.45|><|code_start|><|920|><|1824|><|1138|><|1387|><|1096|><|1712|><|1642|><|810|><|1685|><|620|><|954|><|584|><|23|><|1467|><|509|><|659|><|1598|><|465|><|567|><|1440|><|3|><|476|><|740|><|288|><|419|><|1440|><|1477|><|254|><|25|><|811|><|882|><|476|><|246|><|246|><|code_end|>\nthat<|t_0.17|><|code_start|><|419|><|1690|><|208|><|1044|><|300|><|1100|><|375|><|1222|><|371|><|1045|><|637|><|1719|><|314|><|code_end|>\nis<|t_0.12|><|code_start|><|319|><|1131|><|794|><|1103|><|1296|><|1615|><|1587|><|233|><|863|><|code_end|>\nwhat<|t_0.16|><|code_start|><|793|><|902|><|391|><|946|><|437|><|95|><|1133|><|110|><|58|><|853|><|1283|><|449|><|code_end|>\nit<|t_0.12|><|code_start|><|774|><|239|><|974|><|213|><|1095|><|1612|><|101|><|1569|><|882|><|code_end|>\nis<|t_0.32|><|code_start|><|1131|><|529|><|1144|><|774|><|1114|><|483|><|693|><|648|><|1112|><|1470|><|1112|><|319|><|1294|><|1417|><|1660|><|729|><|1789|><|1413|><|1728|><|554|><|273|><|736|><|640|><|1549|><|code_end|>",ttsver);
                 break;
                 case 3:
-                speaker = format_audiotokens("but<|t_0.21|><|code_start|><|348|><|1776|><|1620|><|1262|><|118|><|288|><|258|><|1407|><|1331|><|1102|><|664|><|1300|><|1647|><|1536|><|71|><|23|><|code_end|>        \nthat<|t_0.19|><|code_start|><|3|><|1740|><|1253|><|1122|><|549|><|715|><|718|><|657|><|1136|><|1247|><|517|><|1333|><|815|><|634|><|code_end|>\nis<|t_0.12|><|code_start|><|1330|><|839|><|753|><|1826|><|1602|><|50|><|1441|><|889|><|948|><|code_end|>\nwhat<|t_0.16|><|code_start|><|899|><|869|><|250|><|894|><|876|><|1471|><|1308|><|1436|><|1328|><|1700|><|1425|><|1330|><|code_end|>\nit<|t_0.12|><|code_start|><|1027|><|1162|><|1344|><|1170|><|86|><|1562|><|1575|><|176|><|1186|><|code_end|>\nis<|t_0.25|><|code_start|><|361|><|1533|><|1697|><|903|><|333|><|1232|><|1337|><|1611|><|1196|><|0|><|1328|><|1245|><|1718|><|1635|><|1616|><|1599|><|1363|><|962|><|328|><|code_end|>",ttsver);
+                speaker = format_audiotokens("but<|t_0.21|><|code_start|><|348|><|1776|><|1620|><|1262|><|118|><|288|><|258|><|1407|><|1331|><|1102|><|664|><|1300|><|1647|><|1536|><|71|><|23|><|code_end|>\nthat<|t_0.19|><|code_start|><|3|><|1740|><|1253|><|1122|><|549|><|715|><|718|><|657|><|1136|><|1247|><|517|><|1333|><|815|><|634|><|code_end|>\nis<|t_0.12|><|code_start|><|1330|><|839|><|753|><|1826|><|1602|><|50|><|1441|><|889|><|948|><|code_end|>\nwhat<|t_0.16|><|code_start|><|899|><|869|><|250|><|894|><|876|><|1471|><|1308|><|1436|><|1328|><|1700|><|1425|><|1330|><|code_end|>\nit<|t_0.12|><|code_start|><|1027|><|1162|><|1344|><|1170|><|86|><|1562|><|1575|><|176|><|1186|><|code_end|>\nis<|t_0.25|><|code_start|><|361|><|1533|><|1697|><|903|><|333|><|1232|><|1337|><|1611|><|1196|><|0|><|1328|><|1245|><|1718|><|1635|><|1616|><|1599|><|1363|><|962|><|328|><|code_end|>",ttsver);
                 break;
                 case 4:
                 speaker = format_audiotokens("but<|t_0.20|><|code_start|><|686|><|1288|><|1251|><|1428|><|481|><|702|><|1812|><|829|><|81|><|756|><|76|><|104|><|952|><|1723|><|1632|><|code_end|>\nthat<|t_0.20|><|code_start|><|1006|><|1067|><|1614|><|1810|><|887|><|43|><|1192|><|106|><|400|><|43|><|730|><|660|><|186|><|87|><|467|><|code_end|>\nis<|t_0.27|><|code_start|><|648|><|1625|><|9|><|685|><|243|><|106|><|996|><|990|><|228|><|809|><|1009|><|2|><|806|><|1325|><|1332|><|1766|><|202|><|725|><|416|><|822|><|code_end|>\nwhat<|t_0.36|><|code_start|><|1287|><|328|><|1241|><|1661|><|1651|><|1708|><|1740|><|1685|><|1715|><|1787|><|1381|><|197|><|1769|><|525|><|1000|><|234|><|364|><|115|><|212|><|632|><|1153|><|228|><|73|><|1002|><|1800|><|1277|><|1117|><|code_end|>\nit<|t_0.40|><|code_start|><|1830|><|1199|><|1282|><|1163|><|1195|><|1752|><|1092|><|1481|><|1003|><|513|><|1639|><|1805|><|1485|><|1645|><|195|><|1464|><|181|><|195|><|123|><|87|><|433|><|878|><|170|><|1265|><|375|><|1708|><|1739|><|1519|><|1185|><|1099|><|code_end|>\nis<|t_0.76|><|code_start|><|1748|><|1422|><|276|><|1337|><|1322|><|1519|><|1779|><|1067|><|1724|><|891|><|1205|><|1419|><|1144|><|1667|><|591|><|1003|><|1543|><|566|><|1390|><|426|><|1824|><|182|><|1138|><|52|><|129|><|1056|><|155|><|1056|><|1298|><|919|><|155|><|125|><|500|><|1022|><|571|><|315|><|400|><|100|><|617|><|295|><|757|><|324|><|592|><|1298|><|1310|><|57|><|876|><|1175|><|1353|><|1770|><|1649|><|1828|><|1637|><|362|><|1744|><|884|><|1027|><|code_end|>",ttsver);
@@ -807,10 +818,11 @@ tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
             }
         }
         guide_tokens.clear();
-        llama_kv_cache_clear(ttc_ctx);
+        llama_memory_clear(llama_get_memory(ttc_ctx),true);
         prompt_init(prompt_inp, ttcvocab);
         next_token_uses_guide_token = true;
     }
+    last_speaker_data = custom_speaker_data;
 
     //second pass: add the speaker before the actual prompt
     guide_tokens = prepare_guide_tokens(ttcvocab,prompt_clean,ttsver);
@@ -937,7 +949,7 @@ tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
     kcpp_embd_batch codebatch = kcpp_embd_batch(codes,0,false,true);
     printf("\nRunning Vocoder (%d AudioTokens)", codes.size());
 
-    if (llama_decode(cts_ctx, codebatch.batch) != 0) {
+    if (llama_encode(cts_ctx, codebatch.batch) != 0) {
         printf("\nError: TTS vocoder generation failed!\n");
         output.data = "";
         output.status = 0;
@@ -964,7 +976,7 @@ tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
                 audio[i] = 0.0f;
             }
             //add some silence at the end
-            for (int i = 0; i < cutout; ++i) {
+            for (int i = 0; i < cutout*2; ++i) {
                 audio.push_back(0.0f);
             }
         }
@@ -987,7 +999,7 @@ tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
 
         last_generation_settings_audio_seed = inputs.audio_seed;
         last_generation_settings_speaker_seed = inputs.speaker_seed;
-        last_generation_settings_prompt = std::string(inputs.prompt);
+        last_generation_settings_prompt = std::string(prompt);
         total_tts_gens += 1;
 
         return output;

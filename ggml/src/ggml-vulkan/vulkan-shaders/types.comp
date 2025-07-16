@@ -1,7 +1,7 @@
-
 #if !defined(GGML_TYPES_COMP)
 #define GGML_TYPES_COMP
 
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
@@ -33,6 +33,19 @@
 #endif
 #endif
 
+#if defined(DATA_A_BF16)
+#define QUANT_K 1
+#define QUANT_R 1
+
+#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
+#define A_TYPE uint16_t
+#elif LOAD_VEC_A == 4
+#define A_TYPE u16vec4
+#elif LOAD_VEC_A == 8
+#error unsupported
+#endif
+#endif
+
 #define QUANT_K_Q4_0 32
 #define QUANT_R_Q4_0 2
 
@@ -50,6 +63,7 @@ struct block_q4_0_packed16
 #if defined(DATA_A_Q4_0)
 #define QUANT_K QUANT_K_Q4_0
 #define QUANT_R QUANT_R_Q4_0
+#define QUANT_AUXF 1
 #define A_TYPE block_q4_0
 #define A_TYPE_PACKED16 block_q4_0_packed16
 #endif
@@ -71,11 +85,19 @@ struct block_q4_1_packed16
     uint16_t qs[16/2];
 };
 
+struct block_q4_1_packed32
+{
+    f16vec2 dm;
+    uint32_t qs[16/4];
+};
+
 #if defined(DATA_A_Q4_1)
 #define QUANT_K QUANT_K_Q4_1
 #define QUANT_R QUANT_R_Q4_1
+#define QUANT_AUXF 2
 #define A_TYPE block_q4_1
 #define A_TYPE_PACKED16 block_q4_1_packed16
+#define A_TYPE_PACKED32 block_q4_1_packed32
 #endif
 
 #define QUANT_K_Q5_0 32
@@ -98,6 +120,7 @@ struct block_q5_0_packed16
 #if defined(DATA_A_Q5_0)
 #define QUANT_K QUANT_K_Q5_0
 #define QUANT_R QUANT_R_Q5_0
+#define QUANT_AUXF 1
 #define A_TYPE block_q5_0
 #define A_TYPE_PACKED16 block_q5_0_packed16
 #endif
@@ -121,11 +144,20 @@ struct block_q5_1_packed16
     uint16_t qs[16/2];
 };
 
+struct block_q5_1_packed32
+{
+    f16vec2 dm;
+    uint qh;
+    uint32_t qs[16/4];
+};
+
 #if defined(DATA_A_Q5_1)
 #define QUANT_K QUANT_K_Q5_1
 #define QUANT_R QUANT_R_Q5_1
+#define QUANT_AUXF 2
 #define A_TYPE block_q5_1
 #define A_TYPE_PACKED16 block_q5_1_packed16
+#define A_TYPE_PACKED32 block_q5_1_packed32
 #endif
 
 #define QUANT_K_Q8_0 32
@@ -139,15 +171,41 @@ struct block_q8_0
 struct block_q8_0_packed16
 {
     float16_t d;
-    uint16_t qs[32/2];
+    int16_t qs[32/2];
+};
+struct block_q8_0_packed32
+{
+    float16_t d;
+    int32_t qs[32/4];
 };
 
 #if defined(DATA_A_Q8_0)
 #define QUANT_K QUANT_K_Q8_0
 #define QUANT_R QUANT_R_Q8_0
+#define QUANT_AUXF 1
 #define A_TYPE block_q8_0
 #define A_TYPE_PACKED16 block_q8_0_packed16
+#define A_TYPE_PACKED32 block_q8_0_packed32
 #endif
+
+#define QUANT_K_Q8_1 32
+#define QUANT_R_Q8_1 1
+
+struct block_q8_1
+{
+    f16vec2 ds;
+    int8_t qs[32];
+};
+struct block_q8_1_packed16
+{
+    f16vec2 ds;
+    int16_t qs[16];
+};
+struct block_q8_1_packed32
+{
+    f16vec2 ds;
+    int32_t qs[8];
+};
 
 // K-quants
 #define QUANT_K_Q2_K 256
@@ -310,6 +368,12 @@ struct block_iq1_m {
     uint8_t  qs[QUANT_K_IQ1_M/8];
     uint8_t  qh[QUANT_K_IQ1_M/16];
     uint16_t scales[QUANT_K_IQ1_M/64];
+};
+
+struct block_iq1_m_packed64 {
+    uint64_t  qs[QUANT_K_IQ1_M/8/8];
+    uint64_t  qh[QUANT_K_IQ1_M/16/8];
+    uint64_t scales;
 };
 
 #if defined(DATA_A_IQ1_S)
@@ -1291,5 +1355,19 @@ void init_iq_shmem(uvec3 wgsize)
     barrier();
 }
 #endif
+
+// returns the bfloat value in the low 16b.
+// See ggml_compute_fp32_to_bf16
+uint32_t fp32_to_bf16(float f)
+{
+    uint32_t u = floatBitsToUint(f);
+    u = (u + (0x7fff + ((u >> 16) & 1))) >> 16;
+    return u;
+}
+
+float bf16_to_fp32(uint32_t u)
+{
+    return uintBitsToFloat(u << 16);
+}
 
 #endif // !defined(GGML_TYPES_COMP)

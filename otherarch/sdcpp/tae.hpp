@@ -149,7 +149,7 @@ public:
                 if (i == 1) {
                     h = ggml_relu_inplace(ctx, h);
                 } else {
-                    h = ggml_upscale(ctx, h, 2);
+                    h = ggml_upscale(ctx, h, 2, ggml_scale_mode::GGML_SCALE_MODE_NEAREST);
                 }
                 continue;
             }
@@ -201,7 +201,7 @@ struct TinyAutoEncoder : public GGMLRunner {
                     bool decoder_only = true,
                     SDVersion version = VERSION_SD1)
         : decode_only(decoder_only),
-          taesd(decode_only, version),
+          taesd(decoder_only, version),
           GGMLRunner(backend) {
         taesd.init(params_ctx, tensor_types, prefix);
     }

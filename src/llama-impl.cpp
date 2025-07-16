@@ -34,9 +34,9 @@ void llama_log_set(ggml_log_callback log_callback, void * user_data) {
 static void llama_log_internal_v(ggml_log_level level, const char * format, va_list args) {
     va_list args_copy;
     va_copy(args_copy, args);
-    char buffer[128];
-    int len = vsnprintf(buffer, 128, format, args);
-    if (len < 128) {
+    char buffer[512];
+    int len = vsnprintf(buffer, 512, format, args);
+    if (len < 512) {
         g_logger_state.log_callback(level, buffer, g_logger_state.log_callback_user_data);
     } else {
         char * buffer2 = new char[len + 1];

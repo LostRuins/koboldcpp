@@ -543,3 +543,20 @@ kcpp_embd_batch::kcpp_embd_batch(std::vector<llama_token> & tokens, int32_t npas
         }
         batch.logits[n_tokens - 1] = true;
 }
+
+std::vector<std::string> split_string(const std::string& input, const std::string& separator) {
+    std::vector<std::string> result;
+    size_t start = 0;
+    size_t end = input.find(separator);
+
+    while (end != std::string::npos) {
+        result.push_back(input.substr(start, end - start));
+        start = end + separator.length();
+        end = input.find(separator, start);
+    }
+
+    // Add the remaining part after the last separator
+    result.push_back(input.substr(start));
+
+    return result;
+}

@@ -130,8 +130,8 @@ public:
         body_feat = conv_body->forward(ctx, body_feat);
         feat      = ggml_add(ctx, feat, body_feat);
         // upsample
-        feat     = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx, feat, 2)));
-        feat     = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx, feat, 2)));
+        feat     = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx, feat, 2, ggml_scale_mode::GGML_SCALE_MODE_NEAREST)));
+        feat     = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx, feat, 2, ggml_scale_mode::GGML_SCALE_MODE_NEAREST)));
         auto out = conv_last->forward(ctx, lrelu(ctx, conv_hr->forward(ctx, feat)));
         return out;
     }

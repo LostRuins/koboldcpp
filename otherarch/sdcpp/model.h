@@ -12,23 +12,28 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 #include "zip.h"
+#include "gguf.h"
 
 #define SD_MAX_DIMS 5
 
 enum SDVersion {
     VERSION_SD1,
+    VERSION_SD1_INPAINT,
     VERSION_SD2,
+    VERSION_SD2_INPAINT,
     VERSION_SDXL,
+    VERSION_SDXL_INPAINT,
     VERSION_SVD,
     VERSION_SD3,
     VERSION_FLUX,
+    VERSION_FLUX_FILL,
     VERSION_COUNT,
 };
 
 static inline bool sd_version_is_flux(SDVersion version) {
-    if (version == VERSION_FLUX) {
+    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL) {
         return true;
     }
     return false;
@@ -36,6 +41,34 @@ static inline bool sd_version_is_flux(SDVersion version) {
 
 static inline bool sd_version_is_sd3(SDVersion version) {
     if (version == VERSION_SD3) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_sd1(SDVersion version) {
+    if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_sd2(SDVersion version) {
+    if (version == VERSION_SD2 || version == VERSION_SD2_INPAINT) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_sdxl(SDVersion version) {
+    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_inpaint(SDVersion version) {
+    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL) {
         return true;
     }
     return false;

@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #include <array>
 #include <functional>
 #include <mutex>

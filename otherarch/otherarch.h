@@ -56,6 +56,7 @@ struct kcpp_params {
     bool use_smartcontext            = false;
     bool use_contextshift            = false;
     bool use_fastforward             = false;
+    bool swa_full                    = true;
 };
 
 // default hparams (GPT-J 6B)
@@ -514,6 +515,15 @@ struct speculative_draft_result
     std::vector<float *> actual_logits;
     bool draft_success = false;
     int drafted_amount = 0;
+};
+
+struct savestate_data
+{
+    size_t current_savestate_size = 0;
+    std::vector<uint8_t> current_savestate_buffer;
+    size_t current_draft_savestate_size = 0;
+    std::vector<uint8_t> current_draft_savestate_buffer;
+    std::vector<gpt_vocab::id> savestate_context_tokens; //for context clones
 };
 
 const float default_norm_eps = 1e-5f;

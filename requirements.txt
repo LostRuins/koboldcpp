@@ -5,3 +5,4 @@ gguf>=0.1.0
 customtkinter>=5.1.0
 protobuf>=4.21.0
 psutil>=5.9.4
+darkdetect>=0.8.0

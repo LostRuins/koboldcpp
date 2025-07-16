@@ -1,8 +1,8 @@
 // *** THIS FILE IS GENERATED - DO NOT EDIT ***
 // See format_utils_generator.py for modifications
-// Copyright 2023 The Khronos Group Inc.
-// Copyright 2023 Valve Corporation
-// Copyright 2023 LunarG, Inc.
+// Copyright 2023-2025 The Khronos Group Inc.
+// Copyright 2023-2025 Valve Corporation
+// Copyright 2023-2025 LunarG, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -249,6 +249,8 @@ inline bool vkuFormatIsSinglePlane_422(VkFormat format);
 inline uint32_t vkuFormatPlaneCount(VkFormat format);
 
 // Returns whether a VkFormat is multiplane
+// Note - Formats like VK_FORMAT_G8B8G8R8_422_UNORM are NOT multi-planar, they require a
+//        VkSamplerYcbcrConversion and you should use vkuFormatRequiresYcbcrConversion instead
 inline bool vkuFormatIsMultiplane(VkFormat format) { return ((vkuFormatPlaneCount(format)) > 1u); }
 
 // Returns a VkFormat that is compatible with a given plane of a multiplane format
@@ -259,6 +261,10 @@ inline VkFormat vkuFindMultiplaneCompatibleFormat(VkFormat mp_fmt, VkImageAspect
 // Will return {1, 1} if given a plane aspect that doesn't exist for the VkFormat
 inline VkExtent2D vkuFindMultiplaneExtentDivisors(VkFormat mp_fmt, VkImageAspectFlagBits plane_aspect);
 
+// From table in spec vkspec.html#formats-compatible-zs-color
+// Introduced in VK_KHR_maintenance8 to allow copying between color and depth/stencil formats
+inline bool vkuFormatIsDepthStencilWithColorSizeCompatible(VkFormat color_format, VkFormat ds_format, VkImageAspectFlags aspect_mask);
+
 // Returns the count of components in a VkFormat
 inline uint32_t vkuFormatComponentCount(VkFormat format);
 
@@ -268,15 +274,23 @@ inline VkExtent3D vkuFormatTexelBlockExtent(VkFormat format);
 // Returns the Compatibility Class of a VkFormat as defined by the spec
 inline enum VKU_FORMAT_COMPATIBILITY_CLASS vkuFormatCompatibilityClass(VkFormat format);
 
-// Return true if a VkFormat is 'normal', with one texel per format element
-inline bool vkuFormatElementIsTexel(VkFormat format);
+// Returns the number of texels inside a texel block
+// Will always be 1 when not using compressed block formats
+inline uint32_t vkuFormatTexelsPerBlock(VkFormat format);
+
+// Returns the number of bytes in a single Texel Block.
+// When dealing with a depth/stencil format, need to consider using vkuFormatStencilSize or vkuFormatDepthSize.
+// When dealing with mulit-planar formats, need to consider using vkuGetPlaneIndex.
+inline uint32_t vkuFormatTexelBlockSize(VkFormat format);
 
 // Return size, in bytes, of one element of a VkFormat
 // Format must not be a depth, stencil, or multiplane format
+// Deprecated - Use vkuFormatTexelBlockSize - there is no "element" size in the spec
 inline uint32_t vkuFormatElementSize(VkFormat format);
 
 // Return the size in bytes of one texel of a VkFormat
 // For compressed or multi-plane, this may be a fractional number
+// Deprecated - Use vkuFormatTexelBlockSize - there is no "element" size in the spec
 inline uint32_t vkuFormatElementSizeWithAspect(VkFormat format, VkImageAspectFlagBits aspectMask);
 
 // Return the size in bytes of one texel of a VkFormat
@@ -349,8 +363,8 @@ struct VKU_FORMAT_COMPONENT_INFO {
 // Generic information for all formats
 struct VKU_FORMAT_INFO {
     enum VKU_FORMAT_COMPATIBILITY_CLASS compatibility;
-    uint32_t block_size;  // bytes
-    uint32_t texel_per_block;
+    uint32_t texel_block_size;  // bytes
+    uint32_t texels_per_block;
     VkExtent3D block_extent;
     uint32_t component_count;
     struct VKU_FORMAT_COMPONENT_INFO components[VKU_FORMAT_MAX_COMPONENTS];
@@ -381,10 +395,10 @@ inline const struct VKU_FORMAT_INFO vkuGetFormatInfo(VkFormat format) {
         case VK_FORMAT_A1R5G5B5_UNORM_PACK16: {
             struct VKU_FORMAT_INFO out = {VKU_FORMAT_COMPATIBILITY_CLASS_16BIT, 2, 1, {1, 1, 1}, 4, {{VKU_FORMAT_COMPONENT_TYPE_A, 1}, {VKU_FORMAT_COMPONENT_TYPE_R, 5}, {VKU_FORMAT_COMPONENT_TYPE_G, 5}, {VKU_FORMAT_COMPONENT_TYPE_B, 5}}};
             return out; }
-        case VK_FORMAT_A1B5G5R5_UNORM_PACK16_KHR: {
+        case VK_FORMAT_A1B5G5R5_UNORM_PACK16: {
             struct VKU_FORMAT_INFO out = {VKU_FORMAT_COMPATIBILITY_CLASS_16BIT, 2, 1, {1, 1, 1}, 4, {{VKU_FORMAT_COMPONENT_TYPE_A, 1}, {VKU_FORMAT_COMPONENT_TYPE_B, 5}, {VKU_FORMAT_COMPONENT_TYPE_G, 5}, {VKU_FORMAT_COMPONENT_TYPE_R, 5}}};
             return out; }
-        case VK_FORMAT_A8_UNORM_KHR: {
+        case VK_FORMAT_A8_UNORM: {
             struct VKU_FORMAT_INFO out = {VKU_FORMAT_COMPATIBILITY_CLASS_8BIT_ALPHA, 1, 1, {1, 1, 1}, 1, {{VKU_FORMAT_COMPONENT_TYPE_A, 8}}};
             return out; }
         case VK_FORMAT_R8_UNORM: {
@@ -1426,8 +1440,8 @@ bool vkuFormatIsUNORM(VkFormat format) {
         case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
         case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
         case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
-        case VK_FORMAT_A1B5G5R5_UNORM_PACK16_KHR:
-        case VK_FORMAT_A8_UNORM_KHR:
+        case VK_FORMAT_A1B5G5R5_UNORM_PACK16:
+        case VK_FORMAT_A8_UNORM:
         case VK_FORMAT_R8_UNORM:
         case VK_FORMAT_R8G8_UNORM:
         case VK_FORMAT_R8G8B8_UNORM:
@@ -1811,7 +1825,7 @@ bool vkuFormatIsPacked(VkFormat format) {
         case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
         case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
         case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
-        case VK_FORMAT_A1B5G5R5_UNORM_PACK16_KHR:
+        case VK_FORMAT_A1B5G5R5_UNORM_PACK16:
         case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
         case VK_FORMAT_A8B8G8R8_SNORM_PACK32:
         case VK_FORMAT_A8B8G8R8_USCALED_PACK32:
@@ -2031,24 +2045,49 @@ inline VkExtent2D vkuFindMultiplaneExtentDivisors(VkFormat mp_fmt, VkImageAspect
     return divisors;
 }
 
+// TODO - This should be generated, but will need updating the spec XML and table
+// Some few case don't have an aspect mask, so might need to check both the Depth and Stencil possiblity
+inline bool vkuFormatIsDepthStencilWithColorSizeCompatible(VkFormat color_format, VkFormat ds_format, VkImageAspectFlags aspect_mask) {
+    bool valid = false;
+
+    if (aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT) {
+        if (ds_format == VK_FORMAT_S8_UINT || ds_format == VK_FORMAT_D16_UNORM_S8_UINT ||
+            ds_format == VK_FORMAT_D24_UNORM_S8_UINT || ds_format == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+            valid |= (color_format == VK_FORMAT_R8_UINT || color_format == VK_FORMAT_R8_SINT ||
+                      color_format == VK_FORMAT_R8_UNORM || color_format == VK_FORMAT_R8_SNORM);
+        }
+    }
+
+    if (aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) {
+        if (ds_format == VK_FORMAT_D32_SFLOAT || ds_format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+            ds_format == VK_FORMAT_X8_D24_UNORM_PACK32 || ds_format == VK_FORMAT_D24_UNORM_S8_UINT) {
+            valid |= (color_format == VK_FORMAT_R32_SFLOAT || color_format == VK_FORMAT_R32_SINT || color_format == VK_FORMAT_R32_UINT);
+        }
+        if (ds_format == VK_FORMAT_D16_UNORM || ds_format == VK_FORMAT_D16_UNORM_S8_UINT) {
+            valid |= (color_format == VK_FORMAT_R16_SFLOAT || color_format == VK_FORMAT_R16_UNORM ||
+                      color_format == VK_FORMAT_R16_SNORM  || color_format == VK_FORMAT_R16_UINT || color_format == VK_FORMAT_R16_SINT);
+        }
+    }
+
+    return valid;
+}
+
 inline uint32_t vkuFormatComponentCount(VkFormat format) { return vkuGetFormatInfo(format).component_count; }
 
 inline VkExtent3D vkuFormatTexelBlockExtent(VkFormat format) { return vkuGetFormatInfo(format).block_extent; }
 
 inline enum VKU_FORMAT_COMPATIBILITY_CLASS vkuFormatCompatibilityClass(VkFormat format) { return vkuGetFormatInfo(format).compatibility; }
 
-inline bool vkuFormatElementIsTexel(VkFormat format) {
-    if (vkuFormatIsPacked(format) || vkuFormatIsCompressed(format) || vkuFormatIsSinglePlane_422(format) || vkuFormatIsMultiplane(format)) {
-        return false;
-    } else {
-        return true;
-    }
-}
+inline uint32_t vkuFormatTexelsPerBlock(VkFormat format) { return vkuGetFormatInfo(format).texels_per_block; }
 
+inline uint32_t vkuFormatTexelBlockSize(VkFormat format) { return vkuGetFormatInfo(format).texel_block_size; }
+
+// Deprecated - Use vkuFormatTexelBlockSize
 inline uint32_t vkuFormatElementSize(VkFormat format) {
     return vkuFormatElementSizeWithAspect(format, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
+// Deprecated - Use vkuFormatTexelBlockSize
 inline uint32_t vkuFormatElementSizeWithAspect(VkFormat format, VkImageAspectFlagBits aspectMask) {
     // Depth/Stencil aspect have separate helper functions
     if (aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) {
@@ -2061,7 +2100,7 @@ inline uint32_t vkuFormatElementSizeWithAspect(VkFormat format, VkImageAspectFla
         format = vkuFindMultiplaneCompatibleFormat(format, aspectMask);
     }
 
-    return vkuGetFormatInfo(format).block_size;
+    return vkuGetFormatInfo(format).texel_block_size;
 }
 
 inline double vkuFormatTexelSize(VkFormat format) {
@@ -2080,7 +2119,7 @@ inline double vkuFormatTexelSizeWithAspect(VkFormat format, VkImageAspectFlagBit
 
 inline bool vkuFormatIs8bit(VkFormat format) {
     switch (format) {
-        case VK_FORMAT_A8_UNORM_KHR:
+        case VK_FORMAT_A8_UNORM:
         case VK_FORMAT_R8_UNORM:
         case VK_FORMAT_R8_SNORM:
         case VK_FORMAT_R8_USCALED:

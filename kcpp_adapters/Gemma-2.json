@@ -1,5 +1,5 @@
 {
-  "system_start": "<start_of_turn>system\n",
+  "system_start": "<start_of_turn>user\n",
   "system_end": "<end_of_turn>\n",
   "user_start": "<start_of_turn>user\n",
   "user_end": "<end_of_turn>\n",

@@ -13,6 +13,7 @@ struct DiffusionModel {
                          struct ggml_tensor* c_concat,
                          struct ggml_tensor* y,
                          struct ggml_tensor* guidance,
+                         std::vector<ggml_tensor*> ref_latents = {},
                          int num_video_frames                      = -1,
                          std::vector<struct ggml_tensor*> controls = {},
                          float control_strength                    = 0.f,
@@ -68,6 +69,7 @@ struct UNetModel : public DiffusionModel {
                  struct ggml_tensor* c_concat,
                  struct ggml_tensor* y,
                  struct ggml_tensor* guidance,
+                 std::vector<ggml_tensor*> ref_latents = {},
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
@@ -118,6 +120,7 @@ struct MMDiTModel : public DiffusionModel {
                  struct ggml_tensor* c_concat,
                  struct ggml_tensor* y,
                  struct ggml_tensor* guidance,
+                 std::vector<ggml_tensor*> ref_latents = {},
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
@@ -133,8 +136,10 @@ struct FluxModel : public DiffusionModel {
 
     FluxModel(ggml_backend_t backend,
               std::map<std::string, enum ggml_type>& tensor_types,
-              bool flash_attn = false)
-        : flux(backend, tensor_types, "model.diffusion_model", flash_attn) {
+              SDVersion version = VERSION_FLUX,
+              bool flash_attn   = false,
+              bool use_mask     = false)
+        : flux(backend, tensor_types, "model.diffusion_model", version, flash_attn, use_mask) {
     }
 
     void alloc_params_buffer() {
@@ -168,13 +173,14 @@ struct FluxModel : public DiffusionModel {
                  struct ggml_tensor* c_concat,
                  struct ggml_tensor* y,
                  struct ggml_tensor* guidance,
+                 std::vector<ggml_tensor*> ref_latents = {},
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
                  struct ggml_tensor** output               = NULL,
                  struct ggml_context* output_ctx           = NULL,
                  std::vector<int> skip_layers              = std::vector<int>()) {
-        return flux.compute(n_threads, x, timesteps, context, y, guidance, output, output_ctx, skip_layers);
+        return flux.compute(n_threads, x, timesteps, context, c_concat, y, guidance, ref_latents, output, output_ctx, skip_layers);
     }
 };
 

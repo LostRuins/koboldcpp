@@ -118,8 +118,9 @@ typedef enum {
     GLSLANG_TARGET_VULKAN_1_1 = (1 << 22) | (1 << 12),
     GLSLANG_TARGET_VULKAN_1_2 = (1 << 22) | (2 << 12),
     GLSLANG_TARGET_VULKAN_1_3 = (1 << 22) | (3 << 12),
+    GLSLANG_TARGET_VULKAN_1_4 = (1 << 22) | (4 << 12),
     GLSLANG_TARGET_OPENGL_450 = 450,
-    LAST_ELEMENT_MARKER(GLSLANG_TARGET_CLIENT_VERSION_COUNT = 5),
+    LAST_ELEMENT_MARKER(GLSLANG_TARGET_CLIENT_VERSION_COUNT = 6),
 } glslang_target_client_version_t;
 
 /* SH_TARGET_LanguageVersion counterpart */
@@ -176,6 +177,7 @@ typedef enum {
     GLSLANG_MSG_ENHANCED                    = (1 << 15),
     GLSLANG_MSG_ABSOLUTE_PATH               = (1 << 16),
     GLSLANG_MSG_DISPLAY_ERROR_COLUMN        = (1 << 17),
+    GLSLANG_MSG_LINK_TIME_OPTIMIZATION_BIT  = (1 << 18),
     LAST_ELEMENT_MARKER(GLSLANG_MSG_COUNT),
 } glslang_messages_t;
 

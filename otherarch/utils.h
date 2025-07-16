@@ -65,6 +65,8 @@ std::vector<float> resample_wav(const std::vector<float>& input, uint32_t input_
 
 int32_t kcpp_quick_sample(float * logits, const int n_logits, const std::vector<int32_t> & last_n_tokens, float rep_pen, float top_p, int top_k, float temp, std::mt19937 & rng);
 
+std::vector<std::string> split_string(const std::string& input, const std::string& separator);
+
 struct kcpp_embd_batch { //duplcated from llava_embd_batch
     std::vector<int32_t> pos;
     std::vector<int32_t> n_seq_id;

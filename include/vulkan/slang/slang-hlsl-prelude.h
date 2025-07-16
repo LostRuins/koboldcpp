@@ -3,6 +3,6 @@
 #endif
 
 #ifndef __DXC_VERSION_MAJOR
-    // warning X3557: loop doesn't seem to do anything, forcing loop to unroll
-    #pragma warning(disable: 3557)
+// warning X3557: loop doesn't seem to do anything, forcing loop to unroll
+#pragma warning(disable : 3557)
 #endif

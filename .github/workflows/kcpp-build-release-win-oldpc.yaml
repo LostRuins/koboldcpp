@@ -1,0 +1,130 @@
+name: Koboldcpp Windows OldPC
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Optional commit hash to build from'
+        required: false
+        default: ''
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
+
+      - name: Show Commit Used
+        run: |
+          echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
+
+      - name: Get Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8.10
+
+      - name: Install python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install customtkinter==5.2.0 pyinstaller==5.11.0 psutil==5.9.5
+
+      - name: Display full Visual Studio info Before
+        run: |
+          & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format json
+        shell: pwsh
+
+      - name: Visual Studio 2019 Reinstall
+        shell: cmd
+        run: |
+          @echo off
+          echo Preparing setup
+          curl -fLO https://download.visualstudio.microsoft.com/download/pr/1fbe074b-8ae1-4e9b-8e83-d1ce4200c9d1/61098e228df7ba3a6a8b4e920a415ad8878d386de6dd0f23f194fe1a55db189a/vs_Enterprise.exe
+          vs_Enterprise.exe --quiet --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.CLI.Support --add Microsoft.VisualStudio.Component.Windows10SDK.19041 --add Microsoft.VisualStudio.Workload.UniversalBuildTools --add Microsoft.VisualStudio.Component.VC.CMake.Project
+          echo Waiting for VS2019 setup
+          set "ProcessName=setup.exe"
+          :CheckProcess
+          tasklist /FI "IMAGENAME eq %ProcessName%" | find /I "%ProcessName%" >nul
+          if %errorlevel%==0 (
+              ping 127.0.0.1 /n 5 >nul
+              goto CheckProcess
+          )
+          echo VS2019 Setup completed
+          exit /b 0
+
+      - name: Disable Visual Studio 2022 by Renaming
+        run: |
+          Rename-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" "Enterprise_DISABLED"
+        shell: pwsh
+
+      - name: Display full Visual Studio info After
+        run: |
+          & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format json
+        shell: pwsh
+
+      - name: Download and install win64devkit
+        run: |
+          curl -L https://github.com/skeeto/w64devkit/releases/download/v1.22.0/w64devkit-1.22.0.zip --output w64devkit.zip
+          Expand-Archive w64devkit.zip -DestinationPath .
+
+      - name: Add w64devkit to PATH
+        run: |
+          echo "$(Get-Location)\w64devkit\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
+      - name: Print System Environment Variables
+        id: printvars
+        run: |
+          echo "Number of processors: ${env:NUMBER_OF_PROCESSORS}"
+          echo "Processor Architecture: ${env:PROCESSOR_ARCHITECTURE}"
+          echo "Computer Name: ${env:COMPUTERNAME}"
+          wmic cpu get name
+          wmic os get TotalVisibleMemorySize, FreePhysicalMemory
+
+      - name: Build Non-CUDA
+        id: make_build
+        run: |
+          make LLAMA_CLBLAST=1 LLAMA_VULKAN=1 LLAMA_PORTABLE=1 -j ${env:NUMBER_OF_PROCESSORS} LLAMA_NOAVX2=1
+
+      - uses: Jimver/cuda-toolkit@v0.2.15
+        id: cuda-toolkit
+        with:
+          cuda: '11.4.4'
+          use-github-cache: false
+
+      - name: Build CUDA
+        id: cmake_build
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DLLAMA_CUBLAS=ON -DLLAMA_AVX2=OFF -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
+          cmake --build . --config Release -j 2
+          cd ..
+
+      # note: The libraries that come from the github cuda directory seem to be larger, so they are not recommended
+      - name: Download CuBLAS Libraries
+        run: |
+          curl -L https://github.com/LostRuins/koboldcpp/releases/download/cuda11_cublas_libraries/cublas64_11.dll --output cublas64_11.dll
+          curl -L https://github.com/LostRuins/koboldcpp/releases/download/cuda11_cublas_libraries/cublasLt64_11.dll --output cublasLt64_11.dll
+          ls
+      # - name: Copy CuBLAS Libraries
+      #   run: |
+      #     copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.4\bin\cublasLt64_11.dll" .
+      #     copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.4\bin\cublas64_11.dll" .
+      #     ls
+
+      - name: Package PyInstallers
+        id: make_pyinstaller
+        run: |
+          ./make_pyinstaller_cuda_oldpc.bat
+
+      - name: Save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcpp_windows_pyinstallers
+          path: dist/

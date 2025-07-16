@@ -61,6 +61,7 @@ enum GGUFArch
     ARCH_RWKV = 6,
     ARCH_QWEN2VL = 7,
     ARCH_GEMMA3 = 8,
+    ARCH_GLM4 = 9,
 };
 
 struct FileFormatExtraMeta
@@ -70,6 +71,7 @@ struct FileFormatExtraMeta
     GGUFArch model_architecture = GGUFArch::ARCH_DEFAULT;
     int n_expert_count = 0;
     std::string model_architecture_str = "";
+    bool explicitly_no_bos = false; //only true if key exists AND is false
 };
 
 struct TopPicksData
@@ -110,6 +112,9 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
 bool ttstype_load_model(const tts_load_model_inputs inputs);
 tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs);
 
+bool embeddingstype_load_model(const embeddings_load_model_inputs inputs);
+embeddings_generation_outputs embeddingstype_generate(const embeddings_generation_inputs inputs);
+
 void timer_start();
 double timer_check();
 void print_tok_vec(std::vector<int> &embd);
@@ -123,3 +128,11 @@ FileFormat check_file_format(const std::string & fname, FileFormatExtraMeta * fi
 void ContextFastForward(std::vector<int> &current_context_tokens, std::vector<int> &embd_inp,
  int &n_past, std::vector<int> &last_n_tokens, const int nctx, std::vector<int> &smartcontext,
  const bool useSmartContext, const bool requireFullSubset);
+
+size_t gpttype_calc_new_state_kv();
+size_t gpttype_calc_new_state_tokencount();
+size_t gpttype_calc_old_state_kv(int slot);
+size_t gpttype_calc_old_state_tokencount(int slot);
+size_t gpttype_save_state_kv(int slot);
+bool gpttype_load_state_kv(int slot);
+bool gpttype_clear_state_kv(bool shrink);

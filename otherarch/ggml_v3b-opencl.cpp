@@ -1816,6 +1816,7 @@ static void ggml_cl_mul_mat_q_f32(const ggml_tensor * src0, const ggml_tensor * 
     if(to_fp32_cl==nullptr)
     {
         printf("\nOpenCL: Unsupported Tensor Type Detected: %d\n",type);
+        printf("Note that CLBlast only works on classic quants and K-quants!\n");
     }
     GGML_ASSERT(to_fp32_cl != nullptr);
 

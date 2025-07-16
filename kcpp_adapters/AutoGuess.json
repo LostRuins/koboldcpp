@@ -14,12 +14,12 @@
     "search": ["<|im_start|>assistant", "<|im_end|>", "You are provided with function signatures within <tools>"],
     "name": "ChatML (Qwen 2.5 based).",
     "adapter": {
-        "system_start": "<|im_start|>system\n\n",
-        "system_end": "<|im_end|>\n\n",
-        "user_start": "<|im_start|>user\n\n",
-        "user_end": "<|im_end|>\n\n",
-        "assistant_start": "<|im_start|>assistant\n\n",
-        "assistant_end": "<|im_end|>\n\n",
+        "system_start": "<|im_start|>system\n",
+        "system_end": "<|im_end|>\n",
+        "user_start": "<|im_start|>user\n",
+        "user_end": "<|im_end|>\n",
+        "assistant_start": "<|im_start|>assistant\n",
+        "assistant_end": "<|im_end|>\n",
         "tools_start": "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n\n<tools>\n",
         "tools_end": "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n"
     }
@@ -27,17 +27,19 @@
     "search": ["<|im_start|>assistant", "<|im_end|>"],
     "name": "ChatML (Generic).",
     "adapter": {
-        "system_start": "<|im_start|>system\n\n",
-        "system_end": "<|im_end|>\n\n",
-        "user_start": "<|im_start|>user\n\n",
-        "user_end": "<|im_end|>\n\n",
-        "assistant_start": "<|im_start|>assistant\n\n",
-        "assistant_end": "<|im_end|>\n\n"
+        "system_start": "<|im_start|>system\n",
+        "system_end": "<|im_end|>\n",
+        "user_start": "<|im_start|>user\n",
+        "user_end": "<|im_end|>\n",
+        "assistant_start": "<|im_start|>assistant\n",
+        "assistant_end": "<|im_end|>\n"
     }
 }, {
     "search": ["System role not supported", "<start_of_turn>"],
     "name": "Google Gemma 2.",
     "adapter": {
+        "system_start": "<start_of_turn>user\n",
+        "system_end": "<end_of_turn>\n",
         "user_start": "<start_of_turn>user\n",
         "user_end": "<end_of_turn>\n",
         "assistant_start": "<start_of_turn>model\n",
@@ -47,31 +49,55 @@
     "search": ["<start_of_image>", "<start_of_turn>", "<end_of_turn>"],
     "name": "Google Gemma 3.",
     "adapter": {
+        "system_start": "<start_of_turn>user\n",
+        "system_end": "<end_of_turn>\n",
         "user_start": "<start_of_turn>user\n",
         "user_end": "<end_of_turn>\n",
         "assistant_start": "<start_of_turn>model\n",
         "assistant_end": "<end_of_turn>\n"
     }
 }, {
-    "search": ["<|start_header_id|>system"],
+    "search": ["<image_soft_token>", "<start_of_turn>model", "<end_of_turn>"],
+    "name": "Google Gemma 3n.",
+    "adapter": {
+        "system_start": "<start_of_turn>user\n",
+        "system_end": "<end_of_turn>\n",
+        "user_start": "<start_of_turn>user\n",
+        "user_end": "<end_of_turn>\n",
+        "assistant_start": "<start_of_turn>model\n",
+        "assistant_end": "<end_of_turn>\n"
+    }
+},{
+    "search": ["<|start_header_id|>assistant<|end_header_id|>"],
     "name": "Llama 3.x.",
     "adapter": {
         "system_start": "<|start_header_id|>system<|end_header_id|>\n\n",
-        "system_end": "<|eot_id|>\n\n",
+        "system_end": "<|eot_id|>",
         "user_start": "<|start_header_id|>user<|end_header_id|>\n\n",
-        "user_end": "<|eot_id|>\n\n",
+        "user_end": "<|eot_id|>",
         "assistant_start": "<|start_header_id|>assistant<|end_header_id|>\n\n",
-        "assistant_end": "<|eot_id|>\n\n"
+        "assistant_end": "<|eot_id|>"
+    }
+}, {
+    "search": ["<|header_start|>assistant<|header_end|>"],
+    "name": "Llama 4",
+    "adapter": {
+        "system_start": "<|header_start|>system<|header_end|>\n\n",
+        "system_end": "<|eot|>",
+        "user_start": "<|header_start|>user<|header_end|>\n\n",
+        "user_end": "<|eot|>",
+        "assistant_start": "<|header_start|>assistant<|header_end|>\n\n",
+        "assistant_end": "<|eot|>"
     }
 }, {
     "search": ["[/INST]", "[SYSTEM_PROMPT]"],
     "name": "Mistral V7 (with system prompt)",
     "adapter": {
-        "system_start": "[SYSTEM_PROMPT] ",
+        "system_start": "[SYSTEM_PROMPT]",
         "system_end": "[/SYSTEM_PROMPT]",
-        "user_start": "[INST] ",
-        "user_end": "[/INST]",
-        "assistant_start": " ",
+        "user_start": "[INST]",
+        "user_end": "",
+        "assistant_start": "[/INST]",
         "assistant_end": "</s>"
     }
 }, {
@@ -79,10 +105,10 @@
     "name": "Mistral V3",
     "adapter": {
         "system_start": "[INST] ",
-        "system_end": "[/INST] ",
+        "system_end": "[/INST]",
         "user_start": "[INST] ",
-        "user_end": "[/INST] ",
-        "assistant_start": "",
+        "user_end": "",
+        "assistant_start": "[/INST]",
         "assistant_end": "</s>"
     }
 }, {
@@ -92,9 +118,20 @@
         "system_start": "[INST]",
         "system_end": "[/INST]\n",
         "user_start": "[INST]",
-        "user_end": "[/INST]\n",
-        "assistant_start": "",
+        "user_end": "",
+        "assistant_start": "[/INST]\n",
         "assistant_end": "</s>"
+    }
+}, {
+    "search": ["[gMASK]<sop>"],
+    "name": "GLM-4",
+    "adapter": {
+        "system_start": "<|system|>\n",
+        "system_end": "",
+        "user_start": "<|user|>\n",
+        "user_end": "",
+        "assistant_start": "<|assistant|>\n",
+        "assistant_end": ""
     }
 }, {
     "search": ["<|system|>", "<|user|>"],
@@ -139,6 +176,17 @@
         "user_end": "",
         "assistant_start": "<｜Assistant｜>",
         "assistant_end": "<｜end▁of▁sentence｜>"
+    }
+}, {
+    "search": ["rwkv-world"],
+    "name": "RWKV World",
+    "adapter": {
+        "system_start": "",
+        "system_end": "\n\n",
+        "user_start": "USER: ",
+        "user_end": "\n",
+        "assistant_start": "ASSISTANT: ",
+        "assistant_end": "</s>\n"
     }
 }
 ]

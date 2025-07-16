@@ -39,12 +39,12 @@ struct load_model_inputs
     const char * executable_path = nullptr;
     const char * model_filename = nullptr;
     const char * lora_filename = nullptr;
-    const char * lora_base = nullptr;
     const char * draftmodel_filename = nullptr;
     const int draft_amount = 8;
     const int draft_gpulayers = 999;
     const float draft_gpusplit[tensor_split_max] = {};
     const char * mmproj_filename = nullptr;
+    const bool mmproj_cpu = false;
     const int visionmaxres = 2048;
     const bool use_mmap = false;
     const bool use_mlock = false;
@@ -52,7 +52,7 @@ struct load_model_inputs
     const bool use_contextshift = false;
     const bool use_fastforward = false;
     const int clblast_info = 0;
-    const int cublas_info = 0;
+    const int kcpp_main_gpu = 0;
     const char * vulkan_info = nullptr;
     const int blasbatchsize = 512;
     const int forceversion = 0;
@@ -61,10 +61,17 @@ struct load_model_inputs
     const float rope_freq_base = 10000.0f;
     const int moe_experts = -1;
     const bool no_bos_token = false;
+    const bool load_guidance = false;
+    const char * override_kv = nullptr;
+    const char * override_tensors = nullptr;
     const bool flash_attention = false;
     const float tensor_split[tensor_split_max] = {};
     const int quant_k = 0;
     const int quant_v = 0;
+    const bool check_slowness = false;
+    const bool highpriority = false;
+    const bool swa_support = false;
+    const float lora_multiplier = 1.0f;
     const bool quiet = false;
     const int debugmode = 0;
 };
@@ -73,6 +80,8 @@ struct generation_inputs
     const int seed = 0;
     const char * prompt = nullptr;
     const char * memory = nullptr;
+    const char * negative_prompt = nullptr;
+    const float guidance_scale = 1;
     const char * images[images_max] = {};
     const int max_context_length = 0;
     const int max_length = 0;
@@ -148,18 +157,21 @@ struct sd_load_model_inputs
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
     const int clblast_info = 0;
-    const int cublas_info = 0;
+    const int kcpp_main_gpu = 0;
     const char * vulkan_info = nullptr;
     const int threads = 0;
     const int quant = 0;
     const bool taesd = false;
-    const bool notile = false;
+    const int tiled_vae_threshold = 0;
     const char * t5xxl_filename = nullptr;
     const char * clipl_filename = nullptr;
     const char * clipg_filename = nullptr;
     const char * vae_filename = nullptr;
     const char * lora_filename = nullptr;
     const float lora_multiplier = 1.0f;
+    const char * photomaker_filename = nullptr;
+    const int img_hard_limit = 0;
+    const int img_soft_limit = 0;
     const bool quiet = false;
     const int debugmode = 0;
 };
@@ -168,6 +180,10 @@ struct sd_generation_inputs
     const char * prompt = nullptr;
     const char * negative_prompt = nullptr;
     const char * init_images = "";
+    const char * mask = "";
+    const int extra_images_len = 0;
+    const char ** extra_images = nullptr;
+    const bool flip_mask = false;
     const float denoising_strength = 0.0f;
     const float cfg_scale = 0.0f;
     const int sample_steps = 0;
@@ -188,7 +204,7 @@ struct whisper_load_model_inputs
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
     const int clblast_info = 0;
-    const int cublas_info = 0;
+    const int kcpp_main_gpu = 0;
     const char * vulkan_info = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
@@ -213,7 +229,7 @@ struct tts_load_model_inputs
     const char * cts_model_filename = nullptr;
     const char * executable_path = nullptr;
     const int clblast_info = 0;
-    const int cublas_info = 0;
+    const int kcpp_main_gpu = 0;
     const char * vulkan_info = nullptr;
     const int gpulayers = 0;
     const bool flash_attention = false;
@@ -226,6 +242,8 @@ struct tts_generation_inputs
     const char * prompt = nullptr;
     const int speaker_seed = 0;
     const int audio_seed = 0;
+    const char * custom_speaker_text = "";
+    const char * custom_speaker_data = "";
 };
 struct tts_generation_outputs
 {
@@ -233,9 +251,35 @@ struct tts_generation_outputs
     const char * data = "";
 };
 
+struct embeddings_load_model_inputs
+{
+    const int threads = 4;
+    const char * model_filename = nullptr;
+    const char * executable_path = nullptr;
+    const int clblast_info = 0;
+    const int kcpp_main_gpu = 0;
+    const char * vulkan_info = nullptr;
+    const int gpulayers = 0;
+    const bool flash_attention = false;
+    const bool use_mmap = false;
+    const int embeddingsmaxctx = 0;
+    const bool quiet = false;
+    const int debugmode = 0;
+};
+struct embeddings_generation_inputs
+{
+    const char * prompt = nullptr;
+    const bool truncate = true;
+};
+struct embeddings_generation_outputs
+{
+    int status = -1;
+    int count = 0;
+    const char * data = "";
+};
+
 extern std::string executable_path;
 extern std::string lora_filename;
-extern std::string lora_base;
 extern std::string mmproj_filename;
 extern std::string draftmodel_filename;
 extern std::vector<std::string> generated_tokens;
@@ -243,6 +287,7 @@ extern bool generation_finished;
 extern float last_eval_time;
 extern float last_process_time;
 extern int last_token_count;
+extern int last_input_count;
 extern int last_seed;
 extern int total_gens;
 extern int total_img_gens;

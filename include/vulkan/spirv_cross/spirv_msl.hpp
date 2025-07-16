@@ -536,6 +536,10 @@ public:
 		// if the fragment does not modify the depth value.
 		bool input_attachment_is_ds_attachment = false;
 
+		// If BuiltInPosition is not written, automatically disable rasterization.
+		// The result can be queried with get_is_rasterization_disabled.
+		bool auto_disable_rasterization = false;
+
 		bool is_ios() const
 		{
 			return platform == iOS;
@@ -756,6 +760,11 @@ public:
 	void set_combined_sampler_suffix(const char *suffix);
 	const char *get_combined_sampler_suffix() const;
 
+	// Information about specialization constants that are translated into MSL macros
+	// instead of using function constant
+	// These must only be called after a successful call to CompilerMSL::compile().
+	bool specialization_constant_is_macro(uint32_t constant_id) const;
+
 protected:
 	// An enum of SPIR-V functions that are implemented in additional
 	// source code that is added to the shader if necessary.
@@ -838,7 +847,9 @@ protected:
 		SPVFuncImplPaddedStd140,
 		SPVFuncImplReduceAdd,
 		SPVFuncImplImageFence,
-		SPVFuncImplTextureCast
+		SPVFuncImplTextureCast,
+		SPVFuncImplMulExtended,
+		SPVFuncImplSetMeshOutputsEXT,
 	};
 
 	// If the underlying resource has been used for comparison then duplicate loads of that resource must be too
@@ -867,6 +878,10 @@ protected:
 	std::string type_to_glsl(const SPIRType &type, uint32_t id, bool member);
 	std::string type_to_glsl(const SPIRType &type, uint32_t id = 0) override;
 	void emit_block_hints(const SPIRBlock &block) override;
+	void emit_mesh_entry_point();
+	void emit_mesh_outputs();
+	void emit_mesh_tasks(SPIRBlock &block) override;
+	void emit_workgroup_initialization(const SPIRVariable &var) override;
 
 	// Allow Metal to use the array<T> template to make arrays a value type
 	std::string type_to_array_glsl(const SPIRType &type, uint32_t variable_id) override;
@@ -918,6 +933,7 @@ protected:
 
 	bool is_tesc_shader() const;
 	bool is_tese_shader() const;
+	bool is_mesh_shader() const;
 
 	void preprocess_op_codes();
 	void localize_global_variables();
@@ -932,6 +948,7 @@ protected:
 	                                            std::unordered_set<uint32_t> &processed_func_ids);
 	uint32_t add_interface_block(spv::StorageClass storage, bool patch = false);
 	uint32_t add_interface_block_pointer(uint32_t ib_var_id, spv::StorageClass storage);
+	uint32_t add_meshlet_block(bool per_primitive);
 
 	struct InterfaceBlockMeta
 	{
@@ -1103,12 +1120,17 @@ protected:
 	uint32_t builtin_stage_input_size_id = 0;
 	uint32_t builtin_local_invocation_index_id = 0;
 	uint32_t builtin_workgroup_size_id = 0;
+	uint32_t builtin_mesh_primitive_indices_id = 0;
+	uint32_t builtin_mesh_sizes_id = 0;
+	uint32_t builtin_task_grid_id = 0;
 	uint32_t builtin_frag_depth_id = 0;
 	uint32_t swizzle_buffer_id = 0;
 	uint32_t buffer_size_buffer_id = 0;
 	uint32_t view_mask_buffer_id = 0;
 	uint32_t dynamic_offsets_buffer_id = 0;
 	uint32_t uint_type_id = 0;
+	uint32_t shared_uint_type_id = 0;
+	uint32_t meshlet_type_id = 0;
 	uint32_t argument_buffer_padding_buffer_type_id = 0;
 	uint32_t argument_buffer_padding_image_type_id = 0;
 	uint32_t argument_buffer_padding_sampler_type_id = 0;
@@ -1121,6 +1143,7 @@ protected:
 	void emit_store_statement(uint32_t lhs_expression, uint32_t rhs_expression) override;
 
 	void analyze_sampled_image_usage();
+	void analyze_workgroup_variables();
 
 	bool access_chain_needs_stage_io_builtin_translation(uint32_t base) override;
 	bool prepare_access_chain_for_scalar_access(std::string &expr, const SPIRType &type, spv::StorageClass storage,
@@ -1155,6 +1178,7 @@ protected:
 	std::set<std::string> pragma_lines;
 	std::set<std::string> typedef_lines;
 	SmallVector<uint32_t> vars_needing_early_declaration;
+	std::unordered_set<uint32_t> constant_macro_ids;
 
 	std::unordered_map<StageSetBinding, std::pair<MSLResourceBinding, bool>, InternalHasher> resource_bindings;
 	std::unordered_map<StageSetBinding, uint32_t, InternalHasher> resource_arg_buff_idx_to_binding_number;
@@ -1173,6 +1197,8 @@ protected:
 	VariableID stage_out_ptr_var_id = 0;
 	VariableID tess_level_inner_var_id = 0;
 	VariableID tess_level_outer_var_id = 0;
+	VariableID mesh_out_per_vertex = 0;
+	VariableID mesh_out_per_primitive = 0;
 	VariableID stage_out_masked_builtin_type_id = 0;
 
 	// Handle HLSL-style 0-based vertex/instance index.
@@ -1200,6 +1226,7 @@ protected:
 	bool needs_subgroup_size = false;
 	bool needs_sample_id = false;
 	bool needs_helper_invocation = false;
+	bool needs_workgroup_zero_init = false;
 	bool writes_to_depth = false;
 	std::string qual_pos_var_name;
 	std::string stage_in_var_name = "in";
@@ -1262,6 +1289,7 @@ protected:
 
 	bool suppress_missing_prototypes = false;
 	bool suppress_incompatible_pointer_types_discard_qualifiers = false;
+	bool suppress_sometimes_unitialized = false;
 
 	void add_spv_func_and_recompile(SPVFuncImpl spv_func);
 

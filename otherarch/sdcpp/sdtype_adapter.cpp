@@ -57,11 +57,12 @@ struct SDParams {
     std::string controlnet_path;
     std::string embeddings_path;
     std::string stacked_id_embeddings_path;
-    std::string input_id_images_path;
+    std::string input_id_images_path = "";
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string input_path;
+    std::string mask_path;
     std::string control_image_path;
 
     std::string prompt;
@@ -69,6 +70,7 @@ struct SDParams {
     float min_cfg     = 1.0f;
     float cfg_scale   = 7.0f;
     float guidance    = 3.5f;
+    float eta         = 0.f;
     float style_ratio = 20.f;
     int clip_skip     = -1;  // <= 0 represents unspecified
     int width         = 512;
@@ -99,9 +101,13 @@ struct SDParams {
     int upscale_repeats           = 1;
 
     std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.;
-    float skip_layer_start       = 0.01;
-    float skip_layer_end         = 0.2;
+    float slg_scale              = 0.f;
+    float skip_layer_start       = 0.01f;
+    float skip_layer_end         = 0.2f;
+
+    bool chroma_use_dit_mask     = true;
+    bool chroma_use_t5_mask      = false;
+    int  chroma_t5_mask_pad      = 1;
 };
 
 //shared
@@ -113,11 +119,17 @@ static sd_ctx_t * sd_ctx = nullptr;
 static int sddebugmode = 0;
 static std::string recent_data = "";
 static uint8_t * input_image_buffer = NULL;
+static uint8_t * input_mask_buffer = NULL;
+static std::vector<uint8_t *> input_extraimage_buffers;
+const int max_extra_images = 4;
 
 static std::string sdplatformenv, sddeviceenv, sdvulkandeviceenv;
-static bool notiling = false;
+static int cfg_tiled_vae_threshold = 0;
+static int cfg_square_limit = 0;
+static int cfg_side_limit = 0;
 static bool sd_is_quiet = false;
 static std::string sdmodelfilename = "";
+static bool photomaker_enabled = false;
 
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
@@ -129,7 +141,12 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     std::string t5xxl_filename = inputs.t5xxl_filename;
     std::string clipl_filename = inputs.clipl_filename;
     std::string clipg_filename = inputs.clipg_filename;
-    notiling = inputs.notile;
+    std::string photomaker_filename = inputs.photomaker_filename;
+    cfg_tiled_vae_threshold = inputs.tiled_vae_threshold;
+    cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold > 8192 ? 8192 : cfg_tiled_vae_threshold);
+    cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold <= 0 ? 8192 : cfg_tiled_vae_threshold); //if negative dont tile
+    cfg_side_limit = inputs.img_hard_limit;
+    cfg_square_limit = inputs.img_soft_limit;
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
 
     if(lorafilename!="")
@@ -156,6 +173,15 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(clipg_filename!="")
     {
         printf("With Custom Clip-G Model: %s\n",clipg_filename.c_str());
+    }
+    if(photomaker_filename!="")
+    {
+        printf("With PhotoMaker Model: %s\n",photomaker_filename.c_str());
+        photomaker_enabled = true;
+    }
+    if(inputs.quant)
+    {
+        printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
     }
 
     //duplicated from expose.cpp
@@ -194,9 +220,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->t5xxl_path = t5xxl_filename;
     sd_params->clip_l_path = clipl_filename;
     sd_params->clip_g_path = clipg_filename;
-    //if clip and t5 is set, and model is a gguf, load it as a diffusion model path
+    sd_params->stacked_id_embeddings_path = photomaker_filename;
+    //if t5 is set, and model is a gguf, load it as a diffusion model path
     bool endswithgguf = (sd_params->model_path.rfind(".gguf") == sd_params->model_path.size() - 5);
-    if(sd_params->clip_l_path!="" && sd_params->t5xxl_path!="" && endswithgguf)
+    if(sd_params->t5xxl_path!="" && endswithgguf)
     {
         printf("\nSwap to Diffusion Model Path:%s",sd_params->model_path.c_str());
         sd_params->diffusion_model_path = sd_params->model_path;
@@ -249,7 +276,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
                         sd_params->clip_on_cpu,
                         sd_params->control_net_cpu,
                         sd_params->vae_on_cpu,
-                        sd_params->diffusion_flash_attn);
+                        sd_params->diffusion_flash_attn,
+                        sd_params->chroma_use_dit_mask,
+                        sd_params->chroma_use_t5_mask,
+                        sd_params->chroma_t5_mask_pad);
 
     if (sd_ctx == NULL) {
         printf("\nError: KCPP SD Failed to create context!\nIf using Flux/SD3.5, make sure you have ALL files required (e.g. VAE, T5, Clip...) or baked in!\n");
@@ -266,8 +296,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         sd_ctx->sd->apply_lora_from_file(lorafilename,inputs.lora_multiplier);
     }
 
-    return true;
+    input_extraimage_buffers.reserve(max_extra_images);
 
+    return true;
 }
 
 std::string clean_input_prompt(const std::string& input) {
@@ -294,9 +325,107 @@ static std::string get_image_params(const SDParams& params) {
     parameter_string += "Seed: " + std::to_string(params.seed) + " | ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + " | ";
     parameter_string += "Sampler: " + std::to_string((int)sd_params->sample_method) + " | ";
+    parameter_string += "Clip skip: " + std::to_string((int)sd_params->clip_skip) + " | ";
     parameter_string += "Model: " + sdmodelfilename + " | ";
     parameter_string += "Version: KoboldCpp";
     return parameter_string;
+}
+
+static inline int rounddown_64(int n) {
+    return n - n % 64;
+}
+
+static inline int roundup_64(int n) {
+    return ((n + 63) / 64) * 64;
+}
+
+static inline int roundnearest(int multiple, int n) {
+    return ((n + (multiple/2)) / multiple) * multiple;
+}
+
+//scale dimensions to ensure width and height stay within limits
+//img_hard_limit = sdclamped, hard size limit per side, no side can exceed this
+//square limit = total NxN resolution based limit to also apply
+static void sd_fix_resolution(int &width, int &height, int img_hard_limit, int img_soft_limit) {
+
+    // sanitize the original values
+    width = std::max(std::min(width, 8192), 64);
+    height = std::max(std::min(height, 8192), 64);
+
+    bool is_landscape = (width > height);
+    int long_side = is_landscape ? width : height;
+    int short_side = is_landscape ? height : width;
+    float original_ratio = static_cast<float>(long_side) / short_side;
+
+    // for the initial rounding, don't bother comparing to the original
+    // requested ratio, since the user can choose those values directly
+    long_side = rounddown_64(long_side);
+    short_side = rounddown_64(short_side);
+    img_hard_limit = rounddown_64(img_hard_limit);
+
+    //enforce sdclamp side limit
+    if (long_side > img_hard_limit) {
+        short_side = static_cast<int>(short_side * img_hard_limit / static_cast<float>(long_side));
+        long_side = img_hard_limit;
+        if (short_side <= 64) {
+            short_side = 64;
+        } else {
+            int down = rounddown_64(short_side);
+            int up = roundup_64(short_side);
+            float longf = static_cast<float>(long_side);
+            // Choose better ratio match between rounding up or down
+            short_side = (longf / down - original_ratio < original_ratio - longf / up) ? down : up;
+        }
+    }
+
+    //enforce sd_restrict_square area limit
+    int area_limit = img_soft_limit * img_soft_limit;
+    if (long_side * short_side > area_limit) {
+        float scale = std::sqrt(static_cast<float>(area_limit) / (long_side * short_side));
+        int new_short = static_cast<int>(short_side * scale);
+        int new_long = static_cast<int>(long_side * scale);
+
+        if (new_short <= 64) {
+            short_side = 64;
+            long_side = rounddown_64(area_limit / short_side);
+        } else {
+            int new_long_down = rounddown_64(new_long);
+            int new_short_down = rounddown_64(new_short);
+            int new_short_up = roundup_64(new_short);
+            int new_long_up = roundup_64(new_long);
+            long_side = new_long_down;
+            short_side = new_short_down;
+
+            // we may get a ratio closer to the original if we still stay below the
+            // limit when rounding up one of the dimensions, so check both cases
+            float rdiff = std::fabs(static_cast<float>(new_long_down) / new_short_down - original_ratio);
+
+            if (new_long_down * new_short_up < area_limit) {
+                float newrdiff = std::fabs(static_cast<float>(new_long_down) / new_short_up - original_ratio);
+                if (newrdiff < rdiff) {
+                    long_side = new_long_down;
+                    short_side = new_short_up;
+                    rdiff = newrdiff;
+                }
+            }
+
+            if (new_long_up * new_short_down < area_limit) {
+                float newrdiff = std::fabs(static_cast<float>(new_long_up) / new_short_down - original_ratio);
+                if (newrdiff < rdiff) {
+                    long_side = new_long_up;
+                    short_side = new_short_down;
+                }
+            }
+        }
+    }
+
+    if (is_landscape) {
+        width = long_side;
+        height = short_side;
+    } else {
+        width = short_side;
+        height = long_side;
+    }
 }
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
@@ -317,6 +446,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     std::string cleanprompt = clean_input_prompt(inputs.prompt);
     std::string cleannegprompt = clean_input_prompt(inputs.negative_prompt);
     std::string img2img_data = std::string(inputs.init_images);
+    std::string img2img_mask = std::string(inputs.mask);
+    std::vector<std::string> extra_image_data;
+    for(int i=0;i<inputs.extra_images_len;++i)
+    {
+        extra_image_data.push_back(std::string(inputs.extra_images[i]));
+    }
+
     std::string sampler = inputs.sample_method;
 
     sd_params->prompt = cleanprompt;
@@ -330,39 +466,77 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->clip_skip = inputs.clip_skip;
     sd_params->mode = (img2img_data==""?SDMode::TXT2IMG:SDMode::IMG2IMG);
 
-    //ensure unsupported dimensions are fixed
-    int biggestdim = (sd_params->width>sd_params->height?sd_params->width:sd_params->height);
     auto loadedsdver = get_loaded_sd_version(sd_ctx);
-    if(loadedsdver==SDVersion::VERSION_FLUX)
+    if (loadedsdver == SDVersion::VERSION_FLUX)
     {
-        sd_params->cfg_scale = 1;
-        if(sampler=="euler a"||sampler=="k_euler_a"||sampler=="euler_a")
-        {
-            sampler = "euler"; //euler a broken on flux
+        if (!sd_loaded_chroma()) {
+            sd_params->cfg_scale = 1;  //non chroma clamp cfg scale
+        }
+        if (sampler == "euler a" || sampler == "k_euler_a" || sampler == "euler_a") {
+            sampler = "euler";  //euler a broken on flux
         }
     }
-    int reslimit = (loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024;
-    if(biggestdim > reslimit)
-    {
-        float scaler = (float)biggestdim / (float)reslimit;
-        int newwidth = (int)((float)sd_params->width / scaler);
-        int newheight = (int)((float)sd_params->height / scaler);
-        newwidth = newwidth - (newwidth%64);
-        newheight = newheight - (newheight%64);
-        sd_params->width = newwidth;
-        sd_params->height = newheight;
+
+    const int default_res_limit = 8192; // arbitrary, just to simplify the code
+    // avoid crashes due to bugs/limitations on certain models
+    // although it can be possible for a single side to exceed 1024, the total resolution of the image
+    // cannot exceed (832x832) for sd1/sd2 or (1024x1024) for sdxl/sd3/flux, to prevent crashing the server
+    const int hard_megapixel_res_limit = (loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024;
+
+    int img_hard_limit = default_res_limit;
+    if (cfg_side_limit > 0) {
+        img_hard_limit = std::max(std::min(cfg_side_limit, default_res_limit), 64);
     }
-    bool dotile = (sd_params->width>768 || sd_params->height>768) && !notiling;
+
+    int img_soft_limit = default_res_limit;
+    if (cfg_square_limit > 0) {
+        img_soft_limit = std::max(std::min(cfg_square_limit, default_res_limit), 64);
+    }
+
+    if (cfg_square_limit > 0 && sddebugmode == 1) {
+        img_soft_limit = std::min(hard_megapixel_res_limit * 2, img_soft_limit);  //double the limit for debugmode if cfg_square_limit is set
+    } else {
+        img_soft_limit = std::min(hard_megapixel_res_limit, img_soft_limit);
+    }
+
+    sd_fix_resolution(sd_params->width, sd_params->height, img_hard_limit, img_soft_limit);
+    if (inputs.width != sd_params->width || inputs.height != sd_params->height) {
+        printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n", inputs.width, inputs.height, sd_params->width, sd_params->height);
+    }
+
+    // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
+    bool dotile = (sd_params->width*sd_params->height > cfg_tiled_vae_threshold*cfg_tiled_vae_threshold);
     set_sd_vae_tiling(sd_ctx,dotile); //changes vae tiling, prevents memory related crash/oom
+
+    if (sd_params->clip_skip <= 0) {
+        // workaround for clip_skip being "stuck" at the previous requested value
+        // 2 is the default for all recent base models (SD2, SDXL, Flux, SD3)
+        if (sd_version_is_sd1((SDVersion)loadedsdver)) {
+            sd_params->clip_skip = 1;
+        }
+        else {
+            sd_params->clip_skip = 2;
+        }
+    }
 
     //for img2img
     sd_image_t input_image = {0,0,0,nullptr};
+    std::vector<sd_image_t> extraimage_references;
+    extraimage_references.reserve(max_extra_images);
     std::vector<uint8_t> image_buffer;
+    std::vector<uint8_t> image_mask_buffer;
+    std::vector<std::vector<uint8_t>> extraimage_buffers;
+    extraimage_buffers.reserve(max_extra_images);
+
     int nx, ny, nc;
     int img2imgW = sd_params->width; //for img2img input
     int img2imgH = sd_params->height;
     int img2imgC = 3; // Assuming RGB image
-    std::vector<uint8_t> resized_image_buf(img2imgW * img2imgH * img2imgC);
+    //because the reference image can be larger than the output image, allocate at least enough for 1024x1024
+    const int imgMemNeed = std::max(img2imgW * img2imgH * img2imgC + 512, 1024 * 1024 * img2imgC + 512);
+    std::vector<uint8_t> resized_image_buf(imgMemNeed);
+    std::vector<uint8_t> resized_mask_buf(imgMemNeed);
+    std::vector<std::vector<uint8_t>> resized_extraimage_bufs(max_extra_images, std::vector<uint8_t>(imgMemNeed));
 
     std::string ts = get_timestamp_str();
     if(!sd_is_quiet)
@@ -394,6 +568,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     {
         sd_params->sample_method = sample_method_t::LCM;
     }
+    else if(sampler=="ddim")
+    {
+        sd_params->sample_method = sample_method_t::DDIM_TRAILING;
+    }
     else if(sampler=="dpm++ 2m karras" || sampler=="dpm++ 2m" || sampler=="k_dpmpp_2m")
     {
         sd_params->sample_method = sample_method_t::DPMPP2M;
@@ -401,6 +579,101 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     else
     {
         sd_params->sample_method = sample_method_t::EULER_A;
+    }
+
+    if(extra_image_data.size()>0)
+    {
+        if(input_extraimage_buffers.size()>0) //just in time free old buffer
+        {
+            for(int i=0;i<input_extraimage_buffers.size();++i)
+            {
+                stbi_image_free(input_extraimage_buffers[i]);
+            }
+            input_extraimage_buffers.clear();
+        }
+        extraimage_buffers.clear();
+        extraimage_references.clear();
+        for(int i=0;i<extra_image_data.size() && i<max_extra_images;++i)
+        {
+            int nx2, ny2, nc2;
+            int desiredchannels = 3;
+            extraimage_buffers.push_back(kcpp_base64_decode(extra_image_data[i]));
+            input_extraimage_buffers.push_back(stbi_load_from_memory(extraimage_buffers[i].data(), extraimage_buffers[i].size(), &nx2, &ny2, &nc2, desiredchannels));
+            // Resize the image
+            float aspect_ratio = static_cast<float>(nx2) / ny2;
+            int desiredWidth = nx2;
+            int desiredHeight = ny2;
+            int smallestsrcdim = std::min(img2imgW,img2imgH);
+            if(desiredWidth > desiredHeight)
+            {
+                desiredWidth = smallestsrcdim;
+                desiredHeight = smallestsrcdim / aspect_ratio;
+            } else {
+                desiredHeight = smallestsrcdim;
+                desiredWidth = smallestsrcdim * aspect_ratio;
+            }
+
+            //round dims to 64
+            desiredWidth = roundnearest(16,desiredWidth);
+            desiredHeight = roundnearest(16,desiredHeight);
+            desiredWidth = std::clamp(desiredWidth,64,1024);
+            desiredHeight = std::clamp(desiredHeight,64,1024);
+
+            if(!sd_is_quiet && sddebugmode==1)
+            {
+                printf("Resize Extraimg: %dx%d to %dx%d\n",nx2,ny2,desiredWidth,desiredHeight);
+            }
+            int resok = stbir_resize_uint8(input_extraimage_buffers[i], nx2, ny2, 0, resized_extraimage_bufs[i].data(), desiredWidth, desiredHeight, 0, desiredchannels);
+            if (!resok) {
+                printf("\nKCPP SD: resize extra image failed!\n");
+                output.data = "";
+                output.status = 0;
+                return output;
+            }
+            sd_image_t extraimage_reference;
+            extraimage_reference.width = desiredWidth;
+            extraimage_reference.height = desiredHeight;
+            extraimage_reference.channel = desiredchannels;
+            extraimage_reference.data = resized_extraimage_bufs[i].data();
+            extraimage_references.push_back(extraimage_reference);
+        }
+
+        //ensure prompt has img keyword, otherwise append it
+        if(photomaker_enabled)
+        {
+            if (sd_params->prompt.find("img") == std::string::npos) {
+                sd_params->prompt += " img";
+            } else if (sd_params->prompt.rfind("img", 0) == 0) {
+                // "img" found at the start of the string (position 0), which is not allowed. Add some text before it
+                sd_params->prompt = "person " + sd_params->prompt;
+            }
+        }
+    }
+
+    std::vector<sd_image_t> kontext_imgs;
+    if(extra_image_data.size()>0 && loadedsdver==SDVersion::VERSION_FLUX && !sd_loaded_chroma())
+    {
+        for(int i=0;i<extra_image_data.size();++i)
+        {
+            kontext_imgs.push_back(extraimage_references[i]);
+        }
+        if(!sd_is_quiet && sddebugmode==1)
+        {
+            printf("\nFlux Kontext: Using %d reference images\n",kontext_imgs.size());
+        }
+    }
+
+    std::vector<sd_image_t*> photomaker_imgs;
+    if(photomaker_enabled && extra_image_data.size()>0)
+    {
+        for(int i=0;i<extra_image_data.size();++i)
+        {
+            photomaker_imgs.push_back(&extraimage_references[i]);
+        }
+        if(!sd_is_quiet && sddebugmode==1)
+        {
+            printf("\nPhotomaker: Using %d reference images\n",photomaker_imgs.size());
+        }
     }
 
     if (sd_params->mode == TXT2IMG) {
@@ -429,6 +702,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                           sd_params->clip_skip,
                           sd_params->cfg_scale,
                           sd_params->guidance,
+                          sd_params->eta,
                           sd_params->width,
                           sd_params->height,
                           sd_params->sample_method,
@@ -440,11 +714,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                           sd_params->style_ratio,
                           sd_params->normalize_input,
                           sd_params->input_id_images_path.c_str(),
+                          kontext_imgs.data(), kontext_imgs.size(),
                           sd_params->skip_layers.data(),
                           sd_params->skip_layers.size(),
                           sd_params->slg_scale,
                           sd_params->skip_layer_start,
-                          sd_params->skip_layer_end);
+                          sd_params->skip_layer_end,
+                          photomaker_imgs);
     } else {
 
         if (sd_params->width <= 0 || sd_params->width % 64 != 0 || sd_params->height <= 0 || sd_params->height % 64 != 0) {
@@ -455,13 +731,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
 
         image_buffer = kcpp_base64_decode(img2img_data);
-
         if(input_image_buffer!=nullptr) //just in time free old buffer
         {
              stbi_image_free(input_image_buffer);
              input_image_buffer = nullptr;
         }
-
         input_image_buffer = stbi_load_from_memory(image_buffer.data(), image_buffer.size(), &nx, &ny, &nc, 3);
 
         if (nx < 64 || ny < 64 || nx > 1024 || ny > 1024 || nc!= 3) {
@@ -478,6 +752,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
 
         // Resize the image
+        if(!sd_is_quiet && sddebugmode==1)
+        {
+            printf("Resize Img2Img: %dx%d to %dx%d\n",nx,ny,img2imgW,img2imgH);
+        }
         int resok = stbir_resize_uint8(input_image_buffer, nx, ny, 0, resized_image_buf.data(), img2imgW, img2imgH, 0, img2imgC);
         if (!resok) {
             printf("\nKCPP SD: resize image failed!\n");
@@ -486,10 +764,50 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             return output;
         }
 
+        if(img2img_mask!="")
+        {
+            int nx2, ny2, nc2;
+            if(input_mask_buffer!=nullptr) //just in time free old buffer
+            {
+                stbi_image_free(input_mask_buffer);
+                input_mask_buffer = nullptr;
+            }
+            image_mask_buffer = kcpp_base64_decode(img2img_mask);
+            input_mask_buffer = stbi_load_from_memory(image_mask_buffer.data(), image_mask_buffer.size(), &nx2, &ny2, &nc2, 1);
+            // Resize the image
+             if(!sd_is_quiet && sddebugmode==1)
+            {
+                printf("Resize Mask: %dx%d to %dx%d\n",nx2,ny2,img2imgW,img2imgH);
+            }
+            int resok = stbir_resize_uint8(input_mask_buffer, nx2, ny2, 0, resized_mask_buf.data(), img2imgW, img2imgH, 0, 1);
+            if (!resok) {
+                printf("\nKCPP SD: resize image failed!\n");
+                output.data = "";
+                output.status = 0;
+                return output;
+            }
+            if(inputs.flip_mask)
+            {
+                int bufsiz = resized_mask_buf.size();
+                for (int i = 0; i < bufsiz; ++i) {
+                    resized_mask_buf[i] = 255 - resized_mask_buf[i];
+                }
+            }
+        }
+
         input_image.width = img2imgW;
         input_image.height = img2imgH;
         input_image.channel = img2imgC;
         input_image.data = resized_image_buf.data();
+
+        uint8_t* mask_image_buffer    = NULL;
+        std::vector<uint8_t> default_mask_image_vec(img2imgW * img2imgH * img2imgC, 255);
+        if (img2img_mask != "") {
+            mask_image_buffer = resized_mask_buf.data();
+        } else {
+            mask_image_buffer = default_mask_image_vec.data();
+        }
+        sd_image_t mask_image = { (uint32_t) img2imgW, (uint32_t) img2imgH, 1, mask_image_buffer };
 
         if(!sd_is_quiet && sddebugmode==1)
         {
@@ -510,11 +828,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         results = img2img(sd_ctx,
                             input_image,
+                            mask_image,
                             sd_params->prompt.c_str(),
                             sd_params->negative_prompt.c_str(),
                             sd_params->clip_skip,
                             sd_params->cfg_scale,
                             sd_params->guidance,
+                            sd_params->eta,
                             sd_params->width,
                             sd_params->height,
                             sd_params->sample_method,
@@ -527,11 +847,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                             sd_params->style_ratio,
                             sd_params->normalize_input,
                             sd_params->input_id_images_path.c_str(),
+                            kontext_imgs.data(), kontext_imgs.size(),
                             sd_params->skip_layers.data(),
                             sd_params->skip_layers.size(),
                             sd_params->slg_scale,
                             sd_params->skip_layer_start,
-                            sd_params->skip_layer_end);
+                            sd_params->skip_layer_end,
+                            photomaker_imgs);
     }
 
     if (results == NULL) {

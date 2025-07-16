@@ -14,7 +14,6 @@
 #include "stb_image.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
 #include "stb_image_write.h"
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -37,6 +36,8 @@ const char* sample_method_str[] = {
     "ipndm",
     "ipndm_v",
     "lcm",
+    "ddim_trailing",
+    "tcd",
 };
 
 // Names of the sigma schedule overrides, same order as sample_schedule in stable-diffusion.h
@@ -83,13 +84,17 @@ struct SDParams {
     std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string input_path;
+    std::string mask_path;
     std::string control_image_path;
+
+    std::vector<std::string> kontext_image_paths;
 
     std::string prompt;
     std::string negative_prompt;
     float min_cfg     = 1.0f;
     float cfg_scale   = 7.0f;
     float guidance    = 3.5f;
+    float eta         = 0.f;
     float style_ratio = 20.f;
     int clip_skip     = -1;  // <= 0 represents unspecified
     int width         = 512;
@@ -120,9 +125,13 @@ struct SDParams {
     int upscale_repeats           = 1;
 
     std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.;
-    float skip_layer_start       = 0.01;
-    float skip_layer_end         = 0.2;
+    float slg_scale              = 0.f;
+    float skip_layer_start       = 0.01f;
+    float skip_layer_end         = 0.2f;
+
+    bool chroma_use_dit_mask     = true;
+    bool chroma_use_t5_mask      = false;
+    int  chroma_t5_mask_pad      = 1;
 };
 
 void print_params(SDParams params) {
@@ -146,6 +155,7 @@ void print_params(SDParams params) {
     printf("    normalize input image :  %s\n", params.normalize_input ? "true" : "false");
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
+    printf("    mask_img:          %s\n", params.mask_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
     printf("    clip on cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
@@ -158,6 +168,7 @@ void print_params(SDParams params) {
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
     printf("    slg_scale:         %.2f\n", params.slg_scale);
     printf("    guidance:          %.2f\n", params.guidance);
+    printf("    eta:               %.2f\n", params.eta);
     printf("    clip_skip:         %d\n", params.clip_skip);
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
@@ -170,6 +181,9 @@ void print_params(SDParams params) {
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    printf("    chroma_use_dit_mask:   %s\n", params.chroma_use_dit_mask ? "true" : "false");
+    printf("    chroma_use_t5_mask:    %s\n", params.chroma_use_t5_mask ? "true" : "false");
+    printf("    chroma_t5_mask_pad:    %d\n", params.chroma_t5_mask_pad);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -198,16 +212,19 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     If not specified, the default is the type of the weight file\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
+    printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
+    printf("  --guidance SCALE                   guidance scale for img2img (default: 3.5)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
-    printf("  --skip_layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
-    printf("  --skip_layer_start START           SLG enabling point: (default: 0.01)\n");
-    printf("  --skip_layer_end END               SLG disabling point: (default: 0.2)\n");
+    printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
+    printf("  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
+    printf("  --skip-layer-start START           SLG enabling point: (default: 0.01)\n");
+    printf("  --skip-layer-end END               SLG disabling point: (default: 0.2)\n");
     printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
     printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%%)\n");
@@ -215,7 +232,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
@@ -233,7 +250,11 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
+    printf("  --chroma-disable-dit-mask          disable dit mask for chroma\n");
+    printf("  --chroma-enable-t5-mask            enable t5 mask for chroma\n");
+    printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
     printf("  -v, --verbose                      print extra info\n");
+    printf("  -ki, --kontext_img [PATH]        Reference image for Flux Kontext models (can be used multiple times) \n");
 }
 
 void parse_args(int argc, const char** argv, SDParams& params) {
@@ -382,6 +403,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.input_path = argv[i];
+        } else if (arg == "--mask") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.mask_path = argv[i];
         } else if (arg == "--control-image") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -428,6 +455,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.guidance = std::stof(argv[i]);
+        } else if (arg == "--eta") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.eta = std::stof(argv[i]);
         } else if (arg == "--strength") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -606,6 +639,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "-ki" || arg == "--kontext-img") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.kontext_image_paths.push_back(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -707,6 +746,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
         parameter_string += "Skip layer end: " + std::to_string(params.skip_layer_end) + ", ";
     }
     parameter_string += "Guidance: " + std::to_string(params.guidance) + ", ";
+    parameter_string += "Eta: " + std::to_string(params.eta) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
@@ -797,10 +837,44 @@ int main(int argc, const char* argv[]) {
         fprintf(stderr, "SVD support is broken, do not use it!!!\n");
         return 1;
     }
+    bool vae_decode_only = true;
 
-    bool vae_decode_only          = true;
+    std::vector<sd_image_t> kontext_imgs;
+    for (auto& path : params.kontext_image_paths) {
+        vae_decode_only       = false;
+        int c                 = 0;
+        int width             = 0;
+        int height            = 0;
+        uint8_t* image_buffer = stbi_load(path.c_str(), &width, &height, &c, 3);
+        if (image_buffer == NULL) {
+            fprintf(stderr, "load image from '%s' failed\n", path.c_str());
+            return 1;
+        }
+        if (c < 3) {
+            fprintf(stderr, "the number of channels for the input image must be >= 3, but got %d channels\n", c);
+            free(image_buffer);
+            return 1;
+        }
+        if (width <= 0) {
+            fprintf(stderr, "error: the width of image must be greater than 0\n");
+            free(image_buffer);
+            return 1;
+        }
+        if (height <= 0) {
+            fprintf(stderr, "error: the height of image must be greater than 0\n");
+            free(image_buffer);
+            return 1;
+        }
+        kontext_imgs.push_back({(uint32_t)width,
+                                (uint32_t)height,
+                                3,
+                                image_buffer});
+    }
+
     uint8_t* input_image_buffer   = NULL;
     uint8_t* control_image_buffer = NULL;
+    uint8_t* mask_image_buffer    = NULL;
+
     if (params.mode == IMG2IMG || params.mode == IMG2VID) {
         vae_decode_only = false;
 
@@ -874,7 +948,10 @@ int main(int argc, const char* argv[]) {
                                   params.clip_on_cpu,
                                   params.control_net_cpu,
                                   params.vae_on_cpu,
-                                  params.diffusion_flash_attn);
+                                  params.diffusion_flash_attn,
+                                  params.chroma_use_dit_mask,
+                                  params.chroma_use_t5_mask,
+                                  params.chroma_t5_mask_pad);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
@@ -905,6 +982,18 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    std::vector<uint8_t> default_mask_image_vec(params.width * params.height, 255);
+    if (params.mask_path != "") {
+        int c             = 0;
+        mask_image_buffer = stbi_load(params.mask_path.c_str(), &params.width, &params.height, &c, 1);
+    } else {
+        mask_image_buffer = default_mask_image_vec.data();
+    }
+    sd_image_t mask_image = {(uint32_t)params.width,
+                             (uint32_t)params.height,
+                             1,
+                             mask_image_buffer};
+
     sd_image_t* results;
     if (params.mode == TXT2IMG) {
         results = txt2img(sd_ctx,
@@ -913,6 +1002,7 @@ int main(int argc, const char* argv[]) {
                           params.clip_skip,
                           params.cfg_scale,
                           params.guidance,
+                          params.eta,
                           params.width,
                           params.height,
                           params.sample_method,
@@ -924,11 +1014,13 @@ int main(int argc, const char* argv[]) {
                           params.style_ratio,
                           params.normalize_input,
                           params.input_id_images_path.c_str(),
+                          kontext_imgs.data(), kontext_imgs.size(),
                           params.skip_layers.data(),
                           params.skip_layers.size(),
                           params.slg_scale,
                           params.skip_layer_start,
-                          params.skip_layer_end);
+                          params.skip_layer_end,
+                          std::vector<sd_image_t*>());
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -974,11 +1066,13 @@ int main(int argc, const char* argv[]) {
         } else {
             results = img2img(sd_ctx,
                               input_image,
+                              mask_image,
                               params.prompt.c_str(),
                               params.negative_prompt.c_str(),
                               params.clip_skip,
                               params.cfg_scale,
                               params.guidance,
+                              params.eta,
                               params.width,
                               params.height,
                               params.sample_method,
@@ -991,11 +1085,13 @@ int main(int argc, const char* argv[]) {
                               params.style_ratio,
                               params.normalize_input,
                               params.input_id_images_path.c_str(),
+                              kontext_imgs.data(), kontext_imgs.size(),
                               params.skip_layers.data(),
                               params.skip_layers.size(),
                               params.slg_scale,
                               params.skip_layer_start,
-                              params.skip_layer_end);
+                              params.skip_layer_end,
+                              std::vector<sd_image_t*>());
         }
     }
 
@@ -1032,16 +1128,41 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    size_t last            = params.output_path.find_last_of(".");
-    std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
+    std::string dummy_name, ext, lc_ext;
+    bool is_jpg;
+    size_t last      = params.output_path.find_last_of(".");
+    size_t last_path = std::min(params.output_path.find_last_of("/"),
+                                params.output_path.find_last_of("\\"));
+    if (last != std::string::npos  // filename has extension
+        && (last_path == std::string::npos || last > last_path)) {
+        dummy_name = params.output_path.substr(0, last);
+        ext = lc_ext = params.output_path.substr(last);
+        std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
+        is_jpg = lc_ext == ".jpg" || lc_ext == ".jpeg" || lc_ext == ".jpe";
+    } else {
+        dummy_name = params.output_path;
+        ext = lc_ext = "";
+        is_jpg       = false;
+    }
+    // appending ".png" to absent or unknown extension
+    if (!is_jpg && lc_ext != ".png") {
+        dummy_name += ext;
+        ext = ".png";
+    }
     for (int i = 0; i < params.batch_count; i++) {
         if (results[i].data == NULL) {
             continue;
         }
-        std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
-        stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                       results[i].data, 0, get_image_params(params, params.seed + i).c_str());
-        printf("save result image to '%s'\n", final_image_path.c_str());
+        std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
+        if (is_jpg) {
+            stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                           results[i].data, 90);
+            printf("save result JPEG image to '%s'\n", final_image_path.c_str());
+        } else {
+            stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                           results[i].data, 0, get_image_params(params, params.seed + i).c_str());
+            printf("save result PNG image to '%s'\n", final_image_path.c_str());
+        }
         free(results[i].data);
         results[i].data = NULL;
     }

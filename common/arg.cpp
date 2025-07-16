@@ -1,13 +1,30 @@
 #include "arg.h"
 
+#include "chat.h"
+#include "common.h"
+#include "gguf.h" // for reading GGUF splits
+#include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
 #include "chat.h"
 #include "build-info.h"
 
+// fix problem with std::min and std::max
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+#define JSON_ASSERT GGML_ASSERT
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <climits>
 #include <cstdarg>
+#include <filesystem>
 #include <fstream>
 #include <regex>
 #include <set>
@@ -15,9 +32,39 @@
 #include <thread>
 #include <vector>
 
-#include "json-schema-to-grammar.h"
+//#define LLAMA_USE_CURL
+
+#if defined(LLAMA_USE_CURL)
+#include <curl/curl.h>
+#include <curl/easy.h>
+#include <future>
+#endif
 
 using json = nlohmann::ordered_json;
+
+std::initializer_list<enum llama_example> mmproj_examples = {
+    LLAMA_EXAMPLE_MTMD,
+    LLAMA_EXAMPLE_SERVER,
+};
+
+static std::string read_file(const std::string & fname) {
+    std::ifstream file(fname);
+    if (!file) {
+        throw std::runtime_error(string_format("error: failed to open file '%s'\n", fname.c_str()));
+    }
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+    return content;
+}
+
+static void write_file(const std::string & fname, const std::string & content) {
+    std::ofstream file(fname);
+    if (!file) {
+        throw std::runtime_error(string_format("error: failed to open file '%s'\n", fname.c_str()));
+    }
+    file << content;
+    file.close();
+}
 
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
     this->examples = std::move(examples);
@@ -127,47 +174,648 @@ std::string common_arg::to_string() {
 }
 
 //
+// downloader
+//
+
+struct common_hf_file_res {
+    std::string repo; // repo name with ":tag" removed
+    std::string ggufFile;
+    std::string mmprojFile;
+};
+
+#ifdef LLAMA_USE_CURL
+
+bool common_has_curl() {
+    return true;
+}
+
+#ifdef __linux__
+#include <linux/limits.h>
+#elif defined(_WIN32)
+#   if !defined(PATH_MAX)
+#   define PATH_MAX MAX_PATH
+#   endif
+#elif defined(_AIX)
+#include <sys/limits.h>
+#else
+#include <sys/syslimits.h>
+#endif
+#define LLAMA_CURL_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
+
+//
+// CURL utils
+//
+
+using curl_ptr = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
+
+// cannot use unique_ptr for curl_slist, because we cannot update without destroying the old one
+struct curl_slist_ptr {
+    struct curl_slist * ptr = nullptr;
+    ~curl_slist_ptr() {
+        if (ptr) {
+            curl_slist_free_all(ptr);
+        }
+    }
+};
+
+#define CURL_MAX_RETRY 3
+#define CURL_RETRY_DELAY_SECONDS 2
+
+static bool curl_perform_with_retry(const std::string & url, CURL * curl, int max_attempts, int retry_delay_seconds, const char * method_name) {
+    int remaining_attempts = max_attempts;
+
+    while (remaining_attempts > 0) {
+        LOG_INF("%s: %s %s (attempt %d of %d)...\n", __func__ , method_name, url.c_str(), max_attempts - remaining_attempts + 1, max_attempts);
+
+        CURLcode res = curl_easy_perform(curl);
+        if (res == CURLE_OK) {
+            return true;
+        }
+
+        int exponential_backoff_delay = std::pow(retry_delay_seconds, max_attempts - remaining_attempts) * 1000;
+        LOG_WRN("%s: curl_easy_perform() failed: %s, retrying after %d milliseconds...\n", __func__, curl_easy_strerror(res), exponential_backoff_delay);
+
+        remaining_attempts--;
+        if (remaining_attempts == 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(exponential_backoff_delay));
+    }
+
+    LOG_ERR("%s: curl_easy_perform() failed after %d attempts\n", __func__, max_attempts);
+
+    return false;
+}
+
+// download one single file from remote URL to local path
+static bool common_download_file_single(const std::string & url, const std::string & path, const std::string & bearer_token, bool offline) {
+    // Check if the file already exists locally
+    auto file_exists = std::filesystem::exists(path);
+
+    // If the file exists, check its JSON metadata companion file.
+    std::string metadata_path = path + ".json";
+    nlohmann::json metadata; // TODO @ngxson : get rid of this json, use regex instead
+    std::string etag;
+    std::string last_modified;
+
+    if (file_exists) {
+        if (offline) {
+            LOG_INF("%s: using cached file (offline mode): %s\n", __func__, path.c_str());
+            return true; // skip verification/downloading
+        }
+        // Try and read the JSON metadata file (note: stream autoclosed upon exiting this block).
+        std::ifstream metadata_in(metadata_path);
+        if (metadata_in.good()) {
+            try {
+                metadata_in >> metadata;
+                LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(), metadata.dump().c_str());
+                if (metadata.contains("etag") && metadata.at("etag").is_string()) {
+                    etag = metadata.at("etag");
+                }
+                if (metadata.contains("lastModified") && metadata.at("lastModified").is_string()) {
+                    last_modified = metadata.at("lastModified");
+                }
+            } catch (const nlohmann::json::exception & e) {
+                LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
+            }
+        }
+        // if we cannot open the metadata file, we assume that the downloaded file is not valid (etag and last-modified are left empty, so we will download it again)
+    } else {
+        if (offline) {
+            LOG_ERR("%s: required file is not available in cache (offline mode): %s\n", __func__, path.c_str());
+            return false;
+        }
+        LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
+    }
+
+    // Send a HEAD request to retrieve the etag and last-modified headers
+    struct common_load_model_from_url_headers {
+        std::string etag;
+        std::string last_modified;
+    };
+
+    common_load_model_from_url_headers headers;
+    bool head_request_ok = false;
+    bool should_download = !file_exists; // by default, we should download if the file does not exist
+
+    // Initialize libcurl
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    if (!curl) {
+        LOG_ERR("%s: error initializing libcurl\n", __func__);
+        return false;
+    }
+
+    // Set the URL, allow to follow http redirection
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
+    // Check if hf-token or bearer-token was specified
+    if (!bearer_token.empty()) {
+        std::string auth_header = "Authorization: Bearer " + bearer_token;
+        http_headers.ptr = curl_slist_append(http_headers.ptr, auth_header.c_str());
+    }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+#if defined(_WIN32)
+    // CURLSSLOPT_NATIVE_CA tells libcurl to use standard certificate store of
+    //   operating system. Currently implemented under MS-Windows.
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+
+    typedef size_t(*CURLOPT_HEADERFUNCTION_PTR)(char *, size_t, size_t, void *);
+    auto header_callback = [](char * buffer, size_t /*size*/, size_t n_items, void * userdata) -> size_t {
+        common_load_model_from_url_headers * headers = (common_load_model_from_url_headers *) userdata;
+
+        static std::regex header_regex("([^:]+): (.*)\r\n");
+        static std::regex etag_regex("ETag", std::regex_constants::icase);
+        static std::regex last_modified_regex("Last-Modified", std::regex_constants::icase);
+
+        std::string header(buffer, n_items);
+        std::smatch match;
+        if (std::regex_match(header, match, header_regex)) {
+            const std::string & key = match[1];
+            const std::string & value = match[2];
+            if (std::regex_match(key, match, etag_regex)) {
+                headers->etag = value;
+            } else if (std::regex_match(key, match, last_modified_regex)) {
+                headers->last_modified = value;
+            }
+        }
+        return n_items;
+    };
+
+    curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 1L); // will trigger the HEAD verb
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L); // hide head request progress
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, static_cast<CURLOPT_HEADERFUNCTION_PTR>(header_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
+
+    // we only allow retrying once for HEAD requests
+    // this is for the use case of using running offline (no internet), retrying can be annoying
+    bool was_perform_successful = curl_perform_with_retry(url, curl.get(), 1, 0, "HEAD");
+    if (!was_perform_successful) {
+        head_request_ok = false;
+    }
+
+    long http_code = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+    if (http_code == 200) {
+        head_request_ok = true;
+    } else {
+        LOG_WRN("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
+        head_request_ok = false;
+    }
+
+    // if head_request_ok is false, we don't have the etag or last-modified headers
+    // we leave should_download as-is, which is true if the file does not exist
+    if (head_request_ok) {
+        // check if ETag or Last-Modified headers are different
+        // if it is, we need to download the file again
+        if (!etag.empty() && etag != headers.etag) {
+            LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__, etag.c_str(), headers.etag.c_str());
+            should_download = true;
+        } else if (!last_modified.empty() && last_modified != headers.last_modified) {
+            LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__, last_modified.c_str(), headers.last_modified.c_str());
+            should_download = true;
+        }
+    }
+
+    if (should_download) {
+        std::string path_temporary = path + ".downloadInProgress";
+        if (file_exists) {
+            LOG_WRN("%s: deleting previous downloaded file: %s\n", __func__, path.c_str());
+            if (remove(path.c_str()) != 0) {
+                LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
+                return false;
+            }
+        }
+
+        // Set the output file
+
+        struct FILE_deleter {
+            void operator()(FILE * f) const {
+                fclose(f);
+            }
+        };
+
+        std::unique_ptr<FILE, FILE_deleter> outfile(fopen(path_temporary.c_str(), "wb"));
+        if (!outfile) {
+            LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path.c_str());
+            return false;
+        }
+
+        typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * data, size_t size, size_t nmemb, void * fd);
+        auto write_callback = [](void * data, size_t size, size_t nmemb, void * fd) -> size_t {
+            return fwrite(data, size, nmemb, (FILE *)fd);
+        };
+        curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 0L);
+        curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+        curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, outfile.get());
+
+        //  display download progress
+        curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+
+        // helper function to hide password in URL
+        auto llama_download_hide_password_in_url = [](const std::string & url) -> std::string {
+            std::size_t protocol_pos = url.find("://");
+            if (protocol_pos == std::string::npos) {
+                return url;  // Malformed URL
+            }
+
+            std::size_t at_pos = url.find('@', protocol_pos + 3);
+            if (at_pos == std::string::npos) {
+                return url;  // No password in URL
+            }
+
+            return url.substr(0, protocol_pos + 3) + "********" + url.substr(at_pos);
+        };
+
+        // start the download
+        LOG_INF("%s: trying to download model from %s to %s (server_etag:%s, server_last_modified:%s)...\n", __func__,
+            llama_download_hide_password_in_url(url).c_str(), path.c_str(), headers.etag.c_str(), headers.last_modified.c_str());
+        bool was_perform_successful = curl_perform_with_retry(url, curl.get(), CURL_MAX_RETRY, CURL_RETRY_DELAY_SECONDS, "GET");
+        if (!was_perform_successful) {
+            return false;
+        }
+
+        long http_code = 0;
+        curl_easy_getinfo (curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code < 200 || http_code >= 400) {
+            LOG_ERR("%s: invalid http status code received: %ld\n", __func__, http_code);
+            return false;
+        }
+
+        // Causes file to be closed explicitly here before we rename it.
+        outfile.reset();
+
+        // Write the updated JSON metadata file.
+        metadata.update({
+            {"url", url},
+            {"etag", headers.etag},
+            {"lastModified", headers.last_modified}
+        });
+        write_file(metadata_path, metadata.dump(4));
+        LOG_DBG("%s: file metadata saved: %s\n", __func__, metadata_path.c_str());
+
+        if (rename(path_temporary.c_str(), path.c_str()) != 0) {
+            LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
+            return false;
+        }
+    } else {
+        LOG_INF("%s: using cached file: %s\n", __func__, path.c_str());
+    }
+
+    return true;
+}
+
+// download multiple files from remote URLs to local paths
+// the input is a vector of pairs <url, path>
+static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls, const std::string & bearer_token, bool offline) {
+    // Prepare download in parallel
+    std::vector<std::future<bool>> futures_download;
+    for (auto const & item : urls) {
+        futures_download.push_back(std::async(std::launch::async, [bearer_token, offline](const std::pair<std::string, std::string> & it) -> bool {
+            return common_download_file_single(it.first, it.second, bearer_token, offline);
+        }, item));
+    }
+
+    // Wait for all downloads to complete
+    for (auto & f : futures_download) {
+        if (!f.get()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool common_download_model(
+        const common_params_model & model,
+        const std::string & bearer_token,
+        bool offline) {
+    // Basic validation of the model.url
+    if (model.url.empty()) {
+        LOG_ERR("%s: invalid model url\n", __func__);
+        return false;
+    }
+
+    if (!common_download_file_single(model.url, model.path, bearer_token, offline)) {
+        return false;
+    }
+
+    // check for additional GGUFs split to download
+    int n_split = 0;
+    {
+        struct gguf_init_params gguf_params = {
+            /*.no_alloc = */ true,
+            /*.ctx      = */ NULL,
+        };
+        auto * ctx_gguf = gguf_init_from_file(model.path.c_str(), gguf_params);
+        if (!ctx_gguf) {
+            LOG_ERR("\n%s:  failed to load input GGUF from %s\n", __func__, model.path.c_str());
+            return false;
+        }
+
+        auto key_n_split = gguf_find_key(ctx_gguf, LLM_KV_SPLIT_COUNT);
+        if (key_n_split >= 0) {
+            n_split = gguf_get_val_u16(ctx_gguf, key_n_split);
+        }
+
+        gguf_free(ctx_gguf);
+    }
+
+    if (n_split > 1) {
+        char split_prefix[PATH_MAX] = {0};
+        char split_url_prefix[LLAMA_CURL_MAX_URL_LENGTH] = {0};
+
+        // Verify the first split file format
+        // and extract split URL and PATH prefixes
+        {
+            if (!llama_split_prefix(split_prefix, sizeof(split_prefix), model.path.c_str(), 0, n_split)) {
+                LOG_ERR("\n%s: unexpected model file name: %s n_split=%d\n", __func__, model.path.c_str(), n_split);
+                return false;
+            }
+
+            if (!llama_split_prefix(split_url_prefix, sizeof(split_url_prefix), model.url.c_str(), 0, n_split)) {
+                LOG_ERR("\n%s: unexpected model url: %s n_split=%d\n", __func__, model.url.c_str(), n_split);
+                return false;
+            }
+        }
+
+        std::vector<std::pair<std::string, std::string>> urls;
+        for (int idx = 1; idx < n_split; idx++) {
+            char split_path[PATH_MAX] = {0};
+            llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
+
+            char split_url[LLAMA_CURL_MAX_URL_LENGTH] = {0};
+            llama_split_path(split_url, sizeof(split_url), split_url_prefix, idx, n_split);
+
+            if (std::string(split_path) == model.path) {
+                continue; // skip the already downloaded file
+            }
+
+            urls.push_back({split_url, split_path});
+        }
+
+        // Download in parallel
+        common_download_file_multiple(urls, bearer_token, offline);
+    }
+
+    return true;
+}
+
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params) {
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    std::vector<char> res_buffer;
+
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        auto data_vec = static_cast<std::vector<char> *>(data);
+        data_vec->insert(data_vec->end(), (char *)ptr, (char *)ptr + size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_buffer);
+#if defined(_WIN32)
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+    if (params.timeout > 0) {
+        curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, params.timeout);
+    }
+    if (params.max_size > 0) {
+        curl_easy_setopt(curl.get(), CURLOPT_MAXFILESIZE, params.max_size);
+    }
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
+    for (const auto & header : params.headers) {
+        http_headers.ptr = curl_slist_append(http_headers.ptr, header.c_str());
+    }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    CURLcode res = curl_easy_perform(curl.get());
+
+    if (res != CURLE_OK) {
+        std::string error_msg = curl_easy_strerror(res);
+        throw std::runtime_error("error: cannot make GET request: " + error_msg);
+    }
+
+    long res_code;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
+
+    return { res_code, std::move(res_buffer) };
+}
+
+/**
+ * Allow getting the HF file from the HF repo with tag (like ollama), for example:
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:q4
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:q5_k_s
+ * Tag is optional, default to "latest" (meaning it checks for Q4_K_M first, then Q4, then if not found, return the first GGUF file in repo)
+ *
+ * Return pair of <repo, file> (with "repo" already having tag removed)
+ *
+ * Note: we use the Ollama-compatible HF API, but not using the blobId. Instead, we use the special "ggufFile" field which returns the value for "hf_file". This is done to be backward-compatible with existing cache files.
+ */
+static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, const std::string & bearer_token, bool offline) {
+    auto parts = string_split<std::string>(hf_repo_with_tag, ':');
+    std::string tag = parts.size() > 1 ? parts.back() : "latest";
+    std::string hf_repo = parts[0];
+    if (string_split<std::string>(hf_repo, '/').size() != 2) {
+        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
+    }
+
+    std::string url = get_model_endpoint() + "v2/" + hf_repo + "/manifests/" + tag;
+
+    // headers
+    std::vector<std::string> headers;
+    headers.push_back("Accept: application/json");
+    if (!bearer_token.empty()) {
+        headers.push_back("Authorization: Bearer " + bearer_token);
+    }
+    // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
+    // User-Agent header is already set in common_remote_get_content, no need to set it here
+
+    // we use "=" to avoid clashing with other component, while still being allowed on windows
+    std::string cached_response_fname = "manifest=" + hf_repo + "=" + tag + ".json";
+    string_replace_all(cached_response_fname, "/", "_");
+    std::string cached_response_path = fs_get_cache_file(cached_response_fname);
+
+    // make the request
+    common_remote_params params;
+    params.headers = headers;
+    long res_code = 0;
+    std::string res_str;
+    bool use_cache = false;
+    if (!offline) {
+        try {
+            auto res = common_remote_get_content(url, params);
+            res_code = res.first;
+            res_str = std::string(res.second.data(), res.second.size());
+        } catch (const std::exception & e) {
+            LOG_WRN("error: failed to get manifest at %s: %s\n", url.c_str(), e.what());
+        }
+    }
+    if (res_code == 0) {
+        if (std::filesystem::exists(cached_response_path)) {
+            LOG_WRN("trying to read manifest from cache: %s\n", cached_response_path.c_str());
+            res_str = read_file(cached_response_path);
+            res_code = 200;
+            use_cache = true;
+        } else {
+            throw std::runtime_error(
+                offline ? "error: failed to get manifest (offline mode)"
+                : "error: failed to get manifest (check your internet connection)");
+        }
+    }
+    std::string ggufFile;
+    std::string mmprojFile;
+
+    if (res_code == 200 || res_code == 304) {
+        // extract ggufFile.rfilename in json, using regex
+        {
+            std::regex pattern("\"ggufFile\"[\\s\\S]*?\"rfilename\"\\s*:\\s*\"([^\"]+)\"");
+            std::smatch match;
+            if (std::regex_search(res_str, match, pattern)) {
+                ggufFile = match[1].str();
+            }
+        }
+        // extract mmprojFile.rfilename in json, using regex
+        {
+            std::regex pattern("\"mmprojFile\"[\\s\\S]*?\"rfilename\"\\s*:\\s*\"([^\"]+)\"");
+            std::smatch match;
+            if (std::regex_search(res_str, match, pattern)) {
+                mmprojFile = match[1].str();
+            }
+        }
+        if (!use_cache) {
+            // if not using cached response, update the cache file
+            write_file(cached_response_path, res_str);
+        }
+    } else if (res_code == 401) {
+        throw std::runtime_error("error: model is private or does not exist; if you are accessing a gated model, please provide a valid HF token");
+    } else {
+        throw std::runtime_error(string_format("error from HF API, response code: %ld, data: %s", res_code, res_str.c_str()));
+    }
+
+    // check response
+    if (ggufFile.empty()) {
+        throw std::runtime_error("error: model does not have ggufFile");
+    }
+
+    return { hf_repo, ggufFile, mmprojFile };
+}
+
+#else
+
+bool common_has_curl() {
+    return false;
+}
+
+static bool common_download_file_single(const std::string &, const std::string &, const std::string &, bool) {
+    LOG_ERR("error: built without CURL, cannot download model from internet\n");
+    return false;
+}
+
+static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> &, const std::string &, bool) {
+    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
+    return false;
+}
+
+static bool common_download_model(
+        const common_params_model &,
+        const std::string &,
+        bool) {
+    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
+    return false;
+}
+
+static struct common_hf_file_res common_get_hf_file(const std::string &, const std::string &, bool) {
+    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
+    return {};
+}
+
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params &) {
+    if (!url.empty()) {
+        throw std::runtime_error("error: built without CURL, cannot download model from the internet");
+    }
+
+    return {};
+}
+
+#endif // LLAMA_USE_CURL
+
+//
 // utils
 //
 
-static void common_params_handle_model_default(
-        std::string & model,
-        const std::string & model_url,
-        std::string & hf_repo,
-        std::string & hf_file,
-        const std::string & hf_token,
-        const std::string & model_default) {
-    if (!hf_repo.empty()) {
-        // short-hand to avoid specifying --hf-file -> default it to --model
-        if (hf_file.empty()) {
-            if (model.empty()) {
-                auto auto_detected = common_get_hf_file(hf_repo, hf_token);
-                if (auto_detected.first.empty() || auto_detected.second.empty()) {
-                    exit(1); // built without CURL, error message already printed
+struct handle_model_result {
+    bool found_mmproj = false;
+    common_params_model mmproj;
+};
+
+static handle_model_result common_params_handle_model(
+        struct common_params_model & model,
+        const std::string & bearer_token,
+        const std::string & model_path_default,
+        bool offline) {
+    handle_model_result result;
+    // handle pre-fill default model path and url based on hf_repo and hf_file
+    {
+        if (!model.hf_repo.empty()) {
+            // short-hand to avoid specifying --hf-file -> default it to --model
+            if (model.hf_file.empty()) {
+                if (model.path.empty()) {
+                    auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
+                    if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
+                        exit(1); // built without CURL, error message already printed
+                    }
+                    model.hf_repo = auto_detected.repo;
+                    model.hf_file = auto_detected.ggufFile;
+                    if (!auto_detected.mmprojFile.empty()) {
+                        result.found_mmproj   = true;
+                        result.mmproj.hf_repo = model.hf_repo;
+                        result.mmproj.hf_file = auto_detected.mmprojFile;
+                    }
+                } else {
+                    model.hf_file = model.path;
                 }
-                hf_repo = auto_detected.first;
-                hf_file = auto_detected.second;
-            } else {
-                hf_file = model;
             }
+
+            std::string model_endpoint = get_model_endpoint();
+            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
+            // make sure model path is present (for caching purposes)
+            if (model.path.empty()) {
+                // this is to avoid different repo having same file name, or same file name in different subdirs
+                std::string filename = model.hf_repo + "_" + model.hf_file;
+                // to make sure we don't have any slashes in the filename
+                string_replace_all(filename, "/", "_");
+                model.path = fs_get_cache_file(filename);
+            }
+
+        } else if (!model.url.empty()) {
+            if (model.path.empty()) {
+                auto f = string_split<std::string>(model.url, '#').front();
+                f = string_split<std::string>(f, '?').front();
+                model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
+            }
+
+        } else if (model.path.empty()) {
+            model.path = model_path_default;
         }
-        // make sure model path is present (for caching purposes)
-        if (model.empty()) {
-            // this is to avoid different repo having same file name, or same file name in different subdirs
-            std::string filename = hf_repo + "_" + hf_file;
-            // to make sure we don't have any slashes in the filename
-            string_replace_all(filename, "/", "_");
-            model = fs_get_cache_file(filename);
-        }
-    } else if (!model_url.empty()) {
-        if (model.empty()) {
-            auto f = string_split<std::string>(model_url, '#').front();
-            f = string_split<std::string>(f, '?').front();
-            model = fs_get_cache_file(string_split<std::string>(f, '/').back());
-        }
-    } else if (model.empty()) {
-        model = model_default;
     }
+
+    // then, download it if needed
+    if (!model.url.empty()) {
+        bool ok = common_download_model(model, bearer_token, offline);
+        if (!ok) {
+            LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
+            exit(1);
+        }
+    }
+
+    return result;
 }
 
 const std::vector<ggml_type> kv_cache_types = {
@@ -301,10 +949,25 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
-    // TODO: refactor model params in a common struct
-    common_params_handle_model_default(params.model,             params.model_url,             params.hf_repo,             params.hf_file,             params.hf_token, DEFAULT_MODEL_PATH);
-    common_params_handle_model_default(params.speculative.model, params.speculative.model_url, params.speculative.hf_repo, params.speculative.hf_file, params.hf_token, "");
-    common_params_handle_model_default(params.vocoder.model,     params.vocoder.model_url,     params.vocoder.hf_repo,     params.vocoder.hf_file,     params.hf_token, "");
+    // handle model and download
+    {
+        auto res = common_params_handle_model(params.model, params.hf_token, DEFAULT_MODEL_PATH, params.offline);
+        if (params.no_mmproj) {
+            params.mmproj = {};
+        } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
+            // optionally, handle mmproj model when -hf is specified
+            params.mmproj = res.mmproj;
+        }
+        // only download mmproj if the current example is using it
+        for (auto & ex : mmproj_examples) {
+            if (ctx_arg.ex == ex) {
+                common_params_handle_model(params.mmproj,    params.hf_token, "", params.offline);
+                break;
+            }
+        }
+        common_params_handle_model(params.speculative.model, params.hf_token, "", params.offline);
+        common_params_handle_model(params.vocoder.model,     params.hf_token, "", params.offline);
+    }
 
     if (params.escape) {
         string_process_escapes(params.prompt);
@@ -323,8 +986,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.kv_overrides.back().key[0] = 0;
     }
 
-    if (params.reranking && params.embedding) {
-        throw std::invalid_argument("error: either --embedding or --reranking can be specified, but not both");
+    if (!params.tensor_buft_overrides.empty()) {
+        params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
     if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
@@ -432,7 +1095,6 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-embedding",
         "llama-eval-callback",
         "llama-export-lora",
-        "llama-gbnf-validator",
         "llama-gen-docs",
         "llama-gguf",
         "llama-gguf-hash",
@@ -440,20 +1102,18 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-gritlm",
         "llama-imatrix",
         "llama-infill",
-        "llama-llava-cli",
+        "llama-mtmd-cli",
         "llama-llava-clip-quantize-cli",
         "llama-lookahead",
         "llama-lookup",
         "llama-lookup-create",
         "llama-lookup-merge",
         "llama-lookup-stats",
-        "llama-minicpmv-cli",
         "llama-parallel",
         "llama-passkey",
         "llama-perplexity",
         "llama-q8dot",
         "llama-quantize",
-        "llama-quantize-stats",
         "llama-qwen2vl-cli",
         "llama-retrieval",
         "llama-run",
@@ -542,6 +1202,9 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
         fprintf(stderr, "%s\n", ex.what());
         ctx_arg.params = params_org;
         return false;
+    } catch (std::exception & ex) {
+        fprintf(stderr, "%s\n", ex.what());
+        exit(1); // for other exceptions, we exit with status code 1
     }
 
     return true;
@@ -633,7 +1296,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.use_color = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_INFILL, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
     add_opt(common_arg(
         {"-t", "--threads"}, "N",
         string_format("number of threads to use during generation (default: %d)", params.cpuparams.n_threads),
@@ -683,9 +1346,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--prio"}, "N",
-        string_format("set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: %d)\n", params.cpuparams.priority),
+        string_format("set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: %d)\n", params.cpuparams.priority),
         [](common_params & params, int prio) {
-            if (prio < 0 || prio > 3) {
+            if (prio < GGML_SCHED_PRIO_LOW || prio > GGML_SCHED_PRIO_REALTIME) {
                 throw std::invalid_argument("invalid value");
             }
             params.cpuparams.priority = (enum ggml_sched_priority) prio;
@@ -766,7 +1429,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"-n", "--predict", "--n-predict"}, "N",
         string_format(
-            ex == LLAMA_EXAMPLE_MAIN || ex == LLAMA_EXAMPLE_INFILL
+            ex == LLAMA_EXAMPLE_MAIN
                 ? "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)"
                 : "number of tokens to predict (default: %d, -1 = infinity)",
             params.n_predict),
@@ -795,6 +1458,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_keep = value;
         }
     ));
+    add_opt(common_arg(
+        {"--swa-full"},
+        string_format("use full-size SWA cache (default: %s)\n"
+            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)", params.swa_full ? "true" : "false"),
+        [](common_params & params) {
+            params.swa_full = true;
+        }
+    ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
@@ -842,13 +1513,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-f", "--file"}, "FNAME",
         "a file containing the prompt (default: none)",
         [](common_params & params, const std::string & value) {
-            std::ifstream file(value);
-            if (!file) {
-                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
-            }
+            params.prompt = read_file(value);
             // store the external file name in params
             params.prompt_file = value;
-            std::copy(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>(), back_inserter(params.prompt));
             if (!params.prompt.empty() && params.prompt.back() == '\n') {
                 params.prompt.pop_back();
             }
@@ -858,11 +1525,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-sysf", "--system-prompt-file"}, "FNAME",
         "a file containing the system prompt (default: none)",
         [](common_params & params, const std::string & value) {
-            std::ifstream file(value);
-            if (!file) {
-                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
-            }
-            std::copy(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>(), back_inserter(params.system_prompt));
+            params.system_prompt = read_file(value);
             if (!params.system_prompt.empty() && params.system_prompt.back() == '\n') {
                 params.system_prompt.pop_back();
             }
@@ -1013,7 +1676,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.input_prefix = value;
             params.enable_chat_template = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_INFILL}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
         {"--in-suffix"}, "STRING",
         "string to suffix after user inputs with (default: empty)",
@@ -1021,14 +1684,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.input_suffix = value;
             params.enable_chat_template = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_INFILL}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
         {"--no-warmup"},
         "skip warming up the model with an empty run",
         [](common_params & params) {
             params.warmup = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -1038,7 +1701,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.spm_infill = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_INFILL}));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--samplers"}, "SAMPLERS",
         string_format("samplers that will be used for generation in the order, separated by \';\'\n(default: %s)", sampler_type_names.c_str()),
@@ -1287,15 +1950,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--grammar-file"}, "FNAME",
         "file to read grammar from",
         [](common_params & params, const std::string & value) {
-            std::ifstream file(value);
-            if (!file) {
-                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
-            }
-            std::copy(
-                std::istreambuf_iterator<char>(file),
-                std::istreambuf_iterator<char>(),
-                std::back_inserter(params.sampling.grammar)
-            );
+            params.sampling.grammar = read_file(value);
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -1303,6 +1958,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
         [](common_params & params, const std::string & value) {
             params.sampling.grammar = json_schema_to_grammar(json::parse(value));
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"-jf", "--json-schema-file"}, "FILE",
+        "File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
+        [](common_params & params, const std::string & value) {
+            std::ifstream file(value);
+            if (!file) {
+                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
+            }
+            std::string schema;
+            std::copy(
+                std::istreambuf_iterator<char>(file),
+                std::istreambuf_iterator<char>(),
+                std::back_inserter(schema)
+            );
+            params.sampling.grammar = json_schema_to_grammar(json::parse(schema));
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -1407,13 +2079,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
-        {"-dkvc", "--dump-kv-cache"},
-        "verbose print of the KV cache",
-        [](common_params & params) {
-            params.dump_kv_cache = true;
-        }
-    ));
-    add_opt(common_arg(
         {"-nkvo", "--no-kv-offload"},
         "disable KV offload",
         [](common_params & params) {
@@ -1446,13 +2111,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.cache_type_v = kv_cache_type_from_str(value);
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
-    add_opt(common_arg(
-        {"--perplexity", "--all-logits"},
-        string_format("return logits for all tokens in the batch (default: %s)", params.logits_all ? "true" : "false"),
-        [](common_params & params) {
-            params.logits_all = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
@@ -1560,18 +2218,40 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_CONT_BATCHING"));
     add_opt(common_arg(
         {"--mmproj"}, "FILE",
-        "path to a multimodal projector file for LLaVA. see examples/llava/README.md",
+        "path to a multimodal projector file. see tools/mtmd/README.md\n"
+        "note: if -hf is used, this argument can be omitted",
         [](common_params & params, const std::string & value) {
-            params.mmproj = value;
+            params.mmproj.path = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ"));
     add_opt(common_arg(
-        {"--image"}, "FILE",
-        "path to an image file. use with multimodal models. Specify multiple times for batching",
+        {"--mmproj-url"}, "URL",
+        "URL to a multimodal projector file. see tools/mtmd/README.md",
+        [](common_params & params, const std::string & value) {
+            params.mmproj.url = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_URL"));
+    add_opt(common_arg(
+        {"--no-mmproj"},
+        "explicitly disable multimodal projector, useful when using -hf",
+        [](common_params & params) {
+            params.no_mmproj = true;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_NO_MMPROJ"));
+    add_opt(common_arg(
+        {"--no-mmproj-offload"},
+        "do not offload multimodal projector to GPU",
+        [](common_params & params) {
+            params.mmproj_use_gpu = false;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_NO_MMPROJ_OFFLOAD"));
+    add_opt(common_arg(
+        {"--image", "--audio"}, "FILE",
+        "path to an image or audio file. use with multimodal models, can be repeated if you have multiple files\n",
         [](common_params & params, const std::string & value) {
             params.image.emplace_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    ).set_examples({LLAMA_EXAMPLE_MTMD}));
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",
@@ -1646,6 +2326,41 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
             }
             exit(0);
+        }
+    ));
+    add_opt(common_arg(
+        {"--override-tensor", "-ot"}, "<tensor name pattern>=<buffer type>,...",
+        "override tensor buffer type", [](common_params & params, const std::string & value) {
+            /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+            if (buft_list.empty()) {
+                // enumerate all the devices and add their buffer types to the list
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    auto * dev = ggml_backend_dev_get(i);
+                    auto * buft = ggml_backend_dev_buffer_type(dev);
+                    if (buft) {
+                        buft_list[ggml_backend_buft_name(buft)] = buft;
+                    }
+                }
+            }
+
+            for (const auto & override : string_split<std::string>(value, ',')) {
+                std::string::size_type pos = override.find('=');
+                if (pos == std::string::npos) {
+                    throw std::invalid_argument("invalid value");
+                }
+                std::string tensor_name = override.substr(0, pos);
+                std::string buffer_type = override.substr(pos + 1);
+
+                if (buft_list.find(buffer_type) == buft_list.end()) {
+                    printf("Available buffer types:\n");
+                    for (const auto & it : buft_list) {
+                        printf("  %s\n", ggml_backend_buft_name(it.second));
+                    }
+                    throw std::invalid_argument("unknown buffer type");
+                }
+                // FIXME: this leaks memory
+                params.tensor_buft_overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+            }
         }
     ));
     add_opt(common_arg(
@@ -1737,6 +2452,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--no-op-offload"},
+        string_format("disable offloading host tensor operations to device (default: %s)", params.no_op_offload ? "true" : "false"),
+        [](common_params & params) {
+            params.no_op_offload = true;
+        }
+    ));
+    add_opt(common_arg(
         {"--lora"}, "FNAME",
         "path to LoRA adapter (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & value) {
@@ -1791,51 +2513,52 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 "or `--model-url` if set, otherwise %s)", DEFAULT_MODEL_PATH
             ),
         [](common_params & params, const std::string & value) {
-            params.model = value;
+            params.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.model_url = value;
+            params.model.url = value;
         }
     ).set_env("LLAMA_ARG_MODEL_URL"));
     add_opt(common_arg(
         {"-hf", "-hfr", "--hf-repo"}, "<user>/<model>[:quant]",
         "Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
+        "mmproj is also downloaded automatically if available. to disable, add --no-mmproj\n"
         "example: unsloth/phi-4-GGUF:q4_k_m\n"
         "(default: unused)",
         [](common_params & params, const std::string & value) {
-            params.hf_repo = value;
+            params.model.hf_repo = value;
         }
     ).set_env("LLAMA_ARG_HF_REPO"));
     add_opt(common_arg(
         {"-hfd", "-hfrd", "--hf-repo-draft"}, "<user>/<model>[:quant]",
         "Same as --hf-repo, but for the draft model (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.speculative.hf_repo = value;
+            params.speculative.model.hf_repo = value;
         }
     ).set_env("LLAMA_ARG_HFD_REPO"));
     add_opt(common_arg(
         {"-hff", "--hf-file"}, "FILE",
         "Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.hf_file = value;
+            params.model.hf_file = value;
         }
     ).set_env("LLAMA_ARG_HF_FILE"));
     add_opt(common_arg(
         {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
         "Hugging Face model repository for the vocoder model (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.vocoder.hf_repo = value;
+            params.vocoder.model.hf_repo = value;
         }
     ).set_env("LLAMA_ARG_HF_REPO_V"));
     add_opt(common_arg(
         {"-hffv", "--hf-file-v"}, "FILE",
         "Hugging Face model file for the vocoder model (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.vocoder.hf_file = value;
+            params.vocoder.model.hf_file = value;
         }
     ).set_env("LLAMA_ARG_HF_FILE_V"));
     add_opt(common_arg(
@@ -1876,7 +2599,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_junk = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PASSKEY}));
+    ).set_examples({LLAMA_EXAMPLE_PASSKEY, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"--pos"}, "N",
         string_format("position of the passkey in the junk text (default: %d)", params.i_pos),
@@ -1927,12 +2650,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--parse-special"},
+        string_format("prase special tokens (chat, tool, etc) (default: %s)", params.parse_special ? "true" : "false"),
+        [](common_params & params) {
+            params.parse_special = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"-pps"},
         string_format("is the prompt shared across parallel sequences (default: %s)", params.is_pp_shared ? "true" : "false"),
         [](common_params & params) {
             params.is_pp_shared = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_BENCH}));
+    ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"-npp"}, "n0,n1,...",
         "number of prompt tokens",
@@ -1979,8 +2709,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
+        {"--cls-separator"}, "STRING",
+        "separator of classification sequences (default \\t) for example \"<#seq#>\"",
+        [](common_params & params, const std::string & value) {
+            params.cls_sep = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
+    add_opt(common_arg(
         {"--host"}, "HOST",
-        string_format("ip address to listen (default: %s)", params.hostname.c_str()),
+        string_format("ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: %s)", params.hostname.c_str()),
         [](common_params & params, const std::string & value) {
             params.hostname = value;
         }
@@ -2015,9 +2752,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--reranking", "--rerank"},
-        string_format("enable reranking endpoint on server (default: %s)", params.reranking ? "enabled" : "disabled"),
+        string_format("enable reranking endpoint on server (default: %s)", "disabled"),
         [](common_params & params) {
-            params.reranking = true;
+            params.embedding = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_RANK;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING"));
     add_opt(common_arg(
@@ -2059,6 +2797,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_CERT_FILE"));
     add_opt(common_arg(
+        {"--chat-template-kwargs"}, "STRING",
+        string_format("sets additional params for the json template parser"),
+        [](common_params & params, const std::string &  value) {
+            auto parsed = json::parse(value);
+            for (const auto & item : parsed.items()) {
+                params.default_template_kwargs[item.key()] = item.value().dump();
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_CHAT_TEMPLATE_KWARGS"));
+    add_opt(common_arg(
         {"-to", "--timeout"}, "N",
         string_format("server read/write timeout in seconds (default: %d)", params.timeout_read),
         [](common_params & params, int value) {
@@ -2075,7 +2823,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_THREADS_HTTP"));
     add_opt(common_arg(
         {"--cache-reuse"}, "N",
-        string_format("min chunk size to attempt reusing from the cache via KV shifting (default: %d)", params.n_cache_reuse),
+        string_format(
+            "min chunk size to attempt reusing from the cache via KV shifting (default: %d)\n"
+            "[(card)](https://ggml.ai/f0.png)", params.n_cache_reuse
+        ),
         [](common_params & params, int value) {
             params.n_cache_reuse = value;
         }
@@ -2128,15 +2879,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_JINJA"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
-        "reasoning format (default: deepseek; allowed values: deepseek, none)\n"
-        "controls whether thought tags are extracted from the response, and in which format they're returned. 'none' leaves thoughts unparsed in `message.content`, 'deepseek' puts them in `message.reasoning_content` (for DeepSeek R1 & Command R7B only).\n"
-        "only supported for non-streamed responses",
+        "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
+        "- none: leaves thoughts unparsed in `message.content`\n"
+        "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
+        "(default: deepseek)",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
+            else if (value == "deepseek-legacy") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY; }
             else if (value == "none") {     params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
-            else { std::invalid_argument("invalid value"); }
+            else { throw std::invalid_argument("invalid value"); }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));
+    add_opt(common_arg(
+        {"--reasoning-budget"}, "N",
+        "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)",
+        [](common_params & params, int value) {
+            if (value != 0 && value != -1) { throw std::invalid_argument("invalid value"); }
+            params.reasoning_budget = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK_BUDGET"));
     add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
@@ -2148,7 +2909,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
     add_opt(common_arg(
         {"--chat-template-file"}, "JINJA_TEMPLATE_FILE",
         string_format(
@@ -2158,16 +2919,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             "list of built-in templates:\n%s", list_builtin_chat_templates().c_str()
         ),
         [](common_params & params, const std::string & value) {
-            std::ifstream file(value);
-            if (!file) {
-                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
-            }
-            std::copy(
-                std::istreambuf_iterator<char>(file),
-                std::istreambuf_iterator<char>(),
-                std::back_inserter(params.chat_template));
+            params.chat_template = read_file(value);
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    add_opt(common_arg(
+        {"--no-prefill-assistant"},
+        string_format(
+            "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
+            "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n"
+        ),
+        [](common_params & params) {
+            params.prefill_assistant = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_PREFILL_ASSISTANT"));
     add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),
@@ -2188,7 +2952,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.simple_io = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_INFILL}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
         {"--positive-file"}, "FNAME",
         string_format("positive prompts file, one prompt per line (default: '%s')", params.cvector_positive_file.c_str()),
@@ -2232,7 +2996,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             /**/ if (value == "jsonl") { params.batched_bench_output_jsonl = true; }
             else if (value == "md") { params.batched_bench_output_jsonl = false; }
-            else { std::invalid_argument("invalid value"); }
+            else { throw std::invalid_argument("invalid value"); }
         }
     ).set_examples({LLAMA_EXAMPLE_BENCH}));
     add_opt(common_arg(
@@ -2264,6 +3028,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             common_log_set_verbosity_thold(INT_MAX);
         }
     ));
+    add_opt(common_arg(
+        {"--offline"},
+        "Offline mode: forces use of cache, prevents network access",
+        [](common_params & params) {
+            params.offline = true;
+        }
+    ).set_env("LLAMA_OFFLINE"));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         "Set the verbosity threshold. Messages with a higher verbosity will be ignored.",
@@ -2455,15 +3226,41 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-md", "--model-draft"}, "FNAME",
         "draft model for speculative decoding (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.speculative.model = value;
+            params.speculative.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_DRAFT"));
+    add_opt(common_arg(
+        {"-ctkd", "--cache-type-k-draft"}, "TYPE",
+        string_format(
+            "KV cache data type for K for the draft model\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.speculative.cache_type_k)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.speculative.cache_type_k = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_K_DRAFT"));
+    add_opt(common_arg(
+        {"-ctvd", "--cache-type-v-draft"}, "TYPE",
+        string_format(
+            "KV cache data type for V for the draft model\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.speculative.cache_type_v)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.speculative.cache_type_v = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_V_DRAFT"));
 
     add_opt(common_arg(
         {"-mv", "--model-vocoder"}, "FNAME",
         "vocoder model for audio generation (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.vocoder.model = value;
+            params.vocoder.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
      add_opt(common_arg(
@@ -2486,10 +3283,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tts-oute-default"},
         string_format("use default OuteTTS models (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "OuteAI/OuteTTS-0.2-500M-GGUF";
-            params.hf_file = "OuteTTS-0.2-500M-Q8_0.gguf";
-            params.vocoder.hf_repo = "ggml-org/WavTokenizer";
-            params.vocoder.hf_file = "WavTokenizer-Large-75-F16.gguf";
+            params.model.hf_repo = "OuteAI/OuteTTS-0.2-500M-GGUF";
+            params.model.hf_file = "OuteTTS-0.2-500M-Q8_0.gguf";
+            params.vocoder.model.hf_repo = "ggml-org/WavTokenizer";
+            params.vocoder.model.hf_file = "WavTokenizer-Large-75-F16.gguf";
         }
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 
@@ -2497,8 +3294,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--embd-bge-small-en-default"},
         string_format("use default bge-small-en-v1.5 model (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
-            params.hf_file = "bge-small-en-v1.5-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
+            params.model.hf_file = "bge-small-en-v1.5-q8_0.gguf";
             params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
@@ -2511,8 +3308,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--embd-e5-small-en-default"},
         string_format("use default e5-small-v2 model (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
-            params.hf_file = "e5-small-v2-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
+            params.model.hf_file = "e5-small-v2-q8_0.gguf";
             params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
@@ -2525,8 +3322,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--embd-gte-small-default"},
         string_format("use default gte-small model (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
-            params.hf_file = "gte-small-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
+            params.model.hf_file = "gte-small-q8_0.gguf";
             params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
@@ -2539,8 +3336,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-1.5b-default"},
         string_format("use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
             params.port = 8012;
             params.n_gpu_layers = 99;
             params.flash_attn = true;
@@ -2555,8 +3352,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-3b-default"},
         string_format("use default Qwen 2.5 Coder 3B (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
             params.port = 8012;
             params.n_gpu_layers = 99;
             params.flash_attn = true;
@@ -2571,8 +3368,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-7b-default"},
         string_format("use default Qwen 2.5 Coder 7B (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
             params.port = 8012;
             params.n_gpu_layers = 99;
             params.flash_attn = true;
@@ -2587,10 +3384,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-7b-spec"},
         string_format("use Qwen 2.5 Coder 7B + 0.5B draft for speculative decoding (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
-            params.speculative.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
-            params.speculative.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
             params.speculative.n_gpu_layers = 99;
             params.port = 8012;
             params.n_gpu_layers = 99;
@@ -2606,10 +3403,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-14b-spec"},
         string_format("use Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-14B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
-            params.speculative.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
-            params.speculative.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-14B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
+            params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
             params.speculative.n_gpu_layers = 99;
             params.port = 8012;
             params.n_gpu_layers = 99;

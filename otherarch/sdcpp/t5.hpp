@@ -12,7 +12,7 @@
 
 #include "darts.h"
 #include "ggml_extend.hpp"
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 #include "model.h"
 
 // Port from: https://github.com/google/sentencepiece/blob/master/src/unigram_model.h
@@ -385,6 +385,7 @@ public:
 
     void pad_tokens(std::vector<int>& tokens,
                     std::vector<float>& weights,
+                    std::vector<float>* attention_mask,
                     size_t max_length = 0,
                     bool padding      = false) {
         if (max_length > 0 && padding) {
@@ -397,10 +398,14 @@ public:
             LOG_DEBUG("token length: %llu", length);
             std::vector<int> new_tokens;
             std::vector<float> new_weights;
+            std::vector<float> new_attention_mask;
             int token_idx = 0;
             for (int i = 0; i < length; i++) {
                 if (token_idx >= orig_token_num) {
                     break;
+                }
+                if (attention_mask != nullptr) {
+                    new_attention_mask.push_back(0.0);
                 }
                 if (i % max_length == max_length - 1) {
                     new_tokens.push_back(eos_id_);
@@ -414,13 +419,24 @@ public:
 
             new_tokens.push_back(eos_id_);
             new_weights.push_back(1.0);
+            if (attention_mask != nullptr) {
+                new_attention_mask.push_back(0.0);
+            }
+
             tokens  = new_tokens;
             weights = new_weights;
+            if (attention_mask != nullptr) {
+                *attention_mask = new_attention_mask;
+            }
 
             if (padding) {
                 int pad_token_id = pad_id_;
                 tokens.insert(tokens.end(), length - tokens.size(), pad_token_id);
                 weights.insert(weights.end(), length - weights.size(), 1.0);
+                if (attention_mask != nullptr) {
+                    // maybe keep some padding tokens unmasked?
+                    attention_mask->insert(attention_mask->end(), length - attention_mask->size(), -HUGE_VALF);
+                }
             }
         }
     }
@@ -579,6 +595,7 @@ public:
         }
         if (past_bias != NULL) {
             if (mask != NULL) {
+                mask = ggml_repeat(ctx, mask, past_bias);
                 mask = ggml_add(ctx, mask, past_bias);
             } else {
                 mask = past_bias;
@@ -739,15 +756,17 @@ struct T5Runner : public GGMLRunner {
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 struct ggml_tensor* input_ids,
-                                struct ggml_tensor* relative_position_bucket) {
+                                struct ggml_tensor* relative_position_bucket,
+                                struct ggml_tensor* attention_mask = NULL) {
         size_t N       = input_ids->ne[1];
         size_t n_token = input_ids->ne[0];
 
-        auto hidden_states = model.forward(ctx, input_ids, NULL, NULL, relative_position_bucket);  // [N, n_token, model_dim]
+        auto hidden_states = model.forward(ctx, input_ids, NULL, attention_mask, relative_position_bucket);  // [N, n_token, model_dim]
         return hidden_states;
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids) {
+    struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
+                                    struct ggml_tensor* attention_mask = NULL) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         input_ids = to_backend(input_ids);
@@ -767,7 +786,7 @@ struct T5Runner : public GGMLRunner {
                                                            input_ids->ne[0]);
         set_backend_tensor_data(relative_position_bucket, relative_position_bucket_vec.data());
 
-        struct ggml_tensor* hidden_states = forward(compute_ctx, input_ids, relative_position_bucket);
+        struct ggml_tensor* hidden_states = forward(compute_ctx, input_ids, relative_position_bucket, attention_mask);
 
         ggml_build_forward_expand(gf, hidden_states);
 
@@ -776,10 +795,11 @@ struct T5Runner : public GGMLRunner {
 
     void compute(const int n_threads,
                  struct ggml_tensor* input_ids,
+                 struct ggml_tensor* attention_mask,
                  ggml_tensor** output,
                  ggml_context* output_ctx = NULL) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(input_ids);
+            return build_graph(input_ids, attention_mask);
         };
         GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
     }
@@ -877,9 +897,9 @@ struct T5Embedder {
         model.alloc_params_buffer();
     }
 
-    std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text,
-                                                             size_t max_length = 0,
-                                                             bool padding      = false) {
+    std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
+                                                                                  size_t max_length = 0,
+                                                                                  bool padding      = false) {
         auto parsed_attention = parse_prompt_attention(text);
 
         {
@@ -906,14 +926,16 @@ struct T5Embedder {
         tokens.push_back(EOS_TOKEN_ID);
         weights.push_back(1.0);
 
-        tokenizer.pad_tokens(tokens, weights, max_length, padding);
+        std::vector<float> attention_mask;
+
+        tokenizer.pad_tokens(tokens, weights, &attention_mask, max_length, padding);
 
         // for (int i = 0; i < tokens.size(); i++) {
         //     std::cout << tokens[i] << ":" << weights[i] << ", ";
         // }
         // std::cout << std::endl;
 
-        return {tokens, weights};
+        return {tokens, weights, attention_mask};
     }
 
     void test() {
@@ -934,8 +956,8 @@ struct T5Embedder {
             // TODO: fix cuda nan
             std::string text("a lovely cat");
             auto tokens_and_weights     = tokenize(text, 77, true);
-            std::vector<int>& tokens    = tokens_and_weights.first;
-            std::vector<float>& weights = tokens_and_weights.second;
+            std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
+            std::vector<float>& weights = std::get<1>(tokens_and_weights);
             for (auto token : tokens) {
                 printf("%d ", token);
             }
@@ -944,7 +966,7 @@ struct T5Embedder {
             struct ggml_tensor* out = NULL;
 
             int t0 = ggml_time_ms();
-            model.compute(8, input_ids, &out, work_ctx);
+            model.compute(8, input_ids, NULL, &out, work_ctx);
             int t1 = ggml_time_ms();
 
             print_ggml_tensor(out);

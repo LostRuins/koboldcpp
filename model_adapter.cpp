@@ -15,6 +15,7 @@
 #include "gguf.h"
 
 #include <chrono>
+#include <filesystem>
 
 static auto bench_timer = std::chrono::high_resolution_clock().now();
 
@@ -86,7 +87,12 @@ void print_tok_vec(std::vector<float> &embd)
  {
     std::vector<char> f_buf(1024*1024);
 
-    auto fin = std::ifstream(fname, std::ios::binary);
+    #ifdef _WIN32
+        std::filesystem::path fpath = std::filesystem::u8path(fname);
+    #else
+        std::filesystem::path fpath = std::filesystem::path(fname);
+    #endif
+    auto fin = std::ifstream(fpath, std::ios::binary);
     fin.rdbuf()->pubsetbuf(f_buf.data(), f_buf.size());
     if (!fin) {
         fprintf(stderr, "%s: failed to open '%s'\n", __func__, fname.c_str());
@@ -291,6 +297,15 @@ void print_tok_vec(std::vector<float> &embd)
             if (keyidx != -1) {
                 freq_base_train = gguf_get_val_f32(ctx, keyidx);
             }
+            fkey = "tokenizer.ggml.add_bos_token";
+            keyidx = gguf_find_key(ctx, fkey.c_str());
+            if (keyidx != -1) {
+                bool result = gguf_get_val_bool(ctx, keyidx);
+                if(result==false)
+                {
+                    fileformatmeta->explicitly_no_bos = true;
+                }
+            }
 
             int filever = gguf_get_version(ctx);
 
@@ -325,9 +340,13 @@ void print_tok_vec(std::vector<float> &embd)
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_GEMMA3;
             }
-            else if(modelarch=="rwkv6")
+            else if(modelarch=="rwkv6" || modelarch=="rwkv7")
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_RWKV;
+            }
+            else if(modelarch=="glm4")
+            {
+                fileformatmeta->model_architecture = GGUFArch::ARCH_GLM4;
             }
             printf("Arch Category: %d\n",fileformatmeta->model_architecture);
 
@@ -445,9 +464,10 @@ void print_tok_vec(std::vector<float> &embd)
 
     //fast forward the past based on identical tokens, stop once a divergence is noted
     int embd_inp_len = embd_inp.size();
+    int cur_ctx_len = current_context_tokens.size();
     bool fastforwardok = true;
 
-    for (int i = 0; i < current_context_tokens.size(); ++i)
+    for (int i = 0; i < cur_ctx_len; ++i)
     {
         if (current_context_tokens[i] == embd_inp[i])
         {
@@ -478,6 +498,10 @@ void print_tok_vec(std::vector<float> &embd)
         else
         {
             if ((i + 2) >= embd_inp_len)
+            {
+                break;
+            }
+            if ((i + 2) >= cur_ctx_len)
             {
                 break;
             }

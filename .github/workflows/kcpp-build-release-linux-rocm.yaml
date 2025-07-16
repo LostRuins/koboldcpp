@@ -1,0 +1,79 @@
+name: Koboldcpp Linux ROCm
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Optional commit hash to build from'
+        required: false
+        default: ''
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  KCPP_CUDA: rocm
+  ARCHES_CU12: 1
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    permissions: write-all
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
+
+      - name: Show Commit Used
+        run: |
+          echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt update
+          export DEBIAN_FRONTEND=noninteractive
+          sudo ln -fs /usr/share/zoneinfo/UTC /etc/localtime
+          echo "tzdata tzdata/Areas select Etc" | sudo debconf-set-selections
+          echo "tzdata tzdata/Zones/Etc select UTC" | sudo debconf-set-selections
+          sudo apt-get -y install git curl bzip2 python3-tk tcl tk
+          curl -fLO https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-6.4.1/ubuntu/22.04/rocm-installer_1.1.1.60401-30-83~22.04.run && sudo bash rocm-installer_1.1.1.60401-30-83~22.04.run deps=install rocm postrocm target="/opt"
+          sudo rm -rf rocm-install*
+
+      - name: Set Tcl/Tk Paths
+        run: |
+          echo "TCL_LIBRARY=$(find /usr/lib/ -name 'tcl8*' | head -n 1)" >> $GITHUB_ENV
+          echo "TK_LIBRARY=$(find /usr/lib/ -name 'tk8*' | head -n 1)" >> $GITHUB_ENV
+
+      - name: Build
+        id: make_build
+        run: |
+          ./koboldcpp.sh dist
+
+      - name: Save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcpp_linux_binary
+          path: dist/
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload rocm-rolling dist/koboldcpp-linux-x64-rocm --clobber

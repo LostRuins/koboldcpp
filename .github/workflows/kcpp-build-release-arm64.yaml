@@ -1,6 +1,13 @@
 name: Koboldcpp Linux ARM64
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Optional commit hash to build from'
+        required: false
+        default: ''
+
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
@@ -12,7 +19,11 @@ jobs:
         id: checkout
         uses: actions/checkout@v3
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
+          ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
+
+      - name: Show Commit Used
+        run: |
+          echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
 
       - name: Install Dependencies
         id: depends
@@ -66,6 +77,9 @@ jobs:
               --add-data './koboldcpp_default.so:.' \
               --add-data './kcpp_adapters:./kcpp_adapters' \
               --add-data './koboldcpp.py:.' \
+              --add-data './json_to_gbnf.py:.' \
+              --add-data './LICENSE.md:.'  \
+              --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' \
               --add-data './klite.embd:.' \
               --add-data './kcpp_docs.embd:.' \
               --add-data './kcpp_sdui.embd:.' \

@@ -13,7 +13,7 @@
  + 
  + MODIFICATIONS TO THIS FILE MAY MEAN IT NO LONGER ACCURATELY REFLECTS KHRONOS
  + STANDARDS. THE UNMODIFIED, NORMATIVE VERSIONS OF KHRONOS SPECIFICATIONS AND
- + HEADER INFORMATION ARE LOCATED AT https://www.khronos.org/registry/ 
+ + HEADER INFORMATION ARE LOCATED AT https://www.khronos.org/registry/
  + 
  + THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  + OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -73,6 +73,7 @@ enum SourceLanguage : uint
     WGSL = 10,
     Slang = 11,
     Zig = 12,
+    Rust = 13,
     Max = 0x7fffffff,
 }
 
@@ -177,6 +178,7 @@ enum ExecutionMode : uint
     EarlyAndLateFragmentTestsAMD = 5017,
     StencilRefReplacingEXT = 5027,
     CoalescingAMDX = 5069,
+    IsApiEntryAMDX = 5070,
     MaxNodeRecursionAMDX = 5071,
     StaticNumWorkgroupsAMDX = 5072,
     ShaderIndexAMDX = 5073,
@@ -189,6 +191,7 @@ enum ExecutionMode : uint
     StencilRefLessBackAMD = 5084,
     QuadDerivativesKHR = 5088,
     RequireFullQuadsKHR = 5089,
+    SharesInputWithAMDX = 5102,
     OutputLinesEXT = 5269,
     OutputLinesNV = 5269,
     OutputPrimitivesEXT = 5270,
@@ -243,7 +246,6 @@ enum StorageClass : uint
     StorageBuffer = 12,
     TileImageEXT = 4172,
     NodePayloadAMDX = 5068,
-    NodeOutputPayloadAMDX = 5076,
     CallableDataKHR = 5328,
     CallableDataNV = 5328,
     IncomingCallableDataKHR = 5329,
@@ -571,6 +573,10 @@ enum Decoration : uint
     NodeMaxPayloadsAMDX = 5020,
     TrackFinishWritingAMDX = 5078,
     PayloadNodeNameAMDX = 5091,
+    PayloadNodeBaseIndexAMDX = 5098,
+    PayloadNodeSparseArrayAMDX = 5099,
+    PayloadNodeArraySizeAMDX = 5100,
+    PayloadDispatchIndirectAMDX = 5105,
     OverrideCoverageNV = 5248,
     PassthroughNV = 5250,
     ViewportRelativeNV = 5252,
@@ -735,7 +741,7 @@ enum BuiltIn : uint
     BaryCoordSmoothSampleAMD = 4997,
     BaryCoordPullModelAMD = 4998,
     FragStencilRefEXT = 5014,
-    CoalescedInputCountAMDX = 5021,
+    RemainingRecursionLevelsAMDX = 5021,
     ShaderIndexAMDX = 5073,
     ViewportMaskNV = 5253,
     SecondaryPositionNV = 5257,
@@ -795,12 +801,19 @@ enum BuiltIn : uint
     IncomingRayFlagsKHR = 5351,
     IncomingRayFlagsNV = 5351,
     RayGeometryIndexKHR = 5352,
+    HitIsSphereNV = 5359,
+    HitIsLSSNV = 5360,
+    HitSpherePositionNV = 5361,
     WarpsPerSMNV = 5374,
     SMCountNV = 5375,
     WarpIDNV = 5376,
     SMIDNV = 5377,
+    HitLSSPositionsNV = 5396,
     HitKindFrontFacingMicroTriangleNV = 5405,
     HitKindBackFacingMicroTriangleNV = 5406,
+    HitSphereRadiusNV = 5420,
+    HitLSSRadiiNV = 5421,
+    ClusterIDNV = 5436,
     CullMaskKHR = 6021,
     Max = 0x7fffffff,
 }
@@ -873,6 +886,7 @@ enum FunctionControlShift : uint
     DontInline = 1,
     Pure = 2,
     Const = 3,
+    OptNoneEXT = 16,
     OptNoneINTEL = 16,
     Max = 0x7fffffff,
 }
@@ -884,6 +898,7 @@ enum FunctionControlMask : uint
     DontInline = 0x00000002,
     Pure = 0x00000004,
     Const = 0x00000008,
+    OptNoneEXT = 0x00010000,
     OptNoneINTEL = 0x00010000,
 }
 
@@ -1196,9 +1211,20 @@ enum Capability : uint
     ShaderInvocationReorderNV = 5383,
     BindlessTextureNV = 5390,
     RayQueryPositionFetchKHR = 5391,
+    CooperativeVectorNV = 5394,
     AtomicFloat16VectorNV = 5404,
     RayTracingDisplacementMicromapNV = 5409,
     RawAccessChainsNV = 5414,
+    RayTracingSpheresGeometryNV = 5418,
+    RayTracingLinearSweptSpheresGeometryNV = 5419,
+    CooperativeMatrixReductionsNV = 5430,
+    CooperativeMatrixConversionsNV = 5431,
+    CooperativeMatrixPerElementOperationsNV = 5432,
+    CooperativeMatrixTensorAddressingNV = 5433,
+    CooperativeMatrixBlockLoadsNV = 5434,
+    CooperativeVectorTrainingNV = 5435,
+    RayTracingClusterAccelerationStructureNV = 5437,
+    TensorAddressingNV = 5439,
     SubgroupShuffleINTEL = 5568,
     SubgroupBufferBlockIOINTEL = 5569,
     SubgroupImageBlockIOINTEL = 5570,
@@ -1258,11 +1284,13 @@ enum Capability : uint
     AtomicFloat32AddEXT = 6033,
     AtomicFloat64AddEXT = 6034,
     LongCompositesINTEL = 6089,
+    OptNoneEXT = 6094,
     OptNoneINTEL = 6094,
     AtomicFloat16AddEXT = 6095,
     DebugInfoModuleINTEL = 6114,
     BFloat16ConversionINTEL = 6115,
     SplitBarrierINTEL = 6141,
+    ArithmeticFenceEXT = 6144,
     FPGAClusterAttributesV2INTEL = 6150,
     FPGAKernelAttributesv2INTEL = 6161,
     FPMaxErrorINTEL = 6169,
@@ -1271,6 +1299,10 @@ enum Capability : uint
     GlobalVariableHostAccessINTEL = 6187,
     GlobalVariableFPGADecorationsINTEL = 6189,
     SubgroupBufferPrefetchINTEL = 6220,
+    Subgroup2DBlockIOINTEL = 6228,
+    Subgroup2DBlockTransformINTEL = 6229,
+    Subgroup2DBlockTransposeINTEL = 6230,
+    SubgroupMatrixMultiplyAccumulateINTEL = 6236,
     GroupUniformArithmeticKHR = 6400,
     MaskedGatherScatterINTEL = 6427,
     CacheControlsINTEL = 6441,
@@ -1288,6 +1320,7 @@ enum RayFlagsShift : uint
     CullFrontFacingTrianglesKHR = 5,
     CullOpaqueKHR = 6,
     CullNoOpaqueKHR = 7,
+    SkipBuiltinPrimitivesNV = 8,
     SkipTrianglesKHR = 8,
     SkipAABBsKHR = 9,
     ForceOpacityMicromap2StateEXT = 10,
@@ -1305,6 +1338,7 @@ enum RayFlagsMask : uint
     CullFrontFacingTrianglesKHR = 0x00000020,
     CullOpaqueKHR = 0x00000040,
     CullNoOpaqueKHR = 0x00000080,
+    SkipBuiltinPrimitivesNV = 0x00000100,
     SkipTrianglesKHR = 0x00000100,
     SkipAABBsKHR = 0x00000200,
     ForceOpacityMicromap2StateEXT = 0x00000400,
@@ -1430,6 +1464,46 @@ enum CooperativeMatrixUse : uint
     Max = 0x7fffffff,
 }
 
+enum CooperativeMatrixReduceShift : uint
+{
+    Row = 0,
+    Column = 1,
+    _2x2 = 2,
+    Max = 0x7fffffff,
+}
+
+enum CooperativeMatrixReduceMask : uint
+{
+    MaskNone = 0,
+    Row = 0x00000001,
+    Column = 0x00000002,
+    _2x2 = 0x00000004,
+}
+
+enum TensorClampMode : uint
+{
+    Undefined = 0,
+    Constant = 1,
+    ClampToEdge = 2,
+    Repeat = 3,
+    RepeatMirrored = 4,
+    Max = 0x7fffffff,
+}
+
+enum TensorAddressingOperandsShift : uint
+{
+    TensorView = 0,
+    DecodeFunc = 1,
+    Max = 0x7fffffff,
+}
+
+enum TensorAddressingOperandsMask : uint
+{
+    MaskNone = 0,
+    TensorView = 0x00000001,
+    DecodeFunc = 0x00000002,
+}
+
 enum InitializationModeQualifier : uint
 {
     InitOnDeviceReprogramINTEL = 0,
@@ -1471,6 +1545,44 @@ enum NamedMaximumNumberOfRegisters : uint
     Max = 0x7fffffff,
 }
 
+enum MatrixMultiplyAccumulateOperandsShift : uint
+{
+    MatrixASignedComponentsINTEL = 0,
+    MatrixBSignedComponentsINTEL = 1,
+    MatrixCBFloat16INTEL = 2,
+    MatrixResultBFloat16INTEL = 3,
+    MatrixAPackedInt8INTEL = 4,
+    MatrixBPackedInt8INTEL = 5,
+    MatrixAPackedInt4INTEL = 6,
+    MatrixBPackedInt4INTEL = 7,
+    MatrixATF32INTEL = 8,
+    MatrixBTF32INTEL = 9,
+    MatrixAPackedFloat16INTEL = 10,
+    MatrixBPackedFloat16INTEL = 11,
+    MatrixAPackedBFloat16INTEL = 12,
+    MatrixBPackedBFloat16INTEL = 13,
+    Max = 0x7fffffff,
+}
+
+enum MatrixMultiplyAccumulateOperandsMask : uint
+{
+    MaskNone = 0,
+    MatrixASignedComponentsINTEL = 0x00000001,
+    MatrixBSignedComponentsINTEL = 0x00000002,
+    MatrixCBFloat16INTEL = 0x00000004,
+    MatrixResultBFloat16INTEL = 0x00000008,
+    MatrixAPackedInt8INTEL = 0x00000010,
+    MatrixBPackedInt8INTEL = 0x00000020,
+    MatrixAPackedInt4INTEL = 0x00000040,
+    MatrixBPackedInt4INTEL = 0x00000080,
+    MatrixATF32INTEL = 0x00000100,
+    MatrixBTF32INTEL = 0x00000200,
+    MatrixAPackedFloat16INTEL = 0x00000400,
+    MatrixBPackedFloat16INTEL = 0x00000800,
+    MatrixAPackedBFloat16INTEL = 0x00001000,
+    MatrixBPackedBFloat16INTEL = 0x00002000,
+}
+
 enum RawAccessChainOperandsShift : uint
 {
     RobustnessPerComponentNV = 0,
@@ -1487,6 +1599,35 @@ enum RawAccessChainOperandsMask : uint
 
 enum FPEncoding : uint
 {
+    Max = 0x7fffffff,
+}
+
+enum CooperativeVectorMatrixLayout : uint
+{
+    RowMajorNV = 0,
+    ColumnMajorNV = 1,
+    InferencingOptimalNV = 2,
+    TrainingOptimalNV = 3,
+    Max = 0x7fffffff,
+}
+
+enum ComponentType : uint
+{
+    Float16NV = 0,
+    Float32NV = 1,
+    Float64NV = 2,
+    SignedInt8NV = 3,
+    SignedInt16NV = 4,
+    SignedInt32NV = 5,
+    SignedInt64NV = 6,
+    UnsignedInt8NV = 7,
+    UnsignedInt16NV = 8,
+    UnsignedInt32NV = 9,
+    UnsignedInt64NV = 10,
+    SignedInt8PackedNV = 1000491000,
+    UnsignedInt8PackedNV = 1000491001,
+    FloatE4M3NV = 1000491002,
+    FloatE5M2NV = 1000491003,
     Max = 0x7fffffff,
 }
 
@@ -1907,9 +2048,14 @@ enum Op : uint
     OpFragmentMaskFetchAMD = 5011,
     OpFragmentFetchAMD = 5012,
     OpReadClockKHR = 5056,
-    OpFinalizeNodePayloadsAMDX = 5075,
+    OpAllocateNodePayloadsAMDX = 5074,
+    OpEnqueueNodePayloadsAMDX = 5075,
+    OpTypeNodePayloadArrayAMDX = 5076,
     OpFinishWritingNodePayloadAMDX = 5078,
-    OpInitializeNodePayloadsAMDX = 5090,
+    OpNodePayloadArrayLengthAMDX = 5090,
+    OpIsNodePayloadValidAMDX = 5101,
+    OpConstantStringAMDX = 5103,
+    OpSpecConstantStringAMDX = 5104,
     OpGroupNonUniformQuadAllKHR = 5110,
     OpGroupNonUniformQuadAnyKHR = 5111,
     OpHitObjectRecordHitMotionNV = 5249,
@@ -1946,12 +2092,20 @@ enum Op : uint
     OpReorderThreadWithHintNV = 5280,
     OpTypeHitObjectNV = 5281,
     OpImageSampleFootprintNV = 5283,
+    OpTypeCooperativeVectorNV = 5288,
+    OpCooperativeVectorMatrixMulNV = 5289,
+    OpCooperativeVectorOuterProductAccumulateNV = 5290,
+    OpCooperativeVectorReduceSumAccumulateNV = 5291,
+    OpCooperativeVectorMatrixMulAddNV = 5292,
+    OpCooperativeMatrixConvertNV = 5293,
     OpEmitMeshTasksEXT = 5294,
     OpSetMeshOutputsEXT = 5295,
     OpGroupNonUniformPartitionNV = 5296,
     OpWritePackedPrimitiveIndices4x8NV = 5299,
     OpFetchMicroTriangleVertexPositionNV = 5300,
     OpFetchMicroTriangleVertexBarycentricNV = 5301,
+    OpCooperativeVectorLoadNV = 5302,
+    OpCooperativeVectorStoreNV = 5303,
     OpReportIntersectionKHR = 5334,
     OpReportIntersectionNV = 5334,
     OpIgnoreIntersectionNV = 5335,
@@ -1963,6 +2117,8 @@ enum Op : uint
     OpTypeAccelerationStructureKHR = 5341,
     OpTypeAccelerationStructureNV = 5341,
     OpExecuteCallableNV = 5344,
+    OpRayQueryGetClusterIdNV = 5345,
+    OpHitObjectGetClusterIdNV = 5346,
     OpTypeCooperativeMatrixNV = 5358,
     OpCooperativeMatrixLoadNV = 5359,
     OpCooperativeMatrixStoreNV = 5360,
@@ -1970,9 +2126,26 @@ enum Op : uint
     OpCooperativeMatrixLengthNV = 5362,
     OpBeginInvocationInterlockEXT = 5364,
     OpEndInvocationInterlockEXT = 5365,
+    OpCooperativeMatrixReduceNV = 5366,
+    OpCooperativeMatrixLoadTensorNV = 5367,
+    OpCooperativeMatrixStoreTensorNV = 5368,
+    OpCooperativeMatrixPerElementOpNV = 5369,
+    OpTypeTensorLayoutNV = 5370,
+    OpTypeTensorViewNV = 5371,
+    OpCreateTensorLayoutNV = 5372,
+    OpTensorLayoutSetDimensionNV = 5373,
+    OpTensorLayoutSetStrideNV = 5374,
+    OpTensorLayoutSliceNV = 5375,
+    OpTensorLayoutSetClampValueNV = 5376,
+    OpCreateTensorViewNV = 5377,
+    OpTensorViewSetDimensionNV = 5378,
+    OpTensorViewSetStrideNV = 5379,
     OpDemoteToHelperInvocation = 5380,
     OpDemoteToHelperInvocationEXT = 5380,
     OpIsHelperInvocationEXT = 5381,
+    OpTensorViewSetClipNV = 5382,
+    OpTensorLayoutSetBlockSizeNV = 5384,
+    OpCooperativeMatrixTransposeNV = 5390,
     OpConvertUToImageNV = 5391,
     OpConvertUToSamplerNV = 5392,
     OpConvertImageToUNV = 5393,
@@ -1981,6 +2154,19 @@ enum Op : uint
     OpConvertSampledImageToUNV = 5396,
     OpSamplerImageAddressingModeNV = 5397,
     OpRawAccessChainNV = 5398,
+    OpRayQueryGetIntersectionSpherePositionNV = 5427,
+    OpRayQueryGetIntersectionSphereRadiusNV = 5428,
+    OpRayQueryGetIntersectionLSSPositionsNV = 5429,
+    OpRayQueryGetIntersectionLSSRadiiNV = 5430,
+    OpRayQueryGetIntersectionLSSHitValueNV = 5431,
+    OpHitObjectGetSpherePositionNV = 5432,
+    OpHitObjectGetSphereRadiusNV = 5433,
+    OpHitObjectGetLSSPositionsNV = 5434,
+    OpHitObjectGetLSSRadiiNV = 5435,
+    OpHitObjectIsSphereHitNV = 5436,
+    OpHitObjectIsLSSHitNV = 5437,
+    OpRayQueryIsSphereHitNV = 5438,
+    OpRayQueryIsLSSHitNV = 5439,
     OpSubgroupShuffleINTEL = 5571,
     OpSubgroupShuffleDownINTEL = 5572,
     OpSubgroupShuffleUpINTEL = 5573,
@@ -2227,7 +2413,14 @@ enum Op : uint
     OpConvertBF16ToFINTEL = 6117,
     OpControlBarrierArriveINTEL = 6142,
     OpControlBarrierWaitINTEL = 6143,
+    OpArithmeticFenceEXT = 6145,
     OpSubgroupBlockPrefetchINTEL = 6221,
+    OpSubgroup2DBlockLoadINTEL = 6231,
+    OpSubgroup2DBlockLoadTransformINTEL = 6232,
+    OpSubgroup2DBlockLoadTransposeINTEL = 6233,
+    OpSubgroup2DBlockPrefetchINTEL = 6234,
+    OpSubgroup2DBlockStoreINTEL = 6235,
+    OpSubgroupMatrixMultiplyAccumulateINTEL = 6237,
     OpGroupIMulKHR = 6401,
     OpGroupFMulKHR = 6402,
     OpGroupBitwiseAndKHR = 6403,

@@ -1,6 +1,6 @@
 name: koboldcpp
 channels:
-  - nvidia/label/cuda-11.5.0
+  - nvidia/label/cuda-12.1.0
   - conda-forge
   - defaults
 dependencies:
@@ -10,7 +10,7 @@ dependencies:
   - cxx-compiler
   - gxx=10
   - pip
-  - git=2.35.1
+  - git
   - clblast
   - ninja
   - make

@@ -44,6 +44,8 @@ enum sample_method_t {
     IPNDM,
     IPNDM_V,
     LCM,
+    DDIM_TRAILING,
+    TCD,
     N_SAMPLE_METHODS
 };
 
@@ -59,37 +61,37 @@ enum schedule_t {
 
 // same as enum ggml_type
 enum sd_type_t {
-    SD_TYPE_F32  = 0,
-    SD_TYPE_F16  = 1,
-    SD_TYPE_Q4_0 = 2,
-    SD_TYPE_Q4_1 = 3,
+    SD_TYPE_F32     = 0,
+    SD_TYPE_F16     = 1,
+    SD_TYPE_Q4_0    = 2,
+    SD_TYPE_Q4_1    = 3,
     // SD_TYPE_Q4_2 = 4, support has been removed
     // SD_TYPE_Q4_3 = 5, support has been removed
-    SD_TYPE_Q5_0     = 6,
-    SD_TYPE_Q5_1     = 7,
-    SD_TYPE_Q8_0     = 8,
-    SD_TYPE_Q8_1     = 9,
-    SD_TYPE_Q2_K     = 10,
-    SD_TYPE_Q3_K     = 11,
-    SD_TYPE_Q4_K     = 12,
-    SD_TYPE_Q5_K     = 13,
-    SD_TYPE_Q6_K     = 14,
-    SD_TYPE_Q8_K     = 15,
-    SD_TYPE_IQ2_XXS  = 16,
-    SD_TYPE_IQ2_XS   = 17,
-    SD_TYPE_IQ3_XXS  = 18,
-    SD_TYPE_IQ1_S    = 19,
-    SD_TYPE_IQ4_NL   = 20,
-    SD_TYPE_IQ3_S    = 21,
-    SD_TYPE_IQ2_S    = 22,
-    SD_TYPE_IQ4_XS   = 23,
-    SD_TYPE_I8       = 24,
-    SD_TYPE_I16      = 25,
-    SD_TYPE_I32      = 26,
-    SD_TYPE_I64      = 27,
-    SD_TYPE_F64      = 28,
-    SD_TYPE_IQ1_M    = 29,
-    SD_TYPE_BF16     = 30,
+    SD_TYPE_Q5_0    = 6,
+    SD_TYPE_Q5_1    = 7,
+    SD_TYPE_Q8_0    = 8,
+    SD_TYPE_Q8_1    = 9,
+    SD_TYPE_Q2_K    = 10,
+    SD_TYPE_Q3_K    = 11,
+    SD_TYPE_Q4_K    = 12,
+    SD_TYPE_Q5_K    = 13,
+    SD_TYPE_Q6_K    = 14,
+    SD_TYPE_Q8_K    = 15,
+    SD_TYPE_IQ2_XXS = 16,
+    SD_TYPE_IQ2_XS  = 17,
+    SD_TYPE_IQ3_XXS = 18,
+    SD_TYPE_IQ1_S   = 19,
+    SD_TYPE_IQ4_NL  = 20,
+    SD_TYPE_IQ3_S   = 21,
+    SD_TYPE_IQ2_S   = 22,
+    SD_TYPE_IQ4_XS  = 23,
+    SD_TYPE_I8      = 24,
+    SD_TYPE_I16     = 25,
+    SD_TYPE_I32     = 26,
+    SD_TYPE_I64     = 27,
+    SD_TYPE_F64     = 28,
+    SD_TYPE_IQ1_M   = 29,
+    SD_TYPE_BF16    = 30,
     SD_TYPE_Q4_0_4_4 = 31,
     SD_TYPE_Q4_0_4_8 = 32,
     SD_TYPE_Q4_0_8_8 = 33,
@@ -98,7 +100,7 @@ enum sd_type_t {
     SD_TYPE_IQ4_NL_4_4 = 36,
     // SD_TYPE_IQ4_NL_4_8 = 37,
     // SD_TYPE_IQ4_NL_8_8 = 38,
-    SD_TYPE_COUNT = 39,
+    SD_TYPE_COUNT   = 39,
 };
 
 SD_API const char* sd_type_name(enum sd_type_t type);
@@ -129,6 +131,7 @@ typedef struct sd_ctx_t sd_ctx_t;
 
 SD_API void set_sd_vae_tiling(sd_ctx_t* ctx, bool tiling);
 SD_API int get_loaded_sd_version(sd_ctx_t* ctx);
+SD_API bool sd_loaded_chroma();
 
 SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             const char* clip_l_path,
@@ -151,7 +154,10 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             bool keep_clip_on_cpu,
                             bool keep_control_net_cpu,
                             bool keep_vae_on_cpu,
-                            bool diffusion_flash_attn);
+                            bool diffusion_flash_attn,
+                            bool chroma_use_dit_mask,
+                            bool chroma_use_t5_mask,
+                            int chroma_t5_mask_pad);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
@@ -161,6 +167,7 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            int clip_skip,
                            float cfg_scale,
                            float guidance,
+                           float eta,
                            int width,
                            int height,
                            enum sample_method_t sample_method,
@@ -172,19 +179,24 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float style_strength,
                            bool normalize_input,
                            const char* input_id_images_path,
+                           sd_image_t* kontext_imgs,
+                           int kontext_img_count,
                            int* skip_layers,
                            size_t skip_layers_count,
                            float slg_scale,
                            float skip_layer_start,
-                           float skip_layer_end);
+                           float skip_layer_end,
+                           const std::vector<sd_image_t*> photomaker_references);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
+                           sd_image_t mask_image,
                            const char* prompt,
                            const char* negative_prompt,
                            int clip_skip,
                            float cfg_scale,
                            float guidance,
+                           float eta,
                            int width,
                            int height,
                            enum sample_method_t sample_method,
@@ -197,11 +209,14 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            float style_strength,
                            bool normalize_input,
                            const char* input_id_images_path,
+                           sd_image_t* kontext_imgs,
+                           int kontext_img_count,
                            int* skip_layers,
                            size_t skip_layers_count,
                            float slg_scale,
                            float skip_layer_start,
-                           float skip_layer_end);
+                           float skip_layer_end,
+                           const std::vector<sd_image_t*> photomaker_references);
 
 SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
@@ -217,6 +232,32 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            int sample_steps,
                            float strength,
                            int64_t seed);
+
+SD_API sd_image_t* edit(sd_ctx_t* sd_ctx,
+                        sd_image_t* ref_images,
+                        int ref_images_count,
+                        const char* prompt,
+                        const char* negative_prompt,
+                        int clip_skip,
+                        float cfg_scale,
+                        float guidance,
+                        float eta,
+                        int width,
+                        int height,
+                        enum sample_method_t sample_method,
+                        int sample_steps,
+                        float strength,
+                        int64_t seed,
+                        int batch_count,
+                        const sd_image_t* control_cond,
+                        float control_strength,
+                        float style_strength,
+                        bool normalize_input,
+                        int* skip_layers,
+                        size_t skip_layers_count,
+                        float slg_scale,
+                        float skip_layer_start,
+                        float skip_layer_end);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

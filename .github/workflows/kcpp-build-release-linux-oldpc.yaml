@@ -1,0 +1,62 @@
+name: Koboldcpp Linux OldPC
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Optional commit hash to build from'
+        required: false
+        default: ''
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  NOAVX2: 1
+  ARCHES_CU11: 1
+  KCPP_CUDA: 11.5.0
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:20.04
+      options: --privileged
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
+
+      - name: Show Commit Used
+        run: |
+          echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
+
+      - name: Dependencies
+        id: depends
+        run: |
+          apt-get update
+          apt-get install -y sudo
+          export DEBIAN_FRONTEND=noninteractive
+          sudo ln -fs /usr/share/zoneinfo/UTC /etc/localtime
+          echo "tzdata tzdata/Areas select Etc" | sudo debconf-set-selections
+          echo "tzdata tzdata/Zones/Etc select UTC" | sudo debconf-set-selections
+          sudo apt-get -y install git curl bzip2 python3-tk tcl tk
+
+      - name: Set Tcl/Tk Paths
+        run: |
+          echo "TCL_LIBRARY=$(find /usr/lib/ -name 'tcl8*' | head -n 1)" >> $GITHUB_ENV
+          echo "TK_LIBRARY=$(find /usr/lib/ -name 'tk8*' | head -n 1)" >> $GITHUB_ENV
+
+      - name: Build
+        id: make_build
+        run: |
+          ./koboldcpp.sh dist
+
+      - name: Rename file before upload
+        run: mv dist/koboldcpp-linux-x64-cuda1150 dist/koboldcpp-linux-x64-oldpc
+
+      - name: Save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcpp_linux_binary
+          path: dist/

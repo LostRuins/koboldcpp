@@ -261,9 +261,19 @@
                             "minimum": 0,
                             "type": "number"
                          },
+                         "nsigma": {
+                            "description": "KoboldCpp ONLY. Top N-Sigma value. Set to above 0 to enable nsigma.",
+                            "minimum": 0,
+                            "type": "number"
+                         },
                          "logprobs": {
                             "default": false,
                             "description": "If true, return up to 5 top logprobs for generated tokens. Incurs performance overhead.",
+                            "type": "boolean"
+                         },
+                         "replace_instruct_placeholders": {
+                            "default": false,
+                            "description": "If true, replaces instruct placeholders {{[INPUT]}} and {{[OUTPUT]}} with backend selected instruct tags.",
                             "type": "boolean"
                          },
                       },
@@ -377,9 +387,29 @@
                             "type": "integer",
                             "description": "Last generation seed used."
                          },
+                         "last_draft_success": {
+                            "type": "integer",
+                            "description": "Last generation draft successes in tokens."
+                         },
+                         "last_draft_failed": {
+                            "type": "integer",
+                            "description": "Last generation draft failures in tokens."
+                         },
                          "total_gens": {
                             "type": "integer",
                             "description": "Total requests generated since startup."
+                         },
+                         "total_img_gens": {
+                            "type": "integer",
+                            "description": "Total image requests generated since startup."
+                         },
+                         "total_tts_gens": {
+                            "type": "integer",
+                            "description": "Total tts requests generated since startup."
+                         },
+                         "total_transcribe_gens": {
+                            "type": "integer",
+                            "description": "Total transcribe requests generated since startup."
                          },
                          "stop_reason": {
                             "type": "integer",
@@ -400,6 +430,14 @@
                           "uptime": {
                             "type": "integer",
                             "description": "Seconds that the server has been running for."
+                         },
+                         "idletime": {
+                            "type": "integer",
+                            "description": "Seconds that the server has been inactive for."
+                         },
+                         "quiet": {
+                            "type": "boolean",
+                            "description": "Is the server in quiet (no logging) mode."
                          }
                       },
                       "required": [
@@ -411,8 +449,8 @@
              },
              "info": {
                 "title": "KoboldCpp API",
-                "description": "For swagger.json, <a href=\"?json=1\">click here</a>.",
-                "version": "2025.01.08"
+                "description": "For swagger.json, <a href=\"?json=1\">click here</a> or use <a href=\"https://lite.koboldai.net/koboldcpp_api.json\">online version</a>.",
+                "version": "2025.06.03"
              },
              "openapi": "3.0.3",
              "paths": {
@@ -611,7 +649,7 @@
                                "application/json": {
                                   "example": {
                                      "result": "KoboldCpp",
-                                     "version": "2025.01.08",
+                                     "version": "2025.06.03",
                                      "protected": false,
                                      "txt2img": false,
                                      "vision": false,
@@ -619,6 +657,7 @@
                                      "multiplayer": false,
                                      "websearch":false,
                                      "tts":false,
+                                     "embeddings":false,
                                   },
                                   "schema": {
                                      "$ref": "#/components/schemas/KcppVersion"
@@ -666,14 +705,24 @@
                             "content": {
                                "application/json": {
                                   "example": {
-                                     "last_process": 5.0,
-                                     "last_eval": 7.0,
-                                     "last_token_count": 80,
-                                     "stop_reason": 1,
-                                     "queue": 0,
-                                     "total_gens": 3,
-                                     "idle": 1
-                                  },
+                                    "last_process": 0.76,
+                                    "last_eval": 65.8,
+                                    "last_token_count": 26,
+                                    "last_seed": 427343,
+                                    "last_draft_success": 0,
+                                    "last_draft_failed": 0,
+                                    "total_gens": 1724,
+                                    "stop_reason": 0,
+                                    "total_img_gens": 0,
+                                    "total_tts_gens": 0,
+                                    "total_transcribe_gens": 0,
+                                    "queue": 0,
+                                    "idle": 0,
+                                    "hordeexitcounter": -1,
+                                    "uptime": 2255,
+                                    "idletime": 3.5,
+                                    "quiet": true
+                                 },
                                   "schema": {
                                      "$ref": "#/components/schemas/KcppPerf"
                                   }
@@ -1455,6 +1504,7 @@
                                "example": {
                                   "input": "hello world, how are you today?",
                                   "voice": "kobo",
+                                  "speaker_json":"",
                                },
                                "schema": {
                                   "properties": {
@@ -1465,6 +1515,10 @@
                                      "voice": {
                                         "type": "string",
                                         "description": "The voice to use when generating the audio. You can enter anything you like, a unique speaker will be generated. There are a few preset voices you can use: kobo,cheery,sleepy,shouty,chatty"
+                                     },
+                                     "speaker_json": {
+                                        "type": "string",
+                                        "description": "Custom speaker JSON. More info at https://github.com/LostRuins/koboldcpp/tree/concedo/examples/outetts"
                                      }
                                   },
                                   "type": "object"
@@ -1490,6 +1544,153 @@
                       "tags": [
                          "api/extra"
                       ]
+                   }
+                },
+                "/api/extra/embeddings": {
+                   "post": {
+                      "summary": "Creates an embedding vector representing the input text. Please refer to OpenAI documentation",
+                      "description": "Creates an embedding vector representing the input text.\n\nThis is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://platform.openai.com/docs/api-reference/embeddings/create](https://platform.openai.com/docs/api-reference/embeddings/create)",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                 "model": "kcpp",
+                                 "input": "Niko the Kobold is in town today.",
+                                 "truncate": true,
+                              },
+                               "schema": {
+                                  "properties": {
+                                     "model": {
+                                        "type": "string",
+                                        "description": "Not used, depends on loaded kcpp embeddings model."
+                                     },
+                                     "input": {
+                                        "type": "string",
+                                        "description": "String to convert into embedding vector"
+                                     },
+                                     "truncate": {
+                                        "type": "boolean",
+                                        "description": "If the string is too long, truncate it. Otherwise, exceeding max embedding size will cause the request to fail."
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "api/extra"
+                      ],
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example":
+                                  {
+                                    "object": "list",
+                                    "data": [
+                                       {
+                                          "object": "embedding",
+                                          "index": 0,
+                                          "embedding": [
+                                          0.089203,
+                                          0.016367,
+                                          0.062196,
+                                          -0.045898,
+                                          -0.019921
+                                          ]
+                                       }
+                                    ],
+                                    "model": "embedmodel",
+                                    "usage": {
+                                       "prompt_tokens": 100,
+                                       "total_tokens": 100
+                                    }
+                                 },
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                   }
+                },
+                "/api/extra/json_to_grammar": {
+                   "post": {
+                      "summary": "Converts a provided JSON schema into GBNF grammar.",
+                      "description": "Converts a provided JSON schema into GBNF grammar. Example schema at [https://platform.openai.com/docs/guides/structured-outputs](https://platform.openai.com/docs/guides/structured-outputs)",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                 "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                    "action_items": {
+                                       "type": "array",
+                                       "items": {
+                                       "type": "object",
+                                       "properties": {
+                                          "description": {
+                                          "type": "string",
+                                          "description": "Description of the action item."
+                                          },
+                                          "due_date": {
+                                          "type": ["string", "null"],
+                                          "description": "Due date for the action item, can be null if not specified."
+                                          },
+                                          "owner": {
+                                          "type": ["string", "null"],
+                                          "description": "Owner responsible for the action item, can be null if not specified."
+                                          }
+                                       },
+                                       "required": ["description", "due_date", "owner"],
+                                       "additionalProperties": false
+                                       },
+                                       "description": "List of action items from the meeting."
+                                    }
+                                    },
+                                    "required": ["action_items"],
+                                    "additionalProperties": false
+                                    }
+                              },
+                               "schema": {
+                                  "properties": {
+                                     "schema": {
+                                        "type": "object",
+                                        "description": "JSON schema representing the desired output format."
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "api/extra"
+                      ],
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                    "result": "action-items ::= \"[\" space (action-items-item (\",\" space action-items-item)*)? \"]\" space\naction-items-item ::= \"{\" space action-items-item-description-kv \",\" space action-items-item-due-date-kv \",\" space action-items-item-owner-kv \"}\" space\naction-items-item-description-kv ::= \"\\\"description\\\"\" space \":\" space string\naction-items-item-due-date ::= string | null\naction-items-item-due-date-kv ::= \"\\\"due_date\\\"\" space \":\" space action-items-item-due-date\naction-items-item-owner ::= string | null\naction-items-item-owner-kv ::= \"\\\"owner\\\"\" space \":\" space action-items-item-owner\naction-items-kv ::= \"\\\"action_items\\\"\" space \":\" space action-items\nchar ::= [^\"\\\\\\x7F\\x00-\\x1F] | [\\\\] ([\"\\\\bfnrt] | \"u\" [0-9a-fA-F]{4})\nnull ::= \"null\" space\nroot ::= \"{\" space action-items-kv \"}\" space\nspace ::= | \" \" | \"\\n\"{1,2} [ \\t]{0,20}\nstring ::= \"\\\"\" char* \"\\\"\" space",
+                                    "success": true
+                                    },
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
                    }
                 },
                 "/api/extra/data/save": {
@@ -1669,12 +1870,17 @@
                             "application/json": {
                                "example": {
                                   "filename": "file1.kcpps",
+                                  "overrideconfig":"",
                                },
                                "schema": {
                                   "properties": {
                                      "filename": {
                                         "type": "string",
                                         "description": "Filename of the .kcpps config to be loaded. Any associated files and models will be automatically swapped in."
+                                     },
+                                     "overrideconfig": {
+                                        "type": "string",
+                                        "description": "If filename is a gguf, this allows other kcpps settings to be overlaid on top of that gguf."
                                      },
                                   },
                                   "type": "object"
@@ -1706,6 +1912,244 @@
                       "summary": "Switches the currently loaded .kcpps config, and reloads any changed files or models.",
                       "tags": [
                          "api/admin"
+                      ]
+                   }
+                },
+                "/api/admin/check_state": {
+                   "post": {
+                      "description": "Gets the number of bytes taken for existing save state, and predicts the bytes required for a new save state.",
+                      "responses": {
+                         "200": {
+                            "content": {
+                                 "application/json": {
+                                  "example": {
+                                     "success": true,
+                                     "old_states": [
+                                       {
+                                          "tokens": 0,
+                                          "size": 0
+                                       },
+                                       {
+                                          "tokens": 0,
+                                          "size": 0
+                                       },
+                                       {
+                                          "tokens": 0,
+                                          "size": 0
+                                       }
+                                    ],
+                                     "new_state_size": 0,
+                                     "new_tokens": 0,
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        },
+                                        "old_states": {
+                                           "type": "array",
+                                            "items": {
+                                            "type": "object",
+                                            "properties": {
+                                               "tokens": {
+                                               "type": "number",
+                                               "description": "Tokens in this saved state."
+                                               },
+                                               "size": {
+                                               "type": "number",
+                                               "description": "Size of this saved state in bytes."
+                                               }
+                                             }
+                                           }
+                                        },
+                                        "new_state_size": {
+                                           "type": "number",
+                                           "description": "Bytes a new save state is estimated to consume."
+                                        },
+                                        "new_tokens": {
+                                           "type": "number",
+                                           "description": "How many tokens will be stored if a new save state is made."
+                                        }
+                                     }
+                                  }
+                               }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Gets the number of bytes taken for existing save state, and predicts the bytes required for a new save state.",
+                      "tags": [
+                         "api/admin"
+                      ]
+                   }
+                },
+                "/api/admin/save_state": {
+                   "post": {
+                      "description": "Creates a new KV cache save state in memory. Overwrites any existing saved state.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "slot": 0,
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "slot": {
+                                        "type": "number",
+                                        "description": "Which slot index to save/load the state to/from."
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                                 "application/json": {
+                                  "example": {
+                                     "success": true,
+                                     "new_state_size": 12345678,
+                                     "new_tokens": 100,
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        },
+                                        "new_state_size": {
+                                           "type": "number",
+                                           "description": "Bytes a new save state is estimated to consume."
+                                        },
+                                        "new_tokens": {
+                                           "type": "number",
+                                           "description": "How many context tokens were saved in state."
+                                        }
+                                     }
+                                  }
+                               }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Creates a new KV cache save state in memory. Overwrites any existing saved state.",
+                      "tags": [
+                         "api/admin"
+                      ]
+                   }
+                },
+                "/api/admin/load_state": {
+                   "post": {
+                      "description": "Reloads a previous KV cache save state into context.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "slot": 0,
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "slot": {
+                                        "type": "number",
+                                        "description": "Which slot index to save/load the state to/from."
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                                 "application/json": {
+                                  "example": {
+                                     "success": true,
+                                     "new_tokens": 100
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        },
+                                        "new_tokens": {
+                                           "type": "number",
+                                           "description": "How many context tokens were loaded from state."
+                                        }
+                                     }
+                                  }
+                               }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Reloads a previous KV cache save state into context.",
+                      "tags": [
+                         "api/admin"
+                      ]
+                   }
+                },
+                "/api/admin/clear_state": {
+                   "post": {
+                      "description": "Frees all previous KV cache save state.",
+                      "responses": {
+                         "200": {
+                            "content": {
+                                 "application/json": {
+                                  "example": {
+                                     "success": true
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        }
+                                     }
+                                  }
+                               }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Frees all previous KV cache save state.",
+                      "tags": [
+                         "api/admin"
+                      ]
+                   }
+                },
+                "/api/extra/shutdown": {
+                   "post": {
+                      "description": "Shuts down the server and exits koboldcpp. Only usable from localhost! Both old and new KoboldCpp Server must have been launched with the --singleinstance flag for this to work.",
+                      "responses": {
+                         "200": {
+                            "content": {
+                                 "application/json": {
+                                  "example": {
+                                     "success": true
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "success": {
+                                           "type": "boolean",
+                                           "description": "Whether the operation was successful."
+                                        }
+                                     }
+                                  }
+                               }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Shuts down the current KoboldCpp server.",
+                      "tags": [
+                         "api/extra"
                       ]
                    }
                 },
@@ -1871,6 +2315,13 @@
                                      "sampler_name": {
                                         "type": "string"
                                      },
+                                     "extra_images": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                       },
+                                       "description": "KCPP only. Used for photomaker and Flux Kontext, to add extra b64 reference images."
+                                     },
                                   },
                                   "type": "object"
                                }
@@ -1930,7 +2381,9 @@
                                   "clip_skip": -1,
                                   "sampler_name": "Euler a",
                                   "denoising_strength": 0.6,
-                                  "init_images":["base64_image_data"],
+                                  "init_images":[],
+                                  "mask":"",
+                                  "inpainting_mask_invert":0,
                                },
                                "schema": {
                                   "properties": {
@@ -1969,6 +2422,19 @@
                                         "items": {
                                           "type": "string"
                                        }
+                                     },
+                                     "mask": {
+                                        "type": "string"
+                                     },
+                                     "inpainting_mask_invert": {
+                                        "type": "string"
+                                     },
+                                     "extra_images": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                       },
+                                       "description": "KCPP only. Used for photomaker and Flux Kontext, to add extra b64 reference images."
                                      },
                                   },
                                   "type": "object"
@@ -2069,11 +2535,11 @@
                 "/v1/completions": {
                    "post": {
                       "summary": "Generates text continuations given a prompt. Please refer to OpenAI documentation",
-                      "description": "Generates text continuations given a prompt.\n\nThis is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://platform.openai.com/docs/api-reference/completions](https://platform.openai.com/docs/api-reference/completions)",
+                      "description": "Generates text continuations given a prompt.\n\nThis is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://platform.openai.com/docs/api-reference/completions](https://platform.openai.com/docs/api-reference/completions). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
                       "requestBody": {
                          "content": {
                             "application/json": {
-                               "example": {},
+                               "example": {"model":"kcpp","prompt": "Hi, my name is Kobo and", "temperature": 0.8,"max_tokens": 64},
                                "schema": {
                                   "properties": {},
                                   "type": "object"
@@ -2091,11 +2557,11 @@
                 "/v1/chat/completions": {
                    "post": {
                       "summary": "Generates a response from a list of messages. Please refer to OpenAI documentation",
-                      "description": "Given a list of messages comprising a conversation, the model will return a response.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://platform.openai.com/docs/api-reference/chat](https://platform.openai.com/docs/api-reference/chat)",
+                      "description": "Given a list of messages comprising a conversation, the model will return a response.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://platform.openai.com/docs/api-reference/chat](https://platform.openai.com/docs/api-reference/chat). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
                       "requestBody": {
                          "content": {
                             "application/json": {
-                               "example": {},
+                               "example": {"model":"kcpp","messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Tell me a joke about Kobolds."}],  "temperature": 0.7},
                                "schema": {
                                   "properties": {},
                                   "type": "object"
@@ -2137,7 +2603,33 @@
                       "requestBody": {
                          "content": {
                             "application/json": {
-                               "example": {},
+                               "example": {"model":"kcpp","input": "Hello, my name is Kobold and I love to play.", "voice": "alloy"},
+                               "schema": {
+                                  "properties": {},
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
+                "/v1/embeddings": {
+                   "post": {
+                      "summary": "Creates an embedding vector representing the input text. Please refer to OpenAI documentation",
+                      "description": "Creates an embedding vector representing the input text.\n\nThis is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://platform.openai.com/docs/api-reference/embeddings/create](https://platform.openai.com/docs/api-reference/embeddings/create)",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                 "model": "kcpp",
+                                 "input": "Niko the Kobold is in town today.",
+                                 "truncate": true,
+                              },
                                "schema": {
                                   "properties": {},
                                   "type": "object"

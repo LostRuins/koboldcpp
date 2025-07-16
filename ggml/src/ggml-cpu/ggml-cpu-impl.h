@@ -4,12 +4,12 @@
 
 #include "ggml.h"
 #include "ggml-impl.h"
+
 #include <stdlib.h> // load `stdlib.h` before other headers to work around MinGW bug: https://sourceforge.net/p/mingw-w64/bugs/192/
 //#include <stddef.h>
 #include <stdbool.h>
 #include <string.h> // memcpy
 #include <math.h>   // fabsf
-
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,40 +62,29 @@ struct ggml_compute_params {
 #if defined(__s390x__) && defined(__VEC__)
 #ifndef __VXE__
 #define __VXE__
-#endif
+#endif  // __VXE__
 #ifndef __VXE2__
 #define __VXE2__
-#endif
-#endif
+#endif  // __VXE2__
+#endif  // __s390x__ && __VEC__
+
+#if defined(__s390x__) && defined(GGML_NNPA)
+#ifndef __NNPA__
+#define __NNPA__
+#endif  // __NNPA__
+#endif  // __s390x__ && GGML_NNPA
 
 #if defined(__ARM_FEATURE_SVE)
-#include <arm_sve.h>
 #include <sys/prctl.h>
 #endif
 
-// 16-bit float
-// on Arm, we use __fp16
-// on x86, we use uint16_t
 #if defined(__ARM_NEON)
 
-// if YCM cannot find <arm_neon.h>, make a symbolic link to it, for example:
-//
-//   $ ln -sfn /Library/Developer/CommandLineTools/usr/lib/clang/13.1.6/include/arm_neon.h ./src/
-//
-#include <arm_neon.h>
-
+// ref: https://github.com/ggml-org/llama.cpp/pull/5404
 #ifdef _MSC_VER
-
-typedef uint16_t ggml_fp16_internal_t;
-
 #define ggml_vld1q_u32(w,x,y,z) { ((w) + ((uint64_t)(x) << 32)), ((y) + ((uint64_t)(z) << 32)) }
-
 #else
-
-typedef __fp16 ggml_fp16_internal_t;
-
 #define ggml_vld1q_u32(w,x,y,z) { (w), (x), (y), (z) }
-
 #endif // _MSC_VER
 
 #if !defined(__aarch64__)
@@ -337,22 +326,16 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 
 #ifdef __wasm_simd128__
 #include <wasm_simd128.h>
-#else
+#endif
+
 #ifdef __POWER9_VECTOR__
 #include <altivec.h>
-#undef bool
-#define bool _Bool
-#else
+#endif
+
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <intrin.h>
-#else
-#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__SSSE3__) || defined(__SSE3__) || defined(__SSE__)
-#if !defined(__riscv)
+#elif defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__SSSE3__) || defined(__SSE3__) || defined(__SSE__)
 #include <immintrin.h>
-#endif
-#endif
-#endif
-#endif
 #endif
 
 #ifdef __riscv_v_intrinsic
@@ -394,7 +377,7 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 #define vec_xor(a, b) ((a) ^ (b)) // Vector XOR
 #endif
 
-typedef signed char char8x16_t __attribute__((vector_size(16)));
+typedef signed   char char8x16_t  __attribute__((vector_size(16)));
 typedef unsigned char uchar8x16_t __attribute__((vector_size(16)));
 
 typedef int8_t  int8x16_t __attribute__((vector_size(16)));
@@ -405,10 +388,10 @@ typedef uint8_t  uint8x16_t __attribute__((vector_size(16)));
 typedef uint16_t uint16x8_t __attribute__((vector_size(16)));
 typedef uint32_t uint32x4_t __attribute__((vector_size(16)));
 
-typedef float float32x4_t __attribute__((vector_size(16)));
-typedef double double64x2_t __attribute((vector_size(16)));
+typedef float  float32x4_t  __attribute__((vector_size(16)));
+typedef double double64x2_t __attribute__((vector_size(16)));
 
-typedef signed long long long64x2_t __attribute((vector_size(16)));
+typedef signed   long long long64x2_t  __attribute__((vector_size(16)));
 typedef unsigned long long ulong64x2_t __attribute__((vector_size(16)));
 
 typedef struct ggml_uint8x16x2_t {
@@ -525,6 +508,9 @@ static __m256 __lasx_xvreplfr2vr_s(const float val) {
 
 // TODO: move to ggml-threading
 void ggml_barrier(struct ggml_threadpool * tp);
+
+void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
+int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);
 
 #ifdef __cplusplus
 }
