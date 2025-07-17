@@ -539,8 +539,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     int img2imgC = 3; // Assuming RGB image
     //because the reference image can be larger than the output image, allocate at least enough for 1024x1024
     const int imgMemNeed = std::max(img2imgW * img2imgH * img2imgC + 512, 1024 * 1024 * img2imgC + 512);
-    std::vector<uint8_t> resized_image_buf(imgMemNeed);
-    std::vector<uint8_t> resized_mask_buf(imgMemNeed);
     std::vector<std::vector<uint8_t>> resized_extraimage_bufs(max_extra_images, std::vector<uint8_t>(imgMemNeed));
 
     std::string ts = get_timestamp_str();
@@ -728,6 +726,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                           photomaker_imgs);
     } else {
 
+        std::vector<uint8_t> resized_image_buf;
+        std::vector<uint8_t> resized_mask_buf;
+
         if (sd_params->width <= 0 || sd_params->width % 64 != 0 || sd_params->height <= 0 || sd_params->height % 64 != 0) {
             printf("\nKCPP SD: bad request image dimensions!\n");
             output.data = "";
@@ -761,6 +762,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         {
             printf("Resize Img2Img: %dx%d to %dx%d\n",nx,ny,img2imgW,img2imgH);
         }
+        resized_image_buf.reserve(img2imgW * img2imgH * img2imgC + 512);
         int resok = stbir_resize_uint8(input_image_buffer, nx, ny, 0, resized_image_buf.data(), img2imgW, img2imgH, 0, img2imgC);
         if (!resok) {
             printf("\nKCPP SD: resize image failed!\n");
@@ -784,6 +786,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             {
                 printf("Resize Mask: %dx%d to %dx%d\n",nx2,ny2,img2imgW,img2imgH);
             }
+            resized_mask_buf.reserve(img2imgW * img2imgH * img2imgC + 512);
             int resok = stbir_resize_uint8(input_mask_buffer, nx2, ny2, 0, resized_mask_buf.data(), img2imgW, img2imgH, 0, 1);
             if (!resok) {
                 printf("\nKCPP SD: resize image failed!\n");
