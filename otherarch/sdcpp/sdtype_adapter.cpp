@@ -744,7 +744,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
         input_image_buffer = stbi_load_from_memory(image_buffer.data(), image_buffer.size(), &nx, &ny, &nc, 3);
 
-        if (nx < 64 || ny < 64 || nx > 1024 || ny > 1024 || nc!= 3) {
+        if (nx < 64 || ny < 64 || nx > 3072 || ny > 3072 || nc!= 3) {
             printf("\nKCPP SD: bad input image dimensions %d x %d!\n",nx,ny);
             output.data = "";
             output.status = 0;
