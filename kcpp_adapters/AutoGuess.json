@@ -12,7 +12,7 @@
     }
 }, {
     "search": ["<|im_start|>assistant", "<|im_end|>", "You are provided with function signatures within <tools>"],
-    "name": "ChatML (Qwen 2.5 based).",
+    "name": "ChatML (Qwen 2.5 based)",
     "adapter": {
         "system_start": "<|im_start|>system\n",
         "system_end": "<|im_end|>\n",
@@ -25,7 +25,7 @@
     }
 }, {
     "search": ["<|im_user|>user<|im_middle|>", "<|im_assistant|>assistant<|im_middle|>", "<|im_end|>"],
-    "name": "ChatML (Kimi).",
+    "name": "ChatML (Kimi)",
     "adapter": {
         "system_start": "<|im_system|>system<|im_middle|>",
         "system_end": "<|im_end|>",
@@ -36,7 +36,7 @@
     }
 }, {
     "search": ["System role not supported", "<start_of_turn>"],
-    "name": "Google Gemma 2.",
+    "name": "Google Gemma 2",
     "adapter": {
         "system_start": "<start_of_turn>user\n",
         "system_end": "<end_of_turn>\n",
@@ -47,7 +47,7 @@
     }
 }, {
     "search": ["<start_of_image>", "<start_of_turn>", "<end_of_turn>"],
-    "name": "Google Gemma 3.",
+    "name": "Google Gemma 3",
     "adapter": {
         "system_start": "<start_of_turn>user\n",
         "system_end": "<end_of_turn>\n",
@@ -58,7 +58,7 @@
     }
 }, {
     "search": ["<image_soft_token>", "<start_of_turn>model", "<end_of_turn>"],
-    "name": "Google Gemma 3n.",
+    "name": "Google Gemma 3n",
     "adapter": {
         "system_start": "<start_of_turn>user\n",
         "system_end": "<end_of_turn>\n",
@@ -69,7 +69,7 @@
     }
 },{
     "search": ["<|start_header_id|>assistant<|end_header_id|>"],
-    "name": "Llama 3.x.",
+    "name": "Llama 3.x",
     "adapter": {
         "system_start": "<|start_header_id|>system<|end_header_id|>\n\n",
         "system_end": "<|eot_id|>",
@@ -212,7 +212,7 @@
     }
 }, {
     "search": ["<|im_start|>assistant", "<|im_end|>"],
-    "name": "ChatML (Generic).",
+    "name": "ChatML (Generic)",
     "adapter": {
         "system_start": "<|im_start|>system\n",
         "system_end": "<|im_end|>\n",
