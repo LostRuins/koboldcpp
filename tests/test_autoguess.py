@@ -33,6 +33,10 @@ AUTOGUESS_MAPPING = {
     "ChatML (Generic)": "NewEden/Gemma-27B-chatml",
 }
 
+# User may be running this test from ./ or from ../ -- we want to be in ./ (i.e. tests)
+if os.path.exists("tests"):
+    os.chdir("tests")
+
 with open("../kcpp_adapters/AutoGuess.json") as f:
     autoguess = json.load(f)
 

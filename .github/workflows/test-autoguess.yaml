@@ -1,0 +1,29 @@
+name: AutoGuess Tests
+
+on:
+  pull_request:
+    paths:
+      - 'kcpp_adapters/AutoGuess.json'
+
+jobs:
+  test-autoguess:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'  # Adjust to your preferred Python version
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+        # Add any requirements installation here if needed
+        # pip install -r requirements.txt
+
+    - name: Run AutoGuess tests
+      run: python tests/test_autoguess.py
