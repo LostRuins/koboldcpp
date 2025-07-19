@@ -19095,7 +19095,32 @@ Current version indicated by LITEVER below.
 			const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 			audioContext.decodeAudioData(arrayBuffer, function (buffer) {
 				const samplefreq = buffer.sampleRate;
-				const samples = buffer.getChannelData(0); // mono
+				const numberOfChannels = buffer.numberOfChannels;
+				const length = buffer.length;
+				//first, mix all down into mono
+				let samples = new Float32Array(length);
+				for (let channel = 0; channel < numberOfChannels; channel++) {
+					const channelData = buffer.getChannelData(channel);
+					for (let i = 0; i < length; i++) {
+						samples[i] += channelData[i];
+					}
+				}
+				for (let i = 0; i < length; i++) {
+					samples[i] /= numberOfChannels;
+				}
+				//handle extremely soft audio
+				let max = 0;
+				for (let i = 0; i < length; i++) {
+					const abs = Math.abs(samples[i]);
+					if (abs > max) max = abs;
+				}
+				if (max > 0 && max < 0.2) {
+					for (let i = 0; i < length; i++) {
+						samples[i] /= max;
+						samples[i] *= 0.2; //all super soft audio is bumped up to this
+					}
+				}
+
 				const durationInSeconds = buffer.duration;
 				const mp3encoder = new lamejs.Mp3Encoder(1, samplefreq, 40); // mono, 16kHz, 40kbps
 				const sampleBlockSize = 1152; //can be anything but make it a multiple of 576 to make encoders life easier
