@@ -81,20 +81,20 @@ seen = set()
 namefmt = "{name:<" + str(max(len(name) for name in AUTOGUESS_MAPPING.keys())) + "}"
 hmifmt = "{huggingface_model_id:<" + str(max(len(huggingface_model_id) for huggingface_model_id in AUTOGUESS_MAPPING.values())) + "}"
 for name, huggingface_model_id in AUTOGUESS_MAPPING.items():
+    seen.add(name)
     if huggingface_model_id == "***UNKNOWN***":
         print(namefmt.format(name=name) + " = " + namefmt.format(name="***UNKNOWN***") + " : PENDING")
+        continue
+    tokenizer_config = get_tokenizer_config_for_huggingface_model_id(huggingface_model_id)
+    assert 'chat_template' in tokenizer_config
+    matched = match_chat_template_to_adapter(tokenizer_config['chat_template'])
+    if matched is None:
+        matched, sub_template = "MISSING MAPPING", None
     else:
-        tokenizer_config = get_tokenizer_config_for_huggingface_model_id(huggingface_model_id)
-        assert 'chat_template' in tokenizer_config
-        matched = match_chat_template_to_adapter(tokenizer_config['chat_template'])
-        if matched is None:
-            matched, sub_template = "MISSING MAPPING", None
-        else:
-            matched, sub_template = matched
-        sub_template = f"[{sub_template}]" if sub_template else ""
-        print(namefmt.format(name=name) + " = " + namefmt.format(name=matched) + " : " + ("OK     " if name == matched else "FAILURE") + " " + hmifmt.format(huggingface_model_id=huggingface_model_id) + " " + sub_template)
-        failures += name != matched
-    seen.add(name)
+        matched, sub_template = matched
+    sub_template = f"[{sub_template}]" if sub_template else ""
+    print(namefmt.format(name=name) + " = " + namefmt.format(name=matched) + " : " + ("OK     " if name == matched else "FAILURE") + " " + hmifmt.format(huggingface_model_id=huggingface_model_id) + " " + sub_template)
+    failures += name != matched
 
 for entry in autoguess:
     if entry['name'] not in seen:
