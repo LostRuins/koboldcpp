@@ -93,8 +93,8 @@ for name, huggingface_model_id in AUTOGUESS_MAPPING.items():
             matched, sub_template = matched
         sub_template = f"[{sub_template}]" if sub_template else ""
         print(namefmt.format(name=name) + " = " + namefmt.format(name=matched) + " : " + ("OK     " if name == matched else "FAILURE") + " " + hmifmt.format(huggingface_model_id=huggingface_model_id) + " " + sub_template)
+        failures += name != matched
     seen.add(name)
-    failures += name != matched
 
 for entry in autoguess:
     if entry['name'] not in seen:
