@@ -43,7 +43,7 @@ with open("../kcpp_adapters/AutoGuess.json") as f:
 os.makedirs(".tokenizer_configs", exist_ok=True)
 
 def get_tokenizer_config_for_huggingface_model_id(huggingface_model_id: str):
-    fname = f"included_tokenizer_configs/{huggingface_model_id.replace('/','_')}.json"
+    fname = f"gated-repositories/tokenizer_configs/{huggingface_model_id.replace('/','_')}.json"
     if os.path.exists(fname):
         with open(fname) as f:
             return json.load(f)
