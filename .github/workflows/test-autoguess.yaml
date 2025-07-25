@@ -2,6 +2,8 @@ name: AutoGuess Tests
 
 on:
   pull_request:
+    branches:
+      - concedo_experimental
     paths:
       - 'kcpp_adapters/AutoGuess.json'
 
