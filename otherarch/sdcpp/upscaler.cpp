@@ -9,9 +9,12 @@ struct UpscalerGGML {
     std::shared_ptr<ESRGAN> esrgan_upscaler;
     std::string esrgan_path;
     int n_threads;
+    bool direct = false;
 
-    UpscalerGGML(int n_threads)
-        : n_threads(n_threads) {
+    UpscalerGGML(int n_threads,
+                 bool direct = false)
+        : n_threads(n_threads),
+          direct(direct) {
     }
 
     bool load_from_file(const std::string& esrgan_path) {
@@ -21,11 +24,16 @@ struct UpscalerGGML {
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
+        ggml_log_set(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 #ifdef SD_USE_VULKAN
         LOG_DEBUG("Using Vulkan backend");
         backend = ggml_backend_vk_init(0);
+#endif
+#ifdef SD_USE_OPENCL
+        LOG_DEBUG("Using OpenCL backend");
+        backend = ggml_backend_opencl_init();
 #endif
 #ifdef SD_USE_SYCL
         LOG_DEBUG("Using SYCL backend");
@@ -42,6 +50,9 @@ struct UpscalerGGML {
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
         esrgan_upscaler = std::make_shared<ESRGAN>(backend, model_loader.tensor_storages_types);
+        if (direct) {
+            esrgan_upscaler->enable_conv2d_direct();
+        }
         if (!esrgan_upscaler->load_from_file(esrgan_path)) {
             return false;
         }
@@ -99,14 +110,15 @@ struct upscaler_ctx_t {
 };
 
 upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
-                                 int n_threads) {
+                                 int n_threads,
+                                 bool direct = false) {
     upscaler_ctx_t* upscaler_ctx = (upscaler_ctx_t*)malloc(sizeof(upscaler_ctx_t));
     if (upscaler_ctx == NULL) {
         return NULL;
     }
     std::string esrgan_path(esrgan_path_c_str);
 
-    upscaler_ctx->upscaler = new UpscalerGGML(n_threads);
+    upscaler_ctx->upscaler = new UpscalerGGML(n_threads, direct);
     if (upscaler_ctx->upscaler == NULL) {
         return NULL;
     }

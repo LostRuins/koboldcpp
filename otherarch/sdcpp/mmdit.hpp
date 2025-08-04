@@ -147,8 +147,8 @@ protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
 
@@ -652,13 +652,13 @@ protected:
     int64_t hidden_size;
     std::string qk_norm;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "pos_embed") != tensor_types.end()) ? tensor_types[prefix + "pos_embed"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F32;
         params["pos_embed"]  = ggml_new_tensor_3d(ctx, wtype, hidden_size, num_patchs, 1);
     }
 
 public:
-    MMDiT(std::map<std::string, enum ggml_type>& tensor_types) {
+    MMDiT(const String2GGMLType& tensor_types = {}) {
         // input_size is always None
         // learn_sigma is always False
         // register_length is alwalys 0
@@ -869,11 +869,9 @@ public:
 struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
-    static std::map<std::string, enum ggml_type> empty_tensor_types;
-
     MMDiTRunner(ggml_backend_t backend,
-                std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
-                const std::string prefix                            = "")
+                const String2GGMLType& tensor_types = {},
+                const std::string prefix            = "")
         : GGMLRunner(backend), mmdit(tensor_types) {
         mmdit.init(params_ctx, tensor_types, prefix);
     }

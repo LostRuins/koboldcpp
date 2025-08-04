@@ -3,7 +3,7 @@
 
 #include "ggml_extend.hpp"
 
-#define LORA_GRAPH_SIZE 20480
+#define LORA_GRAPH_BASE_SIZE 10240
 
 struct LoraModel : public GGMLRunner {
     enum lora_t {
@@ -238,7 +238,8 @@ struct LoraModel : public GGMLRunner {
     }
 
     struct ggml_cgraph* build_lora_graph(std::map<std::string, struct ggml_tensor*> model_tensors, SDVersion version) {
-        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, LORA_GRAPH_SIZE, false);
+        size_t lora_graph_size = LORA_GRAPH_BASE_SIZE + lora_tensors.size() * 10;
+        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, lora_graph_size, false);
 
         zero_index = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, 1);
         set_backend_tensor_data(zero_index, zero_index_vec.data());
@@ -290,7 +291,6 @@ struct LoraModel : public GGMLRunner {
                     std::string hada_2_mid_name  = "";
                     std::string hada_2_down_name = "";
                     std::string hada_2_up_name   = "";
-
 
                     hada_1_down_name = fk + ".hada_w1_b";
                     hada_1_up_name   = fk + ".hada_w1_a";

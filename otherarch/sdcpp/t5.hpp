@@ -457,8 +457,8 @@ protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
 
@@ -735,7 +735,7 @@ struct T5Runner : public GGMLRunner {
     std::vector<int> relative_position_bucket_vec;
 
     T5Runner(ggml_backend_t backend,
-             std::map<std::string, enum ggml_type>& tensor_types,
+             const String2GGMLType& tensor_types,
              const std::string prefix,
              int64_t num_layers = 24,
              int64_t model_dim  = 4096,
@@ -876,16 +876,14 @@ struct T5Embedder {
     T5UniGramTokenizer tokenizer;
     T5Runner model;
 
-    static std::map<std::string, enum ggml_type> empty_tensor_types;
-
     T5Embedder(ggml_backend_t backend,
-               std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
-               const std::string prefix                            = "",
-               int64_t num_layers                                  = 24,
-               int64_t model_dim                                   = 4096,
-               int64_t ff_dim                                      = 10240,
-               int64_t num_heads                                   = 64,
-               int64_t vocab_size                                  = 32128)
+               const String2GGMLType& tensor_types = {},
+               const std::string prefix            = "",
+               int64_t num_layers                  = 24,
+               int64_t model_dim                   = 4096,
+               int64_t ff_dim                      = 10240,
+               int64_t num_heads                   = 64,
+               int64_t vocab_size                  = 32128)
         : model(backend, tensor_types, prefix, num_layers, model_dim, ff_dim, num_heads, vocab_size) {
     }
 

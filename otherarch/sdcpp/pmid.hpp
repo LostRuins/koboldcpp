@@ -623,7 +623,12 @@ public:
     std::vector<float> zeros_right;
 
 public:
-    PhotoMakerIDEncoder(ggml_backend_t backend, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix, SDVersion version = VERSION_SDXL, PMVersion pm_v = PM_VERSION_1, float sty = 20.f)
+    PhotoMakerIDEncoder(ggml_backend_t backend,
+                        const String2GGMLType& tensor_types,
+                        const std::string prefix,
+                        SDVersion version = VERSION_SDXL,
+                        PMVersion pm_v    = PM_VERSION_1,
+                        float sty         = 20.f)
         : GGMLRunner(backend),
           version(version),
           pm_version(pm_v),

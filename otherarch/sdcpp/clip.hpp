@@ -545,9 +545,9 @@ protected:
     int64_t vocab_size;
     int64_t num_positions;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type token_wtype    = (tensor_types.find(prefix + "token_embedding.weight") != tensor_types.end()) ? tensor_types[prefix + "token_embedding.weight"] : GGML_TYPE_F32;
-        enum ggml_type position_wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "position_embedding.weight") != tensor_types.end()) ? tensor_types[prefix + "position_embedding.weight"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type token_wtype    = GGML_TYPE_F32;
+        enum ggml_type position_wtype = GGML_TYPE_F32;
 
         params["token_embedding.weight"]    = ggml_new_tensor_2d(ctx, token_wtype, embed_dim, vocab_size);
         params["position_embedding.weight"] = ggml_new_tensor_2d(ctx, position_wtype, embed_dim, num_positions);
@@ -594,10 +594,10 @@ protected:
     int64_t image_size;
     int64_t num_patches;
     int64_t num_positions;
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type patch_wtype    = GGML_TYPE_F16;  // tensor_types.find(prefix + "patch_embedding.weight") != tensor_types.end() ? tensor_types[prefix + "patch_embedding.weight"] : GGML_TYPE_F16;
-        enum ggml_type class_wtype    = GGML_TYPE_F32;  // tensor_types.find(prefix + "class_embedding") != tensor_types.end() ? tensor_types[prefix + "class_embedding"] : GGML_TYPE_F32;
-        enum ggml_type position_wtype = GGML_TYPE_F32;  // tensor_types.find(prefix + "position_embedding.weight") != tensor_types.end() ? tensor_types[prefix + "position_embedding.weight"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type patch_wtype    = GGML_TYPE_F16;
+        enum ggml_type class_wtype    = GGML_TYPE_F32;
+        enum ggml_type position_wtype = GGML_TYPE_F32;
 
         params["patch_embedding.weight"]    = ggml_new_tensor_4d(ctx, patch_wtype, patch_size, patch_size, num_channels, embed_dim);
         params["class_embedding"]           = ggml_new_tensor_1d(ctx, class_wtype, embed_dim);
@@ -657,9 +657,9 @@ enum CLIPVersion {
 
 class CLIPTextModel : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         if (version == OPEN_CLIP_VIT_BIGG_14) {
-            enum ggml_type wtype      = GGML_TYPE_F32;  // tensor_types.find(prefix + "text_projection") != tensor_types.end() ? tensor_types[prefix + "text_projection"] : GGML_TYPE_F32;
+            enum ggml_type wtype      = GGML_TYPE_F32;
             params["text_projection"] = ggml_new_tensor_2d(ctx, wtype, projection_dim, hidden_size);
         }
     }
@@ -678,8 +678,8 @@ public:
     bool with_final_ln        = true;
 
     CLIPTextModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                  int clip_skip_value = -1,
-                  bool with_final_ln  = true)
+                  bool with_final_ln  = true,
+                  int clip_skip_value = -1)
         : version(version), with_final_ln(with_final_ln) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size       = 1024;
@@ -701,7 +701,7 @@ public:
 
     void set_clip_skip(int skip) {
         if (skip <= 0) {
-            return;
+            skip = -1;
         }
         clip_skip = skip;
     }
@@ -805,8 +805,8 @@ protected:
     int64_t out_features;
     bool transpose_weight;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = tensor_types.find(prefix + "weight") != tensor_types.end() ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
         if (transpose_weight) {
             params["weight"] = ggml_new_tensor_2d(ctx, wtype, out_features, in_features);
         } else {
@@ -868,12 +868,12 @@ struct CLIPTextModelRunner : public GGMLRunner {
     CLIPTextModel model;
 
     CLIPTextModelRunner(ggml_backend_t backend,
-                        std::map<std::string, enum ggml_type>& tensor_types,
+                        const String2GGMLType& tensor_types,
                         const std::string prefix,
                         CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                        int clip_skip_value = 1,
-                        bool with_final_ln  = true)
-        : GGMLRunner(backend), model(version, clip_skip_value, with_final_ln) {
+                        bool with_final_ln  = true,
+                        int clip_skip_value = -1)
+        : GGMLRunner(backend), model(version, with_final_ln, clip_skip_value) {
         model.init(params_ctx, tensor_types, prefix);
     }
 

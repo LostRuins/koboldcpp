@@ -56,8 +56,8 @@ public:
         // x: [N, channels, h, w]
         auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-        x = ggml_upscale(ctx, x, 2, ggml_scale_mode::GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
-        x = conv->forward(ctx, x);    // [N, out_channels, h*2, w*2]
+        x = ggml_upscale(ctx, x, 2, GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
+        x = conv->forward(ctx, x);                             // [N, out_channels, h*2, w*2]
         return x;
     }
 };
@@ -182,9 +182,9 @@ protected:
     int64_t dim_in;
     int64_t dim_out;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
-        enum ggml_type wtype      = (tensor_types.find(prefix + "proj.weight") != tensor_types.end()) ? tensor_types[prefix + "proj.weight"] : GGML_TYPE_F32;
-        enum ggml_type bias_wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "proj.bias") != tensor_types.end()) ? tensor_types[prefix + "proj.bias"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_types, GGML_TYPE_F32);
+        enum ggml_type bias_wtype = GGML_TYPE_F32;
         params["proj.weight"]     = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
         params["proj.bias"]       = ggml_new_tensor_1d(ctx, bias_wtype, dim_out * 2);
     }
@@ -440,9 +440,9 @@ public:
 
 class AlphaBlender : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
         // Get the type of the "mix_factor" tensor from the input tensors map with the specified prefix
-        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "mix_factor") != tensor_types.end()) ? tensor_types[prefix + "mix_factor"] : GGML_TYPE_F32;
+        enum ggml_type wtype = GGML_TYPE_F32;
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 

@@ -263,31 +263,35 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         sd_params->control_net_cpu);
     }
 
-    sd_ctx = new_sd_ctx(sd_params->model_path.c_str(),
-                        sd_params->clip_l_path.c_str(),
-                        sd_params->clip_g_path.c_str(),
-                        sd_params->t5xxl_path.c_str(),
-                        sd_params->diffusion_model_path.c_str(),
-                        sd_params->vae_path.c_str(),
-                        sd_params->taesd_path.c_str(),
-                        sd_params->controlnet_path.c_str(),
-                        sd_params->lora_model_dir.c_str(),
-                        sd_params->embeddings_path.c_str(),
-                        sd_params->stacked_id_embeddings_path.c_str(),
-                        vae_decode_only,
-                        sd_params->vae_tiling,
-                        free_param,
-                        sd_params->n_threads,
-                        sd_params->wtype,
-                        sd_params->rng_type,
-                        sd_params->schedule,
-                        sd_params->clip_on_cpu,
-                        sd_params->control_net_cpu,
-                        sd_params->vae_on_cpu,
-                        sd_params->diffusion_flash_attn,
-                        sd_params->chroma_use_dit_mask,
-                        sd_params->chroma_use_t5_mask,
-                        sd_params->chroma_t5_mask_pad);
+    sd_ctx_params_t params;
+    sd_ctx_params_init(&params);
+    params.model_path = sd_params->model_path.c_str();
+    params.clip_l_path = sd_params->clip_l_path.c_str();
+    params.clip_g_path = sd_params->clip_g_path.c_str();
+    params.t5xxl_path = sd_params->t5xxl_path.c_str();
+    params.diffusion_model_path = sd_params->diffusion_model_path.c_str();
+    params.vae_path = sd_params->vae_path.c_str();
+    params.taesd_path = sd_params->taesd_path.c_str();
+    params.control_net_path = sd_params->controlnet_path.c_str();
+    params.lora_model_dir = sd_params->lora_model_dir.c_str();
+    params.embedding_dir = sd_params->embeddings_path.c_str();
+    params.stacked_id_embed_dir = sd_params->stacked_id_embeddings_path.c_str();
+    params.vae_decode_only = vae_decode_only;
+    params.vae_tiling = sd_params->vae_tiling;
+    params.free_params_immediately = free_param;
+    params.n_threads = sd_params->n_threads;
+    params.wtype = sd_params->wtype;
+    params.rng_type = sd_params->rng_type;
+    params.schedule = sd_params->schedule;
+    params.keep_clip_on_cpu = sd_params->clip_on_cpu;
+    params.keep_control_net_on_cpu = sd_params->control_net_cpu;
+    params.keep_vae_on_cpu = sd_params->vae_on_cpu;
+    params.diffusion_flash_attn = sd_params->diffusion_flash_attn;
+    params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
+    params.chroma_use_t5_mask = sd_params->chroma_use_t5_mask;
+    params.chroma_t5_mask_pad = sd_params->chroma_t5_mask_pad;
+
+    sd_ctx = new_sd_ctx(&params);
 
     if (sd_ctx == NULL) {
         printf("\nError: KCPP SD Failed to create context!\nIf using Flux/SD3.5, make sure you have ALL files required (e.g. VAE, T5, Clip...) or baked in!\n");
@@ -672,18 +676,52 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    std::vector<sd_image_t*> photomaker_imgs;
+    std::vector<sd_image_t> photomaker_imgs;
     if(photomaker_enabled && extra_image_data.size()>0)
     {
         for(int i=0;i<extra_image_data.size();++i)
         {
-            photomaker_imgs.push_back(&extraimage_references[i]);
+            photomaker_imgs.push_back(extraimage_references[i]);
         }
         if(!sd_is_quiet && sddebugmode==1)
         {
             printf("\nPhotomaker: Using %d reference images\n",photomaker_imgs.size());
         }
     }
+
+    sd_img_gen_params_t params;
+    sd_img_gen_params_init (&params);
+
+    params.prompt = sd_params->prompt.c_str();
+    params.negative_prompt = sd_params->negative_prompt.c_str();
+    params.clip_skip = sd_params->clip_skip;
+    params.guidance.txt_cfg = sd_params->cfg_scale;
+    params.guidance.img_cfg = sd_params->cfg_scale;
+    params.guidance.distilled_guidance = sd_params->guidance;
+    params.eta = sd_params->eta;
+    params.width = sd_params->width;
+    params.height = sd_params->height;
+    params.sample_method = sd_params->sample_method;
+    params.sample_steps = sd_params->sample_steps;
+    params.seed = sd_params->seed;
+    params.batch_count = sd_params->batch_count;
+    params.control_cond = control_image;
+    params.control_strength = sd_params->control_strength;
+    params.style_strength = sd_params->style_ratio;
+    params.normalize_input = sd_params->normalize_input;
+    params.input_id_images_path = sd_params->input_id_images_path.c_str();
+
+    params.guidance.slg.layers = sd_params->skip_layers.data();
+    params.guidance.slg.layer_count = sd_params->skip_layers.size();
+    params.guidance.slg.layer_start = sd_params->skip_layer_start;
+    params.guidance.slg.layer_end = sd_params->skip_layer_end;
+    params.guidance.slg.scale = sd_params->slg_scale;
+
+    kcpp_img_gen_params_t extra_params = {};
+    extra_params.kontext_imgs = kontext_imgs.data();
+    extra_params.kontext_img_count = kontext_imgs.size();
+    extra_params.photomaker_references = photomaker_imgs.data();
+    extra_params.photomaker_reference_count = photomaker_imgs.size();
 
     if (sd_params->mode == TXT2IMG) {
 
@@ -704,32 +742,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             sd_params->control_strength);
         }
 
+        results = generate_image(sd_ctx, &params, &extra_params);
 
-        results = txt2img(sd_ctx,
-                          sd_params->prompt.c_str(),
-                          sd_params->negative_prompt.c_str(),
-                          sd_params->clip_skip,
-                          sd_params->cfg_scale,
-                          sd_params->guidance,
-                          sd_params->eta,
-                          sd_params->width,
-                          sd_params->height,
-                          sd_params->sample_method,
-                          sd_params->sample_steps,
-                          sd_params->seed,
-                          sd_params->batch_count,
-                          control_image,
-                          sd_params->control_strength,
-                          sd_params->style_ratio,
-                          sd_params->normalize_input,
-                          sd_params->input_id_images_path.c_str(),
-                          kontext_imgs.data(), kontext_imgs.size(),
-                          sd_params->skip_layers.data(),
-                          sd_params->skip_layers.size(),
-                          sd_params->slg_scale,
-                          sd_params->skip_layer_start,
-                          sd_params->skip_layer_end,
-                          photomaker_imgs);
     } else {
 
         if (sd_params->width <= 0 || sd_params->width % 64 != 0 || sd_params->height <= 0 || sd_params->height % 64 != 0) {
@@ -835,34 +849,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             sd_params->strength);
         }
 
-        results = img2img(sd_ctx,
-                            input_image,
-                            mask_image,
-                            sd_params->prompt.c_str(),
-                            sd_params->negative_prompt.c_str(),
-                            sd_params->clip_skip,
-                            sd_params->cfg_scale,
-                            sd_params->guidance,
-                            sd_params->eta,
-                            sd_params->width,
-                            sd_params->height,
-                            sd_params->sample_method,
-                            sd_params->sample_steps,
-                            sd_params->strength,
-                            sd_params->seed,
-                            sd_params->batch_count,
-                            control_image,
-                            sd_params->control_strength,
-                            sd_params->style_ratio,
-                            sd_params->normalize_input,
-                            sd_params->input_id_images_path.c_str(),
-                            kontext_imgs.data(), kontext_imgs.size(),
-                            sd_params->skip_layers.data(),
-                            sd_params->skip_layers.size(),
-                            sd_params->slg_scale,
-                            sd_params->skip_layer_start,
-                            sd_params->skip_layer_end,
-                            photomaker_imgs);
+        params.strength = sd_params->strength;
+        params.init_image = input_image;
+        params.mask_image = mask_image;
+
+        results = generate_image(sd_ctx, &params, &extra_params);
+
     }
 
     if (results == NULL) {

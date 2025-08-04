@@ -163,8 +163,8 @@ public:
 
 class VideoResnetBlock : public ResnetBlock {
 protected:
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = (tensor_types.find(prefix + "mix_factor") != tensor_types.end()) ? tensor_types[prefix + "mix_factor"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type wtype = get_type(prefix + "mix_factor", tensor_types, GGML_TYPE_F32);
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 
@@ -525,13 +525,24 @@ struct AutoEncoderKL : public GGMLRunner {
     AutoencodingEngine ae;
 
     AutoEncoderKL(ggml_backend_t backend,
-                  std::map<std::string, enum ggml_type>& tensor_types,
+                  const String2GGMLType& tensor_types,
                   const std::string prefix,
                   bool decode_only       = false,
                   bool use_video_decoder = false,
                   SDVersion version      = VERSION_SD1)
         : decode_only(decode_only), ae(decode_only, use_video_decoder, version), GGMLRunner(backend) {
         ae.init(params_ctx, tensor_types, prefix);
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        ae.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {

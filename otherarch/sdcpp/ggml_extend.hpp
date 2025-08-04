@@ -40,6 +40,10 @@
 #include "ggml-vulkan.h"
 #endif
 
+#ifdef SD_USE_OPENCL
+#include "ggml-opencl.h"
+#endif
+
 #ifdef SD_USE_SYCL
 #include "ggml-sycl.h"
 #endif
@@ -52,6 +56,8 @@
 #ifndef __STATIC_INLINE__
 #define __STATIC_INLINE__ static inline
 #endif
+
+static_assert(GGML_MAX_NAME >= 128, "GGML_MAX_NAME must be at least 128");
 
 // n-mode trensor-matrix product
 // example: 2-mode product
@@ -109,13 +115,13 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_merge_lora(ggml_context* ctx, struct 
 // [ne03,ne02,ne01,ne00] x [ne13,ne12,ne11,ne10] => [ne03*ne13,ne02*ne12,ne01*ne11,ne00*ne10]
 __STATIC_INLINE__ struct ggml_tensor* ggml_kronecker(ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b) {
     return ggml_mul(ctx,
-                    ggml_upscale_ext(ctx,
+                    ggml_interpolate(ctx,
                                      a,
                                      a->ne[0] * b->ne[0],
                                      a->ne[1] * b->ne[1],
                                      a->ne[2] * b->ne[2],
                                      a->ne[3] * b->ne[3],
-                                     ggml_scale_mode::GGML_SCALE_MODE_NEAREST),
+                                     GGML_SCALE_MODE_NEAREST),
                     b);
 }
 
@@ -811,6 +817,25 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
     return x;
 }
 
+__STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d_direct(struct ggml_context* ctx,
+                                                             struct ggml_tensor* x,
+                                                             struct ggml_tensor* w,
+                                                             struct ggml_tensor* b,
+                                                             int s0 = 1,
+                                                             int s1 = 1,
+                                                             int p0 = 0,
+                                                             int p1 = 0,
+                                                             int d0 = 1,
+                                                             int d1 = 1) {
+    x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
+    if (b != NULL) {
+        b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
+        // b = ggml_repeat(ctx, b, x);
+        x = ggml_add(ctx, x, b);
+    }
+    return x;
+}
+
 // w: [OC，IC, KD, 1 * 1]
 // x: [N, IC, IH, IW]
 // b: [OC,]
@@ -945,18 +970,32 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
 
     float scale = (1.0f / sqrt((float)d_head));
 
+    int kv_pad = 0;
     // if (flash_attn) {
     //     LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
     // }
-    //  is there anything oddly shaped?? ping Green-Sky if you can trip this assert
+    //   is there anything oddly shaped?? ping Green-Sky if you can trip this assert
     GGML_ASSERT(((L_k % 256 == 0) && L_q == L_k) || !(L_k % 256 == 0));
 
     bool can_use_flash_attn = true;
+    can_use_flash_attn      = can_use_flash_attn && (d_head == 64 ||
+                                                d_head == 80 ||
+                                                d_head == 96 ||
+                                                d_head == 112 ||
+                                                d_head == 128 ||
+                                                d_head == 256);
+#if 0
     can_use_flash_attn      = can_use_flash_attn && L_k % 256 == 0;
-    can_use_flash_attn      = can_use_flash_attn && d_head % 64 == 0;  // double check
-
-    // cuda max d_head seems to be 256, cpu does seem to work with 512
-    can_use_flash_attn = can_use_flash_attn && d_head <= 256;  // double check
+#else
+    if (can_use_flash_attn && L_k % 256 != 0) {
+        // TODO(Green-Sky): might be worth just padding by default
+        if (L_k == 77 || L_k == 4208 || L_k == 3952) {
+            kv_pad = GGML_PAD(L_k, 256) - L_k;
+        } else {
+            can_use_flash_attn = false;
+        }
+    }
+#endif
 
     if (mask != nullptr) {
         // TODO(Green-Sky): figure out if we can bend t5 to work too
@@ -969,11 +1008,18 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
     ggml_tensor* kqv = nullptr;
     // GGML_ASSERT((flash_attn && can_use_flash_attn) || !flash_attn);
     if (can_use_flash_attn && flash_attn) {
-        // LOG_DEBUG("using flash attention");
+        // LOG_DEBUG(" uses flash attention");
+        if (kv_pad != 0) {
+            // LOG_DEBUG(" padding k and v dim1 by %d", kv_pad);
+            k = ggml_pad(ctx, k, 0, kv_pad, 0, 0);
+        }
         k = ggml_cast(ctx, k, GGML_TYPE_F16);
 
         v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
         v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);  // [N * n_head, L_k, d_head]
+        if (kv_pad != 0) {
+            v = ggml_pad(ctx, v, 0, kv_pad, 0, 0);
+        }
         v = ggml_cast(ctx, v, GGML_TYPE_F16);
 
         if (mask != nullptr) {
@@ -1181,6 +1227,8 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
 #define MAX_PARAMS_TENSOR_NUM 32768
 #define MAX_GRAPH_SIZE 32768
 
+typedef std::map<std::string, enum ggml_type> String2GGMLType;
+
 struct GGMLRunner {
 protected:
     typedef std::function<struct ggml_cgraph*()> get_graph_cb_t;
@@ -1365,13 +1413,7 @@ public:
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
-// #ifdef SD_USE_METAL
-//         if (ggml_backend_is_metal(backend)) {
-//             ggml_backend_metal_set_n_cb(backend, n_threads);
-//         }
-// #endif
         ggml_backend_graph_compute(backend, gf);
-
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
@@ -1398,17 +1440,25 @@ protected:
     GGMLBlockMap blocks;
     ParameterMap params;
 
-    void init_blocks(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+    ggml_type get_type(const std::string& name, const String2GGMLType& tensor_types, ggml_type default_type) {
+        auto iter = tensor_types.find(name);
+        if (iter != tensor_types.end()) {
+            return iter->second;
+        }
+        return default_type;
+    }
+
+    void init_blocks(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         for (auto& pair : blocks) {
             auto& block = pair.second;
             block->init(ctx, tensor_types, prefix + pair.first);
         }
     }
 
-    virtual void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {}
+    virtual void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {}
 
 public:
-    void init(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
+    void init(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
         if (prefix.size() > 0) {
             prefix = prefix + ".";
         }
@@ -1455,6 +1505,19 @@ public:
             tensors[prefix + pair.first] = pair.second;
         }
     }
+
+    virtual std::string get_desc() {
+        return "GGMLBlock";
+    }
+
+    void get_all_blocks(std::vector<GGMLBlock*>& result) {
+        result.push_back(this);
+        for (auto& block_iter : blocks) {
+            if (block_iter.second) {
+                block_iter.second->get_all_blocks(result);
+            }
+        }
+    }
 };
 
 class UnaryBlock : public GGMLBlock {
@@ -1469,8 +1532,8 @@ protected:
     bool bias;
     bool force_f32;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = (tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
         if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
         }
@@ -1505,8 +1568,8 @@ class Embedding : public UnaryBlock {
 protected:
     int64_t embedding_dim;
     int64_t num_embeddings;
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = (tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
         params["weight"]     = ggml_new_tensor_2d(ctx, wtype, embedding_dim, num_embeddings);
     }
 
@@ -1544,12 +1607,13 @@ protected:
     std::pair<int, int> padding;
     std::pair<int, int> dilation;
     bool bias;
+    bool direct = false;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F16;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F16;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels, out_channels);
         if (bias) {
-            enum ggml_type wtype = GGML_TYPE_F32;  // (tensor_types.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+            enum ggml_type wtype = GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
         }
     }
@@ -1570,13 +1634,25 @@ public:
           dilation(dilation),
           bias(bias) {}
 
+    void enable_direct() {
+        direct = true;
+    }
+
+    std::string get_desc() {
+        return "Conv2d";
+    }
+
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = NULL;
         if (bias) {
             b = params["bias"];
         }
-        return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+        if (direct) {
+            return ggml_nn_conv_2d_direct(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+        } else {
+            return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+        }
     }
 };
 
@@ -1590,11 +1666,11 @@ protected:
     int64_t dilation;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F16;                                                              //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F16;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx, wtype, 1, kernel_size, in_channels, out_channels);  // 5d => 4d
         if (bias) {
-            enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+            enum ggml_type wtype = GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
         }
     }
@@ -1634,12 +1710,12 @@ protected:
     bool elementwise_affine;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         if (elementwise_affine) {
-            enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+            enum ggml_type wtype = GGML_TYPE_F32;
             params["weight"]     = ggml_new_tensor_1d(ctx, wtype, normalized_shape);
             if (bias) {
-                enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+                enum ggml_type wtype = GGML_TYPE_F32;
                 params["bias"]       = ggml_new_tensor_1d(ctx, wtype, normalized_shape);
             }
         }
@@ -1676,10 +1752,10 @@ protected:
     float eps;
     bool affine;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         if (affine) {
-            enum ggml_type wtype      = GGML_TYPE_F32;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
-            enum ggml_type bias_wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+            enum ggml_type wtype      = GGML_TYPE_F32;
+            enum ggml_type bias_wtype = GGML_TYPE_F32;
             params["weight"]          = ggml_new_tensor_1d(ctx, wtype, num_channels);
             params["bias"]            = ggml_new_tensor_1d(ctx, bias_wtype, num_channels);
         }

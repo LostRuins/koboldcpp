@@ -166,7 +166,6 @@ public:
 // ldm.modules.diffusionmodules.openaimodel.UNetModel
 class UnetModelBlock : public GGMLBlock {
 protected:
-    static std::map<std::string, enum ggml_type> empty_tensor_types;
     SDVersion version = VERSION_SD1;
     // network hparams
     int in_channels                        = 4;
@@ -184,7 +183,7 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types, bool flash_attn = false)
+    UnetModelBlock(SDVersion version = VERSION_SD1, const String2GGMLType& tensor_types = {}, bool flash_attn = false)
         : version(version) {
         if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
@@ -207,6 +206,8 @@ public:
         }
         if (sd_version_is_inpaint(version)) {
             in_channels = 9;
+        } else if (sd_version_is_unet_edit(version)) {
+            in_channels = 8;
         }
 
         // dims is always 2
@@ -537,12 +538,24 @@ struct UNetModelRunner : public GGMLRunner {
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
-                    std::map<std::string, enum ggml_type>& tensor_types,
+                    const String2GGMLType& tensor_types,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1,
                     bool flash_attn   = false)
         : GGMLRunner(backend), unet(version, tensor_types, flash_attn) {
         unet.init(params_ctx, tensor_types, prefix);
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        unet.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                LOG_DEBUG("block %s", block->get_desc().c_str());
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {
