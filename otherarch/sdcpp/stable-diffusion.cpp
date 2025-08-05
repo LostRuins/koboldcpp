@@ -1360,8 +1360,7 @@ public:
                 ggml_tensor_scale_output(result);
             }
         } else {
-            //koboldcpp never use tiling with taesd
-            if (false && vae_tiling) {
+            if (vae_tiling) {
                 // split latent in 64x64 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     tae_first_stage->compute(n_threads, in, decode, &out);

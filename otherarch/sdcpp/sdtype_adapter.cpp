@@ -160,6 +160,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     {
         taesdpath = executable_path + "taesd.embd";
         printf("With TAE SD VAE: %s\n",taesdpath.c_str());
+        if (cfg_tiled_vae_threshold < 8192) {
+            printf("  disabling VAE tiling for TAESD\n");
+            cfg_tiled_vae_threshold = 8192;
+        }
     }
     else if(vaefilename!="")
     {
