@@ -27,8 +27,6 @@
 // #define STB_IMAGE_WRITE_STATIC
 // #include "stb_image_write.h"
 
-static std::string pending_apply_lora_fname = "";
-static float pending_apply_lora_power = 1.0f;
 static bool is_loaded_chroma = false;
 
 const char* model_version_to_str[] = {
@@ -760,11 +758,6 @@ public:
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("check is_using_v_parameterization_for_sd2, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         return result < -1;
-    }
-
-    void set_pending_lora(const std::string& lora_path, float multiplier) {
-        pending_apply_lora_fname = lora_path;
-        pending_apply_lora_power = multiplier;
     }
 
     void apply_lora_from_file(const std::string& lora_path, float multiplier) {
@@ -1775,14 +1768,14 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     prompt = result_pair.second;
     LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
 
-    int64_t t0 = ggml_time_ms();
-    // sd_ctx->sd->apply_loras(lora_f2m); //only use hardcoded lora for kcpp
-    if(pending_apply_lora_fname!="" && pending_apply_lora_power>0)
-    {
-        printf("\nApplying LoRA now...\n");
-        sd_ctx->sd->apply_lora_from_file(pending_apply_lora_fname,pending_apply_lora_power);
-        pending_apply_lora_fname = "";
+    //only use hardcoded lora for kcpp
+    if (!lora_f2m.empty()) {
+        lora_f2m.clear();
+        printf("\nWarning: not applying LoRAs requested by prompt!\n");
     }
+
+    int64_t t0 = ggml_time_ms();
+    sd_ctx->sd->apply_loras(lora_f2m);
     int64_t t1 = ggml_time_ms();
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 

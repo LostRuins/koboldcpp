@@ -305,7 +305,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(lorafilename!="" && inputs.lora_multiplier>0)
     {
         printf("\nApply LoRA...\n");
-       // sd_ctx->sd->set_pending_lora(lorafilename,inputs.lora_multiplier);
         sd_ctx->sd->apply_lora_from_file(lorafilename,inputs.lora_multiplier);
     }
 
