@@ -27,8 +27,6 @@
 // #define STB_IMAGE_WRITE_STATIC
 // #include "stb_image_write.h"
 
-static bool is_loaded_chroma = false;
-
 const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
@@ -191,7 +189,6 @@ public:
 
         init_backend();
 
-        is_loaded_chroma = false;
         std::string taesd_path_fixed = taesd_path;
 
         ModelLoader model_loader;
@@ -393,7 +390,6 @@ public:
                 for (auto pair : model_loader.tensor_storages_types) {
                     if (pair.first.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
                         is_chroma = true;
-                        is_loaded_chroma = true;
                         break;
                     }
                 }
@@ -1700,22 +1696,6 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
         sd_ctx->sd = NULL;
     }
     free(sd_ctx);
-}
-
-void set_sd_vae_tiling(sd_ctx_t* ctx, bool tiling)
-{
-    ctx->sd->vae_tiling = tiling;
-}
-
-int get_loaded_sd_version(sd_ctx_t* ctx)
-{
-    return ctx->sd->version;
-}
-
-//kcpp hack to check if chroma
-bool sd_loaded_chroma()
-{
-    return is_loaded_chroma;
 }
 
 sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,

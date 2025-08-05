@@ -134,6 +134,27 @@ static bool sd_is_quiet = false;
 static std::string sdmodelfilename = "";
 static bool photomaker_enabled = false;
 
+static void set_sd_vae_tiling(sd_ctx_t* ctx, bool tiling)
+{
+    ctx->sd->vae_tiling = tiling;
+}
+
+static int get_loaded_sd_version(sd_ctx_t* ctx)
+{
+    return ctx->sd->version;
+}
+
+static bool loaded_model_is_chroma(sd_ctx_t* ctx)
+{
+    if (ctx != nullptr && ctx->sd != nullptr) {
+        auto maybe_flux = std::dynamic_pointer_cast<FluxModel>(ctx->sd->diffusion_model);
+        if (maybe_flux != nullptr) {
+            return maybe_flux->flux.flux_params.is_chroma;
+        }
+    }
+    return false;
+}
+
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
@@ -485,7 +506,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     auto loadedsdver = get_loaded_sd_version(sd_ctx);
     if (loadedsdver == SDVersion::VERSION_FLUX)
     {
-        if (!sd_loaded_chroma()) {
+        if (!loaded_model_is_chroma(sd_ctx)) {
             sd_params->cfg_scale = 1;  //non chroma clamp cfg scale
         }
         if (sampler == "euler a" || sampler == "k_euler_a" || sampler == "euler_a") {
@@ -667,7 +688,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     std::vector<sd_image_t> kontext_imgs;
-    if(extra_image_data.size()>0 && loadedsdver==SDVersion::VERSION_FLUX && !sd_loaded_chroma())
+    if(extra_image_data.size()>0 && loadedsdver==SDVersion::VERSION_FLUX && !loaded_model_is_chroma(sd_ctx))
     {
         for(int i=0;i<extra_image_data.size();++i)
         {
