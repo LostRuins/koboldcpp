@@ -35,6 +35,9 @@
 // #define STB_IMAGE_RESIZE_IMPLEMENTATION //already defined in llava
 #include "stb_image_resize.h"
 
+static_assert((int)SD_TYPE_COUNT == (int)GGML_TYPE_COUNT,
+              "inconsistency between SD_TYPE_COUNT and GGML_TYPE_COUNT");
+
 enum SDMode {
     TXT2IMG,
     IMG2IMG,

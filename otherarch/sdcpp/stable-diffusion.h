@@ -100,7 +100,7 @@ enum sd_type_t {
     SD_TYPE_IQ4_NL_4_4 = 36,
     // SD_TYPE_IQ4_NL_4_8 = 37,
     // SD_TYPE_IQ4_NL_8_8 = 38,
-    SD_TYPE_COUNT   = 39,
+    SD_TYPE_COUNT   = 40,
 };
 
 SD_API const char* sd_type_name(enum sd_type_t type);
