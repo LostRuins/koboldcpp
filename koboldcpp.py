@@ -2419,6 +2419,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             user_message_end = adapter_obj.get("user_end", "")
             assistant_message_start = adapter_obj.get("assistant_start", "\n### Response:\n")
             assistant_message_end = adapter_obj.get("assistant_end", "")
+            assistant_message_gen = adapter_obj.get("assistant_gen", assistant_message_start)
             tools_message_start = adapter_obj.get("tools_start", "\nTool Results:\n")
             tools_message_end = adapter_obj.get("tools_end", "")
             images_added = []
@@ -2531,7 +2532,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 elif message['role'] == "tool":
                     messages_string += tools_message_end
 
-            messages_string += assistant_message_start
+            messages_string += assistant_message_gen
             genparams["prompt"] = messages_string
             if len(images_added)>0:
                 genparams["images"] = images_added
@@ -2552,7 +2553,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
         adapter_obj = {} if chatcompl_adapter is None else chatcompl_adapter
         user_message_start = adapter_obj.get("user_start", "### Instruction:")
         assistant_message_start = adapter_obj.get("assistant_start", "### Response:")
-        genparams["prompt"] = f"{user_message_start} In one sentence, write a descriptive caption for this image.\n{assistant_message_start}"
+        assistant_message_gen = adapter_obj.get("assistant_gen", assistant_message_start)
+        genparams["prompt"] = f"{user_message_start} In one sentence, write a descriptive caption for this image.\n{assistant_message_gen}"
 
     elif api_format==6:
         detokstr = ""
@@ -2560,12 +2562,13 @@ ws ::= | " " | "\n" [ \t]{0,20}
         adapter_obj = {} if chatcompl_adapter is None else chatcompl_adapter
         user_message_start = adapter_obj.get("user_start", "\n\n### Instruction:\n")
         assistant_message_start = adapter_obj.get("assistant_start", "\n\n### Response:\n")
+        assistant_message_gen = adapter_obj.get("assistant_gen", assistant_message_start)
         try:
             detokstr = detokenize_ids(tokids)
         except Exception as e:
             utfprint("Ollama Context Error: " + str(e))
         ollamasysprompt = genparams.get('system', "")
-        ollamabodyprompt = f"{detokstr}{user_message_start}{genparams.get('prompt', '')}{assistant_message_start}"
+        ollamabodyprompt = f"{detokstr}{user_message_start}{genparams.get('prompt', '')}{assistant_message_gen}"
         ollamaopts = genparams.get('options', {})
         if genparams.get('stop',[]) is not None:
             genparams["stop_sequence"] = genparams.get('stop', [])

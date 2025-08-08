@@ -21,8 +21,8 @@ AUTOGUESS_MAPPING = {
     "Google Gemma 3n": "lmstudio-community/gemma-3n-E4B-it-MLX-bf16",
     "Llama 3.x": "Steelskull/L3.3-Shakudo-70b",
     "Llama 4": "nvidia/Llama-4-Scout-17B-16E-Instruct-FP8",
-    "Mistral V7 (with system prompt)": "Doctor-Shotgun/MS3.2-24B-Magnum-Diamond",
-    "Mistral V3": "mistralai/Mistral-7B-Instruct-v0.3",
+    "Mistral Tekken": "Doctor-Shotgun/MS3.2-24B-Magnum-Diamond",
+    "Mistral Non-Tekken": "mistralai/Mistral-7B-Instruct-v0.3",
     "GLM-4": "THUDM/glm-4-9b-chat-hf",
     "Phi 3.5": "microsoft/Phi-3.5-mini-instruct",
     "Phi 4 (mini)": "microsoft/Phi-4-mini-instruct",
@@ -36,7 +36,7 @@ AUTOGUESS_MAPPING = {
 }
 
 AUTOGUESS_SKIP_ADAPTER_TESTS = {
-    "Mistral V3": {"system"},           # Poor system support
+    "Mistral Non-Tekken": {"system"},   # Poor system support
     "Mistral (Generic)": {"system"},    # Poor system support
 }
 

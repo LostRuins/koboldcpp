@@ -106,7 +106,8 @@
         "system_end": "[/INST]",
         "user_start": "[INST] ",
         "user_end": "",
-        "assistant_start": "[/INST]",
+        "assistant_start": "[/INST] ",
+        "assistant_gen": "[/INST]",
         "assistant_end": "</s>"
     }
 }, {
@@ -168,11 +169,12 @@
     "search": ["<|bom|>","is_last_checked_defined"],
     "name": "Jamba",
     "adapter": {
-        "system_start": "<|bom|><|system|>",
+        "system_start": "<|bom|><|system|> ",
         "system_end": "<|eom|>",
-        "user_start": "<|bom|><|user|>",
+        "user_start": "<|bom|><|user|> ",
         "user_end": "<|eom|>",
-        "assistant_start": "<|bom|><|assistant|>",
+        "assistant_start": "<|bom|><|assistant|> ",
+        "assistant_gen": "<|bom|><|assistant|>",
         "assistant_end": "<|eom|>"
     }
 }, {
@@ -206,6 +208,7 @@
         "user_start": "User: ",
         "user_end": "\n\n",
         "assistant_start": "Assistant: ",
+        "assistant_gen": "Assistant:",
         "assistant_end": "\n\n"
     }
 }, {
