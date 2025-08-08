@@ -190,7 +190,7 @@
     "search": ["<|start|>user<|message|>", "<|channel|>", "<|end|>"],
     "name": "OpenAI Harmony",
     "adapter": {
-        "system_start": "<|start|>developer<|message|>",
+        "system_start": "<|start|>developer<|message|># Instructions\n\n",
         "system_end": "<|end|>",
         "user_start": "<|start|>user<|message|>",
         "user_end": "<|end|>",
