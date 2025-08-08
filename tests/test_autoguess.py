@@ -113,9 +113,9 @@ def test_tokenizer_with_adapter(tokenizer, adapter: dict[str, str], skip: set) -
             expect = system("SyS-tEm")
             templated = templ([{"role": "system", "content": "SyS-tEm"}, {"role": "user", "content": "user"}])
             if expect not in templated:
-                return False, f"system role missing expected fragment {expect.replace("\n", "\\n")}: {templated.replace("\n", "\\n")}"
+                return False, f"system role missing expected fragment\n\tadapter:  {expect.replace("\n", "\\n")}\n\ttokenizer: {templated.replace("\n", "\\n")}"
 
-        # Test user/asst/usernvidia/Llama-4-Scout-17B-16E-Instruct-FP8
+        # Test user/asst/user
         expect = [
             user("user_1"),
             assistant("asst_1"),
@@ -129,17 +129,21 @@ def test_tokenizer_with_adapter(tokenizer, adapter: dict[str, str], skip: set) -
         rem = templated
         for sub in expect:
             if sub not in rem:
-                return False, f"missing expected fragment {sub.replace("\n", "\\n")}: {rem.replace("\n", "\\n")}"
+                return False, f"missing expected fragment\n\tadapter:  {sub.replace("\n", "\\n")}\n\ttokenizer: {rem.replace("\n", "\\n")}"
             rem = rem.split(sub, 1)[1]
     except jinja2.exceptions.TemplateError as e:
         return False, f"template error: {e}"
     return True, None
+
+filter = sys.argv[1] if len(sys.argv) > 1 else None
 
 failures = 0
 seen = set()
 namefmt = "{name:<" + str(max(len(name) for name in AUTOGUESS_MAPPING.keys())) + "}"
 hmifmt = "{huggingface_model_id:<" + str(max(len(huggingface_model_id) for huggingface_model_id in AUTOGUESS_MAPPING.values())) + "}"
 for name, huggingface_model_id in AUTOGUESS_MAPPING.items():
+    if filter and filter not in name:
+        continue
     seen.add(name)
     if huggingface_model_id == "***UNKNOWN***":
         print(namefmt.format(name=name) + " = " + namefmt.format(name="***UNKNOWN***") + " : PENDING")
@@ -162,10 +166,11 @@ for name, huggingface_model_id in AUTOGUESS_MAPPING.items():
     print(namefmt.format(name=name) + " = " + namefmt.format(name=matched) + " : " + ("OK     " if adaptercheck and name == matched else reason if not adaptercheck else "FAILURE") + " " + hmifmt.format(huggingface_model_id=huggingface_model_id) + " " + sub_template)
     failures += name != matched or not adaptercheck
 
-for entry in autoguess:
-    if entry['name'] not in seen:
-        print(namefmt.format(name=entry['name']) + "   MISSING MAPPING")
-        failures += 1
+if filter is None:
+    for entry in autoguess:
+        if entry['name'] not in seen:
+            print(namefmt.format(name=entry['name']) + "   MISSING MAPPING")
+            failures += 1
 
 if failures > 0:
     print(f"There were {failures} failure(s)!")
