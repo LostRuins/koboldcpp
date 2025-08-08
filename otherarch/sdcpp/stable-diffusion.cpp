@@ -2288,22 +2288,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
     }
 
-    if (kcpp_img_gen_params) {
-        for (int i = 0; i < kcpp_img_gen_params->kontext_img_count; i++) {
-            ggml_tensor* img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, kcpp_img_gen_params->kontext_imgs[i].width, kcpp_img_gen_params->kontext_imgs[i].height, 3, 1);
-            sd_image_to_tensor(kcpp_img_gen_params->kontext_imgs[i].data, img);
-
-            ggml_tensor* latent = NULL;
-            if (!sd_ctx->sd->use_tiny_autoencoder) {
-                ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, img);
-                latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-            } else {
-                latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
-            }
-            ref_latents.push_back(latent);
-        }
-    }
-
     sd_image_t* result_images = generate_image_internal(sd_ctx,
                                                         work_ctx,
                                                         init_latent,

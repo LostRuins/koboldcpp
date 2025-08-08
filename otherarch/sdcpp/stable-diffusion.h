@@ -189,8 +189,6 @@ typedef struct {
 } sd_img_gen_params_t;
 
 typedef struct {
-    sd_image_t* kontext_imgs;
-    int kontext_img_count;
     sd_image_t* photomaker_references;
     int photomaker_reference_count;
 } kcpp_img_gen_params_t;

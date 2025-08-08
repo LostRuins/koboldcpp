@@ -687,16 +687,16 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    std::vector<sd_image_t> kontext_imgs;
+    std::vector<sd_image_t> reference_imgs;
     if(extra_image_data.size()>0 && loadedsdver==SDVersion::VERSION_FLUX && !loaded_model_is_chroma(sd_ctx))
     {
         for(int i=0;i<extra_image_data.size();++i)
         {
-            kontext_imgs.push_back(extraimage_references[i]);
+            reference_imgs.push_back(extraimage_references[i]);
         }
         if(!sd_is_quiet && sddebugmode==1)
         {
-            printf("\nFlux Kontext: Using %d reference images\n",kontext_imgs.size());
+            printf("\nFlux Kontext: Using %d reference images\n",reference_imgs.size());
         }
     }
 
@@ -741,9 +741,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.guidance.slg.layer_end = sd_params->skip_layer_end;
     params.guidance.slg.scale = sd_params->slg_scale;
 
+    params.ref_images = reference_imgs.data();
+    params.ref_images_count = reference_imgs.size();
+
     kcpp_img_gen_params_t extra_params = {};
-    extra_params.kontext_imgs = kontext_imgs.data();
-    extra_params.kontext_img_count = kontext_imgs.size();
     extra_params.photomaker_references = photomaker_imgs.data();
     extra_params.photomaker_reference_count = photomaker_imgs.size();
 
