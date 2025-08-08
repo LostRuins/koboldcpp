@@ -31,6 +31,7 @@ AUTOGUESS_MAPPING = {
     "Jamba": "ai21labs/Jamba-tiny-dev",
     "Dots": "rednote-hilab/dots.llm1.inst",
     "RWKV World": "fla-hub/rwkv7-1.5B-world",
+    "OpenAI Harmony": "openai/gpt-oss-120b",
     "Mistral (Generic)": "mistralai/Mistral-Nemo-Instruct-2407",
     "ChatML (Generic)": "NewEden/Gemma-27B-chatml",
 }
@@ -58,10 +59,12 @@ def get_tokenizer_config_for_huggingface_model_id(huggingface_model_id: str):
         with open(fname) as f:
             return json.load(f)
 
-    for filename in ["tokenizer_config.json", "chat_template.json"]:
+    for filename in ["tokenizer_config.json", "chat_template.json", "chat_template.jinja"]:
         url = f"https://huggingface.co/{huggingface_model_id}/resolve/main/{filename}"
         response = requests.get(url)
         if response.status_code == 200:
+            if url.endswith(".jinja"):
+                return {"chat_template": response.text}
             v = json.loads(response.text)
             if 'chat_template' in v:
                 return v
