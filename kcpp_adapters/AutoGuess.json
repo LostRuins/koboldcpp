@@ -193,7 +193,7 @@
     "name": "OpenAI Harmony",
     "adapter": {
         "system_start": "<|start|>developer<|message|># Instructions\n\n",
-        "system_end": "<|end|>",
+        "system_end": "\n\n<|end|>",
         "user_start": "<|start|>user<|message|>",
         "user_end": "<|end|>",
         "assistant_start": "<|start|>assistant<|channel|>final<|message|>",
