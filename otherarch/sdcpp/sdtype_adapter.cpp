@@ -506,11 +506,29 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     auto loadedsdver = get_loaded_sd_version(sd_ctx);
     if (loadedsdver == SDVersion::VERSION_FLUX)
     {
-        if (!loaded_model_is_chroma(sd_ctx)) {
-            sd_params->cfg_scale = 1;  //non chroma clamp cfg scale
+        if (loaded_model_is_chroma(sd_ctx)) {
+            if (sd_params->diffusion_flash_attn && sd_params->chroma_use_dit_mask) {
+                if (!sd_is_quiet && sddebugmode) {
+                    printf("Chroma: flash attention is on, disabling DiT mask\n");
+                }
+                sd_params->chroma_use_dit_mask = false;
+            }
+        }
+        else {
+            if (sd_params->cfg_scale != 1.0f) {
+                //non chroma clamp cfg scale
+                if (!sd_is_quiet && sddebugmode) {
+                    printf("Flux: clamping CFG Scale to 1\n");
+                }
+                sd_params->cfg_scale = 1.0f;
+            }
         }
         if (sampler == "euler a" || sampler == "k_euler_a" || sampler == "euler_a") {
-            sampler = "euler";  //euler a broken on flux
+            //euler a broken on flux
+            if (!sd_is_quiet && sddebugmode) {
+                printf("Flux: switching Euler A to Euler\n");
+            }
+            sampler = "euler";
         }
     }
 
