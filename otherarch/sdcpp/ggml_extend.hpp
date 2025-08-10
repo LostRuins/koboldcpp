@@ -984,7 +984,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
                                                 d_head == 112 ||
                                                 d_head == 128 ||
                                                 d_head == 256);
-#if 0
+// kcpp disable kv_pad (leejet/stable-diffusion.cpp#756)
+#if 1
     can_use_flash_attn      = can_use_flash_attn && L_k % 256 == 0;
 #else
     if (can_use_flash_attn && L_k % 256 != 0) {
