@@ -99,6 +99,8 @@ struct SDParams {
     bool clip_on_cpu              = false;
     bool vae_on_cpu               = false;
     bool diffusion_flash_attn     = false;
+    bool diffusion_conv_direct    = false;
+    bool vae_conv_direct          = false;
     bool canny_preprocess         = false;
     bool color                    = false;
     int upscale_repeats           = 1;
@@ -211,6 +213,14 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     {
         printf("Flash Attention is enabled\n");
     }
+    if(inputs.diffusion_conv_direct)
+    {
+        printf("Conv2D Direct for diffusion model is enabled\n");
+    }
+    if(inputs.vae_conv_direct)
+    {
+        printf("Conv2D Direct for VAE model is enabled\n");
+    }
     if(inputs.quant)
     {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
@@ -246,6 +256,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->wtype = (inputs.quant==0?SD_TYPE_COUNT:SD_TYPE_Q4_0);
     sd_params->n_threads = inputs.threads; //if -1 use physical cores
     sd_params->diffusion_flash_attn = inputs.flash_attention;
+    sd_params->diffusion_conv_direct = inputs.diffusion_conv_direct;
+    sd_params->vae_conv_direct = inputs.vae_conv_direct;
     sd_params->input_path = ""; //unused
     sd_params->batch_count = 1;
     sd_params->vae_path = vaefilename;
@@ -316,6 +328,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.keep_control_net_on_cpu = sd_params->control_net_cpu;
     params.keep_vae_on_cpu = sd_params->vae_on_cpu;
     params.diffusion_flash_attn = sd_params->diffusion_flash_attn;
+    params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
+    params.vae_conv_direct = sd_params->vae_conv_direct;
     params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
     params.chroma_use_t5_mask = sd_params->chroma_use_t5_mask;
     params.chroma_t5_mask_pad = sd_params->chroma_t5_mask_pad;

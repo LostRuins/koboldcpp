@@ -166,6 +166,8 @@ struct sd_load_model_inputs
     const int threads = 0;
     const int quant = 0;
     const bool flash_attention = false;
+    const bool diffusion_conv_direct = false;
+    const bool vae_conv_direct = false;
     const bool taesd = false;
     const int tiled_vae_threshold = 0;
     const char * t5xxl_filename = nullptr;
