@@ -1654,7 +1654,7 @@ def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clipl
 
     inputs.threads = thds
     inputs.quant = quant
-    inputs.flash_attention = args.flashattention
+    inputs.flash_attention = args.sdflashattention
     inputs.taesd = True if args.sdvaeauto else False
     inputs.tiled_vae_threshold = args.sdtiledvae
     inputs.vae_filename = vae_filename.encode("UTF-8")
@@ -4568,6 +4568,7 @@ def show_gui():
     sd_clipl_var = ctk.StringVar()
     sd_clipg_var = ctk.StringVar()
     sd_photomaker_var = ctk.StringVar()
+    sd_flash_attention_var = ctk.IntVar(value=0)
     sd_vaeauto_var = ctk.IntVar(value=0)
     sd_tiled_vae_var = ctk.StringVar(value=str(default_vae_tile_threshold))
     sd_clamped_var = ctk.StringVar(value="0")
@@ -5330,6 +5331,7 @@ def show_gui():
                 sdvaeitem3.grid()
     makecheckbox(images_tab, "Use TAE SD (AutoFix Broken VAE)", sd_vaeauto_var, 42,command=toggletaesd,tooltiptxt="Replace VAE with TAESD. May fix bad VAE.")
     makelabelentry(images_tab, "VAE Tiling Threshold:", sd_tiled_vae_var, 44, 50, padx=144,singleline=True,tooltip="Enable VAE Tiling for images above this size, to save memory.\nSet to 0 to disable VAE tiling.")
+    makecheckbox(images_tab, "Flash Attention", sd_flash_attention_var, 46, tooltiptxt="Enable Flash Attention for diffusion. May save memory or improve performance.")
 
     # audio tab
     audio_tab = tabcontent["Audio"]
@@ -5566,6 +5568,8 @@ def show_gui():
         if sd_model_var.get() != "":
             args.sdmodel = sd_model_var.get()
 
+        if sd_flash_attention_var.get()==1:
+            args.sdflashattention = True
         args.sdthreads = (0 if sd_threads_var.get()=="" else int(sd_threads_var.get()))
         args.sdclamped = (0 if int(sd_clamped_var.get())<=0 else int(sd_clamped_var.get()))
         args.sdclampedsoft = (0 if int(sd_clamped_soft_var.get())<=0 else int(sd_clamped_soft_var.get()))
@@ -5798,6 +5802,7 @@ def show_gui():
         sd_clamped_soft_var.set(int(dict["sdclampedsoft"]) if ("sdclampedsoft" in dict and dict["sdclampedsoft"]) else 0)
         sd_threads_var.set(str(dict["sdthreads"]) if ("sdthreads" in dict and dict["sdthreads"]) else str(default_threads))
         sd_quant_var.set(1 if ("sdquant" in dict and dict["sdquant"]) else 0)
+        sd_flash_attention_var.set(1 if ("sdflashattention" in dict and dict["sdflashattention"]) else 0)
         sd_vae_var.set(dict["sdvae"] if ("sdvae" in dict and dict["sdvae"]) else "")
         sd_t5xxl_var.set(dict["sdt5xxl"] if ("sdt5xxl" in dict and dict["sdt5xxl"]) else "")
         sd_clipl_var.set(dict["sdclipl"] if ("sdclipl" in dict and dict["sdclipl"]) else "")
@@ -7600,6 +7605,7 @@ if __name__ == '__main__':
     sdparsergroup.add_argument("--sdclipl", metavar=('[filename]'), help="Specify a Clip-L safetensors model for use in SD3 or Flux. Leave blank if prebaked or unused.", default="")
     sdparsergroup.add_argument("--sdclipg", metavar=('[filename]'), help="Specify a Clip-G safetensors model for use in SD3. Leave blank if prebaked or unused.", default="")
     sdparsergroup.add_argument("--sdphotomaker", metavar=('[filename]'), help="PhotoMaker is a model that allows face cloning. Specify a PhotoMaker safetensors model which will be applied replacing img2img. SDXL models only. Leave blank if unused.", default="")
+    sdparsergroup.add_argument("--sdflashattention", help="Enables Flash Attention for image generation.", action='store_true')
     sdparsergroupvae = sdparsergroup.add_mutually_exclusive_group()
     sdparsergroupvae.add_argument("--sdvae", metavar=('[filename]'), help="Specify an image generation safetensors VAE which replaces the one in the model.", default="")
     sdparsergroupvae.add_argument("--sdvaeauto", help="Uses a built-in VAE via TAE SD, which is very fast, and fixed bad VAEs.", action='store_true')
