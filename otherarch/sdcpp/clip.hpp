@@ -547,6 +547,12 @@ protected:
 
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         enum ggml_type token_wtype    = GGML_TYPE_F32;
+        #if 1
+        // kcpp reduce memory usage (reverts https://github.com/leejet/stable-diffusion.cpp/pull/601)
+        auto tensor_type = tensor_types.find(prefix + "token_embedding.weight");
+        if (tensor_type != tensor_types.end())
+            token_wtype = tensor_type->second;
+        #endif
         enum ggml_type position_wtype = GGML_TYPE_F32;
 
         params["token_embedding.weight"]    = ggml_new_tensor_2d(ctx, token_wtype, embed_dim, vocab_size);
