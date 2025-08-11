@@ -22,7 +22,7 @@
         "assistant_end": "<|im_end|>\n"
     }
 }, {
-    "search": ["<|im_user|>user<|im_middle|>", "<|im_assistant|>assistant<|im_middle|>", "<|im_end|>"],
+    "search": ["<|im_user|>{{role_name}}<|im_middle|>", "<|im_assistant|>{{role_name}}<|im_middle|>", "<|im_end|>"],
     "name": "ChatML (Kimi)",
     "adapter": {
         "system_start": "<|im_system|>system<|im_middle|>",
