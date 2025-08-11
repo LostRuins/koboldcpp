@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 
 <script id="init-config">
-	const LITEVER = 271;
+	const LITEVER = 272;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -8792,7 +8792,7 @@ Current version indicated by LITEVER below.
 		let modetitle = (temp_scenario.opmode==1?"Story":(temp_scenario.opmode==2?"Adventure":(temp_scenario.opmode==3?"Chat":"Instruct")));
 		let blurb = (temp_scenario.desc!=""?escape_html(temp_scenario.desc).replace(/\n/g, '<br>'):"[No Description Given]");
 		let righttoggle = "";
-		if(temp_scenario.opmode==3)
+		if(temp_scenario.opmode==3 || temp_scenario.opmode==2)
 		{
 			righttoggle = `<span style="float:right"><span class="helpicon">?<span class="helptext">Load scenario in Instruct Mode instead of Chat Mode. Some AI models need this format.</span></span> Use Instruct Mode <input type="checkbox" title="Use Instruct Mode" id="scenarioforceinstruct"></span>`;
 		}
@@ -8839,6 +8839,7 @@ Current version indicated by LITEVER below.
 		}
 
 		localsettings.opmode = temp_scenario.opmode;
+		localsettings.inject_chatnames_instruct = false;
 
 		if(temp_scenario.opmode == 2)
 		{
@@ -8854,8 +8855,18 @@ Current version indicated by LITEVER below.
 			{
 				localsettings.adventure_switch_mode = temp_scenario.adventure_switch_mode;
 			}
+
+			//handle toggle to force instruct mode
+			if(document.getElementById("scenarioforceinstruct") && document.getElementById("scenarioforceinstruct").checked)
+			{
+				localsettings.opmode = 4;
+				if(gametext_arr.length==1 && gametext_arr[0]!="")
+				{
+					gametext_arr[0] = get_instructendplaceholder() + gametext_arr[0].trimStart();
+				}
+			}
 		}
-		if (temp_scenario.opmode == 3) {
+		else if (temp_scenario.opmode == 3) { //chat
 			if(localsettings.gui_type_chat!=3)
 			{
 				if (temp_scenario.gui_type===1) { localsettings.gui_type_chat = 1; }
@@ -8873,20 +8884,21 @@ Current version indicated by LITEVER below.
 			if(document.getElementById("scenarioforceinstruct") && document.getElementById("scenarioforceinstruct").checked)
 			{
 				localsettings.opmode = 4;
-				localsettings.inject_chatnames_instruct = true;
 				if(localsettings.gui_type_instruct!=3)
 				{
 					if (temp_scenario.gui_type===1) { localsettings.gui_type_instruct = 2; } // instruct has no messenger theme
 					else if(temp_scenario.gui_type===2) { localsettings.gui_type_instruct = 2; }
 					else if(temp_scenario.gui_type===0) { localsettings.gui_type_instruct = 0; }
 				}
+
+				localsettings.inject_chatnames_instruct = true;
 				if(gametext_arr.length==1 && gametext_arr[0]!="")
 				{
 					gametext_arr[0] = get_instructendplaceholder() + gametext_arr[0].trimStart();
 				}
 			}
 		}
-		if(temp_scenario.opmode == 4)
+		else if(temp_scenario.opmode == 4)
 		{
 			if (temp_scenario.gui_type===1) { localsettings.gui_type_instruct = 1; }
 			else if(temp_scenario.gui_type===2) { localsettings.gui_type_instruct = 2; }
