@@ -8,6 +8,15 @@
 # editing tools, save formats, memory, world info, author's note, characters,
 # scenarios and everything Kobold and KoboldAI Lite have to offer.
 
+# Version constant
+KcppVersion = "1.97.4"
+
+# Quick version check before any heavy imports
+import sys
+if len(sys.argv) == 2 and sys.argv[1] in ["--version", "-v", "-V"]:
+    print(KcppVersion)
+    sys.exit(0)
+
 import os
 try:
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID" # try set GPU to PCI order first thing
@@ -63,7 +72,6 @@ dry_seq_break_max = 128
 extra_images_max = 4
 
 # global vars
-KcppVersion = "1.97.4"
 showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_config_target":""}
@@ -6487,10 +6495,6 @@ def unregister_koboldcpp():
 def main(launch_args, default_args):
     global args, showdebug, kcpp_instance, exitcounter, using_gui_launcher, sslvalid, global_memory
     args = launch_args #note: these are NOT shared with the child processes!
-
-    if (args.version) and len(sys.argv) <= 2:
-        print(f"{KcppVersion}") # just print version and exit
-        return
 
     #prevent disallowed combos
     if (args.nomodel or args.benchmark or args.launch or args.admin) and args.cli:
