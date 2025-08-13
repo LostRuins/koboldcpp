@@ -13,7 +13,7 @@ KcppVersion = "1.97.4"
 
 # Quick version check before any heavy imports
 import sys
-if len(sys.argv) == 2 and sys.argv[1] in ["--version", "-v", "-V"]:
+if len(sys.argv) == 2 and sys.argv[1] == "--version":
     print(KcppVersion)
     sys.exit(0)
 
