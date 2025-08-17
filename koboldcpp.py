@@ -1666,6 +1666,8 @@ def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clipl
     inputs.img_hard_limit = args.sdclamped
     inputs.img_soft_limit = args.sdclampedsoft
     inputs = set_backend_props(inputs)
+    if args.quiet:
+        inputs.debugmode = 0
     ret = handle.sd_load_model(inputs)
     return ret
 
