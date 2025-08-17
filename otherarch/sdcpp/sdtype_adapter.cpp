@@ -221,7 +221,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     {
         printf("Conv2D Direct for VAE model is enabled\n");
     }
-    if(inputs.quant)
+    if(inputs.quant > 0)
     {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
     }
@@ -253,7 +253,11 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     sd_params = new SDParams();
     sd_params->model_path = inputs.model_filename;
-    sd_params->wtype = (inputs.quant==0?SD_TYPE_COUNT:SD_TYPE_Q4_0);
+    sd_params->wtype = SD_TYPE_COUNT;
+    if (inputs.quant > 0 && inputs.quant < SD_TYPE_COUNT) {
+        sd_params->wtype = (sd_type_t) inputs.quant;
+        printf("\nDiffusion Model quantized to %s", sd_type_name(sd_params->wtype));
+    }
     sd_params->n_threads = inputs.threads; //if -1 use physical cores
     sd_params->diffusion_flash_attn = inputs.flash_attention;
     sd_params->diffusion_conv_direct = inputs.diffusion_conv_direct;
