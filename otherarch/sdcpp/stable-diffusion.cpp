@@ -707,24 +707,69 @@ public:
     }
 
     void apply_lora_from_file(const std::string& lora_path, float multiplier) {
+        printf("🔥 APPLY_LORA DEBUG 1: Starting apply_lora_from_file()\n");
+        printf("🔥 APPLY_LORA DEBUG 2: Path: %s, Multiplier: %.6f\n", lora_path.c_str(), multiplier);
+        fflush(stdout);
+        
         int64_t t0                 = ggml_time_ms();
         std::string st_file_path   = lora_path;
         std::string file_path;
+        
+        printf("🔥 APPLY_LORA DEBUG 3: Checking file existence...\n");
+        fflush(stdout);
+        
         if (file_exists(st_file_path)) {
             file_path = st_file_path;
+            printf("🔥 APPLY_LORA DEBUG 4: ✅ File exists\n");
         } else {
+            printf("🔥 APPLY_LORA DEBUG 4: ❌ File does not exist\n");
             LOG_WARN("can not find %s for lora %s", st_file_path.c_str(), lora_path.c_str());
             return;
         }
+        
+        printf("🔥 APPLY_LORA DEBUG 5: Creating LoraModel object...\n");
+        printf("🔥 APPLY_LORA DEBUG 6: backend pointer: %p\n", (void*)backend);
+        fflush(stdout);
+        
+        printf("🔥 APPLY_LORA DEBUG 6.5: About to call LoraModel constructor...\n");
+        fflush(stdout);
+        
         LoraModel lora(backend, file_path);
+        
+        printf("🔥 APPLY_LORA DEBUG 6.9: LoraModel constructor returned successfully\n");
+        fflush(stdout);
+        
+        printf("🔥 APPLY_LORA DEBUG 7: LoraModel created successfully\n");
+        printf("🔥 APPLY_LORA DEBUG 8: Loading LoRA from file...\n");
+        fflush(stdout);
+        
         if (!lora.load_from_file()) {
+            printf("🔥 APPLY_LORA DEBUG 9: ❌ Failed to load LoRA tensors\n");
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
             return;
         }
 
+        printf("🔥 APPLY_LORA DEBUG 9: ✅ LoRA loaded successfully\n");
+        printf("🔥 APPLY_LORA DEBUG 10: Setting multiplier and applying...\n");
+        fflush(stdout);
+        
         lora.multiplier = multiplier;
+        
+        printf("🔥 APPLY_LORA DEBUG 11: About to call lora.apply()...\n");
+        printf("🔥 APPLY_LORA DEBUG 12: tensors map size: %zu\n", tensors.size());
+        printf("🔥 APPLY_LORA DEBUG 13: version: %d, n_threads: %d\n", version, n_threads);
+        fflush(stdout);
+        
         lora.apply(tensors, version, n_threads);
+        
+        printf("🔥 APPLY_LORA DEBUG 14: ✅ lora.apply() completed\n");
+        printf("🔥 APPLY_LORA DEBUG 15: Freeing params buffer...\n");
+        fflush(stdout);
+        
         lora.free_params_buffer();
+
+        printf("🔥 APPLY_LORA DEBUG 16: ✅ All LoRA operations completed\n");
+        fflush(stdout);
 
         int64_t t1 = ggml_time_ms();
 

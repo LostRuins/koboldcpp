@@ -5883,6 +5883,11 @@ static enum ggml_status ggml_metal_graph_compute(
     struct ggml_backend_metal_context        * ctx     = backend->context;
     struct ggml_backend_metal_device_context * ctx_dev = backend->device->context;
 
+    // 🔥 METAL DEBUG: Start of Metal graph compute
+    printf("🔥 METAL DEBUG 1: Starting ggml_metal_graph_compute\n");
+    printf("🔥 METAL DEBUG 2: Graph has %d nodes\n", gf->n_nodes);
+    fflush(stdout);
+
     // number of nodes encoded by the main thread (empirically determined)
     const int n_main = 128;
 
@@ -5930,11 +5935,24 @@ static enum ggml_status ggml_metal_graph_compute(
         // the main thread commits the first few commands immediately
         // cmd_buf[n_cb]
         {
+            printf("🔥 METAL DEBUG 3: Creating main command buffer\n");
+            fflush(stdout);
+            
             id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
             ctx->cmd_bufs[n_cb].obj = cmd_buf;
 
+            printf("🔥 METAL DEBUG 4: Enqueueing main command buffer\n");
+            fflush(stdout);
+            
             [cmd_buf enqueue];
+            
+            printf("🔥 METAL DEBUG 5: About to call encode_async for main thread\n");
+            fflush(stdout);
+            
             ctx->encode_async(n_cb);
+            
+            printf("🔥 METAL DEBUG 6: ✅ Main thread encode_async completed successfully!\n");
+            fflush(stdout);
         }
 
         // prepare the rest of the command buffers asynchronously
@@ -6358,12 +6376,21 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
         const int cb_idx = iter;
         const int n_cb_l = ctx->n_cb;
 
+        printf("🔥 METAL ENCODE DEBUG 1: Starting encode_async for cb_idx=%d\n", cb_idx);
+        fflush(stdout);
+
         const int n_nodes_0 = ctx->n_nodes_0;
         const int n_nodes_1 = ctx->n_nodes_1;
 
         const int n_nodes_per_cb = ctx->n_nodes_per_cb;
 
+        printf("🔥 METAL ENCODE DEBUG 2: Getting command buffer for cb_idx=%d\n", cb_idx);
+        fflush(stdout);
+
         id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
+
+        printf("🔥 METAL ENCODE DEBUG 3: Creating compute command encoder\n");
+        fflush(stdout);
 
         id<MTLComputeCommandEncoder> encoder = [cmd_buf computeCommandEncoder];
 
@@ -6380,12 +6407,25 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
         struct ggml_metal_mem_pool * mem_pool = ctx->cmd_bufs[cb_idx].mem_pool;
         ggml_metal_mem_pool_reset(mem_pool);
 
+        printf("🔥 METAL ENCODE DEBUG 4: Processing nodes %d to %d for cb_idx=%d\n", node_start, node_end, cb_idx);
+        fflush(stdout);
+
         for (int idx = node_start; idx < node_end;) {
+            printf("🔥 METAL ENCODE DEBUG 5: Processing node %d/%d\n", idx, node_end);
+            fflush(stdout);
+
             if (should_capture) {
                 [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
             }
 
+            printf("🔥 METAL ENCODE DEBUG 6: ⚠️  CRITICAL - About to call ggml_metal_encode_node for idx=%d\n", idx);
+            fflush(stdout);
+
             const int res = ggml_metal_encode_node(backend, idx, node_end, encoder, mem_pool);
+            
+            printf("🔥 METAL ENCODE DEBUG 7: ✅ ggml_metal_encode_node returned res=%d for idx=%d\n", res, idx);
+            fflush(stdout);
+
             if (idx + res > node_end) {
                 GGML_ABORT("fusion error: nodes spanning multiple encoders have been fused. this indicates a bug in the fusion logic %s",
                         "https://github.com/ggml-org/llama.cpp/pull/14849");
@@ -6396,17 +6436,28 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
             }
 
             if (res == 0) {
+                printf("🔥 METAL ENCODE DEBUG 8: Breaking loop - res=0\n");
+                fflush(stdout);
                 break;
             }
 
             idx += res;
         }
 
+        printf("🔥 METAL ENCODE DEBUG 9: Ending encoder for cb_idx=%d\n", cb_idx);
+        fflush(stdout);
+
         [encoder endEncoding];
+
+        printf("🔥 METAL ENCODE DEBUG 10: Committing command buffer for cb_idx=%d\n", cb_idx);
+        fflush(stdout);
 
         if (cb_idx < 2 || ctx->abort_callback == NULL) {
             [cmd_buf commit];
         }
+
+        printf("🔥 METAL ENCODE DEBUG 11: ✅ encode_async completed for cb_idx=%d\n", cb_idx);
+        fflush(stdout);
     });
 }
 

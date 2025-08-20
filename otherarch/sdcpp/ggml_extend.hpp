@@ -1356,25 +1356,75 @@ public:
                  bool free_compute_buffer_immediately = true,
                  struct ggml_tensor** output          = NULL,
                  struct ggml_context* output_ctx      = NULL) {
+        printf("🔥 GGML_COMPUTE DEBUG 1: Starting GGMLRunner::compute\n");
+        printf("🔥 GGML_COMPUTE DEBUG 2: n_threads = %d\n", n_threads);
+        fflush(stdout);
+        
+        printf("🔥 GGML_COMPUTE DEBUG 3: Allocating compute buffer...\n");
+        fflush(stdout);
         alloc_compute_buffer(get_graph);
+        
+        printf("🔥 GGML_COMPUTE DEBUG 4: Resetting compute context...\n");
+        fflush(stdout);
         reset_compute_ctx();
+        
+        printf("🔥 GGML_COMPUTE DEBUG 5: Getting computation graph...\n");
+        fflush(stdout);
         struct ggml_cgraph* gf = get_graph();
+        
+        printf("🔥 GGML_COMPUTE DEBUG 6: Graph obtained: %p\n", (void*)gf);
+        fflush(stdout);
+        
+        printf("🔥 GGML_COMPUTE DEBUG 7: Allocating graph...\n");
+        fflush(stdout);
         GGML_ASSERT(ggml_gallocr_alloc_graph(compute_allocr, gf));
+        
+        printf("🔥 GGML_COMPUTE DEBUG 8: Copying data to backend tensor...\n");
+        fflush(stdout);
         cpy_data_to_backend_tensor();
+        
+        printf("🔥 GGML_COMPUTE DEBUG 9: Setting backend options...\n");
+        fflush(stdout);
         if (ggml_backend_is_cpu(backend)) {
+            printf("🔥 GGML_COMPUTE DEBUG 9a: Using CPU backend, setting threads to %d\n", n_threads);
             ggml_backend_cpu_set_n_threads(backend, n_threads);
+        } else {
+            printf("🔥 GGML_COMPUTE DEBUG 9b: Using non-CPU backend\n");
         }
+        fflush(stdout);
 
 // #ifdef SD_USE_METAL
 //         if (ggml_backend_is_metal(backend)) {
 //             ggml_backend_metal_set_n_cb(backend, n_threads);
 //         }
 // #endif
-        ggml_backend_graph_compute(backend, gf);
+
+        printf("🔥 GGML_COMPUTE DEBUG 10: ⚠️  CRITICAL POINT - About to call ggml_backend_graph_compute...\n");
+        printf("🔥 GGML_COMPUTE DEBUG 10a: Backend pointer: %p\n", (void*)backend);
+        printf("🔥 GGML_COMPUTE DEBUG 10b: Graph pointer: %p\n", (void*)gf);
+        printf("🔥 GGML_COMPUTE DEBUG 10c: This is where LoRA crashes typically occur on Apple M4 Metal backend\n");
+        fflush(stdout);
+        
+        try {
+            ggml_backend_graph_compute(backend, gf);
+            printf("🔥 GGML_COMPUTE DEBUG 11: ✅ ggml_backend_graph_compute completed successfully!\n");
+            fflush(stdout);
+        } catch (const std::exception& e) {
+            printf("🔥 GGML_COMPUTE DEBUG 11: ❌ EXCEPTION in ggml_backend_graph_compute: %s\n", e.what());
+            fflush(stdout);
+            throw;
+        } catch (...) {
+            printf("🔥 GGML_COMPUTE DEBUG 11: ❌ UNKNOWN EXCEPTION in ggml_backend_graph_compute\n");
+            fflush(stdout);
+            throw;
+        }
 
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
+        
+        printf("🔥 GGML_COMPUTE DEBUG 12: Processing output...\n");
+        fflush(stdout);
         if (output != NULL) {
             auto result = ggml_graph_node(gf, -1);
             if (*output == NULL && output_ctx != NULL) {
@@ -1385,9 +1435,14 @@ public:
             }
         }
 
+        printf("🔥 GGML_COMPUTE DEBUG 13: Cleaning up...\n");
+        fflush(stdout);
         if (free_compute_buffer_immediately) {
             free_compute_buffer();
         }
+        
+        printf("🔥 GGML_COMPUTE DEBUG 14: ✅ GGMLRunner::compute completed successfully!\n");
+        fflush(stdout);
     }
 };
 

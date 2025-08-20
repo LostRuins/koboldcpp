@@ -302,3 +302,6 @@ extern int total_transcribe_gens;
 extern int last_draft_success;
 extern int last_draft_failed;
 extern stop_reason last_stop_reason;
+
+// Additional LoRA application function
+extern "C" bool sdtype_apply_additional_lora(const char* lora_filename, float lora_multiplier);
