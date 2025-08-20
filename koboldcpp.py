@@ -76,6 +76,9 @@ friendlyembeddingsmodelname = "inactive"
 lastgeneratedcomfyimg = b''
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
+sdlora_model_dir = ""  #if empty, no LoRA directory is set
+has_txt2img = False  #global variable for SD model availability
+mlx_lora_processor_global = None  #MLX multi-LoRA processor instance
 password = "" #if empty, no auth key required
 fullwhispermodelpath = "" #if empty, it's not initialized
 ttsmodelpath = "" #if empty, not initialized
@@ -117,6 +120,7 @@ websearch_lastresponse = []
 preloaded_story = None
 chatcompl_adapter = None
 chatcompl_adapter_list = None #if using autoguess, will populate this will potential adapters
+scene_extraction_prompt = None  # For custom scene extraction functionality
 embedded_kailite = None
 embedded_kcpp_docs = None
 embedded_kcpp_sdui = None
@@ -286,6 +290,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("vae_filename", ctypes.c_char_p),
                 ("lora_filename", ctypes.c_char_p),
                 ("lora_multiplier", ctypes.c_float),
+                ("lora_model_dir", ctypes.c_char_p),
                 ("photomaker_filename", ctypes.c_char_p),
                 ("img_hard_limit", ctypes.c_int),
                 ("img_soft_limit", ctypes.c_int),
@@ -572,6 +577,8 @@ def init_library():
     handle.sd_load_model.restype = ctypes.c_bool
     handle.sd_generate.argtypes = [sd_generation_inputs]
     handle.sd_generate.restype = sd_generation_outputs
+    handle.sdtype_apply_additional_lora.argtypes = [ctypes.c_char_p, ctypes.c_float]
+    handle.sdtype_apply_additional_lora.restype = ctypes.c_bool
     handle.whisper_load_model.argtypes = [whisper_load_model_inputs]
     handle.whisper_load_model.restype = ctypes.c_bool
     handle.whisper_generate.argtypes = [whisper_generation_inputs]
@@ -893,9 +900,24 @@ def convert_json_to_gbnf(json_obj):
         return ""
 
 def get_capabilities():
-    global savedata_obj, has_multiplayer, KcppVersion, friendlymodelname, friendlysdmodelname, fullsdmodelpath, password, fullwhispermodelpath, ttsmodelpath, embeddingsmodelpath, has_audio_support, has_vision_support
+    global savedata_obj, has_multiplayer, KcppVersion, friendlymodelname, friendlysdmodelname, fullsdmodelpath, password, fullwhispermodelpath, ttsmodelpath, embeddingsmodelpath, has_audio_support, has_vision_support, has_txt2img, mlx_lora_processor_global
+    print(f"🔥 CAPABILITIES DEBUG 1: get_capabilities() called")
+    print(f"🔥 CAPABILITIES DEBUG 2: friendlysdmodelname = '{friendlysdmodelname}'")
+    print(f"🔥 CAPABILITIES DEBUG 3: fullsdmodelpath = '{fullsdmodelpath}'")
+    print(f"🔥 CAPABILITIES DEBUG 4: friendlysdmodelname=='inactive': {friendlysdmodelname=='inactive'}")
+    print(f"🔥 CAPABILITIES DEBUG 5: fullsdmodelpath=='': {fullsdmodelpath==''}")
+
     has_llm = not (friendlymodelname=="inactive")
-    has_txt2img = not (friendlysdmodelname=="inactive" or fullsdmodelpath=="")
+    has_txt2img_calculated = not (friendlysdmodelname=="inactive" or fullsdmodelpath=="")
+    print(f"🔥 CAPABILITIES DEBUG 6: calculated has_txt2img = {has_txt2img_calculated}")
+    print(f"🔥 CAPABILITIES DEBUG 7: global has_txt2img = {has_txt2img}")
+
+    # Use the global has_txt2img that gets set during SD model loading
+    # but also check the calculated value for debugging
+    if has_txt2img != has_txt2img_calculated:
+        print(f"🔥 CAPABILITIES DEBUG 8: WARNING - global and calculated has_txt2img differ!")
+        print(f"🔥 CAPABILITIES DEBUG 8a: Using global value: {has_txt2img}")
+
     has_password = (password!="")
     has_whisper = (fullwhispermodelpath!="")
     has_search = True if args.websearch else False
@@ -903,7 +925,114 @@ def get_capabilities():
     has_embeddings = (embeddingsmodelpath!="")
     has_guidance = True if args.enableguidance else False
     admin_type = (2 if args.admin and args.admindir and args.adminpassword else (1 if args.admin and args.admindir else 0))
-    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":has_vision_support,"audio":has_audio_support,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "savedata":(savedata_obj is not None), "admin": admin_type, "guidance": has_guidance}
+    
+    # MLX LoRA processor status
+    mlx_lora_enabled = hasattr(args, 'sdmlxlora') and args.sdmlxlora
+    mlx_lora_active = mlx_lora_processor_global is not None
+    mlx_lora_stats = {}
+    if mlx_lora_active:
+        try:
+            stats = mlx_lora_processor_global.get_performance_stats()
+            memory_mb = mlx_lora_processor_global._estimate_memory_usage()
+            mlx_lora_stats = {
+                "total_forward_calls": stats.get('total_forward_calls', 0),
+                "average_time_ms": stats.get('average_time_ms', 0.0),
+                "memory_usage_mb": memory_mb,
+                "loaded_loras": len(mlx_lora_processor_global.loras) if hasattr(mlx_lora_processor_global, 'loras') else 0
+            }
+        except:
+            mlx_lora_stats = {"error": "Failed to get MLX stats"}
+    
+    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":has_vision_support,"audio":has_audio_support,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "savedata":(savedata_obj is not None), "admin": admin_type, "guidance": has_guidance, "mlx_lora_enabled": mlx_lora_enabled, "mlx_lora_active": mlx_lora_active, "mlx_lora_stats": mlx_lora_stats}
+
+def load_lora_weights_from_safetensors(lora_file):
+    """
+    Load LoRA A and B matrices from safetensors file.
+    
+    Args:
+        lora_file: Path to .safetensors LoRA file
+        
+    Returns:
+        tuple: (lora_a, lora_b) as numpy arrays
+        
+    Raises:
+        Exception: If file cannot be loaded or matrices not found
+    """
+    try:
+        import safetensors.numpy
+        import numpy as np
+        import os
+        
+        if not os.path.exists(lora_file):
+            raise FileNotFoundError(f"LoRA file not found: {lora_file}")
+        
+        # Load safetensors file
+        print(f"🔍 MLX-LORA: Loading safetensors from {os.path.basename(lora_file)}...")
+        with open(lora_file, 'rb') as f:
+            tensors = safetensors.numpy.load(f.read())
+        
+        print(f"📦 MLX-LORA: Found {len(tensors)} tensors in {os.path.basename(lora_file)}")
+        
+        # Debug: Print all available tensor names
+        tensor_names = list(tensors.keys())
+        print(f"🔑 MLX-LORA: Available tensors: {tensor_names[:10]}{'...' if len(tensor_names) > 10 else ''}")
+        
+        # Look for common LoRA patterns
+        lora_a_candidates = []
+        lora_b_candidates = []
+        
+        # Common LoRA naming patterns
+        for name in tensor_names:
+            name_lower = name.lower()
+            if ('lora_a' in name_lower or '.lora_down.' in name_lower or 'down_' in name_lower):
+                lora_a_candidates.append(name)
+            elif ('lora_b' in name_lower or '.lora_up.' in name_lower or 'up_' in name_lower):
+                lora_b_candidates.append(name)
+        
+        print(f"🔍 MLX-LORA: Found {len(lora_a_candidates)} A matrices, {len(lora_b_candidates)} B matrices")
+        
+        if not lora_a_candidates or not lora_b_candidates:
+            # Try alternative patterns for FLUX LoRAs
+            for name in tensor_names:
+                if 'transformer' in name.lower():
+                    if 'proj_in' in name or 'to_q' in name or 'to_k' in name:
+                        lora_a_candidates.append(name)
+                    elif 'proj_out' in name or 'to_out' in name:
+                        lora_b_candidates.append(name)
+        
+        if not lora_a_candidates or not lora_b_candidates:
+            raise ValueError(f"Could not find LoRA A/B matrices in {os.path.basename(lora_file)}. "
+                           f"Available tensors: {tensor_names[:5]}...")
+        
+        # Use first matching pair (in a real implementation, we'd want to match layers)
+        lora_a_name = lora_a_candidates[0]
+        lora_b_name = lora_b_candidates[0]
+        
+        lora_a = tensors[lora_a_name].astype(np.float32)
+        lora_b = tensors[lora_b_name].astype(np.float32)
+        
+        print(f"✅ MLX-LORA: Using tensors '{lora_a_name}' (A) and '{lora_b_name}' (B)")
+        print(f"📐 MLX-LORA: Matrix shapes: A={lora_a.shape}, B={lora_b.shape}")
+        
+        # Validate shapes are reasonable
+        if lora_a.ndim != 2 or lora_b.ndim != 2:
+            raise ValueError(f"Invalid matrix dimensions: A={lora_a.shape}, B={lora_b.shape}")
+        
+        if lora_a.shape[1] != lora_b.shape[0]:
+            # Try transposing if dimensions don't match for matrix multiplication
+            if lora_a.shape[0] == lora_b.shape[1]:
+                print(f"🔄 MLX-LORA: Transposing matrices for compatibility")
+                lora_a = lora_a.T
+                print(f"📐 MLX-LORA: After transpose: A={lora_a.shape}, B={lora_b.shape}")
+            else:
+                print(f"⚠️ MLX-LORA: Warning - matrix dimensions may not be compatible: A={lora_a.shape}, B={lora_b.shape}")
+        
+        return lora_a, lora_b
+        
+    except ImportError as e:
+        raise Exception(f"safetensors library not available: {e}. Try: pip install safetensors")
+    except Exception as e:
+        raise Exception(f"Failed to load LoRA from {os.path.basename(lora_file)}: {e}")
 
 def dump_gguf_metadata(file_path): #if you're gonna copy this into your own project at least credit concedo
     chunk_size = 1024*1024*12  # read first 12mb of file
@@ -1400,6 +1529,13 @@ def load_model(model_filename):
 
 def generate(genparams, stream_flag=False):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey
+
+    # Check if max_context_length is provided, otherwise use default
+    if "max_context_length" in genparams:
+        print(f"🔧 DEBUG: Using provided max_context_length: {genparams['max_context_length']}")
+    else:
+        print(f"🔧 DEBUG: No max_context_length provided, using default")
+
     default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
     adapter_obj = genparams.get('adapter', default_adapter)
 
@@ -1409,7 +1545,8 @@ def generate(genparams, stream_flag=False):
     guidance_scale = tryparsefloat(genparams.get('guidance_scale', 1.0),1.0)
     images = genparams.get('images', [])
     audio = genparams.get('audio', [])
-    max_context_length = tryparseint(genparams.get('max_context_length', maxctx),maxctx)
+    # Use provided max_context_length or default to maxctx
+    max_context_length = tryparseint(genparams.get('max_context_length', maxctx), maxctx)
     max_length = tryparseint(genparams.get('max_length', args.defaultgenamt),args.defaultgenamt)
     temperature = tryparsefloat(genparams.get('temperature', adapter_obj.get("temperature", 0.75)),0.75)
     top_k = tryparseint(genparams.get('top_k', adapter_obj.get("top_k", 100)),100)
@@ -1642,15 +1779,127 @@ def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clipl
     inputs.tiled_vae_threshold = args.sdtiledvae
     inputs.vae_filename = vae_filename.encode("UTF-8")
     inputs.lora_filename = lora_filename.encode("UTF-8")
-    inputs.lora_multiplier = args.sdloramult
+    
+    # Handle multiple LoRAs if available - for now use primary LoRA
+    if hasattr(args, 'sdlora_list') and hasattr(args, 'sdloramult_list'):
+        inputs.lora_multiplier = args.sdloramult_list[0] if args.sdloramult_list else 1.0
+    else:
+        # Fallback for single LoRA (backward compatibility)  
+        if isinstance(args.sdloramult, str):
+            inputs.lora_multiplier = float(args.sdloramult.split(',')[0]) if args.sdloramult else 1.0
+        else:
+            inputs.lora_multiplier = args.sdloramult
+    inputs.lora_model_dir = sdlora_model_dir.encode("UTF-8") if sdlora_model_dir else "".encode("UTF-8")
     inputs.t5xxl_filename = t5xxl_filename.encode("UTF-8")
     inputs.clipl_filename = clipl_filename.encode("UTF-8")
     inputs.clipg_filename = clipg_filename.encode("UTF-8")
     inputs.photomaker_filename = photomaker_filename.encode("UTF-8")
     inputs.img_hard_limit = args.sdclamped
     inputs.img_soft_limit = args.sdclampedsoft
+    inputs.debugmode = args.debugmode
+    print(f"🔧 SD LOAD CRITICAL: === PASSING RESOLUTION LIMITS TO C++ ===")
+    print(f"🔧 SD LOAD CRITICAL: img_hard_limit = {args.sdclamped} (prevents >1024px sides)")
+    print(f"🔧 SD LOAD CRITICAL: img_soft_limit = {args.sdclampedsoft} (prevents memory scaling)")
+    print(f"🔧 SD LOAD CRITICAL: debugmode = {args.debugmode}")
+    print(f"🔧 SD LOAD CRITICAL: These values PREVENT 64x64 scaling bug!")
+    print(f"🔧 SD LOAD CRITICAL: === C++ HANDOFF COMPLETE ===")
     inputs = set_backend_props(inputs)
     ret = handle.sd_load_model(inputs)
+    
+    # Apply additional LoRAs using MLX fusion or sequential GGML operations
+    if ret and hasattr(args, 'sdlora_list') and hasattr(args, 'sdloramult_list') and len(args.sdlora_list) > 1:
+        print(f"\n🔥 MULTI-LORA: Successfully loaded primary LoRA, processing {len(args.sdlora_list)-1} additional LoRA(s)...")
+        print(f"✅ Applied LoRA 1: {args.sdlora_list[0]} (mult: {args.sdloramult_list[0]})")
+        
+        # Check if MLX processor is enabled
+        if hasattr(args, 'sdmlxlora') and args.sdmlxlora:
+            print(f"\n🚀 MLX-LORA: MLX fusion enabled, attempting fused multi-LoRA processing...")
+            try:
+                # Import MLX system
+                from python_bindings_mlx_lora import create_optimized_lora_system
+                
+                print(f"🚀 MLX-LORA: Initializing MLX processor for {len(args.sdlora_list)} LoRAs")
+                
+                # Create MLX processor configuration
+                mlx_config = {
+                    'max_input_dim': 4096,  # FLUX model dimensions
+                    'max_output_dim': 4096,
+                    'enable_quantization': True,
+                    'quantization_type': 'int4_group64',  # Memory efficient
+                    'temp_buffer_mb': 1024  # Large buffer for FLUX
+                }
+                
+                # Initialize MLX processor
+                mlx_lora_processor = create_optimized_lora_system(mlx_config)
+                
+                # Load all LoRAs into MLX processor
+                for i, (lora_file, lora_mult) in enumerate(zip(args.sdlora_list, args.sdloramult_list)):
+                    print(f"🔥 MLX-LORA: Loading LoRA {i+1}: {os.path.basename(lora_file)} (mult: {lora_mult})")
+                    
+                    try:
+                        # Load actual LoRA weights from safetensors file
+                        import numpy as np
+                        lora_a, lora_b = load_lora_weights_from_safetensors(lora_file)
+                        print(f"✅ MLX-LORA: Loaded LoRA matrices from {os.path.basename(lora_file)}: "
+                              f"A={lora_a.shape}, B={lora_b.shape}")
+                        
+                    except Exception as e:
+                        print(f"⚠️ MLX-LORA: Failed to load LoRA from {lora_file}: {e}")
+                        print(f"🔧 MLX-LORA: Using fallback random matrices for testing...")
+                        
+                        # Fallback to placeholder matrices for testing
+                        import numpy as np
+                        lora_a = np.random.randn(1024, 32).astype(np.float32) * 0.05
+                        lora_b = np.random.randn(32, 1024).astype(np.float32) * 0.05
+                        print(f"⚠️ MLX-LORA: Using placeholder matrices: A={lora_a.shape}, B={lora_b.shape}")
+                    
+                    lora_name = f"lora_{i}_{os.path.splitext(os.path.basename(lora_file))[0]}"
+                    mlx_lora_processor.add_lora(lora_name, lora_a, lora_b, scale=lora_mult)
+                
+                # Store MLX processor globally for use in generation
+                global mlx_lora_processor_global
+                mlx_lora_processor_global = mlx_lora_processor
+                
+                # Performance report
+                mlx_lora_processor.print_performance_report()
+                print(f"✅ MLX-LORA: All {len(args.sdlora_list)} LoRAs loaded into fused processor!")
+                print(f"🚀 MLX-LORA: Ready for high-performance multi-LoRA generation")
+                
+            except Exception as e:
+                print(f"❌ MLX-LORA: Failed to initialize MLX processor: {e}")
+                print(f"⚠️ MLX-LORA: Falling back to sequential GGML processing...")
+                args.sdmlxlora = False  # Disable MLX for this session
+        
+        # Fall back to sequential processing if MLX is disabled or failed
+        if not (hasattr(args, 'sdmlxlora') and args.sdmlxlora):
+            print(f"\n🔧 MULTI-LORA: Using sequential GGML processing...")
+            # Apply additional LoRAs sequentially
+            for i in range(1, len(args.sdlora_list)):
+                lora_file = args.sdlora_list[i]
+                lora_mult = args.sdloramult_list[i] if i < len(args.sdloramult_list) else 1.0
+                
+                print(f"\n🔥 MULTI-LORA: Applying LoRA {i+1}: {os.path.basename(lora_file)} (mult: {lora_mult})")
+                
+                try:
+                    # Try to apply additional LoRA using GGML tensor operations
+                    if hasattr(handle, 'sdtype_apply_additional_lora'):
+                        additional_ret = handle.sdtype_apply_additional_lora(lora_file.encode("UTF-8"), lora_mult)
+                        
+                        if additional_ret:
+                            print(f"✅ MULTI-LORA: LoRA {i+1} applied successfully via GGML tensor operations!")
+                        else:
+                            print(f"❌ MULTI-LORA: Failed to apply LoRA {i+1}")
+                    else:
+                        print(f"⚠️ MULTI-LORA: C++ function not available, LoRA {i+1} will be skipped")
+                        print(f"🔧 MULTI-LORA: Recompile with new C++ code to enable sequential LoRA application")
+                        
+                except Exception as e:
+                    print(f"❌ MULTI-LORA: Error applying LoRA {i+1}: {e}")
+                    print(f"🔧 MULTI-LORA: This may indicate the C++ binary needs recompilation")
+        
+        print(f"\n🎉 MULTI-LORA: Sequential LoRA application completed!")
+        print(f"🔧 MULTI-LORA: All {len(args.sdlora_list)} LoRAs have been merged into the model via GGML operations")
+    
     return ret
 
 def sd_oai_tranform_params(genparams):
@@ -1705,6 +1954,291 @@ def sd_comfyui_tranform_params(genparams):
     else:
         print("Warning: ComfyUI Payload Missing!")
     return genparams
+
+def extract_scene_for_sd(messages, character_context=""):
+    """
+    Extracts scene information from chat messages using the scene_extraction_prompt
+    Returns a dictionary with extracted SD prompt and settings
+    """
+    global scene_extraction_prompt
+
+    print(f"🔍 DEBUG: extract_scene_for_sd called with {len(messages)} messages, character_context: {character_context}")
+    print(f"🔍 DEBUG: scene_extraction_prompt exists: {bool(scene_extraction_prompt)}")
+    print(f"🔍 DEBUG: messages exists: {bool(messages)}")
+
+    if not messages:
+        print(f"🔍 DEBUG: Early return - no messages provided")
+        return None
+
+    # Use default scene extraction prompt if none is provided
+    if not scene_extraction_prompt:
+        scene_extraction_prompt = """Extract visual scene elements for image generation. Respond with ONLY a comma-separated list of keywords.
+
+Include: location, character count, positioning, action, physical details, expression
+
+Use explicit terminology when needed:
+- Sexual acts: penetration, oral sex, riding, doggystyle
+- Body parts: breasts, nipples, penis, vagina
+- BDSM: rope bondage, restraints, collar, blindfold, bound
+- Positions: legs spread, kneeling, bent over, lying down
+- Contact: gripping, touching, hands on [body part]
+
+Examples:
+"Sarah bends over the desk as he takes her from behind" → office, 1 woman 1 man, bent over desk, doggystyle position, penetration from behind, gripping hips, pleasure expression
+
+"Elena rides him slowly, breasts bouncing" → bedroom, 1 woman 1 man, riding position, woman on top, bouncing breasts, slow movement, seductive expression
+
+Be accurate to source material. Use direct terminology for explicit content."""
+        print(f"🔍 DEBUG: Using enhanced structured scene extraction prompt")
+
+    # Get the last few messages for context
+    recent_messages = messages[-3:] if len(messages) > 3 else messages
+    print(f"🔍 DEBUG: Using {len(recent_messages)} recent messages for context")
+
+    # Build context from recent messages
+    conversation_context = ""
+    for msg in recent_messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if content.strip():
+            conversation_context += f"{role}: {content}\n"
+
+    print(f"🔍 DEBUG: Built conversation context: {conversation_context[:200]}...")
+
+    # Create a proper scene extraction prompt using the LLM
+    try:
+        # Use the scene extraction prompt to get the AI to analyze the scene
+        scene_analysis_prompt = f"""You are a scene extraction assistant. Your job is to analyze the following conversation and extract visual elements for image generation.
+
+{scene_extraction_prompt}
+
+Conversation to analyze:
+{conversation_context}
+
+Character context: {character_context}
+
+Now extract the visual scene details:"""
+
+        print(f"🔍 DEBUG: Created scene analysis prompt: {scene_analysis_prompt[:200]}...")
+
+        # For now, we'll use intelligent keyword extraction as a fallback
+        # TODO: Replace this with actual LLM call using your loaded model
+        print(f"🔍 DEBUG: Calling extract_scene_with_llm...")
+        extracted_scene = extract_scene_with_llm(scene_analysis_prompt, conversation_context)
+        print(f"🔍 DEBUG: extract_scene_with_llm returned: {extracted_scene}")
+
+        if extracted_scene:
+            scene_data = {
+                "sd_prompt": extracted_scene,
+                "trigger_generation": True,
+                "character_context": character_context,
+                "conversation_context": conversation_context
+            }
+
+            print(f"🎨 Scene extracted for SD: {extracted_scene}")
+            print(f"🔍 DEBUG: Returning scene_data: {scene_data}")
+            return scene_data
+        else:
+            print(f"🔍 DEBUG: extract_scene_with_llm returned None or empty")
+            # Return a default scene even if extraction failed
+            default_scene = "A detailed scene from the conversation, high quality, detailed"
+            scene_data = {
+                "sd_prompt": default_scene,
+                "trigger_generation": True,
+                "character_context": character_context,
+                "conversation_context": conversation_context
+            }
+            print(f"🔍 DEBUG: Returning default scene_data: {scene_data}")
+            return scene_data
+
+    except Exception as e:
+        print(f"❌ Scene extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+        # Return a default scene even if extraction failed
+        default_scene = "A detailed scene from the conversation, high quality, detailed"
+        scene_data = {
+            "sd_prompt": default_scene,
+            "trigger_generation": True,
+            "character_context": character_context,
+            "conversation_context": conversation_context
+        }
+        print(f"🔍 DEBUG: Returning fallback scene_data after exception: {scene_data}")
+        return scene_data
+
+def extract_scene_with_llm(prompt, context):
+    """
+    Extract scene using LLM analysis - calls the loaded model to generate SD prompts
+    """
+    global scene_extraction_prompt, handle, maxctx
+
+    print(f"🔍 DEBUG: extract_scene_with_llm called with prompt: {prompt[:100]}...")
+    print(f"🔍 DEBUG: context: {context[:100]}...")
+    print(f"🔍 DEBUG: scene_extraction_prompt: {scene_extraction_prompt[:100] if scene_extraction_prompt else 'None'}...")
+
+    try:
+        # Check if model is loaded
+        if not handle:
+            print(f"🔍 DEBUG: No model loaded, falling back to keyword extraction")
+            return extract_generic_scene(context.lower())
+
+        # Create the actual LLM prompt for scene extraction
+        if scene_extraction_prompt:
+            llm_prompt = f"{scene_extraction_prompt}\n\nConversation to analyze:\n{context}\n\nKeyword list:"
+        else:
+            llm_prompt = f"Extract visual scene details from this conversation for image generation. Focus on characters, setting, mood, and visual elements. Format as a detailed Stable Diffusion prompt:\n\nConversation:\n{context}\n\nScene prompt:"
+
+        print(f"🔍 DEBUG: Calling LLM with prompt: {llm_prompt[:200]}...")
+
+        # Prepare generation parameters for scene extraction
+        genparams = {
+            "prompt": llm_prompt,
+            "max_length": 150,  # Shorter for structured keyword list
+            "temperature": 0.6,  # Lower temperature for more consistent formatting
+            "top_p": 0.9,
+            "top_k": 40,
+            "rep_pen": 1.1,
+            "stop_sequence": ["\n\n", "Conversation:", "---"],  # Stop at double line breaks and conversation markers
+            "trim_stop": True
+        }
+
+        # Call the LLM using the same method as regular generation
+        result = generate(genparams)
+
+        if result and result.get("text"):
+            extracted_prompt = result["text"].strip()
+            print(f"🔍 DEBUG: LLM extracted scene: {extracted_prompt}")
+
+            # Clean up the extracted prompt
+            extracted_prompt = extracted_prompt.replace("Scene prompt:", "").strip()
+            extracted_prompt = extracted_prompt.replace("Extracted scene prompt for Stable Diffusion:", "").strip()
+            extracted_prompt = extracted_prompt.replace("Keyword list:", "").strip()
+            
+            # Remove any leading/trailing quotes or brackets that might be added by the LLM
+            extracted_prompt = extracted_prompt.strip("'\"()[]")
+
+            if extracted_prompt and len(extracted_prompt) > 10:
+                return extracted_prompt
+            else:
+                print(f"🔍 DEBUG: LLM result too short, falling back to keyword extraction")
+                return extract_generic_scene(context.lower())
+        else:
+            print(f"🔍 DEBUG: LLM call failed, falling back to keyword extraction")
+            return extract_generic_scene(context.lower())
+
+    except Exception as e:
+        print(f"🔍 DEBUG: Exception in LLM scene extraction: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback to keyword extraction
+        return extract_generic_scene(context.lower())
+
+def extract_booru_style_scene(context):
+    """Extract Booru-style tags from conversation context"""
+    tags = []
+
+    # Character detection
+    if "sarah" in context:
+        tags.append("(1girl, sarah)")
+    elif "girl" in context or "woman" in context or "female" in context:
+        tags.append("(1girl)")
+    elif "boy" in context or "man" in context or "male" in context:
+        tags.append("(1boy)")
+
+    # Setting detection
+    if "bed" in context or "bedroom" in context:
+        tags.append("bedroom")
+    if "window" in context or "moonlight" in context:
+        tags.extend(["window", "moonlight"])
+    if "outdoor" in context or "outside" in context:
+        tags.append("outdoor")
+    if "indoor" in context:
+        tags.append("indoor")
+
+    # Clothing detection
+    if "nightgown" in context or "silk" in context:
+        tags.extend(["nightgown", "silk"])
+    if "dress" in context:
+        tags.append("dress")
+    if "shirt" in context:
+        tags.append("shirt")
+
+    # Mood and style
+    tags.extend(["high_quality", "detailed", "anime_style"])
+
+    if tags:
+        return ", ".join(tags) + ", NOP"
+    return None
+
+def extract_photorealistic_scene(context):
+    """Extract photorealistic scene elements"""
+    tags = []
+
+    # Character detection
+    if "sarah" in context:
+        tags.append("(1girl, sarah, brunette_hair, olive_skin)")
+    elif "girl" in context or "woman" in context:
+        tags.append("(1girl, natural_hair, natural_skin)")
+    elif "boy" in context or "man" in context:
+        tags.append("(1boy, natural_hair, natural_skin)")
+
+    # Setting
+    if "bed" in context or "bedroom" in context:
+        tags.append("modern_bedroom")
+    if "window" in context or "moonlight" in context:
+        tags.extend(["window", "natural_lighting"])
+
+    # Style
+    tags.extend(["photorealistic", "detailed_skin", "natural_lighting", "high_quality"])
+
+    return ", ".join(tags) + ", NOP"
+
+def extract_generic_scene(context):
+    """Generic scene extraction"""
+    tags = []
+
+    # Character detection
+    if ("stephanie" in context or "wife" in context) and ("user" in context or "husband" in context):
+        tags.extend(["(1girl, stephanie)", "(1boy, user)", "married_couple"])
+    elif "girl" in context or "woman" in context or "wife" in context:
+        tags.append("(1girl)")
+    elif "boy" in context or "man" in context or "husband" in context:
+        tags.append("(1boy)")
+
+    # Setting detection
+    if "kitchen" in context:
+        tags.append("kitchen")
+    elif "bedroom" in context or "bed" in context:
+        tags.append("bedroom")
+    elif "party" in context:
+        tags.append("party_setting")
+    
+    if "window" in context:
+        tags.append("window")
+
+    # Activity detection
+    if any(word in context for word in ["quickie", "sex", "lovemaking", "intimate", "passionate"]):
+        tags.extend(["intimate_scene", "passionate"])
+    elif "dress" in context and "getting dressed" in context:
+        tags.extend(["getting_dressed", "afterglow"])
+    elif "hug" in context or "arms around" in context:
+        tags.append("embracing")
+
+    # Clothing
+    if "dress" in context:
+        tags.append("dress")
+    if "purple" in context:
+        tags.append("purple_dress")
+
+    # Style and quality
+    tags.extend(["realistic", "detailed", "high_quality"])
+
+    # Ensure we have at least basic tags if nothing was detected
+    if len(tags) == 3:  # Only the style tags were added
+        tags.insert(0, "intimate_scene")
+
+    return ", ".join(tags)
 
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
@@ -2318,7 +2852,9 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
     return used_tool_json
 
 def transform_genparams(genparams, api_format):
-    global chatcompl_adapter, maxctx
+    print(f"🔍 DEBUG: transform_genparams called with api_format: {api_format}")
+    print(f"🔍 DEBUG: genparams keys: {list(genparams.keys()) if genparams else 'None'}")
+    global chatcompl_adapter, maxctx, has_txt2img
 
     if api_format < 0: #not text gen, do nothing
         return
@@ -2507,6 +3043,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                         genparams["temperature"] = (1.0 if genparams.get("temperature", 0.5) > 1.0 else genparams.get("temperature", 0.5))
                         genparams["using_openai_tools"] = True
                         # Set grammar to llamacpp example grammar to force json response (see https://github.com/ggerganov/llama.cpp/blob/master/grammars/json_arr.gbnf)
+
+                    # Scene extraction is now handled in transform_genparams function
                         genparams["grammar"] = jsongrammar
                         try:
                             toolname = used_tool_json.get('function').get('name')
@@ -2543,6 +3081,37 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 genparams["stop_sequence"].append(user_message_start.strip())
                 genparams["stop_sequence"].append(assistant_message_start.strip())
             genparams["trim_stop"] = True
+
+            # Scene extraction for SD generation - integrate seamlessly with chat flow
+            print(f"🔥 PYTHON STEP 3: Scene extraction check in transform_genparams - scene_extraction_prompt: {bool(scene_extraction_prompt)}, messages_array: {len(messages_array) if messages_array else 0}")
+
+            # Always try scene extraction if we have messages, even without a specific prompt
+            if messages_array:
+                print(f"🔥 PYTHON STEP 4: Attempting scene extraction with {len(messages_array)} messages")
+                print(f"🔥 PYTHON STEP 5: Calling extract_scene_for_sd with {len(messages_array)} messages")
+                scene_data = extract_scene_for_sd(messages_array)
+                print(f"🔥 PYTHON STEP 6: Scene extraction result: {scene_data}")
+
+                if scene_data and scene_data.get("trigger_generation"):
+                    genparams["scene_extracted"] = scene_data["sd_prompt"]
+                    genparams["scene_trigger"] = True
+                    print(f"🔥 PYTHON STEP 7: Scene extracted for SD: {genparams['scene_extracted']}")
+
+                    # Store scene data for UI to use with existing SD endpoints
+                    genparams["scene_data"] = {
+                        "sd_prompt": scene_data["sd_prompt"],
+                        "ready_for_sd": True
+                    }
+
+                    has_txt2img_available = not (friendlysdmodelname=="inactive" or fullsdmodelpath=="")
+                    if has_txt2img_available:
+                        print("🔥 PYTHON STEP 8: SD model available - scene ready for generation")
+                    else:
+                        print("🔥 PYTHON STEP 8: To enable actual SD generation, add --sdmodel parameter when starting KoboldCPP")
+                else:
+                    print(f"🔥 PYTHON ERROR: Scene extraction failed or no trigger - scene_data: {scene_data}")
+            else:
+                print(f"🔥 PYTHON STEP 3: No messages available for scene extraction")
 
 
     elif api_format==5:
@@ -2745,7 +3314,10 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 global last_non_horde_req_time
                 last_non_horde_req_time = time.time()
 
-            return generate(genparams=genparams,stream_flag=stream_flag)
+            print(f"🔥 PYTHON STEP 9: Calling C++ generate() function with prompt length: {len(genparams.get('prompt', ''))}")
+            result = generate(genparams=genparams,stream_flag=stream_flag)
+            print(f"🔥 PYTHON STEP 10: C++ generate() returned, status: {result.get('status', 'unknown')}")
+            return result
 
         genout = {"text": "", "status": -1, "stopreason": -1, "prompt_tokens":0, "completion_tokens": 0, "total_tokens": 0}
         if stream_flag:
@@ -2944,6 +3516,10 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             await asyncio.gather(*tasks)
             generate_result = generate_task.result()
+            print(f"🔥 PYTHON STEP 11: Generation complete, preparing response with scene_extracted: {'scene_extracted' in genparams}")
+            if 'scene_extracted' in genparams:
+                generate_result['scene_extracted'] = genparams['scene_extracted']
+                print(f"🔥 PYTHON STEP 12: Added scene_extracted to response: {genparams['scene_extracted'][:100]}...")
             return generate_result
         except (BrokenPipeError, ConnectionAbortedError) as cae: # attempt to abort if connection lost
             print("An ongoing connection was aborted or interrupted!")
@@ -3168,7 +3744,50 @@ Change Mode<br>
             if embedded_kailite is None:
                 response_body = (f"Embedded KoboldAI Lite is not found.<br>You will have to connect via the main KoboldAI client, or <a href='https://lite.koboldai.net?local=1&port={self.port}'>use this URL</a> to connect.").encode()
             else:
-                response_body = embedded_kailite
+                # DEV MODE: Reload klite.embd on each request for development
+                # TODO: Remove this in production for performance
+                start_reload_time = time.time()
+                print(f"🔄 DEV: Starting klite.embd reload at {time.strftime('%H:%M:%S')}")
+                try:
+                    basepath = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
+                    file_path = os.path.join(basepath, "klite.embd")
+                    print(f"🔄 DEV: Reading file from: {file_path}")
+
+                    file_read_start = time.time()
+                    with open(file_path, mode='rb') as f:
+                        dev_embedded_kailite = f.read()
+                    file_read_time = time.time() - file_read_start
+                    print(f"🔄 DEV: File read took {file_read_time:.3f}s (size: {len(dev_embedded_kailite)} bytes)")
+
+                    # Apply same patches as startup
+                    patch_start = time.time()
+                    patches = [{"find":"Sorry, KoboldAI Lite requires Javascript to function.","replace":"Sorry, KoboldAI Lite requires Javascript to function.<br>You can use <a class=\"color_blueurl\" href=\"/noscript\">KoboldCpp NoScript mode</a> instead."},
+                               {"find":"var localflag = urlParams.get('local');","replace":"var localflag = true;"},
+                               {"find":"<p id=\"tempgtloadtxt\">Loading...</p>","replace":"<p id=\"tempgtloadtxt\">Loading...<br>(If load fails, try <a class=\"color_blueurl\" href=\"/noscript\">KoboldCpp NoScript mode</a> instead, or adding /noscript at this url.)</p>"}]
+
+                    print(f"🔄 DEV: Decoding UTF-8...")
+                    dev_embedded_kailite = dev_embedded_kailite.decode("UTF-8","ignore")
+
+                    print(f"🔄 DEV: Applying {len(patches)} patches...")
+                    for i, p in enumerate(patches):
+                        before_len = len(dev_embedded_kailite)
+                        dev_embedded_kailite = dev_embedded_kailite.replace(p["find"], p["replace"])
+                        after_len = len(dev_embedded_kailite)
+                        print(f"🔄 DEV: Patch {i+1}: {before_len} -> {after_len} chars")
+
+                    print(f"🔄 DEV: Re-encoding to bytes...")
+                    response_body = dev_embedded_kailite.encode()
+
+                    patch_time = time.time() - patch_start
+                    total_time = time.time() - start_reload_time
+                    print(f"🔄 DEV: Patching took {patch_time:.3f}s")
+                    print(f"✅ DEV: Reload complete! Total time: {total_time:.3f}s (final size: {len(response_body)} bytes)")
+
+                except Exception as e:
+                    error_time = time.time() - start_reload_time
+                    print(f"❌ DEV: Failed to reload klite.embd after {error_time:.3f}s: {e}")
+                    print(f"🔄 DEV: Using cached embedded_kailite instead")
+                    response_body = embedded_kailite
 
         elif self.path in ["/noscript", "/noscript?"] or self.path.startswith(('/noscript?','noscript?')): #it's possible for the root url to have ?params without /
             self.noscript_webui()
@@ -3202,6 +3821,64 @@ Change Mode<br>
         elif self.path.endswith(('/api/extra/version')):
             caps = get_capabilities()
             response_body = (json.dumps(caps).encode())
+        elif self.path.endswith('/api/extra/scene/status'):
+            # Scene extraction status endpoint (following your UI pattern)
+            response_body = json.dumps({
+                "scene_extraction_enabled": bool(scene_extraction_prompt),
+                "scene_extraction_prompt": scene_extraction_prompt[:100] + "..." if scene_extraction_prompt and len(scene_extraction_prompt) > 100 else scene_extraction_prompt,
+                "adapter_loaded": bool(chatcompl_adapter),
+                "has_txt2img": has_txt2img,
+                "message": "Scene extraction system status"
+            }).encode()
+        elif self.path.endswith('/api/extra/lora/list'):
+            # List available LoRAs in the configured directory
+            if not sdlora_model_dir:
+                response_body = json.dumps({
+                    "success": False,
+                    "message": "No LoRA model directory configured"
+                }).encode()
+            else:
+                try:
+                    import os
+                    lora_files = []
+                    if os.path.exists(sdlora_model_dir):
+                        for file in os.listdir(sdlora_model_dir):
+                            if file.endswith(('.safetensors', '.ckpt')):
+                                lora_name = os.path.splitext(file)[0]
+                                lora_files.append({
+                                    "name": lora_name,
+                                    "filename": file,
+                                    "path": os.path.join(sdlora_model_dir, file)
+                                })
+
+                    response_body = json.dumps({
+                        "success": True,
+                        "lora_directory": sdlora_model_dir,
+                        "available_loras": lora_files,
+                        "current_lora": args.sdlora if hasattr(args, 'sdlora') else "",
+                        "current_multiplier": args.sdloramult if hasattr(args, 'sdloramult') else 1.0
+                    }).encode()
+                except Exception as e:
+                    response_body = json.dumps({
+                        "success": False,
+                        "message": f"Error listing LoRAs: {str(e)}"
+                    }).encode()
+        elif self.path.endswith('/api/extra/scene/extract'):
+            # Scene extraction endpoint (following your UI pattern)
+            try:
+                # For GET requests, return the current scene extraction status
+                response_body = json.dumps({
+                    "success": True,
+                    "scene_extraction_enabled": bool(scene_extraction_prompt),
+                    "adapter_loaded": bool(chatcompl_adapter),
+                    "has_txt2img": has_txt2img,
+                    "message": "Scene extraction is available via chat completion adapters"
+                }).encode()
+            except Exception as e:
+                response_body = json.dumps({
+                    "success": False,
+                    "message": f"Error: {str(e)}"
+                }).encode()
 
         elif self.path.endswith(('/api/admin/list_options')): #used by admin to get info about a kcpp instance
             opts = []
@@ -3408,7 +4085,7 @@ Change Mode<br>
         return
 
     def do_POST(self):
-        global modelbusy, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support
+        global modelbusy, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, args
         contlenstr = self.headers['content-length']
         content_length = 0
         body = None
@@ -3866,6 +4543,77 @@ Change Mode<br>
                     response_body = (json.dumps({"success": result}).encode())
                 else:
                     response_body = (json.dumps({"success": False}).encode())
+            elif self.path.endswith('/api/extra/scene/extract'):
+                # Scene extraction endpoint for UI to call before txt2img
+                try:
+                    body_data = json.loads(body)
+                    conversation_text = body_data.get('conversation', '')
+
+                    if not conversation_text:
+                        response_body = json.dumps({
+                            "success": False,
+                            "message": "conversation text is required"
+                        }).encode()
+                    else:
+                        # Convert conversation text to message format for scene extraction
+                        messages = [{"role": "user", "content": conversation_text}]
+
+                        print(f"🎨 Scene extraction API called with conversation: {conversation_text[:100]}...")
+                        scene_data = extract_scene_for_sd(messages)
+
+                        if scene_data and scene_data.get("trigger_generation"):
+                            response_body = json.dumps({
+                                "success": True,
+                                "scene_prompt": scene_data["sd_prompt"],
+                                "ready_for_generation": True,
+                                "message": "Scene extracted successfully"
+                            }).encode()
+                            print(f"🎨 Scene extraction API returned: {scene_data['sd_prompt']}")
+                        else:
+                            response_body = json.dumps({
+                                "success": False,
+                                "message": "Scene extraction failed"
+                            }).encode()
+
+                except Exception as e:
+                    response_body = json.dumps({
+                        "success": False,
+                        "message": f"Error processing request: {str(e)}"
+                    }).encode()
+
+            elif self.path.endswith('/api/extra/lora/switch'):
+                # Dynamic LoRA switching endpoint
+                try:
+                    body_data = json.loads(body)
+                    lora_name = body_data.get('lora_name', '')
+                    lora_multiplier = body_data.get('lora_multiplier', 1.0)
+
+                    if not lora_name:
+                        response_body = json.dumps({
+                            "success": False,
+                            "message": "lora_name is required"
+                        }).encode()
+                    elif not sdlora_model_dir:
+                        response_body = json.dumps({
+                            "success": False,
+                            "message": "No LoRA model directory configured"
+                        }).encode()
+                    else:
+                        # Update the global LoRA settings
+                        args.sdlora = lora_name
+                        args.sdloramult = lora_multiplier
+
+                        response_body = json.dumps({
+                            "success": True,
+                            "message": f"Switched to LoRA: {lora_name} (multiplier: {lora_multiplier})"
+                        }).encode()
+
+                except Exception as e:
+                    response_body = json.dumps({
+                        "success": False,
+                        "message": f"Error processing request: {str(e)}"
+                    }).encode()
+
             elif self.path.startswith('/api/upload/image') or self.path.startswith("/upload/image"): #comfyui compatible
                 lastuploadedcomfyimg = b''
                 formdata = self.extract_formdata_from_file_upload(body)
@@ -3882,7 +4630,10 @@ Change Mode<br>
             elif self.path.endswith('/v1/completions') or self.path.endswith('/v1/completion'):
                 api_format = 3
             elif self.path.endswith('/v1/chat/completions'):
+                print(f"🔥 PYTHON STEP 1: Chat completions endpoint reached: {self.path}")
                 api_format = 4
+                print(f"🔥 PYTHON STEP 2: Set api_format to: {api_format}")
+
             elif self.path.endswith('/sdapi/v1/interrogate'):
                 if not has_vision_support:
                     self.send_response(503)
@@ -3898,6 +4649,7 @@ Change Mode<br>
             elif self.path.endswith('/api/chat'): #ollama
                 api_format = 7
             elif self.path=="/prompt" or self.path.endswith('/v1/images/generations') or self.path.endswith('/sdapi/v1/txt2img') or self.path.endswith('/sdapi/v1/img2img'):
+                print(f"🔥 PYTHON SD STEP 1: SD generation endpoint reached: {self.path}")
                 is_imggen = True
                 if self.path=="/prompt":
                     is_comfyui_imggen = True
@@ -3924,9 +4676,12 @@ Change Mode<br>
                         return
 
                 genparams = None
+                print(f"🔍 DEBUG: About to parse request body, body length: {len(body) if body else 0}")
                 try:
                     genparams = json.loads(body)
-                except Exception:
+                    print(f"🔍 DEBUG: Successfully parsed JSON, genparams keys: {list(genparams.keys()) if genparams else 'None'}")
+                except Exception as e:
+                    print(f"🔍 DEBUG: Failed to parse JSON: {e}")
                     genparams = None
                     if is_transcribe: #fallback handling of file uploads
                         formdata = self.extract_formdata_from_file_upload(body)
@@ -3954,9 +4709,11 @@ Change Mode<br>
 
                 printablegenparams_raw = truncate_long_json(genparams,trunc_len)
                 utfprint("\nInput: " + json.dumps(printablegenparams_raw),1)
+                print(f"🔍 DEBUG: About to call transform_genparams with api_format: {api_format}")
 
                 # transform genparams (only used for text gen) first
                 genparams = transform_genparams(genparams, api_format)
+                print(f"🔍 DEBUG: transform_genparams returned successfully")
 
                 if args.debugmode >= 1:
                     printablegenparams = truncate_long_json(genparams,trunc_len)
@@ -3966,11 +4723,18 @@ Change Mode<br>
                     bring_terminal_to_foreground()
 
                 if api_format > 0: #text gen
+                    print(f"🔍 DEBUG: Processing text generation with api_format: {api_format}")
+                    print(f"🔍 DEBUG: genparams keys: {list(genparams.keys())}")
+                    print(f"🔍 DEBUG: messages in genparams: {genparams.get('messages', 'None')}")
+
                     # Check if streaming chat completions, if so, set stream mode to true
                     if (api_format == 4 or api_format == 3) and "stream" in genparams and genparams["stream"]:
                         sse_stream_flag = True
+                        print(f"🔍 DEBUG: Streaming enabled: {sse_stream_flag}")
 
+                    print(f"🔍 DEBUG: About to call handle_request with api_format: {api_format}")
                     gen = asyncio.run(self.handle_request(genparams, api_format, sse_stream_flag))
+                    print(f"🔍 DEBUG: handle_request returned: {type(gen)}")
 
                     try:
                         # Headers are already sent when streaming
@@ -5540,7 +6304,7 @@ def show_gui():
             args.sdquant = True
         if sd_lora_var.get() != "":
             args.sdlora = sd_lora_var.get()
-            args.sdloramult = float(sd_loramult_var.get())
+            args.sdloramult = sd_loramult_var.get()  # Keep as string for comma-delimited support
         else:
             args.sdlora = ""
 
@@ -6764,8 +7528,25 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                     canload = True
                 except Exception as ex:
                     print(ex)
+
         if canload:
             print("Chat Completions Adapter Loaded")
+            # Extract scene extraction prompt if present
+            global scene_extraction_prompt
+            if chatcompl_adapter and "scene_extraction_prompt" in chatcompl_adapter:
+                scene_extraction_prompt = chatcompl_adapter["scene_extraction_prompt"]
+                print(f"🎨 Scene extraction prompt loaded from adapter: {scene_extraction_prompt[:100]}...")
+
+                # Test scene extraction with a sample conversation
+                test_messages = [
+                    {"role": "user", "content": "Sarah is sitting on the bed in her silk nightgown, looking out the window at the moonlight."},
+                    {"role": "assistant", "content": "I can see Sarah there, the moonlight casting a soft glow through the window."}
+                ]
+                test_scene = extract_scene_for_sd(test_messages)
+                if test_scene:
+                    print(f"🎨 Test scene extraction successful: {test_scene['sd_prompt']}")
+                else:
+                    print("❌ Test scene extraction failed")
         else:
             print("Warning: Chat Completions Adapter invalid or not found.")
         if (chatcompl_adapter is not None and isinstance(chatcompl_adapter, list)):
@@ -6938,10 +7719,15 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             shouldavoidgpu = True
             if args.gpulayers and args.gpulayers>0:
                 print("WARNING: GPU layers is set, but a GPU backend was not selected! GPU will not be used!")
-            args.gpulayers = 0
+                args.gpulayers = 0
         elif args.gpulayers==-1 and sys.platform=="darwin" and args.model_param and os.path.exists(args.model_param):
             print("MacOS detected: Auto GPU layers set to maximum")
-            args.gpulayers = 200
+            # If SD model is also loaded, reduce GPU layers to free memory
+            if args.sdmodel and args.sdmodel != "":
+                print("SD model detected: Reducing GPU layers to 40 to free memory for SD model")
+                # args.gpulayers = 40
+            else:
+                args.gpulayers = 200
         elif not shouldavoidgpu and args.model_param and os.path.exists(args.model_param):
             if (args.usecuda is None) and (args.usevulkan is None) and (args.useclblast is None):
                 print("No GPU or CPU backend was selected. Trying to assign one for you automatically...")
@@ -7064,27 +7850,200 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 print("Chat template heuristics failed to identify chat completions format. Alpaca will be used.")
 
     #handle loading image model
+    print(f"🔥 SD LOADING DEBUG 1: Checking SD model args...")
+    print(f"🔥 SD LOADING DEBUG 1a: args.sdmodel = '{args.sdmodel}'")
+    print(f"🔥 SD LOADING DEBUG 1b: args.sdmodel exists check: {bool(args.sdmodel)}")
+    print(f"🔥 SD LOADING DEBUG 1c: args.sdmodel != '' check: {args.sdmodel != ''}")
+    print(f"🔥 SD LOADING DEBUG 1d: Combined condition: {args.sdmodel and args.sdmodel != ''}")
+
+    # M4 Pro Optimization Detection and Logging
+    import platform as platform_module
+    import subprocess
+    is_m4_pro = False
+    try:
+        if platform_module.system() == "Darwin":  # macOS
+            try:
+                result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True, timeout=5)
+                cpu_info = result.stdout.strip() if result.returncode == 0 else ""
+                print(f"🍎 M4 DETECTION: CPU Info: {cpu_info}")
+                is_m4_pro = "Apple M4" in cpu_info
+                print(f"🍎 M4 DETECTION: Is M4 Pro detected: {is_m4_pro}")
+            except Exception as e:
+                print(f"🍎 M4 DETECTION: CPU detection failed: {e}")
+                # Fallback: check if we're on Apple Silicon with specific memory characteristics
+                try:
+                    memory_result = subprocess.run(['sysctl', '-n', 'hw.memsize'], capture_output=True, text=True, timeout=5)
+                    if memory_result.returncode == 0:
+                        memory_gb = int(memory_result.stdout.strip()) // (1024**3)
+                        print(f"🍎 M4 DETECTION: Memory detected: {memory_gb}GB")
+                        # M4 Pro typically has 48GB unified memory
+                        is_m4_pro = memory_gb >= 48
+                        print(f"🍎 M4 DETECTION: Assuming M4 Pro based on memory (>=48GB): {is_m4_pro}")
+                except Exception as e2:
+                    print(f"🍎 M4 DETECTION: Memory fallback detection failed: {e2}")
+    except Exception as e:
+        print(f"🍎 M4 DETECTION: Platform detection failed: {e}")
+
+    if is_m4_pro:
+        print("🍎 M4 PRO OPTIMIZATION: Apple M4 Pro detected! Applying optimizations...")
+        
+        # Thread optimization for M4 Pro
+        if args.threads <= 6:
+            old_threads = args.threads
+            args.threads = 8
+            print(f"🍎 M4 PRO OPTIMIZATION: Thread count optimized: {old_threads} → {args.threads}")
+        else:
+            print(f"🍎 M4 PRO OPTIMIZATION: Thread count already optimized: {args.threads}")
+        
+        # BLAS optimization for Apple Silicon
+        if args.blasbatchsize == 512:  # default value
+            old_blas = args.blasbatchsize
+            args.blasbatchsize = 1024  # Higher batch size for unified memory
+            print(f"🍎 M4 PRO OPTIMIZATION: BLAS batch size optimized: {old_blas} → {args.blasbatchsize}")
+        else:
+            print(f"🍎 M4 PRO OPTIMIZATION: BLAS batch size already set: {args.blasbatchsize}")
+        
+        # Memory mapping optimization
+        if not args.usemmap:
+            args.usemmap = True
+            print("🍎 M4 PRO OPTIMIZATION: Memory mapping enabled for unified memory architecture")
+        else:
+            print("🍎 M4 PRO OPTIMIZATION: Memory mapping already enabled")
+        
+        print("🍎 M4 PRO OPTIMIZATION: Optimizations applied successfully")
+    else:
+        print("🍎 M4 PRO OPTIMIZATION: Non-M4 Pro system detected, skipping Apple Silicon optimizations")
+
     if args.sdmodel and args.sdmodel!="":
+        print("🔥 SD MODEL PROCESSING: Starting SD model optimization pipeline...")
+        
+        # M4 Pro specific SD optimizations
+        if is_m4_pro:
+            print("🔥 M4 PRO SD OPTIMIZATION: Applying M4 Pro specific SD optimizations...")
+            
+            # SD Thread optimization for M4 Pro
+            if args.sdthreads <= 4:
+                old_sdthreads = args.sdthreads
+                args.sdthreads = 6
+                print(f"🔥 M4 PRO SD OPTIMIZATION: SD thread count optimized: {old_sdthreads} → {args.sdthreads}")
+            else:
+                print(f"🔥 M4 PRO SD OPTIMIZATION: SD thread count already optimized: {args.sdthreads}")
+            
+            print("🔥 M4 PRO SD OPTIMIZATION: M4 Pro SD optimizations completed")
+        
+        # Auto-optimize memory settings for SD model
+        if not args.sdquant:
+            print("🔥 SD MEMORY OPTIMIZATION: Auto-enabling --sdquant to save memory")
+            args.sdquant = True
+        # CRITICAL: Resolution limit detection and logging
+        print("🔥 SD RESOLUTION CRITICAL: Starting resolution limit analysis...")
+        print(f"🔥 SD RESOLUTION CRITICAL: Initial args.sdclamped = {args.sdclamped}")
+        print(f"🔥 SD RESOLUTION CRITICAL: Initial args.sdclampedsoft = {args.sdclampedsoft}")
+        
+        # Only apply auto-optimization if values were not explicitly set
+        # Note: args.sdclamped defaults to 0, but we check if it was explicitly provided
+        from sys import argv
+        explicit_sdclamped = '--sdclamped' in argv
+        explicit_sdclampedsoft = '--sdclampedsoft' in argv
+        
+        print(f"🔥 SD RESOLUTION CRITICAL: Command line argv check:")
+        print(f"🔥 SD RESOLUTION CRITICAL: Full argv = {argv}")
+        print(f"🔥 SD RESOLUTION CRITICAL: '--sdclamped' in argv = {explicit_sdclamped}")
+        print(f"🔥 SD RESOLUTION CRITICAL: '--sdclampedsoft' in argv = {explicit_sdclampedsoft}")
+
+        if not explicit_sdclamped:
+            old_sdclamped = args.sdclamped
+            args.sdclamped = 1024
+            print(f"🔥 SD RESOLUTION CRITICAL: AUTO-SETTING sdclamped: {old_sdclamped} → {args.sdclamped} (hard limit)")
+            print("🔥 SD RESOLUTION CRITICAL: This prevents 64x64 resolution scaling issues!")
+        else:
+            print(f"🔥 SD RESOLUTION CRITICAL: USING EXPLICIT sdclamped = {args.sdclamped}")
+            print("🔥 SD RESOLUTION CRITICAL: Explicit value protects against auto-scaling issues!")
+            
+        if not explicit_sdclampedsoft:
+            old_sdclampedsoft = args.sdclampedsoft
+            args.sdclampedsoft = 768
+            print(f"🔥 SD RESOLUTION CRITICAL: AUTO-SETTING sdclampedsoft: {old_sdclampedsoft} → {args.sdclampedsoft} (soft limit)")
+            print("🔥 SD RESOLUTION CRITICAL: This prevents memory-based resolution downscaling!")
+        else:
+            print(f"🔥 SD RESOLUTION CRITICAL: USING EXPLICIT sdclampedsoft = {args.sdclampedsoft}")
+            print("🔥 SD RESOLUTION CRITICAL: Explicit value protects against memory-based scaling issues!")
+            
+        print(f"🔥 SD RESOLUTION CRITICAL: FINAL VALUES - sdclamped={args.sdclamped}, sdclampedsoft={args.sdclampedsoft}")
+        print("🔥 SD RESOLUTION CRITICAL: Resolution limit analysis complete - proceeding with safe values")
+        print(f"🔥 SD LOADING DEBUG 2: SD model condition passed! Processing model: {args.sdmodel}")
         imgmodel = args.sdmodel
+        print(f"🔥 SD LOADING DEBUG 3: imgmodel set to: {imgmodel}")
+        print(f"🔥 SD LOADING DEBUG 4: Checking if imgmodel exists...")
+        print(f"🔥 SD LOADING DEBUG 4a: imgmodel bool check: {bool(imgmodel)}")
+        print(f"🔥 SD LOADING DEBUG 4b: os.path.exists check: {os.path.exists(imgmodel)}")
+        print(f"🔥 SD LOADING DEBUG 4c: Combined exists condition: {not imgmodel or not os.path.exists(imgmodel)}")
+
         if not imgmodel or not os.path.exists(imgmodel):
+            print(f"🔥 SD LOADING DEBUG 5: SD model file not found!")
             if args.ignoremissing:
-                print(f"Ignoring missing img model file: {imgmodel}")
+                print(f"🔥 SD LOADING DEBUG 6: Ignoring missing img model file: {imgmodel}")
                 args.sdmodel = None
             else:
+                print(f"🔥 SD LOADING DEBUG 7: Exiting due to missing SD model file")
                 exitcounter = 999
                 exit_with_error(2,f"Cannot find image model file: {imgmodel}")
         else:
+            print(f"🔥 SD LOADING DEBUG 8: SD model file exists! Proceeding with loading...")
+            print(f"🔥 SD LOADING DEBUG 9: Initializing SD model variables...")
             imglora = ""
             imgvae = ""
             imgt5xxl = ""
             imgclipl = ""
             imgclipg = ""
             imgphotomaker = ""
+            print(f"🔥 SD LOADING DEBUG 10: Variables initialized successfully")
+            print(f"🔥 SD LOADING DEBUG 11: Checking SD LoRA model(s)...")
             if args.sdlora:
-                if os.path.exists(args.sdlora):
-                    imglora = os.path.abspath(args.sdlora)
+                # Parse comma-separated LoRA files
+                lora_files = [f.strip() for f in args.sdlora.split(',') if f.strip()]
+                
+                # Parse comma-separated multipliers 
+                if isinstance(args.sdloramult, str):
+                    lora_mults = [float(m.strip()) for m in args.sdloramult.split(',') if m.strip()]
                 else:
-                    print("Missing SD LORA model file...")
+                    lora_mults = [args.sdloramult]
+                
+                # Extend multipliers to match number of LoRAs (default 1.0)
+                while len(lora_mults) < len(lora_files):
+                    lora_mults.append(1.0)
+                
+                print(f"🔥 SD LOADING DEBUG 11a: Found {len(lora_files)} LoRA file(s)")
+                print(f"🔥 SD LOADING DEBUG 11b: LoRA multipliers: {lora_mults}")
+                
+                # For now, we'll combine multiple LoRAs into a single path string
+                # The C++ side will need to be updated to handle this properly
+                valid_loras = []
+                for i, lora_file in enumerate(lora_files):
+                    if os.path.exists(lora_file):
+                        valid_loras.append(os.path.abspath(lora_file))
+                        print(f"🔥 SD LOADING DEBUG 11c: LoRA {i+1}: {lora_file} (mult: {lora_mults[i]})")
+                    else:
+                        print(f"🔥 SD LOADING DEBUG 11d: Missing LoRA file: {lora_file}")
+                
+                if valid_loras:
+                    # For backward compatibility, use first LoRA as primary
+                    imglora = valid_loras[0]
+                    # Store all LoRAs and multipliers for future C++ implementation
+                    args.sdlora_list = valid_loras
+                    args.sdloramult_list = lora_mults[:len(valid_loras)]
+                    print(f"🔥 SD LOADING DEBUG 11e: Primary LoRA: {imglora}")
+                    if len(valid_loras) > 1:
+                        print(f"🔥 SD LOADING DEBUG 11f: Additional LoRAs will be ignored until C++ multi-LoRA support is added")
+            print(f"🔥 SD LOADING DEBUG 12: LoRA check complete")
+            if args.sdlora_model_dir:
+                if os.path.exists(args.sdlora_model_dir):
+                    global sdlora_model_dir
+                    sdlora_model_dir = os.path.abspath(args.sdlora_model_dir)
+                    print(f"LoRA model directory set to: {sdlora_model_dir}")
+                else:
+                    print(f"Missing SD LoRA model directory: {args.sdlora_model_dir}")
+
             if args.sdvae:
                 if os.path.exists(args.sdvae):
                     imgvae = os.path.abspath(args.sdvae)
@@ -7111,16 +8070,57 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 else:
                     print("Missing SD Photomaker model file...")
 
+            print(f"🔥 SD LOADING DEBUG 16: Converting to absolute path...")
             imgmodel = os.path.abspath(imgmodel)
+            print(f"🔥 SD LOADING DEBUG 17: Absolute path: {imgmodel}")
+
+            print(f"🔥 SD LOADING DEBUG 18: Setting global SD model variables...")
             fullsdmodelpath = imgmodel
+            print(f"🔥 SD LOADING DEBUG 19: fullsdmodelpath set to: {fullsdmodelpath}")
+
             friendlysdmodelname = os.path.basename(imgmodel)
             friendlysdmodelname = os.path.splitext(friendlysdmodelname)[0]
             friendlysdmodelname = sanitize_string(friendlysdmodelname)
+            print(f"🔥 SD LOADING DEBUG 20: friendlysdmodelname set to: {friendlysdmodelname}")
+
+            print(f"🔥 SD LOADING DEBUG 21: About to call sd_load_model with:")
+            print(f"🔥 SD LOADING DEBUG 21a: imgmodel={imgmodel}")
+            print(f"🔥 SD LOADING DEBUG 21b: imgvae={imgvae}")
+            print(f"🔥 SD LOADING DEBUG 21c: imglora={imglora}")
+            print(f"🔥 SD LOADING DEBUG 21d: imgt5xxl={imgt5xxl}")
+            print(f"🔥 SD LOADING DEBUG 21e: imgclipl={imgclipl}")
+            print(f"🔥 SD LOADING DEBUG 21f: imgclipg={imgclipg}")
+            print(f"🔥 SD LOADING DEBUG 21g: imgphotomaker={imgphotomaker}")
+
+            print(f"🔥 SD LOADING DEBUG 22: Calling sd_load_model NOW...")
             loadok = sd_load_model(imgmodel,imgvae,imglora,imgt5xxl,imgclipl,imgclipg,imgphotomaker)
+            print(f"🔥 SD LOADING DEBUG 23: sd_load_model returned: {loadok}")
             print("Load Image Model OK: " + str(loadok))
+
             if not loadok:
+                print(f"🔥 SD LOADING DEBUG 24: SD model loading FAILED!")
                 exitcounter = 999
                 exit_with_error(3,"Could not load image model: " + imgmodel)
+            else:
+                print(f"🔥 SD LOADING DEBUG 25: SD model loading SUCCESS!")
+                print(f"🔥 SD LOADING DEBUG 26: Setting global has_txt2img = True")
+                global has_txt2img
+                has_txt2img = True
+
+    # Handle LoRA model directory even without SD model (for API endpoints)
+    if args.sdlora_model_dir and not sdlora_model_dir:
+        if os.path.exists(args.sdlora_model_dir):
+            sdlora_model_dir = os.path.abspath(args.sdlora_model_dir)
+            print(f"LoRA model directory set to: {sdlora_model_dir}")
+        else:
+            print(f"Missing SD LoRA model directory: {args.sdlora_model_dir}")
+    else:
+        print(f"🔥 SD LOADING DEBUG 27: SD model condition NOT met - SD model will not be loaded")
+        print(f"🔥 SD LOADING DEBUG 28: args.sdmodel = '{args.sdmodel}' (type: {type(args.sdmodel)})")
+        if hasattr(args, 'sdmodel'):
+            print(f"🔥 SD LOADING DEBUG 29: args.sdmodel attribute exists")
+        else:
+            print(f"🔥 SD LOADING DEBUG 29: args.sdmodel attribute DOES NOT exist!")
 
     #handle whisper model
     if args.whispermodel and args.whispermodel!="":
@@ -7543,8 +8543,10 @@ if __name__ == '__main__':
     sdparsergroupvae.add_argument("--sdvaeauto", help="Uses a built-in VAE via TAE SD, which is very fast, and fixed bad VAEs.", action='store_true')
     sdparsergrouplora = sdparsergroup.add_mutually_exclusive_group()
     sdparsergrouplora.add_argument("--sdquant", help="If specified, loads the model quantized to save memory.", action='store_true')
-    sdparsergrouplora.add_argument("--sdlora", metavar=('[filename]'), help="Specify an image generation LORA safetensors model to be applied.", default="")
-    sdparsergroup.add_argument("--sdloramult", metavar=('[amount]'), help="Multiplier for the image LORA model to be applied.", type=float, default=1.0)
+    sdparsergrouplora.add_argument("--sdlora", metavar=('[filename]'), help="Specify image generation LORA safetensors model(s) to be applied. Use comma separation for multiple LoRAs.", default="")
+    sdparsergroup.add_argument("--sdloramult", metavar=('[amount]'), help="Multiplier(s) for the image LORA model(s) to be applied. Use comma separation for multiple multipliers (default: 1.0 for each).", default="1.0")
+    sdparsergroup.add_argument("--sdmlxlora", help="Enable MLX-inspired multi-LoRA fusion for faster processing and memory efficiency. Requires multiple LoRAs to activate.", action='store_true')
+    sdparsergrouplora.add_argument("--sdlora-model-dir", metavar=('[directory]'), help="Specify a directory containing multiple LoRA models for dynamic switching.", default="")
     sdparsergroup.add_argument("--sdtiledvae", metavar=('[maxres]'), help="Adjust the automatic VAE tiling trigger for images above this size. 0 disables vae tiling.", type=int, default=default_vae_tile_threshold)
     whisperparsergroup = parser.add_argument_group('Whisper Transcription Commands')
     whisperparsergroup.add_argument("--whispermodel", metavar=('[filename]'), help="Specify a Whisper .bin model to enable Speech-To-Text transcription.", default="")

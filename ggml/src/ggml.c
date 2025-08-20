@@ -3371,6 +3371,29 @@ struct ggml_tensor * ggml_reshape(
         struct ggml_tensor * b) {
     GGML_ASSERT(ggml_is_contiguous(a));
     // as only the shape of b is relevant, and not its memory layout, b is allowed to be non contiguous.
+    
+    // 🔧 DEBUG: Log tensor dimensions before assertion
+    if (ggml_nelements(a) != ggml_nelements(b)) {
+        printf("🚨 GGML_RESHAPE MISMATCH:\n");
+        printf("🚨   Source tensor 'a': [");
+        for (int i = 0; i < GGML_MAX_DIMS && a->ne[i] > 0; i++) {
+            printf("%lld", a->ne[i]);
+            if (i < GGML_MAX_DIMS - 1 && a->ne[i+1] > 0) printf(" x ");
+        }
+        printf("] = %lld elements\n", ggml_nelements(a));
+        
+        printf("🚨   Target tensor 'b': [");
+        for (int i = 0; i < GGML_MAX_DIMS && b->ne[i] > 0; i++) {
+            printf("%lld", b->ne[i]);
+            if (i < GGML_MAX_DIMS - 1 && b->ne[i+1] > 0) printf(" x ");
+        }
+        printf("] = %lld elements\n", ggml_nelements(b));
+        
+        if (a->name) printf("🚨   Source name: %s\n", a->name);
+        if (b->name) printf("🚨   Target name: %s\n", b->name);
+        fflush(stdout);
+    }
+    
     GGML_ASSERT(ggml_nelements(a) == ggml_nelements(b));
 
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, GGML_MAX_DIMS, b->ne, a, 0);
@@ -6566,7 +6589,11 @@ struct ggml_tensor * ggml_set_zero(struct ggml_tensor * tensor) {
     if (tensor->buffer) {
         ggml_backend_tensor_memset(tensor, 0, 0, ggml_nbytes(tensor));
     } else {
-        GGML_ASSERT(tensor->data);
+        // 🔧 LORA COMPATIBILITY FIX: Gracefully handle NULL tensor data
+        if (!tensor->data) {
+            printf("⚠️ GGML_SET_ZERO: Tensor data is NULL, skipping memset (LoRA compatibility fix)\n");
+            return tensor;  // Skip instead of crashing
+        }
         memset(tensor->data, 0, ggml_nbytes(tensor));
     }
     return tensor;

@@ -6734,10 +6734,13 @@ Current version indicated by LITEVER below.
 
 	function generate_a1111_image(req_payload, onImagesDone)
 	{
+		console.log('🔥 FLOW STEP 12: generate_a1111_image called, preparing SD API call...');
 		//split the prompt
 		let splits = req_payload.prompt.split("###");
 		let prompt = splits[0].trim();
 		let negprompt = (splits.length > 1 ? splits[1] : "");
+		console.log('🔥 FLOW STEP 12a: Prompt for SD:', prompt);
+		console.log('🔥 FLOW STEP 12b: Negative prompt:', negprompt);
 		let parsedseed = Math.floor(Math.random() * 99999999);
 		let tiling = false;
 
@@ -6797,7 +6800,8 @@ Current version indicated by LITEVER below.
 		a1111_t2i_payload = Object.fromEntries(Object.entries(a1111_t2i_payload).filter(([_, v]) => v != null));
 
 		let gen_endpoint = localsettings.saved_a1111_url + ep;
-		console.log(a1111_t2i_payload);
+		console.log('🔥 FLOW STEP 12c: Calling SD endpoint:', gen_endpoint);
+		console.log('🔥 FLOW STEP 12d: SD Payload:', a1111_t2i_payload);
 		fetch(gen_endpoint, {
 			method: 'POST',
 			headers: {
@@ -6807,7 +6811,7 @@ Current version indicated by LITEVER below.
 		})
 		.then(x => x.json())
 		.then(resp => {
-			console.log(resp);
+			console.log('🔥 FLOW STEP 12e: SD Response received:', resp);
 			if(resp.images && resp.images.length>0)
 			{
 				onImagesDone(resp.images[0]);
@@ -14749,10 +14753,12 @@ Current version indicated by LITEVER below.
 
 	function do_manual_gen_image(sentence, base64img="") //b64 for img2img
 	{
+		console.log('🔥 FLOW STEP 8: do_manual_gen_image called with prompt:', sentence.substring(0, 100) + '...');
 		if(localsettings.placeholder_tags)
 		{
 			sentence = replace_placeholders(sentence)
 		}
+		console.log('🔥 FLOW STEP 9: Calling generate_new_image...');
 		generate_new_image(sentence, base64img, true);
 		document.getElementById("btn_addmedia").disabled = true;
 		document.getElementById("btn_addmedia2").disabled = true;
@@ -14767,14 +14773,307 @@ Current version indicated by LITEVER below.
 
 	function do_auto_gen_image(truncated_context)
 	{
+		console.log('🔥 FLOW STEP 1: Auto image generation triggered, context length:', truncated_context.length);
 		var tclen = truncated_context.length;
-		var sentence = truncated_context.substring(tclen - 400, tclen);
-		sentence = start_trim_to_sentence(sentence);
-		sentence = end_trim_to_sentence(sentence,true);
-		if (sentence.length > 0) {
-			nextgeneratedimagemilestone = tclen + generateimagesinterval;
-			do_manual_gen_image(sentence);
+		
+		// Use enhanced scene extraction instead of simple 400-char substring
+		console.log('🔥 FLOW STEP 2: Calling extract_scene_from_context...');
+		extract_scene_from_context(truncated_context).then(scene_prompt => {
+			console.log('🔥 FLOW STEP 6: Scene extraction completed, result:', scene_prompt);
+			if (scene_prompt && scene_prompt.length > 0) {
+				nextgeneratedimagemilestone = tclen + generateimagesinterval;
+				console.log('🔥 FLOW STEP 7: Calling do_manual_gen_image with scene prompt');
+				do_manual_gen_image(scene_prompt);
+			} else {
+				console.log('🔥 FLOW ERROR: No valid scene prompt returned');
+			}
+		}).catch(error => {
+			console.log('🔥 FLOW FALLBACK: Scene extraction failed, using simple method:', error);
+			// Fallback to original method if scene extraction fails
+			var sentence = truncated_context.substring(tclen - 400, tclen);
+			sentence = start_trim_to_sentence(sentence);
+			sentence = end_trim_to_sentence(sentence,true);
+			if (sentence.length > 0) {
+				nextgeneratedimagemilestone = tclen + generateimagesinterval;
+				console.log('🔥 FLOW FALLBACK: Calling do_manual_gen_image with fallback sentence');
+				do_manual_gen_image(sentence);
+			}
+		});
+	}
+	
+	async function extract_scene_from_context(context) {
+		console.log('🔥 FLOW STEP 3: extract_scene_from_context called with context length:', context.length);
+		try {
+			// Take more context for better scene analysis (last 2000 chars instead of 400)
+			const contextLength = Math.min(context.length, 2000);
+			const relevantContext = context.substring(context.length - contextLength);
+			console.log('🔥 FLOW STEP 3a: Using', contextLength, 'characters for scene extraction');
+			
+			console.log('🔥 FLOW STEP 4: Calling /api/extra/scene/extract for LLM-powered scene extraction...');
+			
+			// Use the dedicated scene extraction endpoint that calls the LLM
+			const response = await fetch('/api/extra/scene/extract', {
+				method: 'POST',
+				headers: {'Content-Type': 'application/json'},
+				body: JSON.stringify({
+					conversation: relevantContext
+				})
+			});
+			console.log('🔥 FLOW STEP 4b: Scene extraction response received, status:', response.status);
+			
+			if (response.ok) {
+				const data = await response.json();
+				console.log('🔥 FLOW STEP 5: Scene extraction response data:', data);
+				
+				if (data.success && data.scene_prompt) {
+					console.log('🔥 FLOW STEP 5a: LLM-generated scene prompt:', data.scene_prompt);
+					
+					// Clean up the LLM-generated prompt
+					let scene_prompt = data.scene_prompt.trim();
+					
+					// Remove common prompt artifacts
+					scene_prompt = scene_prompt.replace(/^(Scene prompt:|Extracted scene prompt for Stable Diffusion:|Tags:)/i, '').trim();
+					scene_prompt = scene_prompt.replace(/\n+/g, ' ').replace(/\s+/g, ' ');
+					
+					// Limit length for SD prompts
+					if (scene_prompt.length > 300) {
+						scene_prompt = scene_prompt.substring(0, 300);
+						// Try to end at a complete tag or word
+						const lastComma = scene_prompt.lastIndexOf(',');
+						const lastSpace = scene_prompt.lastIndexOf(' ');
+						const cutPoint = Math.max(lastComma, lastSpace);
+						if (cutPoint > 200) {
+							scene_prompt = scene_prompt.substring(0, cutPoint);
+						}
+					}
+					
+					console.log('🔥 FLOW STEP 5b: Final processed scene prompt:', scene_prompt);
+					return scene_prompt;
+				}
+				
+				// If scene extraction failed but we got a response, log the error
+				if (!data.success) {
+					console.log('🔥 FLOW ERROR: Scene extraction failed:', data.message);
+				}
+			}
+			
+			throw new Error('No valid scene extraction response');
+		} catch (error) {
+			console.error('Scene extraction error:', error);
+			throw error;
 		}
+	}
+
+	// Enhanced Image Generation with Scene Extraction + Dynamic LoRA Loading
+	async function generateImageWithSceneAndLora(conversationText, options = {}) {
+		try {
+			console.log("🎨 Step 1: Enhanced auto image generation started...");
+			
+			// Step 1: Get available LoRAs
+			console.log("🔍 Step 1a: Fetching available LoRAs...");
+			const loraResponse = await fetch('/api/extra/lora/list', {
+				method: 'GET',
+				headers: { 'Content-Type': 'application/json' }
+			});
+			
+			const loraData = await loraResponse.json();
+			console.log("📦 Available LoRAs:", loraData);
+			
+			// Step 2: Extract scene from conversation
+			console.log("🔍 Step 2: Extracting scene from conversation...");
+			const sceneResponse = await fetch('/api/extra/scene/extract', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					conversation: conversationText
+				})
+			});
+			
+			const sceneData = await sceneResponse.json();
+			
+			if (!sceneData.success) {
+				throw new Error(`Scene extraction failed: ${sceneData.message}`);
+			}
+			
+			console.log("🎨 Step 3: Scene extracted successfully!");
+			console.log("Generated SD prompt:", sceneData.scene_prompt);
+			
+			// Step 3: Smart LoRA selection based on scene content
+			let selectedLora = null;
+			
+			if (loraData.success && loraData.available_loras && loraData.available_loras.length > 0) {
+				selectedLora = selectLoraForScene(sceneData.scene_prompt, loraData.available_loras, options);
+				console.log("🔄 Step 4: Selected LoRA:", selectedLora);
+				
+				// Step 4: Switch to the selected LoRA if needed
+				if (selectedLora) {
+					console.log(`🔄 Step 4a: Switching to LoRA: ${selectedLora.name}...`);
+					const loraSwitchResponse = await fetch('/api/extra/lora/switch', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							lora_name: selectedLora.name,
+							lora_multiplier: selectedLora.multiplier || 1.0
+						})
+					});
+					
+					const loraSwitchData = await loraSwitchResponse.json();
+					if (!loraSwitchData.success) {
+						console.warn("⚠️ LoRA switching failed:", loraSwitchData.message);
+					} else {
+						console.log("✅ LoRA switched successfully:", loraSwitchData.message);
+					}
+				}
+			}
+			
+			// Step 5: Generate image with enhanced prompt
+			console.log("🎨 Step 5: Generating image with scene prompt and LoRA...");
+			
+			// Enhance the prompt with LoRA-specific tags if needed
+			let enhancedPrompt = sceneData.scene_prompt;
+			if (selectedLora && selectedLora.prompt_enhancement) {
+				enhancedPrompt = `${enhancedPrompt}, ${selectedLora.prompt_enhancement}`;
+			}
+			
+			const txt2imgResponse = await fetch('/sdapi/v1/txt2img', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					prompt: enhancedPrompt,
+					seed: options.seed || -1,
+					sampler_name: options.sampler || "Euler",
+					batch_size: 1,
+					n_iter: 1,
+					steps: options.steps || 6,
+					cfg_scale: options.cfg_scale || 6,
+					width: options.width || 512,
+					height: options.height || 512,
+					negative_prompt: options.negative_prompt || "ugly, deformed, poorly, censor, blurry, lowres, malformed, watermark, duplicated, grainy, distorted, signature",
+					do_not_save_samples: true,
+					do_not_save_grid: true,
+					enable_hr: false,
+					eta: 0,
+					s_churn: 0,
+					s_tmax: 0,
+					s_tmin: 0,
+					s_noise: 1,
+					override_settings: {
+						sd_model_checkpoint: options.model || "flux1DevNSFWUNLOCKEDFp8_v20BAKEDClipVAE",
+						eta_noise_seed_delta: 0,
+						CLIP_stop_at_last_layers: 1,
+						ddim_discretize: "uniform",
+						img2img_fix_steps: false,
+						sd_hypernetwork: "None",
+						inpainting_mask_weight: 1,
+						initial_noise_multiplier: 1,
+						comma_padding_backtrack: 20
+					}
+				})
+			});
+			
+			const imageData = await txt2imgResponse.json();
+			console.log("🎨 Step 6: Image generation complete!", imageData);
+			
+			return {
+				success: true,
+				scene_prompt: sceneData.scene_prompt,
+				enhanced_prompt: enhancedPrompt,
+				selected_lora: selectedLora,
+				image_data: imageData,
+				available_loras: loraData.available_loras || []
+			};
+			
+		} catch (error) {
+			console.error("❌ Error in enhanced scene + LoRA generation:", error);
+			return {
+				success: false,
+				error: error.message
+			};
+		}
+	}
+
+	// Smart LoRA selection based on scene content
+	function selectLoraForScene(scenePrompt, availableLoras, options = {}) {
+		if (!availableLoras || availableLoras.length === 0) {
+			return null;
+		}
+		
+		// User can override LoRA selection
+		if (options.forceLoraName) {
+			const forcedLora = availableLoras.find(lora => lora.name === options.forceLoraName);
+			if (forcedLora) {
+				return {
+					...forcedLora,
+					multiplier: options.forceLoraMultiplier || 1.0,
+					reason: "User override"
+				};
+			}
+		}
+		
+		const sceneText = scenePrompt.toLowerCase();
+		
+		// Smart LoRA selection rules (customize based on your LoRAs)
+		const loraRules = [
+			{
+				keywords: ["anime", "manga", "2d", "cartoon", "cel shading"],
+				loraPatterns: ["anime", "manga", "2d", "cartoon"],
+				multiplier: 0.8,
+				prompt_enhancement: "anime style, high quality"
+			},
+			{
+				keywords: ["realistic", "photorealistic", "photo", "real"],
+				loraPatterns: ["realistic", "photo", "real"],
+				multiplier: 0.7,
+				prompt_enhancement: "photorealistic, detailed"
+			},
+			{
+				keywords: ["girl", "woman", "female", "lady"],
+				loraPatterns: ["girl", "woman", "female", "waifu"],
+				multiplier: 0.9,
+				prompt_enhancement: "beautiful, detailed face"
+			},
+			{
+				keywords: ["portrait", "face", "closeup", "headshot"],
+				loraPatterns: ["portrait", "face", "closeup"],
+				multiplier: 1.0,
+				prompt_enhancement: "detailed face, high quality portrait"
+			}
+		];
+		
+		// Find matching LoRAs
+		for (const rule of loraRules) {
+			// Check if scene matches keywords
+			const keywordMatch = rule.keywords.some(keyword => sceneText.includes(keyword));
+			
+			if (keywordMatch) {
+				// Find LoRA that matches the pattern
+				const matchingLora = availableLoras.find(lora => 
+					rule.loraPatterns.some(pattern => lora.name.toLowerCase().includes(pattern))
+				);
+				
+				if (matchingLora) {
+					console.log(`🎯 LoRA selected: ${matchingLora.name} (reason: ${rule.keywords.join(', ')} detected)`);
+					return {
+						...matchingLora,
+						multiplier: rule.multiplier,
+						prompt_enhancement: rule.prompt_enhancement,
+						reason: `Scene contains: ${rule.keywords.join(', ')}`
+					};
+				}
+			}
+		}
+		
+		// Fallback: use first available LoRA with low multiplier
+		if (options.useDefaultLora !== false && availableLoras.length > 0) {
+			console.log(`🎯 Using default LoRA: ${availableLoras[0].name}`);
+			return {
+				...availableLoras[0],
+				multiplier: 0.5,
+				reason: "Default fallback"
+			};
+		}
+		
+		return null;
 	}
 
 	function add_img_btn_auto() {
@@ -14790,6 +15089,152 @@ Current version indicated by LITEVER below.
 		}
 		document.getElementById("addmediacontainer").classList.add("hidden");
 	}
+
+	// Fallback scene extraction that works with current server (no restart needed)
+	async function generateImageWithFallbackSceneExtraction(conversationText, options = {}) {
+		try {
+			console.log("🎨 Fallback scene extraction started...");
+			
+			// Step 1: Use existing chat completions API for scene extraction
+			const sceneExtractionPrompt = `Analyze this conversation and extract visual scene elements for image generation. Focus on characters, setting, mood, and visual details. Format as a detailed Stable Diffusion prompt (under 200 characters):
+
+Conversation:
+${conversationText.slice(-1000)}
+
+Visual scene prompt:`;
+
+			console.log("🔍 Calling /v1/chat/completions for scene extraction...");
+			
+			const sceneResponse = await fetch('/v1/chat/completions', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					messages: [
+						{"role": "system", "content": "You are a scene extraction assistant. Convert conversations into visual scene descriptions for image generation. Be concise and descriptive."},
+						{"role": "user", "content": sceneExtractionPrompt}
+					],
+					max_tokens: 100,
+					temperature: 0.3,
+					top_p: 0.8,
+					stream: false
+				})
+			});
+			
+			if (!sceneResponse.ok) {
+				throw new Error(`Scene extraction failed: ${sceneResponse.status}`);
+			}
+			
+			const sceneData = await sceneResponse.json();
+			let scenePrompt = null;
+			
+			if (sceneData.choices && sceneData.choices[0] && sceneData.choices[0].message) {
+				scenePrompt = sceneData.choices[0].message.content.trim();
+				
+				// Clean up the prompt
+				scenePrompt = scenePrompt.replace(/^(Visual scene prompt:|Scene:|Description:)/i, '').trim();
+				scenePrompt = scenePrompt.replace(/\n+/g, ' ').replace(/\s+/g, ' ');
+				
+				// Limit length
+				if (scenePrompt.length > 250) {
+					scenePrompt = scenePrompt.substring(0, 250);
+					const lastSpace = scenePrompt.lastIndexOf(' ');
+					if (lastSpace > 100) {
+						scenePrompt = scenePrompt.substring(0, lastSpace);
+					}
+				}
+			}
+			
+			if (!scenePrompt || scenePrompt.length < 10) {
+				throw new Error("Failed to extract meaningful scene");
+			}
+			
+			console.log("✅ Scene extracted:", scenePrompt);
+			
+			// Step 2: Generate image with extracted scene
+			console.log("🎨 Generating image with extracted scene...");
+			
+			const txt2imgResponse = await fetch('/sdapi/v1/txt2img', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					prompt: scenePrompt,
+					seed: options.seed || -1,
+					sampler_name: options.sampler || "Euler",
+					batch_size: 1,
+					n_iter: 1,
+					steps: options.steps || 6,
+					cfg_scale: options.cfg_scale || 6,
+					width: options.width || 512,
+					height: options.height || 512,
+					negative_prompt: options.negative_prompt || "ugly, deformed, poorly, censor, blurry, lowres, malformed, watermark, duplicated, grainy, distorted, signature",
+					do_not_save_samples: true,
+					do_not_save_grid: true,
+					enable_hr: false,
+					eta: 0,
+					s_churn: 0,
+					s_tmax: 0,
+					s_tmin: 0,
+					s_noise: 1,
+					override_settings: {
+						sd_model_checkpoint: options.model || "flux1DevNSFWUNLOCKEDFp8_v20BAKEDClipVAE",
+						eta_noise_seed_delta: 0,
+						CLIP_stop_at_last_layers: 1,
+						ddim_discretize: "uniform",
+						img2img_fix_steps: false,
+						sd_hypernetwork: "None",
+						inpainting_mask_weight: 1,
+						initial_noise_multiplier: 1,
+						comma_padding_backtrack: 20
+					}
+				})
+			});
+			
+			const imageData = await txt2imgResponse.json();
+			console.log("🎨 Image generation complete!");
+			
+			return {
+				success: true,
+				scene_prompt: scenePrompt,
+				image_data: imageData,
+				method: "fallback_chat_completions"
+			};
+			
+		} catch (error) {
+			console.error("❌ Fallback scene extraction error:", error);
+			return {
+				success: false,
+				error: error.message
+			};
+		}
+	}
+
+	// IMMEDIATE TEST - this should show up as soon as page loads
+	console.log("🚨 IMMEDIATE TEST: This script block is executing!");
+	console.log("🚨 IMMEDIATE TEST: If you see this, our JavaScript is running!");
+
+	// Test function to verify JavaScript updates are working
+	window.testJavaScriptUpdates = function() {
+		const timestamp = new Date().toLocaleTimeString();
+		console.log(`🧪 JavaScript Update Test - v3.0 CACHE BUSTER - ${timestamp}`);
+		alert(`✅ JavaScript updates are working! v3.0 CACHE BUSTER - ${timestamp}`);
+		
+		// Check if our enhanced functions exist
+		const functions = [
+			'generateImageWithFallbackSceneExtraction',
+			'add_img_btn_auto',
+			'testJavaScriptUpdates'
+		];
+		
+		functions.forEach(func => {
+			if (typeof window[func] === 'function') {
+				console.log(`✅ ${func} - FOUND`);
+			} else {
+				console.log(`❌ ${func} - NOT FOUND`);
+			}
+		});
+		
+		return "JavaScript updates are active!";
+	};
 
 	function add_img_btn_custom()
 	{
@@ -17640,6 +18085,8 @@ Current version indicated by LITEVER below.
 
 	function generate_new_image(sentence, base64img="", autoappend=true) //base64img is for img2img, autoappend automatically adds it to gametext arr
 	{
+		console.log('🔥 FLOW STEP 10: generate_new_image called, mode:', localsettings.generate_images_mode);
+		console.log('🔥 FLOW STEP 10a: Final prompt:', sentence);
 		if(base64img!="")
 		{
 			let parts = base64img.split(',');
@@ -17837,17 +18284,21 @@ Current version indicated by LITEVER below.
 			image_db[imgid].imsource = 0; //0=generated,1=uploaded
 			image_db[imgid].imrefid = "";
 			image_db[imgid].type = 0; //0=image, 1=audio
+			console.log('🔥 FLOW STEP 11: Calling generate_a1111_image (A1111/SD mode)...');
 			generate_a1111_image(genimg_payload,(outputimg)=>{
 				if(outputimg)
 				{
+					console.log('🔥 FLOW STEP 13: Image generation successful, processing result...');
 					//console.log(outputimg);
 					let origImg = "data:image/jpeg;base64," + outputimg;
 					let imgres = localsettings.img_allowhd?(localsettings.img_aspect==0?NO_HD_RES_PX:HD_RES_PX):NO_HD_RES_PX;
 					compressImage(origImg, (newDataUri) => {
 						image_db[imgid].done = true;
 						image_db[imgid].result = newDataUri;
+						console.log('🔥 FLOW COMPLETE: Image stored in database with ID:', imgid);
 					}, false, imgres);
 				}else{
+					console.log('🔥 FLOW ERROR: Image generation failed');
 					image_db[imgid].queue = "Failed";
 					msgbox("Image Generation Failed!\n\nPlease make sure KoboldCpp / Forge / A1111 is running and properly configured!\nIn your local install of Automatic1111 WebUi, modify webui-user.bat and add these flags to enable API access:\n\nset COMMANDLINE_ARGS= --api --listen --cors-allow-origins=*\n");
 				}

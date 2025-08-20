@@ -896,3 +896,55 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     total_img_gens += 1;
     return output;
 }
+
+// Function to apply additional LoRA to existing SD context
+extern "C" bool sdtype_apply_additional_lora(const char* lora_filename, float lora_multiplier) {
+    if (!sd_ctx || !sd_ctx->sd) {
+        printf("❌ ADDITIONAL_LORA: SD context not initialized\n");
+        return false;
+    }
+    
+    if (!lora_filename || strlen(lora_filename) == 0) {
+        printf("❌ ADDITIONAL_LORA: No LoRA filename provided\n");
+        return false;
+    }
+    
+    if (lora_multiplier <= 0) {
+        printf("❌ ADDITIONAL_LORA: Invalid multiplier: %f\n", lora_multiplier);
+        return false;
+    }
+    
+    printf("\n🔥 ADDITIONAL_LORA: Applying additional LoRA...\n");
+    printf("🔥 ADDITIONAL_LORA: File: %s\n", lora_filename);
+    printf("🔥 ADDITIONAL_LORA: Multiplier: %.6f\n", lora_multiplier);
+    
+    // Check if file exists
+    std::filesystem::path lora_path(lora_filename);
+    if (!std::filesystem::exists(lora_path)) {
+        printf("❌ ADDITIONAL_LORA: LoRA file does not exist: %s\n", lora_filename);
+        return false;
+    }
+    
+    auto file_size = std::filesystem::file_size(lora_path);
+    printf("🔥 ADDITIONAL_LORA: File size: %zu bytes (%.2f MB)\n", file_size, file_size / 1024.0 / 1024.0);
+    
+    try {
+        // Apply LoRA directly to existing model using GGML tensor operations
+        printf("🔥 ADDITIONAL_LORA: Calling apply_lora_from_file()...\n");
+        fflush(stdout);
+        
+        sd_ctx->sd->apply_lora_from_file(lora_filename, lora_multiplier);
+        
+        printf("✅ ADDITIONAL_LORA: Successfully applied additional LoRA!\n");
+        printf("🔥 ADDITIONAL_LORA: LoRA tensors merged into existing model\n");
+        
+        return true;
+        
+    } catch (const std::exception& e) {
+        printf("❌ ADDITIONAL_LORA: Exception during LoRA application: %s\n", e.what());
+        return false;
+    } catch (...) {
+        printf("❌ ADDITIONAL_LORA: Unknown exception during LoRA application\n");
+        return false;
+    }
+}
