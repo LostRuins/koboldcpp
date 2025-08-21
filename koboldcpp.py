@@ -4001,7 +4001,7 @@ Change Mode<br>
                     trunc_len = 32000
 
                 printablegenparams_raw = truncate_long_json(genparams,trunc_len)
-                utfprint("\nInput: " + json.dumps(printablegenparams_raw),1)
+                utfprint("\nInput: " + json.dumps(printablegenparams_raw,ensure_ascii=False),1)
 
                 # transform genparams (only used for text gen) first
                 genparams = transform_genparams(genparams, api_format)
