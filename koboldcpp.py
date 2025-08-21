@@ -7660,7 +7660,7 @@ if __name__ == '__main__':
     sdparsergroupvae.add_argument("--sdvae", metavar=('[filename]'), help="Specify an image generation safetensors VAE which replaces the one in the model.", default="")
     sdparsergroupvae.add_argument("--sdvaeauto", help="Uses a built-in VAE via TAE SD, which is very fast, and fixed bad VAEs.", action='store_true')
     sdparsergrouplora = sdparsergroup.add_mutually_exclusive_group()
-    sdparsergrouplora.add_argument("--sdquant", help="If specified, loads the model quantized to save memory. Smaller quants save more memory, at the cost of more quality loss.", type=sd_quant_option, choices=sd_quant_choices, default=sd_quant_choices[0])
+    sdparsergrouplora.add_argument("--sdquant", help="If specified, loads the model quantized to save memory. Smaller quants save more memory, at the cost of more quality loss.", type=sd_quant_option, choices=sd_quant_choices, default=sd_quant_choices[0], const=sd_quant_choices[-1], nargs='?')
     sdparsergrouplora.add_argument("--sdlora", metavar=('[filename]'), help="Specify an image generation LORA safetensors model to be applied.", default="")
     sdparsergroup.add_argument("--sdloramult", metavar=('[amount]'), help="Multiplier for the image LORA model to be applied.", type=float, default=1.0)
     sdparsergroup.add_argument("--sdtiledvae", metavar=('[maxres]'), help="Adjust the automatic VAE tiling trigger for images above this size. 0 disables vae tiling.", type=int, default=default_vae_tile_threshold)
