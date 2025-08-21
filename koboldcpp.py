@@ -1136,7 +1136,7 @@ def autoset_gpu_layers(ctxsize, sdquanted, bbs, qkv_level): #shitty algo to dete
                             showmultigpuwarning = False
                             print("Multi-Part GGUF detected. Layer estimates may not be very accurate - recommend setting layers manually.")
                         fsize *= total_parts
-            sdquantsavings = {'q4_0': 2, 'q8_0': 1}.get(sdquanted) or 0
+            sdquantsavings = sdquanted
             if modelfile_extracted_meta[3] > 1024*1024*1024*5: #sdxl tax
                 mem -= 1024*1024*1024*(9 - sdquantsavings * 1.5) # 9, 7.5, 6
             elif modelfile_extracted_meta[3] > 1024*1024*512: #normal sd tax
@@ -1657,19 +1657,10 @@ def sd_convdirect_option(value):
         return 'full'
     raise argparse.ArgumentTypeError(f"Invalid sdconvdirect option \"{value}\". Must be one of {sd_convdirect_choices}.")
 
-sd_quant_choices = ['off', 'q8_0', 'q4_0']
+sd_quant_choices = ['0   (off)', '1   (q8_0)', '2   (q4_0)']
 
 def sd_quant_option(value):
-    if not value:
-        value = ''
-    value = value.lower()
-    if value in ['disabled', 'disable', 'none', 'off', '0', '']:
-        return 'off'
-    elif value in [True, 1, '1']: # compat old config
-        return 'q4_0'
-    elif value in sd_quant_choices:
-        return value
-    raise argparse.ArgumentTypeError(f"Unsupported sdquant option \"{value}\". Must be one of {sd_quant_choices}.")
+    return int((value or '0')[0])
 
 def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clipl_filename,clipg_filename,photomaker_filename):
     global args
@@ -1683,8 +1674,8 @@ def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clipl
             thds = sdt
 
     inputs.threads = thds
-    sd_quant_convert = {'off': -1, 'q8_0': 8, 'q4_0': 2} # enum sd_type_t
-    inputs.quant = sd_quant_convert[sd_quant_option(args.sdquant)]
+    sd_quant_types = {0: -1, 1: 8, 2: 2} # enum sd_type_t
+    inputs.quant = sd_quant_types[args.sdquant]
     inputs.flash_attention = args.sdflashattention
     sdconvdirect = sd_convdirect_option(args.sdconvdirect)
     inputs.diffusion_conv_direct = sdconvdirect == 'full'
@@ -4952,7 +4943,7 @@ def show_gui():
         pass
 
     def changed_gpulayers_estimate(*args):
-        predicted_gpu_layers = autoset_gpu_layers(int(contextsize_text[context_var.get()]),sd_quant_option(sd_quant_var.get()),int(blasbatchsize_values[int(blas_size_var.get())]),(quantkv_var.get() if flashattention_var.get()==1 else 0))
+        predicted_gpu_layers = autoset_gpu_layers(int(contextsize_text[context_var.get()]),sd_quant_option(sd_quant_var.get() or 0),int(blasbatchsize_values[int(blas_size_var.get())]),(quantkv_var.get() if flashattention_var.get()==1 else 0))
         max_gpu_layers = (f"/{modelfile_extracted_meta[1][0]+3}" if (modelfile_extracted_meta and modelfile_extracted_meta[1] and modelfile_extracted_meta[1][0]!=0) else "")
         index = runopts_var.get()
         gpu_be = (index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use CLBlast" or index == "Use CLBlast (Old CPU)" or index == "Use CLBlast (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)")
@@ -5354,7 +5345,7 @@ def show_gui():
     makelabelentry(images_tab, "(Soft):", sd_clamped_soft_var, 4, 50, padx=290,singleline=True,tooltip="Square image size restriction, to protect the server against memory crashes.\nAllows width-height tradeoffs, eg. 640 allows 640x640 and 512x768\nLeave at 0 for the default value: 832 for SD1.5/SD2, 1024 otherwise.",labelpadx=250)
     makelabelentry(images_tab, "Image Threads:" , sd_threads_var, 8, 50,padx=290,singleline=True,tooltip="How many threads to use during image generation.\nIf left blank, uses same value as threads.")
     sd_model_var.trace_add("write", gui_changed_modelfile)
-    makelabelcombobox(images_tab, "Compress Weights (Saves Memory)", sd_quant_var, 10, width=70, labelpadx=85, tooltiptxt="Quantizes the SD model weights to save memory. May degrade quality.", values=sd_quant_choices)
+    makelabelcombobox(images_tab, "Compress Weights (Saves Memory)", sd_quant_var, 10, width=50, labelpadx=65, tooltiptxt="Quantizes the SD model weights to save memory.\nHigher levels save more memory, and cause more quality degradation.", values=sd_quant_choices)
     sd_quant_var.trace_add("write", changed_gpulayers_estimate)
 
     makefileentry(images_tab, "Image LoRA (safetensors/gguf):", "Select SD lora file",sd_lora_var, 20, width=280, singlecol=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select a .safetensors or .gguf SD LoRA model file to be loaded. Should be unquantized!")
@@ -5849,7 +5840,7 @@ def show_gui():
         sd_clamped_var.set(int(dict["sdclamped"]) if ("sdclamped" in dict and dict["sdclamped"]) else 0)
         sd_clamped_soft_var.set(int(dict["sdclampedsoft"]) if ("sdclampedsoft" in dict and dict["sdclampedsoft"]) else 0)
         sd_threads_var.set(str(dict["sdthreads"]) if ("sdthreads" in dict and dict["sdthreads"]) else str(default_threads))
-        sd_quant_var.set(sd_quant_option(dict.get("sdquant")))
+        sd_quant_var.set(sd_quant_choices[(dict["sdquant"] if "sdquant" in dict else 0)])
         sd_flash_attention_var.set(1 if ("sdflashattention" in dict and dict["sdflashattention"]) else 0)
         sd_convdirect_var.set(sd_convdirect_option(dict.get("sdconvdirect")))
         sd_vae_var.set(dict["sdvae"] if ("sdvae" in dict and dict["sdvae"]) else "")
@@ -6202,7 +6193,7 @@ def convert_invalid_args(args):
         if dict["sdconfig"] and len(dict["sdconfig"]) > 2:
             dict["sdthreads"] = int(dict["sdconfig"][2])
         if dict["sdconfig"] and len(dict["sdconfig"]) > 3:
-            dict["sdquant"] = (True if dict["sdconfig"][3]=="quant" else False)
+            dict["sdquant"] = (2 if dict["sdconfig"][3]=="quant" else 0)
     if "hordeconfig" in dict and dict["hordeconfig"] and dict["hordeconfig"][0]!="":
         dict["hordemodelname"] = dict["hordeconfig"][0]
         if len(dict["hordeconfig"]) > 1:
@@ -6228,6 +6219,8 @@ def convert_invalid_args(args):
             dict["model_param"] = model_value[0]  # Take the first file in the list
     if "sdnotile" in dict and "sdtiledvae" not in dict:
         dict["sdtiledvae"] = (0 if (dict["sdnotile"]) else default_vae_tile_threshold) # convert legacy option
+    if 'sdquant' in dict and type(dict['sdquant']) is bool:
+        dict['sdquant'] = 2 if dict['sdquant'] else 0
     return args
 
 def setuptunnel(global_memory, has_sd):
@@ -7067,7 +7060,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             if args.gpulayers==-1:
                 if MaxMemory[0] > 0 and (not args.usecpu) and ((args.usecuda is not None) or (args.usevulkan is not None) or (args.useclblast is not None) or sys.platform=="darwin"):
                     extract_modelfile_params(args.model_param,args.sdmodel,args.whispermodel,args.mmproj,args.draftmodel,args.ttsmodel if args.ttsgpu else "",args.embeddingsmodel if args.embeddingsgpu else "")
-                    layeramt = autoset_gpu_layers(args.contextsize,sd_quant_option(args.sdquant),args.blasbatchsize,(args.quantkv if args.flashattention else 0))
+                    layeramt = autoset_gpu_layers(args.contextsize,args.sdquant,args.blasbatchsize,(args.quantkv if args.flashattention else 0))
                     print(f"Auto Recommended GPU Layers: {layeramt}")
                     args.gpulayers = layeramt
                 else:
@@ -7660,7 +7653,7 @@ if __name__ == '__main__':
     sdparsergroupvae.add_argument("--sdvae", metavar=('[filename]'), help="Specify an image generation safetensors VAE which replaces the one in the model.", default="")
     sdparsergroupvae.add_argument("--sdvaeauto", help="Uses a built-in VAE via TAE SD, which is very fast, and fixed bad VAEs.", action='store_true')
     sdparsergrouplora = sdparsergroup.add_mutually_exclusive_group()
-    sdparsergrouplora.add_argument("--sdquant", help="If specified, loads the model quantized to save memory. Smaller quants save more memory, at the cost of more quality loss.", type=sd_quant_option, choices=sd_quant_choices, default=sd_quant_choices[0], const=sd_quant_choices[-1], nargs='?')
+    sdparsergrouplora.add_argument("--sdquant",  metavar=('[quantization level 0/1/2]'), help="If specified, loads the model quantized to save memory. 0=off, 1=q8, 2=q4", type=int, choices=[0,1,2], nargs="?", const=2, default=0)
     sdparsergrouplora.add_argument("--sdlora", metavar=('[filename]'), help="Specify an image generation LORA safetensors model to be applied.", default="")
     sdparsergroup.add_argument("--sdloramult", metavar=('[amount]'), help="Multiplier for the image LORA model to be applied.", type=float, default=1.0)
     sdparsergroup.add_argument("--sdtiledvae", metavar=('[maxres]'), help="Adjust the automatic VAE tiling trigger for images above this size. 0 disables vae tiling.", type=int, default=default_vae_tile_threshold)
