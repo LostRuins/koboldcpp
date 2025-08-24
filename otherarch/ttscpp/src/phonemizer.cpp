@@ -1,5 +1,7 @@
 #include "phonemizer.h"
 
+#include <fstream>
+
 #ifdef ESPEAK_INSTALL
 /**
  * espeak_wrapper functions and assignments
