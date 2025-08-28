@@ -1259,12 +1259,10 @@ def fetch_gpu_properties(testCL,testCU,testVK):
         MaxMemory[0] = max(lowestcumem,MaxMemory[0])
         MaxFreeMemory[0] = max(lowestfreecumem,MaxFreeMemory[0])
 
-        if MaxMemory[0] < (1024*1024*256):
-            print("Unable to detect VRAM, please set layers manually.")
-
     if testVK:
         try: # Get Vulkan names
             foundVkGPU = False
+            lowestvkmem = 0 
             output = subprocess.run(['vulkaninfo','--summary'], capture_output=True, text=True, check=True, encoding='utf-8', timeout=10).stdout
             devicelist = [line.split("=")[1].strip() for line in output.splitlines() if "deviceName" in line]
             devicetypes = [line.split("=")[1].strip() for line in output.splitlines() if "deviceType" in line]
@@ -1288,16 +1286,15 @@ def fetch_gpu_properties(testCL,testCU,testVK):
                     output = subprocess.run(['vulkaninfo'], capture_output=True, text=True, check=True, encoding='utf-8', timeout=10).stdout
                     devicechunks = output.split("VkPhysicalDeviceMemoryProperties")[1:]
                     gpuidx = 0
-                    lowestvkmem = 0
                     for chunk in devicechunks:
                         heaps = chunk.split("memoryTypes:")[0].split("memoryHeaps[")[1:]
-                        snippet = heaps[0]
-                        if "MEMORY_HEAP_DEVICE_LOCAL_BIT" in snippet and "size" in snippet:
-                            match = re.search(r"size\s*=\s*(\d+)", snippet)
-                            if match:
-                                dmem = int(match.group(1))
-                                if dmem > gpumem_ignore_limit_min and dmem < gpumem_ignore_limit_max:
-                                    lowestvkmem = dmem if lowestvkmem==0 else (dmem if dmem<lowestvkmem else lowestvkmem)
+                        for heap in heaps:  # Check all heaps, not just the first one
+                            if "MEMORY_HEAP_DEVICE_LOCAL_BIT" in heap and "size" in heap:
+                                match = re.search(r"size\s*=\s*(\d+)", heap)
+                                if match:
+                                    dmem = int(match.group(1))
+                                    if dmem > gpumem_ignore_limit_min and dmem < gpumem_ignore_limit_max:
+                                        lowestvkmem = dmem if lowestvkmem==0 else (dmem if dmem<lowestvkmem else lowestvkmem)
                         gpuidx += 1
                 except Exception: # failed to get vulkan vram
                     pass
@@ -1334,6 +1331,11 @@ def fetch_gpu_properties(testCL,testCU,testVK):
             MaxMemory[0] = max(lowestclmem,MaxMemory[0])
         except Exception:
             pass
+    
+    # Check VRAM detection after all backends have been tested
+    if MaxMemory[0] < (1024*1024*256):
+        print("Unable to detect VRAM, please set layers manually.")
+    
     return
 
 def auto_set_backend_cli():
