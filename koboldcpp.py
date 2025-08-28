@@ -1195,22 +1195,45 @@ def fetch_gpu_properties(testCL,testCU,testVK):
             FetchedCUfreeMem = []
             pass
         if len(FetchedCUdevices)==0:
-            try: # Get AMD ROCm GPU names
+            try: # Get AMD ROCm GPU names and VRAM from rocminfo
                 output = subprocess.run(['rocminfo'], capture_output=True, text=True, check=True, encoding='utf-8', timeout=10).stdout
                 device_name = None
+                current_agent_is_gpu = False
+                in_pool_section = False
+                
                 for line in output.splitlines(): # read through the output line by line
                     line = line.strip()
-                    if line.startswith("Marketing Name:"):
+                    if line.startswith("Agent ") and "Agent" in line:
+                        # Reset state for new agent
+                        device_name = None
+                        current_agent_is_gpu = False
+                        in_pool_section = False
+                    elif line.startswith("Marketing Name:"):
                         device_name = line.split(":", 1)[1].strip() # if we find a named device, temporarily save the name
-                    elif line.startswith("Device Type:") and "GPU" in line and device_name is not None: # if the following Device Type is a GPU (not a CPU) then add it to devices list
+                    elif line.startswith("Device Type:") and "GPU" in line and device_name is not None: 
+                        # if the following Device Type is a GPU (not a CPU) then add it to devices list
                         FetchedCUdevices.append(device_name)
+                        current_agent_is_gpu = True
                         AMDgpu = True
                     elif line.startswith("Device Type:") and "GPU" not in line:
                         device_name = None
-                if FetchedCUdevices:
-                    getamdvram = subprocess.run(['rocm-smi', '--showmeminfo', 'vram', '--csv'], capture_output=True, text=True, check=True, encoding='utf-8', timeout=10).stdout # fetch VRAM of devices
-                    if getamdvram:
-                        FetchedCUdeviceMem = [line.split(",")[1].strip() for line in getamdvram.splitlines()[1:] if line.strip()]
+                        current_agent_is_gpu = False
+                    elif line.startswith("Pool Info:") and current_agent_is_gpu:
+                        in_pool_section = True
+                    elif in_pool_section and current_agent_is_gpu and line.startswith("Segment:") and "GLOBAL" in line and "COARSE GRAINED" in line:
+                        # This is the main VRAM pool for this GPU
+                        continue
+                    elif in_pool_section and current_agent_is_gpu and line.startswith("Size:"):
+                        # Extract VRAM size in KB and convert to MB
+                        size_match = re.search(r'(\d+)\(0x[0-9a-fA-F]+\)\s*KB', line)
+                        if size_match:
+                            vram_kb = int(size_match.group(1))
+                            vram_mb = vram_kb // 1024
+                            FetchedCUdeviceMem.append(str(vram_mb))
+                            in_pool_section = False
+                
+                if FetchedCUdevices and FetchedCUdeviceMem:
+                    print(f"Detected AMD GPU VRAM from rocminfo: {list(zip(FetchedCUdevices, FetchedCUdeviceMem))} MB")
             except Exception:
                 FetchedCUdeviceMem = []
                 FetchedCUfreeMem = []
