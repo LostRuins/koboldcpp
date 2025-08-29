@@ -7334,18 +7334,6 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     caps = get_capabilities()
     enabledmlist = []
     disabledmlist = []
-    apimlist = ["KoboldCppApi"]
-    if "llm" in caps and caps["llm"]:
-        apimlist.append("OpenAiApi")
-        apimlist.append("OllamaApi")
-    if "txt2img" in caps and caps["txt2img"]:
-        apimlist.append("A1111ForgeApi")
-        apimlist.append("ComfyUiApi")
-    if "transcribe" in caps and caps["transcribe"]:
-        apimlist.append("WhisperTranscribeApi")
-    if "tts" in caps and caps["tts"]:
-        apimlist.append("XttsApi")
-        apimlist.append("OpenAiSpeechApi")
     enabledmlist.append("TextGeneration") if "llm" in caps and caps["llm"] else disabledmlist.append("TextGeneration")
     enabledmlist.append("ImageGeneration") if "txt2img" in caps and caps["txt2img"] else disabledmlist.append("ImageGeneration")
     enabledmlist.append("VoiceRecognition") if "transcribe" in caps and caps["transcribe"] else disabledmlist.append("VoiceRecognition")
@@ -7360,7 +7348,20 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
     print(f"======\nActive Modules: {' '.join(enabledmlist)}")
     print(f"Inactive Modules: {' '.join(disabledmlist)}")
-    print(f"Enabled APIs: {' '.join(apimlist)}")
+    if start_server:
+        apimlist = ["KoboldCppApi"]
+        if "llm" in caps and caps["llm"]:
+            apimlist.append("OpenAiApi")
+            apimlist.append("OllamaApi")
+        if "txt2img" in caps and caps["txt2img"]:
+            apimlist.append("A1111ForgeApi")
+            apimlist.append("ComfyUiApi")
+        if "transcribe" in caps and caps["transcribe"]:
+            apimlist.append("WhisperTranscribeApi")
+        if "tts" in caps and caps["tts"]:
+            apimlist.append("XttsApi")
+            apimlist.append("OpenAiSpeechApi")
+        print(f"Enabled APIs: {' '.join(apimlist)}")
 
     global sslvalid
     if args.ssl:
