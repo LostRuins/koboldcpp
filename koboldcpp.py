@@ -426,8 +426,9 @@ def restore_stdout():
 
 def get_default_threads():
     physical_core_limit = 1
-    if os.cpu_count() is not None and os.cpu_count()>1:
-        physical_core_limit = os.cpu_count() // 2
+    cpu_count = os.cpu_count()
+    if cpu_count is not None and cpu_count > 1:
+        physical_core_limit = cpu_count // 2
     default_threads = (physical_core_limit if physical_core_limit<=3 else max(3,physical_core_limit-1))
     processor = platform.processor()
     if 'Intel' in processor:
