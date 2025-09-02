@@ -39,6 +39,8 @@ from datetime import datetime, timezone
 from typing import Tuple
 import shutil
 import subprocess
+import tempfile
+import psutil
 
 # constants
 sampler_order_max = 7
@@ -6493,6 +6495,22 @@ def downloader_internal(input_url, output_filename, capture_output, min_file_siz
         input_url = input_url.replace("/blob/main/", "/resolve/main/")
     if output_filename == "auto":
         output_filename = os.path.basename(input_url).split('?')[0].split('#')[0]
+    
+    # If running from PyInstaller and current directory is not writable, use a writable location
+    if getattr(sys, 'frozen', False) and not os.access('.', os.W_OK):
+        # Try user's Downloads folder first, then home directory, then system temp
+        writable_dirs = [
+            os.path.expanduser("~/Downloads"),
+            os.path.expanduser("~"),
+            tempfile.gettempdir()
+        ]
+        for writable_dir in writable_dirs:
+            if os.path.exists(writable_dir) and os.access(writable_dir, os.W_OK):
+                original_filename = output_filename
+                output_filename = os.path.join(writable_dir, os.path.basename(output_filename))
+                print(f"PyInstaller detected with read-only directory. Downloading to: {output_filename}")
+                break
+    
     incomplete_dl_exist = (os.path.exists(output_filename+".aria2") and os.path.getsize(output_filename+".aria2") > 16)
     if os.path.exists(output_filename) and os.path.getsize(output_filename) > min_file_size and not incomplete_dl_exist:
         print(f"{output_filename} already exists, using existing file.")
@@ -7058,7 +7076,6 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     if args.highpriority:
         print("Setting process to Higher Priority - Use Caution")
         try:
-            import psutil
             os_used = sys.platform
             process = psutil.Process(os.getpid())  # Set high priority for the python script for the CPU
             oldprio = process.nice()
@@ -7139,7 +7156,6 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     else:
         print("Unable to determine GPU Memory")
     try:
-        import psutil
         vmem = psutil.virtual_memory()
         print(f"Detected Available RAM: {int(vmem.available/1024/1024)} MB")
     except Exception:

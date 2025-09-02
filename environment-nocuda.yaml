@@ -19,3 +19,4 @@ dependencies:
   - tk=*=xft_*
   - pip:
     - customtkinter
+    - psutil
