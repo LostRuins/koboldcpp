@@ -31,11 +31,11 @@ endif
 # ref: https://github.com/ggerganov/whisper.cpp/issues/66#issuecomment-1282546789
 ifeq ($(UNAME_S),Darwin)
 ifneq ($(UNAME_P),arm)
-	SYSCTL_M := $(shell sysctl -n hw.optional.arm64 2>/dev/null)
+SYSCTL_M := $(shell sysctl -n hw.optional.arm64 2>/dev/null)
 ifeq ($(SYSCTL_M),1)
-	# UNAME_P := arm
-	# UNAME_M := arm64
-	warn := $(warning Your arch is announced as x86_64, but it seems to actually be ARM64. Not fixing that can lead to bad performance. For more info see: https://github.com/ggerganov/whisper.cpp/issues/66\#issuecomment-1282546789)
+# UNAME_P := arm
+# UNAME_M := arm64
+warn := $(warning Your arch is announced as x86_64, but it seems to actually be ARM64. Not fixing that can lead to bad performance. For more info see: https://github.com/ggerganov/whisper.cpp/issues/66\#issuecomment-1282546789)
 endif
 endif
 endif
@@ -48,25 +48,26 @@ endif
 CFLAGS =
 CXXFLAGS =
 ifdef KCPP_DEBUG
-	CFLAGS = -g -O0
-	CXXFLAGS = -g -O0
+CFLAGS = -g -O0
+CXXFLAGS = -g -O0
 endif
 ifdef KCPP_SANITIZE
-	CFLAGS += -fsanitize=undefined -fsanitize-undefined-trap-on-error
-	CXXFLAGS += -fsanitize=undefined -fsanitize-undefined-trap-on-error
+CFLAGS += -fsanitize=undefined -fsanitize-undefined-trap-on-error
+CXXFLAGS += -fsanitize=undefined -fsanitize-undefined-trap-on-error
 endif
 CFLAGS   += -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./include/CL -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK
 CXXFLAGS += -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./include/CL -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK
+
 ifndef KCPP_DEBUG
-	CFLAGS += -DNDEBUG -s
-	CXXFLAGS += -DNDEBUG -s
+CFLAGS += -DNDEBUG -s
+CXXFLAGS += -DNDEBUG -s
 endif
 ifdef LLAMA_NO_LLAMAFILE
 GGML_NO_LLAMAFILE := 1
 endif
 ifndef GGML_NO_LLAMAFILE
-	CFLAGS += -DGGML_USE_LLAMAFILE
-	CXXFLAGS += -DGGML_USE_LLAMAFILE
+CFLAGS += -DGGML_USE_LLAMAFILE
+CXXFLAGS += -DGGML_USE_LLAMAFILE
 endif
 
 #lets try enabling everything
@@ -74,6 +75,17 @@ CFLAGS   += -pthread -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-va
 CXXFLAGS += -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable
 
 LDFLAGS  =
+
+ifdef USE_LLGUIDANCE
+CFLAGS += -DLLAMA_USE_LLGUIDANCE
+CXXFLAGS += -DLLAMA_USE_LLGUIDANCE
+LDFLAGS  += -Lllguidance/target/release -lllguidance
+OBJS_FULL += llguidance.o
+llguidance.o: common/llguidance.cpp
+	cd llguidance && cargo build --release
+	$(CXX) $(CXXFLAGS) -Illguidance/target/release -c $< -o $@
+endif
+
 FASTCFLAGS = $(subst -O3,-Ofast,$(CFLAGS))
 FASTCXXFLAGS = $(subst -O3,-Ofast,$(CXXFLAGS))
 
@@ -90,9 +102,9 @@ CLBLAST_FLAGS = -DGGML_USE_CLBLAST
 FAILSAFE_FLAGS = -DUSE_FAILSAFE
 VULKAN_FLAGS = -DGGML_USE_VULKAN -DSD_USE_VULKAN
 ifdef LLAMA_CUBLAS
-	CUBLAS_FLAGS = -DGGML_USE_CUDA -DSD_USE_CUDA
+CUBLAS_FLAGS = -DGGML_USE_CUDA -DSD_USE_CUDA
 else
-	CUBLAS_FLAGS =
+CUBLAS_FLAGS =
 endif
 CUBLASLD_FLAGS =
 CUBLAS_OBJS =
@@ -104,43 +116,43 @@ OBJS_FAILSAFE += ggml-alloc.o ggml-cpu-traits.o ggml-quants_failsafe.o ggml-cpu-
 
 # OS specific
 ifeq ($(UNAME_S),Linux)
-	CFLAGS   += -pthread
-	CXXFLAGS += -pthread
-	LDFLAGS += -ldl
+CFLAGS   += -pthread
+CXXFLAGS += -pthread
+LDFLAGS += -ldl
 endif
 
 ifeq ($(UNAME_S),Darwin)
-	CFLAGS   += -pthread
-	CXXFLAGS += -pthread
-	CLANG_VER = $(shell clang -v 2>&1 | head -n 1 | awk 'BEGIN {FS="[. ]"};{print $$1 $$2 $$4}')
+CFLAGS   += -pthread
+CXXFLAGS += -pthread
+CLANG_VER = $(shell clang -v 2>&1 | head -n 1 | awk 'BEGIN {FS="[. ]"};{print $$1 $$2 $$4}')
 ifeq ($(CLANG_VER),Appleclang15)
-	LDFLAGS += -ld_classic
+LDFLAGS += -ld_classic
 endif
 endif
 ifeq ($(UNAME_S),FreeBSD)
-	CFLAGS   += -pthread
-	CXXFLAGS += -pthread
+CFLAGS   += -pthread
+CXXFLAGS += -pthread
 endif
 ifeq ($(UNAME_S),NetBSD)
-	CFLAGS   += -pthread
-	CXXFLAGS += -pthread
+CFLAGS   += -pthread
+CXXFLAGS += -pthread
 endif
 ifeq ($(UNAME_S),OpenBSD)
-	CFLAGS   += -pthread
-	CXXFLAGS += -pthread
+CFLAGS   += -pthread
+CXXFLAGS += -pthread
 endif
 ifeq ($(UNAME_S),Haiku)
-	CFLAGS   += -pthread
-	CXXFLAGS += -pthread
+CFLAGS   += -pthread
+CXXFLAGS += -pthread
 endif
 
 ifdef LLAMA_GPROF
-	CFLAGS   += -pg
-	CXXFLAGS += -pg
+CFLAGS   += -pg
+CXXFLAGS += -pg
 endif
 ifdef LLAMA_PERF
-	CFLAGS   += -DGGML_PERF
-	CXXFLAGS += -DGGML_PERF
+CFLAGS   += -DGGML_PERF
+CXXFLAGS += -DGGML_PERF
 endif
 
 CCV := $(shell $(CC) --version | head -n 1)
@@ -150,18 +162,18 @@ CXXV := $(shell $(CXX) --version | head -n 1)
 # For x86 based architectures
 ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64 i686 amd64))
 ifdef LLAMA_PORTABLE
-	SIMPLECFLAGS += -mavx -msse3 -mssse3
-	SIMPLERCFLAGS += -msse3 -mssse3
+SIMPLECFLAGS += -mavx -msse3 -mssse3
+SIMPLERCFLAGS += -msse3 -mssse3
 ifdef LLAMA_NOAVX2
-	FULLCFLAGS += -msse3 -mssse3 -mavx
+FULLCFLAGS += -msse3 -mssse3 -mavx
 else
-	FULLCFLAGS += -mavx2 -msse3 -mssse3 -mfma -mf16c -mavx
+FULLCFLAGS += -mavx2 -msse3 -mssse3 -mfma -mf16c -mavx
 endif # LLAMA_NOAVX2
 else
-	CFLAGS += -march=native -mtune=native
-	SIMPLECFLAGS += -march=native -mtune=native
-	SIMPLERCFLAGS += -march=native -mtune=native
-	FULLCFLAGS += -march=native -mtune=native
+CFLAGS += -march=native -mtune=native
+SIMPLECFLAGS += -march=native -mtune=native
+SIMPLERCFLAGS += -march=native -mtune=native
+FULLCFLAGS += -march=native -mtune=native
 endif # LLAMA_PORTABLE
 endif # if x86
 
@@ -169,10 +181,10 @@ ifndef LLAMA_NO_ACCELERATE
 # Mac M1 - include Accelerate framework.
 # `-framework Accelerate` works on Mac Intel as well, with negliable performance boost (as of the predict time).
 ifeq ($(UNAME_S),Darwin)
-	CFLAGS  += -DGGML_USE_ACCELERATE -DGGML_USE_BLAS -DGGML_BLAS_USE_ACCELERATE
-	CXXFLAGS  += -DGGML_USE_ACCELERATE -DGGML_USE_BLAS -DGGML_BLAS_USE_ACCELERATE
-	LDFLAGS += -framework Accelerate
-	OBJS += ggml-blas.o
+CFLAGS  += -DGGML_USE_ACCELERATE -DGGML_USE_BLAS -DGGML_BLAS_USE_ACCELERATE
+CXXFLAGS  += -DGGML_USE_ACCELERATE -DGGML_USE_BLAS -DGGML_BLAS_USE_ACCELERATE
+LDFLAGS += -framework Accelerate
+OBJS += ggml-blas.o
 endif
 endif
 
@@ -184,48 +196,48 @@ OBJS_CUDA_TEMP_INST += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/templat
 OBJS_CUDA_TEMP_INST += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-vec*f16-f16.cu))
 
 ifdef LLAMA_CUBLAS
-	CUBLAS_FLAGS = -DGGML_USE_CUDA -DSD_USE_CUDA -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include
-	CUBLASLD_FLAGS = -lcuda -lcublas -lcudart -lcublasLt -lpthread -ldl -lrt -L/usr/local/cuda/lib64 -L/opt/cuda/lib64 -L$(CUDA_PATH)/targets/x86_64-linux/lib -L$(CUDA_PATH)/lib64/stubs -L/usr/local/cuda/targets/aarch64-linux/lib -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/lib/wsl/lib
-	CUBLAS_OBJS = ggml-cuda.o ggml_v3-cuda.o ggml_v2-cuda.o ggml_v2-cuda-legacy.o
-	CUBLAS_OBJS += $(patsubst %.cu,%.o,$(filter-out ggml/src/ggml-cuda/ggml-cuda.cu, $(wildcard ggml/src/ggml-cuda/*.cu)))
-	CUBLAS_OBJS += $(OBJS_CUDA_TEMP_INST)
-	NVCC      = nvcc
-	NVCCFLAGS = --forward-unknown-to-host-compiler -use_fast_math -extended-lambda
+CUBLAS_FLAGS = -DGGML_USE_CUDA -DSD_USE_CUDA -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include
+CUBLASLD_FLAGS = -lcuda -lcublas -lcudart -lcublasLt -lpthread -ldl -lrt -L/usr/local/cuda/lib64 -L/opt/cuda/lib64 -L$(CUDA_PATH)/targets/x86_64-linux/lib -L$(CUDA_PATH)/lib64/stubs -L/usr/local/cuda/targets/aarch64-linux/lib -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/lib/wsl/lib
+CUBLAS_OBJS = ggml-cuda.o ggml_v3-cuda.o ggml_v2-cuda.o ggml_v2-cuda-legacy.o
+CUBLAS_OBJS += $(patsubst %.cu,%.o,$(filter-out ggml/src/ggml-cuda/ggml-cuda.cu, $(wildcard ggml/src/ggml-cuda/*.cu)))
+CUBLAS_OBJS += $(OBJS_CUDA_TEMP_INST)
+NVCC      = nvcc
+NVCCFLAGS = --forward-unknown-to-host-compiler -use_fast_math -extended-lambda
 
 ifdef LLAMA_ADD_CONDA_PATHS
-	CUBLASLD_FLAGS += -Lconda/envs/linux/lib -Lconda/envs/linux/lib/stubs
+CUBLASLD_FLAGS += -Lconda/envs/linux/lib -Lconda/envs/linux/lib/stubs
 endif
 
 
 ifdef LLAMA_PORTABLE
 
 ifdef LLAMA_ARCHES_CU11
-	NVCCFLAGS += -Wno-deprecated-gpu-targets \
-	             -gencode arch=compute_35,code=compute_35 \
-	             -gencode arch=compute_50,code=compute_50 \
-	             -gencode arch=compute_61,code=compute_61 \
-	             -gencode arch=compute_70,code=compute_70 \
-	             -gencode arch=compute_75,code=compute_75 \
-	             -DKCPP_LIMIT_CUDA_MAX_ARCH=750
+NVCCFLAGS += -Wno-deprecated-gpu-targets \
+             -gencode arch=compute_35,code=compute_35 \
+             -gencode arch=compute_50,code=compute_50 \
+             -gencode arch=compute_61,code=compute_61 \
+             -gencode arch=compute_70,code=compute_70 \
+             -gencode arch=compute_75,code=compute_75 \
+             -DKCPP_LIMIT_CUDA_MAX_ARCH=750
 
 else ifdef LLAMA_ARCHES_CU12
-	NVCCFLAGS += -Wno-deprecated-gpu-targets \
-	             -gencode arch=compute_50,code=compute_50 \
-	             -gencode arch=compute_61,code=compute_61 \
-	             -gencode arch=compute_70,code=compute_70 \
-	             -gencode arch=compute_75,code=compute_75 \
-	             -gencode arch=compute_80,code=compute_80
+NVCCFLAGS += -Wno-deprecated-gpu-targets \
+             -gencode arch=compute_50,code=compute_50 \
+             -gencode arch=compute_61,code=compute_61 \
+             -gencode arch=compute_70,code=compute_70 \
+             -gencode arch=compute_75,code=compute_75 \
+             -gencode arch=compute_80,code=compute_80
 
 else
-	NVCCFLAGS += -Wno-deprecated-gpu-targets -arch=all
+NVCCFLAGS += -Wno-deprecated-gpu-targets -arch=all
 endif
 
 else
-	NVCCFLAGS += -arch=native
+NVCCFLAGS += -arch=native
 endif # LLAMA_PORTABLE
 
 ifdef LLAMA_CUDA_CCBIN
-	NVCCFLAGS += -ccbin $(LLAMA_CUDA_CCBIN)
+NVCCFLAGS += -ccbin $(LLAMA_CUDA_CCBIN)
 endif
 
 ggml/src/ggml-cuda/%.o: ggml/src/ggml-cuda/%.cu ggml/include/ggml.h ggml/src/ggml-common.h ggml/src/ggml-cuda/common.cuh
@@ -242,49 +254,49 @@ endif # LLAMA_CUBLAS
 
 ifdef LLAMA_HIPBLAS
 ifeq ($(wildcard /opt/rocm),)
-	ROCM_PATH   ?= /usr
+ROCM_PATH   ?= /usr
 ifdef LLAMA_PORTABLE
-	GPU_TARGETS ?= gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(shell $(shell which amdgpu-arch))
+GPU_TARGETS ?= gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(shell $(shell which amdgpu-arch))
 else
-	GPU_TARGETS ?= $(shell $(shell which amdgpu-arch))
+GPU_TARGETS ?= $(shell $(shell which amdgpu-arch))
 endif
-	HCC         := $(ROCM_PATH)/bin/hipcc
-	HCXX        := $(ROCM_PATH)/bin/hipcc
+HCC         := $(ROCM_PATH)/bin/hipcc
+HCXX        := $(ROCM_PATH)/bin/hipcc
 else
-	ROCM_PATH   ?= /opt/rocm
+ROCM_PATH   ?= /opt/rocm
 ifdef LLAMA_PORTABLE
-	GPU_TARGETS ?= gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(shell $(ROCM_PATH)/llvm/bin/amdgpu-arch)
+GPU_TARGETS ?= gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(shell $(ROCM_PATH)/llvm/bin/amdgpu-arch)
 else
-	GPU_TARGETS ?= $(shell $(ROCM_PATH)/llvm/bin/amdgpu-arch)
+GPU_TARGETS ?= $(shell $(ROCM_PATH)/llvm/bin/amdgpu-arch)
 endif
-	HCC         := $(ROCM_PATH)/llvm/bin/clang
-	HCXX        := $(ROCM_PATH)/llvm/bin/clang++
+HCC         := $(ROCM_PATH)/llvm/bin/clang
+HCXX        := $(ROCM_PATH)/llvm/bin/clang++
 endif
 ifdef GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12
-	HIPFLAGS   += -DGGML_HIP_ROCWMMA_FATTN_GFX12
-	CFLAGS     += -DGGML_HIP_ROCWMMA_FATTN_GFX12
-	CXXFLAGS   += -DGGML_HIP_ROCWMMA_FATTN_GFX12
+HIPFLAGS   += -DGGML_HIP_ROCWMMA_FATTN_GFX12
+CFLAGS     += -DGGML_HIP_ROCWMMA_FATTN_GFX12
+CXXFLAGS   += -DGGML_HIP_ROCWMMA_FATTN_GFX12
 endif
 ifdef LLAMA_NO_WMMA
-	HIPFLAGS   += -DGGML_HIP_NO_ROCWMMA_FATTN
+HIPFLAGS   += -DGGML_HIP_NO_ROCWMMA_FATTN
 else
-	DETECT_ROCWMMA := $(shell find -L /opt/rocm/include /usr/include -type f -name rocwmma.hpp 2>/dev/null | head -n 1)
+DETECT_ROCWMMA := $(shell find -L /opt/rocm/include /usr/include -type f -name rocwmma.hpp 2>/dev/null | head -n 1)
 ifdef DETECT_ROCWMMA
-	HIPFLAGS   += -DGGML_HIP_ROCWMMA_FATTN -I$(dir $(DETECT_ROCWMMA))
+HIPFLAGS   += -DGGML_HIP_ROCWMMA_FATTN -I$(dir $(DETECT_ROCWMMA))
 else
-	HIPFLAGS   += -DGGML_HIP_NO_ROCWMMA_FATTN
+HIPFLAGS   += -DGGML_HIP_NO_ROCWMMA_FATTN
 endif
 endif
 
-	HIPFLAGS   += -DGGML_USE_HIP -DGGML_HIP_NO_VMM -DGGML_USE_CUDA -DSD_USE_CUDA $(shell $(ROCM_PATH)/bin/hipconfig -C)
-	HIPLDFLAGS    += -L$(ROCM_PATH)/lib -Wl,-rpath=$(ROCM_PATH)/lib
-	HIPLDFLAGS    += -L$(ROCM_PATH)/lib64 -Wl,-rpath=$(ROCM_PATH)/lib64
-	HIPLDFLAGS    += -lhipblas -lamdhip64 -lrocblas
-	HIP_OBJS      += ggml-cuda.o ggml_v3-cuda.o ggml_v2-cuda.o ggml_v2-cuda-legacy.o
-	HIP_OBJS      += $(patsubst %.cu,%.o,$(filter-out ggml/src/ggml-cuda/ggml-cuda.cu, $(wildcard ggml/src/ggml-cuda/*.cu)))
-	HIP_OBJS      += $(OBJS_CUDA_TEMP_INST)
+HIPFLAGS   += -DGGML_USE_HIP -DGGML_HIP_NO_VMM -DGGML_USE_CUDA -DSD_USE_CUDA $(shell $(ROCM_PATH)/bin/hipconfig -C)
+HIPLDFLAGS    += -L$(ROCM_PATH)/lib -Wl,-rpath=$(ROCM_PATH)/lib
+HIPLDFLAGS    += -L$(ROCM_PATH)/lib64 -Wl,-rpath=$(ROCM_PATH)/lib64
+HIPLDFLAGS    += -lhipblas -lamdhip64 -lrocblas
+HIP_OBJS      += ggml-cuda.o ggml_v3-cuda.o ggml_v2-cuda.o ggml_v2-cuda-legacy.o
+HIP_OBJS      += $(patsubst %.cu,%.o,$(filter-out ggml/src/ggml-cuda/ggml-cuda.cu, $(wildcard ggml/src/ggml-cuda/*.cu)))
+HIP_OBJS      += $(OBJS_CUDA_TEMP_INST)
 
-	HIPFLAGS2    += $(addprefix --offload-arch=,$(GPU_TARGETS))
+HIPFLAGS2    += $(addprefix --offload-arch=,$(GPU_TARGETS))
 
 ggml/src/ggml-cuda/%.o: ggml/src/ggml-cuda/%.cu ggml/include/ggml.h ggml/src/ggml-common.h ggml/src/ggml-cuda/common.cuh
 	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(HIPFLAGS2) -x hip -c -o $@ $<
@@ -300,10 +312,10 @@ endif # LLAMA_HIPBLAS
 
 
 ifdef LLAMA_METAL
-	CFLAGS   += -DGGML_USE_METAL -DGGML_METAL_NDEBUG -DSD_USE_METAL
-	CXXFLAGS += -DGGML_USE_METAL -DSD_USE_METAL
-	LDFLAGS  += -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders
-	OBJS     += ggml-metal.o
+CFLAGS   += -DGGML_USE_METAL -DGGML_METAL_NDEBUG -DSD_USE_METAL
+CXXFLAGS += -DGGML_USE_METAL -DSD_USE_METAL
+LDFLAGS  += -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders
+OBJS     += ggml-metal.o
 
 ggml-metal.o: ggml/src/ggml-metal/ggml-metal.m ggml/src/ggml-metal/ggml-metal-impl.h ggml/include/ggml-metal.h
 	@echo "== Preparing merged Metal file =="
@@ -317,50 +329,50 @@ ifneq ($(filter aarch64%,$(UNAME_M)),)
 # Apple M1, M2, etc.
 # Raspberry Pi 3, 4, Zero 2 (64-bit)
 ifdef LLAMA_PORTABLE
-	CFLAGS +=
-	CXXFLAGS +=
+CFLAGS +=
+CXXFLAGS +=
 else
 # sve is cooked on termux so we are disabling it
 ifeq ($(UNAME_O), Android)
 ifneq ($(findstring clang, $(CCV)), )
-	CFLAGS += -mcpu=native+nosve
-	CXXFLAGS += -mcpu=native+nosve
+CFLAGS += -mcpu=native+nosve
+CXXFLAGS += -mcpu=native+nosve
 else
-	CFLAGS += -mcpu=native
-	CXXFLAGS += -mcpu=native
+CFLAGS += -mcpu=native
+CXXFLAGS += -mcpu=native
 endif
 else
-	CFLAGS += -mcpu=native
-	CXXFLAGS += -mcpu=native
+CFLAGS += -mcpu=native
+CXXFLAGS += -mcpu=native
 endif
 endif
 endif
 
 ifneq ($(filter armv6%,$(UNAME_M)),)
-	# Raspberry Pi 1, Zero
-	CFLAGS 	 += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
-	CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
+# Raspberry Pi 1, Zero
+CFLAGS 	 += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
+CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
 endif
 ifneq ($(filter armv7%,$(UNAME_M)),)
-	# Raspberry Pi 2
-	CFLAGS   += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
-	CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
+# Raspberry Pi 2
+CFLAGS   += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
+CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
 endif
 ifneq ($(filter armv8%,$(UNAME_M)),)
-	# Raspberry Pi 3, 4, Zero 2 (32-bit)
-	CFLAGS   += -mno-unaligned-access
-	CXXFLAGS += -mno-unaligned-access
+# Raspberry Pi 3, 4, Zero 2 (32-bit)
+CFLAGS   += -mno-unaligned-access
+CXXFLAGS += -mno-unaligned-access
 ifneq ($(findstring clang, $(CCV)), ) #cl doesnt support this and sometimes androids end up here
-	CFLAGS 	 += -mfp16-format=ieee
-	CXXFLAGS += -mfp16-format=ieee
+CFLAGS 	 += -mfp16-format=ieee
+CXXFLAGS += -mfp16-format=ieee
 endif
 endif
 
 ifneq ($(filter ppc64%,$(UNAME_M)),)
-	POWER9_M := $(shell grep "POWER9" /proc/cpuinfo)
+POWER9_M := $(shell grep "POWER9" /proc/cpuinfo)
 ifneq (,$(findstring POWER9,$(POWER9_M)))
-	CFLAGS   += -mcpu=power9
-	CXXFLAGS += -mcpu=power9
+CFLAGS   += -mcpu=power9
+CXXFLAGS += -mcpu=power9
 endif
 endif
 
@@ -375,49 +387,49 @@ VULKAN_BUILD =
 NOTIFY_MSG =
 
 ifeq ($(OS),Windows_NT)
-	DEFAULT_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.dll $(LDFLAGS)
+DEFAULT_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.dll $(LDFLAGS)
 ifdef LLAMA_PORTABLE
-	FAILSAFE_BUILD = $(CXX) $(CXXFLAGS) $^ -shared -o $@.dll $(LDFLAGS)
-	NOAVX2_BUILD = $(CXX) $(CXXFLAGS) $^ -shared -o $@.dll $(LDFLAGS)
+FAILSAFE_BUILD = $(CXX) $(CXXFLAGS) $^ -shared -o $@.dll $(LDFLAGS)
+NOAVX2_BUILD = $(CXX) $(CXXFLAGS) $^ -shared -o $@.dll $(LDFLAGS)
 endif
 
 ifdef LLAMA_CLBLAST
-	CLBLAST_BUILD = $(CXX) $(CXXFLAGS) $^ lib/OpenCL.lib lib/clblast.lib -shared -o $@.dll $(LDFLAGS)
+CLBLAST_BUILD = $(CXX) $(CXXFLAGS) $^ lib/OpenCL.lib lib/clblast.lib -shared -o $@.dll $(LDFLAGS)
 endif
 ifdef LLAMA_VULKAN
-	VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ lib/vulkan-1.lib -shared -o $@.dll $(LDFLAGS)
+VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ lib/vulkan-1.lib -shared -o $@.dll $(LDFLAGS)
 endif
 
 ifdef LLAMA_CUBLAS
-	CUBLAS_BUILD = $(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $^ -shared -o $@.dll $(CUBLASLD_FLAGS) $(LDFLAGS)
+CUBLAS_BUILD = $(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $^ -shared -o $@.dll $(CUBLASLD_FLAGS) $(LDFLAGS)
 endif
 ifdef LLAMA_HIPBLAS
-	HIPBLAS_BUILD = $(HCXX) $(CXXFLAGS) $(HIPFLAGS) $^ -shared -o $@.dll $(HIPLDFLAGS) $(LDFLAGS)
+HIPBLAS_BUILD = $(HCXX) $(CXXFLAGS) $(HIPFLAGS) $^ -shared -o $@.dll $(HIPLDFLAGS) $(LDFLAGS)
 endif
 else
-	DEFAULT_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
+DEFAULT_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
 ifdef LLAMA_PORTABLE
 ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64 i686 amd64))
-	FAILSAFE_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
-	NOAVX2_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
+FAILSAFE_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
+NOAVX2_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
 endif
 endif
 
 ifdef LLAMA_CLBLAST
 ifeq ($(UNAME_S),Darwin)
-	CLBLAST_BUILD = $(CXX) $(CXXFLAGS) $^ -lclblast -framework OpenCL $(ARCH_ADD) -shared -o $@.so $(LDFLAGS)
+CLBLAST_BUILD = $(CXX) $(CXXFLAGS) $^ -lclblast -framework OpenCL $(ARCH_ADD) -shared -o $@.so $(LDFLAGS)
 else
-	CLBLAST_BUILD = $(CXX) $(CXXFLAGS) $^ -lclblast -lOpenCL $(ARCH_ADD) -shared -o $@.so $(LDFLAGS)
+CLBLAST_BUILD = $(CXX) $(CXXFLAGS) $^ -lclblast -lOpenCL $(ARCH_ADD) -shared -o $@.so $(LDFLAGS)
 endif
 endif
 ifdef LLAMA_CUBLAS
-	CUBLAS_BUILD = $(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $^ -shared -o $@.so $(CUBLASLD_FLAGS) $(LDFLAGS)
+CUBLAS_BUILD = $(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $^ -shared -o $@.so $(CUBLASLD_FLAGS) $(LDFLAGS)
 endif
 ifdef LLAMA_HIPBLAS
-	HIPBLAS_BUILD = $(HCXX) $(CXXFLAGS) $(HIPFLAGS) $^ -shared -o $@.so $(HIPLDFLAGS) $(LDFLAGS)
+HIPBLAS_BUILD = $(HCXX) $(CXXFLAGS) $(HIPFLAGS) $^ -shared -o $@.so $(HIPLDFLAGS) $(LDFLAGS)
 endif
 ifdef LLAMA_VULKAN
-	VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
+VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
 endif
 endif
 
@@ -434,7 +446,7 @@ endif
 endif
 
 ifdef NO_VULKAN_EXTENSIONS
-	VKGEN_NOEXT_ADD = -DNO_VULKAN_EXTENSIONS
+VKGEN_NOEXT_ADD = -DNO_VULKAN_EXTENSIONS
 endif
 VKGEN_NOEXT_FORCE = -DNO_VULKAN_EXTENSIONS
 
@@ -908,17 +920,17 @@ koboldcpp_vulkan_noavx2:
 endif
 
 # tools
-quantize_gguf: tools/quantize/quantize.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL)
+quantize_gguf: tools/quantize/quantize.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
-quantize_gptj: otherarch/tools/gptj_quantize.cpp otherarch/tools/common-ggml.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL)
+quantize_gptj: otherarch/tools/gptj_quantize.cpp otherarch/tools/common-ggml.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
-quantize_gpt2: otherarch/tools/gpt2_quantize.cpp otherarch/tools/common-ggml.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL)
+quantize_gpt2: otherarch/tools/gpt2_quantize.cpp otherarch/tools/common-ggml.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
-quantize_neox: otherarch/tools/neox_quantize.cpp otherarch/tools/common-ggml.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL)
+quantize_neox: otherarch/tools/neox_quantize.cpp otherarch/tools/common-ggml.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
-quantize_mpt: otherarch/tools/mpt_quantize.cpp otherarch/tools/common-ggml.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL)
+quantize_mpt: otherarch/tools/mpt_quantize.cpp otherarch/tools/common-ggml.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
-quantize_clip: tools/mtmd/clip.cpp tools/mtmd/clip.h tools/quantclip.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL)
+quantize_clip: tools/mtmd/clip.cpp tools/quantclip.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 #window simple clinfo
