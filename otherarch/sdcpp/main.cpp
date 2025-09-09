@@ -1077,7 +1077,7 @@ int main(int argc, const char* argv[]) {
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
         if (is_jpg) {
             stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                           results[i].data, 90);
+                           results[i].data, 90, get_image_params(params, params.seed + i).c_str());
             printf("save result JPEG image to '%s'\n", final_image_path.c_str());
         } else {
             stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
