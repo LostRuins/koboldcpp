@@ -3,6 +3,8 @@
 #include <time.h>
 #include <iostream>
 #include <random>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -387,20 +389,21 @@ std::string clean_input_prompt(const std::string& input) {
     return result;
 }
 
-static std::string get_image_params(const SDParams& params) {
-    std::string parameter_string = "";
-    parameter_string += "Prompt: " + params.prompt + " | ";
-    parameter_string += "NegativePrompt: " + params.negative_prompt + " | ";
-    parameter_string += "Steps: " + std::to_string(params.sample_steps) + " | ";
-    parameter_string += "CFGScale: " + std::to_string(params.cfg_scale) + " | ";
-    parameter_string += "Guidance: " + std::to_string(params.guidance) + " | ";
-    parameter_string += "Seed: " + std::to_string(params.seed) + " | ";
-    parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + " | ";
-    parameter_string += "Sampler: " + std::to_string((int)sd_params->sample_method) + " | ";
-    parameter_string += "Clip skip: " + std::to_string((int)sd_params->clip_skip) + " | ";
-    parameter_string += "Model: " + sdmodelfilename + " | ";
-    parameter_string += "Version: KoboldCpp";
-    return parameter_string;
+static std::string get_image_params(const sd_img_gen_params_t & params) {
+    std::stringstream parameter_string;
+    parameter_string << std::setprecision(3)
+        <<    "Prompt: " << params.prompt
+        << " | NegativePrompt: " << params.negative_prompt
+        << " | Steps: " << params.sample_steps
+        << " | CFGScale: " << params.guidance.txt_cfg
+        << " | Guidance: " << params.guidance.distilled_guidance
+        << " | Seed: " << params.seed
+        << " | Size: " << params.width << "x" << params.height
+        << " | Sampler: " << sd_sample_method_name(params.sample_method)
+        << " | Clip skip: " << params.clip_skip
+        << " | Model: " << sdmodelfilename
+        << " | Version: KoboldCpp";
+    return parameter_string.str();
 }
 
 static inline int rounddown_64(int n) {
@@ -930,7 +933,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
 
         int out_data_len;
-        unsigned char * png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(*sd_params).c_str());
+        unsigned char * png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(params).c_str());
         if (png != NULL)
         {
             recent_data = kcpp_base64_encode(png,out_data_len);
