@@ -500,6 +500,42 @@ static void sd_fix_resolution(int &width, int &height, int img_hard_limit, int i
     }
 }
 
+static enum sample_method_t sampler_from_name(const std::string& sampler)
+{
+    if(sampler=="euler a"||sampler=="k_euler_a"||sampler=="euler_a") //all lowercase
+    {
+        return sample_method_t::EULER_A;
+    }
+    else if(sampler=="euler"||sampler=="k_euler")
+    {
+        return sample_method_t::EULER;
+    }
+    else if(sampler=="heun"||sampler=="k_heun")
+    {
+        return sample_method_t::HEUN;
+    }
+    else if(sampler=="dpm2"||sampler=="k_dpm_2")
+    {
+        return sample_method_t::DPM2;
+    }
+    else if(sampler=="lcm"||sampler=="k_lcm")
+    {
+        return sample_method_t::LCM;
+    }
+    else if(sampler=="ddim")
+    {
+        return sample_method_t::DDIM_TRAILING;
+    }
+    else if(sampler=="dpm++ 2m karras" || sampler=="dpm++ 2m" || sampler=="k_dpmpp_2m")
+    {
+        return sample_method_t::DPMPP2M;
+    }
+    else
+    {
+        return sample_method_t::EULER_A;
+    }
+}
+
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
     sd_generation_outputs output;
@@ -525,8 +561,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         extra_image_data.push_back(std::string(inputs.extra_images[i]));
     }
 
-    std::string sampler = inputs.sample_method;
-
     sd_params->prompt = cleanprompt;
     sd_params->negative_prompt = cleannegprompt;
     sd_params->cfg_scale = inputs.cfg_scale;
@@ -536,6 +570,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->height = inputs.height;
     sd_params->strength = inputs.denoising_strength;
     sd_params->clip_skip = inputs.clip_skip;
+    sd_params->sample_method = sampler_from_name(inputs.sample_method);
     sd_params->mode = (img2img_data==""?SDMode::TXT2IMG:SDMode::IMG2IMG);
 
     auto loadedsdver = get_loaded_sd_version(sd_ctx);
@@ -548,12 +583,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             }
             sd_params->cfg_scale = 1.0f;
         }
-        if (sampler == "euler a" || sampler == "k_euler_a" || sampler == "euler_a") {
+        if (sd_params->sample_method == sample_method_t::EULER_A) {
             //euler a broken on flux
             if (!sd_is_quiet && sddebugmode) {
                 printf("Flux: switching Euler A to Euler\n");
             }
-            sampler = "euler";
+            sd_params->sample_method = sample_method_t::EULER;
         }
     }
 
@@ -616,39 +651,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     fflush(stdout);
-
-    if(sampler=="euler a"||sampler=="k_euler_a"||sampler=="euler_a") //all lowercase
-    {
-        sd_params->sample_method = sample_method_t::EULER_A;
-    }
-    else if(sampler=="euler"||sampler=="k_euler")
-    {
-        sd_params->sample_method = sample_method_t::EULER;
-    }
-    else if(sampler=="heun"||sampler=="k_heun")
-    {
-        sd_params->sample_method = sample_method_t::HEUN;
-    }
-    else if(sampler=="dpm2"||sampler=="k_dpm_2")
-    {
-        sd_params->sample_method = sample_method_t::DPM2;
-    }
-    else if(sampler=="lcm"||sampler=="k_lcm")
-    {
-        sd_params->sample_method = sample_method_t::LCM;
-    }
-    else if(sampler=="ddim")
-    {
-        sd_params->sample_method = sample_method_t::DDIM_TRAILING;
-    }
-    else if(sampler=="dpm++ 2m karras" || sampler=="dpm++ 2m" || sampler=="k_dpmpp_2m")
-    {
-        sd_params->sample_method = sample_method_t::DPMPP2M;
-    }
-    else
-    {
-        sd_params->sample_method = sample_method_t::EULER_A;
-    }
 
     if(extra_image_data.size()>0)
     {
