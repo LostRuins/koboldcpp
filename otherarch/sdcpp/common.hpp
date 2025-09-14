@@ -270,7 +270,10 @@ public:
         // to_out_1 is nn.Dropout(), skip for inference
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                struct ggml_tensor* context) {
         // x: [N, n_token, query_dim]
         // context: [N, n_context, context_dim]
         // return: [N, n_token, query_dim]
@@ -288,7 +291,7 @@ public:
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
 
-        x = ggml_nn_attention_ext(ctx, q, k, v, n_head, NULL, false, false, flash_attn);  // [N, n_token, inner_dim]
+        x = ggml_nn_attention_ext(ctx, backend, q, k, v, n_head, NULL, false, false, flash_attn);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
         return x;
@@ -327,7 +330,10 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                struct ggml_tensor* context) {
         // x: [N, n_token, query_dim]
         // context: [N, n_context, context_dim]
         // return: [N, n_token, query_dim]
@@ -352,11 +358,11 @@ public:
 
         auto r = x;
         x      = norm1->forward(ctx, x);
-        x      = attn1->forward(ctx, x, x);  // self-attention
+        x      = attn1->forward(ctx, backend, x, x);  // self-attention
         x      = ggml_add(ctx, x, r);
         r      = x;
         x      = norm2->forward(ctx, x);
-        x      = attn2->forward(ctx, x, context);  // cross-attention
+        x      = attn2->forward(ctx, backend, x, context);  // cross-attention
         x      = ggml_add(ctx, x, r);
         r      = x;
         x      = norm3->forward(ctx, x);
@@ -401,7 +407,10 @@ public:
         blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    virtual struct ggml_tensor* forward(struct ggml_context* ctx,
+                                        ggml_backend_t backend,
+                                        struct ggml_tensor* x,
+                                        struct ggml_tensor* context) {
         // x: [N, in_channels, h, w]
         // context: [N, max_position(aka n_token), hidden_size(aka context_dim)]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
@@ -424,7 +433,7 @@ public:
             std::string name       = "transformer_blocks." + std::to_string(i);
             auto transformer_block = std::dynamic_pointer_cast<BasicTransformerBlock>(blocks[name]);
 
-            x = transformer_block->forward(ctx, x, context);
+            x = transformer_block->forward(ctx, backend, x, context);
         }
 
         x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]

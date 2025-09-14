@@ -124,7 +124,10 @@ protected:
                 return;
             }
             std::string piece = item[0];
-            float score       = item[1];
+            if (piece.empty()) {
+                piece = "<empty_token>";
+            }
+            float score = item[1];
             piece_score_pairs.emplace_back(piece, score);
         }
     }
@@ -147,6 +150,7 @@ protected:
         std::vector<const char*> key(pieces->size());
         std::vector<int> value(pieces->size());
         for (size_t i = 0; i < pieces->size(); ++i) {
+            // LOG_DEBUG("%s %d", (*pieces)[i].first.c_str(), (*pieces)[i].second);
             key[i]   = (*pieces)[i].first.data();  // sorted piece.
             value[i] = (*pieces)[i].second;        // vocab_id
         }
@@ -335,9 +339,9 @@ protected:
     }
 
 public:
-    explicit T5UniGramTokenizer(const std::string& json_str = "") {
-        if (json_str.size() != 0) {
-            InitializePieces(json_str);
+    explicit T5UniGramTokenizer(bool is_umt5 = false) {
+        if (is_umt5) {
+            InitializePieces(ModelLoader::load_umt5_tokenizer_json());
         } else {
             InitializePieces(ModelLoader::load_t5_tokenizer_json());
         }
@@ -574,6 +578,7 @@ public:
 
     // x: [N, n_token, model_dim]
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                                                ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
                                                                 struct ggml_tensor* past_bias                = NULL,
                                                                 struct ggml_tensor* mask                     = NULL,
@@ -604,7 +609,7 @@ public:
 
         k = ggml_scale_inplace(ctx, k, sqrt(d_head));
 
-        x = ggml_nn_attention_ext(ctx, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
+        x = ggml_nn_attention_ext(ctx, backend, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
 
         x = out_proj->forward(ctx, x);  // [N, n_token, model_dim]
         return {x, past_bias};
@@ -623,6 +628,7 @@ public:
     }
 
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                                                ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
                                                                 struct ggml_tensor* past_bias                = NULL,
                                                                 struct ggml_tensor* mask                     = NULL,
@@ -632,7 +638,7 @@ public:
         auto layer_norm    = std::dynamic_pointer_cast<T5LayerNorm>(blocks["layer_norm"]);
 
         auto normed_hidden_state = layer_norm->forward(ctx, x);
-        auto ret                 = SelfAttention->forward(ctx, normed_hidden_state, past_bias, mask, relative_position_bucket);
+        auto ret                 = SelfAttention->forward(ctx, backend, normed_hidden_state, past_bias, mask, relative_position_bucket);
         auto output              = ret.first;
         past_bias                = ret.second;
 
@@ -649,6 +655,7 @@ public:
     }
 
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                                                ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
                                                                 struct ggml_tensor* past_bias                = NULL,
                                                                 struct ggml_tensor* mask                     = NULL,
@@ -657,7 +664,7 @@ public:
         auto layer_0 = std::dynamic_pointer_cast<T5LayerSelfAttention>(blocks["layer.0"]);
         auto layer_1 = std::dynamic_pointer_cast<T5LayerFF>(blocks["layer.1"]);
 
-        auto ret  = layer_0->forward(ctx, x, past_bias, mask, relative_position_bucket);
+        auto ret  = layer_0->forward(ctx, backend, x, past_bias, mask, relative_position_bucket);
         x         = ret.first;
         past_bias = ret.second;
         x         = layer_1->forward(ctx, x);
@@ -673,16 +680,18 @@ public:
             int64_t model_dim,
             int64_t inner_dim,
             int64_t ff_dim,
-            int64_t num_heads)
+            int64_t num_heads,
+            bool relative_attention = true)
         : num_layers(num_layers) {
         for (int i = 0; i < num_layers; i++) {
-            blocks["block." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new T5Block(model_dim, inner_dim, ff_dim, num_heads, i == 0));
+            blocks["block." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new T5Block(model_dim, inner_dim, ff_dim, num_heads, (!relative_attention || i == 0)));
         }
 
         blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new T5LayerNorm(model_dim));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* past_bias                = NULL,
                                 struct ggml_tensor* attention_mask           = NULL,
@@ -691,7 +700,7 @@ public:
         for (int i = 0; i < num_layers; i++) {
             auto block = std::dynamic_pointer_cast<T5Block>(blocks["block." + std::to_string(i)]);
 
-            auto ret  = block->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
+            auto ret  = block->forward(ctx, backend, x, past_bias, attention_mask, relative_position_bucket);
             x         = ret.first;
             past_bias = ret.second;
         }
@@ -703,18 +712,34 @@ public:
     }
 };
 
+struct T5Params {
+    int64_t num_layers      = 24;
+    int64_t model_dim       = 4096;
+    int64_t ff_dim          = 10240;
+    int64_t num_heads       = 64;
+    int64_t vocab_size      = 32128;
+    bool relative_attention = true;
+};
+
 struct T5 : public GGMLBlock {
+    T5Params params;
+
 public:
-    T5(int64_t num_layers,
-       int64_t model_dim,
-       int64_t ff_dim,
-       int64_t num_heads,
-       int64_t vocab_size) {
-        blocks["encoder"] = std::shared_ptr<GGMLBlock>(new T5Stack(num_layers, model_dim, model_dim, ff_dim, num_heads));
-        blocks["shared"]  = std::shared_ptr<GGMLBlock>(new Embedding(vocab_size, model_dim));
+    T5() {}
+    T5(T5Params params)
+        : params(params) {
+        blocks["encoder"] = std::shared_ptr<GGMLBlock>(new T5Stack(params.num_layers,
+                                                                   params.model_dim,
+                                                                   params.model_dim,
+                                                                   params.ff_dim,
+                                                                   params.num_heads,
+                                                                   params.relative_attention));
+        blocks["shared"]  = std::shared_ptr<GGMLBlock>(new Embedding(params.vocab_size,
+                                                                     params.model_dim));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* past_bias                = NULL,
                                 struct ggml_tensor* attention_mask           = NULL,
@@ -725,24 +750,27 @@ public:
         auto encoder = std::dynamic_pointer_cast<T5Stack>(blocks["encoder"]);
 
         auto x = shared->forward(ctx, input_ids);
-        x      = encoder->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
+        x      = encoder->forward(ctx, backend, x, past_bias, attention_mask, relative_position_bucket);
         return x;
     }
 };
 
 struct T5Runner : public GGMLRunner {
+    T5Params params;
     T5 model;
     std::vector<int> relative_position_bucket_vec;
 
     T5Runner(ggml_backend_t backend,
+             bool offload_params_to_cpu,
              const String2GGMLType& tensor_types,
              const std::string prefix,
-             int64_t num_layers = 24,
-             int64_t model_dim  = 4096,
-             int64_t ff_dim     = 10240,
-             int64_t num_heads  = 64,
-             int64_t vocab_size = 32128)
-        : GGMLRunner(backend), model(num_layers, model_dim, ff_dim, num_heads, vocab_size) {
+             bool is_umt5 = false)
+        : GGMLRunner(backend, offload_params_to_cpu) {
+        if (is_umt5) {
+            params.vocab_size         = 256384;
+            params.relative_attention = false;
+        }
+        model = T5(params);
         model.init(params_ctx, tensor_types, prefix);
     }
 
@@ -755,13 +783,14 @@ struct T5Runner : public GGMLRunner {
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* relative_position_bucket,
                                 struct ggml_tensor* attention_mask = NULL) {
         size_t N       = input_ids->ne[1];
         size_t n_token = input_ids->ne[0];
 
-        auto hidden_states = model.forward(ctx, input_ids, NULL, attention_mask, relative_position_bucket);  // [N, n_token, model_dim]
+        auto hidden_states = model.forward(ctx, backend, input_ids, NULL, attention_mask, relative_position_bucket);  // [N, n_token, model_dim]
         return hidden_states;
     }
 
@@ -769,7 +798,8 @@ struct T5Runner : public GGMLRunner {
                                     struct ggml_tensor* attention_mask = NULL) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
-        input_ids = to_backend(input_ids);
+        input_ids      = to_backend(input_ids);
+        attention_mask = to_backend(attention_mask);
 
         relative_position_bucket_vec = compute_relative_position_bucket(input_ids->ne[0], input_ids->ne[0]);
 
@@ -786,7 +816,7 @@ struct T5Runner : public GGMLRunner {
                                                            input_ids->ne[0]);
         set_backend_tensor_data(relative_position_bucket, relative_position_bucket_vec.data());
 
-        struct ggml_tensor* hidden_states = forward(compute_ctx, input_ids, relative_position_bucket, attention_mask);
+        struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, relative_position_bucket, attention_mask);
 
         ggml_build_forward_expand(gf, hidden_states);
 
@@ -877,14 +907,11 @@ struct T5Embedder {
     T5Runner model;
 
     T5Embedder(ggml_backend_t backend,
+               bool offload_params_to_cpu,
                const String2GGMLType& tensor_types = {},
                const std::string prefix            = "",
-               int64_t num_layers                  = 24,
-               int64_t model_dim                   = 4096,
-               int64_t ff_dim                      = 10240,
-               int64_t num_heads                   = 64,
-               int64_t vocab_size                  = 32128)
-        : model(backend, tensor_types, prefix, num_layers, model_dim, ff_dim, num_heads, vocab_size) {
+               bool is_umt5                        = false)
+        : model(backend, offload_params_to_cpu, tensor_types, prefix, is_umt5), tokenizer(is_umt5) {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -946,25 +973,22 @@ struct T5Embedder {
         GGML_ASSERT(work_ctx != NULL);
 
         {
-            // cpu f16: pass
-            // cpu f32: pass
-            // cuda f16: nan
-            // cuda f32: pass
-            // cuda q8_0: nan
-            // TODO: fix cuda nan
             std::string text("a lovely cat");
-            auto tokens_and_weights     = tokenize(text, 77, true);
+            // std::string text("一只可爱的猫"); // umt5 chinease test
+            auto tokens_and_weights     = tokenize(text, 512, true);
             std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
             std::vector<float>& weights = std::get<1>(tokens_and_weights);
+            std::vector<float>& masks   = std::get<2>(tokens_and_weights);
             for (auto token : tokens) {
                 printf("%d ", token);
             }
             printf("\n");
             auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
+            auto attention_mask     = vector_to_ggml_tensor(work_ctx, masks);
             struct ggml_tensor* out = NULL;
 
             int t0 = ggml_time_ms();
-            model.compute(8, input_ids, NULL, &out, work_ctx);
+            model.compute(8, input_ids, attention_mask, &out, work_ctx);
             int t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
@@ -973,32 +997,43 @@ struct T5Embedder {
     }
 
     static void load_from_file_and_test(const std::string& file_path) {
-        // ggml_backend_t backend    = ggml_backend_cuda_init(0);
-        ggml_backend_t backend         = ggml_backend_cpu_init();
-        ggml_type model_data_type      = GGML_TYPE_F32;
-        std::shared_ptr<T5Embedder> t5 = std::shared_ptr<T5Embedder>(new T5Embedder(backend));
-        {
-            LOG_INFO("loading from '%s'", file_path.c_str());
+        // cpu f16: pass
+        // cpu f32: pass
+        // cuda f16: pass
+        // cuda f32: pass
+        // cuda q8_0: pass
+        // ggml_backend_t backend = ggml_backend_cuda_init(0);
+        ggml_backend_t backend    = ggml_backend_cpu_init();
+        ggml_type model_data_type = GGML_TYPE_F16;
 
-            t5->alloc_params_buffer();
-            std::map<std::string, ggml_tensor*> tensors;
-            t5->get_param_tensors(tensors, "");
-
-            ModelLoader model_loader;
-            if (!model_loader.init_from_file(file_path)) {
-                LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
-                return;
-            }
-
-            bool success = model_loader.load_tensors(tensors, backend);
-
-            if (!success) {
-                LOG_ERROR("load tensors from model loader failed");
-                return;
-            }
-
-            LOG_INFO("t5 model loaded");
+        ModelLoader model_loader;
+        if (!model_loader.init_from_file(file_path)) {
+            LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
+            return;
         }
+
+        auto tensor_types = model_loader.tensor_storages_types;
+        for (auto& item : tensor_types) {
+            // LOG_DEBUG("%s %u", item.first.c_str(), item.second);
+            if (ends_with(item.first, "weight")) {
+                item.second = model_data_type;
+            }
+        }
+
+        std::shared_ptr<T5Embedder> t5 = std::shared_ptr<T5Embedder>(new T5Embedder(backend, false, tensor_types, "", true));
+
+        t5->alloc_params_buffer();
+        std::map<std::string, ggml_tensor*> tensors;
+        t5->get_param_tensors(tensors, "");
+
+        bool success = model_loader.load_tensors(tensors);
+
+        if (!success) {
+            LOG_ERROR("load tensors from model loader failed");
+            return;
+        }
+
+        LOG_INFO("t5 model loaded");
         t5->test();
     }
 };

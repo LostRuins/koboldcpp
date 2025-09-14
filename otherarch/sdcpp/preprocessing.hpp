@@ -162,16 +162,16 @@ void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float lo
     }
 }
 
-uint8_t* preprocess_canny(uint8_t* img, int width, int height, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
+bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
     struct ggml_init_params params;
-    params.mem_size               = static_cast<size_t>(10 * 1024 * 1024);  // 10
+    params.mem_size               = static_cast<size_t>(10 * 1024 * 1024);  // 10MB
     params.mem_buffer             = NULL;
     params.no_alloc               = false;
     struct ggml_context* work_ctx = ggml_init(params);
 
     if (!work_ctx) {
         LOG_ERROR("ggml_init() failed");
-        return NULL;
+        return false;
     }
 
     float kX[9] = {
@@ -192,8 +192,8 @@ uint8_t* preprocess_canny(uint8_t* img, int width, int height, float high_thresh
     struct ggml_tensor* sf_ky = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 3, 3, 1, 1);
     memcpy(sf_ky->data, kY, ggml_nbytes(sf_ky));
     gaussian_kernel(gkernel);
-    struct ggml_tensor* image      = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-    struct ggml_tensor* image_gray = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 1, 1);
+    struct ggml_tensor* image      = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, img.width, img.height, 3, 1);
+    struct ggml_tensor* image_gray = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, img.width, img.height, 1, 1);
     struct ggml_tensor* iX         = ggml_dup_tensor(work_ctx, image_gray);
     struct ggml_tensor* iY         = ggml_dup_tensor(work_ctx, image_gray);
     struct ggml_tensor* G          = ggml_dup_tensor(work_ctx, image_gray);
@@ -209,8 +209,8 @@ uint8_t* preprocess_canny(uint8_t* img, int width, int height, float high_thresh
     non_max_supression(image_gray, G, tetha);
     threshold_hystersis(image_gray, high_threshold, low_threshold, weak, strong);
     // to RGB channels
-    for (int iy = 0; iy < height; iy++) {
-        for (int ix = 0; ix < width; ix++) {
+    for (int iy = 0; iy < img.height; iy++) {
+        for (int ix = 0; ix < img.width; ix++) {
             float gray = ggml_tensor_get_f32(image_gray, ix, iy);
             gray       = inverse ? 1.0f - gray : gray;
             ggml_tensor_set_f32(image, gray, ix, iy);
@@ -218,10 +218,11 @@ uint8_t* preprocess_canny(uint8_t* img, int width, int height, float high_thresh
             ggml_tensor_set_f32(image, gray, ix, iy, 2);
         }
     }
-    free(img);
     uint8_t* output = sd_tensor_to_image(image);
+    free(img.data);
+    img.data = output;
     ggml_free(work_ctx);
-    return output;
+    return true;
 }
 
 #endif  // __PREPROCESSING_HPP__

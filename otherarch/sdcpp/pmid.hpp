@@ -508,6 +508,7 @@ struct PhotoMakerIDEncoderBlock : public CLIPVisionModelProjection {
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* id_pixel_values,
                                 struct ggml_tensor* prompt_embeds,
                                 struct ggml_tensor* class_tokens_mask,
@@ -520,9 +521,9 @@ struct PhotoMakerIDEncoderBlock : public CLIPVisionModelProjection {
         auto visual_projection_2 = std::dynamic_pointer_cast<Linear>(blocks["visual_projection_2"]);
         auto fuse_module         = std::dynamic_pointer_cast<FuseModule>(blocks["fuse_module"]);
 
-        struct ggml_tensor* shared_id_embeds = vision_model->forward(ctx, id_pixel_values);          // [N, hidden_size]
-        struct ggml_tensor* id_embeds        = visual_projection->forward(ctx, shared_id_embeds);    // [N, proj_dim(768)]
-        struct ggml_tensor* id_embeds_2      = visual_projection_2->forward(ctx, shared_id_embeds);  // [N, 1280]
+        struct ggml_tensor* shared_id_embeds = vision_model->forward(ctx, backend, id_pixel_values);  // [N, hidden_size]
+        struct ggml_tensor* id_embeds        = visual_projection->forward(ctx, shared_id_embeds);     // [N, proj_dim(768)]
+        struct ggml_tensor* id_embeds_2      = visual_projection_2->forward(ctx, shared_id_embeds);   // [N, 1280]
 
         id_embeds   = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 2, 0, 1, 3));
         id_embeds_2 = ggml_cont(ctx, ggml_permute(ctx, id_embeds_2, 2, 0, 1, 3));
@@ -579,6 +580,7 @@ struct PhotoMakerIDEncoder_CLIPInsightfaceExtendtokenBlock : public CLIPVisionMo
     */
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* id_pixel_values,
                                 struct ggml_tensor* prompt_embeds,
                                 struct ggml_tensor* class_tokens_mask,
@@ -592,7 +594,7 @@ struct PhotoMakerIDEncoder_CLIPInsightfaceExtendtokenBlock : public CLIPVisionMo
         auto qformer_perceiver = std::dynamic_pointer_cast<QFormerPerceiver>(blocks["qformer_perceiver"]);
 
         // struct ggml_tensor* last_hidden_state = vision_model->forward(ctx, id_pixel_values);          // [N, hidden_size]
-        struct ggml_tensor* last_hidden_state = vision_model->forward(ctx, id_pixel_values, false);  // [N, hidden_size]
+        struct ggml_tensor* last_hidden_state = vision_model->forward(ctx, backend, id_pixel_values, false);  // [N, hidden_size]
         id_embeds                             = qformer_perceiver->forward(ctx, id_embeds, last_hidden_state);
 
         struct ggml_tensor* updated_prompt_embeds = fuse_module->forward(ctx,
@@ -624,12 +626,13 @@ public:
 
 public:
     PhotoMakerIDEncoder(ggml_backend_t backend,
+                        bool offload_params_to_cpu,
                         const String2GGMLType& tensor_types,
                         const std::string prefix,
                         SDVersion version = VERSION_SDXL,
                         PMVersion pm_v    = PM_VERSION_1,
                         float sty         = 20.f)
-        : GGMLRunner(backend),
+        : GGMLRunner(backend, offload_params_to_cpu),
           version(version),
           pm_version(pm_v),
           style_strength(sty) {
@@ -741,6 +744,7 @@ public:
         struct ggml_tensor* updated_prompt_embeds = NULL;
         if (pm_version == PM_VERSION_1)
             updated_prompt_embeds = id_encoder.forward(ctx0,
+                                                       runtime_backend,
                                                        id_pixel_values_d,
                                                        prompt_embeds_d,
                                                        class_tokens_mask_d,
@@ -748,6 +752,7 @@ public:
                                                        left, right);
         else if (pm_version == PM_VERSION_2)
             updated_prompt_embeds = id_encoder2.forward(ctx0,
+                                                        runtime_backend,
                                                         id_pixel_values_d,
                                                         prompt_embeds_d,
                                                         class_tokens_mask_d,
@@ -785,10 +790,11 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
     bool applied     = false;
 
     PhotoMakerIDEmbed(ggml_backend_t backend,
+                      bool offload_params_to_cpu,
                       ModelLoader* ml,
                       const std::string& file_path = "",
                       const std::string& prefix    = "")
-        : file_path(file_path), GGMLRunner(backend), model_loader(ml) {
+        : file_path(file_path), GGMLRunner(backend, offload_params_to_cpu), model_loader(ml) {
         if (!model_loader->init_from_file(file_path, prefix)) {
             load_failed = true;
         }
@@ -828,11 +834,11 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
             return true;
         };
 
-        model_loader->load_tensors(on_new_tensor_cb, backend);
+        model_loader->load_tensors(on_new_tensor_cb);
         alloc_params_buffer();
 
         dry_run = false;
-        model_loader->load_tensors(on_new_tensor_cb, backend);
+        model_loader->load_tensors(on_new_tensor_cb);
 
         LOG_DEBUG("finished loading PhotoMaker ID Embeds ");
         return true;

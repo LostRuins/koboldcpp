@@ -251,8 +251,37 @@ struct KarrasSchedule : SigmaSchedule {
     }
 };
 
+// Close to Beta Schedule, but increadably simple in code.
+struct SmoothStepSchedule : SigmaSchedule {
+    static constexpr float smoothstep(float x) {
+        return x * x * (3.0f - 2.0f * x);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result;
+        result.reserve(n + 1);
+
+        const int t_max = TIMESTEPS - 1;
+        if (n == 0) {
+            return result;
+        } else if (n == 1) {
+            result.push_back(t_to_sigma((float)t_max));
+            result.push_back(0.f);
+            return result;
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+            float u = 1.f - float(i) / float(n);
+            result.push_back(t_to_sigma(std::round(smoothstep(u) * t_max)));
+        }
+
+        result.push_back(0.f);
+        return result;
+    }
+};
+
 struct Denoiser {
-    std::shared_ptr<SigmaSchedule> schedule                                                  = std::make_shared<DiscreteSchedule>();
+    std::shared_ptr<SigmaSchedule> scheduler                                                 = std::make_shared<DiscreteSchedule>();
     virtual float sigma_min()                                                                = 0;
     virtual float sigma_max()                                                                = 0;
     virtual float sigma_to_t(float sigma)                                                    = 0;
@@ -263,7 +292,7 @@ struct Denoiser {
 
     virtual std::vector<float> get_sigmas(uint32_t n) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
-        return schedule->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
+        return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
     }
 };
 
@@ -349,7 +378,7 @@ struct EDMVDenoiser : public CompVisVDenoiser {
 
     EDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0)
         : min_sigma(min_sigma), max_sigma(max_sigma) {
-        schedule = std::make_shared<ExponentialSchedule>();
+        scheduler = std::make_shared<ExponentialSchedule>();
     }
 
     float t_to_sigma(float t) {
@@ -382,7 +411,8 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     float sigma_data = 1.0f;
 
-    DiscreteFlowDenoiser() {
+    DiscreteFlowDenoiser(float shift = 3.0f)
+        : shift(shift) {
         set_parameters();
     }
 

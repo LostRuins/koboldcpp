@@ -64,7 +64,6 @@ struct SDParams {
     float strength                = 0.75f;
     int64_t seed                  = 42;
     bool clip_on_cpu              = false;
-    bool vae_on_cpu               = false;
     bool diffusion_flash_attn     = false;
     bool diffusion_conv_direct    = false;
     bool vae_conv_direct          = false;
@@ -92,11 +91,6 @@ static int cfg_side_limit = 0;
 static bool sd_is_quiet = false;
 static std::string sdmodelfilename = "";
 static bool photomaker_enabled = false;
-
-static void set_sd_vae_tiling(sd_ctx_t* ctx, bool tiling)
-{
-    ctx->sd->vae_tiling = tiling;
-}
 
 static int get_loaded_sd_version(sd_ctx_t* ctx)
 {
@@ -255,7 +249,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.stacked_id_embed_dir = sd_params->stacked_id_embeddings_path.c_str();
 
     params.vae_decode_only = false;
-    params.vae_tiling = false;
     params.free_params_immediately = false;
     params.rng_type = CUDA_RNG;
 
@@ -338,12 +331,12 @@ static std::string get_image_params(const sd_img_gen_params_t & params) {
     parameter_string << std::setprecision(3)
         <<    "Prompt: " << params.prompt
         << " | NegativePrompt: " << params.negative_prompt
-        << " | Steps: " << params.sample_steps
-        << " | CFGScale: " << params.guidance.txt_cfg
-        << " | Guidance: " << params.guidance.distilled_guidance
+        << " | Steps: " << params.sample_params.sample_steps
+        << " | CFGScale: " << params.sample_params.guidance.txt_cfg
+        << " | Guidance: " << params.sample_params.guidance.distilled_guidance
         << " | Seed: " << params.seed
         << " | Size: " << params.width << "x" << params.height
-        << " | Sampler: " << sd_sample_method_name(params.sample_method)
+        << " | Sampler: " << sd_sample_method_name(params.sample_params.sample_method)
         << " | Clip skip: " << params.clip_skip
         << " | Model: " << sdmodelfilename
         << " | Version: KoboldCpp";
@@ -569,7 +562,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
     bool dotile = (sd_params->width*sd_params->height > cfg_tiled_vae_threshold*cfg_tiled_vae_threshold);
-    set_sd_vae_tiling(sd_ctx,dotile); //changes vae tiling, prevents memory related crash/oom
 
     //for img2img
     sd_image_t input_image = {0,0,0,nullptr};
@@ -698,17 +690,20 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_img_gen_params_t params = {};
     sd_img_gen_params_init (&params);
 
+    params.batch_count = 1;
+
     params.prompt = sd_params->prompt.c_str();
     params.negative_prompt = sd_params->negative_prompt.c_str();
     params.clip_skip = sd_params->clip_skip;
-    params.guidance.txt_cfg = sd_params->cfg_scale;
-    params.guidance.img_cfg = sd_params->cfg_scale;
+    params.sample_params.guidance.txt_cfg = sd_params->cfg_scale;
+    params.sample_params.guidance.img_cfg = sd_params->cfg_scale;
     params.width = sd_params->width;
     params.height = sd_params->height;
-    params.sample_method = sd_params->sample_method;
-    params.sample_steps = sd_params->sample_steps;
+    params.sample_params.sample_method = sd_params->sample_method;
+    params.sample_params.sample_steps = sd_params->sample_steps;
     params.seed = sd_params->seed;
     params.strength = sd_params->strength;
+    params.vae_tiling_params.enabled = dotile;
     params.batch_count = 1;
     params.input_id_images_path = "";
 
@@ -727,10 +722,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             ss  << "\nTXT2IMG PROMPT:" << params.prompt
                 << "\nNPROMPT:" << params.negative_prompt
                 << "\nCLPSKP:" << params.clip_skip
-                << "\nCFGSCLE:" << params.guidance.txt_cfg
+                << "\nCFGSCLE:" << params.sample_params.guidance.txt_cfg
                 << "\nSIZE:" << params.width << "x" << params.height
-                << "\nSM:" << sd_sample_method_name(params.sample_method)
-                << "\nSTEP:" << params.sample_steps
+                << "\nSM:" << sd_sample_method_name(params.sample_params.sample_method)
+                << "\nSTEP:" << params.sample_params.sample_steps
                 << "\nSEED:" << params.seed
                 << "\nBATCH:" << params.batch_count
                 << "\n\n";
@@ -838,10 +833,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             ss  << "\nnIMG2IMG PROMPT:" << params.prompt
                 << "\nNPROMPT:" << params.negative_prompt
                 << "\nCLPSKP:" << params.clip_skip
-                << "\nCFGSCLE:" << params.guidance.txt_cfg
+                << "\nCFGSCLE:" << params.sample_params.guidance.txt_cfg
                 << "\nSIZE:" << params.width << "x" << params.height
-                << "\nSM:" << sd_sample_method_name(params.sample_method)
-                << "\nSTEP:" << params.sample_steps
+                << "\nSM:" << sd_sample_method_name(params.sample_params.sample_method)
+                << "\nSTEP:" << params.sample_params.sample_steps
                 << "\nSEED:" << params.seed
                 << "\nSTRENGTH:" << params.strength
                 << "\nBATCH:" << params.batch_count
