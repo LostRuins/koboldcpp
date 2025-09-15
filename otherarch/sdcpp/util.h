@@ -22,14 +22,9 @@ bool file_exists(const std::string& filename);
 bool is_directory(const std::string& path);
 std::string get_full_path(const std::string& dir, const std::string& filename);
 
-std::vector<std::string> get_files_from_dir(const std::string& dir);
-
 std::u32string utf8_to_utf32(const std::string& utf8_str);
 std::string utf32_to_utf8(const std::u32string& utf32_str);
 std::u32string unicode_value_to_utf32(int unicode_value);
-
-sd_image_t* preprocess_id_image(sd_image_t* img);
-
 // std::string sd_basename(const std::string& path);
 
 typedef struct {

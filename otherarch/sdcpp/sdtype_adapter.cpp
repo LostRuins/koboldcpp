@@ -246,7 +246,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.diffusion_model_path = sd_params->diffusion_model_path.c_str();
     params.vae_path = sd_params->vae_path.c_str();
     params.taesd_path = sd_params->taesd_path.c_str();
-    params.stacked_id_embed_dir = sd_params->stacked_id_embeddings_path.c_str();
+    params.photo_maker_path = sd_params->stacked_id_embeddings_path.c_str();
 
     params.vae_decode_only = false;
     params.free_params_immediately = false;
@@ -272,7 +272,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
             << "\nDIFFUSION:"  << params.diffusion_model_path
             << "\nVAE:"        << params.vae_path
             << "\nTAESD:"      << params.taesd_path
-            << "\nPHOTOMAKER:" << params.stacked_id_embed_dir
+            << "\nPHOTOMAKER:" << params.photo_maker_path
             << "\nTHREADS:"    << params.n_threads
             << "\nWTYPE:"      << params.wtype
             << "\nDIFFUSIONFLASHATTN:"  << (params.diffusion_flash_attn ? 1 : 0)
@@ -705,14 +705,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.strength = sd_params->strength;
     params.vae_tiling_params.enabled = dotile;
     params.batch_count = 1;
-    params.input_id_images_path = "";
 
     params.ref_images = reference_imgs.data();
     params.ref_images_count = reference_imgs.size();
 
-    kcpp_img_gen_params_t extra_params = {};
-    extra_params.photomaker_references = photomaker_imgs.data();
-    extra_params.photomaker_reference_count = photomaker_imgs.size();
+    params.pm_params.id_images = photomaker_imgs.data();
+    params.pm_params.id_images_count = photomaker_imgs.size();
 
     if (!is_img2img) {
 
@@ -734,7 +732,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         fflush(stdout);
 
-        results = generate_image(sd_ctx, &params, &extra_params);
+        results = generate_image(sd_ctx, &params);
 
     } else {
 
@@ -846,7 +844,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         fflush(stdout);
 
-        results = generate_image(sd_ctx, &params, &extra_params);
+        results = generate_image(sd_ctx, &params);
 
     }
 

@@ -248,9 +248,10 @@ public:
     ggml_type get_diffusion_model_wtype();
     ggml_type get_vae_wtype();
     void set_wtype_override(ggml_type wtype, std::string prefix = "");
-    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb);
+    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
-                      std::set<std::string> ignore_tensors = {});
+                      std::set<std::string> ignore_tensors = {},
+                      int n_threads                        = 0);
 
     bool save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules);
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);

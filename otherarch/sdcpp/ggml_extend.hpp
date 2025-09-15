@@ -194,20 +194,10 @@ __STATIC_INLINE__ float sd_image_get_f32(sd_image_t image, int iw, int ih, int i
     return value;
 }
 
-#if 0 // kcpp
-static struct ggml_tensor* get_tensor_from_graph(struct ggml_cgraph* gf, const char* name) {
-    struct ggml_tensor* res = NULL;
-    for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
-        struct ggml_tensor* node = ggml_graph_node(gf, i);
-        // printf("%d, %s \n", i, ggml_get_name(node));
-        if (strcmp(ggml_get_name(node), name) == 0) {
-            res = node;
-            break;
-        }
-    }
-    return res;
+__STATIC_INLINE__ float sd_image_get_f32(sd_image_f32_t image, int iw, int ih, int ic) {
+    float value = *(image.data + ih * image.width * image.channel + iw * image.channel + ic);
+    return value;
 }
-#endif
 
 __STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false, const char* mark = "") {
     printf("%s (%s): shape(%zu, %zu, %zu, %zu)\n", mark, ggml_type_name(tensor->type), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
@@ -457,28 +447,6 @@ __STATIC_INLINE__ void sd_apply_mask(struct ggml_tensor* image_data,
             for (int k = 0; k < channels; k++) {
                 float value = (1 - m) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
                 ggml_tensor_set_f32(output, value, ix, iy, k);
-            }
-        }
-    }
-}
-
-__STATIC_INLINE__ void sd_mul_images_to_tensor(const uint8_t* image_data,
-                                               struct ggml_tensor* output,
-                                               int idx,
-                                               float* mean = NULL,
-                                               float* std  = NULL) {
-    int64_t width    = output->ne[0];
-    int64_t height   = output->ne[1];
-    int64_t channels = output->ne[2];
-    GGML_ASSERT(channels == 3 && output->type == GGML_TYPE_F32);
-    for (int iy = 0; iy < height; iy++) {
-        for (int ix = 0; ix < width; ix++) {
-            for (int k = 0; k < channels; k++) {
-                int value       = *(image_data + iy * width * channels + ix * channels + k);
-                float pixel_val = value / 255.0f;
-                if (mean != NULL && std != NULL)
-                    pixel_val = (pixel_val - mean[k]) / std[k];
-                ggml_tensor_set_f32(output, pixel_val, ix, iy, k, idx);
             }
         }
     }
@@ -786,9 +754,11 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_chunk(struct ggml_contex
 
 typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
-__STATIC_INLINE__ void
-sd_tiling_calc_tiles(int &num_tiles_dim, float& tile_overlap_factor_dim, int small_dim, int tile_size, const float tile_overlap_factor) {
-
+__STATIC_INLINE__ void sd_tiling_calc_tiles(int& num_tiles_dim,
+                                            float& tile_overlap_factor_dim,
+                                            int small_dim,
+                                            int tile_size,
+                                            const float tile_overlap_factor) {
     int tile_overlap     = (tile_size * tile_overlap_factor);
     int non_tile_overlap = tile_size - tile_overlap;
 

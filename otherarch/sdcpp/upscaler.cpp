@@ -69,7 +69,7 @@ struct UpscalerGGML {
                  input_image.width, input_image.height, output_width, output_height);
 
         struct ggml_init_params params;
-        params.mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
+        params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
         params.mem_buffer = NULL;
         params.no_alloc   = false;
 
