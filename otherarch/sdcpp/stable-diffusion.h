@@ -58,6 +58,8 @@ enum scheduler_t {
     EXPONENTIAL,
     AYS,
     GITS,
+    SGM_UNIFORM,
+    SIMPLE,
     SMOOTHSTEP,
     SCHEDULE_COUNT
 };
@@ -183,6 +185,7 @@ typedef struct {
     enum sample_method_t sample_method;
     int sample_steps;
     float eta;
+    int shifted_timestep;
 } sd_sample_params_t;
 
 typedef struct {
@@ -209,7 +212,6 @@ typedef struct {
     int batch_count;
     sd_image_t control_image;
     float control_strength;
-    bool normalize_input;
     sd_pm_params_t pm_params;
     sd_tiling_params_t vae_tiling_params;
 } sd_img_gen_params_t;

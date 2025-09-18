@@ -500,6 +500,10 @@ public:
             diffusion_model->alloc_params_buffer();
             diffusion_model->get_param_tensors(tensors);
 
+            if (sd_version_is_unet_edit(version)) {
+                vae_decode_only = false;
+            }
+
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->alloc_params_buffer();
                 high_noise_diffusion_model->get_param_tensors(tensors);
@@ -806,6 +810,16 @@ public:
             case GITS:
                 LOG_INFO("Running with GITS scheduler");
                 denoiser->scheduler          = std::make_shared<GITSSchedule>();
+                denoiser->scheduler->version = version;
+                break;
+            case SGM_UNIFORM:
+                LOG_INFO("Running with SGM Uniform schedule");
+                denoiser->scheduler          = std::make_shared<SGMUniformSchedule>();
+                denoiser->scheduler->version = version;
+                break;
+            case SIMPLE:
+                LOG_INFO("Running with Simple schedule");
+                denoiser->scheduler          = std::make_shared<SimpleSchedule>();
                 denoiser->scheduler->version = version;
                 break;
             case SMOOTHSTEP:
@@ -1127,6 +1141,7 @@ public:
                         float control_strength,
                         sd_guidance_params_t guidance,
                         float eta,
+                        int shifted_timestep,
                         sample_method_t method,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
@@ -1136,6 +1151,10 @@ public:
                         ggml_tensor* denoise_mask             = NULL,
                         ggml_tensor* vace_context             = NULL,
                         float vace_strength                   = 1.f) {
+        if (shifted_timestep > 0 && !sd_version_is_sdxl(version)) {
+            LOG_WARN("timestep shifting is only supported for SDXL models!");
+            shifted_timestep = 0;
+        }
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
@@ -1196,7 +1215,17 @@ public:
             float c_in   = scaling[2];
 
             float t = denoiser->sigma_to_t(sigma);
-            std::vector<float> timesteps_vec(1, t);  // [N, ]
+            std::vector<float> timesteps_vec;
+            if (shifted_timestep > 0 && sd_version_is_sdxl(version)) {
+                float shifted_t_float = t * (float(shifted_timestep) / float(TIMESTEPS));
+                int64_t shifted_t     = static_cast<int64_t>(roundf(shifted_t_float));
+                shifted_t             = std::max((int64_t)0, std::min((int64_t)(TIMESTEPS - 1), shifted_t));
+                LOG_DEBUG("shifting timestep from %.2f to %" PRId64 " (sigma: %.4f)", t, shifted_t, sigma);
+                timesteps_vec.assign(1, (float)shifted_t);
+            } else {
+                timesteps_vec.assign(1, t);
+            }
+
             timesteps_vec  = process_timesteps(timesteps_vec, init_latent, denoise_mask);
             auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
             std::vector<float> guidance_vec(1, guidance.distilled_guidance);
@@ -1294,6 +1323,19 @@ public:
             float* vec_input     = (float*)input->data;
             float* positive_data = (float*)out_cond->data;
             int ne_elements      = (int)ggml_nelements(denoised);
+
+            if (shifted_timestep > 0 && sd_version_is_sdxl(version)) {
+                int64_t shifted_t_idx              = static_cast<int64_t>(roundf(timesteps_vec[0]));
+                float shifted_sigma                = denoiser->t_to_sigma((float)shifted_t_idx);
+                std::vector<float> shifted_scaling = denoiser->get_scalings(shifted_sigma);
+                float shifted_c_skip               = shifted_scaling[0];
+                float shifted_c_out                = shifted_scaling[1];
+                float shifted_c_in                 = shifted_scaling[2];
+
+                c_skip = shifted_c_skip * c_in / shifted_c_in;
+                c_out  = shifted_c_out;
+            }
+
             for (int i = 0; i < ne_elements; i++) {
                 float latent_result = positive_data[i];
                 if (has_unconditioned) {
@@ -1316,6 +1358,7 @@ public:
                 // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
                 vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
             }
+
             int64_t t1 = ggml_time_us();
             if (step > 0) {
                 pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
@@ -1417,15 +1460,15 @@ public:
         }
 
         if (!use_tiny_autoencoder) {
-            float tile_overlap;
-            int tile_size_x, tile_size_y;
-            // multiply tile size for encode to keep the compute buffer size consistent
-            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539f);
-
-            LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
-
             process_vae_input_tensor(x);
             if (vae_tiling_params.enabled && !encode_video) {
+                float tile_overlap;
+                int tile_size_x, tile_size_y;
+                // multiply tile size for encode to keep the compute buffer size consistent
+                get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539f);
+
+                LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, false, &out, work_ctx);
                 };
@@ -1562,15 +1605,15 @@ public:
         }
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
-            float tile_overlap;
-            int tile_size_x, tile_size_y;
-            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, x->ne[0], x->ne[1]);
-
-            LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
-
             process_latent_out(x);
             // x = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
             if (vae_tiling_params.enabled && !decode_video) {
+                float tile_overlap;
+                int tile_size_x, tile_size_y;
+                get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, x->ne[0], x->ne[1]);
+
+                LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, true, &out, NULL);
@@ -1682,6 +1725,8 @@ const char* schedule_to_str[] = {
     "exponential",
     "ays",
     "gits",
+    "sgm_uniform",
+    "simple",
     "smoothstep",
 };
 
@@ -1814,7 +1859,8 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              "scheduler: %s, "
              "sample_method: %s, "
              "sample_steps: %d, "
-             "eta: %.2f)",
+             "eta: %.2f, "
+             "shifted_timestep: %d)",
              sample_params->guidance.txt_cfg,
              sample_params->guidance.img_cfg,
              sample_params->guidance.distilled_guidance,
@@ -1825,7 +1871,8 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              sd_schedule_name(sample_params->scheduler),
              sd_sample_method_name(sample_params->sample_method),
              sample_params->sample_steps,
-             sample_params->eta);
+             sample_params->eta,
+             sample_params->shifted_timestep);
 
     return buf;
 }
@@ -1841,7 +1888,6 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->seed              = -1;
     sd_img_gen_params->batch_count       = 1;
     sd_img_gen_params->control_strength  = 0.9f;
-    sd_img_gen_params->normalize_input   = false;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
     sd_img_gen_params->vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 }
@@ -1867,7 +1913,6 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "ref_images_count: %d\n"
              "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
-             "normalize_input: %s\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
              "VAE tiling: %s\n",
              SAFE_STR(sd_img_gen_params->prompt),
@@ -1882,7 +1927,6 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->ref_images_count,
              BOOL_STR(sd_img_gen_params->increase_ref_index),
              sd_img_gen_params->control_strength,
-             BOOL_STR(sd_img_gen_params->normalize_input),
              sd_img_gen_params->pm_params.style_strength,
              sd_img_gen_params->pm_params.id_images_count,
              SAFE_STR(sd_img_gen_params->pm_params.id_embed_path),
@@ -1957,6 +2001,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     int clip_skip,
                                     sd_guidance_params_t guidance,
                                     float eta,
+                                    int shifted_timestep,
                                     int width,
                                     int height,
                                     enum sample_method_t sample_method,
@@ -1965,7 +2010,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     int batch_count,
                                     sd_image_t control_image,
                                     float control_strength,
-                                    bool normalize_input,
                                     sd_pm_params_t pm_params,
                                     std::vector<ggml_tensor*> ref_latents,
                                     bool increase_ref_index,
@@ -2195,6 +2239,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      control_strength,
                                                      guidance,
                                                      eta,
+                                                     shifted_timestep,
                                                      sample_method,
                                                      sigmas,
                                                      start_merge_step,
@@ -2436,19 +2481,35 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         init_latent = generate_init_latent(sd_ctx, work_ctx, width, height);
     }
 
-    if (sd_img_gen_params->ref_images_count > 0) {
+    sd_guidance_params_t guidance = sd_img_gen_params->sample_params.guidance;
+    std::vector<sd_image_t*> ref_images;
+    for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
+        ref_images.push_back(&sd_img_gen_params->ref_images[i]);
+    }
+
+    std::vector<uint8_t> empty_image_data;
+    sd_image_t empty_image = {(uint32_t)width, (uint32_t)height, 3, nullptr};
+    if (ref_images.empty() && sd_version_is_unet_edit(sd_ctx->sd->version)) {
+        LOG_WARN("This model needs at least one reference image; using an empty reference");
+        empty_image_data.resize(width * height * 3);
+        ref_images.push_back(&empty_image);
+        empty_image.data = empty_image_data.data();
+        guidance.img_cfg = 0.f;
+    }
+
+    if (ref_images.size() > 0) {
         LOG_INFO("EDIT mode");
     }
 
     std::vector<ggml_tensor*> ref_latents;
-    for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
+    for (int i = 0; i < ref_images.size(); i++) {
         ggml_tensor* img = ggml_new_tensor_4d(work_ctx,
                                               GGML_TYPE_F32,
-                                              sd_img_gen_params->ref_images[i].width,
-                                              sd_img_gen_params->ref_images[i].height,
+                                              ref_images[i]->width,
+                                              ref_images[i]->height,
                                               3,
                                               1);
-        sd_image_to_tensor(sd_img_gen_params->ref_images[i], img);
+        sd_image_to_tensor(*ref_images[i], img);
 
         ggml_tensor* latent = NULL;
         if (sd_ctx->sd->use_tiny_autoencoder) {
@@ -2486,8 +2547,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         SAFE_STR(sd_img_gen_params->prompt),
                                                         SAFE_STR(sd_img_gen_params->negative_prompt),
                                                         sd_img_gen_params->clip_skip,
-                                                        sd_img_gen_params->sample_params.guidance,
+                                                        guidance,
                                                         sd_img_gen_params->sample_params.eta,
+                                                        sd_img_gen_params->sample_params.shifted_timestep,
                                                         width,
                                                         height,
                                                         sample_method,
@@ -2496,7 +2558,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->batch_count,
                                                         sd_img_gen_params->control_image,
                                                         sd_img_gen_params->control_strength,
-                                                        sd_img_gen_params->normalize_input,
                                                         sd_img_gen_params->pm_params,
                                                         ref_latents,
                                                         sd_img_gen_params->increase_ref_index,
@@ -2828,6 +2889,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  0,
                                  sd_vid_gen_params->high_noise_sample_params.guidance,
                                  sd_vid_gen_params->high_noise_sample_params.eta,
+                                 sd_vid_gen_params->high_noise_sample_params.shifted_timestep,
                                  sd_vid_gen_params->high_noise_sample_params.sample_method,
                                  high_noise_sigmas,
                                  -1,
@@ -2863,6 +2925,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           0,
                                           sd_vid_gen_params->sample_params.guidance,
                                           sd_vid_gen_params->sample_params.eta,
+                                          sd_vid_gen_params->sample_params.shifted_timestep,
                                           sd_vid_gen_params->sample_params.sample_method,
                                           sigmas,
                                           -1,

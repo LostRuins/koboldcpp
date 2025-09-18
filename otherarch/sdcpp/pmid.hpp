@@ -599,7 +599,8 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
             return false;
         }
 
-        bool dry_run          = true;
+        bool dry_run = true;
+        std::mutex tensor_mutex;
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
             const std::string& name = tensor_storage.name;
 
@@ -608,6 +609,7 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
                 return true;
             }
             if (dry_run) {
+                std::lock_guard<std::mutex> lock(tensor_mutex);
                 struct ggml_tensor* real = ggml_new_tensor(params_ctx,
                                                            tensor_storage.type,
                                                            tensor_storage.n_dims,
