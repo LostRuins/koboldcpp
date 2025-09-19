@@ -58,7 +58,7 @@ jobs:
           echo "tzdata tzdata/Areas select Etc" | sudo debconf-set-selections
           echo "tzdata tzdata/Zones/Etc select UTC" | sudo debconf-set-selections
           sudo apt-get -y install git curl bzip2 python3-tk tcl tk
-          curl -fLO https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-6.4.1/ubuntu/22.04/rocm-installer_1.1.1.60401-30-83~22.04.run && sudo bash rocm-installer_1.1.1.60401-30-83~22.04.run deps=install rocm postrocm target="/opt"
+          curl -fLO https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-7.0.1/ubuntu/22.04/rocm-installer_1.2.1.70001-36-42~22.04.run && sudo bash rocm-installer_1.2.1.70001-36-42~22.04.run deps=install rocm postrocm target="/opt"
           sudo rm -rf rocm-install*
 
       - name: Set Tcl/Tk Paths
