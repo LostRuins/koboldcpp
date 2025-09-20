@@ -4041,40 +4041,43 @@ Change Mode<br>
                     global current_model
 
                     model = genparams["model"]
-                    if server_process is not None and current_model != model:
-                        import psutil
-                        parent = psutil.Process(server_process.pid)
-                        processes = parent.children(recursive=True) + [parent]
-                        for process in processes:
-                            process.terminate()
-                        for process in processes:
-                            process.wait()
-
-                        server_process = None
+                    model_path = next((str(path) for path in get_models() if path.stem == model), None)
+                    if model_path is None:
+                        self.send_response(404)
+                        self.end_headers(content_type='application/json')
+                        self.wfile.write(json.dumps({"detail": {
+                                "error": "Model Not Found",
+                                "msg": f"Model file {model} not found.",
+                                "type": "bad_input",
+                            }}).encode())
+                        return
 
                     if server_process is None:
-                        current_model = model
-
-                        model_path = next((str(path) for path in get_models() if path.stem == model), None)
-                        if model_path is None:
-                            self.send_response(404)
-                            self.end_headers(content_type='application/json')
-                            self.wfile.write(json.dumps({"detail": {
-                                    "error": "Model Not Found",
-                                    "msg": f"Model file {model} not found.",
-                                    "type": "bad_input",
-                                }}).encode())
-                            return
-
                         server_process = subprocess.Popen([sys.executable] + sys.argv + ["--port", str(args.port + 1), "--model", model_path], env={
                             "KOBOLDCPP_SERVER": "True"
                         })
+                    elif current_model != model:
+                        with urllib.request.urlopen(urllib.request.Request(f"http://localhost:{args.port + 1}/api/admin/reload_config", method="POST", data=json.dumps({"filename": model_path}).encode(), headers={
+                            "Authorization": f"Bearer {args.adminpassword}"
+                        })) as response:
+                            if response.status != 200:
+                                self.send_response(500)
+                                self.end_headers(content_type='application/json')
+                                self.wfile.write(json.dumps({"detail": {
+                                        "error": "Failed to switch model",
+                                        "msg": f"Failed to switch model to {model}.",
+                                        "type": "server_error",
+                                    }}).encode())
+                                return
 
-                    # Poke the server until it's alive
+                    current_model = model
+
+                    # Poke the server until it has the new model
                     while True:
                         try:
-                            with urllib.request.urlopen(urllib.request.Request(f"http://localhost:{args.port + 1}", method="HEAD"), timeout=1000) as response:
-                                if response.status == 200:
+                            with urllib.request.urlopen(urllib.request.Request(f"http://localhost:{args.port + 1}/api/v1/model", method="GET"), timeout=1000) as response:
+                                data = json.loads(response.read().decode())
+                                if response.status == 200 and data.get("result") == f"koboldcpp/{model}":
                                     break
 
                                 time.sleep(1)
