@@ -22,23 +22,10 @@ jobs:
   linux:
     runs-on: ubuntu-22.04
     permissions: write-all
+    container:
+      image: rocm/dev-ubuntu-22.04:7.0-complete
+      options: --privileged
     steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: true
-
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Clone
         id: checkout
         uses: actions/checkout@v3
@@ -58,8 +45,6 @@ jobs:
           echo "tzdata tzdata/Areas select Etc" | sudo debconf-set-selections
           echo "tzdata tzdata/Zones/Etc select UTC" | sudo debconf-set-selections
           sudo apt-get -y install git curl bzip2 python3-tk tcl tk
-          curl -fLO https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-7.0.1/ubuntu/22.04/rocm-installer_1.2.1.70001-36-42~22.04.run && sudo bash rocm-installer_1.2.1.70001-36-42~22.04.run deps=install rocm postrocm target="/opt"
-          sudo rm -rf rocm-install*
 
       - name: Set Tcl/Tk Paths
         run: |
