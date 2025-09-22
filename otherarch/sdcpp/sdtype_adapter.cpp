@@ -40,17 +40,8 @@
 static_assert((int)SD_TYPE_COUNT == (int)GGML_TYPE_COUNT,
               "inconsistency between SD_TYPE_COUNT and GGML_TYPE_COUNT");
 
-enum SDMode {
-    TXT2IMG,
-    IMG2IMG,
-    IMG2VID,
-    CONVERT,
-    MODE_COUNT
-};
-
 struct SDParams {
     int n_threads = -1;
-    SDMode mode   = TXT2IMG;
     std::string model_path;
     std::string clip_l_path;
     std::string clip_g_path;
@@ -58,63 +49,27 @@ struct SDParams {
     std::string diffusion_model_path;
     std::string vae_path;
     std::string taesd_path;
-    std::string esrgan_path;
-    std::string controlnet_path;
-    std::string embeddings_path;
     std::string stacked_id_embeddings_path;
-    std::string input_id_images_path = "";
     sd_type_t wtype = SD_TYPE_COUNT;
-    std::string lora_model_dir;
-    std::string output_path = "output.png";
-    std::string input_path;
-    std::string mask_path;
-    std::string control_image_path;
 
     std::string prompt;
     std::string negative_prompt;
-    float min_cfg     = 1.0f;
     float cfg_scale   = 7.0f;
-    float guidance    = 3.5f;
-    float eta         = 0.f;
-    float style_ratio = 20.f;
     int clip_skip     = -1;  // <= 0 represents unspecified
     int width         = 512;
     int height        = 512;
-    int batch_count   = 1;
-
-    int video_frames         = 6;
-    int motion_bucket_id     = 127;
-    int fps                  = 6;
-    float augmentation_level = 0.f;
 
     sample_method_t sample_method = EULER_A;
-    schedule_t schedule           = DEFAULT;
     int sample_steps              = 20;
     float strength                = 0.75f;
-    float control_strength        = 0.9f;
-    rng_type_t rng_type           = CUDA_RNG;
     int64_t seed                  = 42;
-    bool verbose                  = false;
-    bool vae_tiling               = false;
-    bool control_net_cpu          = false;
-    bool normalize_input          = false;
     bool clip_on_cpu              = false;
     bool vae_on_cpu               = false;
     bool diffusion_flash_attn     = false;
     bool diffusion_conv_direct    = false;
     bool vae_conv_direct          = false;
-    bool canny_preprocess         = false;
-    bool color                    = false;
-    int upscale_repeats           = 1;
-
-    std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.f;
-    float skip_layer_start       = 0.01f;
-    float skip_layer_end         = 0.2f;
 
     bool chroma_use_dit_mask     = true;
-    bool chroma_use_t5_mask      = false;
-    int  chroma_t5_mask_pad      = 1;
 };
 
 //shared
@@ -264,8 +219,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->diffusion_flash_attn = inputs.flash_attention;
     sd_params->diffusion_conv_direct = inputs.diffusion_conv_direct;
     sd_params->vae_conv_direct = inputs.vae_conv_direct;
-    sd_params->input_path = ""; //unused
-    sd_params->batch_count = 1;
     sd_params->vae_path = vaefilename;
     sd_params->taesd_path = taesdpath;
     sd_params->t5xxl_path = t5xxl_filename;
@@ -289,29 +242,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     set_sd_log_level(sddebugmode);
 
-    bool vae_decode_only = false;
-    bool free_param = false;
-    if(inputs.debugmode==1)
-    {
-        printf("\nMODEL:%s\nVAE:%s\nTAESD:%s\nCNET:%s\nLORA:%s\nEMBD:%s\nVAE_DEC:%d\nVAE_TILE:%d\nFREE_PARAM:%d\nTHREADS:%d\nWTYPE:%d\nRNGTYPE:%d\nSCHED:%d\nCNETCPU:%d\n\n",
-        sd_params->model_path.c_str(),
-        sd_params->vae_path.c_str(),
-        sd_params->taesd_path.c_str(),
-        sd_params->controlnet_path.c_str(),
-        sd_params->lora_model_dir.c_str(),
-        sd_params->embeddings_path.c_str(),
-        vae_decode_only,
-        sd_params->vae_tiling,
-        free_param,
-        sd_params->n_threads,
-        sd_params->wtype,
-        sd_params->rng_type,
-        sd_params->schedule,
-        sd_params->control_net_cpu);
-    }
-
-    sd_ctx_params_t params;
+    sd_ctx_params_t params = {};
     sd_ctx_params_init(&params);
+
     params.model_path = sd_params->model_path.c_str();
     params.clip_l_path = sd_params->clip_l_path.c_str();
     params.clip_g_path = sd_params->clip_g_path.c_str();
@@ -319,30 +252,41 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.diffusion_model_path = sd_params->diffusion_model_path.c_str();
     params.vae_path = sd_params->vae_path.c_str();
     params.taesd_path = sd_params->taesd_path.c_str();
-    params.control_net_path = sd_params->controlnet_path.c_str();
-    params.lora_model_dir = sd_params->lora_model_dir.c_str();
-    params.embedding_dir = sd_params->embeddings_path.c_str();
     params.stacked_id_embed_dir = sd_params->stacked_id_embeddings_path.c_str();
-    params.vae_decode_only = vae_decode_only;
-    params.vae_tiling = sd_params->vae_tiling;
-    params.free_params_immediately = free_param;
+
+    params.vae_decode_only = false;
+    params.vae_tiling = false;
+    params.free_params_immediately = false;
+    params.rng_type = CUDA_RNG;
+
     params.n_threads = sd_params->n_threads;
     params.wtype = sd_params->wtype;
-    params.rng_type = sd_params->rng_type;
-    params.schedule = sd_params->schedule;
     params.keep_clip_on_cpu = sd_params->clip_on_cpu;
-    params.keep_control_net_on_cpu = sd_params->control_net_cpu;
-    params.keep_vae_on_cpu = sd_params->vae_on_cpu;
     params.diffusion_flash_attn = sd_params->diffusion_flash_attn;
     params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
-    params.chroma_use_t5_mask = sd_params->chroma_use_t5_mask;
-    params.chroma_t5_mask_pad = sd_params->chroma_t5_mask_pad;
 
     if (params.chroma_use_dit_mask && params.diffusion_flash_attn) {
         // note we don't know yet if it's a Chroma model
         params.chroma_use_dit_mask = false;
+    }
+
+    if(inputs.debugmode==1)
+    {
+        std::stringstream ss;
+        ss  << "\nMODEL:"      << params.model_path
+            << "\nDIFFUSION:"  << params.diffusion_model_path
+            << "\nVAE:"        << params.vae_path
+            << "\nTAESD:"      << params.taesd_path
+            << "\nPHOTOMAKER:" << params.stacked_id_embed_dir
+            << "\nTHREADS:"    << params.n_threads
+            << "\nWTYPE:"      << params.wtype
+            << "\nDIFFUSIONFLASHATTN:"  << (params.diffusion_flash_attn ? 1 : 0)
+            << "\nDIFFUSIONCONVDIRECT:" << (params.diffusion_conv_direct ? 1 : 0)
+            << "\nVAECONVDIRECT:"       << (params.vae_conv_direct ? 1 : 0)
+            << "\n";
+        printf("%s", ss.str().c_str());
     }
 
     sd_ctx = new_sd_ctx(&params);
@@ -551,7 +495,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         return output;
     }
     sd_image_t * results;
-    sd_image_t* control_image = NULL;
 
     //sanitize prompts, remove quotes and limit lengths
     std::string cleanprompt = clean_input_prompt(inputs.prompt);
@@ -574,7 +517,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->strength = inputs.denoising_strength;
     sd_params->clip_skip = inputs.clip_skip;
     sd_params->sample_method = sampler_from_name(inputs.sample_method);
-    sd_params->mode = (img2img_data==""?SDMode::TXT2IMG:SDMode::IMG2IMG);
+
+    bool is_img2img = img2img_data != "";
 
     auto loadedsdver = get_loaded_sd_version(sd_ctx);
     if (loadedsdver == SDVersion::VERSION_FLUX)
@@ -589,7 +533,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         if (sd_params->sample_method == sample_method_t::EULER_A) {
             //euler a broken on flux
             if (!sd_is_quiet && sddebugmode) {
-                printf("Flux: switching Euler A to Euler\n");
+                printf("%s: switching Euler A to Euler\n", loaded_model_is_chroma(sd_ctx) ? "Chroma" : "Flux");
             }
             sd_params->sample_method = sample_method_t::EULER;
         }
@@ -619,7 +563,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     sd_fix_resolution(sd_params->width, sd_params->height, img_hard_limit, img_soft_limit);
     if (inputs.width != sd_params->width || inputs.height != sd_params->height) {
-        printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n", inputs.width, inputs.height, sd_params->width, sd_params->height);
+        printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n",
+            inputs.width, inputs.height, sd_params->width, sd_params->height);
     }
 
     // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
@@ -750,7 +695,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    sd_img_gen_params_t params;
+    sd_img_gen_params_t params = {};
     sd_img_gen_params_init (&params);
 
     params.prompt = sd_params->prompt.c_str();
@@ -758,25 +703,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.clip_skip = sd_params->clip_skip;
     params.guidance.txt_cfg = sd_params->cfg_scale;
     params.guidance.img_cfg = sd_params->cfg_scale;
-    params.guidance.distilled_guidance = sd_params->guidance;
-    params.eta = sd_params->eta;
     params.width = sd_params->width;
     params.height = sd_params->height;
     params.sample_method = sd_params->sample_method;
     params.sample_steps = sd_params->sample_steps;
     params.seed = sd_params->seed;
-    params.batch_count = sd_params->batch_count;
-    params.control_cond = control_image;
-    params.control_strength = sd_params->control_strength;
-    params.style_strength = sd_params->style_ratio;
-    params.normalize_input = sd_params->normalize_input;
-    params.input_id_images_path = sd_params->input_id_images_path.c_str();
-
-    params.guidance.slg.layers = sd_params->skip_layers.data();
-    params.guidance.slg.layer_count = sd_params->skip_layers.size();
-    params.guidance.slg.layer_start = sd_params->skip_layer_start;
-    params.guidance.slg.layer_end = sd_params->skip_layer_end;
-    params.guidance.slg.scale = sd_params->slg_scale;
+    params.strength = sd_params->strength;
+    params.batch_count = 1;
+    params.input_id_images_path = "";
 
     params.ref_images = reference_imgs.data();
     params.ref_images_count = reference_imgs.size();
@@ -785,30 +719,31 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     extra_params.photomaker_references = photomaker_imgs.data();
     extra_params.photomaker_reference_count = photomaker_imgs.size();
 
-    if (sd_params->mode == TXT2IMG) {
+    if (!is_img2img) {
 
         if(!sd_is_quiet && sddebugmode==1)
         {
-            printf("\nTXT2IMG PROMPT:%s\nNPROMPT:%s\nCLPSKP:%d\nCFGSCLE:%f\nW:%d\nH:%d\nSM:%d\nSTEP:%d\nSEED:%d\nBATCH:%d\nCIMG:%p\nCSTR:%f\n\n",
-            sd_params->prompt.c_str(),
-            sd_params->negative_prompt.c_str(),
-            sd_params->clip_skip,
-            sd_params->cfg_scale,
-            sd_params->width,
-            sd_params->height,
-            sd_params->sample_method,
-            sd_params->sample_steps,
-            (int)sd_params->seed,
-            sd_params->batch_count,
-            control_image,
-            sd_params->control_strength);
+            std::stringstream ss;
+            ss  << "\nTXT2IMG PROMPT:" << params.prompt
+                << "\nNPROMPT:" << params.negative_prompt
+                << "\nCLPSKP:" << params.clip_skip
+                << "\nCFGSCLE:" << params.guidance.txt_cfg
+                << "\nSIZE:" << params.width << "x" << params.height
+                << "\nSM:" << sd_sample_method_name(params.sample_method)
+                << "\nSTEP:" << params.sample_steps
+                << "\nSEED:" << params.seed
+                << "\nBATCH:" << params.batch_count
+                << "\n\n";
+            printf("%s", ss.str().c_str());
         }
+
+        fflush(stdout);
 
         results = generate_image(sd_ctx, &params, &extra_params);
 
     } else {
 
-        if (sd_params->width <= 0 || sd_params->width % 64 != 0 || sd_params->height <= 0 || sd_params->height % 64 != 0) {
+        if (params.width <= 0 || params.width % 64 != 0 || params.height <= 0 || params.height % 64 != 0) {
             printf("\nKCPP SD: bad request image dimensions!\n");
             output.data = "";
             output.status = 0;
@@ -894,26 +829,27 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
         sd_image_t mask_image = { (uint32_t) img2imgW, (uint32_t) img2imgH, 1, mask_image_buffer };
 
-        if(!sd_is_quiet && sddebugmode==1)
-        {
-            printf("\nIMG2IMG PROMPT:%s\nNPROMPT:%s\nCLPSKP:%d\nCFGSCLE:%f\nW:%d\nH:%d\nSM:%d\nSTEP:%d\nSEED:%d\nBATCH:%d\nCIMG:%p\nSTR:%f\n\n",
-            sd_params->prompt.c_str(),
-            sd_params->negative_prompt.c_str(),
-            sd_params->clip_skip,
-            sd_params->cfg_scale,
-            sd_params->width,
-            sd_params->height,
-            sd_params->sample_method,
-            sd_params->sample_steps,
-            (int)sd_params->seed,
-            sd_params->batch_count,
-            control_image,
-            sd_params->strength);
-        }
-
-        params.strength = sd_params->strength;
         params.init_image = input_image;
         params.mask_image = mask_image;
+
+        if(!sd_is_quiet && sddebugmode==1)
+        {
+            std::stringstream ss;
+            ss  << "\nnIMG2IMG PROMPT:" << params.prompt
+                << "\nNPROMPT:" << params.negative_prompt
+                << "\nCLPSKP:" << params.clip_skip
+                << "\nCFGSCLE:" << params.guidance.txt_cfg
+                << "\nSIZE:" << params.width << "x" << params.height
+                << "\nSM:" << sd_sample_method_name(params.sample_method)
+                << "\nSTEP:" << params.sample_steps
+                << "\nSEED:" << params.seed
+                << "\nSTRENGTH:" << params.strength
+                << "\nBATCH:" << params.batch_count
+                << "\n\n";
+            printf("%s", ss.str().c_str());
+        }
+
+        fflush(stdout);
 
         results = generate_image(sd_ctx, &params, &extra_params);
 
@@ -927,7 +863,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
 
-    for (int i = 0; i < sd_params->batch_count; i++) {
+    for (int i = 0; i < params.batch_count; i++) {
         if (results[i].data == NULL) {
             continue;
         }
