@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 
 <script id="init-config">
-	const LITEVER = 283;
+	const LITEVER = 285;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -111,7 +111,7 @@ Current version indicated by LITEVER below.
 		--theme_color_topmenu: #32496d;
 	}
 
-	.theme-old {
+	.theme-1 {
 		--theme_color_bg_dark:#262626;
 		--theme_color_bg_outer:#303030;
 		--theme_color_bg:#263040;
@@ -133,6 +133,103 @@ Current version indicated by LITEVER below.
 		--theme_color_glow_text: #7afaff;
 		--theme_color_placeholder_text:#9e9e9e;
 		--theme_color_topmenu: #337ab7;
+	}
+
+	.theme-2 {
+		--theme_color_bg: #2f2231;
+		--theme_color_bg_dark: #211b22;
+		--theme_color_bg_outer: #170f1a;
+		--theme_color_border: #bd8857;
+		--theme_color_border_highlight: #e68e3a;
+		--theme_color_disabled_bg: #484d56;
+		--theme_color_disabled_fg: #616773;
+		--theme_color_footer: #2a1d30;
+		--theme_color_glow_text: #a161a6;
+		--theme_color_highlight: #ffa434;
+		--theme_color_input_bg: #5c3b6b;
+		--theme_color_input_text: #ffffff;
+		--theme_color_main: #ce9447;
+		--theme_color_placeholder_text: #b6b3b3;
+		--theme_color_tabs: #e4a95a;
+		--theme_color_tabs_highlight: #dc901c;
+		--theme_color_tabs_text: #ffffff;
+		--theme_color_text: #ffffff;
+		--theme_color_topbtn: #c88333;
+		--theme_color_topbtn_highlight: #d98908;
+		--theme_color_topmenu: #2a1f33;
+	}
+
+	.theme-3 {
+		--theme_color_bg: #000000;
+		--theme_color_bg_dark: #000000;
+		--theme_color_bg_outer: #000000;
+		--theme_color_border: #000000;
+		--theme_color_border_highlight: #ffffff;
+		--theme_color_disabled_bg: #000000;
+		--theme_color_disabled_fg: #000000;
+		--theme_color_footer: #000000;
+		--theme_color_glow_text: #94d7ff;
+		--theme_color_highlight: #4d4d4d;
+		--theme_color_input_bg: #475162;
+		--theme_color_input_text: #ffffff;
+		--theme_color_main: #000000;
+		--theme_color_placeholder_text: #9e9e9e;
+		--theme_color_tabs: #000000;
+		--theme_color_tabs_highlight: #596985;
+		--theme_color_tabs_text: #ffffff;
+		--theme_color_text: #ffffff;
+		--theme_color_topbtn: #000000;
+		--theme_color_topbtn_highlight: #596985;
+		--theme_color_topmenu: #000000;
+	}
+
+	.theme-4 {
+		--theme_color_bg: #182330;
+		--theme_color_bg_dark: #0b141a;
+		--theme_color_bg_outer: #182330;
+		--theme_color_border: #485c6c;
+		--theme_color_border_highlight: #82a1bc;
+		--theme_color_disabled_bg: #484d56;
+		--theme_color_disabled_fg: #616773;
+		--theme_color_footer: #182330;
+		--theme_color_glow_text: #94d7ff;
+		--theme_color_highlight: #00bfffcc;
+		--theme_color_input_bg: #475162;
+		--theme_color_input_text: #e0e0e0;
+		--theme_color_main: #ff69b499;
+		--theme_color_placeholder_text: #9e9e9e;
+		--theme_color_tabs: #32496d;
+		--theme_color_tabs_highlight: #00bfffcc;
+		--theme_color_tabs_text: #e0e0e0;
+		--theme_color_text: #d1d1d1;
+		--theme_color_topbtn: #ff69b4b3;
+		--theme_color_topbtn_highlight: #00bfffcc;
+		--theme_color_topmenu: #ff69b4b3;
+	}
+
+	.theme-5
+	{
+		--theme_color_bg_dark: #244752ad;
+		--theme_color_bg: #244752;
+		--theme_color_bg_outer: #647476;
+		--theme_color_main: #002b36;
+		--theme_color_footer: #002b36;
+		--theme_color_text: #a0bebe;
+		--theme_color_input_text: #a0bebe;
+		--theme_color_highlight: #7e9ea8;
+		--theme_color_border: #7c8e8e;
+		--theme_color_border_highlight: #82a1bc;
+		--theme_color_input_bg: #244752;
+		--theme_color_disabled_bg: #484d56;
+		--theme_color_disabled_fg: #616773;
+		--theme_color_topbtn: #244752;
+		--theme_color_topbtn_highlight: #244752;
+		--theme_color_tabs: #002b36;
+		--theme_color_tabs_highlight: #4b7b8a;
+		--theme_color_tabs_text: #a0bebe;
+		--theme_color_glow_text: #a0bebe;
+		--theme_color_placeholder_text: #c5d5d5;
+		--theme_color_topmenu: #002b36;
 	}
 
 	body.connected.corpoui .topmenu {
@@ -3653,7 +3750,7 @@ Current version indicated by LITEVER below.
 		passed_ai_warning: false, //used to store AI safety panel acknowledgement state
 		entersubmit: (is_on_mobile()?false:true), //enter sends the prompt
 		darkmode: true,
-		oldtheme: false, //temp setting maybe.
+		colortheme: 0, // 0=newtheme, 1=oldtheme, 2=fruity, 3=black
 		render_streaming_markdown: true,
 
 		raw_instruct_tags: false, //experimental flags
@@ -4045,12 +4142,11 @@ Current version indicated by LITEVER below.
 	{
 		return !isNaN(parseFloat(n)) && isFinite(n);
 	}
+	function escapeRegExp(string) {
+		return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+	}
 	function replaceAll(str, find, replace, caseInsensitive=false) //replace all occurances in string with string
 	{
-		function escapeRegExp(string) {
-			return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
-		}
-
 		return str.replace(new RegExp(escapeRegExp(find), (caseInsensitive?'gi':'g')), replace);
 	}
 	function rgb_to_hex(rgbColor) { //convert rgb color to hex
@@ -4842,7 +4938,9 @@ Current version indicated by LITEVER below.
 		{
 			return "";
 		}
-		return `${localsettings.start_thinking_tag}([\\s\\S]*?)${localsettings.stop_thinking_tag}`;
+		const safeStart = escapeRegExp(localsettings.start_thinking_tag);
+		const safeStop = escapeRegExp(localsettings.stop_thinking_tag);
+		return `${safeStart}([\\s\\S]*?)${safeStop}`;
 	}
 
 	function remove_all_instruct_tags(text)
@@ -13132,7 +13230,7 @@ Current version indicated by LITEVER below.
 		document.getElementById("show_advanced_load").checked = localsettings.show_advanced_load;
 		document.getElementById("import_tavern_prompt").checked = localsettings.import_tavern_prompt;
 		document.getElementById("invert_colors").checked = localsettings.invert_colors;
-		document.getElementById("oldtheme").checked = localsettings.oldtheme;
+		document.getElementById("colortheme").value = localsettings.colortheme;
 		document.getElementById("sidepanel_mode").checked = localsettings.sidepanel_mode;
 		document.getElementById("trimsentences").checked = localsettings.trimsentences;
 		document.getElementById("trimwhitespace").checked = localsettings.trimwhitespace;
@@ -13611,11 +13709,30 @@ Current version indicated by LITEVER below.
 			document.body.classList.remove("invert_colors");
 		}
 
-		if(localsettings.oldtheme)
+		document.body.classList.remove("theme-1");
+		document.body.classList.remove("theme-2");
+		document.body.classList.remove("theme-3");
+		document.body.classList.remove("theme-4");
+		document.body.classList.remove("theme-5");
+		if(localsettings.colortheme==1)
 		{
-			document.body.classList.add("theme-old");
-		} else {
-			document.body.classList.remove("theme-old");
+			document.body.classList.add("theme-1");
+		}
+		else if(localsettings.colortheme==2)
+		{
+			document.body.classList.add("theme-2");
+		}
+		else if(localsettings.colortheme==3)
+		{
+			document.body.classList.add("theme-3");
+		}
+		else if(localsettings.colortheme==4)
+		{
+			document.body.classList.add("theme-4");
+		}
+		else if(localsettings.colortheme==5)
+		{
+			document.body.classList.add("theme-5");
 		}
 	}
 
@@ -13715,7 +13832,7 @@ Current version indicated by LITEVER below.
 		localsettings.show_advanced_load = (document.getElementById("show_advanced_load").checked ? true : false);
 		localsettings.import_tavern_prompt = (document.getElementById("import_tavern_prompt").checked ? true : false);
 		localsettings.invert_colors = (document.getElementById("invert_colors").checked ? true : false);
-		localsettings.oldtheme = (document.getElementById("oldtheme").checked ? true : false);
+		localsettings.colortheme = parseInt(document.getElementById("colortheme").value);
 		localsettings.sidepanel_mode = (document.getElementById("sidepanel_mode").checked ? true : false);
 		localsettings.trimsentences = (document.getElementById("trimsentences").checked ? true : false);
 		localsettings.trimwhitespace = (document.getElementById("trimwhitespace").checked ? true : false);
@@ -15019,7 +15136,7 @@ Current version indicated by LITEVER below.
 				let matchiter = 0;
 				inputtxt = inputtxt.replace(/%ExpandBtn%(?:\n{0,2})?/g, function (m) {
 					let curr = matches[matchiter];
-					let expandedhtml = `<span><button type="button" title="Show Thoughts" class="btn btn-primary" style="font-size:12px;padding:2px 2px;" onclick="toggle_hide_thinking(this)">Show Thoughts (${curr.length} characters)</button><span class="color_lightgreen hidden"><br>${escape_html(curr)}</span><br></span>`;
+					let expandedhtml = `<span><button type="button" title="Show Thoughts" class="btn btn-primary" style="font-size:12px;padding:2px 2px;" onclick="toggle_hide_thinking(this)">Show Thoughts (${curr.length} characters)</button><span class="color_lightgreen hidden"><br>${escape_html(curr)}\n</span><br></span>`;
 					if(!curr || curr.trim()=="" || curr.trim()=="/nothink" || curr.trim()==`${localsettings.start_thinking_tag}${localsettings.stop_thinking_tag}`)
 					{
 						expandedhtml = `<span><button type="button" title="No Thoughts" class="btn btn-primary" style="font-size:12px;padding:2px 2px;" onclick="">No Thoughts</button><br></span>`;
@@ -22274,7 +22391,7 @@ Current version indicated by LITEVER below.
 		let panel = document.getElementById('corpoleftpanelitemstopper');
 		let panelitems = `<div onclick="btn_memory()" class="corpo_leftpanel_btn" type="button" style="background-image: var(--img_gear); padding-left: 44px;">Context</div>
 		<div onclick="btn_editmode()" class="corpo_leftpanel_btn" type="button" style="background-image: var(--img_corpo_edit); padding-left: 44px;">Raw Editor</div>
-		<div onclick="update_toggle_lightmode(true)" class="corpo_leftpanel_btn" type="button" style="background-image: var(--img_corpo_theme); padding-left: 44px;">Light / Dark Theme</div>`;
+		<div onclick="update_toggle_lightmode(true)" class="corpo_leftpanel_btn" type="button" style="background-image: var(--img_corpo_theme); padding-left: 44px;">Light / Dark Mode</div>`;
 
 		if(localsettings.opmode==3||localsettings.opmode==4)
 		{
@@ -26413,6 +26530,18 @@ Current version indicated by LITEVER below.
 							<button title="Set Background Image" type="button" class="btn btn-primary bg_green" style="padding:2px 2px;margin:0px 0px 0px auto;font-size:10px;" onclick="load_bgimg_button()">Set</button>
 							<button title="Remove Background Image" type="button" class="btn btn-primary bg_red" style="padding:2px 2px;margin:0px 0px 0px 1px;font-size:10px;" onclick="clear_bg_img()">Clear</button>
 						</div>
+						<div class="settinglabel">
+							<div class="justifyleft settingsmall">Color Scheme <span class="helpicon">?<span
+								class="helptext">Set UI color scheme. Does not apply to corpo mode.</span></span></div>
+							<select title="Color Scheme" style="padding:1px; height:auto; width: 66px; font-size: 7pt; margin:0px 0px 0px auto;" class="form-control" id="colortheme">
+								<option value="0">Modern</option>
+								<option value="1">Nostalgia</option>
+								<option value="2">Tako</option>
+								<option value="3">Shadow</option>
+								<option value="4">Candy</option>
+								<option value="5">Aqua</option>
+							</select>
+						</div>
 					</div>
 					<div class="settingitem wide">
 						<div class="settinglabel settingsmall">Options below are experimental. Use at your own risk.</div>
@@ -26445,11 +26574,6 @@ Current version indicated by LITEVER below.
 							<div class="justifyleft settingsmall">LegacySavefile <span class="helpicon">?<span
 								class="helptext">Adds extra data to the savefile for better legacy support. Will make your savefile much larger.</span></span></div>
 							<input title="Legacy Savefile" type="checkbox" id="legacy_savefile" style="margin:0px 0px 0px 0px;">
-						</div>
-						<div class="settinglabel">
-							<div class="justifyleft settingsmall">OldColorTheme <span class="helpicon">?<span
-								class="helptext">Switch to old color theme.</span></span></div>
-							<input title="Old Color Theme" type="checkbox" id="oldtheme" style="margin:0px 0px 0px 0px;">
 						</div>
 					</div>
 

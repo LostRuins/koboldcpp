@@ -338,12 +338,25 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.chroma_use_t5_mask = sd_params->chroma_use_t5_mask;
     params.chroma_t5_mask_pad = sd_params->chroma_t5_mask_pad;
 
+    if (params.chroma_use_dit_mask && params.diffusion_flash_attn) {
+        // note we don't know yet if it's a Chroma model
+        params.chroma_use_dit_mask = false;
+    }
+
     sd_ctx = new_sd_ctx(&params);
 
     if (sd_ctx == NULL) {
         printf("\nError: KCPP SD Failed to create context!\nIf using Flux/SD3.5, make sure you have ALL files required (e.g. VAE, T5, Clip...) or baked in!\n");
         printf("Otherwise, if you are using GGUF format, you can try the original .safetensors instead (Comfy GGUF not supported)\n");
         return false;
+    }
+
+    if (!sd_is_quiet) {
+        if (loaded_model_is_chroma(sd_ctx) && sd_params->diffusion_flash_attn && sd_params->chroma_use_dit_mask)
+        {
+            printf("Chroma: flash attention is on, disabling DiT mask (this will lower image quality)\n");
+            // disabled before loading
+        }
     }
 
     std::filesystem::path mpath(inputs.model_filename);
@@ -528,22 +541,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     auto loadedsdver = get_loaded_sd_version(sd_ctx);
     if (loadedsdver == SDVersion::VERSION_FLUX)
     {
-        if (loaded_model_is_chroma(sd_ctx)) {
-            if (sd_params->diffusion_flash_attn && sd_params->chroma_use_dit_mask) {
-                if (!sd_is_quiet && sddebugmode) {
-                    printf("Chroma: flash attention is on, disabling DiT mask\n");
-                }
-                sd_params->chroma_use_dit_mask = false;
+        if (!loaded_model_is_chroma(sd_ctx) && sd_params->cfg_scale != 1.0f) {
+            //non chroma clamp cfg scale
+            if (!sd_is_quiet && sddebugmode) {
+                printf("Flux: clamping CFG Scale to 1\n");
             }
-        }
-        else {
-            if (sd_params->cfg_scale != 1.0f) {
-                //non chroma clamp cfg scale
-                if (!sd_is_quiet && sddebugmode) {
-                    printf("Flux: clamping CFG Scale to 1\n");
-                }
-                sd_params->cfg_scale = 1.0f;
-            }
+            sd_params->cfg_scale = 1.0f;
         }
         if (sampler == "euler a" || sampler == "k_euler_a" || sampler == "euler_a") {
             //euler a broken on flux

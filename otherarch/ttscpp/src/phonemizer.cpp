@@ -821,11 +821,11 @@ void populate_kokoro_ipa_map(std::string executable_path)
             }
         }
         myfile.close();
-		printf("\nPopulated Kokoro IPA: %d entries", kokoro_ipa_map.size());
+		printf("\nPopulated Kokoro IPA: %d entries\n", kokoro_ipa_map.size());
     }
     else
     {
-		printf("\nUnable to open Kokoro IPA file");
+		printf("\nUnable to open Kokoro IPA file\n");
     }
 }
 std::string found_word_to_ipa(std::string input)

@@ -64,7 +64,7 @@ dry_seq_break_max = 128
 extra_images_max = 4
 
 # global vars
-KcppVersion = "1.99"
+KcppVersion = "1.99.3"
 showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_config_target":""}
@@ -1248,7 +1248,7 @@ def fetch_gpu_properties(testCL,testCU,testVK):
             for idx in range(0,4):
                 if(len(FetchedCUdevices)>idx):
                     if len(FetchedCUdeviceMem)>idx:
-                        dmem = int(FetchedCUdeviceMem[idx]) if AMDgpu else (int(FetchedCUdeviceMem[idx])*1024*1024)
+                        dmem = (int(FetchedCUdeviceMem[idx])*1024*1024) if AMDgpu else (int(FetchedCUdeviceMem[idx])*1024*1024)
                         lowestcumem = dmem if lowestcumem==0 else (dmem if dmem<lowestcumem else lowestcumem)
                     if len(FetchedCUfreeMem)>idx:
                         dmem = (int(FetchedCUfreeMem[idx])*1024*1024)
@@ -4589,7 +4589,7 @@ def show_gui():
     swa_var = ctk.IntVar(value=0)
     remotetunnel_var = ctk.IntVar(value=0)
     smartcontext_var = ctk.IntVar()
-    flashattention_var = ctk.IntVar(value=1)
+    flashattention_var = ctk.IntVar(value=0)
     context_var = ctk.IntVar()
     customrope_var = ctk.IntVar()
     manualrope_var = ctk.IntVar()
@@ -6492,26 +6492,33 @@ def downloader_internal(input_url, output_filename, capture_output, min_file_siz
     if "https://huggingface.co/" in input_url and "/blob/main/" in input_url:
         input_url = input_url.replace("/blob/main/", "/resolve/main/")
     if output_filename == "auto":
-        exe_dir = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__)
-        filename = os.path.basename(input_url).split('?')[0].split('#')[0]
-        output_filename = os.path.join(exe_dir, filename)
+        cwd = os.getcwd()
+        test_writable = os.access(cwd, os.W_OK)
+        if test_writable:
+            output_filename = os.path.basename(input_url).split('?')[0].split('#')[0]
+        else:
+            exe_dir = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__)
+            filename = os.path.basename(input_url).split('?')[0].split('#')[0]
+            output_filename = os.path.join(exe_dir, filename)
     incomplete_dl_exist = (os.path.exists(output_filename+".aria2") and os.path.getsize(output_filename+".aria2") > 16)
     if os.path.exists(output_filename) and os.path.getsize(output_filename) > min_file_size and not incomplete_dl_exist:
         print(f"{output_filename} already exists, using existing file.")
         return output_filename
     print(f"Downloading {input_url}", flush=True)
-    dl_success = False
 
+    dl_success = False
+    out_dir = os.path.dirname(os.path.abspath(output_filename)) or os.getcwd()
+    out_name = os.path.basename(output_filename)
     try:
         if os.name == 'nt':
             basepath = os.path.abspath(os.path.dirname(__file__))
-            a2cexe = (os.path.join(basepath, "aria2c-win.exe"))
-            if os.path.exists(a2cexe): #on windows try using embedded a2cexe
-                out_dir = os.path.dirname(output_filename)
-                out_name = os.path.basename(output_filename)
+            a2cexe = os.path.join(basepath, "aria2c-win.exe")
+            if os.path.exists(a2cexe):  # on windows try using embedded aria2c
                 rc = subprocess.run([
-                        a2cexe, "-x", "16", "-s", "16", "--summary-interval=15", "--console-log-level=error", "--log-level=error",
-                        "--download-result=default", "--continue=true", "--allow-overwrite=true", "--file-allocation=none", "--max-tries=3",
+                        a2cexe, "-x", "16", "-s", "16",
+                        "--summary-interval=15", "--console-log-level=error", "--log-level=error",
+                        "--download-result=default", "--continue=true", "--allow-overwrite=true",
+                        "--file-allocation=none", "--max-tries=3",
                         "-d", out_dir, "-o", out_name, input_url
                     ], capture_output=capture_output, text=True, check=True, encoding='utf-8')
                 dl_success = (rc.returncode == 0 and os.path.exists(output_filename) and os.path.getsize(output_filename) > min_file_size)
@@ -6520,11 +6527,11 @@ def downloader_internal(input_url, output_filename, capture_output, min_file_siz
 
     try:
         if not dl_success and shutil.which("aria2c") is not None:
-            out_dir = os.path.dirname(output_filename)
-            out_name = os.path.basename(output_filename)
             rc = subprocess.run([
-                    "aria2c", "-x", "16", "-s", "16", "--summary-interval=15", "--console-log-level=error", "--log-level=error",
-                    "--download-result=default", "--allow-overwrite=true", "--file-allocation=none", "--max-tries=3",
+                    "aria2c", "-x", "16", "-s", "16",
+                    "--summary-interval=15", "--console-log-level=error", "--log-level=error",
+                    "--download-result=default", "--allow-overwrite=true",
+                    "--file-allocation=none", "--max-tries=3",
                     "-d", out_dir, "-o", out_name, input_url
                 ], capture_output=capture_output, text=True, check=True, encoding='utf-8')
             dl_success = (rc.returncode == 0 and os.path.exists(output_filename) and os.path.getsize(output_filename) > min_file_size)

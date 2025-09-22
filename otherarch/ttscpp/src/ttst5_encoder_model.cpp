@@ -164,11 +164,6 @@ void t5_encoder::assign_weight(std::string name, ggml_tensor * tensor) {
 
 struct t5_context * build_new_t5_context(struct t5_encoder * model, int n_threads, bool use_cpu) {
 	t5_context * t5ctx = new t5_context(model, n_threads);
-    if (!use_cpu) {
-#ifdef GGML_USE_METAL
-        t5ctx->backend = ggml_backend_metal_init();
-#endif
-    }
     t5ctx->backend_cpu = ggml_backend_cpu_init();
     t5ctx->set_threads();
     t5ctx->build_schedule();

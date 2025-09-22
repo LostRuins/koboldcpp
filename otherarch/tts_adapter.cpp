@@ -661,8 +661,8 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
         printf("\nLoading OuteTTS Model, OuteTTS: %s \nWavTokenizer: %s \n",modelfile_ttc.c_str(),modelfile_cts.c_str());
         if(modelfile_ttc=="" || modelfile_cts=="")
         {
-             printf("\nWarning: KCPP OuteTTS missing a file! Make sure both TTS and WavTokenizer models are loaded.\n");
-              return false;
+            printf("\nWarning: KCPP OuteTTS missing a file! Make sure both TTS and WavTokenizer models are loaded.\n");
+            return false;
         }
     }
 

@@ -1485,11 +1485,7 @@ std::string get_espeak_id_from_kokoro_voice(std::string voice) {
 
 struct kokoro_duration_context * build_new_duration_kokoro_context(struct kokoro_model * model, int n_threads, bool use_cpu) {
     kokoro_duration_context * kctx = new kokoro_duration_context(model, n_threads);
-    if (!use_cpu) {
-#ifdef GGML_USE_METAL
-        kctx->backend = ggml_backend_metal_init();
-#endif
-    }
+
     kctx->backend_cpu = ggml_backend_cpu_init();
     kctx->set_threads();
     kctx->build_schedule();
@@ -1500,11 +1496,6 @@ struct kokoro_duration_context * build_new_duration_kokoro_context(struct kokoro
 
 struct kokoro_context * build_new_kokoro_context(struct kokoro_model * model, int n_threads, bool use_cpu) {
     kokoro_context * kctx = new kokoro_context(model, n_threads);
-    if (!use_cpu) {
-#ifdef GGML_USE_METAL
-        kctx->backend = ggml_backend_metal_init();
-#endif
-    }
     kctx->backend_cpu = ggml_backend_cpu_init();
     kctx->set_threads();
     kctx->build_schedule();

@@ -123,11 +123,6 @@ static struct ggml_tensor * dac_build_audio_inputs(struct ggml_context * ctx, st
 
 struct dac_context * build_new_dac_context(struct dac_model * model, int n_threads, bool use_cpu) {
     dac_context * dctx = new dac_context(model, n_threads);
-    if (!use_cpu) {
-#ifdef GGML_USE_METAL
-        dctx->backend = ggml_backend_metal_init();
-#endif
-    }
     dctx->backend_cpu = ggml_backend_cpu_init();
     dctx->set_threads();
     dctx->build_schedule();

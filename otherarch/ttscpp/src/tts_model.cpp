@@ -34,10 +34,7 @@ void runner_context::get_ggml_node_data(struct ggml_tensor * output_node, float 
 
 void runner_context::set_threads() {
     if (backend != nullptr) {
-#ifdef GGML_USE_METAL
-        // this is form copied from llama.cpp, but has since been removed. I don't know if this should be tuned.
-        // ggml_backend_metal_set_n_cb(backend, 1);
-#endif
+
     }
     if (backend_cpu != nullptr) {
         ggml_backend_cpu_set_n_threads(backend_cpu, n_threads);
@@ -111,6 +108,12 @@ void tts_model::prep_buffers_and_context(bool cpu_only, float size_offset, uint3
         /*.mem_buffer =*/ NULL,
         /*.no_alloc   =*/ true,
     };
+    if(dedicated_add_on_size>13000)
+    {
+        printf("Clamp TTS addon memory %zu to 13000\n",dedicated_add_on_size);
+        dedicated_add_on_size = 13000;
+    }
+    printf("TTS Memory Requested: %zu, with buffer %zu + %zu\n",ctx_size,tensor_meta.n_bytes,dedicated_add_on_size);
     ctx = ggml_init(params);
     buf = ggml_backend_buft_alloc_buffer(buffer, tensor_meta.n_bytes + dedicated_add_on_size);
 }
