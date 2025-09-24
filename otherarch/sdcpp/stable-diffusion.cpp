@@ -591,7 +591,7 @@ public:
                 printf("\n!!!!\nWARNING: PhotoMaker is only compatible with SDXL models. PhotoMaker will be disabled!\n!!!!\n");
               } else {
                 pmid_lora = std::make_shared<LoraModel>(backend, sd_ctx_params->photo_maker_path, "");
-                if (!pmid_lora->load_from_file(true)) {
+                if (!pmid_lora->load_from_file(true, n_threads)) {
                     LOG_WARN("load photomaker lora tensors from %s failed", sd_ctx_params->photo_maker_path);
                     return false;
                 }
@@ -660,14 +660,14 @@ public:
             if (!use_tiny_autoencoder) {
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
             } else {
-                if (!tae_first_stage->load_from_file(taesd_path)) {
+                if (!tae_first_stage->load_from_file(taesd_path, n_threads)) {
                     return false;
                 }
                 vae_params_mem_size = tae_first_stage->get_params_buffer_size();
             }
             size_t control_net_params_mem_size = 0;
             if (control_net) {
-                if (!control_net->load_from_file(SAFE_STR(sd_ctx_params->control_net_path))) {
+                if (!control_net->load_from_file(SAFE_STR(sd_ctx_params->control_net_path), n_threads)) {
                     return false;
                 }
                 control_net_params_mem_size = control_net->get_params_buffer_size();
@@ -888,7 +888,7 @@ public:
             return;
         }
         LoraModel lora(backend, file_path);
-        if (!lora.load_from_file()) {
+        if (!lora.load_from_file(false, n_threads)) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
             return;
         }
@@ -925,7 +925,7 @@ public:
             return;
         }
         LoraModel lora(backend, file_path, is_high_noise ? "model.high_noise_" : "");
-        if (!lora.load_from_file()) {
+        if (!lora.load_from_file(false, n_threads)) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
             return;
         }

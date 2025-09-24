@@ -116,7 +116,7 @@ struct LoraModel : public GGMLRunner {
         return "lora";
     }
 
-    bool load_from_file(bool filter_tensor = false, int n_threads = 0) {
+    bool load_from_file(bool filter_tensor, int n_threads) {
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
 
         if (load_failed) {

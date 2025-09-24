@@ -553,12 +553,13 @@ protected:
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         enum ggml_type token_wtype = GGML_TYPE_F32;
         if (!force_clip_f32) {
-            auto tensor_type = tensor_types.find(prefix + "token_embedding.weight");
-            if (tensor_type != tensor_types.end())
+            auto tensor_type                = tensor_types.find(prefix + "token_embedding.weight");
+            std::set<ggml_type> allow_types = {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
+            if (tensor_type != tensor_types.end() && allow_types.find(tensor_type->second) != allow_types.end()) {
                 token_wtype = tensor_type->second;
+            }
         }
-        enum ggml_type position_wtype = GGML_TYPE_F32;
-
+        enum ggml_type position_wtype       = GGML_TYPE_F32;
         params["token_embedding.weight"]    = ggml_new_tensor_2d(ctx, token_wtype, embed_dim, vocab_size);
         params["position_embedding.weight"] = ggml_new_tensor_2d(ctx, position_wtype, embed_dim, num_positions);
     }

@@ -18,7 +18,8 @@ struct UpscalerGGML {
     }
 
     bool load_from_file(const std::string& esrgan_path,
-                        bool offload_params_to_cpu) {
+                        bool offload_params_to_cpu,
+                        int n_threads) {
         ggml_log_set(ggml_log_callback_default, nullptr);
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
@@ -54,7 +55,7 @@ struct UpscalerGGML {
         if (direct) {
             esrgan_upscaler->enable_conv2d_direct();
         }
-        if (!esrgan_upscaler->load_from_file(esrgan_path)) {
+        if (!esrgan_upscaler->load_from_file(esrgan_path, n_threads)) {
             return false;
         }
         return true;
@@ -124,7 +125,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return NULL;
     }
 
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu)) {
+    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu, n_threads)) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = NULL;
         free(upscaler_ctx);

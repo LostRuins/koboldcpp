@@ -222,7 +222,7 @@ struct TinyAutoEncoder : public GGMLRunner {
         return "taesd";
     }
 
-    bool load_from_file(const std::string& file_path) {
+    bool load_from_file(const std::string& file_path, int n_threads) {
         LOG_INFO("loading taesd from '%s', decode_only = %s", file_path.c_str(), decode_only ? "true" : "false");
         alloc_params_buffer();
         std::map<std::string, ggml_tensor*> taesd_tensors;
@@ -238,7 +238,7 @@ struct TinyAutoEncoder : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(taesd_tensors, ignore_tensors);
+        bool success = model_loader.load_tensors(taesd_tensors, ignore_tensors, n_threads);
 
         if (!success) {
             LOG_ERROR("load tae tensors from model loader failed");

@@ -591,7 +591,7 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
         return "id_embeds";
     }
 
-    bool load_from_file(bool filter_tensor = false) {
+    bool load_from_file(bool filter_tensor, int n_threads) {
         LOG_INFO("loading PhotoMaker ID Embeds from '%s'", file_path.c_str());
 
         if (load_failed) {
@@ -623,11 +623,11 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
             return true;
         };
 
-        model_loader->load_tensors(on_new_tensor_cb);
+        model_loader->load_tensors(on_new_tensor_cb, n_threads);
         alloc_params_buffer();
 
         dry_run = false;
-        model_loader->load_tensors(on_new_tensor_cb);
+        model_loader->load_tensors(on_new_tensor_cb, n_threads);
 
         LOG_DEBUG("finished loading PhotoMaker ID Embeds ");
         return true;

@@ -445,7 +445,7 @@ struct ControlNet : public GGMLRunner {
         guided_hint_cached = true;
     }
 
-    bool load_from_file(const std::string& file_path) {
+    bool load_from_file(const std::string& file_path, int n_threads) {
         LOG_INFO("loading control net from '%s'", file_path.c_str());
         alloc_params_buffer();
         std::map<std::string, ggml_tensor*> tensors;
@@ -458,7 +458,7 @@ struct ControlNet : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(tensors, ignore_tensors);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads);
 
         if (!success) {
             LOG_ERROR("load control net tensors from model loader failed");

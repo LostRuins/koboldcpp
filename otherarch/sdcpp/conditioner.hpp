@@ -141,7 +141,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             }
             return true;
         };
-        model_loader.load_tensors(on_load);
+        model_loader.load_tensors(on_load, 1);
         readed_embeddings.push_back(embd_name);
         if (embd) {
             int64_t hidden_size = text_model->model.hidden_size;

@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -1996,7 +1997,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     std::atomic<int64_t> copy_to_backend_time_ms(0);
     std::atomic<int64_t> convert_time_ms(0);
 
-    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : (int)std::thread::hardware_concurrency();
+    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : sd_get_num_physical_cores();
+    LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
 
     int64_t start_time = ggml_time_ms();
     std::vector<TensorStorage> processed_tensor_storages;
@@ -2046,13 +2048,25 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             w.join();
         }
 
-        std::unordered_map<std::string, IndexedStorage> latest_map;
+        std::vector<IndexedStorage> deduplicated;
+        deduplicated.reserve(all_results.size());
+        std::unordered_map<std::string, size_t> name_to_pos;
         for (auto& entry : all_results) {
-            latest_map[entry.ts.name] = entry;
+            auto it = name_to_pos.find(entry.ts.name);
+            if (it == name_to_pos.end()) {
+                name_to_pos.emplace(entry.ts.name, deduplicated.size());
+                deduplicated.push_back(entry);
+            } else if (deduplicated[it->second].index < entry.index) {
+                deduplicated[it->second] = entry;
+            }
         }
 
-        processed_tensor_storages.reserve(latest_map.size());
-        for (auto& [name, entry] : latest_map) {
+        std::sort(deduplicated.begin(), deduplicated.end(), [](const IndexedStorage& a, const IndexedStorage& b) {
+            return a.index < b.index;
+        });
+
+        processed_tensor_storages.reserve(deduplicated.size());
+        for (auto& entry : deduplicated) {
             processed_tensor_storages.push_back(entry.ts);
         }
     }
@@ -2454,6 +2468,8 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
             // Pass, do not convert. For MMDiT
         } else if (contains(name, "time_embed.") || contains(name, "label_emb.")) {
             // Pass, do not convert. For Unet
+        } else if (contains(name, "embedding")) {
+            // Pass, do not convert embedding
         } else {
             return true;
         }
