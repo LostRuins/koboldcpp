@@ -293,15 +293,15 @@ public:
         {
             std::string to_search = "taesd.embd";
             std::string to_replace = "";
-            if(version==VERSION_SDXL)
+            if(sd_version_is_sdxl(version))
             {
                 to_replace = "taesd_xl.embd";
             }
-            else if(version==VERSION_FLUX)
+            else if(sd_version_is_flux(version))
             {
                 to_replace = "taesd_f.embd";
             }
-            else if(version==VERSION_SD3)
+            else if(sd_version_is_sd3(version))
             {
                 to_replace = "taesd_3.embd";
             }
@@ -660,7 +660,7 @@ public:
             if (!use_tiny_autoencoder) {
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
             } else {
-                if (!tae_first_stage->load_from_file(taesd_path, n_threads)) {
+                if (!tae_first_stage->load_from_file(taesd_path_fixed, n_threads)) {
                     return false;
                 }
                 vae_params_mem_size = tae_first_stage->get_params_buffer_size();
