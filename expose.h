@@ -202,6 +202,7 @@ struct sd_generation_inputs
     const int height = 0;
     const int seed = 0;
     const char * sample_method = nullptr;
+    const char * scheduler = nullptr;
     const int clip_skip = -1;
     const int vid_req_frames = 1;
     const int vid_req_avi = 0;

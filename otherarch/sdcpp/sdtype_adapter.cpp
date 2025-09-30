@@ -68,6 +68,7 @@ struct SDParams {
     int height        = 512;
 
     sample_method_t sample_method = SAMPLE_METHOD_DEFAULT;
+    scheduler_t scheduler         = scheduler_t::DEFAULT;
     int sample_steps              = 20;
     float strength                = 0.75f;
     int64_t seed                  = 42;
@@ -404,8 +405,8 @@ std::string clean_input_prompt(const std::string& input) {
 }
 
 static std::string get_image_params(const sd_img_gen_params_t & params) {
-    std::stringstream parameter_string;
-    parameter_string << std::setprecision(3)
+    std::stringstream ss;
+    ss << std::setprecision(3)
         <<    "Prompt: " << params.prompt
         << " | NegativePrompt: " << params.negative_prompt
         << " | Steps: " << params.sample_params.sample_steps
@@ -413,11 +414,13 @@ static std::string get_image_params(const sd_img_gen_params_t & params) {
         << " | Guidance: " << params.sample_params.guidance.distilled_guidance
         << " | Seed: " << params.seed
         << " | Size: " << params.width << "x" << params.height
-        << " | Sampler: " << sd_sample_method_name(params.sample_params.sample_method)
-        << " | Clip skip: " << params.clip_skip
+        << " | Sampler: " << sd_sample_method_name(params.sample_params.sample_method);
+    if (params.sample_params.scheduler != scheduler_t::DEFAULT)
+        ss << " " << sd_schedule_name(params.sample_params.scheduler);
+    ss  << " | Clip skip: " << params.clip_skip
         << " | Model: " << sdmodelfilename
         << " | Version: KoboldCpp";
-    return parameter_string.str();
+    return ss.str();
 }
 
 static inline int rounddown_64(int n) {
@@ -559,7 +562,6 @@ static enum sample_method_t sampler_from_name(const std::string& sampler)
     }
 }
 
-
 uint8_t* load_image_from_b64(const std::string & b64str, int& width, int& height, int expected_width = 0, int expected_height = 0, int expected_channel = 3)
 {
     std::vector<uint8_t> decoded_buf = kcpp_base64_decode(b64str);
@@ -650,6 +652,19 @@ uint8_t* load_image_from_b64(const std::string & b64str, int& width, int& height
         image_buffer = resized_image_buffer;
     }
     return image_buffer;
+
+}
+
+static enum scheduler_t scheduler_from_name(const char * scheduler)
+{
+    if (scheduler) {
+        enum scheduler_t result = str_to_schedule(scheduler);
+        if (result != scheduler_t::SCHEDULE_COUNT)
+        {
+            return result;
+        }
+    }
+    return scheduler_t::DEFAULT;
 }
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
@@ -687,6 +702,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->strength = inputs.denoising_strength;
     sd_params->clip_skip = inputs.clip_skip;
     sd_params->sample_method = sampler_from_name(inputs.sample_method);
+    sd_params->scheduler = scheduler_from_name(inputs.scheduler);
 
     if (sd_params->sample_method == SAMPLE_METHOD_DEFAULT) {
         sd_params->sample_method = sd_get_default_sample_method(sd_ctx);
@@ -854,6 +870,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.width = sd_params->width;
     params.height = sd_params->height;
     params.sample_params.sample_method = sd_params->sample_method;
+    params.sample_params.scheduler = sd_params->scheduler;
     params.sample_params.sample_steps = sd_params->sample_steps;
     params.seed = sd_params->seed;
     params.strength = sd_params->strength;
@@ -932,6 +949,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 << "\nCFGSCLE:" << params.sample_params.guidance.txt_cfg
                 << "\nSIZE:" << params.width << "x" << params.height
                 << "\nSM:" << sd_sample_method_name(params.sample_params.sample_method)
+                << "\nSCHED:" << sd_schedule_name(params.sample_params.scheduler)
                 << "\nSTEP:" << params.sample_params.sample_steps
                 << "\nSEED:" << params.seed
                 << "\nBATCH:" << params.batch_count
