@@ -396,6 +396,8 @@ class embeddings_generation_outputs(ctypes.Structure):
                 ("count", ctypes.c_int),
                 ("data", ctypes.c_char_p)]
 
+
+
 def getdirpath():
     return os.path.dirname(os.path.realpath(__file__))
 def getabspath():
@@ -1791,8 +1793,57 @@ def sd_comfyui_tranform_params(genparams):
         print("Warning: ComfyUI Payload Missing!")
     return genparams
 
+def sd_process_meta_fields(fields, config):
+    # aliases to match sd.cpp command-line options
+    aliases = {
+        'cfg-scale': 'cfg_scale',
+        'guidance': 'distilled_guidance',
+        'sampler': 'sampler_name',
+        'sampling-method': 'sampler_name',
+        'timestep-shift': 'shifted_timestep',
+    }
+    fields_dict = {aliases.get(k, k): v for k, v in fields}
+    # whitelist accepted parameters
+    whitelist = ['scheduler', 'shifted_timestep', 'distilled_guidance']
+    if config:
+        # note the current UI always set these
+        whitelist += ['sampler_name', 'cfg_scale']
+    fields_dict = {k: v for k, v in fields_dict.items() if k in whitelist}
+    return fields_dict
+
+# json with top-level dict
+def sd_parse_meta_field(prompt, config=False):
+    jfields = {}
+    try:
+        jfields = json.loads(prompt)
+    except json.JSONDecodeError:
+        # accept "field":"value",... without {} (also empty strings)
+        try:
+            jfields = json.loads('{ ' + prompt + ' }')
+        except json.JSONDecodeError:
+            print("Warning: couldn't parse meta prompt; it should be valid JSON.")
+    if not isinstance(jfields, dict):
+        jfields = {}
+    kv_dict = sd_process_meta_fields(jfields.items(), config)
+    return kv_dict
+
+
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
+
+    sdgendefaults = sd_parse_meta_field(args.sdgendefaults or '', config=True)
+    params = dict()
+    defparams = dict()
+    for k, v in sdgendefaults.items():
+        if k in ['sampler_name', 'scheduler']:
+            # these can be explicitely set to 'default'; process later
+            # TODO should we consider values like 'clip_skip=-1' as 'default' too?
+            defparams[k] = v
+        else:
+            params[k] = v
+    # apply most of the defaults
+    params.update(genparams)
+    genparams = params
 
     default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
     adapter_obj = genparams.get('adapter', default_adapter)
@@ -1827,8 +1878,12 @@ def sd_generate(genparams):
     seed = tryparseint(genparams.get("seed", -1),-1)
     if seed < 0:
         seed = random.randint(100000, 999999)
-    sample_method = genparams.get("sampler_name", "default")
-    scheduler = genparams.get("scheduler", "default")
+    sample_method = (genparams.get("sampler_name") or "default").lower()
+    if sample_method == 'default' and 'sampler_name' in defparams:
+        sample_method = (defparams.get("sampler_name") or "default").lower()
+    scheduler = (genparams.get("scheduler") or "default").lower()
+    if scheduler == 'default' and 'scheduler' in defparams:
+        scheduler = (defparams.get("scheduler") or "default").lower()
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
     vid_req_frames = 1 if (not vid_req_frames or vid_req_frames < 1) else vid_req_frames
@@ -1871,8 +1926,8 @@ def sd_generate(genparams):
     inputs.width = width
     inputs.height = height
     inputs.seed = seed
-    inputs.sample_method = sample_method.lower().encode("UTF-8")
-    inputs.scheduler = scheduler.lower().encode("UTF-8")
+    inputs.sample_method = sample_method.encode("UTF-8")
+    inputs.scheduler = scheduler.encode("UTF-8")
     inputs.clip_skip = clip_skip
     inputs.vid_req_frames = vid_req_frames
     inputs.vid_req_avi = vid_req_avi
@@ -4690,6 +4745,7 @@ def show_gui():
     sd_clamped_soft_var = ctk.StringVar(value="0")
     sd_threads_var = ctk.StringVar(value=str(default_threads))
     sd_quant_var = ctk.StringVar(value=sd_quant_choices[0])
+    sd_gen_defaults_var = ctk.StringVar()
 
     whisper_model_var = ctk.StringVar()
     tts_model_var = ctk.StringVar()
@@ -5465,6 +5521,7 @@ def show_gui():
     makecheckbox(images_tab, "Model CPU Offload", sd_offload_cpu_var, 50,padx=8, tooltiptxt="Offload image weights in RAM to save VRAM, swap into VRAM when needed.")
     makecheckbox(images_tab, "VAE on CPU", sd_vae_cpu_var, 50,padx=160, tooltiptxt="Force VAE to CPU only for image generation.")
     makecheckbox(images_tab, "CLIP on GPU", sd_clip_gpu_var, 50,padx=280, tooltiptxt="Put CLIP and T5 to GPU for image generation. Otherwise, CLIP will use CPU.")
+    makelabelentry(images_tab, "Default Params:", sd_gen_defaults_var, 52, 280, padx=110, singleline=True, tooltip='Default image generation parameters when not specified by the UI or API.\nSpecified as JSON fields: {"KEY1":"VALUE1", "KEY2":"VALUE2"...}')
 
     # audio tab
     audio_tab = tabcontent["Audio"]
@@ -5738,6 +5795,7 @@ def show_gui():
             args.sdloramult = float(sd_loramult_var.get())
         else:
             args.sdlora = ""
+        args.sdgendefaults = sd_gen_defaults_var.get()
 
         if whisper_model_var.get() != "":
             args.whispermodel = whisper_model_var.get()
@@ -5964,6 +6022,7 @@ def show_gui():
 
         sd_lora_var.set(dict["sdlora"] if ("sdlora" in dict and dict["sdlora"]) else "")
         sd_loramult_var.set(str(dict["sdloramult"]) if ("sdloramult" in dict and dict["sdloramult"]) else "1.0")
+        sd_gen_defaults_var.set(dict.get("sdgendefaults", ""))
 
         whisper_model_var.set(dict["whispermodel"] if ("whispermodel" in dict and dict["whispermodel"]) else "")
 
@@ -7797,6 +7856,7 @@ if __name__ == '__main__':
     sdparsergrouplora.add_argument("--sdlora", metavar=('[filename]'), help="Specify an image generation LORA safetensors model to be applied.", default="")
     sdparsergroup.add_argument("--sdloramult", metavar=('[amount]'), help="Multiplier for the image LORA model to be applied.", type=float, default=1.0)
     sdparsergroup.add_argument("--sdtiledvae", metavar=('[maxres]'), help="Adjust the automatic VAE tiling trigger for images above this size. 0 disables vae tiling.", type=int, default=default_vae_tile_threshold)
+    sdparsergroup.add_argument("--sdgendefaults", metavar=('{"parameter":"value",...}'), help="Sets default parameters for image generation, as a JSON string.", default="")
     whisperparsergroup = parser.add_argument_group('Whisper Transcription Commands')
     whisperparsergroup.add_argument("--whispermodel", metavar=('[filename]'), help="Specify a Whisper .bin model to enable Speech-To-Text transcription.", default="")
 
