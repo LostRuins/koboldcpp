@@ -1822,7 +1822,7 @@ def sd_generate(genparams):
     seed = tryparseint(genparams.get("seed", -1),-1)
     if seed < 0:
         seed = random.randint(100000, 999999)
-    sample_method = genparams.get("sampler_name", "k_euler_a")
+    sample_method = genparams.get("sampler_name", "default")
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
     vid_req_frames = 1 if (not vid_req_frames or vid_req_frames < 1) else vid_req_frames
