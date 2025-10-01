@@ -401,17 +401,10 @@ public:
                 use_t5xxl = true;
             }
             if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
-                #if 0 // kcpp
                 LOG_WARN(
                     "!!!It appears that you are using the T5 model. Some backends may encounter issues with it."
                     "If you notice that the generated images are completely black,"
                     "try running the T5 model on the CPU using the --clip-on-cpu parameter.");
-                #else
-                if (conditioner_wtype != GGML_TYPE_F32) {
-                    LOG_INFO("CLIP: Forcing CPU backend for T5");
-                    clip_on_cpu = true;
-                }
-                #endif
             }
             if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
                 LOG_INFO("CLIP: Using CPU backend");
