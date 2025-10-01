@@ -311,6 +311,7 @@ class sd_generation_inputs(ctypes.Structure):
                 ("flip_mask", ctypes.c_bool),
                 ("denoising_strength", ctypes.c_float),
                 ("cfg_scale", ctypes.c_float),
+                ("distilled_guidance", ctypes.c_float),
                 ("sample_steps", ctypes.c_int),
                 ("width", ctypes.c_int),
                 ("height", ctypes.c_int),
@@ -1817,6 +1818,7 @@ def sd_generate(genparams):
     flip_mask = genparams.get("inpainting_mask_invert", 0)
     denoising_strength = tryparsefloat(genparams.get("denoising_strength", 0.6),0.6)
     cfg_scale = tryparsefloat(genparams.get("cfg_scale", 5),5)
+    distilled_guidance = tryparsefloat(genparams.get("distilled_guidance", None), None)
     sample_steps = tryparseint(genparams.get("steps", 20),20)
     width = tryparseint(genparams.get("width", 512),512)
     height = tryparseint(genparams.get("height", 512),512)
@@ -1836,6 +1838,8 @@ def sd_generate(genparams):
 
     #clean vars
     cfg_scale = (1 if cfg_scale < 1 else (25 if cfg_scale > 25 else cfg_scale))
+    if distilled_guidance is not None and (distilled_guidance < 0 or distilled_guidance > 100):
+        distilled_guidance = None # fall back to the default
     sample_steps = (1 if sample_steps < 1 else (forced_steplimit if sample_steps > forced_steplimit else sample_steps))
     vid_req_frames = (1 if vid_req_frames < 1 else (100 if vid_req_frames > 100 else vid_req_frames))
 
@@ -1854,6 +1858,8 @@ def sd_generate(genparams):
         inputs.extra_images[n] = extra_image.encode("UTF-8")
     inputs.flip_mask = flip_mask
     inputs.cfg_scale = cfg_scale
+    if distilled_guidance is not None:
+        inputs.distilled_guidance = distilled_guidance
     inputs.denoising_strength = denoising_strength
     inputs.sample_steps = sample_steps
     inputs.width = width

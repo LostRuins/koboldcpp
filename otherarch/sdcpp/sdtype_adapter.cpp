@@ -70,6 +70,7 @@ struct SDParams {
     sample_method_t sample_method = SAMPLE_METHOD_DEFAULT;
     scheduler_t scheduler         = scheduler_t::DEFAULT;
     int sample_steps              = 20;
+    float distilled_guidance      = -1.0f;
     float strength                = 0.75f;
     int64_t seed                  = 42;
     bool clip_on_cpu              = false;
@@ -695,6 +696,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->prompt = cleanprompt;
     sd_params->negative_prompt = cleannegprompt;
     sd_params->cfg_scale = inputs.cfg_scale;
+    sd_params->distilled_guidance = inputs.distilled_guidance;
     sd_params->sample_steps = inputs.sample_steps;
     sd_params->seed = inputs.seed;
     sd_params->width = inputs.width;
@@ -867,6 +869,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.clip_skip = sd_params->clip_skip;
     params.sample_params.guidance.txt_cfg = sd_params->cfg_scale;
     params.sample_params.guidance.img_cfg = sd_params->cfg_scale;
+    if (sd_params->distilled_guidance >= 0.f) {
+        params.sample_params.guidance.distilled_guidance = sd_params->distilled_guidance;
+    }
     params.width = sd_params->width;
     params.height = sd_params->height;
     params.sample_params.sample_method = sd_params->sample_method;
