@@ -198,6 +198,7 @@ struct sd_generation_inputs
     const float denoising_strength = 0.0f;
     const float cfg_scale = 0.0f;
     const float distilled_guidance = -1.0f;
+    const int shifted_timestep = 0;
     const int sample_steps = 0;
     const int width = 0;
     const int height = 0;

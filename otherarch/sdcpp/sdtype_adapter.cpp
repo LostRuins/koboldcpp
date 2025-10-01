@@ -71,6 +71,7 @@ struct SDParams {
     scheduler_t scheduler         = scheduler_t::DEFAULT;
     int sample_steps              = 20;
     float distilled_guidance      = -1.0f;
+    float shifted_timestep        = 0;
     float strength                = 0.75f;
     int64_t seed                  = 42;
     bool clip_on_cpu              = false;
@@ -418,6 +419,8 @@ static std::string get_image_params(const sd_img_gen_params_t & params) {
         << " | Sampler: " << sd_sample_method_name(params.sample_params.sample_method);
     if (params.sample_params.scheduler != scheduler_t::DEFAULT)
         ss << " " << sd_schedule_name(params.sample_params.scheduler);
+    if (params.sample_params.shifted_timestep != 0)
+        ss << "| Timestep Shift: " << params.sample_params.shifted_timestep;
     ss  << " | Clip skip: " << params.clip_skip
         << " | Model: " << sdmodelfilename
         << " | Version: KoboldCpp";
@@ -698,6 +701,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->cfg_scale = inputs.cfg_scale;
     sd_params->distilled_guidance = inputs.distilled_guidance;
     sd_params->sample_steps = inputs.sample_steps;
+    sd_params->shifted_timestep = inputs.shifted_timestep;
     sd_params->seed = inputs.seed;
     sd_params->width = inputs.width;
     sd_params->height = inputs.height;
@@ -877,6 +881,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.sample_params.sample_method = sd_params->sample_method;
     params.sample_params.scheduler = sd_params->scheduler;
     params.sample_params.sample_steps = sd_params->sample_steps;
+    params.sample_params.shifted_timestep = sd_params->shifted_timestep;
     params.seed = sd_params->seed;
     params.strength = sd_params->strength;
     params.vae_tiling_params.enabled = dotile;
