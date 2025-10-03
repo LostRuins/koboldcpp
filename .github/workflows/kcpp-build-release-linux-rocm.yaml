@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions: write-all
     container:
-      image: rocm/dev-ubuntu-22.04:7.0-complete
+      image: rocm/dev-ubuntu-22.04:7.0
       options: --privileged
     steps:
       - name: Clone
