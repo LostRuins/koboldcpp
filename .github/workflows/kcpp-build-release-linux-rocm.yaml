@@ -45,9 +45,9 @@ jobs:
           docker run --privileged \
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
+            -e KCPP_CUDA="ROCm" \
+            -e BRANCH_NAME="${{ github.head_ref || github.ref_name }}" \
             rocm/dev-ubuntu-22.04:7.0-complete \
-            -e "KCPP_CUDA=ROCm" \
-            -e "BRANCH_NAME=${{ github.head_ref || github.ref_name }}" \
             bash -c "
               apt update &&
               DEBIAN_FRONTEND=noninteractive apt install -y git curl bzip2 python3-tk tcl tk &&
