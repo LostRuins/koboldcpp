@@ -19,7 +19,10 @@ env:
   ARCHES_CU12: 1
 
 jobs:
-  clean-linux:
+  linux:
+    needs: clean-linux
+    runs-on: ubuntu-22.04
+    permissions: write-all
     runs-on: ubuntu-22.04
     permissions: write-all
     steps:
@@ -38,10 +41,6 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-  linux:
-    needs: clean-linux
-    runs-on: ubuntu-22.04
-    permissions: write-all
     container:
       image: rocm/dev-ubuntu-22.04:7.0-complete
       options: --privileged
