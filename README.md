@@ -92,14 +92,14 @@ when you can't use the precompiled binary directly, we provide an automated buil
 
 ### Compiling on Linux (Manual Method)
 - To compile your binaries from source, clone the repo with `git clone https://github.com/LostRuins/koboldcpp.git`
-- A makefile is provided, simply run `make`.
-- Optional Vulkan: Link your own install of Vulkan SDK manually with `make LLAMA_VULKAN=1`
-- Optional CLBlast: Link your own install of CLBlast manually with `make LLAMA_CLBLAST=1`
+- A makefile is provided, simply run `make -j`.
+- Optional Vulkan: Link your own install of Vulkan SDK manually with `make -j LLAMA_VULKAN=1`
+- Optional CLBlast: Link your own install of CLBlast manually with `make -j LLAMA_CLBLAST=1`
 - Note: for these you will need to obtain and link OpenCL and CLBlast libraries.
   - For Arch Linux: Install `cblas` and `clblast`.
   - For Debian: Install `libclblast-dev`.
 - You can attempt a CuBLAS build with `LLAMA_CUBLAS=1`, (or `LLAMA_HIPBLAS=1` for AMD). You will need CUDA Toolkit installed. Some have also reported success with the CMake file, though that is more for windows.
-- For a full featured build (all backends), do `make LLAMA_CLBLAST=1 LLAMA_CUBLAS=1 LLAMA_VULKAN=1`. (Note that `LLAMA_CUBLAS=1` will not work on windows, you need visual studio)
+- For a full featured build (all backends), do `make -j LLAMA_CLBLAST=1 LLAMA_CUBLAS=1 LLAMA_VULKAN=1`. (Note that `LLAMA_CUBLAS=1` will not work on windows, you need visual studio)
 - To make your build sharable and capable of working on other devices, you must use `LLAMA_PORTABLE=1`
 - After all binaries are built, you can run the python script with the command `python koboldcpp.py [ggml_model.gguf] [port]`
 
@@ -107,8 +107,8 @@ when you can't use the precompiled binary directly, we provide an automated buil
 - You're encouraged to use the .exe released, but if you want to compile your binaries from source at Windows, the easiest way is:
   - Get the latest release of w64devkit (https://github.com/skeeto/w64devkit). Be sure to use the "vanilla one", not i686 or other different stuff. If you try they will conflit with the precompiled libs!
   - Clone the repo with `git clone https://github.com/LostRuins/koboldcpp.git`
-  - Make sure you are using the w64devkit integrated terminal, then run `make` at the KoboldCpp source folder. This will create the .dll files for a pure CPU native build.
-  - For a full featured build (all backends), do `make LLAMA_CLBLAST=1 LLAMA_VULKAN=1`. (Note that `LLAMA_CUBLAS=1` will not work on windows, you need visual studio)
+  - Make sure you are using the w64devkit integrated terminal, then run `make -j` at the KoboldCpp source folder. This will create the .dll files for a pure CPU native build.
+  - For a full featured build (all backends), do `make -j LLAMA_CLBLAST=1 LLAMA_VULKAN=1`. (Note that `LLAMA_CUBLAS=1` will not work on windows, you need visual studio)
   - To make your build sharable and capable of working on other devices, you must use `LLAMA_PORTABLE=1`
   - If you want to generate the .exe file, make sure you have the python module PyInstaller installed with pip (`pip install PyInstaller`). Then run the script `make_pyinstaller.bat`
   - The koboldcpp.exe file will be at your dist folder.
@@ -122,8 +122,8 @@ when you can't use the precompiled binary directly, we provide an automated buil
 
 ### Compiling on MacOS
 - You can compile your binaries from source. You can clone the repo with `git clone https://github.com/LostRuins/koboldcpp.git`
-- A makefile is provided, simply run `make`.
-- If you want Metal GPU support, instead run `make LLAMA_METAL=1`, note that MacOS metal libraries need to be installed.
+- A makefile is provided, simply run `make -j`.
+- If you want Metal GPU support, instead run `make -j LLAMA_METAL=1`, note that MacOS metal libraries need to be installed.
 - To make your build sharable and capable of working on other devices, you must use `LLAMA_PORTABLE=1`
 - After all binaries are built, you can run the python script with the command `python koboldcpp.py --model [ggml_model.gguf]` (and add `--gpulayers (number of layer)` if you wish to offload layers to GPU).
 
@@ -143,7 +143,7 @@ and it will install everything required. Alternatively, you can download the abo
 - Run `pkg upgrade`
 - Clone the repo `git clone https://github.com/LostRuins/koboldcpp.git`
 - Navigate to the koboldcpp folder `cd koboldcpp`
-- Build the project `make`
+- Build the project `make -j`
 - To make your build sharable and capable of working on other devices, you must use `LLAMA_PORTABLE=1`, this disables usage of ARM instrinsics.
 - Grab a small GGUF model, such as `wget https://huggingface.co/concedo/KobbleTinyV2-1.1B-GGUF/resolve/main/KobbleTiny-Q4_K.gguf`
 - Start the python server `python koboldcpp.py --model KobbleTiny-Q4_K.gguf`
@@ -197,7 +197,7 @@ and it will install everything required. Alternatively, you can download the abo
 - For any further enquiries, contact @concedo on discord, or LostRuins on github.
 
 ## Notes
-- If you wish, after building the koboldcpp libraries with `make`, you can rebuild the exe yourself with pyinstaller by using `make_pyinstaller.bat`
+- If you wish, after building the koboldcpp libraries with `make -j`, you can rebuild the exe yourself with pyinstaller by using `make_pyinstaller.bat`
 - API documentation available at `/api` (e.g. `http://localhost:5001/api`) and https://lite.koboldai.net/koboldcpp_api. An OpenAI compatible API is also provided at `/v1` route (e.g. `http://localhost:5001/v1`).
 - **All up-to-date GGUF models are supported**, and KoboldCpp also includes backward compatibility for older versions/legacy GGML `.bin` models, though some newer features might be unavailable.
 - An incomplete list of architectures is listed, but there are *many hundreds of other GGUF models*. In general, if it's GGUF, it should work.
