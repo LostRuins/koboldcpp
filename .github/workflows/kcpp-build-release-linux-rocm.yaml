@@ -12,7 +12,6 @@ on:
         required: false
         default: ''
 
-
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   KCPP_CUDA: rocm
@@ -20,9 +19,6 @@ env:
 
 jobs:
   linux:
-    needs: clean-linux
-    runs-on: ubuntu-22.04
-    permissions: write-all
     runs-on: ubuntu-22.04
     permissions: write-all
     steps:
