@@ -232,6 +232,25 @@ struct GITSSchedule : SigmaSchedule {
     }
 };
 
+struct SGMUniformSchedule : SigmaSchedule {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min_in, float sigma_max_in, t_to_sigma_t t_to_sigma_func) override {
+        std::vector<float> result;
+        if (n == 0) {
+            result.push_back(0.0f);
+            return result;
+        }
+        result.reserve(n + 1);
+        int t_max                    = TIMESTEPS - 1;
+        int t_min                    = 0;
+        std::vector<float> timesteps = linear_space(static_cast<float>(t_max), static_cast<float>(t_min), n + 1);
+        for (int i = 0; i < n; i++) {
+            result.push_back(t_to_sigma_func(timesteps[i]));
+        }
+        result.push_back(0.0f);
+        return result;
+    }
+};
+
 struct KarrasSchedule : SigmaSchedule {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
         // These *COULD* be function arguments here,
@@ -251,8 +270,66 @@ struct KarrasSchedule : SigmaSchedule {
     }
 };
 
+struct SimpleSchedule : SigmaSchedule {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result_sigmas;
+
+        if (n == 0) {
+            return result_sigmas;
+        }
+
+        result_sigmas.reserve(n + 1);
+
+        int model_sigmas_len = TIMESTEPS;
+
+        float step_factor = static_cast<float>(model_sigmas_len) / static_cast<float>(n);
+
+        for (uint32_t i = 0; i < n; ++i) {
+            int offset_from_start_of_py_array = static_cast<int>(static_cast<float>(i) * step_factor);
+            int timestep_index                = model_sigmas_len - 1 - offset_from_start_of_py_array;
+
+            if (timestep_index < 0) {
+                timestep_index = 0;
+            }
+
+            result_sigmas.push_back(t_to_sigma(static_cast<float>(timestep_index)));
+        }
+        result_sigmas.push_back(0.0f);
+        return result_sigmas;
+    }
+};
+
+// Close to Beta Schedule, but increadably simple in code.
+struct SmoothStepSchedule : SigmaSchedule {
+    static constexpr float smoothstep(float x) {
+        return x * x * (3.0f - 2.0f * x);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result;
+        result.reserve(n + 1);
+
+        const int t_max = TIMESTEPS - 1;
+        if (n == 0) {
+            return result;
+        } else if (n == 1) {
+            result.push_back(t_to_sigma((float)t_max));
+            result.push_back(0.f);
+            return result;
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+            float u = 1.f - float(i) / float(n);
+            result.push_back(t_to_sigma(std::round(smoothstep(u) * t_max)));
+        }
+
+        result.push_back(0.f);
+        return result;
+    }
+};
+
 struct Denoiser {
-    std::shared_ptr<SigmaSchedule> schedule                                                  = std::make_shared<DiscreteSchedule>();
+    std::shared_ptr<SigmaSchedule> scheduler                                                 = std::make_shared<DiscreteSchedule>();
     virtual float sigma_min()                                                                = 0;
     virtual float sigma_max()                                                                = 0;
     virtual float sigma_to_t(float sigma)                                                    = 0;
@@ -263,7 +340,7 @@ struct Denoiser {
 
     virtual std::vector<float> get_sigmas(uint32_t n) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
-        return schedule->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
+        return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
     }
 };
 
@@ -349,7 +426,7 @@ struct EDMVDenoiser : public CompVisVDenoiser {
 
     EDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0)
         : min_sigma(min_sigma), max_sigma(max_sigma) {
-        schedule = std::make_shared<ExponentialSchedule>();
+        scheduler = std::make_shared<ExponentialSchedule>();
     }
 
     float t_to_sigma(float t) {
@@ -382,7 +459,8 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     float sigma_data = 1.0f;
 
-    DiscreteFlowDenoiser() {
+    DiscreteFlowDenoiser(float shift = 3.0f)
+        : shift(shift) {
         set_parameters();
     }
 
@@ -692,7 +770,6 @@ static void sample_k_diffusion(sample_method_t method,
         } break;
         case DPMPP2S_A: {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
@@ -707,22 +784,15 @@ static void sample_k_diffusion(sample_method_t method,
                 auto sigma_fn    = [](float t) -> float { return exp(-t); };
 
                 if (sigma_down == 0) {
-                    // Euler step
-                    float* vec_d        = (float*)d->data;
+                    // d = (x - denoised) / sigmas[i];
+                    // dt = sigma_down - sigmas[i];
+                    // x += d * dt;
+                    // => x = denoised
                     float* vec_x        = (float*)x->data;
                     float* vec_denoised = (float*)denoised->data;
 
-                    for (int j = 0; j < ggml_nelements(d); j++) {
-                        vec_d[j] = (vec_x[j] - vec_denoised[j]) / sigmas[i];
-                    }
-
-                    // TODO: If sigma_down == 0, isn't this wrong?
-                    // But
-                    // https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/sampling.py#L525
-                    // has this exactly the same way.
-                    float dt = sigma_down - sigmas[i];
-                    for (int j = 0; j < ggml_nelements(d); j++) {
-                        vec_x[j] = vec_x[j] + vec_d[j] * dt;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_denoised[j];
                     }
                 } else {
                     // DPM-Solver++(2S)
@@ -731,7 +801,6 @@ static void sample_k_diffusion(sample_method_t method,
                     float h      = t_next - t;
                     float s      = t + 0.5f * h;
 
-                    float* vec_d        = (float*)d->data;
                     float* vec_x        = (float*)x->data;
                     float* vec_x2       = (float*)x2->data;
                     float* vec_denoised = (float*)denoised->data;

@@ -367,13 +367,9 @@ std::string gguf_get_model_arch(const std::string & gguf_filename)
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_FALCON;
             }
-            else if(modelarch=="mamba")
+            else if(modelarch=="mamba" || modelarch=="mamba2" || modelarch=="nemotron_h" || modelarch=="jamba") //lazy approach, put all RNN models
             {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_MAMBA;
-            }
-            else if(modelarch=="jamba")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_JAMBA;
+                fileformatmeta->model_architecture = GGUFArch::ARCH_MAMBALIKE;
             }
             else if(modelarch=="llama" && freq_base_train==10000.0f && (n_tensors==435 || n_tensors==611))
             {

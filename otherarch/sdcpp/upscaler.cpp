@@ -17,14 +17,16 @@ struct UpscalerGGML {
           direct(direct) {
     }
 
-    bool load_from_file(const std::string& esrgan_path) {
+    bool load_from_file(const std::string& esrgan_path,
+                        bool offload_params_to_cpu,
+                        int n_threads) {
+        ggml_log_set(ggml_log_callback_default, nullptr);
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_log_set(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 #ifdef SD_USE_VULKAN
@@ -49,11 +51,11 @@ struct UpscalerGGML {
             backend = ggml_backend_cpu_init();
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
-        esrgan_upscaler = std::make_shared<ESRGAN>(backend, model_loader.tensor_storages_types);
+        esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, model_loader.tensor_storages_types);
         if (direct) {
             esrgan_upscaler->enable_conv2d_direct();
         }
-        if (!esrgan_upscaler->load_from_file(esrgan_path)) {
+        if (!esrgan_upscaler->load_from_file(esrgan_path, n_threads)) {
             return false;
         }
         return true;
@@ -68,8 +70,7 @@ struct UpscalerGGML {
                  input_image.width, input_image.height, output_width, output_height);
 
         struct ggml_init_params params;
-        params.mem_size = output_width * output_height * 3 * sizeof(float) * 2;
-        params.mem_size += 2 * ggml_tensor_overhead();
+        params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
         params.mem_buffer = NULL;
         params.no_alloc   = false;
 
@@ -79,9 +80,9 @@ struct UpscalerGGML {
             LOG_ERROR("ggml_init() failed");
             return upscaled_image;
         }
-        LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
+        // LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
         ggml_tensor* input_image_tensor = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, input_image.width, input_image.height, 3, 1);
-        sd_image_to_tensor(input_image.data, input_image_tensor);
+        sd_image_to_tensor(input_image, input_image_tensor);
 
         ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, 3, 1);
         auto on_tiling        = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
@@ -110,8 +111,9 @@ struct upscaler_ctx_t {
 };
 
 upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
-                                 int n_threads,
-                                 bool direct = false) {
+                                 bool offload_params_to_cpu,
+                                 bool direct,
+                                 int n_threads) {
     upscaler_ctx_t* upscaler_ctx = (upscaler_ctx_t*)malloc(sizeof(upscaler_ctx_t));
     if (upscaler_ctx == NULL) {
         return NULL;
@@ -123,7 +125,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return NULL;
     }
 
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path)) {
+    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu, n_threads)) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = NULL;
         free(upscaler_ctx);

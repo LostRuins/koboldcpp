@@ -55,7 +55,7 @@ enum GGUFArch
     ARCH_DEFAULT = 0, //used for llama3 and other generic gguf
     ARCH_FALCON = 1,
     ARCH_PHI = 2,
-    ARCH_MAMBA = 3,
+    ARCH_MAMBALIKE = 3,
     ARCH_SOLAR = 4,
     ARCH_QWEN2 = 5,
     ARCH_RWKV = 6,
@@ -63,8 +63,7 @@ enum GGUFArch
     ARCH_GEMMA3 = 8,
     ARCH_GLM4 = 9,
     ARCH_GEMMA3N = 10,
-    ARCH_JAMBA = 11,
-    ARCH_GPTOSS = 12,
+    ARCH_GPTOSS = 11,
 };
 
 struct FileFormatExtraMeta

@@ -31,7 +31,7 @@ static std::string hexToUnicode(const std::string& hexString) {
 void read_rwkv_vocab()
 {
     std::string line;
-    auto filepath = executable_path + "rwkv_vocab.embd";
+    auto filepath = executable_path + "embd_res/rwkv_vocab.embd";
     printf("\nReading vocab from %s",filepath.c_str());
     std::ifstream myfile(filepath);
     if (myfile.is_open())
@@ -61,7 +61,7 @@ void read_rwkv_world_vocab() //its in hexadecimal
 {
     std::string line;
     std::string unicodeString;
-    auto filepath = executable_path + "rwkv_world_vocab.embd";
+    auto filepath = executable_path + "embd_res/rwkv_world_vocab.embd";
     printf("\nReading world vocab from %s",filepath.c_str());
     std::ifstream myfile(filepath);
     if (myfile.is_open())

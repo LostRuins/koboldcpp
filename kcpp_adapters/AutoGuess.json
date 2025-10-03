@@ -33,6 +33,17 @@
         "assistant_end": "<|im_end|>"
     }
 }, {
+    "search": ["<|im_user|>", "<|im_system|>system<|im_middle|>", "<|im_end|>"],
+    "name": "ChatML (Kimi Alternate)",
+    "adapter": {
+        "system_start": "<|im_system|>system<|im_middle|>",
+        "system_end": "<|im_end|>",
+        "user_start": "<|im_user|>user<|im_middle|>",
+        "user_end": "<|im_end|>",
+        "assistant_start": "<|im_assistant|>assistant<|im_middle|>",
+        "assistant_end": "<|im_end|>"
+    }
+}, {
     "search": ["System role not supported", "<start_of_turn>"],
     "name": "Google Gemma 2",
     "adapter": {

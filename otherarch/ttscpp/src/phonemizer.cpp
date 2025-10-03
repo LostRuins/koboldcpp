@@ -804,7 +804,7 @@ static std::unordered_map<std::string, std::string> kokoro_ipa_map;
 void populate_kokoro_ipa_map(std::string executable_path)
 {
 	std::string line;
-    auto filepath = executable_path + "kokoro_ipa.embd";
+    auto filepath = executable_path + "embd_res/kokoro_ipa.embd";
     printf("\nReading Kokoro IPA from %s",filepath.c_str());
     std::ifstream myfile(filepath);
     if (myfile.is_open())

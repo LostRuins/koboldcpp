@@ -62,6 +62,17 @@ void replace_all_chars(std::string& str, char target, char replacement) {
     }
 }
 
+int round_up_to(int value, int base) {
+    if (base <= 0) {
+        return value;
+    }
+    if (value % base == 0) {
+        return value;
+    } else {
+        return ((value / base) + 1) * base;
+    }
+}
+
 #ifdef _WIN32  // code for windows
 #include <windows.h>
 
@@ -87,56 +98,6 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
     } else {
         return "";
     }
-}
-
-std::vector<std::string> get_files_from_dir(const std::string& dir) {
-    std::vector<std::string> files;
-
-    WIN32_FIND_DATA findFileData;
-    HANDLE hFind;
-
-    char currentDirectory[MAX_PATH];
-    GetCurrentDirectory(MAX_PATH, currentDirectory);
-
-    char directoryPath[MAX_PATH];  // this is absolute path
-    sprintf(directoryPath, "%s\\%s\\*", currentDirectory, dir.c_str());
-
-    // Find the first file in the directory
-    hFind               = FindFirstFile(directoryPath, &findFileData);
-    bool isAbsolutePath = false;
-    // Check if the directory was found
-    if (hFind == INVALID_HANDLE_VALUE) {
-        printf("Unable to find directory. Try with original path \n");
-
-        char directoryPathAbsolute[MAX_PATH];
-        sprintf(directoryPathAbsolute, "%s*", dir.c_str());
-
-        hFind          = FindFirstFile(directoryPathAbsolute, &findFileData);
-        isAbsolutePath = true;
-        if (hFind == INVALID_HANDLE_VALUE) {
-            printf("Absolute path was also wrong.\n");
-            return files;
-        }
-    }
-
-    // Loop through all files in the directory
-    do {
-        // Check if the found file is a regular file (not a directory)
-        if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            if (isAbsolutePath) {
-                files.push_back(dir + "\\" + std::string(findFileData.cFileName));
-            } else {
-                files.push_back(std::string(currentDirectory) + "\\" + dir + "\\" + std::string(findFileData.cFileName));
-            }
-        }
-    } while (FindNextFile(hFind, &findFileData) != 0);
-
-    // Close the handle
-    FindClose(hFind);
-
-    sort(files.begin(), files.end());
-
-    return files;
 }
 
 #else  // Unix
@@ -171,27 +132,6 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
     }
 
     return "";
-}
-
-std::vector<std::string> get_files_from_dir(const std::string& dir) {
-    std::vector<std::string> files;
-
-    DIR* dp = opendir(dir.c_str());
-
-    if (dp != nullptr) {
-        struct dirent* entry;
-
-        while ((entry = readdir(dp)) != nullptr) {
-            std::string fname = dir + "/" + entry->d_name;
-            if (!is_directory(fname))
-                files.push_back(fname);
-        }
-        closedir(dp);
-    }
-
-    sort(files.begin(), files.end());
-
-    return files;
 }
 
 #endif
@@ -280,7 +220,7 @@ std::string path_join(const std::string& p1, const std::string& p2) {
     return p1 + "/" + p2;
 }
 
-std::vector<std::string> splitString(const std::string& str, char delimiter) {
+std::vector<std::string> split_string(const std::string& str, char delimiter) {
     std::vector<std::string> result;
     size_t start = 0;
     size_t end   = str.find(delimiter);
@@ -297,38 +237,6 @@ std::vector<std::string> splitString(const std::string& str, char delimiter) {
     return result;
 }
 
-sd_image_t* preprocess_id_image(sd_image_t* img) {
-    int shortest_edge   = 224;
-    int size            = shortest_edge;
-    sd_image_t* resized = NULL;
-    uint32_t w          = img->width;
-    uint32_t h          = img->height;
-    uint32_t c          = img->channel;
-
-    // 1. do resize using stb_resize functions
-
-    unsigned char* buf = (unsigned char*)malloc(sizeof(unsigned char) * 3 * size * size);
-    if (!stbir_resize_uint8(img->data, w, h, 0,
-                            buf, size, size, 0,
-                            c)) {
-        fprintf(stderr, "%s: resize operation failed \n ", __func__);
-        return resized;
-    }
-
-    // 2. do center crop (likely unnecessary due to step 1)
-
-    // 3. do rescale
-
-    // 4. do normalize
-
-    // 3 and 4 will need to be done in float format.
-
-    resized = new sd_image_t{(uint32_t)shortest_edge,
-                             (uint32_t)shortest_edge,
-                             3,
-                             buf};
-    return resized;
-}
 
 static int sdloglevel = 0; //-1 = hide all, 0 = normal, 1 = showall
 static bool sdquiet = false;
@@ -422,7 +330,10 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     if (written >= 0 && written < LOG_BUFFER_SIZE) {
         vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
     }
-    strncat(log_buffer, "\n", LOG_BUFFER_SIZE - strlen(log_buffer));
+    size_t len = strlen(log_buffer);
+    if (log_buffer[len - 1] != '\n') {
+        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
+    }
 
     if (sd_log_cb) {
         sd_log_cb(level, log_buffer, sd_log_cb_data);

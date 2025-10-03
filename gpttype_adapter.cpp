@@ -484,8 +484,8 @@ void ContextRewind(std::vector<int> &embd, std::vector<int> &current_context_tok
         printf("\nWARNING: Don't use context rewind when in batch processing phase!\n");
         return;
     }
-    bool is_recurrent = (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture==GGUFArch::ARCH_MAMBA
-    || file_format_meta.model_architecture==GGUFArch::ARCH_RWKV || file_format_meta.model_architecture==GGUFArch::ARCH_JAMBA));
+    bool is_recurrent = (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture==GGUFArch::ARCH_MAMBALIKE
+    || file_format_meta.model_architecture==GGUFArch::ARCH_RWKV));
     if(file_format == FileFormat::RWKV_1 || file_format==FileFormat::RWKV_2 || is_recurrent)
     {
         printf("\nWARNING: RNN models do not support context rewind!\n");
@@ -3747,8 +3747,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         printf("%s\n", RemoveBell(outstr).c_str());
     }
 
-    bool is_recurrent = (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture==GGUFArch::ARCH_MAMBA
-    || file_format_meta.model_architecture==GGUFArch::ARCH_RWKV || file_format_meta.model_architecture==GGUFArch::ARCH_JAMBA));
+    bool is_recurrent = (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture==GGUFArch::ARCH_MAMBALIKE
+    || file_format_meta.model_architecture==GGUFArch::ARCH_RWKV));
     bool blank_prompt = (addedmemory=="" && kcpp_data->prompt=="");
 
     if (file_format == FileFormat::RWKV_1 || file_format==FileFormat::RWKV_2 || is_recurrent)

@@ -174,10 +174,11 @@ public:
 
     struct ggml_tensor* attention_layer_forward(std::string name,
                                                 struct ggml_context* ctx,
+                                                ggml_backend_t backend,
                                                 struct ggml_tensor* x,
                                                 struct ggml_tensor* context) {
         auto block = std::dynamic_pointer_cast<SpatialTransformer>(blocks[name]);
-        return block->forward(ctx, x, context);
+        return block->forward(ctx, backend, x, context);
     }
 
     struct ggml_tensor* input_hint_block_forward(struct ggml_context* ctx,
@@ -199,6 +200,7 @@ public:
     }
 
     std::vector<struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                             ggml_backend_t backend,
                                              struct ggml_tensor* x,
                                              struct ggml_tensor* hint,
                                              struct ggml_tensor* guided_hint,
@@ -272,7 +274,7 @@ public:
                 h                = resblock_forward(name, ctx, h, emb);  // [N, mult*model_channels, h, w]
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
-                    h                = attention_layer_forward(name, ctx, h, context);  // [N, mult*model_channels, h, w]
+                    h                = attention_layer_forward(name, ctx, backend, h, context);  // [N, mult*model_channels, h, w]
                 }
 
                 auto zero_conv = std::dynamic_pointer_cast<Conv2d>(blocks["zero_convs." + std::to_string(input_block_idx) + ".0"]);
@@ -296,9 +298,9 @@ public:
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        h = resblock_forward("middle_block.0", ctx, h, emb);             // [N, 4*model_channels, h/8, w/8]
-        h = attention_layer_forward("middle_block.1", ctx, h, context);  // [N, 4*model_channels, h/8, w/8]
-        h = resblock_forward("middle_block.2", ctx, h, emb);             // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.0", ctx, h, emb);                      // [N, 4*model_channels, h/8, w/8]
+        h = attention_layer_forward("middle_block.1", ctx, backend, h, context);  // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.2", ctx, h, emb);                      // [N, 4*model_channels, h/8, w/8]
 
         // out
         outs.push_back(middle_block_out->forward(ctx, h));
@@ -317,9 +319,10 @@ struct ControlNet : public GGMLRunner {
     bool guided_hint_cached         = false;
 
     ControlNet(ggml_backend_t backend,
+               bool offload_params_to_cpu,
                const String2GGMLType& tensor_types = {},
                SDVersion version                   = VERSION_SD1)
-        : GGMLRunner(backend), control_net(version) {
+        : GGMLRunner(backend, offload_params_to_cpu), control_net(version) {
         control_net.init(params_ctx, tensor_types, "");
     }
 
@@ -357,7 +360,7 @@ struct ControlNet : public GGMLRunner {
             control_buffer_size += ggml_nbytes(controls[i]);
         }
 
-        control_buffer = ggml_backend_alloc_ctx_tensors(control_ctx, backend);
+        control_buffer = ggml_backend_alloc_ctx_tensors(control_ctx, runtime_backend);
 
         LOG_DEBUG("control buffer size %.2fMB", control_buffer_size * 1.f / 1024.f / 1024.f);
     }
@@ -402,6 +405,7 @@ struct ControlNet : public GGMLRunner {
         timesteps = to_backend(timesteps);
 
         auto outs = control_net.forward(compute_ctx,
+                                        runtime_backend,
                                         x,
                                         hint,
                                         guided_hint_cached ? guided_hint : NULL,
@@ -441,7 +445,7 @@ struct ControlNet : public GGMLRunner {
         guided_hint_cached = true;
     }
 
-    bool load_from_file(const std::string& file_path) {
+    bool load_from_file(const std::string& file_path, int n_threads) {
         LOG_INFO("loading control net from '%s'", file_path.c_str());
         alloc_params_buffer();
         std::map<std::string, ggml_tensor*> tensors;
@@ -454,7 +458,7 @@ struct ControlNet : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(tensors, backend, ignore_tensors);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads);
 
         if (!success) {
             LOG_ERROR("load control net tensors from model loader failed");

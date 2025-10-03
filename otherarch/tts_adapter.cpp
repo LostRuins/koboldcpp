@@ -651,7 +651,7 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     is_ttscpp_file = false;
     if (detectedarch!="" && SUPPORTED_ARCHITECTURES.find(detectedarch) != SUPPORTED_ARCHITECTURES.end()) {
         is_ttscpp_file = true;
-        printf("\nLoading TTS.CPP Model Arch: %s \n", detectedarch.c_str());
+        printf("\nLoading TTS.CPP Model: %s, Arch: %s \n",modelfile_ttc.c_str(), detectedarch.c_str());
         if(detectedarch=="kokoro")
         {
             //setup kokoro IPA
@@ -671,7 +671,7 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
 
     // tts init
     if (is_ttscpp_file) {
-        ttscpp_config = new generation_configuration("am_echo", 25, 1.0, 1.0, true, "", 2048, 1.0);
+        ttscpp_config = new generation_configuration("am_echo", 25, 1.0, 1.0, true, "", 1600, 1.0);
         ttscpp_runner = runner_from_file(modelfile_ttc, inputs.threads, ttscpp_config, true);
         if (ttscpp_runner == nullptr) {
             printf("\nTTS Load Error: Failed to initialize TTSCPP!\n");

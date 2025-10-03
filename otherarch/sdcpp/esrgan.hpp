@@ -142,8 +142,10 @@ struct ESRGAN : public GGMLRunner {
     int scale     = 4;
     int tile_size = 128;  // avoid cuda OOM for 4gb VRAM
 
-    ESRGAN(ggml_backend_t backend, const String2GGMLType& tensor_types = {})
-        : GGMLRunner(backend) {
+    ESRGAN(ggml_backend_t backend,
+           bool offload_params_to_cpu,
+           const String2GGMLType& tensor_types = {})
+        : GGMLRunner(backend, offload_params_to_cpu) {
         rrdb_net.init(params_ctx, tensor_types, "");
     }
 
@@ -162,7 +164,7 @@ struct ESRGAN : public GGMLRunner {
         return "esrgan";
     }
 
-    bool load_from_file(const std::string& file_path) {
+    bool load_from_file(const std::string& file_path, int n_threads) {
         LOG_INFO("loading esrgan from '%s'", file_path.c_str());
 
         alloc_params_buffer();
@@ -175,7 +177,7 @@ struct ESRGAN : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(esrgan_tensors, backend);
+        bool success = model_loader.load_tensors(esrgan_tensors, {}, n_threads);
 
         if (!success) {
             LOG_ERROR("load esrgan tensors from model loader failed");
