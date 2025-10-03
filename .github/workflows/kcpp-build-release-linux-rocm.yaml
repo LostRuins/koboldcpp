@@ -45,7 +45,7 @@ jobs:
           docker run --privileged \
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
-            -e KCPP_CUDA="ROCm" \
+            -e KCPP_CUDA="rocm" \
             -e BRANCH_NAME="${{ github.head_ref || github.ref_name }}" \
             rocm/dev-ubuntu-22.04:7.0-complete \
             bash -c "
