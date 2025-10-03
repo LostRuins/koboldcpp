@@ -19,11 +19,31 @@ env:
   ARCHES_CU12: 1
 
 jobs:
+  clean-linux:
+    runs-on: ubuntu-22.04
+    permissions: write-all
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: true
+
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
   linux:
+    needs: clean-linux
     runs-on: ubuntu-22.04
     permissions: write-all
     container:
-      image: rocm/dev-ubuntu-22.04:7.0
+      image: rocm/dev-ubuntu-22.04:7.0-complete
       options: --privileged
     steps:
       - name: Clone
