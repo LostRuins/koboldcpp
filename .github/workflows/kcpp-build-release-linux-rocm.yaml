@@ -46,6 +46,8 @@ jobs:
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
             rocm/dev-ubuntu-22.04:7.0-complete \
+            -e "KCPP_CUDA=ROCm" \
+            -e "BRANCH_NAME=${{ github.head_ref || github.ref_name }}" \
             bash -c "
               apt update &&
               DEBIAN_FRONTEND=noninteractive apt install -y git curl bzip2 python3-tk tcl tk &&
@@ -64,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload rocm-rolling ${{ github.workspace }}/dist/koboldcpp-linux-x64-rocm --clobber
+          gh release upload rocm-rolling dist/koboldcpp-linux-x64-rocm --clobber
 
       - name: Upload version pinned tagged binary
         if: ${{ inputs.tag_name != '' }}
@@ -72,5 +74,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name }}
         run: |
-          cp dist/koboldcpp-linux-x64-rocm "${{ github.workspace }}/dist/koboldcpp-linux-x64-rocm-${TAG_NAME}"
-          gh release upload rocm-rolling "${{ github.workspace }}/dist/koboldcpp-linux-x64-rocm-${TAG_NAME}" --clobber
+          cp dist/koboldcpp-linux-x64-rocm "dist/koboldcpp-linux-x64-rocm-${TAG_NAME}"
+          gh release upload rocm-rolling "dist/koboldcpp-linux-x64-rocm-${TAG_NAME}" --clobber
