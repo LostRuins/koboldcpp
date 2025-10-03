@@ -42,7 +42,6 @@ jobs:
 
       - name: Build inside ROCm container
         run: |
-          docker pull rocm/dev-ubuntu-22.04:7.0-complete
           docker run --privileged \
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
@@ -59,13 +58,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kcpp_linux_binary
-          path: dist/
+          path: ${{ github.workspace }}/dist/
 
       - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload rocm-rolling dist/koboldcpp-linux-x64-rocm --clobber
+          gh release upload rocm-rolling ${{ github.workspace }}/dist/koboldcpp-linux-x64-rocm --clobber
 
       - name: Upload version pinned tagged binary
         if: ${{ inputs.tag_name != '' }}
@@ -73,5 +72,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name }}
         run: |
-          cp dist/koboldcpp-linux-x64-rocm "dist/koboldcpp-linux-x64-rocm-${TAG_NAME}"
-          gh release upload rocm-rolling "dist/koboldcpp-linux-x64-rocm-${TAG_NAME}" --clobber
+          cp dist/koboldcpp-linux-x64-rocm "${{ github.workspace }}/dist/koboldcpp-linux-x64-rocm-${TAG_NAME}"
+          gh release upload rocm-rolling "${{ github.workspace }}/dist/koboldcpp-linux-x64-rocm-${TAG_NAME}" --clobber
