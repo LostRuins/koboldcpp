@@ -177,6 +177,102 @@ std::string sd_load_umt5()
     return umt5str;
 }
 
+// helper class to parse json fields, reporting wrongly typed and unknown js keys
+class JsonFieldHelper {
+public:
+    JsonFieldHelper(bool debug_=false)
+     :debug(debug_) {}
+
+    template<typename Field>
+    void get_field(Field& field, const std::string& name, const nlohmann::json& js) {
+        if (js.contains(name)) {
+            known_fields.insert(name);
+            assign_value(field, name, js[name]);
+        }
+    }
+
+    void dump_errors(const nlohmann::json& js) {
+        for (auto msg : field_errors) {
+            printf("json fields: %s\n", msg.c_str());
+        }
+
+        for (auto it = js.begin(); it != js.end(); ++it) {
+            if (known_fields.find(it.key()) == known_fields.end()) {
+                printf("json fields: %s: unmatched key\n", it.key().c_str());
+            }
+        }
+    }
+
+private:
+
+    bool debug;
+    std::unordered_set<std::string> known_fields;
+    std::vector<std::string> field_errors;
+
+    // Overloaded assignment handlers for different types
+    void assign_value(int& field, const std::string& name, const nlohmann::json& jv) {
+        if (jv.is_number()) {
+            field = static_cast<int>(jv); // accepts floating point too
+            if (debug) printf("json fields: %s=%d\n", name.c_str(), field);
+        } else {
+            field_errors.push_back(name + ": wrong type (expected int)");
+        }
+    }
+
+    void assign_value(float& field, const std::string& name, const nlohmann::json& jv) {
+        if (jv.is_number()) {
+            field = jv;
+            if (debug) printf("json fields: %s=%f\n", name.c_str(), field);
+        } else {
+            field_errors.push_back(name + ": wrong type (expected float)");
+        }
+    }
+
+    void assign_value(bool& field, const std::string& name, const nlohmann::json& jv) {
+        if (jv.is_boolean() || jv.is_number()) {
+            field = static_cast<bool>(jv);
+            if (debug) printf("json fields: %s=%s\n", name.c_str(), field?"true":"false");
+        } else {
+            field_errors.push_back(name + ": wrong type (expected boolean)");
+        }
+    }
+};
+
+static void parse_json_parameters(const std::string& json_str, sd_img_gen_params_t & params, bool debug=false)
+{
+    nlohmann::json js;
+
+    try {
+        js = nlohmann::json::parse(json_str);
+    } catch (...) {
+        if (sddebugmode) {
+            printf("json fields: parse error\n");
+        }
+        return;
+    }
+
+    if (!js.is_object()) {
+        if (sddebugmode) {
+            printf("json fields: not a top-level object\n");
+        }
+        return;
+    }
+
+    JsonFieldHelper jh(debug);
+
+    jh.get_field(params.vae_tiling_params.enabled, "vae_tiling_params.enabled", js);
+    jh.get_field(params.vae_tiling_params.tile_size_x, "vae_tiling_params.tile_size_x", js);
+    jh.get_field(params.vae_tiling_params.tile_size_y, "vae_tiling_params.tile_size_y", js);
+    jh.get_field(params.vae_tiling_params.target_overlap, "vae_tiling_params.target_overlap", js);
+    jh.get_field(params.vae_tiling_params.rel_size_x, "vae_tiling_params.rel_size_x", js);
+    jh.get_field(params.vae_tiling_params.rel_size_y, "vae_tiling_params.rel_size_y", js);
+
+    if (debug) {
+        jh.dump_errors(js);
+    }
+}
+
+
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
@@ -194,6 +290,18 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     cfg_side_limit = inputs.img_hard_limit;
     cfg_square_limit = inputs.img_soft_limit;
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
+
+    // TEST
+    {
+       sd_img_gen_params_t params = {};
+       parse_json_parameters("{"
+           "\"vae_tiling_params.enabled\": true,"
+           "\"vae_tiling_params.rel_size_x\": 3.0,"
+           "\"vae_tiling_params.tile_size_y\": \"x\","
+           "\"vae_tiling_params.tile_size_x\": 1.0,"
+           "\"ajgdhfsjdgfj\": 12"
+           "}", params, true);
+    }
 
     if(lorafilename!="")
     {
