@@ -479,12 +479,15 @@ __STATIC_INLINE__ void ggml_split_tensor_2d(struct ggml_tensor* input,
     int64_t width    = output->ne[0];
     int64_t height   = output->ne[1];
     int64_t channels = output->ne[2];
+    int64_t ne3      = output->ne[3];
     GGML_ASSERT(input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32);
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                float value = ggml_tensor_get_f32(input, ix + x, iy + y, k);
-                ggml_tensor_set_f32(output, value, ix, iy, k);
+                for (int l = 0; l < ne3; l++) {
+                    float value = ggml_tensor_get_f32(input, ix + x, iy + y, k, l);
+                    ggml_tensor_set_f32(output, value, ix, iy, k, l);
+                }
             }
         }
     }
@@ -507,6 +510,7 @@ __STATIC_INLINE__ void ggml_merge_tensor_2d(struct ggml_tensor* input,
     int64_t width    = input->ne[0];
     int64_t height   = input->ne[1];
     int64_t channels = input->ne[2];
+    int64_t ne3      = input->ne[3];
 
     int64_t img_width  = output->ne[0];
     int64_t img_height = output->ne[1];
@@ -515,24 +519,26 @@ __STATIC_INLINE__ void ggml_merge_tensor_2d(struct ggml_tensor* input,
     for (int iy = y_skip; iy < height; iy++) {
         for (int ix = x_skip; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                float new_value = ggml_tensor_get_f32(input, ix, iy, k);
-                if (overlap_x > 0 || overlap_y > 0) {  // blend colors in overlapped area
-                    float old_value = ggml_tensor_get_f32(output, x + ix, y + iy, k);
+                for (int l = 0; l < ne3; l++) {
+                    float new_value = ggml_tensor_get_f32(input, ix, iy, k, l);
+                    if (overlap_x > 0 || overlap_y > 0) {  // blend colors in overlapped area
+                        float old_value = ggml_tensor_get_f32(output, x + ix, y + iy, k, l);
 
-                    const float x_f_0 = (overlap_x > 0 && x > 0) ? (ix - x_skip) / float(overlap_x) : 1;
-                    const float x_f_1 = (overlap_x > 0 && x < (img_width - width)) ? (width - ix) / float(overlap_x) : 1;
-                    const float y_f_0 = (overlap_y > 0 && y > 0) ? (iy - y_skip) / float(overlap_y) : 1;
-                    const float y_f_1 = (overlap_y > 0 && y < (img_height - height)) ? (height - iy) / float(overlap_y) : 1;
+                        const float x_f_0 = (overlap_x > 0 && x > 0) ? (ix - x_skip) / float(overlap_x) : 1;
+                        const float x_f_1 = (overlap_x > 0 && x < (img_width - width)) ? (width - ix) / float(overlap_x) : 1;
+                        const float y_f_0 = (overlap_y > 0 && y > 0) ? (iy - y_skip) / float(overlap_y) : 1;
+                        const float y_f_1 = (overlap_y > 0 && y < (img_height - height)) ? (height - iy) / float(overlap_y) : 1;
 
-                    const float x_f = std::min(std::min(x_f_0, x_f_1), 1.f);
-                    const float y_f = std::min(std::min(y_f_0, y_f_1), 1.f);
+                        const float x_f = std::min(std::min(x_f_0, x_f_1), 1.f);
+                        const float y_f = std::min(std::min(y_f_0, y_f_1), 1.f);
 
-                    ggml_tensor_set_f32(
-                        output,
-                        old_value + new_value * ggml_smootherstep_f32(y_f) * ggml_smootherstep_f32(x_f),
-                        x + ix, y + iy, k);
-                } else {
-                    ggml_tensor_set_f32(output, new_value, x + ix, y + iy, k);
+                        ggml_tensor_set_f32(
+                            output,
+                            old_value + new_value * ggml_smootherstep_f32(y_f) * ggml_smootherstep_f32(x_f),
+                            x + ix, y + iy, k, l);
+                    } else {
+                        ggml_tensor_set_f32(output, new_value, x + ix, y + iy, k, l);
+                    }
                 }
             }
         }
@@ -848,8 +854,8 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     }
 
     struct ggml_init_params params = {};
-    params.mem_size += input_tile_size_x * input_tile_size_y * input->ne[2] * sizeof(float);     // input chunk
-    params.mem_size += output_tile_size_x * output_tile_size_y * output->ne[2] * sizeof(float);  // output chunk
+    params.mem_size += input_tile_size_x * input_tile_size_y * input->ne[2] * input->ne[3] * sizeof(float);      // input chunk
+    params.mem_size += output_tile_size_x * output_tile_size_y * output->ne[2] * output->ne[3] * sizeof(float);  // output chunk
     params.mem_size += 3 * ggml_tensor_overhead();
     params.mem_buffer = NULL;
     params.no_alloc   = false;
@@ -864,8 +870,8 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     }
 
     // tiling
-    ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size_x, input_tile_size_y, input->ne[2], 1);
-    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size_x, output_tile_size_y, output->ne[2], 1);
+    ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size_x, input_tile_size_y, input->ne[2], input->ne[3]);
+    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size_x, output_tile_size_y, output->ne[2], output->ne[3]);
     int num_tiles            = num_tiles_x * num_tiles_y;
     LOG_INFO("processing %i tiles", num_tiles);
     pretty_progress(0, num_tiles, 0.0f);
