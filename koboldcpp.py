@@ -1929,7 +1929,9 @@ def sd_generate(genparams):
     inputs.sample_steps = sample_steps
     inputs.width = width
     inputs.height = height
-    inputs.seed = seed
+    # avoid overflow on the underlying type
+    seed_limit = 2**(sd_generation_inputs.seed.size * 8 - 1)
+    inputs.seed = seed % seed_limit
     inputs.sample_method = sample_method.encode("UTF-8")
     inputs.scheduler = scheduler.encode("UTF-8")
     inputs.clip_skip = clip_skip
