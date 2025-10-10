@@ -92,8 +92,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_mul_n_mode(struct ggml_context* ctx, 
     int ne3 = a->ne[3];
     // make 2D
     a = ggml_cont(ctx, ggml_reshape_2d(ctx, a, a->ne[0], (ne3 * ne2 * ne1)));
-
-    struct ggml_tensor* result = ggml_cont(ctx, ggml_transpose(ctx, ggml_mul_mat(ctx, a, b)));
+    auto ttmp = ggml_mul_mat(ctx, a, b);
+    ggml_mul_mat_set_prec(ttmp, GGML_PREC_F32);
+    struct ggml_tensor* result = ggml_cont(ctx, ggml_transpose(ctx, ttmp));
 
     // reshape output (same shape as a after permutation except first dim)
     result = ggml_reshape_4d(ctx, result, result->ne[0], ne1, ne2, ne3);
@@ -946,7 +947,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_linear(struct ggml_context* ctx,
                                                      struct ggml_tensor* x,
                                                      struct ggml_tensor* w,
                                                      struct ggml_tensor* b,
-                                                     bool force_prec_f32 = false) {
+                                                     bool force_prec_f32 = true) {
     x = ggml_mul_mat(ctx, w, x);
     if (force_prec_f32) {
         ggml_mul_mat_set_prec(x, GGML_PREC_F32);
@@ -1125,12 +1126,14 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx
 #else
     float d_head           = (float)q->ne[0];
     struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, n_token, n_k]
+    ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
     kq                     = ggml_scale_inplace(ctx, kq, 1.0f / sqrt(d_head));
     if (mask) {
         kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
     }
     kq                      = ggml_soft_max_inplace(ctx, kq);
     struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, n_token, d_head]
+    ggml_mul_mat_set_prec(kqv, GGML_PREC_F32);
 #endif
     return kqv;
 }
@@ -1266,6 +1269,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         v = ggml_reshape_3d(ctx, v, L_k, d_head, n_kv_head * N);  // [N * n_kv_head, d_head, L_k]
 
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
+        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
         kq      = ggml_scale_inplace(ctx, kq, scale);
         if (mask) {
             kq = ggml_add_inplace(ctx, kq, mask);
@@ -1276,6 +1280,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         kq = ggml_soft_max_inplace(ctx, kq);
 
         kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, L_q, d_head]
+        ggml_mul_mat_set_prec(kqv, GGML_PREC_F32);
 
         kqv = ggml_reshape_4d(ctx, kqv, d_head, L_q, n_head, N);  // [N, n_head, L_q, d_head]
         kqv = ggml_permute(ctx, kqv, 0, 2, 1, 3);                 // [N, L_q, n_head, d_head]
@@ -1982,7 +1987,7 @@ public:
            int64_t out_features,
            bool bias      = true,
            bool force_f32 = false,
-           bool force_prec_f32 = false)
+           bool force_prec_f32 = true)
         : in_features(in_features),
           out_features(out_features),
           bias(bias),
@@ -1995,7 +2000,7 @@ public:
         if (bias) {
             b = params["bias"];
         }
-        return ggml_nn_linear(ctx, x, w, b, force_prec_f32);
+        return ggml_nn_linear(ctx, x, w, b, true);
     }
 };
 
