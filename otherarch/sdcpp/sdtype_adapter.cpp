@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <filesystem>
 
+#define KCPP_BAKE_SD_VOCAB
+
 #include "model_adapter.h"
 
 std::string sd_load_merges();
