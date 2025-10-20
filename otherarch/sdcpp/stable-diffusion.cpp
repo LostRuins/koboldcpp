@@ -16,6 +16,8 @@
 #include "tae.hpp"
 #include "vae.hpp"
 
+using std::isfinite;
+
 // #define STB_IMAGE_IMPLEMENTATION
 // #define STB_IMAGE_STATIC
 #include "stb_image.h"
@@ -89,10 +91,6 @@ public:
     ggml_backend_t clip_backend        = NULL;
     ggml_backend_t control_net_backend = NULL;
     ggml_backend_t vae_backend         = NULL;
-    ggml_type model_wtype              = GGML_TYPE_COUNT;
-    ggml_type conditioner_wtype        = GGML_TYPE_COUNT;
-    ggml_type diffusion_model_wtype    = GGML_TYPE_COUNT;
-    ggml_type vae_wtype                = GGML_TYPE_COUNT;
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -416,37 +414,33 @@ public:
         ggml_type wtype = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
                               ? (ggml_type)sd_ctx_params->wtype
                               : GGML_TYPE_COUNT;
-        if (wtype == GGML_TYPE_COUNT) {
-            model_wtype = model_loader.get_sd_wtype();
-            if (model_wtype == GGML_TYPE_COUNT) {
-                model_wtype = GGML_TYPE_F32;
-                LOG_WARN("can not get mode wtype frome weight, use f32");
-            }
-            conditioner_wtype = model_loader.get_conditioner_wtype();
-            if (conditioner_wtype == GGML_TYPE_COUNT) {
-                conditioner_wtype = wtype;
-            }
-            diffusion_model_wtype = model_loader.get_diffusion_model_wtype();
-            if (diffusion_model_wtype == GGML_TYPE_COUNT) {
-                diffusion_model_wtype = wtype;
-            }
-            vae_wtype = model_loader.get_vae_wtype();
-
-            if (vae_wtype == GGML_TYPE_COUNT) {
-                vae_wtype = wtype;
-            }
-        } else {
-            model_wtype           = wtype;
-            conditioner_wtype     = wtype;
-            diffusion_model_wtype = wtype;
-            vae_wtype             = wtype;
+        if (wtype != GGML_TYPE_COUNT) {
             model_loader.set_wtype_override(wtype);
         }
 
-        LOG_INFO("Weight type:                 %s", ggml_type_name(model_wtype));
-        LOG_INFO("Conditioner weight type:     %s", ggml_type_name(conditioner_wtype));
-        LOG_INFO("Diffusion model weight type: %s", ggml_type_name(diffusion_model_wtype));
-        LOG_INFO("VAE weight type:             %s", ggml_type_name(vae_wtype));
+        std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();
+        std::map<ggml_type, uint32_t> conditioner_wtype_stat     = model_loader.get_conditioner_wtype_stat();
+        std::map<ggml_type, uint32_t> diffusion_model_wtype_stat = model_loader.get_diffusion_model_wtype_stat();
+        std::map<ggml_type, uint32_t> vae_wtype_stat             = model_loader.get_vae_wtype_stat();
+
+        auto wtype_stat_to_str = [](const std::map<ggml_type, uint32_t>& m, int key_width = 8, int value_width = 5) -> std::string {
+            std::ostringstream oss;
+            bool first = true;
+            for (const auto& [type, count] : m) {
+                if (!first)
+                    oss << "|";
+                first = false;
+                oss << std::right << std::setw(key_width) << ggml_type_name(type)
+                    << ": "
+                    << std::left << std::setw(value_width) << count;
+            }
+            return oss.str();
+        };
+
+        LOG_INFO("Weight type stat:                 %s", wtype_stat_to_str(wtype_stat).c_str());
+        LOG_INFO("Conditioner weight type stat:     %s", wtype_stat_to_str(conditioner_wtype_stat).c_str());
+        LOG_INFO("Diffusion model weight type stat: %s", wtype_stat_to_str(diffusion_model_wtype_stat).c_str());
+        LOG_INFO("VAE weight type stat:             %s", wtype_stat_to_str(vae_wtype_stat).c_str());
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
@@ -1094,9 +1088,6 @@ public:
     }
 
     void apply_loras(const std::unordered_map<std::string, float>& lora_state) {
-        if (lora_state.size() > 0 && model_wtype != GGML_TYPE_F16 && model_wtype != GGML_TYPE_F32) {
-            LOG_WARN("In quantized models when applying LoRA, the images have poor quality.");
-        }
         std::unordered_map<std::string, float> lora_state_diff;
         for (auto& kv : lora_state) {
             const std::string& lora_name = kv.first;

@@ -266,7 +266,7 @@ void pretty_progress(int step, int steps, float time) {
         }
     }
     progress += "|";
-    printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s\033[K",
+    printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it    " : "\r%s %i/%i - %.2fit/s    ",
            progress.c_str(), step, steps,
            time > 1.0f || time == 0 ? time : (1.0f / time));
     fflush(stdout);  // for linux
@@ -296,8 +296,8 @@ std::string trim(const std::string& s) {
 static sd_log_cb_t sd_log_cb = NULL;
 void* sd_log_cb_data         = NULL;
 
-
 #define LOG_BUFFER_SIZE 4096
+
 void log_message(const char* format, ...) {
     if (sdloglevel>0) {
         printf("\n");

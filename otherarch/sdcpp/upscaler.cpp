@@ -138,6 +138,13 @@ sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_
     return upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
 }
 
+int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {
+    if (upscaler_ctx == NULL || upscaler_ctx->upscaler == NULL || upscaler_ctx->upscaler->esrgan_upscaler == NULL) {
+        return 1;
+    }
+    return upscaler_ctx->upscaler->esrgan_upscaler->scale;
+}
+
 void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx) {
     if (upscaler_ctx->upscaler != NULL) {
         delete upscaler_ctx->upscaler;
