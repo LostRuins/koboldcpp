@@ -266,7 +266,7 @@ void pretty_progress(int step, int steps, float time) {
         }
     }
     progress += "|";
-    printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it    " : "\r%s %i/%i - %.2fit/s\033[K",
+    printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s\033[K",
            progress.c_str(), step, steps,
            time > 1.0f || time == 0 ? time : (1.0f / time));
     fflush(stdout);  // for linux
