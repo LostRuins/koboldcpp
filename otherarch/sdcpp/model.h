@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "ggml-backend.h"
@@ -140,8 +141,8 @@ struct TensorStorage {
 
     TensorStorage() = default;
 
-    TensorStorage(const std::string& name, ggml_type type, const int64_t* ne, int n_dims, size_t file_index, size_t offset = 0)
-        : name(name), type(type), n_dims(n_dims), file_index(file_index), offset(offset) {
+    TensorStorage(std::string name, ggml_type type, const int64_t* ne, int n_dims, size_t file_index, size_t offset = 0)
+        : name(std::move(name)), type(type), n_dims(n_dims), file_index(file_index), offset(offset) {
         for (int i = 0; i < n_dims; i++) {
             this->ne[i] = ne[i];
         }

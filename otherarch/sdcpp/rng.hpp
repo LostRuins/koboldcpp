@@ -15,11 +15,11 @@ private:
     std::default_random_engine generator;
 
 public:
-    void manual_seed(uint64_t seed) {
+    void manual_seed(uint64_t seed) override {
         generator.seed((unsigned int)seed);
     }
 
-    std::vector<float> randn(uint32_t n) {
+    std::vector<float> randn(uint32_t n) override {
         std::vector<float> result;
         float mean   = 0.0;
         float stddev = 1.0;

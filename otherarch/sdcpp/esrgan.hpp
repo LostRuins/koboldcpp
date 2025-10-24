@@ -174,7 +174,7 @@ struct ESRGAN : public GGMLRunner {
         }
     }
 
-    std::string get_desc() {
+    std::string get_desc() override {
         return "esrgan";
     }
 
@@ -367,7 +367,7 @@ struct ESRGAN : public GGMLRunner {
     void compute(const int n_threads,
                  struct ggml_tensor* x,
                  ggml_tensor** output,
-                 ggml_context* output_ctx = NULL) {
+                 ggml_context* output_ctx = nullptr) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(x);
         };

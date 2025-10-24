@@ -1,10 +1,10 @@
 #ifndef __AVI_WRITER_H__
 #define __AVI_WRITER_H__
 
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 #include "stable-diffusion.h"
 
@@ -135,7 +135,7 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
     write_u32_le(f, 0);                   // Colors important
 
     // 'movi' LIST (video frames)
-    long movi_list_pos = ftell(f);
+    // long movi_list_pos = ftell(f);
     fwrite("LIST", 4, 1, f);
     long movi_size_pos = ftell(f);
     write_u32_le(f, 0);  // Placeholder for movi size
@@ -154,7 +154,7 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
     } jpeg_data;
 
     for (int i = 0; i < num_images; i++) {
-        jpeg_data.buf  = NULL;
+        jpeg_data.buf  = nullptr;
         jpeg_data.size = 0;
 
         // Callback function to collect JPEG data into memory

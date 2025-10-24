@@ -7,6 +7,7 @@
 #include <map>
 #include <random>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -213,119 +214,6 @@ void print_params(SDParams params) {
     free(high_noise_sample_params_str);
 }
 
-void print_usage(int argc, const char* argv[]) {
-    printf("usage: %s [arguments]\n", argv[0]);
-    printf("\n");
-    printf("arguments:\n");
-    printf("  -h, --help                         show this help message and exit\n");
-    printf("  -M, --mode [MODE]                  run mode, one of: [img_gen, vid_gen, upscale, convert], default: img_gen\n");
-    printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
-    printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
-    printf("  --offload-to-cpu                   place the weights in RAM to save VRAM, and automatically load them into VRAM when needed\n");
-    printf("  -m, --model [MODEL]                path to full model\n");
-    printf("  --diffusion-model                  path to the standalone diffusion model\n");
-    printf("  --high-noise-diffusion-model       path to the standalone high noise diffusion model\n");
-    printf("  --clip_l                           path to the clip-l text encoder\n");
-    printf("  --clip_g                           path to the clip-g text encoder\n");
-    printf("  --clip_vision                      path to the clip-vision encoder\n");
-    printf("  --t5xxl                            path to the t5xxl text encoder\n");
-    printf("  --qwen2vl                          path to the qwen2vl text encoder\n");
-    printf("  --qwen2vl_vision                   path to the qwen2vl vit\n");
-    printf("  --vae [VAE]                        path to vae\n");
-    printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
-    printf("  --control-net [CONTROL_PATH]       path to control net model\n");
-    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
-    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. For img_gen mode, upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now\n");
-    printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
-    printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
-    printf("                                     If not specified, the default is the type of the weight file\n");
-    printf("  --tensor-type-rules [EXPRESSION]   weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")\n");
-    printf("  --lora-model-dir [DIR]             lora model directory\n");
-    printf("  -i, --init-img [IMAGE]             path to the init image, required by img2img\n");
-    printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
-    printf("  -i, --end-img [IMAGE]              path to the end image, required by flf2v\n");
-    printf("  --control-image [IMAGE]            path to image condition, control net\n");
-    printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
-    printf("  --disable-auto-resize-ref-image    disable auto resize of ref images\n");
-    printf("  --control-video [PATH]             path to control video frames, It must be a directory path.\n");
-    printf("                                     The video frames inside should be stored as images in lexicographical (character) order\n");
-    printf("                                     For example, if the control video path is `frames`, the directory contain images such as 00.png, 01.png, ... etc.\n");
-    printf("  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).\n");
-    printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
-    printf("  -p, --prompt [PROMPT]              the prompt to render\n");
-    printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
-    printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
-    printf("  --img-cfg-scale SCALE              image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)\n");
-    printf("  --guidance SCALE                   distilled guidance scale for models with guidance input (default: 3.5)\n");
-    printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
-    printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
-    printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
-    printf("  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
-    printf("  --skip-layer-start START           SLG enabling point: (default: 0.01)\n");
-    printf("  --skip-layer-end END               SLG disabling point: (default: 0.2)\n");
-    printf("  --scheduler {discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple} Denoiser sigma scheduler (default: discrete)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
-    printf("                                     sampling method (default: \"euler\" for Flux/SD3/Wan, \"euler_a\" otherwise)\n");
-    printf("  --timestep-shift N                 shift timestep for NitroFusion models, default: 0, recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant\n");
-    printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
-    printf("  --high-noise-cfg-scale SCALE       (high noise) unconditional guidance scale: (default: 7.0)\n");
-    printf("  --high-noise-img-cfg-scale SCALE   (high noise) image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)\n");
-    printf("  --high-noise-guidance SCALE        (high noise) distilled guidance scale for models with guidance input (default: 3.5)\n");
-    printf("  --high-noise-slg-scale SCALE       (high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
-    printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
-    printf("  --high-noise-eta SCALE             (high noise) eta in DDIM, only for DDIM and TCD: (default: 0)\n");
-    printf("  --high-noise-skip-layers LAYERS    (high noise) Layers to skip for SLG steps: (default: [7,8,9])\n");
-    printf("  --high-noise-skip-layer-start      (high noise) SLG enabling point: (default: 0.01)\n");
-    printf("  --high-noise-skip-layer-end END    (high noise) SLG disabling point: (default: 0.2)\n");
-    printf("  --high-noise-scheduler {discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple} Denoiser sigma scheduler (default: discrete)\n");
-    printf("  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
-    printf("                                     (high noise) sampling method (default: \"euler_a\")\n");
-    printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)\n");
-    printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
-    printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
-    printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
-    printf("                                     1.0 corresponds to full destruction of information in init image\n");
-    printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
-    printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
-    printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
-    printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --prediction {eps, v, edm_v, sd3_flow, flux_flow}        Prediction type override.\n");
-    printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
-    printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
-    printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
-    printf("  --vae-tile-size [X]x[Y]            tile size for vae tiling (default: 32x32)\n");
-    printf("  --vae-relative-tile-size [X]x[Y]   relative tile size for vae tiling, in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)\n");
-    printf("  --vae-tile-overlap OVERLAP         tile overlap for vae tiling, in fraction of tile size (default: 0.5)\n");
-    printf("  --force-sdxl-vae-conv-scale        force use of conv scale on sdxl vae\n");
-    printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
-    printf("  --clip-on-cpu                      keep clip in cpu (for low vram)\n");
-    printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
-    printf("                                     Might lower quality, since it implies converting k and v to f16.\n");
-    printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --diffusion-conv-direct            use Conv2d direct in the diffusion model\n");
-    printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --vae-conv-direct                  use Conv2d direct in the vae model (should improve the performance)\n");
-    printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
-    printf("  --canny                            apply canny preprocessor (edge detection)\n");
-    printf("  --color                            colors the logging tags according to level\n");
-    printf("  --chroma-disable-dit-mask          disable dit mask for chroma\n");
-    printf("  --chroma-enable-t5-mask            enable t5 mask for chroma\n");
-    printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
-    printf("  --video-frames                     video frames (default: 1)\n");
-    printf("  --fps                              fps (default: 24)\n");
-    printf("  --moe-boundary BOUNDARY            timestep boundary for Wan2.2 MoE model. (default: 0.875)\n");
-    printf("                                     only enabled if `--high-noise-steps` is set to -1\n");
-    printf("  --flow-shift SHIFT                 shift value for Flow models like SD3.x or WAN (default: auto)\n");
-    printf("  --vace-strength                    wan vace strength\n");
-    printf("  --photo-maker                      path to PHOTOMAKER model\n");
-    printf("  --pm-id-images-dir [DIR]           path to PHOTOMAKER input id images dir\n");
-    printf("  --pm-id-embed-path [PATH]          path to PHOTOMAKER v2 id embed\n");
-    printf("  --pm-style-strength                strength for keeping PHOTOMAKER input identity (default: 20)\n");
-    printf("  -v, --verbose                      print extra info\n");
-}
-
 #if defined(_WIN32)
 static std::string utf16_to_utf8(const std::wstring& wstr) {
     if (wstr.empty())
@@ -495,94 +383,424 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
     return true;
 }
 
+static std::string wrap_text(const std::string& text, size_t width, size_t indent) {
+    std::ostringstream oss;
+    size_t line_len = 0;
+    size_t pos      = 0;
+
+    while (pos < text.size()) {
+        // Preserve manual newlines
+        if (text[pos] == '\n') {
+            oss << '\n'
+                << std::string(indent, ' ');
+            line_len = indent;
+            ++pos;
+            continue;
+        }
+
+        // Add the character
+        oss << text[pos];
+        ++line_len;
+        ++pos;
+
+        // If the current line exceeds width, try to break at the last space
+        if (line_len >= width) {
+            std::string current = oss.str();
+            size_t back         = current.size();
+
+            // Find the last space (for a clean break)
+            while (back > 0 && current[back - 1] != ' ' && current[back - 1] != '\n')
+                --back;
+
+            // If found a space to break on
+            if (back > 0 && current[back - 1] != '\n') {
+                std::string before = current.substr(0, back - 1);
+                std::string after  = current.substr(back);
+                oss.str("");
+                oss.clear();
+                oss << before << "\n"
+                    << std::string(indent, ' ') << after;
+            } else {
+                // If no space found, just break at width
+                oss << "\n"
+                    << std::string(indent, ' ');
+            }
+            line_len = indent;
+        }
+    }
+
+    return oss.str();
+}
+
+void print_usage(int argc, const char* argv[], const ArgOptions& options) {
+    constexpr size_t max_line_width = 120;
+
+    std::cout << "Usage: " << argv[0] << " [options]\n\n";
+    std::cout << "Options:\n";
+
+    struct Entry {
+        std::string names;
+        std::string desc;
+    };
+    std::vector<Entry> entries;
+
+    auto add_entry = [&](const std::string& s, const std::string& l,
+                         const std::string& desc, const std::string& hint = "") {
+        std::ostringstream ss;
+        if (!s.empty())
+            ss << s;
+        if (!s.empty() && !l.empty())
+            ss << ", ";
+        if (!l.empty())
+            ss << l;
+        if (!hint.empty())
+            ss << " " << hint;
+        entries.push_back({ss.str(), desc});
+    };
+
+    for (auto& o : options.string_options)
+        add_entry(o.short_name, o.long_name, o.desc, "<string>");
+    for (auto& o : options.int_options)
+        add_entry(o.short_name, o.long_name, o.desc, "<int>");
+    for (auto& o : options.float_options)
+        add_entry(o.short_name, o.long_name, o.desc, "<float>");
+    for (auto& o : options.bool_options)
+        add_entry(o.short_name, o.long_name, o.desc, "");
+    for (auto& o : options.manual_options)
+        add_entry(o.short_name, o.long_name, o.desc);
+
+    size_t max_name_width = 0;
+    for (auto& e : entries)
+        max_name_width = std::max(max_name_width, e.names.size());
+
+    for (auto& e : entries) {
+        size_t indent            = 2 + max_name_width + 4;
+        size_t desc_width        = (max_line_width > indent ? max_line_width - indent : 40);
+        std::string wrapped_desc = wrap_text(e.desc, max_line_width, indent);
+        std::cout << "  " << std::left << std::setw(static_cast<int>(max_name_width) + 4)
+                  << e.names << wrapped_desc << "\n";
+    }
+}
+
 void parse_args(int argc, const char** argv, SDParams& params) {
     ArgOptions options;
     options.string_options = {
-        {"-m", "--model", "", &params.model_path},
-        {"", "--clip_l", "", &params.clip_l_path},
-        {"", "--clip_g", "", &params.clip_g_path},
-        {"", "--clip_vision", "", &params.clip_vision_path},
-        {"", "--t5xxl", "", &params.t5xxl_path},
-        {"", "--qwen2vl", "", &params.qwen2vl_path},
-        {"", "--qwen2vl_vision", "", &params.qwen2vl_vision_path},
-        {"", "--diffusion-model", "", &params.diffusion_model_path},
-        {"", "--high-noise-diffusion-model", "", &params.high_noise_diffusion_model_path},
-        {"", "--vae", "", &params.vae_path},
-        {"", "--taesd", "", &params.taesd_path},
-        {"", "--control-net", "", &params.control_net_path},
-        {"", "--embd-dir", "", &params.embedding_dir},
-        {"", "--lora-model-dir", "", &params.lora_model_dir},
-        {"-i", "--init-img", "", &params.init_image_path},
-        {"", "--end-img", "", &params.end_image_path},
-        {"", "--tensor-type-rules", "", &params.tensor_type_rules},
-        {"", "--photo-maker", "", &params.photo_maker_path},
-        {"", "--pm-id-images-dir", "", &params.pm_id_images_dir},
-        {"", "--pm-id-embed-path", "", &params.pm_id_embed_path},
-        {"", "--mask", "", &params.mask_image_path},
-        {"", "--control-image", "", &params.control_image_path},
-        {"", "--control-video", "", &params.control_video_path},
-        {"-o", "--output", "", &params.output_path},
-        {"-p", "--prompt", "", &params.prompt},
-        {"-n", "--negative-prompt", "", &params.negative_prompt},
-        {"", "--upscale-model", "", &params.esrgan_path},
+        {"-m",
+         "--model",
+         "path to full model",
+         &params.model_path},
+        {"",
+         "--clip_l",
+         "path to the clip-l text encoder", &params.clip_l_path},
+        {"", "--clip_g",
+         "path to the clip-g text encoder",
+         &params.clip_g_path},
+        {"",
+         "--clip_vision",
+         "path to the clip-vision encoder",
+         &params.clip_vision_path},
+        {"",
+         "--t5xxl",
+         "path to the t5xxl text encoder",
+         &params.t5xxl_path},
+        {"",
+         "--qwen2vl",
+         "path to the qwen2vl text encoder",
+         &params.qwen2vl_path},
+        {"",
+         "--qwen2vl_vision",
+         "path to the qwen2vl vit",
+         &params.qwen2vl_vision_path},
+        {"",
+         "--diffusion-model",
+         "path to the standalone diffusion model",
+         &params.diffusion_model_path},
+        {"",
+         "--high-noise-diffusion-model",
+         "path to the standalone high noise diffusion model",
+         &params.high_noise_diffusion_model_path},
+        {"",
+         "--vae",
+         "path to standalone vae model",
+         &params.vae_path},
+        {"",
+         "--taesd",
+         "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
+         &params.taesd_path},
+        {"",
+         "--control-net",
+         "path to control net model",
+         &params.control_net_path},
+        {"",
+         "--embd-dir",
+         "embeddings directory",
+         &params.embedding_dir},
+        {"",
+         "--lora-model-dir",
+         "lora model directory",
+         &params.lora_model_dir},
+        {"-i",
+         "--init-img",
+         "path to the init image",
+         &params.init_image_path},
+        {"",
+         "--end-img",
+         "path to the end image, required by flf2v",
+         &params.end_image_path},
+        {"",
+         "--tensor-type-rules",
+         "weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")",
+         &params.tensor_type_rules},
+        {"",
+         "--photo-maker",
+         "path to PHOTOMAKER model",
+         &params.photo_maker_path},
+        {"",
+         "--pm-id-images-dir",
+         "path to PHOTOMAKER input id images dir",
+         &params.pm_id_images_dir},
+        {"",
+         "--pm-id-embed-path",
+         "path to PHOTOMAKER v2 id embed",
+         &params.pm_id_embed_path},
+        {"",
+         "--mask",
+         "path to the mask image",
+         &params.mask_image_path},
+        {"",
+         "--control-image",
+         "path to control image, control net",
+         &params.control_image_path},
+        {"",
+         "--control-video",
+         "path to control video frames, It must be a directory path. The video frames inside should be stored as images in "
+         "lexicographical (character) order. For example, if the control video path is `frames`, the directory contain images "
+         "such as 00.png, 01.png, ... etc.",
+         &params.control_video_path},
+        {"-o",
+         "--output",
+         "path to write result image to (default: ./output.png)",
+         &params.output_path},
+        {"-p",
+         "--prompt",
+         "the prompt to render",
+         &params.prompt},
+        {"-n",
+         "--negative-prompt",
+         "the negative prompt (default: \"\")",
+         &params.negative_prompt},
+        {"",
+         "--upscale-model",
+         "path to esrgan model.",
+         &params.esrgan_path},
     };
 
     options.int_options = {
-        {"-t", "--threads", "", &params.n_threads},
-        {"", "--upscale-repeats", "", &params.upscale_repeats},
-        {"-H", "--height", "", &params.height},
-        {"-W", "--width", "", &params.width},
-        {"", "--steps", "", &params.sample_params.sample_steps},
-        {"", "--high-noise-steps", "", &params.high_noise_sample_params.sample_steps},
-        {"", "--clip-skip", "", &params.clip_skip},
-        {"-b", "--batch-count", "", &params.batch_count},
-        {"", "--chroma-t5-mask-pad", "", &params.chroma_t5_mask_pad},
-        {"", "--video-frames", "", &params.video_frames},
-        {"", "--fps", "", &params.fps},
-        {"", "--timestep-shift", "", &params.sample_params.shifted_timestep},
+        {"-t",
+         "--threads",
+         "number of threads to use during computation (default: -1). "
+         "If threads <= 0, then threads will be set to the number of CPU physical cores",
+         &params.n_threads},
+        {"",
+         "--upscale-repeats",
+         "Run the ESRGAN upscaler this many times (default: 1)",
+         &params.upscale_repeats},
+        {"-H",
+         "--height",
+         "image height, in pixel space (default: 512)",
+         &params.height},
+        {"-W",
+         "--width",
+         "image width, in pixel space (default: 512)",
+         &params.width},
+        {"",
+         "--steps",
+         "number of sample steps (default: 20)",
+         &params.sample_params.sample_steps},
+        {"",
+         "--high-noise-steps",
+         "(high noise) number of sample steps (default: -1 = auto)",
+         &params.high_noise_sample_params.sample_steps},
+        {"",
+         "--clip-skip",
+         "ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1). "
+         "<= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x",
+         &params.clip_skip},
+        {"-b",
+         "--batch-count",
+         "batch count",
+         &params.batch_count},
+        {"",
+         "--chroma-t5-mask-pad",
+         "t5 mask pad size of chroma",
+         &params.chroma_t5_mask_pad},
+        {"",
+         "--video-frames",
+         "video frames (default: 1)",
+         &params.video_frames},
+        {"",
+         "--fps",
+         "fps (default: 24)",
+         &params.fps},
+        {"",
+         "--timestep-shift",
+         "shift timestep for NitroFusion models (default: 0). "
+         "recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant",
+         &params.sample_params.shifted_timestep},
     };
 
     options.float_options = {
-        {"", "--cfg-scale", "", &params.sample_params.guidance.txt_cfg},
-        {"", "--img-cfg-scale", "", &params.sample_params.guidance.img_cfg},
-        {"", "--guidance", "", &params.sample_params.guidance.distilled_guidance},
-        {"", "--slg-scale", "", &params.sample_params.guidance.slg.scale},
-        {"", "--skip-layer-start", "", &params.sample_params.guidance.slg.layer_start},
-        {"", "--skip-layer-end", "", &params.sample_params.guidance.slg.layer_end},
-        {"", "--eta", "", &params.sample_params.eta},
-        {"", "--high-noise-cfg-scale", "", &params.high_noise_sample_params.guidance.txt_cfg},
-        {"", "--high-noise-img-cfg-scale", "", &params.high_noise_sample_params.guidance.img_cfg},
-        {"", "--high-noise-guidance", "", &params.high_noise_sample_params.guidance.distilled_guidance},
-        {"", "--high-noise-slg-scale", "", &params.high_noise_sample_params.guidance.slg.scale},
-        {"", "--high-noise-skip-layer-start", "", &params.high_noise_sample_params.guidance.slg.layer_start},
-        {"", "--high-noise-skip-layer-end", "", &params.high_noise_sample_params.guidance.slg.layer_end},
-        {"", "--high-noise-eta", "", &params.high_noise_sample_params.eta},
-        {"", "--strength", "", &params.strength},
-        {"", "--pm-style-strength", "", &params.pm_style_strength},
-        {"", "--control-strength", "", &params.control_strength},
-        {"", "--moe-boundary", "", &params.moe_boundary},
-        {"", "--flow-shift", "", &params.flow_shift},
-        {"", "--vace-strength", "", &params.vace_strength},
-        {"", "--vae-tile-overlap", "", &params.vae_tiling_params.target_overlap},
+        {"",
+         "--cfg-scale",
+         "unconditional guidance scale: (default: 7.0)",
+         &params.sample_params.guidance.txt_cfg},
+        {"",
+         "--img-cfg-scale",
+         "image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)",
+         &params.sample_params.guidance.img_cfg},
+        {"",
+         "--guidance",
+         "distilled guidance scale for models with guidance input (default: 3.5)",
+         &params.sample_params.guidance.distilled_guidance},
+        {"",
+         "--slg-scale",
+         "skip layer guidance (SLG) scale, only for DiT models: (default: 0). 0 means disabled, a value of 2.5 is nice for sd3.5 medium",
+         &params.sample_params.guidance.slg.scale},
+        {"",
+         "--skip-layer-start",
+         "SLG enabling point (default: 0.01)",
+         &params.sample_params.guidance.slg.layer_start},
+        {"",
+         "--skip-layer-end",
+         "SLG disabling point (default: 0.2)",
+         &params.sample_params.guidance.slg.layer_end},
+        {"",
+         "--eta",
+         "eta in DDIM, only for DDIM and TCD (default: 0)",
+         &params.sample_params.eta},
+        {"",
+         "--high-noise-cfg-scale",
+         "(high noise) unconditional guidance scale: (default: 7.0)",
+         &params.high_noise_sample_params.guidance.txt_cfg},
+        {"",
+         "--high-noise-img-cfg-scale",
+         "(high noise) image guidance scale for inpaint or instruct-pix2pix models (default: same as --cfg-scale)",
+         &params.high_noise_sample_params.guidance.img_cfg},
+        {"",
+         "--high-noise-guidance",
+         "(high noise) distilled guidance scale for models with guidance input (default: 3.5)",
+         &params.high_noise_sample_params.guidance.distilled_guidance},
+        {"",
+         "--high-noise-slg-scale",
+         "(high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)",
+         &params.high_noise_sample_params.guidance.slg.scale},
+        {"",
+         "--high-noise-skip-layer-start",
+         "(high noise) SLG enabling point (default: 0.01)",
+         &params.high_noise_sample_params.guidance.slg.layer_start},
+        {"",
+         "--high-noise-skip-layer-end",
+         "(high noise) SLG disabling point (default: 0.2)",
+         &params.high_noise_sample_params.guidance.slg.layer_end},
+        {"",
+         "--high-noise-eta",
+         "(high noise) eta in DDIM, only for DDIM and TCD (default: 0)",
+         &params.high_noise_sample_params.eta},
+        {"",
+         "--strength",
+         "strength for noising/unnoising (default: 0.75)",
+         &params.strength},
+        {"",
+         "--pm-style-strength",
+         "",
+         &params.pm_style_strength},
+        {"",
+         "--control-strength",
+         "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image",
+         &params.control_strength},
+        {"",
+         "--moe-boundary",
+         "timestep boundary for Wan2.2 MoE model. (default: 0.875). Only enabled if `--high-noise-steps` is set to -1",
+         &params.moe_boundary},
+        {"",
+         "--flow-shift",
+         "shift value for Flow models like SD3.x or WAN (default: auto)",
+         &params.flow_shift},
+        {"",
+         "--vace-strength",
+         "wan vace strength",
+         &params.vace_strength},
+        {"",
+         "--vae-tile-overlap",
+         "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
+         &params.vae_tiling_params.target_overlap},
     };
 
     options.bool_options = {
-        {"", "--vae-tiling", "", true, &params.vae_tiling_params.enabled},
-        {"", "--force-sdxl-vae-conv-scale", "", true, &params.force_sdxl_vae_conv_scale},
-        {"", "--offload-to-cpu", "", true, &params.offload_params_to_cpu},
-        {"", "--control-net-cpu", "", true, &params.control_net_cpu},
-        {"", "--clip-on-cpu", "", true, &params.clip_on_cpu},
-        {"", "--vae-on-cpu", "", true, &params.vae_on_cpu},
-        {"", "--diffusion-fa", "", true, &params.diffusion_flash_attn},
-        {"", "--diffusion-conv-direct", "", true, &params.diffusion_conv_direct},
-        {"", "--vae-conv-direct", "", true, &params.vae_conv_direct},
-        {"", "--canny", "", true, &params.canny_preprocess},
-        {"-v", "--verbose", "", true, &params.verbose},
-        {"", "--color", "", true, &params.color},
-        {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
-        {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
-        {"", "--increase-ref-index", "", true, &params.increase_ref_index},
-        {"", "--disable-auto-resize-ref-image", "", false, &params.auto_resize_ref_image},
+        {"",
+         "--vae-tiling",
+         "process vae in tiles to reduce memory usage",
+         true, &params.vae_tiling_params.enabled},
+        {"",
+         "--force-sdxl-vae-conv-scale",
+         "force use of conv scale on sdxl vae",
+         true, &params.force_sdxl_vae_conv_scale},
+        {"",
+         "--offload-to-cpu",
+         "place the weights in RAM to save VRAM, and automatically load them into VRAM when needed",
+         true, &params.offload_params_to_cpu},
+        {"",
+         "--control-net-cpu",
+         "keep controlnet in cpu (for low vram)",
+         true, &params.control_net_cpu},
+        {"",
+         "--clip-on-cpu",
+         "keep clip in cpu (for low vram)",
+         true, &params.clip_on_cpu},
+        {"",
+         "--vae-on-cpu",
+         "keep vae in cpu (for low vram)",
+         true, &params.vae_on_cpu},
+        {"",
+         "--diffusion-fa",
+         "use flash attention in the diffusion model",
+         true, &params.diffusion_flash_attn},
+        {"",
+         "--diffusion-conv-direct",
+         "use ggml_conv2d_direct in the diffusion model",
+         true, &params.diffusion_conv_direct},
+        {"",
+         "--vae-conv-direct",
+         "use ggml_conv2d_direct in the vae model",
+         true, &params.vae_conv_direct},
+        {"",
+         "--canny",
+         "apply canny preprocessor (edge detection)",
+         true, &params.canny_preprocess},
+        {"-v",
+         "--verbose",
+         "print extra info",
+         true, &params.verbose},
+        {"",
+         "--color",
+         "colors the logging tags according to level",
+         true, &params.color},
+        {"",
+         "--chroma-disable-dit-mask",
+         "disable dit mask for chroma",
+         false, &params.chroma_use_dit_mask},
+        {"",
+         "--chroma-enable-t5-mask",
+         "enable t5 mask for chroma",
+         true, &params.chroma_use_t5_mask},
+        {"",
+         "--increase-ref-index",
+         "automatically increase the indices of references images based on the order they are listed (starting with 1).",
+         true, &params.increase_ref_index},
+        {"",
+         "--disable-auto-resize-ref-image",
+         "disable auto resize of ref images",
+         false, &params.auto_resize_ref_image},
     };
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
@@ -590,7 +808,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             return -1;
         }
         const char* mode = argv[index];
-        if (mode != NULL) {
+        if (mode != nullptr) {
             int mode_found = -1;
             for (int i = 0; i < MODE_COUNT; i++) {
                 if (!strcmp(mode, modes_str[i])) {
@@ -715,7 +933,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     };
 
     auto on_help_arg = [&](int argc, const char** argv, int index) {
-        print_usage(argc, argv);
+        print_usage(argc, argv, options);
         exit(0);
         return 0;
     };
@@ -829,25 +1047,73 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     };
 
     options.manual_options = {
-        {"-M", "--mode", "", on_mode_arg},
-        {"", "--type", "", on_type_arg},
-        {"", "--rng", "", on_rng_arg},
-        {"-s", "--seed", "", on_seed_arg},
-        {"", "--sampling-method", "", on_sample_method_arg},
-        {"", "--prediction", "", on_prediction_arg},
-        {"", "--scheduler", "", on_schedule_arg},
-        {"", "--skip-layers", "", on_skip_layers_arg},
-        {"", "--high-noise-sampling-method", "", on_high_noise_sample_method_arg},
-        {"", "--high-noise-scheduler", "", on_high_noise_schedule_arg},
-        {"", "--high-noise-skip-layers", "", on_high_noise_skip_layers_arg},
-        {"-r", "--ref-image", "", on_ref_image_arg},
-        {"-h", "--help", "", on_help_arg},
-        {"", "--vae-tile-size", "", on_tile_size_arg},
-        {"", "--vae-relative-tile-size", "", on_relative_tile_size_arg},
+        {"-M",
+         "--mode",
+         "run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen",
+         on_mode_arg},
+        {"",
+         "--type",
+         "weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). "
+         "If not specified, the default is the type of the weight file",
+         on_type_arg},
+        {"",
+         "--rng",
+         "RNG, one of [std_default, cuda], default: cuda",
+         on_rng_arg},
+        {"-s",
+         "--seed",
+         "RNG seed (default: 42, use random seed for < 0)",
+         on_seed_arg},
+        {"",
+         "--sampling-method",
+         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd] "
+         "(default: euler for Flux/SD3/Wan, euler_a otherwise)",
+         on_sample_method_arg},
+        {"",
+         "--prediction",
+         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow]",
+         on_prediction_arg},
+        {"",
+         "--scheduler",
+         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete",
+         on_schedule_arg},
+        {"",
+         "--skip-layers",
+         "layers to skip for SLG steps (default: [7,8,9])",
+         on_skip_layers_arg},
+        {"",
+         "--high-noise-sampling-method",
+         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd]"
+         " default: euler for Flux/SD3/Wan, euler_a otherwise",
+         on_high_noise_sample_method_arg},
+        {"",
+         "--high-noise-scheduler",
+         "(high noise) denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete",
+         on_high_noise_schedule_arg},
+        {"",
+         "--high-noise-skip-layers",
+         "(high noise) layers to skip for SLG steps (default: [7,8,9])",
+         on_high_noise_skip_layers_arg},
+        {"-r",
+         "--ref-image",
+         "reference image for Flux Kontext models (can be used multiple times)",
+         on_ref_image_arg},
+        {"-h",
+         "--help",
+         "show this help message and exit",
+         on_help_arg},
+        {"",
+         "--vae-tile-size",
+         "tile size for vae tiling, format [X]x[Y] (default: 32x32)",
+         on_tile_size_arg},
+        {"",
+         "--vae-relative-tile-size",
+         "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
+         on_relative_tile_size_arg},
     };
 
     if (!parse_options(argc, argv, options)) {
-        print_usage(argc, argv);
+        print_usage(argc, argv, options);
         exit(1);
     }
 
@@ -857,19 +1123,19 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     if ((params.mode == IMG_GEN || params.mode == VID_GEN) && params.prompt.length() == 0) {
         fprintf(stderr, "error: the following arguments are required: prompt\n");
-        print_usage(argc, argv);
+        print_usage(argc, argv, options);
         exit(1);
     }
 
     if (params.mode != UPSCALE && params.model_path.length() == 0 && params.diffusion_model_path.length() == 0) {
         fprintf(stderr, "error: the following arguments are required: model_path/diffusion_model\n");
-        print_usage(argc, argv);
+        print_usage(argc, argv, options);
         exit(1);
     }
 
     if (params.output_path.length() == 0) {
         fprintf(stderr, "error: the following arguments are required: output_path\n");
-        print_usage(argc, argv);
+        print_usage(argc, argv, options);
         exit(1);
     }
 
@@ -933,7 +1199,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if (params.seed < 0) {
-        srand((int)time(NULL));
+        srand((int)time(nullptr));
         params.seed = rand();
     }
 
@@ -1048,9 +1314,9 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 uint8_t* load_image(const char* image_path, int& width, int& height, int expected_width = 0, int expected_height = 0, int expected_channel = 3) {
     int c                 = 0;
     uint8_t* image_buffer = (uint8_t*)stbi_load(image_path, &width, &height, &c, expected_channel);
-    if (image_buffer == NULL) {
+    if (image_buffer == nullptr) {
         fprintf(stderr, "load image from '%s' failed\n", image_path);
-        return NULL;
+        return nullptr;
     }
     if (c < expected_channel) {
         fprintf(stderr,
@@ -1060,17 +1326,17 @@ uint8_t* load_image(const char* image_path, int& width, int& height, int expecte
                 c,
                 image_path);
         free(image_buffer);
-        return NULL;
+        return nullptr;
     }
     if (width <= 0) {
         fprintf(stderr, "error: the width of image must be greater than 0, image_path = %s\n", image_path);
         free(image_buffer);
-        return NULL;
+        return nullptr;
     }
     if (height <= 0) {
         fprintf(stderr, "error: the height of image must be greater than 0, image_path = %s\n", image_path);
         free(image_buffer);
-        return NULL;
+        return nullptr;
     }
 
     // Resize input image ...
@@ -1092,10 +1358,10 @@ uint8_t* load_image(const char* image_path, int& width, int& height, int expecte
         if (crop_x != 0 || crop_y != 0) {
             printf("crop input image from %dx%d to %dx%d, image_path = %s\n", width, height, crop_w, crop_h, image_path);
             uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
-            if (cropped_image_buffer == NULL) {
+            if (cropped_image_buffer == nullptr) {
                 fprintf(stderr, "error: allocate memory for crop\n");
                 free(image_buffer);
-                return NULL;
+                return nullptr;
             }
             for (int row = 0; row < crop_h; row++) {
                 uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
@@ -1114,10 +1380,10 @@ uint8_t* load_image(const char* image_path, int& width, int& height, int expecte
         int resized_width  = expected_width;
 
         uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
-        if (resized_image_buffer == NULL) {
+        if (resized_image_buffer == nullptr) {
             fprintf(stderr, "error: allocate memory for resize input image\n");
             free(image_buffer);
-            return NULL;
+            return nullptr;
         }
         stbir_resize(image_buffer, width, height, 0,
                      resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
@@ -1168,7 +1434,7 @@ bool load_images_from_dir(const std::string dir,
             int width             = 0;
             int height            = 0;
             uint8_t* image_buffer = load_image(path.c_str(), width, height, expected_width, expected_height);
-            if (image_buffer == NULL) {
+            if (image_buffer == nullptr) {
                 fprintf(stderr, "load image from '%s' failed\n", path.c_str());
                 return false;
             }
@@ -1220,10 +1486,10 @@ int main(int argc, const char* argv[]) {
     }
 
     bool vae_decode_only     = true;
-    sd_image_t init_image    = {(uint32_t)params.width, (uint32_t)params.height, 3, NULL};
-    sd_image_t end_image     = {(uint32_t)params.width, (uint32_t)params.height, 3, NULL};
-    sd_image_t control_image = {(uint32_t)params.width, (uint32_t)params.height, 3, NULL};
-    sd_image_t mask_image    = {(uint32_t)params.width, (uint32_t)params.height, 1, NULL};
+    sd_image_t init_image    = {(uint32_t)params.width, (uint32_t)params.height, 3, nullptr};
+    sd_image_t end_image     = {(uint32_t)params.width, (uint32_t)params.height, 3, nullptr};
+    sd_image_t control_image = {(uint32_t)params.width, (uint32_t)params.height, 3, nullptr};
+    sd_image_t mask_image    = {(uint32_t)params.width, (uint32_t)params.height, 1, nullptr};
     std::vector<sd_image_t> ref_images;
     std::vector<sd_image_t> pmid_images;
     std::vector<sd_image_t> control_frames;
@@ -1235,17 +1501,17 @@ int main(int argc, const char* argv[]) {
         free(mask_image.data);
         for (auto image : ref_images) {
             free(image.data);
-            image.data = NULL;
+            image.data = nullptr;
         }
         ref_images.clear();
         for (auto image : pmid_images) {
             free(image.data);
-            image.data = NULL;
+            image.data = nullptr;
         }
         pmid_images.clear();
         for (auto image : control_frames) {
             free(image.data);
-            image.data = NULL;
+            image.data = nullptr;
         }
         control_frames.clear();
     };
@@ -1256,7 +1522,7 @@ int main(int argc, const char* argv[]) {
         int width       = 0;
         int height      = 0;
         init_image.data = load_image(params.init_image_path.c_str(), width, height, params.width, params.height);
-        if (init_image.data == NULL) {
+        if (init_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", params.init_image_path.c_str());
             release_all_resources();
             return 1;
@@ -1269,7 +1535,7 @@ int main(int argc, const char* argv[]) {
         int width      = 0;
         int height     = 0;
         end_image.data = load_image(params.end_image_path.c_str(), width, height, params.width, params.height);
-        if (end_image.data == NULL) {
+        if (end_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", params.end_image_path.c_str());
             release_all_resources();
             return 1;
@@ -1281,7 +1547,7 @@ int main(int argc, const char* argv[]) {
         int width       = 0;
         int height      = 0;
         mask_image.data = load_image(params.mask_image_path.c_str(), width, height, params.width, params.height, 1);
-        if (mask_image.data == NULL) {
+        if (mask_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", params.mask_image_path.c_str());
             release_all_resources();
             return 1;
@@ -1289,7 +1555,7 @@ int main(int argc, const char* argv[]) {
     } else {
         mask_image.data = (uint8_t*)malloc(params.width * params.height);
         memset(mask_image.data, 255, params.width * params.height);
-        if (mask_image.data == NULL) {
+        if (mask_image.data == nullptr) {
             fprintf(stderr, "malloc mask image failed\n");
             release_all_resources();
             return 1;
@@ -1300,7 +1566,7 @@ int main(int argc, const char* argv[]) {
         int width          = 0;
         int height         = 0;
         control_image.data = load_image(params.control_image_path.c_str(), width, height, params.width, params.height);
-        if (control_image.data == NULL) {
+        if (control_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
             release_all_resources();
             return 1;
@@ -1321,7 +1587,7 @@ int main(int argc, const char* argv[]) {
             int width             = 0;
             int height            = 0;
             uint8_t* image_buffer = load_image(path.c_str(), width, height);
-            if (image_buffer == NULL) {
+            if (image_buffer == nullptr) {
                 fprintf(stderr, "load image from '%s' failed\n", path.c_str());
                 release_all_resources();
                 return 1;
@@ -1403,18 +1669,18 @@ int main(int argc, const char* argv[]) {
     if (params.mode == UPSCALE) {
         num_results = 1;
         results     = (sd_image_t*)calloc(num_results, sizeof(sd_image_t));
-        if (results == NULL) {
+        if (results == nullptr) {
             printf("failed to allocate results array\n");
             release_all_resources();
             return 1;
         }
 
         results[0]      = init_image;
-        init_image.data = NULL;
+        init_image.data = nullptr;
     } else {
         sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
 
-        if (sd_ctx == NULL) {
+        if (sd_ctx == nullptr) {
             printf("new_sd_ctx_t failed\n");
             release_all_resources();
             return 1;
@@ -1477,7 +1743,7 @@ int main(int argc, const char* argv[]) {
             results = generate_video(sd_ctx, &vid_gen_params, &num_results);
         }
 
-        if (results == NULL) {
+        if (results == nullptr) {
             printf("generate failed\n");
             free_sd_ctx(sd_ctx);
             return 1;
@@ -1493,17 +1759,17 @@ int main(int argc, const char* argv[]) {
                                                         params.diffusion_conv_direct,
                                                         params.n_threads);
 
-        if (upscaler_ctx == NULL) {
+        if (upscaler_ctx == nullptr) {
             printf("new_upscaler_ctx failed\n");
         } else {
             for (int i = 0; i < num_results; i++) {
-                if (results[i].data == NULL) {
+                if (results[i].data == nullptr) {
                     continue;
                 }
                 sd_image_t current_image = results[i];
                 for (int u = 0; u < params.upscale_repeats; ++u) {
                     sd_image_t upscaled_image = upscale(upscaler_ctx, current_image, upscale_factor);
-                    if (upscaled_image.data == NULL) {
+                    if (upscaled_image.data == nullptr) {
                         printf("upscale failed\n");
                         break;
                     }
@@ -1561,7 +1827,7 @@ int main(int argc, const char* argv[]) {
             file_ext = ".png";
         }
         for (int i = 0; i < num_results; i++) {
-            if (results[i].data == NULL) {
+            if (results[i].data == nullptr) {
                 continue;
             }
             std::string final_image_path = i > 0 ? base_path + "_" + std::to_string(i + 1) + file_ext : base_path + file_ext;
@@ -1579,7 +1845,7 @@ int main(int argc, const char* argv[]) {
 
     for (int i = 0; i < num_results; i++) {
         free(results[i].data);
-        results[i].data = NULL;
+        results[i].data = nullptr;
     }
     free(results);
 

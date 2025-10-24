@@ -100,7 +100,7 @@ struct LoraModel : public GGMLRunner {
     bool load_failed                = false;
     bool applied                    = false;
     std::vector<int> zero_index_vec = {0};
-    ggml_tensor* zero_index         = NULL;
+    ggml_tensor* zero_index         = nullptr;
     enum lora_t type                = REGULAR;
 
     LoraModel(ggml_backend_t backend,
@@ -112,7 +112,7 @@ struct LoraModel : public GGMLRunner {
         }
     }
 
-    std::string get_desc() {
+    std::string get_desc() override {
         return "lora";
     }
 
@@ -287,7 +287,7 @@ struct LoraModel : public GGMLRunner {
                 if (is_qkvm_split) {
                     key = key.substr(sizeof("SPLIT_L|") - 1);
                 }
-                struct ggml_tensor* updown = NULL;
+                struct ggml_tensor* updown = nullptr;
                 float scale_value          = 1.0f;
                 std::string full_key       = lora_pre[type] + key;
                 if (is_bias) {
@@ -314,13 +314,13 @@ struct LoraModel : public GGMLRunner {
                     }
                     std::string alpha_name = "";
 
-                    ggml_tensor* hada_1_mid  = NULL;  // tau for tucker decomposition
-                    ggml_tensor* hada_1_up   = NULL;
-                    ggml_tensor* hada_1_down = NULL;
+                    ggml_tensor* hada_1_mid  = nullptr;  // tau for tucker decomposition
+                    ggml_tensor* hada_1_up   = nullptr;
+                    ggml_tensor* hada_1_down = nullptr;
 
-                    ggml_tensor* hada_2_mid  = NULL;  // tau for tucker decomposition
-                    ggml_tensor* hada_2_up   = NULL;
-                    ggml_tensor* hada_2_down = NULL;
+                    ggml_tensor* hada_2_mid  = nullptr;  // tau for tucker decomposition
+                    ggml_tensor* hada_2_up   = nullptr;
+                    ggml_tensor* hada_2_down = nullptr;
 
                     std::string hada_1_mid_name  = "";
                     std::string hada_1_down_name = "";
@@ -368,7 +368,7 @@ struct LoraModel : public GGMLRunner {
                     applied_lora_tensors.insert(hada_2_up_name);
 
                     applied_lora_tensors.insert(alpha_name);
-                    if (hada_1_up == NULL || hada_1_down == NULL || hada_2_up == NULL || hada_2_down == NULL) {
+                    if (hada_1_up == nullptr || hada_1_down == nullptr || hada_2_up == nullptr || hada_2_down == nullptr) {
                         continue;
                     }
 
@@ -394,8 +394,8 @@ struct LoraModel : public GGMLRunner {
 
                     std::string alpha_name = full_key + ".alpha";
 
-                    ggml_tensor* lokr_w1 = NULL;
-                    ggml_tensor* lokr_w2 = NULL;
+                    ggml_tensor* lokr_w1 = nullptr;
+                    ggml_tensor* lokr_w2 = nullptr;
 
                     std::string lokr_w1_name = "";
                     std::string lokr_w2_name = "";
@@ -407,8 +407,8 @@ struct LoraModel : public GGMLRunner {
                         lokr_w1 = to_f32(compute_ctx, lora_tensors[lokr_w1_name]);
                         applied_lora_tensors.insert(lokr_w1_name);
                     } else {
-                        ggml_tensor* down     = NULL;
-                        ggml_tensor* up       = NULL;
+                        ggml_tensor* down     = nullptr;
+                        ggml_tensor* up       = nullptr;
                         std::string down_name = lokr_w1_name + "_b";
                         std::string up_name   = lokr_w1_name + "_a";
                         if (lora_tensors.find(down_name) != lora_tensors.end()) {
@@ -432,8 +432,8 @@ struct LoraModel : public GGMLRunner {
                         lokr_w2 = to_f32(compute_ctx, lora_tensors[lokr_w2_name]);
                         applied_lora_tensors.insert(lokr_w2_name);
                     } else {
-                        ggml_tensor* down     = NULL;
-                        ggml_tensor* up       = NULL;
+                        ggml_tensor* down     = nullptr;
+                        ggml_tensor* up       = nullptr;
                         std::string down_name = lokr_w2_name + "_b";
                         std::string up_name   = lokr_w2_name + "_a";
                         if (lora_tensors.find(down_name) != lora_tensors.end()) {
@@ -460,9 +460,9 @@ struct LoraModel : public GGMLRunner {
 
                 } else {
                     // LoRA mode
-                    ggml_tensor* lora_mid  = NULL;  // tau for tucker decomposition
-                    ggml_tensor* lora_up   = NULL;
-                    ggml_tensor* lora_down = NULL;
+                    ggml_tensor* lora_mid  = nullptr;  // tau for tucker decomposition
+                    ggml_tensor* lora_up   = nullptr;
+                    ggml_tensor* lora_down = nullptr;
 
                     std::string alpha_name         = "";
                     std::string scale_name         = "";
@@ -497,12 +497,12 @@ struct LoraModel : public GGMLRunner {
                             auto split_k_alpha_name = full_key + "k" + suffix + ".alpha";
                             auto split_v_alpha_name = full_key + "v" + suffix + ".alpha";
 
-                            ggml_tensor* lora_q_down = NULL;
-                            ggml_tensor* lora_q_up   = NULL;
-                            ggml_tensor* lora_k_down = NULL;
-                            ggml_tensor* lora_k_up   = NULL;
-                            ggml_tensor* lora_v_down = NULL;
-                            ggml_tensor* lora_v_up   = NULL;
+                            ggml_tensor* lora_q_down = nullptr;
+                            ggml_tensor* lora_q_up   = nullptr;
+                            ggml_tensor* lora_k_down = nullptr;
+                            ggml_tensor* lora_k_up   = nullptr;
+                            ggml_tensor* lora_v_down = nullptr;
+                            ggml_tensor* lora_v_up   = nullptr;
 
                             lora_q_down = to_f32(compute_ctx, lora_tensors[split_q_d_name]);
 
@@ -633,15 +633,15 @@ struct LoraModel : public GGMLRunner {
                             auto split_v_alpha_name = full_key + "attn.to_v" + ".alpha";
                             auto split_m_alpha_name = full_key + "proj_mlp" + ".alpha";
 
-                            ggml_tensor* lora_q_down = NULL;
-                            ggml_tensor* lora_q_up   = NULL;
-                            ggml_tensor* lora_k_down = NULL;
-                            ggml_tensor* lora_k_up   = NULL;
-                            ggml_tensor* lora_v_down = NULL;
-                            ggml_tensor* lora_v_up   = NULL;
+                            ggml_tensor* lora_q_down = nullptr;
+                            ggml_tensor* lora_q_up   = nullptr;
+                            ggml_tensor* lora_k_down = nullptr;
+                            ggml_tensor* lora_k_up   = nullptr;
+                            ggml_tensor* lora_v_down = nullptr;
+                            ggml_tensor* lora_v_up   = nullptr;
 
-                            ggml_tensor* lora_m_down = NULL;
-                            ggml_tensor* lora_m_up   = NULL;
+                            ggml_tensor* lora_m_down = nullptr;
+                            ggml_tensor* lora_m_up   = nullptr;
 
                             lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
 
@@ -809,7 +809,7 @@ struct LoraModel : public GGMLRunner {
                         }
                     }
 
-                    if (lora_up == NULL || lora_down == NULL) {
+                    if (lora_up == nullptr || lora_down == nullptr) {
                         continue;
                     }
                     // calc_scale

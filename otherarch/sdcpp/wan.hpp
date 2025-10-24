@@ -2,6 +2,8 @@
 #define __WAN_HPP__
 
 #include <map>
+#include <memory>
+#include <utility>
 
 #include "common.hpp"
 #include "flux.hpp"
@@ -24,7 +26,7 @@ namespace WAN {
         std::tuple<int, int, int> dilation;
         bool bias;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
             params["weight"] = ggml_new_tensor_4d(ctx,
                                                   GGML_TYPE_F16,
                                                   std::get<2>(kernel_size),
@@ -46,17 +48,17 @@ namespace WAN {
                      bool bias                          = true)
             : in_channels(in_channels),
               out_channels(out_channels),
-              kernel_size(kernel_size),
-              stride(stride),
-              padding(padding),
-              dilation(dilation),
+              kernel_size(std::move(kernel_size)),
+              stride(std::move(stride)),
+              padding(std::move(padding)),
+              dilation(std::move(dilation)),
               bias(bias) {}
 
-        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* cache_x = NULL) {
+        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* cache_x = nullptr) {
             // x: [N*IC, ID, IH, IW]
             // result: x: [N*OC, ID, IH, IW]
             struct ggml_tensor* w = params["weight"];
-            struct ggml_tensor* b = NULL;
+            struct ggml_tensor* b = nullptr;
             if (bias) {
                 b = params["bias"];
             }
@@ -68,7 +70,7 @@ namespace WAN {
             int lp2 = 2 * std::get<0>(padding);
             int rp2 = 0;
 
-            if (cache_x != NULL && lp2 > 0) {
+            if (cache_x != nullptr && lp2 > 0) {
                 x = ggml_concat(ctx, cache_x, x, 2);
                 lp2 -= (int)cache_x->ne[2];
             }
@@ -85,7 +87,7 @@ namespace WAN {
     protected:
         int64_t dim;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
             ggml_type wtype = GGML_TYPE_F32;
             params["gamma"] = ggml_new_tensor_1d(ctx, wtype, dim);
         }
@@ -94,7 +96,7 @@ namespace WAN {
         RMS_norm(int64_t dim)
             : dim(dim) {}
 
-        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
             // x: [N*IC, ID, IH, IW], IC == dim
             // assert N == 1
 
@@ -159,12 +161,12 @@ namespace WAN {
                     int idx = feat_idx;
                     feat_idx += 1;
                     if (chunk_idx == 0) {
-                        // feat_cache[idx] == NULL, pass
+                        // feat_cache[idx] == nullptr, pass
                     } else {
                         auto time_conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["time_conv"]);
 
                         auto cache_x = ggml_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
-                        if (cache_x->ne[2] < 2 && feat_cache[idx] != NULL) {  // chunk_idx >= 2
+                        if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {  // chunk_idx >= 2
                             // cache last frame of last two chunk
                             cache_x = ggml_concat(ctx,
                                                   ggml_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
@@ -209,7 +211,7 @@ namespace WAN {
             if (mode == "downsample3d") {
                 if (feat_cache.size() > 0) {
                     int idx = feat_idx;
-                    if (feat_cache[idx] == NULL) {
+                    if (feat_cache[idx] == nullptr) {
                         feat_cache[idx] = x;
                         feat_idx += 1;
                     } else {
@@ -373,7 +375,7 @@ namespace WAN {
                     if (feat_cache.size() > 0) {
                         int idx      = feat_idx;
                         auto cache_x = ggml_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
-                        if (cache_x->ne[2] < 2 && feat_cache[idx] != NULL) {
+                        if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                             // cache last frame of last two chunk
                             cache_x = ggml_concat(ctx,
                                                   ggml_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
@@ -566,7 +568,7 @@ namespace WAN {
 
             x = ggml_nn_attention(ctx, q, k, v, false);  // [t, h * w, c]
             // v      = ggml_cont(ctx, ggml_torch_permute(ctx, v, 1, 0, 2, 3));  // [t, h * w, c]
-            // x = ggml_nn_attention_ext(ctx, q, k, v, q->ne[2], NULL, false, false, true);
+            // x = ggml_nn_attention_ext(ctx, q, k, v, q->ne[2], nullptr, false, false, true);
 
             x = ggml_nn_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [t, c, h * w]
             x = ggml_reshape_4d(ctx, x, w, h, c, n);                  // [t, c, h, w]
@@ -672,7 +674,7 @@ namespace WAN {
             if (feat_cache.size() > 0) {
                 int idx      = feat_idx;
                 auto cache_x = ggml_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
-                if (cache_x->ne[2] < 2 && feat_cache[idx] != NULL) {
+                if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                     // cache last frame of last two chunk
                     cache_x = ggml_concat(ctx,
                                           ggml_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
@@ -724,7 +726,7 @@ namespace WAN {
             if (feat_cache.size() > 0) {
                 int idx      = feat_idx;
                 auto cache_x = ggml_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
-                if (cache_x->ne[2] < 2 && feat_cache[idx] != NULL) {
+                if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                     // cache last frame of last two chunk
                     cache_x = ggml_concat(ctx,
                                           ggml_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
@@ -843,7 +845,7 @@ namespace WAN {
             if (feat_cache.size() > 0) {
                 int idx      = feat_idx;
                 auto cache_x = ggml_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
-                if (cache_x->ne[2] < 2 && feat_cache[idx] != NULL) {
+                if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                     // cache last frame of last two chunk
                     cache_x = ggml_concat(ctx,
                                           ggml_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
@@ -895,7 +897,7 @@ namespace WAN {
             if (feat_cache.size() > 0) {
                 int idx      = feat_idx;
                 auto cache_x = ggml_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
-                if (cache_x->ne[2] < 2 && feat_cache[idx] != NULL) {
+                if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                     // cache last frame of last two chunk
                     cache_x = ggml_concat(ctx,
                                           ggml_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
@@ -935,9 +937,9 @@ namespace WAN {
 
         void clear_cache() {
             _conv_idx     = 0;
-            _feat_map     = std::vector<struct ggml_tensor*>(_conv_num, NULL);
+            _feat_map     = std::vector<struct ggml_tensor*>(_conv_num, nullptr);
             _enc_conv_idx = 0;
-            _enc_feat_map = std::vector<struct ggml_tensor*>(_enc_conv_num, NULL);
+            _enc_feat_map = std::vector<struct ggml_tensor*>(_enc_conv_num, nullptr);
         }
 
     public:
@@ -1116,11 +1118,11 @@ namespace WAN {
             ae.init(params_ctx, tensor_types, prefix);
         }
 
-        std::string get_desc() {
+        std::string get_desc() override {
             return "wan_vae";
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) override {
             ae.get_param_tensors(tensors, prefix);
         }
 
@@ -1152,7 +1154,7 @@ namespace WAN {
 
             for (int64_t feat_idx = 0; feat_idx < ae._feat_map.size(); feat_idx++) {
                 ggml_tensor* feat_cache = ae._feat_map[feat_idx];
-                if (feat_cache != NULL) {
+                if (feat_cache != nullptr) {
                     cache("feat_idx:" + std::to_string(feat_idx), feat_cache);
                     ggml_build_forward_expand(gf, feat_cache);
                 }
@@ -1167,7 +1169,7 @@ namespace WAN {
                      struct ggml_tensor* z,
                      bool decode_graph,
                      struct ggml_tensor** output,
-                     struct ggml_context* output_ctx = NULL) {
+                     struct ggml_context* output_ctx = nullptr) override {
             if (true) {
                 auto get_graph = [&]() -> struct ggml_cgraph* {
                     return build_graph(z, decode_graph);
@@ -1180,7 +1182,7 @@ namespace WAN {
                 auto get_graph = [&]() -> struct ggml_cgraph* {
                     return build_graph_partial(z, decode_graph, i);
                 };
-                struct ggml_tensor* out = NULL;
+                struct ggml_tensor* out = nullptr;
                 GGMLRunner::compute(get_graph, n_threads, true, &out, output_ctx);
                 ae.clear_cache();
                 if (t == 1) {
@@ -1220,11 +1222,11 @@ namespace WAN {
         void test() {
             struct ggml_init_params params;
             params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
-            params.mem_buffer = NULL;
+            params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
             struct ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != NULL);
+            GGML_ASSERT(work_ctx != nullptr);
 
             if (true) {
                 // cpu f32, pass
@@ -1235,7 +1237,7 @@ namespace WAN {
                 ggml_set_f32(z, 0.5f);
                 z = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
                 print_ggml_tensor(z);
-                struct ggml_tensor* out = NULL;
+                struct ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
                 compute(8, z, true, &out, work_ctx);
@@ -1250,7 +1252,7 @@ namespace WAN {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend            = ggml_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::shared_ptr<WanVAERunner>(new WanVAERunner(backend, false, {}, "", false, VERSION_WAN2_2_TI2V));
+            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, false, String2GGMLType{}, "", false, VERSION_WAN2_2_TI2V);
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -1309,7 +1311,7 @@ namespace WAN {
                                             ggml_backend_t backend,
                                             struct ggml_tensor* x,
                                             struct ggml_tensor* pe,
-                                            struct ggml_tensor* mask = NULL) {
+                                            struct ggml_tensor* mask = nullptr) {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
@@ -1367,7 +1369,7 @@ namespace WAN {
                                     ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* context,
-                                    int64_t context_img_len) {
+                                    int64_t context_img_len) override {
             // x: [N, n_token, dim]
             // context: [N, n_context, dim]
             // context_img_len: unused
@@ -1388,7 +1390,7 @@ namespace WAN {
             k      = norm_k->forward(ctx, k);
             auto v = v_proj->forward(ctx, context);  // [N, n_context, dim]
 
-            x = ggml_nn_attention_ext(ctx, backend, q, k, v, num_heads, NULL, false, false, flash_attn);  // [N, n_token, dim]
+            x = ggml_nn_attention_ext(ctx, backend, q, k, v, num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -1417,7 +1419,7 @@ namespace WAN {
                                     ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* context,
-                                    int64_t context_img_len) {
+                                    int64_t context_img_len) override {
             // x: [N, n_token, dim]
             // context: [N, context_img_len + context_txt_len, dim]
             // return [N, n_token, dim]
@@ -1455,8 +1457,8 @@ namespace WAN {
             k_img      = norm_k_img->forward(ctx, k_img);
             auto v_img = v_img_proj->forward(ctx, context_img);  // [N, context_img_len, dim]
 
-            auto img_x = ggml_nn_attention_ext(ctx, backend, q, k_img, v_img, num_heads, NULL, false, false, flash_attn);  // [N, n_token, dim]
-            x          = ggml_nn_attention_ext(ctx, backend, q, k, v, num_heads, NULL, false, false, flash_attn);          // [N, n_token, dim]
+            auto img_x = ggml_nn_attention_ext(ctx, backend, q, k_img, v_img, num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
+            x          = ggml_nn_attention_ext(ctx, backend, q, k, v, num_heads, nullptr, false, false, flash_attn);          // [N, n_token, dim]
 
             x = ggml_add(ctx, x, img_x);
 
@@ -1497,7 +1499,7 @@ namespace WAN {
     protected:
         int dim;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
             enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 6, 1);
         }
@@ -1587,7 +1589,7 @@ namespace WAN {
     class VaceWanAttentionBlock : public WanAttentionBlock {
     protected:
         int block_id;
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
             enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 6, 1);
         }
@@ -1641,7 +1643,7 @@ namespace WAN {
     protected:
         int dim;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
             enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 2, 1);
         }
@@ -1688,7 +1690,7 @@ namespace WAN {
         int in_dim;
         int flf_pos_embed_token_number;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
             if (flf_pos_embed_token_number > 0) {
                 params["emb_pos"] = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, in_dim, flf_pos_embed_token_number, 1);
             }
@@ -1876,8 +1878,8 @@ namespace WAN {
                                          struct ggml_tensor* timestep,
                                          struct ggml_tensor* context,
                                          struct ggml_tensor* pe,
-                                         struct ggml_tensor* clip_fea     = NULL,
-                                         struct ggml_tensor* vace_context = NULL,
+                                         struct ggml_tensor* clip_fea     = nullptr,
+                                         struct ggml_tensor* vace_context = nullptr,
                                          float vace_strength              = 1.f,
                                          int64_t N                        = 1) {
             // x: [N*C, T, H, W], C => in_dim
@@ -1920,7 +1922,7 @@ namespace WAN {
             context = text_embedding_2->forward(ctx, context);  // [N, context_txt_len, dim]
 
             int64_t context_img_len = 0;
-            if (clip_fea != NULL) {
+            if (clip_fea != nullptr) {
                 if (params.model_type == "i2v") {
                     auto img_emb     = std::dynamic_pointer_cast<MLPProj>(blocks["img_emb"]);
                     auto context_img = img_emb->forward(ctx, clip_fea);            // [N, context_img_len, dim]
@@ -1930,7 +1932,7 @@ namespace WAN {
             }
 
             // vace_patch_embedding
-            ggml_tensor* c = NULL;
+            ggml_tensor* c = nullptr;
             if (params.vace_layers > 0) {
                 auto vace_patch_embedding = std::dynamic_pointer_cast<Conv3d>(blocks["vace_patch_embedding"]);
 
@@ -1971,9 +1973,9 @@ namespace WAN {
                                     struct ggml_tensor* timestep,
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* pe,
-                                    struct ggml_tensor* clip_fea        = NULL,
-                                    struct ggml_tensor* time_dim_concat = NULL,
-                                    struct ggml_tensor* vace_context    = NULL,
+                                    struct ggml_tensor* clip_fea        = nullptr,
+                                    struct ggml_tensor* time_dim_concat = nullptr,
+                                    struct ggml_tensor* vace_context    = nullptr,
                                     float vace_strength                 = 1.f,
                                     int64_t N                           = 1) {
             // Forward pass of DiT.
@@ -1997,7 +1999,7 @@ namespace WAN {
             int64_t h_len = ((H + (std::get<1>(params.patch_size) / 2)) / std::get<1>(params.patch_size));
             int64_t w_len = ((W + (std::get<2>(params.patch_size) / 2)) / std::get<2>(params.patch_size));
 
-            if (time_dim_concat != NULL) {
+            if (time_dim_concat != nullptr) {
                 time_dim_concat = pad_to_patch_size(ctx, time_dim_concat);
                 x               = ggml_concat(ctx, x, time_dim_concat, 2);  // [N*C, (T+pad_t) + (T2+pad_t2), H + pad_h, W + pad_w]
                 t_len           = ((x->ne[2] + (std::get<0>(params.patch_size) / 2)) / std::get<0>(params.patch_size));
@@ -2134,7 +2136,7 @@ namespace WAN {
             wan.init(params_ctx, tensor_types, prefix);
         }
 
-        std::string get_desc() {
+        std::string get_desc() override {
             return desc;
         }
 
@@ -2145,10 +2147,10 @@ namespace WAN {
         struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                         struct ggml_tensor* timesteps,
                                         struct ggml_tensor* context,
-                                        struct ggml_tensor* clip_fea        = NULL,
-                                        struct ggml_tensor* c_concat        = NULL,
-                                        struct ggml_tensor* time_dim_concat = NULL,
-                                        struct ggml_tensor* vace_context    = NULL,
+                                        struct ggml_tensor* clip_fea        = nullptr,
+                                        struct ggml_tensor* c_concat        = nullptr,
+                                        struct ggml_tensor* time_dim_concat = nullptr,
+                                        struct ggml_tensor* vace_context    = nullptr,
                                         float vace_strength                 = 1.f) {
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, WAN_GRAPH_SIZE, false);
 
@@ -2174,10 +2176,10 @@ namespace WAN {
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, wan_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
-            // pe->data = NULL;
+            // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
-            if (c_concat != NULL) {
+            if (c_concat != nullptr) {
                 x = ggml_concat(compute_ctx, x, c_concat, 3);
             }
 
@@ -2201,13 +2203,13 @@ namespace WAN {
                      struct ggml_tensor* x,
                      struct ggml_tensor* timesteps,
                      struct ggml_tensor* context,
-                     struct ggml_tensor* clip_fea        = NULL,
-                     struct ggml_tensor* c_concat        = NULL,
-                     struct ggml_tensor* time_dim_concat = NULL,
-                     struct ggml_tensor* vace_context    = NULL,
+                     struct ggml_tensor* clip_fea        = nullptr,
+                     struct ggml_tensor* c_concat        = nullptr,
+                     struct ggml_tensor* time_dim_concat = nullptr,
+                     struct ggml_tensor* vace_context    = nullptr,
                      float vace_strength                 = 1.f,
-                     struct ggml_tensor** output         = NULL,
-                     struct ggml_context* output_ctx     = NULL) {
+                     struct ggml_tensor** output         = nullptr,
+                     struct ggml_context* output_ctx     = nullptr) {
             auto get_graph = [&]() -> struct ggml_cgraph* {
                 return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat, vace_context, vace_strength);
             };
@@ -2218,11 +2220,11 @@ namespace WAN {
         void test() {
             struct ggml_init_params params;
             params.mem_size   = static_cast<size_t>(200 * 1024 * 1024);  // 200 MB
-            params.mem_buffer = NULL;
+            params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
             struct ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != NULL);
+            GGML_ASSERT(work_ctx != nullptr);
 
             {
                 // cpu f16: pass
@@ -2244,10 +2246,10 @@ namespace WAN {
                 // auto clip_fea = load_tensor_from_file(work_ctx, "wan_dit_clip_fea.bin");
                 // print_ggml_tensor(clip_fea);
 
-                struct ggml_tensor* out = NULL;
+                struct ggml_tensor* out = nullptr;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, NULL, NULL, NULL, NULL, 1.f, &out, work_ctx);
+                compute(8, x, timesteps, context, nullptr, nullptr, nullptr, nullptr, 1.f, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
@@ -2275,12 +2277,12 @@ namespace WAN {
                 }
             }
 
-            std::shared_ptr<WanRunner> wan = std::shared_ptr<WanRunner>(new WanRunner(backend,
-                                                                                      false,
-                                                                                      tensor_types,
-                                                                                      "model.diffusion_model",
-                                                                                      VERSION_WAN2_2_TI2V,
-                                                                                      true));
+            std::shared_ptr<WanRunner> wan = std::make_shared<WanRunner>(backend,
+                                                                         false,
+                                                                         tensor_types,
+                                                                         "model.diffusion_model",
+                                                                         VERSION_WAN2_2_TI2V,
+                                                                         true);
 
             wan->alloc_params_buffer();
             std::map<std::string, ggml_tensor*> tensors;

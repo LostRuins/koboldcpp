@@ -472,8 +472,8 @@ public:
         struct ggml_tensor* prompt_embeds_d   = to_backend(prompt_embeds);
         struct ggml_tensor* id_embeds_d       = to_backend(id_embeds);
 
-        struct ggml_tensor* left  = NULL;
-        struct ggml_tensor* right = NULL;
+        struct ggml_tensor* left  = nullptr;
+        struct ggml_tensor* right = nullptr;
         for (int i = 0; i < class_tokens_mask.size(); i++) {
             if (class_tokens_mask[i]) {
                 // printf(" 1,");
@@ -528,7 +528,7 @@ public:
                 }
             }
         }
-        struct ggml_tensor* updated_prompt_embeds = NULL;
+        struct ggml_tensor* updated_prompt_embeds = nullptr;
         if (pm_version == PM_VERSION_1)
             updated_prompt_embeds = id_encoder.forward(ctx0,
                                                        runtime_backend,
@@ -638,7 +638,7 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
         pos = tensors.find("pmid.id_embeds");
         if (pos != tensors.end())
             return pos->second;
-        return NULL;
+        return nullptr;
     }
 };
 

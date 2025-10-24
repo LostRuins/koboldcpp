@@ -1,7 +1,7 @@
 #ifndef __T5_HPP__
 #define __T5_HPP__
 
-#include <float.h>
+#include <cfloat>
 #include <limits>
 #include <map>
 #include <memory>
@@ -461,7 +461,7 @@ protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
@@ -472,7 +472,7 @@ public:
         : hidden_size(hidden_size),
           eps(eps) {}
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         struct ggml_tensor* w = params["weight"];
         x                     = ggml_rms_norm(ctx, x, eps);
         x                     = ggml_mul(ctx, x, w);
@@ -487,7 +487,7 @@ public:
         blocks["wo"] = std::shared_ptr<GGMLBlock>(new Linear(ff_dim, model_dim, false));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         // x: [N, n_token, model_dim]
         auto wi = std::dynamic_pointer_cast<Linear>(blocks["wi"]);
         auto wo = std::dynamic_pointer_cast<Linear>(blocks["wo"]);
@@ -509,7 +509,7 @@ public:
         blocks["wo"] = std::shared_ptr<GGMLBlock>(new Linear(ff_dim, model_dim, false, false, false, scale));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         // x: [N, n_token, model_dim]
         auto wi_0 = std::dynamic_pointer_cast<Linear>(blocks["wi_0"]);
         auto wi_1 = std::dynamic_pointer_cast<Linear>(blocks["wi_1"]);
@@ -530,7 +530,7 @@ public:
         blocks["layer_norm"]     = std::shared_ptr<GGMLBlock>(new T5LayerNorm(model_dim));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         // x: [N, n_token, model_dim]
         auto DenseReluDense = std::dynamic_pointer_cast<T5DenseGatedActDense>(blocks["DenseReluDense"]);
         auto layer_norm     = std::dynamic_pointer_cast<T5LayerNorm>(blocks["layer_norm"]);
@@ -582,9 +582,9 @@ public:
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
                                                                 ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
-                                                                struct ggml_tensor* past_bias                = NULL,
-                                                                struct ggml_tensor* mask                     = NULL,
-                                                                struct ggml_tensor* relative_position_bucket = NULL) {
+                                                                struct ggml_tensor* past_bias                = nullptr,
+                                                                struct ggml_tensor* mask                     = nullptr,
+                                                                struct ggml_tensor* relative_position_bucket = nullptr) {
         auto q_proj   = std::dynamic_pointer_cast<Linear>(blocks["q"]);
         auto k_proj   = std::dynamic_pointer_cast<Linear>(blocks["k"]);
         auto v_proj   = std::dynamic_pointer_cast<Linear>(blocks["v"]);
@@ -597,11 +597,11 @@ public:
         auto k = k_proj->forward(ctx, x);
         auto v = v_proj->forward(ctx, x);
 
-        if (using_relative_attention_bias && relative_position_bucket != NULL) {
+        if (using_relative_attention_bias && relative_position_bucket != nullptr) {
             past_bias = compute_bias(ctx, relative_position_bucket);
         }
-        if (past_bias != NULL) {
-            if (mask != NULL) {
+        if (past_bias != nullptr) {
+            if (mask != nullptr) {
                 mask = ggml_repeat(ctx, mask, past_bias);
                 mask = ggml_add(ctx, mask, past_bias);
             } else {
@@ -632,9 +632,9 @@ public:
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
                                                                 ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
-                                                                struct ggml_tensor* past_bias                = NULL,
-                                                                struct ggml_tensor* mask                     = NULL,
-                                                                struct ggml_tensor* relative_position_bucket = NULL) {
+                                                                struct ggml_tensor* past_bias                = nullptr,
+                                                                struct ggml_tensor* mask                     = nullptr,
+                                                                struct ggml_tensor* relative_position_bucket = nullptr) {
         // x: [N, n_token, model_dim]
         auto SelfAttention = std::dynamic_pointer_cast<T5Attention>(blocks["SelfAttention"]);
         auto layer_norm    = std::dynamic_pointer_cast<T5LayerNorm>(blocks["layer_norm"]);
@@ -659,9 +659,9 @@ public:
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
                                                                 ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
-                                                                struct ggml_tensor* past_bias                = NULL,
-                                                                struct ggml_tensor* mask                     = NULL,
-                                                                struct ggml_tensor* relative_position_bucket = NULL) {
+                                                                struct ggml_tensor* past_bias                = nullptr,
+                                                                struct ggml_tensor* mask                     = nullptr,
+                                                                struct ggml_tensor* relative_position_bucket = nullptr) {
         // x: [N, n_token, model_dim]
         auto layer_0 = std::dynamic_pointer_cast<T5LayerSelfAttention>(blocks["layer.0"]);
         auto layer_1 = std::dynamic_pointer_cast<T5LayerFF>(blocks["layer.1"]);
@@ -695,9 +695,9 @@ public:
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 ggml_backend_t backend,
                                 struct ggml_tensor* x,
-                                struct ggml_tensor* past_bias                = NULL,
-                                struct ggml_tensor* attention_mask           = NULL,
-                                struct ggml_tensor* relative_position_bucket = NULL) {
+                                struct ggml_tensor* past_bias                = nullptr,
+                                struct ggml_tensor* attention_mask           = nullptr,
+                                struct ggml_tensor* relative_position_bucket = nullptr) {
         // x: [N, n_token, model_dim]
         for (int i = 0; i < num_layers; i++) {
             auto block = std::dynamic_pointer_cast<T5Block>(blocks["block." + std::to_string(i)]);
@@ -743,9 +743,9 @@ public:
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
-                                struct ggml_tensor* past_bias                = NULL,
-                                struct ggml_tensor* attention_mask           = NULL,
-                                struct ggml_tensor* relative_position_bucket = NULL) {
+                                struct ggml_tensor* past_bias                = nullptr,
+                                struct ggml_tensor* attention_mask           = nullptr,
+                                struct ggml_tensor* relative_position_bucket = nullptr) {
         // input_ids: [N, n_token]
 
         auto shared  = std::dynamic_pointer_cast<Embedding>(blocks["shared"]);
@@ -776,7 +776,7 @@ struct T5Runner : public GGMLRunner {
         model.init(params_ctx, tensor_types, prefix);
     }
 
-    std::string get_desc() {
+    std::string get_desc() override {
         return "t5";
     }
 
@@ -788,16 +788,16 @@ struct T5Runner : public GGMLRunner {
                                 ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* relative_position_bucket,
-                                struct ggml_tensor* attention_mask = NULL) {
+                                struct ggml_tensor* attention_mask = nullptr) {
         size_t N       = input_ids->ne[1];
         size_t n_token = input_ids->ne[0];
 
-        auto hidden_states = model.forward(ctx, backend, input_ids, NULL, attention_mask, relative_position_bucket);  // [N, n_token, model_dim]
+        auto hidden_states = model.forward(ctx, backend, input_ids, nullptr, attention_mask, relative_position_bucket);  // [N, n_token, model_dim]
         return hidden_states;
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* attention_mask = NULL) {
+                                    struct ggml_tensor* attention_mask = nullptr) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         input_ids      = to_backend(input_ids);
@@ -829,7 +829,7 @@ struct T5Runner : public GGMLRunner {
                  struct ggml_tensor* input_ids,
                  struct ggml_tensor* attention_mask,
                  ggml_tensor** output,
-                 ggml_context* output_ctx = NULL) {
+                 ggml_context* output_ctx = nullptr) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(input_ids, attention_mask);
         };
@@ -968,11 +968,11 @@ struct T5Embedder {
     void test() {
         struct ggml_init_params params;
         params.mem_size   = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-        params.mem_buffer = NULL;
+        params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
         struct ggml_context* work_ctx = ggml_init(params);
-        GGML_ASSERT(work_ctx != NULL);
+        GGML_ASSERT(work_ctx != nullptr);
 
         {
             std::string text("a lovely cat");
@@ -987,7 +987,7 @@ struct T5Embedder {
             printf("\n");
             auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
             auto attention_mask     = vector_to_ggml_tensor(work_ctx, masks);
-            struct ggml_tensor* out = NULL;
+            struct ggml_tensor* out = nullptr;
 
             int t0 = ggml_time_ms();
             model.compute(8, input_ids, attention_mask, &out, work_ctx);
@@ -1022,7 +1022,7 @@ struct T5Embedder {
             }
         }
 
-        std::shared_ptr<T5Embedder> t5 = std::shared_ptr<T5Embedder>(new T5Embedder(backend, false, tensor_types, "", true));
+        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, false, tensor_types, "", true);
 
         t5->alloc_params_buffer();
         std::map<std::string, ggml_tensor*> tensors;

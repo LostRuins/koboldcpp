@@ -13,10 +13,10 @@ namespace LTXV {
     public:
         CausalConv3d(int64_t in_channels,
                      int64_t out_channels,
-                     int kernel_size        = 3,
-                     std::tuple<int> stride = {1, 1, 1},
-                     int dilation           = 1,
-                     bool bias              = true) {
+                     int kernel_size                  = 3,
+                     std::tuple<int, int, int> stride = {1, 1, 1},
+                     int dilation                     = 1,
+                     bool bias                        = true) {
             time_kernel_size = kernel_size / 2;
             blocks["conv"]   = std::shared_ptr<GGMLBlock>(new Conv3d(in_channels,
                                                                      out_channels,

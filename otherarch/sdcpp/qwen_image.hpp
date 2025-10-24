@@ -1,6 +1,8 @@
 #ifndef __QWEN_IMAGE_HPP__
 #define __QWEN_IMAGE_HPP__
 
+#include <memory>
+
 #include "common.hpp"
 #include "flux.hpp"
 #include "ggml_extend.hpp"
@@ -534,12 +536,12 @@ namespace Qwen {
                     continue;
                 }
             }
-            LOG_ERROR("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
+            LOG_INFO("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
             qwen_image = QwenImageModel(qwen_image_params);
             qwen_image.init(params_ctx, tensor_types, prefix);
         }
 
-        std::string get_desc() {
+        std::string get_desc() override {
             return "qwen_image";
         }
 
@@ -577,7 +579,7 @@ namespace Qwen {
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, qwen_image_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe, true, "pe");
-            // pe->data = NULL;
+            // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
             struct ggml_tensor* out = qwen_image.forward(compute_ctx,
@@ -599,8 +601,8 @@ namespace Qwen {
                      struct ggml_tensor* context,
                      std::vector<ggml_tensor*> ref_latents = {},
                      bool increase_ref_index               = false,
-                     struct ggml_tensor** output           = NULL,
-                     struct ggml_context* output_ctx       = NULL) {
+                     struct ggml_tensor** output           = nullptr,
+                     struct ggml_context* output_ctx       = nullptr) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
@@ -614,11 +616,11 @@ namespace Qwen {
         void test() {
             struct ggml_init_params params;
             params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1GB
-            params.mem_buffer = NULL;
+            params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
             struct ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != NULL);
+            GGML_ASSERT(work_ctx != nullptr);
 
             {
                 // auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 16, 16, 16, 1);
@@ -634,7 +636,7 @@ namespace Qwen {
                 auto context = load_tensor_from_file(work_ctx, "./qwen_image_context.bin");
                 print_ggml_tensor(context);
 
-                struct ggml_tensor* out = NULL;
+                struct ggml_tensor* out = nullptr;
 
                 int t0 = ggml_time_ms();
                 compute(8, x, timesteps, context, {}, false, &out, work_ctx);
@@ -666,12 +668,12 @@ namespace Qwen {
                 }
             }
 
-            std::shared_ptr<QwenImageRunner> qwen_image = std::shared_ptr<QwenImageRunner>(new QwenImageRunner(backend,
-                                                                                                               false,
-                                                                                                               tensor_types,
-                                                                                                               "model.diffusion_model",
-                                                                                                               VERSION_QWEN_IMAGE,
-                                                                                                               true));
+            std::shared_ptr<QwenImageRunner> qwen_image = std::make_shared<QwenImageRunner>(backend,
+                                                                                            false,
+                                                                                            tensor_types,
+                                                                                            "model.diffusion_model",
+                                                                                            VERSION_QWEN_IMAGE,
+                                                                                            true);
 
             qwen_image->alloc_params_buffer();
             std::map<std::string, ggml_tensor*> tensors;

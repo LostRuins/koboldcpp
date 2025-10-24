@@ -29,7 +29,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         // x: [n, n_in, h, w]
         // return: [n, n_out, h, w]
 
@@ -86,7 +86,7 @@ public:
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, z_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         // x: [n, in_channels, h, w]
         // return: [n, z_channels, h/8, w/8]
 
@@ -136,7 +136,7 @@ public:
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) override {
         // z: [n, z_channels, h, w]
         // return: [n, out_channels, h*8, w*8]
 
@@ -218,7 +218,7 @@ struct TinyAutoEncoder : public GGMLRunner {
         }
     }
 
-    std::string get_desc() {
+    std::string get_desc() override {
         return "taesd";
     }
 
@@ -261,7 +261,7 @@ struct TinyAutoEncoder : public GGMLRunner {
                  struct ggml_tensor* z,
                  bool decode_graph,
                  struct ggml_tensor** output,
-                 struct ggml_context* output_ctx = NULL) {
+                 struct ggml_context* output_ctx = nullptr) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
