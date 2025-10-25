@@ -253,6 +253,9 @@ std::string kcpp_fix_wrong_img_tensor_name(const std::string& name) //kcpp funct
     if (starts_with(name, "text_encoders.qwen25_7b.transformer.visual.")) {
         return "text_encoders.qwen2vl.visual." + name.substr(strlen("text_encoders.qwen25_7b.transformer.visual."));
     }
+    if (starts_with(name, "text_encoders.umt5xxl.")) {
+        return "text_encoders.t5xxl." + name.substr(strlen("text_encoders.umt5xxl."));
+    }
     return name;
 }
 
