@@ -33,17 +33,20 @@ const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
     "Instruct-Pix2Pix",
+    "SD 1.x Tiny UNet",
     "SD 2.x",
     "SD 2.x Inpaint",
     "SDXL",
     "SDXL Inpaint",
     "SDXL Instruct-Pix2Pix",
+    "SDXL (SSD1B)",
     "SVD",
     "SD3.x",
     "Flux",
     "Flux Fill",
     "Flux Control",
     "Flex.2",
+    "Chroma Radiance",
     "Wan 2.x",
     "Wan 2.2 I2V",
     "Wan 2.2 TI2V",
@@ -616,6 +619,9 @@ public:
                                                                         version);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
+            } else if (version == VERSION_CHROMA_RADIANCE) {
+                first_stage_model = std::make_shared<FakeVAE>(vae_backend,
+                                                              offload_params_to_cpu);
             } else if (!use_tiny_autoencoder) {
                 first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend,
                                                                     offload_params_to_cpu,
@@ -1202,7 +1208,7 @@ public:
         struct ggml_tensor* c_concat = nullptr;
         {
             if (zero_out_masked) {
-                c_concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 4, 1);
+                c_concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / get_vae_scale_factor(), height / get_vae_scale_factor(), 4, 1);
                 ggml_set_f32(c_concat, 0.f);
             } else {
                 ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
@@ -1536,6 +1542,53 @@ public:
         return x;
     }
 
+    int get_vae_scale_factor() {
+        int vae_scale_factor = 8;
+        if (version == VERSION_WAN2_2_TI2V) {
+            vae_scale_factor = 16;
+        } else if (version == VERSION_CHROMA_RADIANCE) {
+            vae_scale_factor = 1;
+        }
+        return vae_scale_factor;
+    }
+
+    int get_latent_channel() {
+        int latent_channel = 4;
+        if (sd_version_is_dit(version)) {
+            if (version == VERSION_WAN2_2_TI2V) {
+                latent_channel = 48;
+            } else if (version == VERSION_CHROMA_RADIANCE) {
+                latent_channel = 3;
+            } else {
+                latent_channel = 16;
+            }
+        }
+        return latent_channel;
+    }
+
+    ggml_tensor* generate_init_latent(ggml_context* work_ctx,
+                                      int width,
+                                      int height,
+                                      int frames = 1,
+                                      bool video = false) {
+        int vae_scale_factor = get_vae_scale_factor();
+        int W                = width / vae_scale_factor;
+        int H                = height / vae_scale_factor;
+        int T                = frames;
+        if (sd_version_is_wan(version)) {
+            T = ((T - 1) / 4) + 1;
+        }
+        int C = get_latent_channel();
+        ggml_tensor* init_latent;
+        if (video) {
+            init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, T, C);
+        } else {
+            init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
+        }
+        ggml_set_f32(init_latent, shift_factor);
+        return init_latent;
+    }
+
     void process_latent_in(ggml_tensor* latent) {
         if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
             GGML_ASSERT(latent->ne[3] == 16 || latent->ne[3] == 48);
@@ -1571,6 +1624,8 @@ public:
                     }
                 }
             }
+        } else if (version == VERSION_CHROMA_RADIANCE) {
+            // pass
         } else {
             ggml_tensor_iter(latent, [&](ggml_tensor* latent, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
                 float value = ggml_tensor_get_f32(latent, i0, i1, i2, i3);
@@ -1615,6 +1670,8 @@ public:
                     }
                 }
             }
+        } else if (version == VERSION_CHROMA_RADIANCE) {
+            // pass
         } else {
             ggml_tensor_iter(latent, [&](ggml_tensor* latent, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
                 float value = ggml_tensor_get_f32(latent, i0, i1, i2, i3);
@@ -1656,11 +1713,11 @@ public:
     ggml_tensor* vae_encode(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
         int64_t t0          = ggml_time_ms();
         ggml_tensor* result = nullptr;
-        int W               = x->ne[0] / 8;
-        int H               = x->ne[1] / 8;
+        int W               = x->ne[0] / get_vae_scale_factor();
+        int H               = x->ne[1] / get_vae_scale_factor();
+        int C               = get_latent_channel();
         if (vae_tiling_params.enabled && !encode_video) {
             // TODO wan2.2 vae support?
-            int C = sd_version_is_dit(version) ? 16 : 4;
             int ne2;
             int ne3;
             if (sd_version_is_qwen_image(version)) {
@@ -1747,7 +1804,10 @@ public:
 
     ggml_tensor* get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* vae_output) {
         ggml_tensor* latent;
-        if (use_tiny_autoencoder || sd_version_is_qwen_image(version) || sd_version_is_wan(version)) {
+        if (use_tiny_autoencoder ||
+            sd_version_is_qwen_image(version) ||
+            sd_version_is_wan(version) ||
+            version == VERSION_CHROMA_RADIANCE) {
             latent = vae_output;
         } else if (version == VERSION_SD1_PIX2PIX) {
             latent = ggml_view_3d(work_ctx,
@@ -1774,18 +1834,14 @@ public:
     }
 
     ggml_tensor* decode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
-        int64_t W           = x->ne[0] * 8;
-        int64_t H           = x->ne[1] * 8;
+        int64_t W           = x->ne[0] * get_vae_scale_factor();
+        int64_t H           = x->ne[1] * get_vae_scale_factor();
         int64_t C           = 3;
         ggml_tensor* result = nullptr;
         if (decode_video) {
             int T = x->ne[2];
             if (sd_version_is_wan(version)) {
                 T = ((T - 1) * 4) + 1;
-                if (version == VERSION_WAN2_2_TI2V) {
-                    W = x->ne[0] * 16;
-                    H = x->ne[1] * 16;
-                }
             }
             result = ggml_new_tensor_4d(work_ctx,
                                         GGML_TYPE_F32,
@@ -2396,16 +2452,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 
     // Sample
     std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
-    int C = 4;
-    if (sd_version_is_sd3(sd_ctx->sd->version)) {
-        C = 16;
-    } else if (sd_version_is_flux(sd_ctx->sd->version)) {
-        C = 16;
-    } else if (sd_version_is_qwen_image(sd_ctx->sd->version)) {
-        C = 16;
-    }
-    int W = width / 8;
-    int H = height / 8;
+    int C = sd_ctx->sd->get_latent_channel();
+    int W = width / sd_ctx->sd->get_vae_scale_factor();
+    int H = height / sd_ctx->sd->get_vae_scale_factor();
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
 
     struct ggml_tensor* control_latent = nullptr;
@@ -2583,51 +2632,11 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     return result_images;
 }
 
-ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
-                                  ggml_context* work_ctx,
-                                  int width,
-                                  int height,
-                                  int frames = 1,
-                                  bool video = false) {
-    int C = 4;
-    int T = frames;
-    int W = width / 8;
-    int H = height / 8;
-    if (sd_version_is_sd3(sd_ctx->sd->version)) {
-        C = 16;
-    } else if (sd_version_is_flux(sd_ctx->sd->version)) {
-        C = 16;
-    } else if (sd_version_is_qwen_image(sd_ctx->sd->version)) {
-        C = 16;
-    } else if (sd_version_is_wan(sd_ctx->sd->version)) {
-        C = 16;
-        T = ((T - 1) / 4) + 1;
-        if (sd_ctx->sd->version == VERSION_WAN2_2_TI2V) {
-            C = 48;
-            W = width / 16;
-            H = height / 16;
-        }
-    }
-    ggml_tensor* init_latent;
-    if (video) {
-        init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, T, C);
-    } else {
-        init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
-    }
-    if (sd_version_is_sd3(sd_ctx->sd->version)) {
-        ggml_set_f32(init_latent, 0.0609f);
-    } else if (sd_version_is_flux(sd_ctx->sd->version)) {
-        ggml_set_f32(init_latent, 0.1159f);
-    } else {
-        ggml_set_f32(init_latent, 0.f);
-    }
-    return init_latent;
-}
-
 sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
     int width                     = sd_img_gen_params->width;
     int height                    = sd_img_gen_params->height;
+    int vae_scale_factor          = sd_ctx->sd->get_vae_scale_factor();
     if (sd_version_is_dit(sd_ctx->sd->version)) {
         if (width % 16 || height % 16) {
             LOG_ERROR("Image dimensions must be must be a multiple of 16 on each axis for %s models. (Got %dx%d)",
@@ -2723,20 +2732,20 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                1);
             for (int ix = 0; ix < masked_latent->ne[0]; ix++) {
                 for (int iy = 0; iy < masked_latent->ne[1]; iy++) {
-                    int mx = ix * 8;
-                    int my = iy * 8;
+                    int mx = ix * vae_scale_factor;
+                    int my = iy * vae_scale_factor;
                     if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
                         for (int k = 0; k < masked_latent->ne[2]; k++) {
                             float v = ggml_tensor_get_f32(masked_latent, ix, iy, k);
                             ggml_tensor_set_f32(concat_latent, v, ix, iy, k);
                         }
                         // "Encode" 8x8 mask chunks into a flattened 1x64 vector, and concatenate to masked image
-                        for (int x = 0; x < 8; x++) {
-                            for (int y = 0; y < 8; y++) {
+                        for (int x = 0; x < vae_scale_factor; x++) {
+                            for (int y = 0; y < vae_scale_factor; y++) {
                                 float m = ggml_tensor_get_f32(mask_img, mx + x, my + y);
-                                // TODO: check if the way the mask is flattened is correct (is it supposed to be x*8+y or x+8*y?)
-                                // python code was using "b (h 8) (w 8) -> b (8 8) h w"
-                                ggml_tensor_set_f32(concat_latent, m, ix, iy, masked_latent->ne[2] + x * 8 + y);
+                                // TODO: check if the way the mask is flattened is correct (is it supposed to be x*vae_scale_factor+y or x+vae_scale_factor*y?)
+                                // python code was using "b (h vae_scale_factor) (w vae_scale_factor) -> b (vae_scale_factor vae_scale_factor) h w"
+                                ggml_tensor_set_f32(concat_latent, m, ix, iy, masked_latent->ne[2] + x * vae_scale_factor + y);
                             }
                         }
                     } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
@@ -2759,11 +2768,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
         {
             // LOG_WARN("Inpainting with a base model is not great");
-            denoise_mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 1, 1);
+            denoise_mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / vae_scale_factor, height / vae_scale_factor, 1, 1);
             for (int ix = 0; ix < denoise_mask->ne[0]; ix++) {
                 for (int iy = 0; iy < denoise_mask->ne[1]; iy++) {
-                    int mx  = ix * 8;
-                    int my  = iy * 8;
+                    int mx  = ix * vae_scale_factor;
+                    int my  = iy * vae_scale_factor;
                     float m = ggml_tensor_get_f32(mask_img, mx, my);
                     ggml_tensor_set_f32(denoise_mask, m, ix, iy);
                 }
@@ -2774,7 +2783,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
             LOG_WARN("This is an inpainting model, this should only be used in img2img mode with a mask");
         }
-        init_latent = generate_init_latent(sd_ctx, work_ctx, width, height);
+        init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height);
     }
 
     sd_guidance_params_t guidance = sd_img_gen_params->sample_params.guidance;
@@ -2902,6 +2911,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     int sample_steps = sd_vid_gen_params->sample_params.sample_steps;
     LOG_INFO("generate_video %dx%dx%d", width, height, frames);
 
+    int vae_scale_factor = sd_ctx->sd->get_vae_scale_factor();
+
     sd_ctx->sd->init_scheduler(sd_vid_gen_params->sample_params.scheduler);
 
     int high_noise_sample_steps = 0;
@@ -2999,7 +3010,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             ggml_tensor_set_f32(image, value, i0, i1, i2, i3);
         });
 
-        concat_latent = sd_ctx->sd->encode_first_stage(work_ctx, image);  // [b*c, t, h/8, w/8]
+        concat_latent = sd_ctx->sd->encode_first_stage(work_ctx, image);  // [b*c, t, h/vae_scale_factor, w/vae_scale_factor]
 
         int64_t t2 = ggml_time_ms();
         LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
@@ -3009,7 +3020,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                       concat_latent->ne[0],
                                                       concat_latent->ne[1],
                                                       concat_latent->ne[2],
-                                                      4);  // [b*4, t, w/8, h/8]
+                                                      4);  // [b*4, t, w/vae_scale_factor, h/vae_scale_factor]
         ggml_tensor_iter(concat_mask, [&](ggml_tensor* concat_mask, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
             float value = 0.0f;
             if (i2 == 0 && sd_vid_gen_params->init_image.data) {  // start image
@@ -3020,7 +3031,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             ggml_tensor_set_f32(concat_mask, value, i0, i1, i2, i3);
         });
 
-        concat_latent = ggml_tensor_concat(work_ctx, concat_mask, concat_latent, 3);  // [b*(c+4), t, h/8, w/8]
+        concat_latent = ggml_tensor_concat(work_ctx, concat_mask, concat_latent, 3);  // [b*(c+4), t, h/vae_scale_factor, w/vae_scale_factor]
     } else if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.2-TI2V-5B" && sd_vid_gen_params->init_image.data) {
         LOG_INFO("IMG2VID");
 
@@ -3031,7 +3042,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
         auto init_image_latent = sd_ctx->sd->vae_encode(work_ctx, init_img);  // [b*c, 1, h/16, w/16]
 
-        init_latent  = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
+        init_latent  = sd_ctx->sd->generate_init_latent(work_ctx, width, height, frames, true);
         denoise_mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], 1);
         ggml_set_f32(denoise_mask, 1.f);
 
@@ -3088,8 +3099,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             ggml_tensor_set_f32(reactive, reactive_value, i0, i1, i2, i3);
         });
 
-        inactive = sd_ctx->sd->encode_first_stage(work_ctx, inactive);  // [b*c, t, h/8, w/8]
-        reactive = sd_ctx->sd->encode_first_stage(work_ctx, reactive);  // [b*c, t, h/8, w/8]
+        inactive = sd_ctx->sd->encode_first_stage(work_ctx, inactive);  // [b*c, t, h/vae_scale_factor, w/vae_scale_factor]
+        reactive = sd_ctx->sd->encode_first_stage(work_ctx, reactive);  // [b*c, t, h/vae_scale_factor, w/vae_scale_factor]
 
         int64_t length = inactive->ne[2];
         if (ref_image_latent) {
@@ -3097,7 +3108,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             frames        = (length - 1) * 4 + 1;
             ref_image_num = 1;
         }
-        vace_context = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, inactive->ne[0], inactive->ne[1], length, 96);  // [b*96, t, h/8, w/8]
+        vace_context = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, inactive->ne[0], inactive->ne[1], length, 96);  // [b*96, t, h/vae_scale_factor, w/vae_scale_factor]
         ggml_tensor_iter(vace_context, [&](ggml_tensor* vace_context, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
             float value;
             if (i3 < 32) {
@@ -3114,7 +3125,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                 if (ref_image_latent && i2 == 0) {
                     value = 0.f;
                 } else {
-                    int64_t vae_stride        = 8;
+                    int64_t vae_stride        = vae_scale_factor;
                     int64_t mask_height_index = i1 * vae_stride + (i3 - 32) / vae_stride;
                     int64_t mask_width_index  = i0 * vae_stride + (i3 - 32) % vae_stride;
                     value                     = ggml_tensor_get_f32(mask, mask_width_index, mask_height_index, i2 - ref_image_num, 0);
@@ -3127,7 +3138,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
 
     if (init_latent == nullptr) {
-        init_latent = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
+        init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height, frames, true);
     }
 
     // Get learned condition
@@ -3158,16 +3169,10 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         sd_ctx->sd->cond_stage_model->free_params_buffer();
     }
 
-    int W = width / 8;
-    int H = height / 8;
+    int W = width / vae_scale_factor;
+    int H = height / vae_scale_factor;
     int T = init_latent->ne[2];
-    int C = 16;
-
-    if (sd_ctx->sd->version == VERSION_WAN2_2_TI2V) {
-        W = width / 16;
-        H = height / 16;
-        C = 48;
-    }
+    int C = sd_ctx->sd->get_latent_channel();
 
     struct ggml_tensor* final_latent;
     struct ggml_tensor* x_t   = init_latent;

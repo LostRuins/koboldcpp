@@ -960,7 +960,16 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_linear(struct ggml_context* ctx,
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, scale);
     }
-    x = ggml_mul_mat(ctx, w, x);
+    if (x->ne[2] * x->ne[3] > 1024) {
+        // workaround: avoid ggml cuda error
+        int64_t ne2 = x->ne[2];
+        int64_t ne3 = x->ne[3];
+        x           = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2] * x->ne[3]);
+        x           = ggml_mul_mat(ctx, w, x);
+        x           = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / ne2 / ne3, ne2, ne3);
+    } else {
+        x = ggml_mul_mat(ctx, w, x);
+    }
     if (force_prec_f32) {
         ggml_mul_mat_set_prec(x, GGML_PREC_F32);
     }

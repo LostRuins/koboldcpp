@@ -649,7 +649,7 @@ namespace Qwen {
 
         static void load_from_file_and_test(const std::string& file_path) {
             // cuda q8: pass
-            // cuda q8 fa: nan
+            // cuda q8 fa: pass
             // ggml_backend_t backend    = ggml_backend_cuda_init(0);
             ggml_backend_t backend    = ggml_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;

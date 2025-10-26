@@ -23,17 +23,20 @@ enum SDVersion {
     VERSION_SD1,
     VERSION_SD1_INPAINT,
     VERSION_SD1_PIX2PIX,
+    VERSION_SD1_TINY_UNET,
     VERSION_SD2,
     VERSION_SD2_INPAINT,
     VERSION_SDXL,
     VERSION_SDXL_INPAINT,
     VERSION_SDXL_PIX2PIX,
+    VERSION_SDXL_SSD1B,
     VERSION_SVD,
     VERSION_SD3,
     VERSION_FLUX,
     VERSION_FLUX_FILL,
     VERSION_FLUX_CONTROLS,
     VERSION_FLEX_2,
+    VERSION_CHROMA_RADIANCE,
     VERSION_WAN2,
     VERSION_WAN2_2_I2V,
     VERSION_WAN2_2_TI2V,
@@ -42,7 +45,7 @@ enum SDVersion {
 };
 
 static inline bool sd_version_is_sd1(SDVersion version) {
-    if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT || version == VERSION_SD1_PIX2PIX) {
+    if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT || version == VERSION_SD1_PIX2PIX || version == VERSION_SD1_TINY_UNET) {
         return true;
     }
     return false;
@@ -56,7 +59,7 @@ static inline bool sd_version_is_sd2(SDVersion version) {
 }
 
 static inline bool sd_version_is_sdxl(SDVersion version) {
-    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT || version == VERSION_SDXL_PIX2PIX) {
+    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT || version == VERSION_SDXL_PIX2PIX || version == VERSION_SDXL_SSD1B) {
         return true;
     }
     return false;
@@ -70,7 +73,11 @@ static inline bool sd_version_is_sd3(SDVersion version) {
 }
 
 static inline bool sd_version_is_flux(SDVersion version) {
-    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL || version == VERSION_FLUX_CONTROLS || version == VERSION_FLEX_2) {
+    if (version == VERSION_FLUX ||
+        version == VERSION_FLUX_FILL ||
+        version == VERSION_FLUX_CONTROLS ||
+        version == VERSION_FLEX_2 ||
+        version == VERSION_CHROMA_RADIANCE) {
         return true;
     }
     return false;

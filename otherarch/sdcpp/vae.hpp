@@ -533,6 +533,30 @@ struct VAE : public GGMLRunner {
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
 };
 
+struct FakeVAE : public VAE {
+    FakeVAE(ggml_backend_t backend, bool offload_params_to_cpu)
+        : VAE(backend, offload_params_to_cpu) {}
+    void compute(const int n_threads,
+                 struct ggml_tensor* z,
+                 bool decode_graph,
+                 struct ggml_tensor** output,
+                 struct ggml_context* output_ctx) override {
+        if (*output == nullptr && output_ctx != nullptr) {
+            *output = ggml_dup_tensor(output_ctx, z);
+        }
+        ggml_tensor_iter(z, [&](ggml_tensor* z, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+            float value = ggml_tensor_get_f32(z, i0, i1, i2, i3);
+            ggml_tensor_set_f32(*output, value, i0, i1, i2, i3);
+        });
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) override {}
+
+    std::string get_desc() override {
+        return "fake_vae";
+    }
+};
+
 struct AutoEncoderKL : public VAE {
     bool decode_only = true;
     AutoencodingEngine ae;
