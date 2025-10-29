@@ -641,10 +641,10 @@ public:
         // concat(patch_embedding, class_embedding) + position_embedding
         struct ggml_tensor* patch_embedding;
         int64_t N       = pixel_values->ne[3];
-        patch_embedding = ggml_nn_conv_2d(ctx, pixel_values, patch_embed_weight, nullptr, patch_size, patch_size);  // [N, embed_dim, image_size // pacht_size, image_size // pacht_size]
-        patch_embedding = ggml_reshape_3d(ctx, patch_embedding, num_patches, embed_dim, N);                         // [N, embed_dim, num_patches]
-        patch_embedding = ggml_cont(ctx, ggml_permute(ctx, patch_embedding, 1, 0, 2, 3));                           // [N, num_patches, embed_dim]
-        patch_embedding = ggml_reshape_4d(ctx, patch_embedding, 1, embed_dim, num_patches, N);                      // [N, num_patches, embed_dim, 1]
+        patch_embedding = ggml_ext_conv_2d(ctx, pixel_values, patch_embed_weight, nullptr, patch_size, patch_size);  // [N, embed_dim, image_size // pacht_size, image_size // pacht_size]
+        patch_embedding = ggml_reshape_3d(ctx, patch_embedding, num_patches, embed_dim, N);                          // [N, embed_dim, num_patches]
+        patch_embedding = ggml_cont(ctx, ggml_permute(ctx, patch_embedding, 1, 0, 2, 3));                            // [N, num_patches, embed_dim]
+        patch_embedding = ggml_reshape_4d(ctx, patch_embedding, 1, embed_dim, num_patches, N);                       // [N, num_patches, embed_dim, 1]
 
         struct ggml_tensor* class_embedding = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, embed_dim, N);
         class_embedding                     = ggml_repeat(ctx, class_embed_weight, class_embedding);      // [N, embed_dim]
@@ -736,7 +736,7 @@ public:
             auto text_projection = params["text_projection"];
             ggml_tensor* pooled  = ggml_view_1d(ctx, x, hidden_size, x->nb[1] * max_token_idx);
             if (text_projection != nullptr) {
-                pooled = ggml_nn_linear(ctx, pooled, text_projection, nullptr);
+                pooled = ggml_ext_linear(ctx, pooled, text_projection, nullptr);
             } else {
                 LOG_DEBUG("identity projection");
             }
@@ -836,7 +836,7 @@ public:
         if (transpose_weight) {
             w = ggml_cont(ctx, ggml_transpose(ctx, w));
         }
-        return ggml_nn_linear(ctx, x, w, nullptr);
+        return ggml_ext_linear(ctx, x, w, nullptr);
     }
 };
 

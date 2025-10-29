@@ -401,8 +401,8 @@ struct CompVisDenoiser : public Denoiser {
 
     // this function will modify noise/latent
     ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) override {
-        ggml_tensor_scale(noise, sigma);
-        ggml_tensor_add(latent, noise);
+        ggml_ext_tensor_scale_inplace(noise, sigma);
+        ggml_ext_tensor_add_inplace(latent, noise);
         return latent;
     }
 
@@ -496,14 +496,14 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     // this function will modify noise/latent
     ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) override {
-        ggml_tensor_scale(noise, sigma);
-        ggml_tensor_scale(latent, 1.0f - sigma);
-        ggml_tensor_add(latent, noise);
+        ggml_ext_tensor_scale_inplace(noise, sigma);
+        ggml_ext_tensor_scale_inplace(latent, 1.0f - sigma);
+        ggml_ext_tensor_add_inplace(latent, noise);
         return latent;
     }
 
     ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) override {
-        ggml_tensor_scale(latent, 1.0f / (1.0f - sigma));
+        ggml_ext_tensor_scale_inplace(latent, 1.0f / (1.0f - sigma));
         return latent;
     }
 };
@@ -555,14 +555,14 @@ struct FluxFlowDenoiser : public Denoiser {
 
     // this function will modify noise/latent
     ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) override {
-        ggml_tensor_scale(noise, sigma);
-        ggml_tensor_scale(latent, 1.0f - sigma);
-        ggml_tensor_add(latent, noise);
+        ggml_ext_tensor_scale_inplace(noise, sigma);
+        ggml_ext_tensor_scale_inplace(latent, 1.0f - sigma);
+        ggml_ext_tensor_add_inplace(latent, noise);
         return latent;
     }
 
     ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) override {
-        ggml_tensor_scale(latent, 1.0f / (1.0f - sigma));
+        ggml_ext_tensor_scale_inplace(latent, 1.0f / (1.0f - sigma));
         return latent;
     }
 };
@@ -620,7 +620,7 @@ static void sample_k_diffusion(sample_method_t method,
 
                 if (sigmas[i + 1] > 0) {
                     // x = x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
-                    ggml_tensor_set_f32_randn(noise, rng);
+                    ggml_ext_im_set_randn_f32(noise, rng);
                     // noise = load_tensor_from_file(work_ctx, "./rand" + std::to_string(i+1) + ".bin");
                     {
                         float* vec_x     = (float*)x->data;
@@ -820,7 +820,7 @@ static void sample_k_diffusion(sample_method_t method,
 
                 // Noise addition
                 if (sigmas[i + 1] > 0) {
-                    ggml_tensor_set_f32_randn(noise, rng);
+                    ggml_ext_im_set_randn_f32(noise, rng);
                     {
                         float* vec_x     = (float*)x->data;
                         float* vec_noise = (float*)noise->data;
@@ -1085,7 +1085,7 @@ static void sample_k_diffusion(sample_method_t method,
 
                 if (sigmas[i + 1] > 0) {
                     // x += sigmas[i + 1] * noise_sampler(sigmas[i], sigmas[i + 1])
-                    ggml_tensor_set_f32_randn(noise, rng);
+                    ggml_ext_im_set_randn_f32(noise, rng);
                     // noise = load_tensor_from_file(res_ctx, "./rand" + std::to_string(i+1) + ".bin");
                     {
                         float* vec_x     = (float*)x->data;
@@ -1276,7 +1276,7 @@ static void sample_k_diffusion(sample_method_t method,
                     }
                 }
                 if (eta > 0) {
-                    ggml_tensor_set_f32_randn(variance_noise, rng);
+                    ggml_ext_im_set_randn_f32(variance_noise, rng);
                     float* vec_variance_noise =
                         (float*)variance_noise->data;
                     float* vec_x = (float*)x->data;
@@ -1444,7 +1444,7 @@ static void sample_k_diffusion(sample_method_t method,
                 if (eta > 0 && i != steps - 1) {
                     // In this case, x is still pred_noised_sample,
                     // continue in-place
-                    ggml_tensor_set_f32_randn(noise, rng);
+                    ggml_ext_im_set_randn_f32(noise, rng);
                     float* vec_x     = (float*)x->data;
                     float* vec_noise = (float*)noise->data;
                     for (int j = 0; j < ggml_nelements(x); j++) {

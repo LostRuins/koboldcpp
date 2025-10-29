@@ -82,7 +82,7 @@ struct UpscalerGGML {
         }
         // LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
         ggml_tensor* input_image_tensor = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, input_image.width, input_image.height, 3, 1);
-        sd_image_to_tensor(input_image, input_image_tensor);
+        sd_image_to_ggml_tensor(input_image, input_image_tensor);
 
         ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, 3, 1);
         auto on_tiling        = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
@@ -91,8 +91,8 @@ struct UpscalerGGML {
         int64_t t0 = ggml_time_ms();
         sd_tiling(input_image_tensor, upscaled, esrgan_upscaler->scale, esrgan_upscaler->tile_size, 0.25f, on_tiling);
         esrgan_upscaler->free_compute_buffer();
-        ggml_tensor_clamp(upscaled, 0.f, 1.f);
-        uint8_t* upscaled_data = sd_tensor_to_image(upscaled);
+        ggml_ext_tensor_clamp_inplace(upscaled, 0.f, 1.f);
+        uint8_t* upscaled_data = ggml_tensor_to_sd_image(upscaled);
         ggml_free(upscale_ctx);
         int64_t t3 = ggml_time_ms();
         LOG_INFO("input_image_tensor upscaled, taking %.2fs", (t3 - t0) / 1000.0f);

@@ -29,7 +29,7 @@ public:
         auto layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["layernorm"]);
 
         struct ggml_tensor* r = x;
-        // x = ggml_nn_layer_norm(ctx, x, ln_w, ln_b);
+        // x = ggml_ext_layer_norm(ctx, x, ln_w, ln_b);
         x = layer_norm->forward(ctx, x);
         // x = ggml_add(ctx, ggml_mul_mat(ctx, fc1_w, x),  fc1_b);
         x = fc1->forward(ctx, x);

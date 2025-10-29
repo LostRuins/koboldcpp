@@ -56,7 +56,7 @@ namespace Qwen {
             // return: [N, embedding_dim]
             auto timestep_embedder = std::dynamic_pointer_cast<TimestepEmbedding>(blocks["timestep_embedder"]);
 
-            auto timesteps_proj = ggml_nn_timestep_embedding(ctx, timesteps, 256, 10000, 1.f);
+            auto timesteps_proj = ggml_ext_timestep_embedding(ctx, timesteps, 256, 10000, 1.f);
             auto timesteps_emb  = timestep_embedder->forward(ctx, timesteps_proj);
             return timesteps_emb;
         }
@@ -246,11 +246,11 @@ namespace Qwen {
 
             auto img_mod_params    = ggml_silu(ctx, t_emb);
             img_mod_params         = img_mod_1->forward(ctx, img_mod_params);
-            auto img_mod_param_vec = ggml_chunk(ctx, img_mod_params, 6, 0);
+            auto img_mod_param_vec = ggml_ext_chunk(ctx, img_mod_params, 6, 0);
 
             auto txt_mod_params    = ggml_silu(ctx, t_emb);
             txt_mod_params         = txt_mod_1->forward(ctx, txt_mod_params);
-            auto txt_mod_param_vec = ggml_chunk(ctx, txt_mod_params, 6, 0);
+            auto txt_mod_param_vec = ggml_ext_chunk(ctx, txt_mod_params, 6, 0);
 
             auto img_normed    = img_norm1->forward(ctx, img);
             auto img_modulated = Flux::modulate(ctx, img_normed, img_mod_param_vec[0], img_mod_param_vec[1]);
@@ -305,7 +305,7 @@ namespace Qwen {
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
 
             auto emb   = linear->forward(ctx, ggml_silu(ctx, c));
-            auto mods  = ggml_chunk(ctx, emb, 2, 0);
+            auto mods  = ggml_ext_chunk(ctx, emb, 2, 0);
             auto scale = mods[0];
             auto shift = mods[1];
 
@@ -496,8 +496,8 @@ namespace Qwen {
             out = unpatchify(ctx, out, h_len, w_len);  // [N, C, H + pad_h, W + pad_w]
 
             // slice
-            out = ggml_slice(ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
-            out = ggml_slice(ctx, out, 0, 0, W);  // [N, C, H, W]
+            out = ggml_ext_slice(ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
+            out = ggml_ext_slice(ctx, out, 0, 0, W);  // [N, C, H, W]
 
             return out;
         }

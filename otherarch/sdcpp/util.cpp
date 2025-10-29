@@ -29,9 +29,6 @@
 #include "ggml.h"
 #include "stable-diffusion.h"
 
-// #define STB_IMAGE_RESIZE_IMPLEMENTATION //already defined
-#include "stb_image_resize.h"
-
 bool ends_with(const std::string& str, const std::string& ending) {
     if (str.length() >= ending.length()) {
         return (str.compare(str.length() - ending.length(), ending.length(), ending) == 0);

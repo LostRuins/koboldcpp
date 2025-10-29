@@ -113,7 +113,7 @@ public:
         auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
         auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
 
-        auto t_freq = ggml_nn_timestep_embedding(ctx, t, frequency_embedding_size);  // [N, frequency_embedding_size]
+        auto t_freq = ggml_ext_timestep_embedding(ctx, t, frequency_embedding_size);  // [N, frequency_embedding_size]
 
         auto t_emb = mlp_0->forward(ctx, t_freq);
         t_emb      = ggml_silu_inplace(ctx, t_emb);
@@ -210,8 +210,8 @@ public:
                                 ggml_backend_t backend,
                                 struct ggml_tensor* x) {
         auto qkv = pre_attention(ctx, x);
-        x        = ggml_nn_attention_ext(ctx, backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, true);  // [N, n_token, dim]
-        x        = post_attention(ctx, x);                                                                               // [N, n_token, dim]
+        x        = ggml_ext_attention_ext(ctx, backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, true);  // [N, n_token, dim]
+        x        = post_attention(ctx, x);                                                                                // [N, n_token, dim]
         return x;
     }
 };
@@ -441,8 +441,8 @@ public:
             auto qkv2          = std::get<1>(qkv_intermediates);
             auto intermediates = std::get<2>(qkv_intermediates);
 
-            auto attn_out  = ggml_nn_attention_ext(ctx, backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, flash_attn);     // [N, n_token, dim]
-            auto attn2_out = ggml_nn_attention_ext(ctx, backend, qkv2[0], qkv2[1], qkv2[2], num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
+            auto attn_out  = ggml_ext_attention_ext(ctx, backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, flash_attn);     // [N, n_token, dim]
+            auto attn2_out = ggml_ext_attention_ext(ctx, backend, qkv2[0], qkv2[1], qkv2[2], num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
             x              = post_attention_x(ctx,
                                               attn_out,
                                               attn2_out,
@@ -458,7 +458,7 @@ public:
             auto qkv               = qkv_intermediates.first;
             auto intermediates     = qkv_intermediates.second;
 
-            auto attn_out = ggml_nn_attention_ext(ctx, backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
+            auto attn_out = ggml_ext_attention_ext(ctx, backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
             x             = post_attention(ctx,
                                            attn_out,
                                            intermediates[0],
@@ -504,8 +504,8 @@ block_mixing(struct ggml_context* ctx,
         qkv.push_back(ggml_concat(ctx, context_qkv[i], x_qkv[i], 1));
     }
 
-    auto attn         = ggml_nn_attention_ext(ctx, backend, qkv[0], qkv[1], qkv[2], x_block->num_heads, nullptr, false, false, flash_attn);  // [N, n_context + n_token, hidden_size]
-    attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));                                                                 // [n_context + n_token, N, hidden_size]
+    auto attn         = ggml_ext_attention_ext(ctx, backend, qkv[0], qkv[1], qkv[2], x_block->num_heads, nullptr, false, false, flash_attn);  // [N, n_context + n_token, hidden_size]
+    attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));                                                                  // [n_context + n_token, N, hidden_size]
     auto context_attn = ggml_view_3d(ctx,
                                      attn,
                                      attn->ne[0],
@@ -538,7 +538,7 @@ block_mixing(struct ggml_context* ctx,
     }
 
     if (x_block->self_attn) {
-        auto attn2 = ggml_nn_attention_ext(ctx, backend, x_qkv2[0], x_qkv2[1], x_qkv2[2], x_block->num_heads);  // [N, n_token, hidden_size]
+        auto attn2 = ggml_ext_attention_ext(ctx, backend, x_qkv2[0], x_qkv2[1], x_qkv2[2], x_block->num_heads);  // [N, n_token, hidden_size]
 
         x = x_block->post_attention_x(ctx,
                                       x_attn,

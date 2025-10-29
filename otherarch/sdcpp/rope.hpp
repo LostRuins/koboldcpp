@@ -360,8 +360,8 @@ namespace Rope {
             x = ggml_reshape_4d(ctx, x, 2, d_head / 2, L, n_head * N);  // [N * n_head, L, d_head/2, 2]
             x = ggml_cont(ctx, ggml_permute(ctx, x, 3, 0, 1, 2));       // [2, N * n_head, L, d_head/2]
         } else {
-            x = ggml_reshape_4d(ctx, x, d_head / 2, 2, L, n_head * N);   // [N * n_head, L, 2, d_head/2]
-            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 3, 1));  // [2, N * n_head, L, d_head/2]
+            x = ggml_reshape_4d(ctx, x, d_head / 2, 2, L, n_head * N);       // [N * n_head, L, 2, d_head/2]
+            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 3, 1));  // [2, N * n_head, L, d_head/2]
         }
 
         int64_t offset = x->nb[2] * x->ne[2];
@@ -402,7 +402,7 @@ namespace Rope {
         q = apply_rope(ctx, q, pe, rope_interleaved);  // [N*n_head, L, d_head]
         k = apply_rope(ctx, k, pe, rope_interleaved);  // [N*n_head, L, d_head]
 
-        auto x = ggml_nn_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn, kv_scale);  // [N, L, n_head*d_head]
+        auto x = ggml_ext_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn, kv_scale);  // [N, L, n_head*d_head]
         return x;
     }
 };  // namespace Rope

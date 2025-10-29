@@ -372,15 +372,15 @@ struct LoraModel : public GGMLRunner {
                         continue;
                     }
 
-                    struct ggml_tensor* updown_1 = ggml_merge_lora(compute_ctx, hada_1_down, hada_1_up, hada_1_mid);
-                    struct ggml_tensor* updown_2 = ggml_merge_lora(compute_ctx, hada_2_down, hada_2_up, hada_2_mid);
+                    struct ggml_tensor* updown_1 = ggml_ext_merge_lora(compute_ctx, hada_1_down, hada_1_up, hada_1_mid);
+                    struct ggml_tensor* updown_2 = ggml_ext_merge_lora(compute_ctx, hada_2_down, hada_2_up, hada_2_mid);
                     updown                       = ggml_mul_inplace(compute_ctx, updown_1, updown_2);
 
                     // calc_scale
                     // TODO: .dora_scale?
                     int64_t rank = hada_1_down->ne[ggml_n_dims(hada_1_down) - 1];
                     if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
-                        float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
+                        float alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[alpha_name]);
                         scale_value = alpha / rank;
                     }
                 } else if (lora_tensors.find(full_key + ".lokr_w1") != lora_tensors.end() || lora_tensors.find(full_key + ".lokr_w1_a") != lora_tensors.end()) {
@@ -418,7 +418,7 @@ struct LoraModel : public GGMLRunner {
 
                             int64_t rank = down->ne[ggml_n_dims(down) - 1];
                             if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
-                                float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
+                                float alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[alpha_name]);
                                 scale_value = alpha / rank;
                             }
                         }
@@ -426,7 +426,7 @@ struct LoraModel : public GGMLRunner {
                             up = to_f32(compute_ctx, lora_tensors[up_name]);
                             applied_lora_tensors.insert(up_name);
                         }
-                        lokr_w1 = ggml_merge_lora(compute_ctx, down, up);
+                        lokr_w1 = ggml_ext_merge_lora(compute_ctx, down, up);
                     }
                     if (lora_tensors.find(lokr_w2_name) != lora_tensors.end()) {
                         lokr_w2 = to_f32(compute_ctx, lora_tensors[lokr_w2_name]);
@@ -442,7 +442,7 @@ struct LoraModel : public GGMLRunner {
 
                             int64_t rank = down->ne[ggml_n_dims(down) - 1];
                             if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
-                                float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
+                                float alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[alpha_name]);
                                 scale_value = alpha / rank;
                             }
                         }
@@ -450,13 +450,13 @@ struct LoraModel : public GGMLRunner {
                             up = to_f32(compute_ctx, lora_tensors[up_name]);
                             applied_lora_tensors.insert(up_name);
                         }
-                        lokr_w2 = ggml_merge_lora(compute_ctx, down, up);
+                        lokr_w2 = ggml_ext_merge_lora(compute_ctx, down, up);
                     }
 
                     // Technically it might be unused, but I believe it's the expected behavior
                     applied_lora_tensors.insert(alpha_name);
 
-                    updown = ggml_kronecker(compute_ctx, lokr_w1, lokr_w2);
+                    updown = ggml_ext_kronecker(compute_ctx, lokr_w1, lokr_w2);
 
                 } else {
                     // LoRA mode
@@ -535,30 +535,30 @@ struct LoraModel : public GGMLRunner {
                             float lora_v_scale = 1;
 
                             if (lora_tensors.find(split_q_scale_name) != lora_tensors.end()) {
-                                lora_q_scale = ggml_backend_tensor_get_f32(lora_tensors[split_q_scale_name]);
+                                lora_q_scale = ggml_ext_backend_tensor_get_f32(lora_tensors[split_q_scale_name]);
                                 applied_lora_tensors.insert(split_q_scale_name);
                             }
                             if (lora_tensors.find(split_k_scale_name) != lora_tensors.end()) {
-                                lora_k_scale = ggml_backend_tensor_get_f32(lora_tensors[split_k_scale_name]);
+                                lora_k_scale = ggml_ext_backend_tensor_get_f32(lora_tensors[split_k_scale_name]);
                                 applied_lora_tensors.insert(split_k_scale_name);
                             }
                             if (lora_tensors.find(split_v_scale_name) != lora_tensors.end()) {
-                                lora_v_scale = ggml_backend_tensor_get_f32(lora_tensors[split_v_scale_name]);
+                                lora_v_scale = ggml_ext_backend_tensor_get_f32(lora_tensors[split_v_scale_name]);
                                 applied_lora_tensors.insert(split_v_scale_name);
                             }
 
                             if (lora_tensors.find(split_q_alpha_name) != lora_tensors.end()) {
-                                float lora_q_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_q_alpha_name]);
+                                float lora_q_alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[split_q_alpha_name]);
                                 applied_lora_tensors.insert(split_q_alpha_name);
                                 lora_q_scale = lora_q_alpha / q_rank;
                             }
                             if (lora_tensors.find(split_k_alpha_name) != lora_tensors.end()) {
-                                float lora_k_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_k_alpha_name]);
+                                float lora_k_alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[split_k_alpha_name]);
                                 applied_lora_tensors.insert(split_k_alpha_name);
                                 lora_k_scale = lora_k_alpha / k_rank;
                             }
                             if (lora_tensors.find(split_v_alpha_name) != lora_tensors.end()) {
-                                float lora_v_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_v_alpha_name]);
+                                float lora_v_alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[split_v_alpha_name]);
                                 applied_lora_tensors.insert(split_v_alpha_name);
                                 lora_v_scale = lora_v_alpha / v_rank;
                             }
@@ -688,39 +688,39 @@ struct LoraModel : public GGMLRunner {
                             float lora_m_scale = 1;
 
                             if (lora_tensors.find(split_q_scale_name) != lora_tensors.end()) {
-                                lora_q_scale = ggml_backend_tensor_get_f32(lora_tensors[split_q_scale_name]);
+                                lora_q_scale = ggml_ext_backend_tensor_get_f32(lora_tensors[split_q_scale_name]);
                                 applied_lora_tensors.insert(split_q_scale_name);
                             }
                             if (lora_tensors.find(split_k_scale_name) != lora_tensors.end()) {
-                                lora_k_scale = ggml_backend_tensor_get_f32(lora_tensors[split_k_scale_name]);
+                                lora_k_scale = ggml_ext_backend_tensor_get_f32(lora_tensors[split_k_scale_name]);
                                 applied_lora_tensors.insert(split_k_scale_name);
                             }
                             if (lora_tensors.find(split_v_scale_name) != lora_tensors.end()) {
-                                lora_v_scale = ggml_backend_tensor_get_f32(lora_tensors[split_v_scale_name]);
+                                lora_v_scale = ggml_ext_backend_tensor_get_f32(lora_tensors[split_v_scale_name]);
                                 applied_lora_tensors.insert(split_v_scale_name);
                             }
                             if (lora_tensors.find(split_m_scale_name) != lora_tensors.end()) {
-                                lora_m_scale = ggml_backend_tensor_get_f32(lora_tensors[split_m_scale_name]);
+                                lora_m_scale = ggml_ext_backend_tensor_get_f32(lora_tensors[split_m_scale_name]);
                                 applied_lora_tensors.insert(split_m_scale_name);
                             }
 
                             if (lora_tensors.find(split_q_alpha_name) != lora_tensors.end()) {
-                                float lora_q_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_q_alpha_name]);
+                                float lora_q_alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[split_q_alpha_name]);
                                 applied_lora_tensors.insert(split_q_alpha_name);
                                 lora_q_scale = lora_q_alpha / q_rank;
                             }
                             if (lora_tensors.find(split_k_alpha_name) != lora_tensors.end()) {
-                                float lora_k_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_k_alpha_name]);
+                                float lora_k_alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[split_k_alpha_name]);
                                 applied_lora_tensors.insert(split_k_alpha_name);
                                 lora_k_scale = lora_k_alpha / k_rank;
                             }
                             if (lora_tensors.find(split_v_alpha_name) != lora_tensors.end()) {
-                                float lora_v_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_v_alpha_name]);
+                                float lora_v_alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[split_v_alpha_name]);
                                 applied_lora_tensors.insert(split_v_alpha_name);
                                 lora_v_scale = lora_v_alpha / v_rank;
                             }
                             if (lora_tensors.find(split_m_alpha_name) != lora_tensors.end()) {
-                                float lora_m_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_m_alpha_name]);
+                                float lora_m_alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[split_m_alpha_name]);
                                 applied_lora_tensors.insert(split_m_alpha_name);
                                 lora_m_scale = lora_m_alpha / m_rank;
                             }
@@ -816,16 +816,16 @@ struct LoraModel : public GGMLRunner {
                     // TODO: .dora_scale?
                     int64_t rank = lora_down->ne[ggml_n_dims(lora_down) - 1];
                     if (lora_tensors.find(scale_name) != lora_tensors.end()) {
-                        scale_value = ggml_backend_tensor_get_f32(lora_tensors[scale_name]);
+                        scale_value = ggml_ext_backend_tensor_get_f32(lora_tensors[scale_name]);
                         applied_lora_tensors.insert(scale_name);
                     } else if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
-                        float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
+                        float alpha = ggml_ext_backend_tensor_get_f32(lora_tensors[alpha_name]);
                         scale_value = alpha / rank;
                         // LOG_DEBUG("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
                         applied_lora_tensors.insert(alpha_name);
                     }
 
-                    updown = ggml_merge_lora(compute_ctx, lora_down, lora_up, lora_mid);
+                    updown = ggml_ext_merge_lora(compute_ctx, lora_down, lora_up, lora_mid);
                 }
                 scale_value *= multiplier;
                 ggml_tensor* original_tensor = model_tensor;

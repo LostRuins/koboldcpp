@@ -114,7 +114,7 @@ public:
 
         auto num_frames = ggml_arange(ctx, 0, timesteps, 1);
         // since b is 1, no need to do repeat
-        auto t_emb = ggml_nn_timestep_embedding(ctx, num_frames, in_channels, max_time_embed_period);  // [N, in_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx, num_frames, in_channels, max_time_embed_period);  // [N, in_channels]
 
         auto emb = time_pos_embed_0->forward(ctx, t_emb);
         emb      = ggml_silu_inplace(ctx, emb);
@@ -451,7 +451,7 @@ public:
         auto out_0 = std::dynamic_pointer_cast<GroupNorm32>(blocks["out.0"]);
         auto out_2 = std::dynamic_pointer_cast<Conv2d>(blocks["out.2"]);
 
-        auto t_emb = ggml_nn_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
 
         auto emb = time_embed_0->forward(ctx, t_emb);
         emb      = ggml_silu_inplace(ctx, emb);

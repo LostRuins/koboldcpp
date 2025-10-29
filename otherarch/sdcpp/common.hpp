@@ -205,8 +205,8 @@ public:
         auto gate_b = ggml_view_1d(ctx, b, b->ne[0] / 2, b->nb[0] * b->ne[0] / 2);                      // [dim_out, ]
 
         auto x_in = x;
-        x         = ggml_nn_linear(ctx, x_in, x_w, x_b);        // [ne3, ne2, ne1, dim_out]
-        auto gate = ggml_nn_linear(ctx, x_in, gate_w, gate_b);  // [ne3, ne2, ne1, dim_out]
+        x         = ggml_ext_linear(ctx, x_in, x_w, x_b);        // [ne3, ne2, ne1, dim_out]
+        auto gate = ggml_ext_linear(ctx, x_in, gate_w, gate_b);  // [ne3, ne2, ne1, dim_out]
 
         gate = ggml_gelu_inplace(ctx, gate);
 
@@ -325,7 +325,7 @@ public:
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
 
-        x = ggml_nn_attention_ext(ctx, backend, q, k, v, n_head, nullptr, false, false, flash_attn);  // [N, n_token, inner_dim]
+        x = ggml_ext_attention_ext(ctx, backend, q, k, v, n_head, nullptr, false, false, flash_attn);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
         return x;
@@ -492,7 +492,7 @@ protected:
     float get_alpha() {
         // image_only_indicator is always tensor([0.]) and since mix_factor.shape is [1,]
         // so learned_with_images is same as learned
-        float alpha = ggml_backend_tensor_get_f32(params["mix_factor"]);
+        float alpha = ggml_ext_backend_tensor_get_f32(params["mix_factor"]);
         return sigmoid(alpha);
     }
 

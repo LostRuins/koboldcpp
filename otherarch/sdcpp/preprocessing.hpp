@@ -28,7 +28,7 @@ void gaussian_kernel(struct ggml_tensor* kernel) {
         for (int x = 0; x < kernel->ne[1]; x++) {
             float gy = -ks_mid + x;
             float k_ = expf(-((gx * gx + gy * gy) / (2.0f * powf(sigma, 2.0f)))) * normal;
-            ggml_tensor_set_f32(kernel, k_, x, y);
+            ggml_ext_tensor_set_f32(kernel, k_, x, y);
         }
     }
 }
@@ -36,11 +36,11 @@ void gaussian_kernel(struct ggml_tensor* kernel) {
 void grayscale(struct ggml_tensor* rgb_img, struct ggml_tensor* grayscale) {
     for (int iy = 0; iy < rgb_img->ne[1]; iy++) {
         for (int ix = 0; ix < rgb_img->ne[0]; ix++) {
-            float r    = ggml_tensor_get_f32(rgb_img, ix, iy);
-            float g    = ggml_tensor_get_f32(rgb_img, ix, iy, 1);
-            float b    = ggml_tensor_get_f32(rgb_img, ix, iy, 2);
+            float r    = ggml_ext_tensor_get_f32(rgb_img, ix, iy);
+            float g    = ggml_ext_tensor_get_f32(rgb_img, ix, iy, 1);
+            float b    = ggml_ext_tensor_get_f32(rgb_img, ix, iy, 2);
             float gray = 0.2989f * r + 0.5870f * g + 0.1140f * b;
-            ggml_tensor_set_f32(grayscale, gray, ix, iy);
+            ggml_ext_tensor_set_f32(grayscale, gray, ix, iy);
         }
     }
 }
@@ -81,37 +81,37 @@ void normalize_tensor(struct ggml_tensor* g) {
 void non_max_supression(struct ggml_tensor* result, struct ggml_tensor* G, struct ggml_tensor* D) {
     for (int iy = 1; iy < result->ne[1] - 1; iy++) {
         for (int ix = 1; ix < result->ne[0] - 1; ix++) {
-            float angle = ggml_tensor_get_f32(D, ix, iy) * 180.0f / M_PI_;
+            float angle = ggml_ext_tensor_get_f32(D, ix, iy) * 180.0f / M_PI_;
             angle       = angle < 0.0f ? angle += 180.0f : angle;
             float q     = 1.0f;
             float r     = 1.0f;
 
             // angle 0
             if ((0 >= angle && angle < 22.5f) || (157.5f >= angle && angle <= 180)) {
-                q = ggml_tensor_get_f32(G, ix, iy + 1);
-                r = ggml_tensor_get_f32(G, ix, iy - 1);
+                q = ggml_ext_tensor_get_f32(G, ix, iy + 1);
+                r = ggml_ext_tensor_get_f32(G, ix, iy - 1);
             }
             // angle 45
             else if (22.5f >= angle && angle < 67.5f) {
-                q = ggml_tensor_get_f32(G, ix + 1, iy - 1);
-                r = ggml_tensor_get_f32(G, ix - 1, iy + 1);
+                q = ggml_ext_tensor_get_f32(G, ix + 1, iy - 1);
+                r = ggml_ext_tensor_get_f32(G, ix - 1, iy + 1);
             }
             // angle 90
             else if (67.5f >= angle && angle < 112.5) {
-                q = ggml_tensor_get_f32(G, ix + 1, iy);
-                r = ggml_tensor_get_f32(G, ix - 1, iy);
+                q = ggml_ext_tensor_get_f32(G, ix + 1, iy);
+                r = ggml_ext_tensor_get_f32(G, ix - 1, iy);
             }
             // angle 135
             else if (112.5 >= angle && angle < 157.5f) {
-                q = ggml_tensor_get_f32(G, ix - 1, iy - 1);
-                r = ggml_tensor_get_f32(G, ix + 1, iy + 1);
+                q = ggml_ext_tensor_get_f32(G, ix - 1, iy - 1);
+                r = ggml_ext_tensor_get_f32(G, ix + 1, iy + 1);
             }
 
-            float cur = ggml_tensor_get_f32(G, ix, iy);
+            float cur = ggml_ext_tensor_get_f32(G, ix, iy);
             if ((cur >= q) && (cur >= r)) {
-                ggml_tensor_set_f32(result, cur, ix, iy);
+                ggml_ext_tensor_set_f32(result, cur, ix, iy);
             } else {
-                ggml_tensor_set_f32(result, 0.0f, ix, iy);
+                ggml_ext_tensor_set_f32(result, 0.0f, ix, iy);
             }
         }
     }
@@ -138,9 +138,9 @@ void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float lo
     for (int iy = 0; iy < img->ne[1]; iy++) {
         for (int ix = 0; ix < img->ne[0]; ix++) {
             if (ix >= 3 && ix <= img->ne[0] - 3 && iy >= 3 && iy <= img->ne[1] - 3) {
-                ggml_tensor_set_f32(img, ggml_tensor_get_f32(img, ix, iy), ix, iy);
+                ggml_ext_tensor_set_f32(img, ggml_ext_tensor_get_f32(img, ix, iy), ix, iy);
             } else {
-                ggml_tensor_set_f32(img, 0.0f, ix, iy);
+                ggml_ext_tensor_set_f32(img, 0.0f, ix, iy);
             }
         }
     }
@@ -148,14 +148,14 @@ void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float lo
     // hysteresis
     for (int iy = 1; iy < img->ne[1] - 1; iy++) {
         for (int ix = 1; ix < img->ne[0] - 1; ix++) {
-            float imd_v = ggml_tensor_get_f32(img, ix, iy);
+            float imd_v = ggml_ext_tensor_get_f32(img, ix, iy);
             if (imd_v == weak) {
-                if (ggml_tensor_get_f32(img, ix + 1, iy - 1) == strong || ggml_tensor_get_f32(img, ix + 1, iy) == strong ||
-                    ggml_tensor_get_f32(img, ix, iy - 1) == strong || ggml_tensor_get_f32(img, ix, iy + 1) == strong ||
-                    ggml_tensor_get_f32(img, ix - 1, iy - 1) == strong || ggml_tensor_get_f32(img, ix - 1, iy) == strong) {
-                    ggml_tensor_set_f32(img, strong, ix, iy);
+                if (ggml_ext_tensor_get_f32(img, ix + 1, iy - 1) == strong || ggml_ext_tensor_get_f32(img, ix + 1, iy) == strong ||
+                    ggml_ext_tensor_get_f32(img, ix, iy - 1) == strong || ggml_ext_tensor_get_f32(img, ix, iy + 1) == strong ||
+                    ggml_ext_tensor_get_f32(img, ix - 1, iy - 1) == strong || ggml_ext_tensor_get_f32(img, ix - 1, iy) == strong) {
+                    ggml_ext_tensor_set_f32(img, strong, ix, iy);
                 } else {
-                    ggml_tensor_set_f32(img, 0.0f, ix, iy);
+                    ggml_ext_tensor_set_f32(img, 0.0f, ix, iy);
                 }
             }
         }
@@ -198,7 +198,7 @@ bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold,
     struct ggml_tensor* iY         = ggml_dup_tensor(work_ctx, image_gray);
     struct ggml_tensor* G          = ggml_dup_tensor(work_ctx, image_gray);
     struct ggml_tensor* tetha      = ggml_dup_tensor(work_ctx, image_gray);
-    sd_image_to_tensor(img, image);
+    sd_image_to_ggml_tensor(img, image);
     grayscale(image, image_gray);
     convolve(image_gray, image_gray, gkernel, 2);
     convolve(image_gray, iX, sf_kx, 1);
@@ -211,14 +211,14 @@ bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold,
     // to RGB channels
     for (int iy = 0; iy < img.height; iy++) {
         for (int ix = 0; ix < img.width; ix++) {
-            float gray = ggml_tensor_get_f32(image_gray, ix, iy);
+            float gray = ggml_ext_tensor_get_f32(image_gray, ix, iy);
             gray       = inverse ? 1.0f - gray : gray;
-            ggml_tensor_set_f32(image, gray, ix, iy);
-            ggml_tensor_set_f32(image, gray, ix, iy, 1);
-            ggml_tensor_set_f32(image, gray, ix, iy, 2);
+            ggml_ext_tensor_set_f32(image, gray, ix, iy);
+            ggml_ext_tensor_set_f32(image, gray, ix, iy, 1);
+            ggml_ext_tensor_set_f32(image, gray, ix, iy, 2);
         }
     }
-    sd_tensor_to_image(image, img.data);
+    ggml_tensor_to_sd_image(image, img.data);
     ggml_free(work_ctx);
     return true;
 }

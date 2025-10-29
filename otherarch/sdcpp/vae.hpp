@@ -102,7 +102,7 @@ public:
         auto v = v_proj->forward(ctx, h_);              // [N, in_channels, h, w]
         v      = ggml_reshape_3d(ctx, v, h * w, c, n);  // [N, in_channels, h * w]
 
-        h_ = ggml_nn_attention(ctx, q, k, v, false);  // [N, h * w, in_channels]
+        h_ = ggml_ext_attention(ctx, q, k, v, false);  // [N, h * w, in_channels]
 
         h_ = ggml_cont(ctx, ggml_permute(ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
         h_ = ggml_reshape_4d(ctx, h_, w, h, c, n);               // [N, in_channels, h, w]
@@ -169,7 +169,7 @@ protected:
     }
 
     float get_alpha() {
-        float alpha = ggml_backend_tensor_get_f32(params["mix_factor"]);
+        float alpha = ggml_ext_backend_tensor_get_f32(params["mix_factor"]);
         return sigmoid(alpha);
     }
 
@@ -544,9 +544,9 @@ struct FakeVAE : public VAE {
         if (*output == nullptr && output_ctx != nullptr) {
             *output = ggml_dup_tensor(output_ctx, z);
         }
-        ggml_tensor_iter(z, [&](ggml_tensor* z, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
-            float value = ggml_tensor_get_f32(z, i0, i1, i2, i3);
-            ggml_tensor_set_f32(*output, value, i0, i1, i2, i3);
+        ggml_ext_tensor_iter(z, [&](ggml_tensor* z, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+            float value = ggml_ext_tensor_get_f32(z, i0, i1, i2, i3);
+            ggml_ext_tensor_set_f32(*output, value, i0, i1, i2, i3);
         });
     }
 

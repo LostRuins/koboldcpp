@@ -230,7 +230,7 @@ public:
 
         auto middle_block_out = std::dynamic_pointer_cast<Conv2d>(blocks["middle_block_out.0"]);
 
-        auto t_emb = ggml_nn_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
 
         auto emb = time_embed_0->forward(ctx, t_emb);
         emb      = ggml_silu_inplace(ctx, emb);
