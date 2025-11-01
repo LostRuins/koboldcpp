@@ -6302,13 +6302,16 @@ def run_horde_worker(args, api_key, worker_name):
             session_kudos_earned += reward
             session_jobs += 1
             curtime = datetime.now()
-            elapsedtime=curtime-sessionstart
-            hrs = int(elapsedtime.total_seconds()) // 3600
+            elapsedtime = curtime - sessionstart
+            hrs_float = elapsedtime.total_seconds() / 3600
+            hrs = int(hrs_float)
             mins = elapsedtime.seconds // 60 % 60
             secs = elapsedtime.seconds % 60
             elapsedtimestr = f"{hrs:03d}h:{mins:02d}m:{secs:02d}s"
-            earnrate = session_kudos_earned/(elapsedtime.total_seconds()/3600)
-            print_with_time(f'Submitted {jobid} and earned {reward:.0f} kudos\n[Total:{session_kudos_earned:.0f} kudos, Time:{elapsedtimestr}, Jobs:{session_jobs}, EarnRate:{earnrate:.0f} kudos/hr]')
+            earnrate = session_kudos_earned / hrs_float
+            jobrate = session_jobs / hrs_float
+            jobcost = session_kudos_earned / session_jobs
+            print_with_time(f'Submitted {jobid} and earned {reward:.0f} kudos\n[Total:{session_kudos_earned:.0f} kudos, Time:{elapsedtimestr}, Jobs:{session_jobs}, EarnRate:{earnrate:.2f} kudos/hr, JobRate:{jobrate:.2f} jobs/hr, JobCost:{jobcost:.2f} kudos/job]')
             rewardcounter += 1
             if rewardcounter > 50:
                 rewardcounter = 0
