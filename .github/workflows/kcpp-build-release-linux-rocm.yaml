@@ -1,4 +1,4 @@
-name: Koboldcpp Linux ROCm
+name: KoboldCpp Linux ROCm
 
 on:
   workflow_dispatch:
@@ -12,7 +12,6 @@ on:
         required: false
         default: ''
 
-
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   KCPP_CUDA: rocm
@@ -23,24 +22,16 @@ jobs:
     runs-on: ubuntu-22.04
     permissions: write-all
     steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: true
+      - name: Free up disk space before container
+        run: |
+          echo "Cleaning up runner to make room for ROCm container..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
+          sudo apt-get clean
+          df -h
 
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      - name: Clone
-        id: checkout
+      - name: Checkout source
         uses: actions/checkout@v3
         with:
           ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
@@ -49,33 +40,27 @@ jobs:
         run: |
           echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
 
-      - name: Dependencies
-        id: depends
+      - name: Build inside ROCm container
         run: |
-          sudo apt update
-          export DEBIAN_FRONTEND=noninteractive
-          sudo ln -fs /usr/share/zoneinfo/UTC /etc/localtime
-          echo "tzdata tzdata/Areas select Etc" | sudo debconf-set-selections
-          echo "tzdata tzdata/Zones/Etc select UTC" | sudo debconf-set-selections
-          sudo apt-get -y install git curl bzip2 python3-tk tcl tk
-          curl -fLO https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-6.4.1/ubuntu/22.04/rocm-installer_1.1.1.60401-30-83~22.04.run && sudo bash rocm-installer_1.1.1.60401-30-83~22.04.run deps=install rocm postrocm target="/opt"
-          sudo rm -rf rocm-install*
-
-      - name: Set Tcl/Tk Paths
-        run: |
-          echo "TCL_LIBRARY=$(find /usr/lib/ -name 'tcl8*' | head -n 1)" >> $GITHUB_ENV
-          echo "TK_LIBRARY=$(find /usr/lib/ -name 'tk8*' | head -n 1)" >> $GITHUB_ENV
-
-      - name: Build
-        id: make_build
-        run: |
-          ./koboldcpp.sh dist
+          docker run --privileged \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            -e KCPP_CUDA="rocm" \
+            -e BRANCH_NAME="${{ github.head_ref || github.ref_name }}" \
+            rocm/dev-ubuntu-22.04:7.1-complete \
+            bash -c "
+              apt update &&
+              DEBIAN_FRONTEND=noninteractive apt install -y git curl bzip2 python3-tk tcl tk &&
+              export TCL_LIBRARY=\$(find /usr/lib/ -name 'tcl8*' | head -n 1) &&
+              export TK_LIBRARY=\$(find /usr/lib/ -name 'tk8*' | head -n 1) &&
+              ./koboldcpp.sh dist
+            "
 
       - name: Save artifact
         uses: actions/upload-artifact@v4
         with:
           name: kcpp_linux_binary
-          path: dist/
+          path: ${{ github.workspace }}/dist/
 
       - name: Upload to GitHub Release
         env:
