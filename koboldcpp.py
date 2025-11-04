@@ -1193,11 +1193,7 @@ def autoset_gpu_layers(ctxsize, sdquanted, bbs, qkv_level): #shitty algo to dete
     except Exception:
         return 0
 
-def fetch_gpu_properties(testCL,testCU,testVK):
-    gpumem_ignore_limit_min = 1024*1024*600 #600 mb min
-    gpumem_ignore_limit_max = 1024*1024*1024*300 #300 gb max
-
-    if testCU:
+def detect_memory_cu(gpumem_ignore_limit_min, gpumem_ignore_limit_max):
         FetchedCUdevices = []
         FetchedCUdeviceMem = []
         FetchedCUfreeMem = []
@@ -1274,10 +1270,11 @@ def fetch_gpu_properties(testCL,testCU,testVK):
             lowestcumem = 0
             lowestfreecumem = 0
 
-        MaxMemory[0] = max(lowestcumem,MaxMemory[0])
-        MaxFreeMemory[0] = max(lowestfreecumem,MaxFreeMemory[0])
+        return lowestcumem, lowestfreecumem
 
-    if testVK:
+
+def detect_memory_vk(gpumem_ignore_limit_min, gpumem_ignore_limit_max):
+
         try: # Get Vulkan names
             foundVkGPU = False
             lowestvkmem = 0
@@ -1316,11 +1313,15 @@ def fetch_gpu_properties(testCL,testCU,testVK):
                         gpuidx += 1
                 except Exception: # failed to get vulkan vram
                     pass
-            MaxMemory[0] = max(lowestvkmem,MaxMemory[0])
+            return lowestvkmem
         except Exception:
             pass
 
-    if testCL:
+        return 0
+
+
+def detect_memory_cl(gpumem_ignore_limit_min, gpumem_ignore_limit_max):
+
         try: # Get OpenCL GPU names on windows using a special binary. overwrite at known index if found.
             basepath = os.path.abspath(os.path.dirname(__file__))
             output = ""
@@ -1346,9 +1347,39 @@ def fetch_gpu_properties(testCL,testCU,testVK):
                             lowestclmem = dmem if lowestclmem==0 else (dmem if dmem<lowestclmem else lowestclmem)
                     dev += 1
                 plat += 1
-            MaxMemory[0] = max(lowestclmem,MaxMemory[0])
+            return lowestclmem
         except Exception:
             pass
+
+        return 0
+
+
+def fetch_gpu_properties(testCL,testCU,testVK,testmemory=False):
+    gpumem_ignore_limit_min = 1024*1024*600 #600 mb min
+    gpumem_ignore_limit_max = 1024*1024*1024*300 #300 gb max
+
+    if testCU:
+
+        cumem, freecumem = detect_memory_cu(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
+        MaxMemory[0] = max(cumem,MaxMemory[0])
+        MaxFreeMemory[0] = max(freecumem,MaxFreeMemory[0])
+        if testmemory:
+            print(f'detected CUDA memory: {cumem/(1024*1024)} MB, {freecumem/(1024*102)} MB free')
+
+    if testVK:
+
+        vkmem = detect_memory_vk(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
+        MaxMemory[0] = max(vkmem,MaxMemory[0])
+        if testmemory:
+            print(f'detected Vulkan memory: {vkmem/(1024*1024)} MB')
+
+    if testCL:
+
+        clmem = detect_memory_cl(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
+        MaxMemory[0] = max(clmem,MaxMemory[0])
+        if testmemory:
+            print(f'detected OpenCL memory: {clmem/(1024*1024)} MB')
+
 
     # Check VRAM detection after all backends have been tested
     if MaxMemory[0] < (1024*1024*256):
@@ -6943,6 +6974,10 @@ def main(launch_args, default_args):
         print(f"{KcppVersion}") # just print version and exit
         return
 
+    if args.testmemory:
+        fetch_gpu_properties(True, True, True, testmemory=True)
+        return
+
     #prevent disallowed combos
     if (args.nomodel or args.benchmark or args.launch or args.admin) and args.cli:
         exit_with_error(1, "Error: --cli cannot be combined with --launch, --nomodel, --admin or --benchmark")
@@ -8047,5 +8082,8 @@ if __name__ == '__main__':
     compatgroup.add_argument("--noblas", help=argparse.SUPPRESS, action='store_true')
     compatgroup3.add_argument("--nommap","--no-mmap", help=argparse.SUPPRESS, action='store_true')
     deprecatedgroup.add_argument("--sdnotile", help=argparse.SUPPRESS, action='store_true') # legacy option, see sdtiledvae
+
+    debuggroup = parser.add_argument_group('Debug Commands')
+    debuggroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')
 
     main(launch_args=parser.parse_args(),default_args=parser.parse_args([]))
