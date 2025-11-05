@@ -111,7 +111,7 @@ static std::vector<media_object> media_objects;
 static std::vector<int> last_media_mem; //for storing dummy tokens that will be consumed by llava
 static std::string media_composite_image_signature = ""; //for identifying when the llava images change, we need to invalidate the cache
 static int current_media_identifier = MEDIA_TOKEN_IDENTIFIER_A;
-static int vision_max_res = 2048;
+static int vision_max_res = 32768;
 static bool use_mrope = false;
 
 static kcpp_params * kcpp_data = nullptr;
