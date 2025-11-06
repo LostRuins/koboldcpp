@@ -369,7 +369,7 @@ bool llava_eval_image_embed(llama_context * ctx_llama, const struct llava_image_
 
 struct llava_image_embed * llava_image_embed_make_with_bytes(struct clip_ctx * ctx_clip, int n_threads, const unsigned char * image_bytes, int image_bytes_length) {
     clip_image_u8 * img = clip_image_u8_init();
-    if (!clip_image_load_from_bytes(image_bytes, image_bytes_length, img, 2048)) {
+    if (!clip_image_load_from_bytes(image_bytes, image_bytes_length, img, 4096)) {
         clip_image_u8_free(img);
         LOG_ERR("%s: can't load image from bytes, is it a valid image?", __func__);
         return NULL;
