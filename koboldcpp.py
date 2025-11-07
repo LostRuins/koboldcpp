@@ -2558,9 +2558,9 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                         pollgrammar += "\"" + name + "\""
                     pollgrammar = r'root ::= ' + pollgrammar
 
-                    decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If no tool is suitable, reply no_tool. (Reply directly with the selected tool's name):"
+                    decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the LLM reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
                     temp_poll = {
-                        "prompt": f"Chat history: {messages_truncated}\n\nPrevious toolcall responses:  {tool_call_results}\n\nTool List:\n{tools_string}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "prompt": f"Chat history: {messages_truncated}\n\nPrevious toolcall responses:  {tool_call_results}\n\nLLM's reasoning: {temp_poll_text}\n\nTool List:\n{tools_string}\n\n{decide_tool_prompt}{assistant_message_start}",
                         "max_length":16,
                         "temperature":0.1,
                         "top_k":1,
