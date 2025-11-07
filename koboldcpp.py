@@ -2432,38 +2432,117 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
     # tools handling: Check if user is passing a openai tools array, if so add to end of prompt before assistant prompt unless tool_choice has been set to None
     tools_array = genparams.get('tools', [])
     chosen_tool = genparams.get('tool_choice', "auto")
+    messages = genparams.get("messages")
+
     # first handle auto mode, determine whether a tool is needed
     used_tool_json = None
-    if not curr_ctx:
+
+    if not curr_ctx or not messages:
         return None
+
     if tools_array and len(tools_array) > 0 and chosen_tool is not None and chosen_tool!="none":
-        tools_string = json.dumps(tools_array, indent=0)
+        # extract the last 6 user messages and AI responses
+        # from the messages array
+        messages_truncated = messages[-6:]
+
+        # get user's last message
+        last_user_message = ""
+        for message in messages_truncated:
+            if message['role'] == "user":
+                last_user_message = message['content']
+
+        # get last tool call results
+        tool_call_results = []
+        for message in reversed(messages_truncated):
+            # we get only the tool call results
+            # since the last user request
+            if message['role'] == "tool":
+                tool_call_results.append(message['content'])
+            else:
+                break
+        tool_call_results = list(reversed(tool_call_results))
+
+        # pass only the essential tool call information
+        # to the model, to reduce the size of the prompt
+        # it needs to process
+        tools_array_filtered = []
+        for tool_dict in tools_array:
+            tool_data = tool_dict['function']
+
+            tool_props = {}
+            for prop_name, prop_data in tool_data['parameters']['properties'].items():
+                tool_props[prop_name] = prop_data['type']
+
+            tools_array_filtered.append({
+                "name": tool_data['name'],
+                "description": tool_data['description'],
+                "properties": tool_props
+            })
+
+        tools_string = json.dumps(tools_array_filtered, indent=0)
+
         should_use_tools = True
         if chosen_tool=="auto":
-            # if you want a different template, you can set 'custom_tools_prompt' in the chat completions adapter as follows
-            custom_tools_prompt = "Can the user query be answered by a listed tool above? (One word response: yes or no):"
-            if is_followup_tool:
-                custom_tools_prompt = "Can the user query be further answered by another listed tool above? (If response is already complete, reply NO) (One word response: yes or no):"
             # note: message string already contains the instruct start tag!
+
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO"'
+
+            if not is_followup_tool:
+                # if you want a different template, you can set 'custom_tools_prompt' in the chat completions adapter as follows
+                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's last message, or is a tool call optional? Explain your reasoning in one sentence. State your final decision at the end. Don't use emojis."
+                custom_tools_prompt_processed = f"Chat history: {messages_truncated}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+            else:
+                custom_tools_prompt = "If user's request was to generate any kind of non-text media, no further action is needed and the answer should be no, regardless of what the tool call response was. Otherwise, given the tool call response to the user's request, is another tool call needed to further answer user's message? State your final decision at the end. Don't use emojis."
+                custom_tools_prompt_processed = f"User's request: {last_user_message}\n\nTool call response: {tool_call_results}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+
+            # first, prompt to see if a tool call is needed using the prompt above.
+            # the result is a short explanation by the LLM on why a tool call
+            # is or is not needed, along with it's final decision at the end.
             temp_poll = {
-                "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}",
+                "prompt": custom_tools_prompt_processed,
+                "max_length":500,
+                "temperature":0.1,
+                "top_k":1,
+                "rep_pen":1,
+                "ban_eos_token":False
+            }
+            temp_poll_result = generate(genparams=temp_poll)
+            temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
+
+            # then we take that final decision
+            # and translate it to a simple "yes" or "no" using
+            # another call to the model
+            temp_poll_check = {
+                "prompt": f"LLM's reasoning: {temp_poll_text}\n\nDid the LLM's decide tool calls were needed? (one word answer: yes or no)",
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
                 "rep_pen":1,
                 "ban_eos_token":False,
-                "grammar":pollgrammar
-                }
-            temp_poll_result = generate(genparams=temp_poll)
-            if temp_poll_result and "yes" not in temp_poll_result['text'].lower():
+                "grammar": pollgrammar
+            }
+            temp_poll_check_result = generate(genparams=temp_poll_check)
+            temp_poll_check_text = temp_poll_check_result['text'].lower()
+
+            if temp_poll_result and "yes" not in temp_poll_check_text:
                 should_use_tools = False
+
             if not args.quiet:
-                print(f"\nRelevant tool is listed: {temp_poll_result['text']} ({should_use_tools})")
+                print()
+                print("[TOOLCALL REQUEST]")
+                print(f"Prompt: {custom_tools_prompt}")
+                if is_followup_tool:
+                    print(f"Previous tool call results: {tool_call_results}")
+                print(f"Decision: {temp_poll_check_text}")
+                print(f"Reasoning: {temp_poll_text}")
+
+                if chosen_tool != "auto":
+                    print(f"Chosen tool: {chosen_tool}")
 
         if should_use_tools:
             #first, try and extract a specific tool if selected
             used_tool_json = extract_tool_info_from_tool_array(chosen_tool, tools_array)
+
             if used_tool_json: #already found the tool we want, remove all others
                 pass
             elif len(tools_array)==1:
@@ -2477,11 +2556,11 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                     for name in toolnames:
                         pollgrammar += ("" if pollgrammar=="" else " | ")
                         pollgrammar += "\"" + name + "\""
-                    pollgrammar += " | \"no_tool\""
                     pollgrammar = r'root ::= ' + pollgrammar
+
                     decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If no tool is suitable, reply no_tool. (Reply directly with the selected tool's name):"
                     temp_poll = {
-                        "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "prompt": f"{messages_truncated}\n\nTool List:\n{tools_string}\n\n{decide_tool_prompt}{assistant_message_start}",
                         "max_length":16,
                         "temperature":0.1,
                         "top_k":1,
@@ -2490,8 +2569,10 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                         "grammar":pollgrammar
                         }
                     temp_poll_result = generate(genparams=temp_poll)
+
                     if temp_poll_result:
                         raw = temp_poll_result['text'].lower()
+
                         if "no_tool" in raw:
                             print(f"\nNo suitable tool found.")
                         else:
