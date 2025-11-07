@@ -2556,7 +2556,6 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                     for name in toolnames:
                         pollgrammar += ("" if pollgrammar=="" else " | ")
                         pollgrammar += "\"" + name + "\""
-                    pollgrammar += " | \"no_tool\""
                     pollgrammar = r'root ::= ' + pollgrammar
 
                     decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If no tool is suitable, reply no_tool. (Reply directly with the selected tool's name):"
@@ -2574,15 +2573,12 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                     if temp_poll_result:
                         raw = temp_poll_result['text'].lower()
 
-                        if "no_tool" in raw:
-                            print(f"\nNo suitable tool found.")
-                        else:
-                            for name in toolnames:
-                                if name.lower() in raw:
-                                    used_tool_json = extract_tool_info_from_tool_array(name, tools_array)
-                                    if not args.quiet:
-                                        print(f"\nAttempting to use tool: {name}")
-                                    break
+                        for name in toolnames:
+                            if name.lower() in raw:
+                                used_tool_json = extract_tool_info_from_tool_array(name, tools_array)
+                                if not args.quiet:
+                                    print(f"\nAttempting to use tool: {name}")
+                                break
 
     return used_tool_json
 
