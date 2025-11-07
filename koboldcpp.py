@@ -2513,7 +2513,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             # and translate it to a simple "yes" or "no" using
             # another call to the model
             temp_poll_check = {
-                "prompt": f"LLM's reasoning: {temp_poll_text}\n\nDid the LLM's decide tool calls were needed? (one word answer: yes or no)",
+                "prompt": f"LLM's reasoning: {temp_poll_text}\n\nDid the LLM's final decision state a tool call is needed? (one word answer: yes or no)",
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
