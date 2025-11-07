@@ -2578,7 +2578,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                             if name.lower() in raw:
                                 used_tool_json = extract_tool_info_from_tool_array(name, tools_array)
                                 if not args.quiet:
-                                    print(f"\nAttempting to use tool: {name}")
+                                    print(f"\n\nAttempting to use tool: {name}\n")
                                 break
 
     return used_tool_json
