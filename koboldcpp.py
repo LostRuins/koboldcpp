@@ -2489,7 +2489,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
             if not is_followup_tool:
                 # if you want a different template, you can set 'custom_tools_prompt' in the chat completions adapter as follows
-                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's last message, or is a tool call optional? Explain your reasoning in one sentence. State your final decision at the end. Don't use emojis."
+                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's request, or is a tool call optional? Explain your reasoning in one sentence. State your final decision at the end. Don't use emojis."
                 custom_tools_prompt_processed = f"User's request: {last_user_message}\n\nChat history: {messages_truncated}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
             else:
                 custom_tools_prompt = "If user's request was to generate any kind of non-text media, no further action is needed and the answer should be no, regardless of what the tool call response was. Otherwise, given the tool call response to the user's request, is another tool call needed to further answer user's message? State your final decision at the end. Don't use emojis."
