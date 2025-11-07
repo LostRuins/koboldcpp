@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from typing import Tuple
 import shutil
 import subprocess
+import gzip
 
 # constants
 sampler_order_max = 7
@@ -65,7 +66,7 @@ dry_seq_break_max = 128
 extra_images_max = 4 # for kontext/qwen img
 
 # global vars
-KcppVersion = "1.101.1"
+KcppVersion = "1.102"
 showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_config_target":""}
@@ -121,8 +122,12 @@ preloaded_story = None
 chatcompl_adapter = None
 chatcompl_adapter_list = None #if using autoguess, will populate this will potential adapters
 embedded_kailite = None
+embedded_kailite_gz = None
 embedded_kcpp_docs = None
+embedded_kcpp_docs_gz = None
 embedded_kcpp_sdui = None
+embedded_kcpp_sdui_gz = None
+embedded_lcpp_ui_gz = None
 sslvalid = False
 nocertify = False
 start_time = time.time()
@@ -2427,117 +2432,38 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
     # tools handling: Check if user is passing a openai tools array, if so add to end of prompt before assistant prompt unless tool_choice has been set to None
     tools_array = genparams.get('tools', [])
     chosen_tool = genparams.get('tool_choice', "auto")
-    messages = genparams.get("messages")
-
     # first handle auto mode, determine whether a tool is needed
     used_tool_json = None
-
-    if not curr_ctx or not messages:
+    if not curr_ctx:
         return None
-
     if tools_array and len(tools_array) > 0 and chosen_tool is not None and chosen_tool!="none":
-        # extract the last 6 user messages and AI responses
-        # from the messages array
-        messages_truncated = messages[-6:]
-
-        # get user's last message
-        last_user_message = ""
-        for message in messages_truncated:
-            if message['role'] == "user":
-                last_user_message = message['content']
-
-        # get last tool call results
-        tool_call_results = []
-        for message in reversed(messages_truncated):
-            # we get only the tool call results
-            # since the last user request
-            if message['role'] == "tool":
-                tool_call_results.append(message['content'])
-            else:
-                break
-        tool_call_results = list(reversed(tool_call_results))
-
-        # pass only the essential tool call information
-        # to the model, to reduce the size of the prompt
-        # it needs to process
-        tools_array_filtered = []
-        for tool_dict in tools_array:
-            tool_data = tool_dict['function']
-
-            tool_props = {}
-            for prop_name, prop_data in tool_data['parameters']['properties'].items():
-                tool_props[prop_name] = prop_data['type']
-
-            tools_array_filtered.append({
-                "name": tool_data['name'],
-                "description": tool_data['description'],
-                "properties": tool_props
-            })
-
-        tools_string = json.dumps(tools_array_filtered, indent=0)
-
+        tools_string = json.dumps(tools_array, indent=0)
         should_use_tools = True
         if chosen_tool=="auto":
+            # if you want a different template, you can set 'custom_tools_prompt' in the chat completions adapter as follows
+            custom_tools_prompt = "Can the user query be answered by a listed tool above? (One word response: yes or no):"
+            if is_followup_tool:
+                custom_tools_prompt = "Can the user query be further answered by another listed tool above? (If response is already complete, reply NO) (One word response: yes or no):"
             # note: message string already contains the instruct start tag!
-
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO"'
-
-            if not is_followup_tool:
-                # if you want a different template, you can set 'custom_tools_prompt' in the chat completions adapter as follows
-                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's last message, or is a tool call optional? Explain your reasoning in one sentence. State your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"Chat history: {messages_truncated}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
-            else:
-                custom_tools_prompt = "If user's request was to generate any kind of non-text media, no further action is needed and the answer should be no, regardless of what the tool call response was. Otherwise, given the tool call response to the user's request, is another tool call needed to further answer user's message? State your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"User's request: {last_user_message}\n\nTool call response: {tool_call_results}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
-
-            # first, prompt to see if a tool call is needed using the prompt above.
-            # the result is a short explanation by the LLM on why a tool call
-            # is or is not needed, along with it's final decision at the end.
             temp_poll = {
-                "prompt": custom_tools_prompt_processed,
-                "max_length":500,
-                "temperature":0.1,
-                "top_k":1,
-                "rep_pen":1,
-                "ban_eos_token":False
-            }
-            temp_poll_result = generate(genparams=temp_poll)
-            temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
-
-            # then we take that final decision
-            # and translate it to a simple "yes" or "no" using
-            # another call to the model
-            temp_poll_check = {
-                "prompt": f"LLM's reasoning: {temp_poll_text}\n\nDid the LLM's decide tool calls were needed? (one word answer: yes or no)",
+                "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}",
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
                 "rep_pen":1,
                 "ban_eos_token":False,
-                "grammar": pollgrammar
-            }
-            temp_poll_check_result = generate(genparams=temp_poll_check)
-            temp_poll_check_text = temp_poll_check_result['text'].lower()
-
-            if temp_poll_result and "yes" not in temp_poll_check_text:
+                "grammar":pollgrammar
+                }
+            temp_poll_result = generate(genparams=temp_poll)
+            if temp_poll_result and "yes" not in temp_poll_result['text'].lower():
                 should_use_tools = False
-
             if not args.quiet:
-                print()
-                print("[TOOLCALL REQUEST]")
-                print(f"Prompt: {custom_tools_prompt}")
-                if is_followup_tool:
-                    print(f"Previous tool call results: {tool_call_results}")
-                print(f"Decision: {temp_poll_check_text}")
-                print(f"Reasoning: {temp_poll_text}")
-
-                if chosen_tool != "auto":
-                    print(f"Chosen tool: {chosen_tool}")
+                print(f"\nRelevant tool is listed: {temp_poll_result['text']} ({should_use_tools})")
 
         if should_use_tools:
             #first, try and extract a specific tool if selected
             used_tool_json = extract_tool_info_from_tool_array(chosen_tool, tools_array)
-
             if used_tool_json: #already found the tool we want, remove all others
                 pass
             elif len(tools_array)==1:
@@ -2551,11 +2477,11 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                     for name in toolnames:
                         pollgrammar += ("" if pollgrammar=="" else " | ")
                         pollgrammar += "\"" + name + "\""
+                    pollgrammar += " | \"no_tool\""
                     pollgrammar = r'root ::= ' + pollgrammar
-
                     decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If no tool is suitable, reply no_tool. (Reply directly with the selected tool's name):"
                     temp_poll = {
-                        "prompt": f"{messages_truncated}\n\nTool List:\n{tools_string}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{decide_tool_prompt}{assistant_message_start}",
                         "max_length":16,
                         "temperature":0.1,
                         "top_k":1,
@@ -2564,10 +2490,8 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                         "grammar":pollgrammar
                         }
                     temp_poll_result = generate(genparams=temp_poll)
-
                     if temp_poll_result:
                         raw = temp_poll_result['text'].lower()
-
                         if "no_tool" in raw:
                             print(f"\nNo suitable tool found.")
                         else:
@@ -2660,6 +2584,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
         adapter_obj = genparams.get('adapter', default_adapter)
         default_max_tok = (adapter_obj.get("max_length", args.defaultgenamt) if (api_format==4 or api_format==7) else args.defaultgenamt)
         genparams["max_length"] = tryparseint(genparams.get('max_tokens', genparams.get('max_completion_tokens', default_max_tok)),default_max_tok)
+        if genparams["max_length"] <= 0:
+            genparams["max_length"] = default_max_tok
         presence_penalty = genparams.get('presence_penalty', genparams.get('frequency_penalty', 0.0))
         genparams["presence_penalty"] = tryparsefloat(presence_penalty,0.0)
         # openai allows either a string or a list as a stop sequence
@@ -3443,19 +3369,31 @@ Change Mode<br>
         self.wfile.write(finalhtml)
 
     def do_GET(self):
-        global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui
+        global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, embedded_kailite_gz, embedded_kcpp_docs_gz, embedded_kcpp_sdui_gz, embedded_lcpp_ui_gz
         global last_req_time, start_time
         global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname
         self.path = self.path.rstrip('/')
         response_body = None
         content_type = 'application/json'
+        content_encoding = None
+
+        # Check if browser supports gzip
+        accept_encoding = self.headers.get('Accept-Encoding', '')
+        supports_gzip = 'gzip' in accept_encoding.lower()
+
+        if self.path!="/lcpp" and self.path.startswith("/lcpp/"):
+            self.path = self.path[5:] #adapt lcpp paths to the root
 
         if self.path in ["", "/?"] or self.path.startswith(('/?','?')): #it's possible for the root url to have ?params without /
             content_type = 'text/html'
-            if embedded_kailite is None:
-                response_body = (f"Embedded KoboldAI Lite is not found.<br>You will have to connect via the main KoboldAI client, or <a href='https://lite.koboldai.net?local=1&port={self.port}'>use this URL</a> to connect.").encode()
-            else:
+            if supports_gzip and embedded_kailite_gz is not None:
+                response_body = embedded_kailite_gz
+                content_encoding = 'gzip'
+            elif embedded_kailite is not None:
                 response_body = embedded_kailite
+            else:
+                response_body = (f"Embedded KoboldAI Lite is not found.<br>You will have to connect via the main KoboldAI client, or <a href='https://lite.koboldai.net?local=1&port={self.port}'>use this URL</a> to connect.").encode()
+            
 
         elif self.path in ["/noscript", "/noscript?"] or self.path.startswith(('/noscript?','noscript?')): #it's possible for the root url to have ?params without /
             self.noscript_webui()
@@ -3663,25 +3601,50 @@ Change Mode<br>
             chat_template = ctypes.string_at(ctbytes).decode("UTF-8","ignore")
             response_body = (json.dumps({
                 "chat_template": chat_template,
+                "id": 0,
+		        "id_task": -1,
                 "total_slots": 1,
+                "model_path": "local_model.gguf",
+                "n_ctx": maxctx,
                 "default_generation_settings": {
                     "n_ctx": maxctx,
                 },
             }).encode())
 
+        elif self.path=="/slots":
+            self.send_response(501)
+            self.end_headers(content_type='application/json')
+            self.wfile.write(json.dumps({"error":{"code":501,"message":"This server does not support slots endpoint.","type":"not_supported_error"}}).encode())
+            return
+
         elif self.path=="/api" or self.path=="/docs" or self.path.startswith(('/api/?json=','/api?json=','/docs/?json=','/docs?json=')):
             content_type = 'text/html'
-            if embedded_kcpp_docs is None:
-                response_body = ("KoboldCpp API is running!\n\nAPI usage reference can be found at the wiki: https://github.com/LostRuins/koboldcpp/wiki").encode()
-            else:
+            if supports_gzip and embedded_kcpp_docs_gz is not None:
+                response_body = embedded_kcpp_docs_gz
+                content_encoding = 'gzip'
+            elif embedded_kcpp_docs is not None:
                 response_body = embedded_kcpp_docs
-
+            else:
+                response_body = ("KoboldCpp API is running!\n\nAPI usage reference can be found at the wiki: https://github.com/LostRuins/koboldcpp/wiki").encode()
+           
+        elif self.path=="/lcpp":
+            content_type = 'text/html'
+            # IMPORTANT: svelte needs a patch to accept this as a non-redirect path. Search for `r.pathname === e + "/index.html"` and add desired path there.
+            if supports_gzip and embedded_lcpp_ui_gz is not None:
+                response_body = embedded_lcpp_ui_gz
+                content_encoding = 'gzip'           
+            else:
+                response_body = ("Llama.cpp UI is not available. Please use the KoboldAI Lite UI instead.").encode()
+           
         elif self.path.startswith(("/sdui")):
             content_type = 'text/html'
-            if embedded_kcpp_sdui is None:
-                response_body = ("KoboldCpp API is running, but KCPP SDUI is not loaded").encode()
-            else:
+            if supports_gzip and embedded_kcpp_sdui_gz is not None:
+                response_body = embedded_kcpp_sdui_gz
+                content_encoding = 'gzip'
+            elif embedded_kcpp_sdui is not None:
                 response_body = embedded_kcpp_sdui
+            else:
+                response_body = ("KoboldCpp API is running, but KCPP SDUI is not loaded").encode()               
 
         elif self.path=="/v1":
             content_type = 'text/html'
@@ -3707,6 +3670,8 @@ Change Mode<br>
         else:
             self.send_response(200)
             self.send_header('content-length', str(len(response_body)))
+            if content_encoding:
+                self.send_header('Content-Encoding', content_encoding)
             self.end_headers(content_type=content_type)
             self.wfile.write(response_body)
         return
@@ -4435,8 +4400,7 @@ Change Mode<br>
         return super(KcppServerRequestHandler, self).end_headers()
 
 def RunServerMultiThreaded(addr, port, server_handler):
-    global exitcounter, sslvalid
-    global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, global_memory
+    global exitcounter, sslvalid, global_memory
     if is_port_in_use(port):
         print(f"Warning: Port {port} already appears to be in use by another program.")
 
@@ -6629,6 +6593,7 @@ def setuptunnel(global_memory, has_sd):
                         if global_memory and global_memory["load_complete"]:
                             print(f"Your remote Kobold API can be found at {tunneloutput}/api")
                             print(f"Your remote OpenAI Compatible API can be found at {tunneloutput}/v1")
+                            print(f"Your remote llama.cpp secondary WebUI at {tunneloutput}/lcpp/")
                             if has_sd:
                                 print(f"StableUI is available at {tunneloutput}/sdui/")
                             print("======\n")
@@ -7166,7 +7131,7 @@ def main(launch_args, default_args):
                 input()
 
 def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
-    global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, start_time, exitcounter, global_memory, using_gui_launcher
+    global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, embedded_kailite_gz, embedded_kcpp_docs_gz, embedded_kcpp_sdui_gz, embedded_lcpp_ui_gz, start_time, exitcounter, global_memory, using_gui_launcher
     global libname, args, friendlymodelname, friendlysdmodelname, fullsdmodelpath, password, fullwhispermodelpath, ttsmodelpath, embeddingsmodelpath, friendlyembeddingsmodelname, has_audio_support, has_vision_support
 
     start_server = True
@@ -7688,6 +7653,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             for p in patches:
                 embedded_kailite = embedded_kailite.replace(p["find"], p["replace"])
             embedded_kailite = embedded_kailite.encode()
+            embedded_kailite_gz = gzip.compress(embedded_kailite)
             print("Embedded KoboldAI Lite loaded.")
     except Exception:
         print("Could not find KoboldAI Lite. Embedded KoboldAI Lite will not be available.")
@@ -7695,6 +7661,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     try:
         with open(os.path.join(embddir, "kcpp_docs.embd"), mode='rb') as f:
             embedded_kcpp_docs = f.read()
+            embedded_kcpp_docs_gz = gzip.compress(embedded_kcpp_docs)
             print("Embedded API docs loaded.")
     except Exception:
         print("Could not find Embedded KoboldCpp API docs.")
@@ -7702,10 +7669,18 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     try:
         with open(os.path.join(embddir, "kcpp_sdui.embd"), mode='rb') as f:
             embedded_kcpp_sdui = f.read()
+            embedded_kcpp_sdui_gz = gzip.compress(embedded_kcpp_sdui)
             if args.sdmodel:
                 print("Embedded SDUI loaded.")
     except Exception:
         print("Could not find Embedded SDUI.")
+
+    try:
+        with open(os.path.join(embddir, "lcpp.gz.embd"), mode='rb') as f:
+            embedded_lcpp_ui_gz = f.read()
+            print("Llama.cpp UI loaded.")
+    except Exception:
+        print("Could not find Embedded llama.cpp UI.")
 
     # print enabled modules
     caps = get_capabilities()
@@ -7759,6 +7734,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         if not args.remotetunnel:
             print(f"Starting Kobold API on port {args.port} at {endpoint_url}/api/")
             print(f"Starting OpenAI Compatible API on port {args.port} at {endpoint_url}/v1/")
+            print(f"Starting llama.cpp secondary WebUI at {endpoint_url}/lcpp/")
             if args.sdmodel:
                 print(f"StableUI is available at {endpoint_url}/sdui/")
         elif global_memory:
@@ -7768,6 +7744,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 remote_url = val
                 print(f"Your remote Kobold API can be found at {endpoint_url}/api")
                 print(f"Your remote OpenAI Compatible API can be found at {endpoint_url}/v1")
+                print(f"Starting llama.cpp secondary WebUI at {endpoint_url}/lcpp/")
                 if args.sdmodel:
                     print(f"StableUI is available at {endpoint_url}/sdui/")
             global_memory["load_complete"] = True
