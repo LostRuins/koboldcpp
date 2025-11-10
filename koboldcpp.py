@@ -1195,11 +1195,7 @@ def autoset_gpu_layers(ctxsize, sdquanted, bbs, qkv_level): #shitty algo to dete
     except Exception:
         return 0
 
-def fetch_gpu_properties(testCL,testCU,testVK):
-    gpumem_ignore_limit_min = 1024*1024*600 #600 mb min
-    gpumem_ignore_limit_max = 1024*1024*1024*300 #300 gb max
-
-    if testCU:
+def detect_memory_cu(gpumem_ignore_limit_min, gpumem_ignore_limit_max):
         FetchedCUdevices = []
         FetchedCUdeviceMem = []
         FetchedCUfreeMem = []
@@ -1276,10 +1272,11 @@ def fetch_gpu_properties(testCL,testCU,testVK):
             lowestcumem = 0
             lowestfreecumem = 0
 
-        MaxMemory[0] = max(lowestcumem,MaxMemory[0])
-        MaxFreeMemory[0] = max(lowestfreecumem,MaxFreeMemory[0])
+        return lowestcumem, lowestfreecumem
 
-    if testVK:
+
+def detect_memory_vk(gpumem_ignore_limit_min, gpumem_ignore_limit_max):
+
         try: # Get Vulkan names
             foundVkGPU = False
             lowestvkmem = 0
@@ -1318,11 +1315,15 @@ def fetch_gpu_properties(testCL,testCU,testVK):
                         gpuidx += 1
                 except Exception: # failed to get vulkan vram
                     pass
-            MaxMemory[0] = max(lowestvkmem,MaxMemory[0])
+            return lowestvkmem
         except Exception:
             pass
 
-    if testCL:
+        return 0
+
+
+def detect_memory_cl(gpumem_ignore_limit_min, gpumem_ignore_limit_max):
+
         try: # Get OpenCL GPU names on windows using a special binary. overwrite at known index if found.
             basepath = os.path.abspath(os.path.dirname(__file__))
             output = ""
@@ -1348,9 +1349,36 @@ def fetch_gpu_properties(testCL,testCU,testVK):
                             lowestclmem = dmem if lowestclmem==0 else (dmem if dmem<lowestclmem else lowestclmem)
                     dev += 1
                 plat += 1
-            MaxMemory[0] = max(lowestclmem,MaxMemory[0])
+            return lowestclmem
         except Exception:
             pass
+
+        return 0
+
+
+def fetch_gpu_properties(testCL,testCU,testVK,testmemory=False):
+    gpumem_ignore_limit_min = 1024*1024*600 #600 mb min
+    gpumem_ignore_limit_max = 1024*1024*1024*300 #300 gb max
+
+    if testCU:
+        cumem, freecumem = detect_memory_cu(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
+        MaxMemory[0] = max(cumem,MaxMemory[0])
+        MaxFreeMemory[0] = max(freecumem,MaxFreeMemory[0])
+        if testmemory:
+            print(f'detected CUDA memory: {cumem/(1024*1024)} MB, {freecumem/(1024*102)} MB free')
+
+    if testVK:
+        vkmem = detect_memory_vk(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
+        MaxMemory[0] = max(vkmem,MaxMemory[0])
+        if testmemory:
+            print(f'detected Vulkan memory: {vkmem/(1024*1024)} MB')
+
+    if testCL:
+        clmem = detect_memory_cl(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
+        MaxMemory[0] = max(clmem,MaxMemory[0])
+        if testmemory:
+            print(f'detected OpenCL memory: {clmem/(1024*1024)} MB')
+
 
     # Check VRAM detection after all backends have been tested
     if MaxMemory[0] < (1024*1024*256):
@@ -2334,25 +2362,42 @@ def is_ipv6_supported():
     except Exception:
         return False
 
-def format_jinja(messages):   
+def format_jinja(messages,tools):   
     try:
         def strftime_now(format='%Y-%m-%d %H:%M:%S'):
             return datetime.now().strftime(format)
+        def tojson(x, ensure_ascii=False, indent=None, separators=None, sort_keys=False):
+            return json.dumps(x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
         global cached_chat_template
         from jinja2.sandbox import ImmutableSandboxedEnvironment
         jinja_env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
         jinja_env.globals['strftime_now'] = strftime_now
+        jinja_env.filters["tojson"] = tojson
         jinja_compiled_template = jinja_env.from_string(cached_chat_template)
-        text = jinja_compiled_template.render(messages=messages, add_generation_prompt=True, bos_token="", eos_token="")
+        text = jinja_compiled_template.render(messages=messages, tools=tools, add_generation_prompt=True, bos_token="", eos_token="")
         return text if text else None
     except Exception as e:
         print("Jinja formatting failed: {e}")
         return None
 
+def remove_outer_tags(inputstr):
+    try:
+        stripped = inputstr.strip() 
+        match = re.match(r'^<([^\s<>]+)>(.*?)</\1>\s*$', stripped, re.DOTALL) # Try angle brackets first
+        if match:
+            return match.group(2).strip()
+        match = re.match(r'^\[([^\s<>]+)\](.*?)\[/\1]\s*$', stripped, re.DOTALL) # Then try square brackets
+        if match:
+            return match.group(2).strip()
+        return stripped # If no match, return original string
+    except Exception:
+        return stripped
 
 # Used to parse json for openai tool calls
 def extract_json_from_string(input_string):
     parsed_json = None
+    input_string = remove_outer_tags(input_string) #if we detected wrapper tags, remove them    
+
     try: # First check if model exported perfect json
         parsed_json = json.loads(input_string)
         if not isinstance(parsed_json, list):
@@ -2741,10 +2786,13 @@ ws ::= | " " | "\n" [ \t]{0,20}
             attachedimgid = 0
             attachedaudid = 0
             jinja_output = None
-            if use_jinja and cached_chat_template:
-                jinja_output = format_jinja(messages_array)
+            jinjatools = genparams.get('tools', [])
+            if use_jinja and cached_chat_template:                
+                jinja_output = format_jinja(messages_array,jinjatools)                
             if jinja_output:
                 messages_string = jinja_output
+                if jinjatools and len(jinjatools)>0:
+                    genparams["using_openai_tools"] = True
             else:
                 for message in messages_array:
                     message_index += 1
@@ -3237,6 +3285,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 if streamDone:
                     if api_format == 4 or api_format == 3:  # if oai chat, send last [DONE] message consistent with openai format
                         await self.send_oai_sse_event('[DONE]')
+                        await asyncio.sleep(async_sleep_short)
                     break
         except Exception as ex:
             print("Token streaming was interrupted or aborted!")
@@ -3473,7 +3522,7 @@ Change Mode<br>
 
     def do_GET(self):
         global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, embedded_kailite_gz, embedded_kcpp_docs_gz, embedded_kcpp_sdui_gz, embedded_lcpp_ui_gz
-        global last_req_time, start_time, cached_chat_template
+        global last_req_time, start_time, cached_chat_template, has_vision_support, has_audio_support, has_whisper, friendlymodelname
         global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname
         self.path = self.path.rstrip('/')
         response_body = None
@@ -3705,7 +3754,11 @@ Change Mode<br>
                 "id": 0,
 		        "id_task": -1,
                 "total_slots": 1,
-                "model_path": "local_model.gguf",
+                "modalities": {
+                    "vision": has_vision_support,
+                    "audio": has_audio_support
+                },
+                "model_path": friendlymodelname,
                 "n_ctx": maxctx,
                 "default_generation_settings": {
                     "n_ctx": maxctx,
@@ -7049,6 +7102,10 @@ def main(launch_args, default_args):
         print(f"{KcppVersion}") # just print version and exit
         return
 
+    if args.testmemory:
+        fetch_gpu_properties(True, True, True, testmemory=True)
+        return
+
     #prevent disallowed combos
     if (args.nomodel or args.benchmark or args.launch or args.admin) and args.cli:
         exit_with_error(1, "Error: --cli cannot be combined with --launch, --nomodel, --admin or --benchmark")
@@ -8153,5 +8210,8 @@ if __name__ == '__main__':
     compatgroup.add_argument("--noblas", help=argparse.SUPPRESS, action='store_true')
     compatgroup3.add_argument("--nommap","--no-mmap", help=argparse.SUPPRESS, action='store_true')
     deprecatedgroup.add_argument("--sdnotile", help=argparse.SUPPRESS, action='store_true') # legacy option, see sdtiledvae
+
+    debuggroup = parser.add_argument_group('Debug Commands')
+    debuggroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')
 
     main(launch_args=parser.parse_args(),default_args=parser.parse_args([]))

@@ -2473,10 +2473,14 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 set_clip_uses_gpu(false);
                 printf("Clip forced to use CPU!\n");
             }
-            clip_init_result cres = clip_init(mmproj_filename.c_str(), clip_context_params{
-                /* use_gpu */   true,
-                /* verbosity */ static_cast<ggml_log_level>(1),
-            });
+             clip_context_params ctx_clip_params {
+                /* use_gpu           */ true,
+                /* verbosity         */ static_cast<ggml_log_level>(1),
+                /* flash_attn_type   */ (kcpp_data->flash_attn?CLIP_FLASH_ATTN_TYPE_ENABLED:CLIP_FLASH_ATTN_TYPE_DISABLED),
+                /* image_min_tokens  */ -1,
+                /* image_max_tokens  */ -1,
+            };
+            clip_init_result cres = clip_init(mmproj_filename.c_str(), ctx_clip_params);
             clp_ctx_v = cres.ctx_v;
             clp_ctx_a = cres.ctx_a;
             if(clp_ctx_v == nullptr && clp_ctx_a == nullptr) {
