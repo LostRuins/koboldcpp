@@ -71,7 +71,7 @@ jobs:
               apt-get update && apt-get install -y build-essential && \
               apt-get update && apt-get install -y gcc-12 g++-12 && \
               export LD_LIBRARY_PATH=/usr/lib/gcc/x86_64-linux-gnu/12:$LD_LIBRARY_PATH && \
-              pip install customtkinter pyinstaller tk && \
+              pip install customtkinter pyinstaller tk jinja2 && \
               cd /src && \
               pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil \
               --add-data './koboldcpp_default.so:.' \

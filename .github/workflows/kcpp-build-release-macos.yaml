@@ -28,7 +28,7 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          pip install customtkinter pyinstaller tk
+          pip install customtkinter pyinstaller tk jinja2
 
       - name: Build
         id: make_build
