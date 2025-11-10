@@ -881,7 +881,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size_x, input_tile_size_y, input->ne[2], input->ne[3]);
     ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size_x, output_tile_size_y, output->ne[2], output->ne[3]);
     int num_tiles            = num_tiles_x * num_tiles_y;
-    LOG_INFO("processing %i tiles", num_tiles);
+    LOG_DEBUG("processing %i tiles", num_tiles);
     pretty_progress(0, num_tiles, 0.0f);
     int tile_count = 1;
     bool last_y = false, last_x = false;
@@ -1163,8 +1163,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
                                                              struct ggml_tensor* mask = nullptr,
                                                              bool diag_mask_inf       = false,
                                                              bool skip_reshape        = false,
-                                                             bool flash_attn          = false,  // avoid overflow
-                                                             float kv_scale           = 1.0f) {
+                                                             bool flash_attn          = false,
+                                                             float kv_scale           = 1.0f) {  // avoid overflow
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -1466,7 +1466,12 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
 #define MAX_PARAMS_TENSOR_NUM 32768
 #define MAX_GRAPH_SIZE 327680
 
-typedef std::map<std::string, enum ggml_type> String2GGMLType;
+struct GGMLRunnerContext {
+    ggml_backend_t backend     = nullptr;
+    ggml_context* ggml_ctx     = nullptr;
+    bool flash_attn_enabled    = false;
+    bool conv2d_direct_enabled = false;
+};
 
 struct GGMLRunner {
 protected:
@@ -1493,6 +1498,9 @@ protected:
     std::map<struct ggml_tensor*, const void*> backend_tensor_data_map;
     std::map<std::string, struct ggml_tensor*> cache_tensor_map;  // name -> tensor
     const std::string final_result_name = "ggml_runner_final_result_tensor";
+
+    bool flash_attn_enabled    = false;
+    bool conv2d_direct_enabled = false;
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1566,8 +1574,10 @@ protected:
     struct ggml_cgraph* get_compute_graph(get_graph_cb_t get_graph) {
         prepare_build_in_tensor_before();
         struct ggml_cgraph* gf = get_graph();
-        auto result            = ggml_graph_node(gf, -1);
-        ggml_set_name(result, final_result_name.c_str());
+        if (ggml_graph_n_nodes(gf) > 0) {
+            auto result = ggml_graph_node(gf, -1);
+            ggml_set_name(result, final_result_name.c_str());
+        }
         prepare_build_in_tensor_after(gf);
         return gf;
     }
@@ -1750,6 +1760,15 @@ public:
         free_cache_ctx_and_buffer();
     }
 
+    virtual GGMLRunnerContext get_context() {
+        GGMLRunnerContext runner_ctx;
+        runner_ctx.ggml_ctx              = compute_ctx;
+        runner_ctx.backend               = runtime_backend;
+        runner_ctx.flash_attn_enabled    = flash_attn_enabled;
+        runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
+        return runner_ctx;
+    }
+
     void reset_compute_ctx() {
         free_compute_ctx();
         alloc_compute_ctx();
@@ -1870,6 +1889,14 @@ public:
             free_compute_buffer();
         }
     }
+
+    void set_flash_attention_enabled(bool enabled) {
+        flash_attn_enabled = enabled;
+    }
+
+    void set_conv2d_direct_enabled(bool enabled) {
+        conv2d_direct_enabled = enabled;
+    }
 };
 
 class GGMLBlock {
@@ -1879,30 +1906,36 @@ protected:
     GGMLBlockMap blocks;
     ParameterMap params;
 
-    ggml_type get_type(const std::string& name, const String2GGMLType& tensor_types, ggml_type default_type) {
-        auto iter = tensor_types.find(name);
-        if (iter != tensor_types.end()) {
-            return iter->second;
+    ggml_type get_type(const std::string& name, const String2TensorStorage& tensor_storage_map, ggml_type default_type) {
+        ggml_type wtype = default_type;
+        auto iter       = tensor_storage_map.find(name);
+        if (iter != tensor_storage_map.end()) {
+            const TensorStorage& tensor_storage = iter->second;
+            if (tensor_storage.expected_type != GGML_TYPE_COUNT) {
+                wtype = tensor_storage.expected_type;
+            } else {
+                wtype = tensor_storage.type;
+            }
         }
-        return default_type;
+        return wtype;
     }
 
-    void init_blocks(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+    void init_blocks(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
         for (auto& pair : blocks) {
             auto& block = pair.second;
-            block->init(ctx, tensor_types, prefix + pair.first);
+            block->init(ctx, tensor_storage_map, prefix + pair.first);
         }
     }
 
-    virtual void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {}
+    virtual void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {}
 
 public:
-    void init(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+    void init(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") {
         if (prefix.size() > 0) {
             prefix = prefix + ".";
         }
-        init_blocks(ctx, tensor_types, prefix);
-        init_params(ctx, tensor_types, prefix);
+        init_params(ctx, tensor_storage_map, prefix);
+        init_blocks(ctx, tensor_storage_map, prefix);
     }
 
     size_t get_params_num() {
@@ -1961,12 +1994,12 @@ public:
 
 class UnaryBlock : public GGMLBlock {
 public:
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) = 0;
+    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) = 0;
 };
 
 class Identity : public UnaryBlock {
 public:
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         return x;
     }
 };
@@ -1980,8 +2013,8 @@ protected:
     bool force_prec_f32;
     float scale;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
-        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
         if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
         }
@@ -2006,13 +2039,13 @@ public:
           force_prec_f32(force_prec_f32),
           scale(scale) {}
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
         }
-        return ggml_ext_linear(ctx, x, w, b, force_prec_f32, scale);
+        return ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
     }
 };
 
@@ -2028,8 +2061,8 @@ class Embedding : public UnaryBlock {
 protected:
     int64_t embedding_dim;
     int64_t num_embeddings;
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
         if (!support_get_rows(wtype)) {
             wtype = GGML_TYPE_F32;
         }
@@ -2042,7 +2075,7 @@ public:
           num_embeddings(num_embeddings) {
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* input_ids) {
         // input_ids: [N, n_token]
         auto weight = params["weight"];
@@ -2050,11 +2083,11 @@ public:
         // There are issues with ggml batch inference, so we are expanding it here first.
         // TODO: fix ggml batch inference
         int64_t n = input_ids->ne[1];
-        input_ids = ggml_reshape_1d(ctx, input_ids, input_ids->ne[0] * input_ids->ne[1]);
+        input_ids = ggml_reshape_1d(ctx->ggml_ctx, input_ids, input_ids->ne[0] * input_ids->ne[1]);
 
-        input_ids      = ggml_reshape_3d(ctx, input_ids, input_ids->ne[0], 1, input_ids->ne[1]);
-        auto embedding = ggml_get_rows(ctx, weight, input_ids);
-        embedding      = ggml_reshape_3d(ctx, embedding, embedding->ne[0], embedding->ne[1] / n, n);
+        input_ids      = ggml_reshape_3d(ctx->ggml_ctx, input_ids, input_ids->ne[0], 1, input_ids->ne[1]);
+        auto embedding = ggml_get_rows(ctx->ggml_ctx, weight, input_ids);
+        embedding      = ggml_reshape_3d(ctx->ggml_ctx, embedding, embedding->ne[0], embedding->ne[1] / n, n);
 
         // [N, n_token, embedding_dim]
         return embedding;
@@ -2070,10 +2103,9 @@ protected:
     std::pair<int, int> padding;
     std::pair<int, int> dilation;
     bool bias;
-    bool direct = false;
     float scale = 1.f;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels, out_channels);
         if (bias) {
@@ -2098,10 +2130,6 @@ public:
           dilation(dilation),
           bias(bias) {}
 
-    void enable_direct() {
-        direct = true;
-    }
-
     void set_scale(float scale_value) {
         scale = scale_value;
     }
@@ -2110,13 +2138,13 @@ public:
         return "Conv2d";
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
         }
-        return ggml_ext_conv_2d(ctx,
+        return ggml_ext_conv_2d(ctx->ggml_ctx,
                                 x,
                                 w,
                                 b,
@@ -2126,7 +2154,7 @@ public:
                                 padding.first,
                                 dilation.second,
                                 dilation.first,
-                                direct,
+                                ctx->conv2d_direct_enabled,
                                 scale);
     }
 };
@@ -2141,7 +2169,7 @@ protected:
     int64_t dilation;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx, wtype, 1, kernel_size, in_channels, out_channels);  // 5d => 4d
         if (bias) {
@@ -2168,13 +2196,13 @@ public:
 
     // x: [N, IC, ID, IH*IW]
     // result: [N, OC, OD, OH*OW]
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
         }
-        return ggml_ext_conv_3d_nx1x1(ctx, x, w, b, stride, padding, dilation);
+        return ggml_ext_conv_3d_nx1x1(ctx->ggml_ctx, x, w, b, stride, padding, dilation);
     }
 };
 
@@ -2188,7 +2216,7 @@ protected:
     std::tuple<int, int, int> dilation;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx,
                                                   wtype,
@@ -2217,13 +2245,13 @@ public:
           dilation(dilation),
           bias(bias) {}
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
         }
-        return ggml_ext_conv_3d(ctx, x, w, b, in_channels,
+        return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
                                 std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                 std::get<2>(padding), std::get<1>(padding), std::get<0>(padding),
                                 std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation));
@@ -2237,7 +2265,7 @@ protected:
     bool elementwise_affine;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         if (elementwise_affine) {
             enum ggml_type wtype = GGML_TYPE_F32;
             params["weight"]     = ggml_new_tensor_1d(ctx, wtype, normalized_shape);
@@ -2258,7 +2286,7 @@ public:
           elementwise_affine(elementwise_affine),
           bias(bias) {}
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = nullptr;
         struct ggml_tensor* b = nullptr;
 
@@ -2268,7 +2296,7 @@ public:
                 b = params["bias"];
             }
         }
-        return ggml_ext_layer_norm(ctx, x, w, b, eps);
+        return ggml_ext_layer_norm(ctx->ggml_ctx, x, w, b, eps);
     }
 };
 
@@ -2279,7 +2307,7 @@ protected:
     float eps;
     bool affine;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         if (affine) {
             enum ggml_type wtype      = GGML_TYPE_F32;
             enum ggml_type bias_wtype = GGML_TYPE_F32;
@@ -2298,14 +2326,14 @@ public:
           eps(eps),
           affine(affine) {}
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = nullptr;
         struct ggml_tensor* b = nullptr;
         if (affine) {
             w = params["weight"];
             b = params["bias"];
         }
-        return ggml_ext_group_norm(ctx, x, w, b, num_groups);
+        return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups);
     }
 };
 
@@ -2320,7 +2348,7 @@ protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
@@ -2331,10 +2359,10 @@ public:
         : hidden_size(hidden_size),
           eps(eps) {}
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
-        x                     = ggml_rms_norm(ctx, x, eps);
-        x                     = ggml_mul_inplace(ctx, x, w);
+        x                     = ggml_rms_norm(ctx->ggml_ctx, x, eps);
+        x                     = ggml_mul_inplace(ctx->ggml_ctx, x, w);
         return x;
     }
 };
@@ -2343,9 +2371,11 @@ class MultiheadAttention : public GGMLBlock {
 protected:
     int64_t embed_dim;
     int64_t n_head;
+    bool proj_in;
     std::string q_proj_name;
     std::string k_proj_name;
     std::string v_proj_name;
+    std::string in_proj_name;
     std::string out_proj_name;
 
 public:
@@ -2353,37 +2383,57 @@ public:
                        int64_t n_head,
                        bool qkv_proj_bias        = true,
                        bool out_proj_bias        = true,
+                       bool proj_in              = false,
                        std::string q_proj_name   = "q_proj",
                        std::string k_proj_name   = "k_proj",
                        std::string v_proj_name   = "v_proj",
+                       std::string in_proj_name  = "in_proj",
                        std::string out_proj_name = "out_proj")
         : embed_dim(embed_dim),
           n_head(n_head),
+          proj_in(proj_in),
           q_proj_name(q_proj_name),
           k_proj_name(k_proj_name),
           v_proj_name(v_proj_name),
+          in_proj_name(in_proj_name),
           out_proj_name(out_proj_name) {
-        blocks[q_proj_name]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
-        blocks[k_proj_name]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
-        blocks[v_proj_name]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
+        if (proj_in) {
+            blocks[in_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim * 3, qkv_proj_bias));
+        } else {
+            blocks[q_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
+            blocks[k_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
+            blocks[v_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
+        }
         blocks[out_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, out_proj_bias));
     }
 
     // x: [N, n_token, embed_dim]
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                ggml_backend_t backend,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 bool mask = false) {
-        auto q_proj   = std::dynamic_pointer_cast<Linear>(blocks[q_proj_name]);
-        auto k_proj   = std::dynamic_pointer_cast<Linear>(blocks[k_proj_name]);
-        auto v_proj   = std::dynamic_pointer_cast<Linear>(blocks[v_proj_name]);
         auto out_proj = std::dynamic_pointer_cast<Linear>(blocks[out_proj_name]);
 
-        struct ggml_tensor* q = q_proj->forward(ctx, x);
-        struct ggml_tensor* k = k_proj->forward(ctx, x);
-        struct ggml_tensor* v = v_proj->forward(ctx, x);
+        ggml_tensor* q;
+        ggml_tensor* k;
+        ggml_tensor* v;
+        if (proj_in) {
+            auto in_proj = std::dynamic_pointer_cast<Linear>(blocks[in_proj_name]);
+            auto qkv     = in_proj->forward(ctx, x);
+            auto qkv_vec = split_qkv(ctx->ggml_ctx, qkv);
+            q            = qkv_vec[0];
+            k            = qkv_vec[1];
+            v            = qkv_vec[2];
+        } else {
+            auto q_proj = std::dynamic_pointer_cast<Linear>(blocks[q_proj_name]);
+            auto k_proj = std::dynamic_pointer_cast<Linear>(blocks[k_proj_name]);
+            auto v_proj = std::dynamic_pointer_cast<Linear>(blocks[v_proj_name]);
 
-        x = ggml_ext_attention_ext(ctx, backend, q, k, v, n_head, nullptr, mask);  // [N, n_token, embed_dim]
+            q = q_proj->forward(ctx, x);
+            k = k_proj->forward(ctx, x);
+            v = v_proj->forward(ctx, x);
+        }
+
+        x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, nullptr, mask);  // [N, n_token, embed_dim]
 
         x = out_proj->forward(ctx, x);  // [N, n_token, embed_dim]
         return x;

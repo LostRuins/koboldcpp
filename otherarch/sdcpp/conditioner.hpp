@@ -63,19 +63,19 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
                                       bool offload_params_to_cpu,
-                                      const String2GGMLType& tensor_types,
+                                      const String2TensorStorage& tensor_storage_map,
                                       const std::string& embd_dir,
                                       SDVersion version = VERSION_SD1,
                                       PMVersion pv      = PM_VERSION_1)
         : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407), embd_dir(embd_dir) {
         bool force_clip_f32 = embd_dir.size() > 0;
         if (sd_version_is_sd1(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
+            text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
         } else if (sd_version_is_sd2(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, true, force_clip_f32);
+            text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, true, force_clip_f32);
         } else if (sd_version_is_sdxl(version)) {
-            text_model  = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, force_clip_f32);
-            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, force_clip_f32);
+            text_model  = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, force_clip_f32);
+            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, force_clip_f32);
         }
     }
 
@@ -111,7 +111,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     bool load_embedding(std::string embd_name, std::string embd_path, std::vector<int32_t>& bpe_tokens) {
         // the order matters
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(embd_path)) {
+        if (!model_loader.init_from_file_and_convert_name(embd_path)) {
             LOG_ERROR("embedding '%s' failed", embd_name.c_str());
             return false;
         }
@@ -623,9 +623,21 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
 
     FrozenCLIPVisionEmbedder(ggml_backend_t backend,
                              bool offload_params_to_cpu,
-                             const String2GGMLType& tensor_types = {})
-        : vision_model(OPEN_CLIP_VIT_H_14), GGMLRunner(backend, offload_params_to_cpu) {
-        vision_model.init(params_ctx, tensor_types, "cond_stage_model.transformer");
+                             const String2TensorStorage& tensor_storage_map = {})
+        : GGMLRunner(backend, offload_params_to_cpu) {
+        std::string prefix = "cond_stage_model.transformer";
+        bool proj_in       = false;
+        for (const auto& [name, tensor_storage] : tensor_storage_map) {
+            if (!starts_with(name, prefix)) {
+                continue;
+            }
+            if (contains(name, "self_attn.in_proj")) {
+                proj_in = true;
+                break;
+            }
+        }
+        vision_model = CLIPVisionModelProjection(OPEN_CLIP_VIT_H_14, false, proj_in);
+        vision_model.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {
@@ -641,7 +653,9 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
 
         pixel_values = to_backend(pixel_values);
 
-        struct ggml_tensor* hidden_states = vision_model.forward(compute_ctx, runtime_backend, pixel_values, return_pooled, clip_skip);
+        auto runner_ctx = get_context();
+
+        struct ggml_tensor* hidden_states = vision_model.forward(&runner_ctx, pixel_values, return_pooled, clip_skip);
 
         ggml_build_forward_expand(gf, hidden_states);
 
@@ -671,12 +685,12 @@ struct SD3CLIPEmbedder : public Conditioner {
 
     SD3CLIPEmbedder(ggml_backend_t backend,
                     bool offload_params_to_cpu,
-                    const String2GGMLType& tensor_types = {})
+                    const String2TensorStorage& tensor_storage_map = {})
         : clip_g_tokenizer(0) {
         bool use_clip_l = false;
         bool use_clip_g = false;
         bool use_t5     = false;
-        for (auto pair : tensor_types) {
+        for (auto pair : tensor_storage_map) {
             if (pair.first.find("text_encoders.clip_l") != std::string::npos) {
                 use_clip_l = true;
             } else if (pair.first.find("text_encoders.clip_g") != std::string::npos) {
@@ -690,13 +704,13 @@ struct SD3CLIPEmbedder : public Conditioner {
             return;
         }
         if (use_clip_l) {
-            clip_l = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
+            clip_l = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
         }
         if (use_clip_g) {
-            clip_g = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
+            clip_g = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
         }
         if (use_t5) {
-            t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.t5xxl.transformer");
+            t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.t5xxl.transformer");
         }
     }
 
@@ -1080,10 +1094,10 @@ struct FluxCLIPEmbedder : public Conditioner {
 
     FluxCLIPEmbedder(ggml_backend_t backend,
                      bool offload_params_to_cpu,
-                     const String2GGMLType& tensor_types = {}) {
+                     const String2TensorStorage& tensor_storage_map = {}) {
         bool use_clip_l = false;
         bool use_t5     = false;
-        for (auto pair : tensor_types) {
+        for (auto pair : tensor_storage_map) {
             if (pair.first.find("text_encoders.clip_l") != std::string::npos) {
                 use_clip_l = true;
             } else if (pair.first.find("text_encoders.t5xxl") != std::string::npos) {
@@ -1097,12 +1111,12 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
 
         if (use_clip_l) {
-            clip_l = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
+            clip_l = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
         } else {
             LOG_WARN("clip_l text encoder not found! Prompt adherence might be degraded.");
         }
         if (use_t5) {
-            t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.t5xxl.transformer");
+            t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.t5xxl.transformer");
         } else {
             LOG_WARN("t5xxl text encoder not found! Prompt adherence might be degraded.");
         }
@@ -1340,13 +1354,13 @@ struct T5CLIPEmbedder : public Conditioner {
 
     T5CLIPEmbedder(ggml_backend_t backend,
                    bool offload_params_to_cpu,
-                   const String2GGMLType& tensor_types = {},
-                   bool use_mask                       = false,
-                   int mask_pad                        = 1,
-                   bool is_umt5                        = false)
+                   const String2TensorStorage& tensor_storage_map = {},
+                   bool use_mask                                  = false,
+                   int mask_pad                                   = 1,
+                   bool is_umt5                                   = false)
         : use_mask(use_mask), mask_pad(mask_pad), t5_tokenizer(is_umt5) {
         bool use_t5 = false;
-        for (auto pair : tensor_types) {
+        for (auto pair : tensor_storage_map) {
             if (pair.first.find("text_encoders.t5xxl") != std::string::npos) {
                 use_t5 = true;
             }
@@ -1356,7 +1370,7 @@ struct T5CLIPEmbedder : public Conditioner {
             LOG_WARN("IMPORTANT NOTICE: No text encoders provided, cannot process prompts!");
             return;
         } else {
-            t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.t5xxl.transformer", is_umt5);
+            t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.t5xxl.transformer", is_umt5);
         }
     }
 
@@ -1547,12 +1561,12 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
 
     Qwen2_5_VLCLIPEmbedder(ggml_backend_t backend,
                            bool offload_params_to_cpu,
-                           const String2GGMLType& tensor_types = {},
-                           const std::string prefix            = "",
-                           bool enable_vision                  = false) {
+                           const String2TensorStorage& tensor_storage_map = {},
+                           const std::string prefix                       = "",
+                           bool enable_vision                             = false) {
         qwenvl = std::make_shared<Qwen::Qwen2_5_VLRunner>(backend,
                                                           offload_params_to_cpu,
-                                                          tensor_types,
+                                                          tensor_storage_map,
                                                           "text_encoders.qwen2vl",
                                                           enable_vision);
     }

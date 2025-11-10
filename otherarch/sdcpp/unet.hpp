@@ -20,9 +20,10 @@ public:
                             int64_t d_head,
                             int64_t depth,
                             int64_t context_dim,
+                            bool use_linear,
                             int64_t time_depth            = 1,
                             int64_t max_time_embed_period = 10000)
-        : SpatialTransformer(in_channels, n_head, d_head, depth, context_dim),
+        : SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear),
           max_time_embed_period(max_time_embed_period) {
         // We will convert unet transformer linear to conv2d 1x1 when loading the weights, so use_linear is always False
         // use_spatial_context is always True
@@ -60,8 +61,7 @@ public:
         blocks["time_mixer"] = std::shared_ptr<GGMLBlock>(new AlphaBlender());
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                ggml_backend_t backend,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* context,
                                 int timesteps) {
@@ -92,7 +92,7 @@ public:
         auto time_context    = context;  // [b*t, n_context, context_dim]
         auto spatial_context = context;
         // time_context_first_timestep = time_context[::timesteps]
-        auto time_context_first_timestep = ggml_view_3d(ctx,
+        auto time_context_first_timestep = ggml_view_3d(ctx->ggml_ctx,
                                                         time_context,
                                                         time_context->ne[0],
                                                         time_context->ne[1],
@@ -100,26 +100,26 @@ public:
                                                         time_context->nb[1],
                                                         time_context->nb[2],
                                                         0);  // [b, n_context, context_dim]
-        time_context                     = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
+        time_context                     = ggml_new_tensor_3d(ctx->ggml_ctx, GGML_TYPE_F32,
                                                               time_context_first_timestep->ne[0],
                                                               time_context_first_timestep->ne[1],
                                                               time_context_first_timestep->ne[2] * h * w);
-        time_context                     = ggml_repeat(ctx, time_context_first_timestep, time_context);  // [b*h*w, n_context, context_dim]
+        time_context                     = ggml_repeat(ctx->ggml_ctx, time_context_first_timestep, time_context);  // [b*h*w, n_context, context_dim]
 
         x = norm->forward(ctx, x);
         x = proj_in->forward(ctx, x);  // [N, inner_dim, h, w]
 
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
-        x = ggml_reshape_3d(ctx, x, inner_dim, w * h, n);      // [N, h * w, inner_dim]
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
+        x = ggml_reshape_3d(ctx->ggml_ctx, x, inner_dim, w * h, n);                // [N, h * w, inner_dim]
 
-        auto num_frames = ggml_arange(ctx, 0, timesteps, 1);
+        auto num_frames = ggml_arange(ctx->ggml_ctx, 0, timesteps, 1);
         // since b is 1, no need to do repeat
-        auto t_emb = ggml_ext_timestep_embedding(ctx, num_frames, in_channels, max_time_embed_period);  // [N, in_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, num_frames, in_channels, max_time_embed_period);  // [N, in_channels]
 
         auto emb = time_pos_embed_0->forward(ctx, t_emb);
-        emb      = ggml_silu_inplace(ctx, emb);
-        emb      = time_pos_embed_2->forward(ctx, emb);                   // [N, in_channels]
-        emb      = ggml_reshape_3d(ctx, emb, emb->ne[0], 1, emb->ne[1]);  // [N, 1, in_channels]
+        emb      = ggml_silu_inplace(ctx->ggml_ctx, emb);
+        emb      = time_pos_embed_2->forward(ctx, emb);                             // [N, in_channels]
+        emb      = ggml_reshape_3d(ctx->ggml_ctx, emb, emb->ne[0], 1, emb->ne[1]);  // [N, 1, in_channels]
 
         for (int i = 0; i < depth; i++) {
             std::string transformer_name = "transformer_blocks." + std::to_string(i);
@@ -128,11 +128,11 @@ public:
             auto block     = std::dynamic_pointer_cast<BasicTransformerBlock>(blocks[transformer_name]);
             auto mix_block = std::dynamic_pointer_cast<BasicTransformerBlock>(blocks[time_stack_name]);
 
-            x = block->forward(ctx, backend, x, spatial_context);  // [N, h * w, inner_dim]
+            x = block->forward(ctx, x, spatial_context);  // [N, h * w, inner_dim]
 
             // in_channels == inner_dim
             auto x_mix = x;
-            x_mix      = ggml_add(ctx, x_mix, emb);  // [N, h * w, inner_dim]
+            x_mix      = ggml_add(ctx->ggml_ctx, x_mix, emb);  // [N, h * w, inner_dim]
 
             int64_t N = x_mix->ne[2];
             int64_t T = timesteps;
@@ -140,26 +140,26 @@ public:
             int64_t S = x_mix->ne[1];
             int64_t C = x_mix->ne[0];
 
-            x_mix = ggml_reshape_4d(ctx, x_mix, C, S, T, B);               // (b t) s c -> b t s c
-            x_mix = ggml_cont(ctx, ggml_permute(ctx, x_mix, 0, 2, 1, 3));  // b t s c -> b s t c
-            x_mix = ggml_reshape_3d(ctx, x_mix, C, T, S * B);              // b s t c -> (b s) t c
+            x_mix = ggml_reshape_4d(ctx->ggml_ctx, x_mix, C, S, T, B);                         // (b t) s c -> b t s c
+            x_mix = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x_mix, 0, 2, 1, 3));  // b t s c -> b s t c
+            x_mix = ggml_reshape_3d(ctx->ggml_ctx, x_mix, C, T, S * B);                        // b s t c -> (b s) t c
 
-            x_mix = mix_block->forward(ctx, backend, x_mix, time_context);  // [B * h * w, T, inner_dim]
+            x_mix = mix_block->forward(ctx, x_mix, time_context);  // [B * h * w, T, inner_dim]
 
-            x_mix = ggml_reshape_4d(ctx, x_mix, C, T, S, B);               // (b s) t c -> b s t c
-            x_mix = ggml_cont(ctx, ggml_permute(ctx, x_mix, 0, 2, 1, 3));  // b s t c -> b t s c
-            x_mix = ggml_reshape_3d(ctx, x_mix, C, S, T * B);              // b t s c -> (b t) s c
+            x_mix = ggml_reshape_4d(ctx->ggml_ctx, x_mix, C, T, S, B);                         // (b s) t c -> b s t c
+            x_mix = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x_mix, 0, 2, 1, 3));  // b s t c -> b t s c
+            x_mix = ggml_reshape_3d(ctx->ggml_ctx, x_mix, C, S, T * B);                        // b t s c -> (b t) s c
 
             x = time_mixer->forward(ctx, x, x_mix);  // [N, h * w, inner_dim]
         }
 
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
-        x = ggml_reshape_4d(ctx, x, w, h, inner_dim, n);       // [N, inner_dim, h, w]
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
+        x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, inner_dim, n);                 // [N, inner_dim, h, w]
 
         // proj_out
         x = proj_out->forward(ctx, x);  // [N, in_channels, h, w]
 
-        x = ggml_add(ctx, x, x_in);
+        x = ggml_add(ctx->ggml_ctx, x, x_in);
         return x;
     }
 };
@@ -179,17 +179,20 @@ protected:
     int num_heads                          = 8;
     int num_head_channels                  = -1;   // channels // num_heads
     int context_dim                        = 768;  // 1024 for VERSION_SD2, 2048 for VERSION_SDXL
+    bool use_linear_projection             = false;
+    bool tiny_unet                         = false;
 
 public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, const String2GGMLType& tensor_types = {}, bool flash_attn = false)
+    UnetModelBlock(SDVersion version = VERSION_SD1, const String2TensorStorage& tensor_storage_map = {})
         : version(version) {
         if (sd_version_is_sd2(version)) {
-            context_dim       = 1024;
-            num_head_channels = 64;
-            num_heads         = -1;
+            context_dim           = 1024;
+            num_head_channels     = 64;
+            num_heads             = -1;
+            use_linear_projection = true;
         } else if (sd_version_is_sdxl(version)) {
             context_dim           = 2048;
             attention_resolutions = {4, 2};
@@ -197,21 +200,25 @@ public:
             transformer_depth     = {1, 2, 10};
             num_head_channels     = 64;
             num_heads             = -1;
+            use_linear_projection = true;
         } else if (version == VERSION_SVD) {
-            in_channels       = 8;
-            out_channels      = 4;
-            context_dim       = 1024;
-            adm_in_channels   = 768;
-            num_head_channels = 64;
-            num_heads         = -1;
-        } else if (version == VERSION_SD1_TINY_UNET) {
-            num_res_blocks = 1;
-            channel_mult   = {1, 2, 4};
+            in_channels           = 8;
+            out_channels          = 4;
+            context_dim           = 1024;
+            adm_in_channels       = 768;
+            num_head_channels     = 64;
+            num_heads             = -1;
+            use_linear_projection = true;
         }
         if (sd_version_is_inpaint(version)) {
             in_channels = 9;
         } else if (sd_version_is_unet_edit(version)) {
             in_channels = 8;
+        }
+        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET) {
+            num_res_blocks = 1;
+            channel_mult   = {1, 2, 4};
+            tiny_unet      = true;
         }
 
         // dims is always 2
@@ -250,9 +257,9 @@ public:
                                        int64_t depth,
                                        int64_t context_dim) -> SpatialTransformer* {
             if (version == VERSION_SVD) {
-                return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim);
+                return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
             } else {
-                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, flash_attn);
+                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
             }
         };
 
@@ -286,7 +293,7 @@ public:
                                                                                   context_dim));
                 }
                 input_block_chans.push_back(ch);
-                if (version == VERSION_SD1_TINY_UNET) {
+                if (tiny_unet) {
                     input_block_idx++;
                 }
             }
@@ -307,7 +314,7 @@ public:
             d_head = num_head_channels;
             n_head = ch / d_head;
         }
-        if (version != VERSION_SD1_TINY_UNET) {
+        if (!tiny_unet) {
             blocks["middle_block.0"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
             if (version != VERSION_SDXL_SSD1B) {
                 blocks["middle_block.1"] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
@@ -354,7 +361,7 @@ public:
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    if (version == VERSION_SD1_TINY_UNET) {
+                    if (tiny_unet) {
                         output_block_idx++;
                         if (output_block_idx == 2) {
                             up_sample_idx = 1;
@@ -377,7 +384,7 @@ public:
     }
 
     struct ggml_tensor* resblock_forward(std::string name,
-                                         struct ggml_context* ctx,
+                                         GGMLRunnerContext* ctx,
                                          struct ggml_tensor* x,
                                          struct ggml_tensor* emb,
                                          int num_video_frames) {
@@ -393,24 +400,22 @@ public:
     }
 
     struct ggml_tensor* attention_layer_forward(std::string name,
-                                                struct ggml_context* ctx,
-                                                ggml_backend_t backend,
+                                                GGMLRunnerContext* ctx,
                                                 struct ggml_tensor* x,
                                                 struct ggml_tensor* context,
                                                 int timesteps) {
         if (version == VERSION_SVD) {
             auto block = std::dynamic_pointer_cast<SpatialVideoTransformer>(blocks[name]);
 
-            return block->forward(ctx, backend, x, context, timesteps);
+            return block->forward(ctx, x, context, timesteps);
         } else {
             auto block = std::dynamic_pointer_cast<SpatialTransformer>(blocks[name]);
 
-            return block->forward(ctx, backend, x, context);
+            return block->forward(ctx, x, context);
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                ggml_backend_t backend,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* timesteps,
                                 struct ggml_tensor* context,
@@ -427,20 +432,20 @@ public:
         // return: [N, out_channels, h, w]
         if (context != nullptr) {
             if (context->ne[2] != x->ne[3]) {
-                context = ggml_repeat(ctx, context, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, context->ne[0], context->ne[1], x->ne[3]));
+                context = ggml_repeat(ctx->ggml_ctx, context, ggml_new_tensor_3d(ctx->ggml_ctx, GGML_TYPE_F32, context->ne[0], context->ne[1], x->ne[3]));
             }
         }
 
         if (c_concat != nullptr) {
             if (c_concat->ne[3] != x->ne[3]) {
-                c_concat = ggml_repeat(ctx, c_concat, x);
+                c_concat = ggml_repeat(ctx->ggml_ctx, c_concat, x);
             }
-            x = ggml_concat(ctx, x, c_concat, 2);
+            x = ggml_concat(ctx->ggml_ctx, x, c_concat, 2);
         }
 
         if (y != nullptr) {
             if (y->ne[1] != x->ne[3]) {
-                y = ggml_repeat(ctx, y, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, y->ne[0], x->ne[3]));
+                y = ggml_repeat(ctx->ggml_ctx, y, ggml_new_tensor_2d(ctx->ggml_ctx, GGML_TYPE_F32, y->ne[0], x->ne[3]));
             }
         }
 
@@ -451,10 +456,10 @@ public:
         auto out_0 = std::dynamic_pointer_cast<GroupNorm32>(blocks["out.0"]);
         auto out_2 = std::dynamic_pointer_cast<Conv2d>(blocks["out.2"]);
 
-        auto t_emb = ggml_ext_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, model_channels);  // [N, model_channels]
 
         auto emb = time_embed_0->forward(ctx, t_emb);
-        emb      = ggml_silu_inplace(ctx, emb);
+        emb      = ggml_silu_inplace(ctx->ggml_ctx, emb);
         emb      = time_embed_2->forward(ctx, emb);  // [N, time_embed_dim]
 
         // SDXL/SVD
@@ -463,10 +468,10 @@ public:
             auto label_embed_2 = std::dynamic_pointer_cast<Linear>(blocks["label_emb.0.2"]);
 
             auto label_emb = label_embed_0->forward(ctx, y);
-            label_emb      = ggml_silu_inplace(ctx, label_emb);
+            label_emb      = ggml_silu_inplace(ctx->ggml_ctx, label_emb);
             label_emb      = label_embed_2->forward(ctx, label_emb);  // [N, time_embed_dim]
 
-            emb = ggml_add(ctx, emb, label_emb);  // [N, time_embed_dim]
+            emb = ggml_add(ctx->ggml_ctx, emb, label_emb);  // [N, time_embed_dim]
         }
 
         // input_blocks
@@ -489,11 +494,11 @@ public:
                 h                = resblock_forward(name, ctx, h, emb, num_video_frames);  // [N, mult*model_channels, h, w]
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
-                    h                = attention_layer_forward(name, ctx, backend, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
+                    h                = attention_layer_forward(name, ctx, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
                 }
                 hs.push_back(h);
             }
-            if (version == VERSION_SD1_TINY_UNET) {
+            if (tiny_unet) {
                 input_block_idx++;
             }
             if (i != len_mults - 1) {
@@ -510,16 +515,16 @@ public:
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        if (version != VERSION_SD1_TINY_UNET) {
+        if (!tiny_unet) {
             h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
             if (version != VERSION_SDXL_SSD1B) {
-                h = attention_layer_forward("middle_block.1", ctx, backend, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
-                h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
+                h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
+                h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
             }
         }
         if (controls.size() > 0) {
-            auto cs = ggml_scale_inplace(ctx, controls[controls.size() - 1], control_strength);
-            h       = ggml_add(ctx, h, cs);  // middle control
+            auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[controls.size() - 1], control_strength);
+            h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
         }
         int control_offset = controls.size() - 2;
 
@@ -531,12 +536,12 @@ public:
                 hs.pop_back();
 
                 if (controls.size() > 0) {
-                    auto cs = ggml_scale_inplace(ctx, controls[control_offset], control_strength);
-                    h_skip  = ggml_add(ctx, h_skip, cs);  // control net condition
+                    auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[control_offset], control_strength);
+                    h_skip  = ggml_add(ctx->ggml_ctx, h_skip, cs);  // control net condition
                     control_offset--;
                 }
 
-                h = ggml_concat(ctx, h, h_skip, 2);
+                h = ggml_concat(ctx->ggml_ctx, h, h_skip, 2);
 
                 std::string name = "output_blocks." + std::to_string(output_block_idx) + ".0";
 
@@ -546,13 +551,13 @@ public:
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + ".1";
 
-                    h = attention_layer_forward(name, ctx, backend, h, context, num_video_frames);
+                    h = attention_layer_forward(name, ctx, h, context, num_video_frames);
 
                     up_sample_idx++;
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    if (version == VERSION_SD1_TINY_UNET) {
+                    if (tiny_unet) {
                         output_block_idx++;
                         if (output_block_idx == 2) {
                             up_sample_idx = 1;
@@ -572,7 +577,7 @@ public:
 
         // out
         h = out_0->forward(ctx, h);
-        h = ggml_silu_inplace(ctx, h);
+        h = ggml_silu_inplace(ctx->ggml_ctx, h);
         h = out_2->forward(ctx, h);
         ggml_set_name(h, "bench-end");
         return h;  // [N, out_channels, h, w]
@@ -584,24 +589,11 @@ struct UNetModelRunner : public GGMLRunner {
 
     UNetModelRunner(ggml_backend_t backend,
                     bool offload_params_to_cpu,
-                    const String2GGMLType& tensor_types,
+                    const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
-                    SDVersion version = VERSION_SD1,
-                    bool flash_attn   = false)
-        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_types, flash_attn) {
-        unet.init(params_ctx, tensor_types, prefix);
-    }
-
-    void enable_conv2d_direct() {
-        std::vector<GGMLBlock*> blocks;
-        unet.get_all_blocks(blocks);
-        for (auto block : blocks) {
-            if (block->get_desc() == "Conv2d") {
-                LOG_DEBUG("block %s", block->get_desc().c_str());
-                auto conv_block = (Conv2d*)block;
-                conv_block->enable_direct();
-            }
-        }
+                    SDVersion version = VERSION_SD1)
+        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_storage_map) {
+        unet.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {
@@ -636,8 +628,9 @@ struct UNetModelRunner : public GGMLRunner {
             controls[i] = to_backend(controls[i]);
         }
 
-        struct ggml_tensor* out = unet.forward(compute_ctx,
-                                               runtime_backend,
+        auto runner_ctx = get_context();
+
+        struct ggml_tensor* out = unet.forward(&runner_ctx,
                                                x,
                                                timesteps,
                                                context,

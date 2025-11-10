@@ -29,7 +29,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [n, n_in, h, w]
         // return: [n, n_out, h, w]
 
@@ -38,9 +38,9 @@ public:
         auto conv_4 = std::dynamic_pointer_cast<Conv2d>(blocks["conv.4"]);
 
         auto h = conv_0->forward(ctx, x);
-        h      = ggml_relu_inplace(ctx, h);
+        h      = ggml_relu_inplace(ctx->ggml_ctx, h);
         h      = conv_2->forward(ctx, h);
-        h      = ggml_relu_inplace(ctx, h);
+        h      = ggml_relu_inplace(ctx->ggml_ctx, h);
         h      = conv_4->forward(ctx, h);
 
         if (n_in != n_out) {
@@ -49,8 +49,8 @@ public:
             x = skip->forward(ctx, x);
         }
 
-        h = ggml_add(ctx, h, x);
-        h = ggml_relu_inplace(ctx, h);
+        h = ggml_add(ctx->ggml_ctx, h, x);
+        h = ggml_relu_inplace(ctx->ggml_ctx, h);
         return h;
     }
 };
@@ -86,7 +86,7 @@ public:
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, z_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [n, in_channels, h, w]
         // return: [n, z_channels, h/8, w/8]
 
@@ -136,20 +136,20 @@ public:
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) override {
         // z: [n, z_channels, h, w]
         // return: [n, out_channels, h*8, w*8]
 
-        auto h = ggml_scale(ctx, z, 1.0f / 3.0f);
-        h      = ggml_tanh_inplace(ctx, h);
-        h      = ggml_scale(ctx, h, 3.0f);
+        auto h = ggml_scale(ctx->ggml_ctx, z, 1.0f / 3.0f);
+        h      = ggml_tanh_inplace(ctx->ggml_ctx, h);
+        h      = ggml_scale(ctx->ggml_ctx, h, 3.0f);
 
         for (int i = 0; i < num_blocks * 3 + 10; i++) {
             if (blocks.find(std::to_string(i)) == blocks.end()) {
                 if (i == 1) {
-                    h = ggml_relu_inplace(ctx, h);
+                    h = ggml_relu_inplace(ctx->ggml_ctx, h);
                 } else {
-                    h = ggml_upscale(ctx, h, 2, GGML_SCALE_MODE_NEAREST);
+                    h = ggml_upscale(ctx->ggml_ctx, h, 2, GGML_SCALE_MODE_NEAREST);
                 }
                 continue;
             }
@@ -180,12 +180,12 @@ public:
         }
     }
 
-    struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
+    struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         auto decoder = std::dynamic_pointer_cast<TinyDecoder>(blocks["decoder.layers"]);
         return decoder->forward(ctx, z);
     }
 
-    struct ggml_tensor* encode(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* encode(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         auto encoder = std::dynamic_pointer_cast<TinyEncoder>(blocks["encoder.layers"]);
         return encoder->forward(ctx, x);
     }
@@ -197,25 +197,14 @@ struct TinyAutoEncoder : public GGMLRunner {
 
     TinyAutoEncoder(ggml_backend_t backend,
                     bool offload_params_to_cpu,
-                    const String2GGMLType& tensor_types,
+                    const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
                     bool decoder_only = true,
                     SDVersion version = VERSION_SD1)
         : decode_only(decoder_only),
           taesd(decoder_only, version),
           GGMLRunner(backend, offload_params_to_cpu) {
-        taesd.init(params_ctx, tensor_types, prefix);
-    }
-
-    void enable_conv2d_direct() {
-        std::vector<GGMLBlock*> blocks;
-        taesd.get_all_blocks(blocks);
-        for (auto block : blocks) {
-            if (block->get_desc() == "Conv2d") {
-                auto conv_block = (Conv2d*)block;
-                conv_block->enable_direct();
-            }
-        }
+        taesd.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {
@@ -233,7 +222,7 @@ struct TinyAutoEncoder : public GGMLRunner {
         }
 
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(file_path)) {
+        if (!model_loader.init_from_file_and_convert_name(file_path)) {
             LOG_ERROR("init taesd model loader from file failed: '%s'", file_path.c_str());
             return false;
         }
@@ -252,7 +241,8 @@ struct TinyAutoEncoder : public GGMLRunner {
     struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
         struct ggml_cgraph* gf  = ggml_new_graph(compute_ctx);
         z                       = to_backend(z);
-        struct ggml_tensor* out = decode_graph ? taesd.decode(compute_ctx, z) : taesd.encode(compute_ctx, z);
+        auto runner_ctx         = get_context();
+        struct ggml_tensor* out = decode_graph ? taesd.decode(&runner_ctx, z) : taesd.encode(&runner_ctx, z);
         ggml_build_forward_expand(gf, out);
         return gf;
     }

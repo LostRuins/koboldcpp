@@ -25,6 +25,7 @@ std::string sd_load_qwen2_merges();
 #include "flux.hpp"
 #include "stable-diffusion.cpp"
 #include "util.cpp"
+#include "name_conversion.cpp"
 #include "upscaler.cpp"
 #include "model.cpp"
 #include "tokenize_util.cpp"

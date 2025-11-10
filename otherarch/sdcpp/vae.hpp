@@ -30,7 +30,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [N, in_channels, h, w]
         // t_emb is always None
         auto norm1 = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm1"]);
@@ -40,12 +40,12 @@ public:
 
         auto h = x;
         h      = norm1->forward(ctx, h);
-        h      = ggml_silu_inplace(ctx, h);  // swish
+        h      = ggml_silu_inplace(ctx->ggml_ctx, h);  // swish
         h      = conv1->forward(ctx, h);
         // return h;
 
         h = norm2->forward(ctx, h);
-        h = ggml_silu_inplace(ctx, h);  // swish
+        h = ggml_silu_inplace(ctx->ggml_ctx, h);  // swish
         // dropout, skip for inference
         h = conv2->forward(ctx, h);
 
@@ -56,7 +56,7 @@ public:
             x = nin_shortcut->forward(ctx, x);  // [N, out_channels, h, w]
         }
 
-        h = ggml_add(ctx, h, x);
+        h = ggml_add(ctx->ggml_ctx, h, x);
         return h;  // [N, out_channels, h, w]
     }
 };
@@ -64,25 +64,51 @@ public:
 class AttnBlock : public UnaryBlock {
 protected:
     int64_t in_channels;
+    bool use_linear;
 
-public:
-    AttnBlock(int64_t in_channels)
-        : in_channels(in_channels) {
-        blocks["norm"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["q"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
-        blocks["k"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
-        blocks["v"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
-
-        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
+        auto iter = tensor_storage_map.find(prefix + "proj_out.weight");
+        if (iter != tensor_storage_map.end()) {
+            if (iter->second.n_dims == 4 && use_linear) {
+                use_linear         = false;
+                blocks["q"]        = std::make_shared<Conv2d>(in_channels, in_channels, std::pair{1, 1});
+                blocks["k"]        = std::make_shared<Conv2d>(in_channels, in_channels, std::pair{1, 1});
+                blocks["v"]        = std::make_shared<Conv2d>(in_channels, in_channels, std::pair{1, 1});
+                blocks["proj_out"] = std::make_shared<Conv2d>(in_channels, in_channels, std::pair{1, 1});
+            } else if (iter->second.n_dims == 2 && !use_linear) {
+                use_linear         = true;
+                blocks["q"]        = std::make_shared<Linear>(in_channels, in_channels);
+                blocks["k"]        = std::make_shared<Linear>(in_channels, in_channels);
+                blocks["v"]        = std::make_shared<Linear>(in_channels, in_channels);
+                blocks["proj_out"] = std::make_shared<Linear>(in_channels, in_channels);
+            }
+        }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+public:
+    AttnBlock(int64_t in_channels, bool use_linear)
+        : in_channels(in_channels), use_linear(use_linear) {
+        blocks["norm"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
+        if (use_linear) {
+            blocks["q"]        = std::shared_ptr<GGMLBlock>(new Linear(in_channels, in_channels));
+            blocks["k"]        = std::shared_ptr<GGMLBlock>(new Linear(in_channels, in_channels));
+            blocks["v"]        = std::shared_ptr<GGMLBlock>(new Linear(in_channels, in_channels));
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(in_channels, in_channels));
+        } else {
+            blocks["q"]        = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
+            blocks["k"]        = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
+            blocks["v"]        = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
+        }
+    }
+
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [N, in_channels, h, w]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
-        auto q_proj   = std::dynamic_pointer_cast<Conv2d>(blocks["q"]);
-        auto k_proj   = std::dynamic_pointer_cast<Conv2d>(blocks["k"]);
-        auto v_proj   = std::dynamic_pointer_cast<Conv2d>(blocks["v"]);
-        auto proj_out = std::dynamic_pointer_cast<Conv2d>(blocks["proj_out"]);
+        auto q_proj   = std::dynamic_pointer_cast<UnaryBlock>(blocks["q"]);
+        auto k_proj   = std::dynamic_pointer_cast<UnaryBlock>(blocks["k"]);
+        auto v_proj   = std::dynamic_pointer_cast<UnaryBlock>(blocks["v"]);
+        auto proj_out = std::dynamic_pointer_cast<UnaryBlock>(blocks["proj_out"]);
 
         auto h_ = norm->forward(ctx, x);
 
@@ -91,25 +117,46 @@ public:
         const int64_t h = h_->ne[1];
         const int64_t w = h_->ne[0];
 
-        auto q = q_proj->forward(ctx, h_);                          // [N, in_channels, h, w]
-        q      = ggml_cont(ctx, ggml_permute(ctx, q, 1, 2, 0, 3));  // [N, h, w, in_channels]
-        q      = ggml_reshape_3d(ctx, q, c, h * w, n);              // [N, h * w, in_channels]
+        ggml_tensor* q;
+        ggml_tensor* k;
+        ggml_tensor* v;
+        if (use_linear) {
+            h_ = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h_, 1, 2, 0, 3));  // [N, h, w, in_channels]
+            h_ = ggml_reshape_3d(ctx->ggml_ctx, h_, c, h * w, n);                        // [N, h * w, in_channels]
 
-        auto k = k_proj->forward(ctx, h_);                          // [N, in_channels, h, w]
-        k      = ggml_cont(ctx, ggml_permute(ctx, k, 1, 2, 0, 3));  // [N, h, w, in_channels]
-        k      = ggml_reshape_3d(ctx, k, c, h * w, n);              // [N, h * w, in_channels]
+            q = q_proj->forward(ctx, h_);  // [N, h * w, in_channels]
+            k = k_proj->forward(ctx, h_);  // [N, h * w, in_channels]
+            v = v_proj->forward(ctx, h_);  // [N, h * w, in_channels]
 
-        auto v = v_proj->forward(ctx, h_);              // [N, in_channels, h, w]
-        v      = ggml_reshape_3d(ctx, v, h * w, c, n);  // [N, in_channels, h * w]
+            v = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));  // [N, in_channels, h * w]
+        } else {
+            q = q_proj->forward(ctx, h_);                                              // [N, in_channels, h, w]
+            q = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, q, 1, 2, 0, 3));  // [N, h, w, in_channels]
+            q = ggml_reshape_3d(ctx->ggml_ctx, q, c, h * w, n);                        // [N, h * w, in_channels]
 
-        h_ = ggml_ext_attention(ctx, q, k, v, false);  // [N, h * w, in_channels]
+            k = k_proj->forward(ctx, h_);                                              // [N, in_channels, h, w]
+            k = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, k, 1, 2, 0, 3));  // [N, h, w, in_channels]
+            k = ggml_reshape_3d(ctx->ggml_ctx, k, c, h * w, n);                        // [N, h * w, in_channels]
 
-        h_ = ggml_cont(ctx, ggml_permute(ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
-        h_ = ggml_reshape_4d(ctx, h_, w, h, c, n);               // [N, in_channels, h, w]
+            v = v_proj->forward(ctx, h_);                        // [N, in_channels, h, w]
+            v = ggml_reshape_3d(ctx->ggml_ctx, v, h * w, c, n);  // [N, in_channels, h * w]
+        }
 
-        h_ = proj_out->forward(ctx, h_);  // [N, in_channels, h, w]
+        h_ = ggml_ext_attention(ctx->ggml_ctx, q, k, v, false);  // [N, h * w, in_channels]
 
-        h_ = ggml_add(ctx, h_, x);
+        if (use_linear) {
+            h_ = proj_out->forward(ctx, h_);  // [N, h * w, in_channels]
+
+            h_ = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
+            h_ = ggml_reshape_4d(ctx->ggml_ctx, h_, w, h, c, n);                         // [N, in_channels, h, w]
+        } else {
+            h_ = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
+            h_ = ggml_reshape_4d(ctx->ggml_ctx, h_, w, h, c, n);                         // [N, in_channels, h, w]
+
+            h_ = proj_out->forward(ctx, h_);  // [N, in_channels, h, w]
+        }
+
+        h_ = ggml_add(ctx->ggml_ctx, h_, x);
         return h_;
     }
 };
@@ -133,7 +180,7 @@ public:
                                                                              kernel_padding));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x) override {
         // timesteps always None
         // skip_video always False
@@ -152,19 +199,19 @@ public:
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
 
-        x = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
-        x = time_mix_conv->forward(ctx, x);                    // [B, OC, T, OH * OW]
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
-        x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w
-        return x;                                              // [B*T, OC, OH, OW]
+        x = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, C, T, B);                     // (b t) c h w -> b t c (h w)
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+        x = time_mix_conv->forward(ctx, x);                                        // [B, OC, T, OH * OW]
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
+        x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w
+        return x;                                                                  // [B*T, OC, OH, OW]
     }
 };
 
 class VideoResnetBlock : public ResnetBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
-        enum ggml_type wtype = get_type(prefix + "mix_factor", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        enum ggml_type wtype = get_type(prefix + "mix_factor", tensor_storage_map, GGML_TYPE_F32);
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 
@@ -182,7 +229,7 @@ public:
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [N, in_channels, h, w] aka [b*t, in_channels, h, w]
         // return: [N, out_channels, h, w] aka [b*t, out_channels, h, w]
         // t_emb is always None
@@ -199,19 +246,19 @@ public:
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
 
-        x          = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
-        x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+        x          = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, C, T, B);                     // (b t) c h w -> b t c (h w)
+        x          = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
         auto x_mix = x;
 
         x = time_stack->forward(ctx, x);  // b t c (h w)
 
         float alpha = get_alpha();
-        x           = ggml_add(ctx,
-                               ggml_scale(ctx, x, alpha),
-                               ggml_scale(ctx, x_mix, 1.0f - alpha));
+        x           = ggml_add(ctx->ggml_ctx,
+                               ggml_scale(ctx->ggml_ctx, x, alpha),
+                               ggml_scale(ctx->ggml_ctx, x_mix, 1.0f - alpha));
 
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
-        x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
+        x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w
 
         return x;
     }
@@ -233,7 +280,8 @@ public:
             int num_res_blocks,
             int in_channels,
             int z_channels,
-            bool double_z = true)
+            bool double_z              = true,
+            bool use_linear_projection = false)
         : ch(ch),
           ch_mult(ch_mult),
           num_res_blocks(num_res_blocks),
@@ -264,14 +312,14 @@ public:
         }
 
         blocks["mid.block_1"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in));
-        blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in));
+        blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in, use_linear_projection));
         blocks["mid.block_2"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in));
 
         blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(block_in));
         blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(block_in, double_z ? z_channels * 2 : z_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, in_channels, h, w]
 
         auto conv_in     = std::dynamic_pointer_cast<Conv2d>(blocks["conv_in"]);
@@ -307,8 +355,8 @@ public:
 
         // end
         h = norm_out->forward(ctx, h);
-        h = ggml_silu_inplace(ctx, h);  // nonlinearity/swish
-        h = conv_out->forward(ctx, h);  // [N, z_channels*2, h, w]
+        h = ggml_silu_inplace(ctx->ggml_ctx, h);  // nonlinearity/swish
+        h = conv_out->forward(ctx, h);            // [N, z_channels*2, h, w]
         return h;
     }
 };
@@ -351,8 +399,9 @@ public:
             std::vector<int> ch_mult,
             int num_res_blocks,
             int z_channels,
-            bool video_decoder    = false,
-            int video_kernel_size = 3)
+            bool use_linear_projection = false,
+            bool video_decoder         = false,
+            int video_kernel_size      = 3)
         : ch(ch),
           out_ch(out_ch),
           ch_mult(ch_mult),
@@ -366,7 +415,7 @@ public:
         blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, block_in, {3, 3}, {1, 1}, {1, 1}));
 
         blocks["mid.block_1"] = get_resnet_block(block_in, block_in);
-        blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in));
+        blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in, use_linear_projection));
         blocks["mid.block_2"] = get_resnet_block(block_in, block_in);
 
         for (int i = num_resolutions - 1; i >= 0; i--) {
@@ -388,7 +437,7 @@ public:
         blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1});
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
+    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
         // alpha is always 0
         // merge_strategy is always learned
@@ -429,8 +478,8 @@ public:
         }
 
         h = norm_out->forward(ctx, h);
-        h = ggml_silu_inplace(ctx, h);  // nonlinearity/swish
-        h = conv_out->forward(ctx, h);  // [N, out_ch, h*8, w*8]
+        h = ggml_silu_inplace(ctx->ggml_ctx, h);  // nonlinearity/swish
+        h = conv_out->forward(ctx, h);            // [N, out_ch, h*8, w*8]
         return h;
     }
 };
@@ -454,9 +503,10 @@ protected:
     } dd_config;
 
 public:
-    AutoencodingEngine(bool decode_only       = true,
-                       bool use_video_decoder = false,
-                       SDVersion version      = VERSION_SD1)
+    AutoencodingEngine(SDVersion version          = VERSION_SD1,
+                       bool decode_only           = true,
+                       bool use_linear_projection = false,
+                       bool use_video_decoder     = false)
         : decode_only(decode_only), use_video_decoder(use_video_decoder) {
         if (sd_version_is_dit(version)) {
             dd_config.z_channels = 16;
@@ -470,6 +520,7 @@ public:
                                                                    dd_config.ch_mult,
                                                                    dd_config.num_res_blocks,
                                                                    dd_config.z_channels,
+                                                                   use_linear_projection,
                                                                    use_video_decoder));
         if (use_quant) {
             blocks["post_quant_conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(dd_config.z_channels,
@@ -482,7 +533,8 @@ public:
                                                                        dd_config.num_res_blocks,
                                                                        dd_config.in_channels,
                                                                        dd_config.z_channels,
-                                                                       dd_config.double_z));
+                                                                       dd_config.double_z,
+                                                                       use_linear_projection));
             if (use_quant) {
                 int factor = dd_config.double_z ? 2 : 1;
 
@@ -493,7 +545,7 @@ public:
         }
     }
 
-    struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
+    struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
         if (use_quant) {
             auto post_quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["post_quant_conv"]);
@@ -507,7 +559,7 @@ public:
         return h;
     }
 
-    struct ggml_tensor* encode(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* encode(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, in_channels, h, w]
         auto encoder = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
 
@@ -529,7 +581,6 @@ struct VAE : public GGMLRunner {
                          struct ggml_tensor** output,
                          struct ggml_context* output_ctx)                                                         = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) = 0;
-    virtual void enable_conv2d_direct(){};
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
 };
 
@@ -563,24 +614,26 @@ struct AutoEncoderKL : public VAE {
 
     AutoEncoderKL(ggml_backend_t backend,
                   bool offload_params_to_cpu,
-                  const String2GGMLType& tensor_types,
+                  const String2TensorStorage& tensor_storage_map,
                   const std::string prefix,
                   bool decode_only       = false,
                   bool use_video_decoder = false,
                   SDVersion version      = VERSION_SD1)
-        : decode_only(decode_only), ae(decode_only, use_video_decoder, version), VAE(backend, offload_params_to_cpu) {
-        ae.init(params_ctx, tensor_types, prefix);
-    }
-
-    void enable_conv2d_direct() override {
-        std::vector<GGMLBlock*> blocks;
-        ae.get_all_blocks(blocks);
-        for (auto block : blocks) {
-            if (block->get_desc() == "Conv2d") {
-                auto conv_block = (Conv2d*)block;
-                conv_block->enable_direct();
+        : decode_only(decode_only), VAE(backend, offload_params_to_cpu) {
+        bool use_linear_projection = false;
+        for (const auto& [name, tensor_storage] : tensor_storage_map) {
+            if (!starts_with(name, prefix)) {
+                continue;
+            }
+            if (ends_with(name, "attn_1.proj_out.weight")) {
+                if (tensor_storage.n_dims == 2) {
+                    use_linear_projection = true;
+                }
+                break;
             }
         }
+        ae = AutoencodingEngine(version, decode_only, use_linear_projection, use_video_decoder);
+        ae.init(params_ctx, tensor_storage_map, prefix);
     }
 
     void set_conv2d_scale(float scale) override {
@@ -607,7 +660,9 @@ struct AutoEncoderKL : public VAE {
 
         z = to_backend(z);
 
-        struct ggml_tensor* out = decode_graph ? ae.decode(compute_ctx, z) : ae.encode(compute_ctx, z);
+        auto runner_ctx = get_context();
+
+        struct ggml_tensor* out = decode_graph ? ae.decode(&runner_ctx, z) : ae.encode(&runner_ctx, z);
 
         ggml_build_forward_expand(gf, out);
 

@@ -15,6 +15,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include <nlohmann/json.hpp>
+#include "ordered_map.hpp"
 #include "zip.h"
 
 #define SD_MAX_DIMS 5
@@ -26,6 +27,7 @@ enum SDVersion {
     VERSION_SD1_TINY_UNET,
     VERSION_SD2,
     VERSION_SD2_INPAINT,
+    VERSION_SD2_TINY_UNET,
     VERSION_SDXL,
     VERSION_SDXL_INPAINT,
     VERSION_SDXL_PIX2PIX,
@@ -52,7 +54,7 @@ static inline bool sd_version_is_sd1(SDVersion version) {
 }
 
 static inline bool sd_version_is_sd2(SDVersion version) {
-    if (version == VERSION_SD2 || version == VERSION_SD2_INPAINT) {
+    if (version == VERSION_SD2 || version == VERSION_SD2_INPAINT || version == VERSION_SD2_TINY_UNET) {
         return true;
     }
     return false;
@@ -60,6 +62,15 @@ static inline bool sd_version_is_sd2(SDVersion version) {
 
 static inline bool sd_version_is_sdxl(SDVersion version) {
     if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT || version == VERSION_SDXL_PIX2PIX || version == VERSION_SDXL_SSD1B) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_unet(SDVersion version) {
+    if (sd_version_is_sd1(version) ||
+        sd_version_is_sd2(version) ||
+        sd_version_is_sdxl(version)) {
         return true;
     }
     return false;
@@ -98,7 +109,11 @@ static inline bool sd_version_is_qwen_image(SDVersion version) {
 }
 
 static inline bool sd_version_is_inpaint(SDVersion version) {
-    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL || version == VERSION_FLEX_2) {
+    if (version == VERSION_SD1_INPAINT ||
+        version == VERSION_SD2_INPAINT ||
+        version == VERSION_SDXL_INPAINT ||
+        version == VERSION_FLUX_FILL ||
+        version == VERSION_FLEX_2) {
         return true;
     }
     return false;
@@ -134,6 +149,7 @@ enum PMVersion {
 struct TensorStorage {
     std::string name;
     ggml_type type          = GGML_TYPE_F32;
+    ggml_type expected_type = GGML_TYPE_COUNT;
     bool is_bf16            = false;
     bool is_f8_e4m3         = false;
     bool is_f8_e5m2         = false;
@@ -242,12 +258,15 @@ struct TensorStorage {
 
 typedef std::function<bool(const TensorStorage&, ggml_tensor**)> on_new_tensor_cb_t;
 
-typedef std::map<std::string, enum ggml_type> String2GGMLType;
+typedef OrderedMap<std::string, TensorStorage> String2TensorStorage;
 
 class ModelLoader {
 protected:
+    SDVersion version_ = VERSION_COUNT;
     std::vector<std::string> file_paths_;
-    std::vector<TensorStorage> tensor_storages;
+    String2TensorStorage tensor_storage_map;
+
+    void add_tensor_storage(const TensorStorage& tensor_storage);
 
     bool parse_data_pkl(uint8_t* buffer,
                         size_t buffer_size,
@@ -262,16 +281,18 @@ protected:
     bool init_from_diffusers_file(const std::string& file_path, const std::string& prefix = "");
 
 public:
-    String2GGMLType tensor_storages_types;
-
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     bool has_diffusion_model_tensors();
-    bool model_is_unet();
+    void convert_tensors_name();
+    bool init_from_file_and_convert_name(const std::string& file_path,
+                                         const std::string& prefix = "",
+                                         SDVersion version         = VERSION_COUNT);
     SDVersion get_sd_version();
     std::map<ggml_type, uint32_t> get_wtype_stat();
     std::map<ggml_type, uint32_t> get_conditioner_wtype_stat();
     std::map<ggml_type, uint32_t> get_diffusion_model_wtype_stat();
     std::map<ggml_type, uint32_t> get_vae_wtype_stat();
+    String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
     void set_wtype_override(ggml_type wtype, std::string prefix = "");
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
@@ -280,8 +301,8 @@ public:
 
     std::vector<std::string> get_tensor_names() const {
         std::vector<std::string> names;
-        for (const auto& ts : tensor_storages) {
-            names.push_back(ts.name);
+        for (const auto& [name, tensor_storage] : tensor_storage_map) {
+            names.push_back(name);
         }
         return names;
     }

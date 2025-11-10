@@ -23,12 +23,12 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, channels, h, w]
         if (vae_downsample) {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-            x = ggml_pad(ctx, x, 1, 1, 0, 0);
+            x = ggml_pad(ctx->ggml_ctx, x, 1, 1, 0, 0);
             x = conv->forward(ctx, x);
         } else {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["op"]);
@@ -52,12 +52,12 @@ public:
         blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, channels, h, w]
         auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-        x = ggml_upscale(ctx, x, 2, GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
-        x = conv->forward(ctx, x);                             // [N, out_channels, h*2, w*2]
+        x = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
+        x = conv->forward(ctx, x);                                       // [N, out_channels, h*2, w*2]
         return x;
     }
 };
@@ -121,7 +121,7 @@ public:
         }
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* emb = nullptr) {
+    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x, struct ggml_tensor* emb = nullptr) {
         // For dims==3, we reduce dimension from 5d to 4d by merging h and w, in order not to change ggml
         // [N, c, t, h, w] => [N, c, t, h * w]
         // x: [N, channels, h, w] if dims == 2 else [N, channels, t, h, w]
@@ -137,32 +137,32 @@ public:
 
         // in_layers
         auto h = in_layers_0->forward(ctx, x);
-        h      = ggml_silu_inplace(ctx, h);
+        h      = ggml_silu_inplace(ctx->ggml_ctx, h);
         h      = in_layers_2->forward(ctx, h);  // [N, out_channels, h, w] if dims == 2 else [N, out_channels, t, h, w]
 
         // emb_layers
         if (!skip_t_emb) {
             auto emb_layer_1 = std::dynamic_pointer_cast<Linear>(blocks["emb_layers.1"]);
 
-            auto emb_out = ggml_silu(ctx, emb);
+            auto emb_out = ggml_silu(ctx->ggml_ctx, emb);
             emb_out      = emb_layer_1->forward(ctx, emb_out);  // [N, out_channels] if dims == 2 else [N, t, out_channels]
 
             if (dims == 2) {
-                emb_out = ggml_reshape_4d(ctx, emb_out, 1, 1, emb_out->ne[0], emb_out->ne[1]);  // [N, out_channels, 1, 1]
+                emb_out = ggml_reshape_4d(ctx->ggml_ctx, emb_out, 1, 1, emb_out->ne[0], emb_out->ne[1]);  // [N, out_channels, 1, 1]
             } else {
-                emb_out = ggml_reshape_4d(ctx, emb_out, 1, emb_out->ne[0], emb_out->ne[1], emb_out->ne[2]);  // [N, t, out_channels, 1]
+                emb_out = ggml_reshape_4d(ctx->ggml_ctx, emb_out, 1, emb_out->ne[0], emb_out->ne[1], emb_out->ne[2]);  // [N, t, out_channels, 1]
                 if (exchange_temb_dims) {
                     // emb_out = rearrange(emb_out, "b t c ... -> b c t ...")
-                    emb_out = ggml_cont(ctx, ggml_permute(ctx, emb_out, 0, 2, 1, 3));  // [N, out_channels, t, 1]
+                    emb_out = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, emb_out, 0, 2, 1, 3));  // [N, out_channels, t, 1]
                 }
             }
 
-            h = ggml_add(ctx, h, emb_out);  // [N, out_channels, h, w] if dims == 2 else [N, out_channels, t, h, w]
+            h = ggml_add(ctx->ggml_ctx, h, emb_out);  // [N, out_channels, h, w] if dims == 2 else [N, out_channels, t, h, w]
         }
 
         // out_layers
         h = out_layers_0->forward(ctx, h);
-        h = ggml_silu_inplace(ctx, h);
+        h = ggml_silu_inplace(ctx->ggml_ctx, h);
         // dropout, skip for inference
         h = out_layers_3->forward(ctx, h);
 
@@ -172,7 +172,7 @@ public:
             x                    = skip_connection->forward(ctx, x);  // [N, out_channels, h, w] if dims == 2 else [N, out_channels, t, h, w]
         }
 
-        h = ggml_add(ctx, h, x);
+        h = ggml_add(ctx->ggml_ctx, h, x);
         return h;  // [N, out_channels, h, w] if dims == 2 else [N, out_channels, t, h, w]
     }
 };
@@ -182,8 +182,8 @@ protected:
     int64_t dim_in;
     int64_t dim_out;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
-        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
+        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_storage_map, GGML_TYPE_F32);
         enum ggml_type bias_wtype = GGML_TYPE_F32;
         params["proj.weight"]     = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
         params["proj.bias"]       = ggml_new_tensor_1d(ctx, bias_wtype, dim_out * 2);
@@ -193,24 +193,24 @@ public:
     GEGLU(int64_t dim_in, int64_t dim_out)
         : dim_in(dim_in), dim_out(dim_out) {}
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [ne3, ne2, ne1, dim_in]
         // return: [ne3, ne2, ne1, dim_out]
         struct ggml_tensor* w = params["proj.weight"];
         struct ggml_tensor* b = params["proj.bias"];
 
-        auto x_w    = ggml_view_2d(ctx, w, w->ne[0], w->ne[1] / 2, w->nb[1], 0);                        // [dim_out, dim_in]
-        auto x_b    = ggml_view_1d(ctx, b, b->ne[0] / 2, 0);                                            // [dim_out, dim_in]
-        auto gate_w = ggml_view_2d(ctx, w, w->ne[0], w->ne[1] / 2, w->nb[1], w->nb[1] * w->ne[1] / 2);  // [dim_out, ]
-        auto gate_b = ggml_view_1d(ctx, b, b->ne[0] / 2, b->nb[0] * b->ne[0] / 2);                      // [dim_out, ]
+        auto x_w    = ggml_view_2d(ctx->ggml_ctx, w, w->ne[0], w->ne[1] / 2, w->nb[1], 0);                        // [dim_out, dim_in]
+        auto x_b    = ggml_view_1d(ctx->ggml_ctx, b, b->ne[0] / 2, 0);                                            // [dim_out, dim_in]
+        auto gate_w = ggml_view_2d(ctx->ggml_ctx, w, w->ne[0], w->ne[1] / 2, w->nb[1], w->nb[1] * w->ne[1] / 2);  // [dim_out, ]
+        auto gate_b = ggml_view_1d(ctx->ggml_ctx, b, b->ne[0] / 2, b->nb[0] * b->ne[0] / 2);                      // [dim_out, ]
 
         auto x_in = x;
-        x         = ggml_ext_linear(ctx, x_in, x_w, x_b);        // [ne3, ne2, ne1, dim_out]
-        auto gate = ggml_ext_linear(ctx, x_in, gate_w, gate_b);  // [ne3, ne2, ne1, dim_out]
+        x         = ggml_ext_linear(ctx->ggml_ctx, x_in, x_w, x_b);        // [ne3, ne2, ne1, dim_out]
+        auto gate = ggml_ext_linear(ctx->ggml_ctx, x_in, gate_w, gate_b);  // [ne3, ne2, ne1, dim_out]
 
-        gate = ggml_gelu_inplace(ctx, gate);
+        gate = ggml_gelu_inplace(ctx->ggml_ctx, gate);
 
-        x = ggml_mul(ctx, x, gate);  // [ne3, ne2, ne1, dim_out]
+        x = ggml_mul(ctx->ggml_ctx, x, gate);  // [ne3, ne2, ne1, dim_out]
 
         return x;
     }
@@ -222,13 +222,13 @@ public:
         blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim_in, dim_out, bias));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [ne3, ne2, ne1, dim_in]
         // return: [ne3, ne2, ne1, dim_out]
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
         x = proj->forward(ctx, x);
-        x = ggml_gelu_inplace(ctx, x);
+        x = ggml_gelu_inplace(ctx->ggml_ctx, x);
         return x;
     }
 };
@@ -262,7 +262,7 @@ public:
         blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out, true, false, false, scale));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [ne3, ne2, ne1, dim]
         // return: [ne3, ne2, ne1, dim_out]
 
@@ -281,19 +281,16 @@ protected:
     int64_t context_dim;
     int64_t n_head;
     int64_t d_head;
-    bool flash_attn;
 
 public:
     CrossAttention(int64_t query_dim,
                    int64_t context_dim,
                    int64_t n_head,
-                   int64_t d_head,
-                   bool flash_attn = false)
+                   int64_t d_head)
         : n_head(n_head),
           d_head(d_head),
           query_dim(query_dim),
-          context_dim(context_dim),
-          flash_attn(flash_attn) {
+          context_dim(context_dim) {
         int64_t inner_dim = d_head * n_head;
 
         blocks["to_q"] = std::shared_ptr<GGMLBlock>(new Linear(query_dim, inner_dim, false));
@@ -304,8 +301,7 @@ public:
         // to_out_1 is nn.Dropout(), skip for inference
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                ggml_backend_t backend,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* context) {
         // x: [N, n_token, query_dim]
@@ -325,7 +321,7 @@ public:
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
 
-        x = ggml_ext_attention_ext(ctx, backend, q, k, v, n_head, nullptr, false, false, flash_attn);  // [N, n_token, inner_dim]
+        x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
         return x;
@@ -343,16 +339,15 @@ public:
                           int64_t n_head,
                           int64_t d_head,
                           int64_t context_dim,
-                          bool ff_in      = false,
-                          bool flash_attn = false)
+                          bool ff_in = false)
         : n_head(n_head), d_head(d_head), ff_in(ff_in) {
         // disable_self_attn is always False
         // disable_temporal_crossattention is always False
         // switch_temporal_ca_to_sa is always False
         // inner_dim is always None or equal to dim
         // gated_ff is always True
-        blocks["attn1"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, dim, n_head, d_head, flash_attn));
-        blocks["attn2"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, context_dim, n_head, d_head, flash_attn));
+        blocks["attn1"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, dim, n_head, d_head));
+        blocks["attn2"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, context_dim, n_head, d_head));
         blocks["ff"]    = std::shared_ptr<GGMLBlock>(new FeedForward(dim, dim));
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
         blocks["norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
@@ -364,8 +359,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                ggml_backend_t backend,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* context) {
         // x: [N, n_token, query_dim]
@@ -387,21 +381,21 @@ public:
             x           = norm_in->forward(ctx, x);
             x           = ff_in->forward(ctx, x);
             // self.is_res is always True
-            x = ggml_add(ctx, x, x_skip);
+            x = ggml_add(ctx->ggml_ctx, x, x_skip);
         }
 
         auto r = x;
         x      = norm1->forward(ctx, x);
-        x      = attn1->forward(ctx, backend, x, x);  // self-attention
-        x      = ggml_add(ctx, x, r);
+        x      = attn1->forward(ctx, x, x);  // self-attention
+        x      = ggml_add(ctx->ggml_ctx, x, r);
         r      = x;
         x      = norm2->forward(ctx, x);
-        x      = attn2->forward(ctx, backend, x, context);  // cross-attention
-        x      = ggml_add(ctx, x, r);
+        x      = attn2->forward(ctx, x, context);  // cross-attention
+        x      = ggml_add(ctx->ggml_ctx, x, r);
         r      = x;
         x      = norm3->forward(ctx, x);
         x      = ff->forward(ctx, x);
-        x      = ggml_add(ctx, x, r);
+        x      = ggml_add(ctx->ggml_ctx, x, r);
 
         return x;
     }
@@ -414,6 +408,23 @@ protected:
     int64_t d_head;
     int64_t depth       = 1;    // 1
     int64_t context_dim = 768;  // hidden_size, 1024 for VERSION_SD2
+    bool use_linear     = false;
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
+        auto iter = tensor_storage_map.find(prefix + "proj_out.weight");
+        if (iter != tensor_storage_map.end()) {
+            int64_t inner_dim = n_head * d_head;
+            if (iter->second.n_dims == 4 && use_linear) {
+                use_linear         = false;
+                blocks["proj_in"]  = std::make_shared<Conv2d>(in_channels, inner_dim, std::pair{1, 1});
+                blocks["proj_out"] = std::make_shared<Conv2d>(inner_dim, in_channels, std::pair{1, 1});
+            } else if (iter->second.n_dims == 2 && !use_linear) {
+                use_linear         = true;
+                blocks["proj_in"]  = std::make_shared<Linear>(in_channels, inner_dim);
+                blocks["proj_out"] = std::make_shared<Linear>(inner_dim, in_channels);
+            }
+        }
+    }
 
 public:
     SpatialTransformer(int64_t in_channels,
@@ -421,35 +432,42 @@ public:
                        int64_t d_head,
                        int64_t depth,
                        int64_t context_dim,
-                       bool flash_attn = false)
+                       bool use_linear)
         : in_channels(in_channels),
           n_head(n_head),
           d_head(d_head),
           depth(depth),
-          context_dim(context_dim) {
-        // We will convert unet transformer linear to conv2d 1x1 when loading the weights, so use_linear is always False
+          context_dim(context_dim),
+          use_linear(use_linear) {
         // disable_self_attn is always False
         int64_t inner_dim = n_head * d_head;  // in_channels
         blocks["norm"]    = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, inner_dim, {1, 1}));
+        if (use_linear) {
+            blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_dim));
+        } else {
+            blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, inner_dim, {1, 1}));
+        }
 
         for (int i = 0; i < depth; i++) {
             std::string name = "transformer_blocks." + std::to_string(i);
-            blocks[name]     = std::shared_ptr<GGMLBlock>(new BasicTransformerBlock(inner_dim, n_head, d_head, context_dim, false, flash_attn));
+            blocks[name]     = std::shared_ptr<GGMLBlock>(new BasicTransformerBlock(inner_dim, n_head, d_head, context_dim, false));
         }
 
-        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));
+        if (use_linear) {
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, in_channels));
+        } else {
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));
+        }
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx,
-                                        ggml_backend_t backend,
+    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                         struct ggml_tensor* x,
                                         struct ggml_tensor* context) {
         // x: [N, in_channels, h, w]
         // context: [N, max_position(aka n_token), hidden_size(aka context_dim)]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
-        auto proj_in  = std::dynamic_pointer_cast<Conv2d>(blocks["proj_in"]);
-        auto proj_out = std::dynamic_pointer_cast<Conv2d>(blocks["proj_out"]);
+        auto proj_in  = std::dynamic_pointer_cast<UnaryBlock>(blocks["proj_in"]);
+        auto proj_out = std::dynamic_pointer_cast<UnaryBlock>(blocks["proj_out"]);
 
         auto x_in         = x;
         int64_t n         = x->ne[3];
@@ -458,32 +476,45 @@ public:
         int64_t inner_dim = n_head * d_head;
 
         x = norm->forward(ctx, x);
-        x = proj_in->forward(ctx, x);  // [N, inner_dim, h, w]
-
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
-        x = ggml_reshape_3d(ctx, x, inner_dim, w * h, n);      // [N, h * w, inner_dim]
+        if (use_linear) {
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
+            x = ggml_reshape_3d(ctx->ggml_ctx, x, inner_dim, w * h, n);                // [N, h * w, inner_dim]
+            x = proj_in->forward(ctx, x);                                              // [N, inner_dim, h, w]
+        } else {
+            x = proj_in->forward(ctx, x);                                              // [N, inner_dim, h, w]
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
+            x = ggml_reshape_3d(ctx->ggml_ctx, x, inner_dim, w * h, n);                // [N, h * w, inner_dim]
+        }
 
         for (int i = 0; i < depth; i++) {
             std::string name       = "transformer_blocks." + std::to_string(i);
             auto transformer_block = std::dynamic_pointer_cast<BasicTransformerBlock>(blocks[name]);
 
-            x = transformer_block->forward(ctx, backend, x, context);
+            x = transformer_block->forward(ctx, x, context);
         }
 
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
-        x = ggml_reshape_4d(ctx, x, w, h, inner_dim, n);       // [N, inner_dim, h, w]
+        if (use_linear) {
+            // proj_out
+            x = proj_out->forward(ctx, x);  // [N, in_channels, h, w]
 
-        // proj_out
-        x = proj_out->forward(ctx, x);  // [N, in_channels, h, w]
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
+            x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, inner_dim, n);                 // [N, inner_dim, h, w]
+        } else {
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
+            x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, inner_dim, n);                 // [N, inner_dim, h, w]
 
-        x = ggml_add(ctx, x, x_in);
+            // proj_out
+            x = proj_out->forward(ctx, x);  // [N, in_channels, h, w]
+        }
+
+        x = ggml_add(ctx->ggml_ctx, x, x_in);
         return x;
     }
 };
 
 class AlphaBlender : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
         // Get the type of the "mix_factor" tensor from the input tensors map with the specified prefix
         enum ggml_type wtype = GGML_TYPE_F32;
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
@@ -503,14 +534,14 @@ public:
         // since mix_factor.shape is [1,], we don't need rearrange using  rearrange_pattern
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x_spatial,
                                 struct ggml_tensor* x_temporal) {
         // image_only_indicator is always tensor([0.])
         float alpha = get_alpha();
-        auto x      = ggml_add(ctx,
-                               ggml_scale(ctx, x_spatial, alpha),
-                               ggml_scale(ctx, x_temporal, 1.0f - alpha));
+        auto x      = ggml_add(ctx->ggml_ctx,
+                               ggml_scale(ctx->ggml_ctx, x_spatial, alpha),
+                               ggml_scale(ctx->ggml_ctx, x_temporal, 1.0f - alpha));
         return x;
     }
 };
@@ -528,7 +559,7 @@ public:
         blocks["time_mixer"] = std::shared_ptr<GGMLBlock>(new AlphaBlender());
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* emb,
                                 int num_video_frames) {
@@ -546,18 +577,18 @@ public:
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
 
-        x          = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
-        x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+        x          = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, C, T, B);                     // (b t) c h w -> b t c (h w)
+        x          = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
         auto x_mix = x;
 
-        emb = ggml_reshape_4d(ctx, emb, emb->ne[0], T, B, emb->ne[3]);  // (b t) ... -> b t ...
+        emb = ggml_reshape_4d(ctx->ggml_ctx, emb, emb->ne[0], T, B, emb->ne[3]);  // (b t) ... -> b t ...
 
         x = time_stack->forward(ctx, x, emb);  // b t c (h w)
 
         x = time_mixer->forward(ctx, x_mix, x);  // b t c (h w)
 
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
-        x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
+        x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w
 
         return x;
     }

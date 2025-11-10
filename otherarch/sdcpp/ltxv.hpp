@@ -27,7 +27,7 @@ namespace LTXV {
                                                                      bias));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
                                     bool causal = true) {
             // x: [N*IC, ID, IH, IW]

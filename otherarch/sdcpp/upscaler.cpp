@@ -42,7 +42,7 @@ struct UpscalerGGML {
         backend = ggml_backend_sycl_init(0);
 #endif
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(esrgan_path)) {
+        if (!model_loader.init_from_file_and_convert_name(esrgan_path)) {
             LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
         }
         model_loader.set_wtype_override(model_data_type);
@@ -51,9 +51,9 @@ struct UpscalerGGML {
             backend = ggml_backend_cpu_init();
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
-        esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, model_loader.tensor_storages_types);
+        esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, model_loader.get_tensor_storage_map());
         if (direct) {
-            esrgan_upscaler->enable_conv2d_direct();
+            esrgan_upscaler->set_conv2d_direct_enabled(true);
         }
         if (!esrgan_upscaler->load_from_file(esrgan_path, n_threads)) {
             return false;

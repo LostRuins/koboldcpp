@@ -27,11 +27,11 @@ public:
         blocks["conv5"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + 4 * num_grow_ch, num_feat, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    struct ggml_tensor* lrelu(struct ggml_context* ctx, struct ggml_tensor* x) {
-        return ggml_leaky_relu(ctx, x, 0.2f, true);
+    struct ggml_tensor* lrelu(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        return ggml_leaky_relu(ctx->ggml_ctx, x, 0.2f, true);
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [n, num_feat, h, w]
         // return: [n, num_feat, h, w]
 
@@ -42,16 +42,16 @@ public:
         auto conv5 = std::dynamic_pointer_cast<Conv2d>(blocks["conv5"]);
 
         auto x1    = lrelu(ctx, conv1->forward(ctx, x));
-        auto x_cat = ggml_concat(ctx, x, x1, 2);
+        auto x_cat = ggml_concat(ctx->ggml_ctx, x, x1, 2);
         auto x2    = lrelu(ctx, conv2->forward(ctx, x_cat));
-        x_cat      = ggml_concat(ctx, x_cat, x2, 2);
+        x_cat      = ggml_concat(ctx->ggml_ctx, x_cat, x2, 2);
         auto x3    = lrelu(ctx, conv3->forward(ctx, x_cat));
-        x_cat      = ggml_concat(ctx, x_cat, x3, 2);
+        x_cat      = ggml_concat(ctx->ggml_ctx, x_cat, x3, 2);
         auto x4    = lrelu(ctx, conv4->forward(ctx, x_cat));
-        x_cat      = ggml_concat(ctx, x_cat, x4, 2);
+        x_cat      = ggml_concat(ctx->ggml_ctx, x_cat, x4, 2);
         auto x5    = conv5->forward(ctx, x_cat);
 
-        x5 = ggml_add(ctx, ggml_scale(ctx, x5, 0.2f), x);
+        x5 = ggml_add(ctx->ggml_ctx, ggml_scale(ctx->ggml_ctx, x5, 0.2f), x);
         return x5;
     }
 };
@@ -64,7 +64,7 @@ public:
         blocks["rdb3"] = std::shared_ptr<GGMLBlock>(new ResidualDenseBlock(num_feat, num_grow_ch));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [n, num_feat, h, w]
         // return: [n, num_feat, h, w]
 
@@ -76,7 +76,7 @@ public:
         out      = rdb2->forward(ctx, out);
         out      = rdb3->forward(ctx, out);
 
-        out = ggml_add(ctx, ggml_scale(ctx, out, 0.2f), x);
+        out = ggml_add(ctx->ggml_ctx, ggml_scale(ctx->ggml_ctx, out, 0.2f), x);
         return out;
     }
 };
@@ -112,11 +112,11 @@ public:
     int get_scale() { return scale; }
     int get_num_block() { return num_block; }
 
-    struct ggml_tensor* lrelu(struct ggml_context* ctx, struct ggml_tensor* x) {
-        return ggml_leaky_relu(ctx, x, 0.2f, true);
+    struct ggml_tensor* lrelu(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        return ggml_leaky_relu(ctx->ggml_ctx, x, 0.2f, true);
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [n, num_in_ch, h, w]
         // return: [n, num_out_ch, h*scale, w*scale]
         auto conv_first = std::dynamic_pointer_cast<Conv2d>(blocks["conv_first"]);
@@ -133,14 +133,14 @@ public:
             body_feat = block->forward(ctx, body_feat);
         }
         body_feat = conv_body->forward(ctx, body_feat);
-        feat      = ggml_add(ctx, feat, body_feat);
+        feat      = ggml_add(ctx->ggml_ctx, feat, body_feat);
         // upsample
         if (scale >= 2) {
             auto conv_up1 = std::dynamic_pointer_cast<Conv2d>(blocks["conv_up1"]);
-            feat          = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
+            feat          = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx->ggml_ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
             if (scale == 4) {
                 auto conv_up2 = std::dynamic_pointer_cast<Conv2d>(blocks["conv_up2"]);
-                feat          = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
+                feat          = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx->ggml_ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
             }
         }
         // for all scales
@@ -156,22 +156,9 @@ struct ESRGAN : public GGMLRunner {
 
     ESRGAN(ggml_backend_t backend,
            bool offload_params_to_cpu,
-           const String2GGMLType& tensor_types = {})
+           const String2TensorStorage& tensor_storage_map = {})
         : GGMLRunner(backend, offload_params_to_cpu) {
         // rrdb_net will be created in load_from_file
-    }
-
-    void enable_conv2d_direct() {
-        if (!rrdb_net)
-            return;
-        std::vector<GGMLBlock*> blocks;
-        rrdb_net->get_all_blocks(blocks);
-        for (auto block : blocks) {
-            if (block->get_desc() == "Conv2d") {
-                auto conv_block = (Conv2d*)block;
-                conv_block->enable_direct();
-            }
-        }
     }
 
     std::string get_desc() override {
@@ -182,7 +169,7 @@ struct ESRGAN : public GGMLRunner {
         LOG_INFO("loading esrgan from '%s'", file_path.c_str());
 
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(file_path)) {
+        if (!model_loader.init_from_file_and_convert_name(file_path)) {
             LOG_ERROR("init esrgan model loader from file failed: '%s'", file_path.c_str());
             return false;
         }
@@ -359,7 +346,9 @@ struct ESRGAN : public GGMLRunner {
         constexpr int kGraphNodes = 1 << 16;  // 65k
         struct ggml_cgraph* gf    = ggml_new_graph_custom(compute_ctx, kGraphNodes, /*grads*/ false);
         x                         = to_backend(x);
-        struct ggml_tensor* out   = rrdb_net->forward(compute_ctx, x);
+
+        auto runner_ctx         = get_context();
+        struct ggml_tensor* out = rrdb_net->forward(&runner_ctx, x);
         ggml_build_forward_expand(gf, out);
         return gf;
     }

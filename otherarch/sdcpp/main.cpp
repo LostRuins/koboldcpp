@@ -46,6 +46,13 @@ const char* modes_str[] = {
 };
 #define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale"
 
+const char* previews_str[] = {
+    "none",
+    "proj",
+    "tae",
+    "vae",
+};
+
 enum SDMode {
     IMG_GEN,
     VID_GEN,
@@ -135,6 +142,12 @@ struct SDParams {
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
     bool force_sdxl_vae_conv_scale       = false;
 
+    preview_t preview_method = PREVIEW_NONE;
+    int preview_interval     = 1;
+    std::string preview_path = "preview.png";
+    bool taesd_preview       = false;
+    bool preview_noisy       = false;
+
     SDParams() {
         sd_sample_params_init(&sample_params);
         sd_sample_params_init(&high_noise_sample_params);
@@ -210,6 +223,8 @@ void print_params(SDParams params) {
     printf("    video_frames:                      %d\n", params.video_frames);
     printf("    vace_strength:                     %.2f\n", params.vace_strength);
     printf("    fps:                               %d\n", params.fps);
+    printf("    preview_mode:                      %s (%s)\n", previews_str[params.preview_method], params.preview_noisy ? "noisy" : "denoised");
+    printf("    preview_interval:                  %d\n", params.preview_interval);
     free(sample_params_str);
     free(high_noise_sample_params_str);
 }
@@ -590,6 +605,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "the negative prompt (default: \"\")",
          &params.negative_prompt},
         {"",
+         "--preview-path",
+         "path to write preview image to (default: ./preview.png)",
+         &params.preview_path},
+        {"",
          "--upscale-model",
          "path to esrgan model.",
          &params.esrgan_path},
@@ -647,6 +666,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "shift timestep for NitroFusion models (default: 0). "
          "recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant",
          &params.sample_params.shifted_timestep},
+        {"",
+         "--preview-interval",
+         "interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at every step)",
+         &params.preview_interval},
     };
 
     options.float_options = {
@@ -801,7 +824,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--disable-auto-resize-ref-image",
          "disable auto resize of ref images",
          false, &params.auto_resize_ref_image},
-    };
+        {"",
+         "--taesd-preview-only",
+         std::string("prevents usage of taesd for decoding the final image. (for use with --preview ") + previews_str[PREVIEW_TAE] + ")",
+         true, &params.taesd_preview},
+        {"",
+         "--preview-noisy",
+         "enables previewing noisy inputs of the models rather than the denoised outputs",
+         true, &params.preview_noisy}};
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
@@ -1046,6 +1076,26 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_preview_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* preview = argv[index];
+        int preview_method  = -1;
+        for (int m = 0; m < PREVIEW_COUNT; m++) {
+            if (!strcmp(preview, previews_str[m])) {
+                preview_method = m;
+            }
+        }
+        if (preview_method == -1) {
+            fprintf(stderr, "error: preview method %s\n",
+                    preview);
+            return -1;
+        }
+        params.preview_method = (preview_t)preview_method;
+        return 1;
+    };
+
     options.manual_options = {
         {"-M",
          "--mode",
@@ -1110,6 +1160,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--vae-relative-tile-size",
          "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
          on_relative_tile_size_arg},
+        {"",
+         "--preview",
+         std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")\n",
+         on_preview_arg},
     };
 
     if (!parse_options(argc, argv, options)) {
@@ -1452,15 +1506,50 @@ bool load_images_from_dir(const std::string dir,
     return true;
 }
 
+const char* preview_path;
+float preview_fps;
+
+void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) {
+    (void)step;
+    (void)is_noisy;
+    // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
+    // unused in this app, it will either be always noisy or always denoised here
+    if (frame_count == 1) {
+        stbi_write_png(preview_path, image->width, image->height, image->channel, image->data, 0);
+    } else {
+        create_mjpg_avi_from_sd_images(preview_path, image, frame_count, preview_fps);
+    }
+}
+
 int main(int argc, const char* argv[]) {
     SDParams params;
     parse_args(argc, argv, params);
+    preview_path = params.preview_path.c_str();
+    if (params.video_frames > 4) {
+        size_t last_dot_pos   = params.preview_path.find_last_of(".");
+        std::string base_path = params.preview_path;
+        std::string file_ext  = "";
+        if (last_dot_pos != std::string::npos) {  // filename has extension
+            base_path = params.preview_path.substr(0, last_dot_pos);
+            file_ext  = params.preview_path.substr(last_dot_pos);
+            std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
+        }
+        if (file_ext == ".png") {
+            base_path    = base_path + ".avi";
+            preview_path = base_path.c_str();
+        }
+    }
+    preview_fps = params.fps;
+    if (params.preview_method == PREVIEW_PROJ)
+        preview_fps /= 4.0f;
+
     params.sample_params.guidance.slg.layers                 = params.skip_layers.data();
     params.sample_params.guidance.slg.layer_count            = params.skip_layers.size();
     params.high_noise_sample_params.guidance.slg.layers      = params.high_noise_skip_layers.data();
     params.high_noise_sample_params.guidance.slg.layer_count = params.high_noise_skip_layers.size();
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
+    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval, !params.preview_noisy, params.preview_noisy);
 
     if (params.verbose) {
         print_params(params);
@@ -1654,6 +1743,7 @@ int main(int argc, const char* argv[]) {
         params.control_net_cpu,
         params.vae_on_cpu,
         params.diffusion_flash_attn,
+        params.taesd_preview,
         params.diffusion_conv_direct,
         params.vae_conv_direct,
         params.force_sdxl_vae_conv_scale,

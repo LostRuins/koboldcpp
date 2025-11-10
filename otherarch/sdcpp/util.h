@@ -52,6 +52,15 @@ std::string trim(const std::string& s);
 
 std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::string& text);
 
+sd_progress_cb_t sd_get_progress_callback();
+void* sd_get_progress_callback_data();
+
+sd_preview_cb_t sd_get_preview_callback();
+preview_t sd_get_preview_mode();
+int sd_get_preview_interval();
+bool sd_should_preview_denoised();
+bool sd_should_preview_noisy();
+
 void log_message(const char* format, ...);
 void set_sd_log_level(int log);
 bool get_sd_log_level();

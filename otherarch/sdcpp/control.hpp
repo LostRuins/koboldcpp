@@ -27,6 +27,7 @@ protected:
     int num_heads                          = 8;
     int num_head_channels                  = -1;   // channels // num_heads
     int context_dim                        = 768;  // 1024 for VERSION_SD2, 2048 for VERSION_SDXL
+    bool use_linear_projection             = false;
 
 public:
     int model_channels  = 320;
@@ -82,7 +83,7 @@ public:
                                        int64_t d_head,
                                        int64_t depth,
                                        int64_t context_dim) -> SpatialTransformer* {
-            return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim);
+            return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
         };
 
         auto make_zero_conv = [&](int64_t channels) {
@@ -165,7 +166,7 @@ public:
     }
 
     struct ggml_tensor* resblock_forward(std::string name,
-                                         struct ggml_context* ctx,
+                                         GGMLRunnerContext* ctx,
                                          struct ggml_tensor* x,
                                          struct ggml_tensor* emb) {
         auto block = std::dynamic_pointer_cast<ResBlock>(blocks[name]);
@@ -173,15 +174,14 @@ public:
     }
 
     struct ggml_tensor* attention_layer_forward(std::string name,
-                                                struct ggml_context* ctx,
-                                                ggml_backend_t backend,
+                                                GGMLRunnerContext* ctx,
                                                 struct ggml_tensor* x,
                                                 struct ggml_tensor* context) {
         auto block = std::dynamic_pointer_cast<SpatialTransformer>(blocks[name]);
-        return block->forward(ctx, backend, x, context);
+        return block->forward(ctx, x, context);
     }
 
-    struct ggml_tensor* input_hint_block_forward(struct ggml_context* ctx,
+    struct ggml_tensor* input_hint_block_forward(GGMLRunnerContext* ctx,
                                                  struct ggml_tensor* hint,
                                                  struct ggml_tensor* emb,
                                                  struct ggml_tensor* context) {
@@ -193,14 +193,13 @@ public:
 
                 h = block->forward(ctx, h);
             } else {
-                h = ggml_silu_inplace(ctx, h);
+                h = ggml_silu_inplace(ctx->ggml_ctx, h);
             }
         }
         return h;
     }
 
-    std::vector<struct ggml_tensor*> forward(struct ggml_context* ctx,
-                                             ggml_backend_t backend,
+    std::vector<struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
                                              struct ggml_tensor* x,
                                              struct ggml_tensor* hint,
                                              struct ggml_tensor* guided_hint,
@@ -213,13 +212,13 @@ public:
         // y: [N, adm_in_channels] or [1, adm_in_channels]
         if (context != nullptr) {
             if (context->ne[2] != x->ne[3]) {
-                context = ggml_repeat(ctx, context, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, context->ne[0], context->ne[1], x->ne[3]));
+                context = ggml_repeat(ctx->ggml_ctx, context, ggml_new_tensor_3d(ctx->ggml_ctx, GGML_TYPE_F32, context->ne[0], context->ne[1], x->ne[3]));
             }
         }
 
         if (y != nullptr) {
             if (y->ne[1] != x->ne[3]) {
-                y = ggml_repeat(ctx, y, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, y->ne[0], x->ne[3]));
+                y = ggml_repeat(ctx->ggml_ctx, y, ggml_new_tensor_2d(ctx->ggml_ctx, GGML_TYPE_F32, y->ne[0], x->ne[3]));
             }
         }
 
@@ -230,10 +229,10 @@ public:
 
         auto middle_block_out = std::dynamic_pointer_cast<Conv2d>(blocks["middle_block_out.0"]);
 
-        auto t_emb = ggml_ext_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, model_channels);  // [N, model_channels]
 
         auto emb = time_embed_0->forward(ctx, t_emb);
-        emb      = ggml_silu_inplace(ctx, emb);
+        emb      = ggml_silu_inplace(ctx->ggml_ctx, emb);
         emb      = time_embed_2->forward(ctx, emb);  // [N, time_embed_dim]
 
         // SDXL/SVD
@@ -242,10 +241,10 @@ public:
             auto label_embed_2 = std::dynamic_pointer_cast<Linear>(blocks["label_emb.0.2"]);
 
             auto label_emb = label_embed_0->forward(ctx, y);
-            label_emb      = ggml_silu_inplace(ctx, label_emb);
+            label_emb      = ggml_silu_inplace(ctx->ggml_ctx, label_emb);
             label_emb      = label_embed_2->forward(ctx, label_emb);  // [N, time_embed_dim]
 
-            emb = ggml_add(ctx, emb, label_emb);  // [N, time_embed_dim]
+            emb = ggml_add(ctx->ggml_ctx, emb, label_emb);  // [N, time_embed_dim]
         }
 
         std::vector<struct ggml_tensor*> outs;
@@ -259,7 +258,7 @@ public:
 
         // input block 0
         auto h = input_blocks_0_0->forward(ctx, x);
-        h      = ggml_add(ctx, h, guided_hint);
+        h      = ggml_add(ctx->ggml_ctx, h, guided_hint);
         outs.push_back(zero_convs_0->forward(ctx, h));
 
         // input block 1-11
@@ -274,7 +273,7 @@ public:
                 h                = resblock_forward(name, ctx, h, emb);  // [N, mult*model_channels, h, w]
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
-                    h                = attention_layer_forward(name, ctx, backend, h, context);  // [N, mult*model_channels, h, w]
+                    h                = attention_layer_forward(name, ctx, h, context);  // [N, mult*model_channels, h, w]
                 }
 
                 auto zero_conv = std::dynamic_pointer_cast<Conv2d>(blocks["zero_convs." + std::to_string(input_block_idx) + ".0"]);
@@ -298,9 +297,9 @@ public:
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        h = resblock_forward("middle_block.0", ctx, h, emb);                      // [N, 4*model_channels, h/8, w/8]
-        h = attention_layer_forward("middle_block.1", ctx, backend, h, context);  // [N, 4*model_channels, h/8, w/8]
-        h = resblock_forward("middle_block.2", ctx, h, emb);                      // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.0", ctx, h, emb);             // [N, 4*model_channels, h/8, w/8]
+        h = attention_layer_forward("middle_block.1", ctx, h, context);  // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.2", ctx, h, emb);             // [N, 4*model_channels, h/8, w/8]
 
         // out
         outs.push_back(middle_block_out->forward(ctx, h));
@@ -320,21 +319,10 @@ struct ControlNet : public GGMLRunner {
 
     ControlNet(ggml_backend_t backend,
                bool offload_params_to_cpu,
-               const String2GGMLType& tensor_types = {},
-               SDVersion version                   = VERSION_SD1)
+               const String2TensorStorage& tensor_storage_map = {},
+               SDVersion version                              = VERSION_SD1)
         : GGMLRunner(backend, offload_params_to_cpu), control_net(version) {
-        control_net.init(params_ctx, tensor_types, "");
-    }
-
-    void enable_conv2d_direct() {
-        std::vector<GGMLBlock*> blocks;
-        control_net.get_all_blocks(blocks);
-        for (auto block : blocks) {
-            if (block->get_desc() == "Conv2d") {
-                auto conv_block = (Conv2d*)block;
-                conv_block->enable_direct();
-            }
-        }
+        control_net.init(params_ctx, tensor_storage_map, "");
     }
 
     ~ControlNet() override {
@@ -404,8 +392,9 @@ struct ControlNet : public GGMLRunner {
         y         = to_backend(y);
         timesteps = to_backend(timesteps);
 
-        auto outs = control_net.forward(compute_ctx,
-                                        runtime_backend,
+        auto runner_ctx = get_context();
+
+        auto outs = control_net.forward(&runner_ctx,
                                         x,
                                         hint,
                                         guided_hint_cached ? guided_hint : nullptr,
@@ -453,7 +442,7 @@ struct ControlNet : public GGMLRunner {
         std::set<std::string> ignore_tensors;
 
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(file_path)) {
+        if (!model_loader.init_from_file_and_convert_name(file_path)) {
             LOG_ERROR("init control net model loader from file failed: '%s'", file_path.c_str());
             return false;
         }

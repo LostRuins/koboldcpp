@@ -349,15 +349,15 @@ namespace Qwen {
             blocks["down_proj"] = std::shared_ptr<GGMLBlock>(new Linear(intermediate_size, hidden_size, bias));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
             // x: [N, n_token, hidden_size]
             auto gate_proj = std::dynamic_pointer_cast<Linear>(blocks["gate_proj"]);
             auto up_proj   = std::dynamic_pointer_cast<Linear>(blocks["up_proj"]);
             auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
 
             auto h = gate_proj->forward(ctx, x);
-            h      = ggml_silu_inplace(ctx, h);
-            h      = ggml_mul_inplace(ctx, h, up_proj->forward(ctx, x));
+            h      = ggml_silu_inplace(ctx->ggml_ctx, h);
+            h      = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
             h      = down_proj->forward(ctx, h);
             return h;
         }
@@ -409,10 +409,10 @@ namespace Qwen {
             }
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
             // x: [N*grid_t*grid_h*grid_w, in_channels, temporal_patch_size*patch_size*patch_size]
             // return: [N*grid_t*grid_h*grid_w, embed_dim]
-            x = ggml_reshape_4d(ctx,
+            x = ggml_reshape_4d(ctx->ggml_ctx,
                                 x,
                                 patch_size,
                                 patch_size,
@@ -423,22 +423,22 @@ namespace Qwen {
                 auto proj_0 = std::dynamic_pointer_cast<Conv2d>(blocks["proj.0"]);
                 auto proj_1 = std::dynamic_pointer_cast<Conv2d>(blocks["proj.1"]);
 
-                auto x0 = ggml_ext_slice(ctx, x, 2, 0, 1);
-                x0      = ggml_reshape_4d(ctx, x0, x0->ne[0], x0->ne[1], in_channels, x0->ne[3] / in_channels);
+                auto x0 = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                x0      = ggml_reshape_4d(ctx->ggml_ctx, x0, x0->ne[0], x0->ne[1], in_channels, x0->ne[3] / in_channels);
                 x0      = proj_0->forward(ctx, x0);
 
-                auto x1 = ggml_ext_slice(ctx, x, 2, 1, 2);
-                x1      = ggml_reshape_4d(ctx, x1, x1->ne[0], x1->ne[1], in_channels, x1->ne[3] / in_channels);
+                auto x1 = ggml_ext_slice(ctx->ggml_ctx, x, 2, 1, 2);
+                x1      = ggml_reshape_4d(ctx->ggml_ctx, x1, x1->ne[0], x1->ne[1], in_channels, x1->ne[3] / in_channels);
                 x1      = proj_1->forward(ctx, x1);
 
-                x = ggml_add(ctx, x0, x1);
+                x = ggml_add(ctx->ggml_ctx, x0, x1);
             } else {
                 auto proj = std::dynamic_pointer_cast<Conv3d>(blocks["proj"]);
 
                 x = proj->forward(ctx, x);
             }
 
-            x = ggml_reshape_2d(ctx, x, embed_dim, ggml_nelements(x) / embed_dim);
+            x = ggml_reshape_2d(ctx->ggml_ctx, x, embed_dim, ggml_nelements(x) / embed_dim);
             return x;
         }
     };
@@ -458,15 +458,15 @@ namespace Qwen {
             blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, dim));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
             auto ln_q  = std::dynamic_pointer_cast<RMSNorm>(blocks["ln_q"]);
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
 
             x = ln_q->forward(ctx, x);
-            x = ggml_reshape_2d(ctx, x, hidden_size, ggml_nelements(x) / hidden_size);
+            x = ggml_reshape_2d(ctx->ggml_ctx, x, hidden_size, ggml_nelements(x) / hidden_size);
             x = mlp_0->forward(ctx, x);
-            x = ggml_gelu(ctx, x);
+            x = ggml_gelu(ctx->ggml_ctx, x);
             x = mlp_2->forward(ctx, x);
             return x;
         }
@@ -495,8 +495,7 @@ namespace Qwen {
             blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* pe,
                                     struct ggml_tensor* mask = nullptr) {
@@ -519,14 +518,14 @@ namespace Qwen {
             } else {
                 auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
                 auto qkv      = qkv_proj->forward(ctx, x);
-                qkv_vec       = split_qkv(ctx, qkv);
+                qkv_vec       = split_qkv(ctx->ggml_ctx, qkv);
             }
 
-            auto q = ggml_reshape_4d(ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
-            auto k = ggml_reshape_4d(ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
-            auto v = ggml_reshape_4d(ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
+            auto q = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
+            auto k = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
+            auto v = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
 
-            x = Rope::attention(ctx, backend, q, k, v, pe, mask, false, 1.f, false);  // [N, n_token, hidden_size]
+            x = Rope::attention(ctx, q, k, v, pe, mask, 1.f, false);  // [N, n_token, hidden_size]
 
             x = proj->forward(ctx, x);  // [N, n_token, hidden_size]
             return x;
@@ -546,8 +545,7 @@ namespace Qwen {
             blocks["norm2"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* pe,
                                     struct ggml_tensor* mask = nullptr) {
@@ -559,13 +557,13 @@ namespace Qwen {
 
             auto residual = x;
             x             = norm1->forward(ctx, x);
-            x             = attn->forward(ctx, backend, x, pe, mask);
-            x             = ggml_add_inplace(ctx, x, residual);
+            x             = attn->forward(ctx, x, pe, mask);
+            x             = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             residual = x;
             x        = norm2->forward(ctx, x);
             x        = mlp->forward(ctx, x);
-            x        = ggml_add_inplace(ctx, x, residual);
+            x        = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             return x;
         }
@@ -607,8 +605,7 @@ namespace Qwen {
             blocks["merger"] = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLPatchMerger(out_hidden_size, hidden_size, spatial_merge_size));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* pixel_values,
                                     struct ggml_tensor* pe,
                                     struct ggml_tensor* window_index,
@@ -623,9 +620,9 @@ namespace Qwen {
 
             auto x = patch_embed->forward(ctx, pixel_values);
 
-            x = ggml_reshape_4d(ctx, x, x->ne[0] * spatial_merge_size * spatial_merge_size, x->ne[1] / spatial_merge_size / spatial_merge_size, x->ne[2], x->ne[3]);
-            x = ggml_get_rows(ctx, x, window_index);
-            x = ggml_reshape_4d(ctx, x, x->ne[0] / spatial_merge_size / spatial_merge_size, x->ne[1] * spatial_merge_size * spatial_merge_size, x->ne[2], x->ne[3]);
+            x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0] * spatial_merge_size * spatial_merge_size, x->ne[1] / spatial_merge_size / spatial_merge_size, x->ne[2], x->ne[3]);
+            x = ggml_get_rows(ctx->ggml_ctx, x, window_index);
+            x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0] / spatial_merge_size / spatial_merge_size, x->ne[1] * spatial_merge_size * spatial_merge_size, x->ne[2], x->ne[3]);
 
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<Qwen2_5_VLVisionBlock>(blocks["blocks." + std::to_string(i)]);
@@ -634,12 +631,12 @@ namespace Qwen {
                 if (fullatt_block_indexes.find(i) != fullatt_block_indexes.end()) {
                     mask = nullptr;
                 }
-                x = block->forward(ctx, backend, x, pe, mask);
+                x = block->forward(ctx, x, pe, mask);
             }
 
             x = merger->forward(ctx, x);
 
-            x = ggml_get_rows(ctx, x, window_inverse_index);
+            x = ggml_get_rows(ctx->ggml_ctx, x, window_inverse_index);
 
             return x;
         }
@@ -664,8 +661,7 @@ namespace Qwen {
             blocks["o_proj"] = std::shared_ptr<GGMLBlock>(new Linear(num_heads * head_dim, hidden_size, false));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* input_pos) {
             // x: [N, n_token, hidden_size]
@@ -680,21 +676,21 @@ namespace Qwen {
             auto k = k_proj->forward(ctx, x);  // [N, n_token, num_kv_heads*head_dim]
             auto v = v_proj->forward(ctx, x);  // [N, n_token, num_kv_heads*head_dim]
 
-            q = ggml_reshape_4d(ctx, q, head_dim, num_heads, n_token, N);     // [N, n_token, num_heads, head_dim]
-            k = ggml_reshape_4d(ctx, k, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
-            v = ggml_reshape_4d(ctx, v, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
+            q = ggml_reshape_4d(ctx->ggml_ctx, q, head_dim, num_heads, n_token, N);     // [N, n_token, num_heads, head_dim]
+            k = ggml_reshape_4d(ctx->ggml_ctx, k, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
+            v = ggml_reshape_4d(ctx->ggml_ctx, v, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
 
             int sections[4] = {16, 24, 24, 0};
-            q               = ggml_rope_multi(ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
-            k               = ggml_rope_multi(ctx, k, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            k               = ggml_rope_multi(ctx->ggml_ctx, k, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
 
-            q = ggml_cont(ctx, ggml_ext_torch_permute(ctx, q, 0, 2, 1, 3));        // [N, num_heads, n_token, head_dim]
-            q = ggml_reshape_3d(ctx, q, q->ne[0], q->ne[1], q->ne[2] * q->ne[3]);  // [N*num_heads, n_token, head_dim]
+            q = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, q, 0, 2, 1, 3));  // [N, num_heads, n_token, head_dim]
+            q = ggml_reshape_3d(ctx->ggml_ctx, q, q->ne[0], q->ne[1], q->ne[2] * q->ne[3]);      // [N*num_heads, n_token, head_dim]
 
-            k = ggml_cont(ctx, ggml_ext_torch_permute(ctx, k, 0, 2, 1, 3));        // [N, num_kv_heads, n_token, head_dim]
-            k = ggml_reshape_3d(ctx, k, k->ne[0], k->ne[1], k->ne[2] * k->ne[3]);  // [N*num_kv_heads, n_token, head_dim]
+            k = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 0, 2, 1, 3));  // [N, num_kv_heads, n_token, head_dim]
+            k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0], k->ne[1], k->ne[2] * k->ne[3]);      // [N*num_kv_heads, n_token, head_dim]
 
-            x = ggml_ext_attention_ext(ctx, backend, q, k, v, num_heads, nullptr, true, true, false);  // [N, n_token, hidden_size]
+            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, true, true, false);  // [N, n_token, hidden_size]
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
             return x;
@@ -714,8 +710,7 @@ namespace Qwen {
             blocks["post_attention_layernorm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* input_pos) {
             // x: [N, n_token, hidden_size]
@@ -726,13 +721,13 @@ namespace Qwen {
 
             auto residual = x;
             x             = input_layernorm->forward(ctx, x);
-            x             = self_attn->forward(ctx, backend, x, input_pos);
-            x             = ggml_add_inplace(ctx, x, residual);
+            x             = self_attn->forward(ctx, x, input_pos);
+            x             = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             residual = x;
             x        = post_attention_layernorm->forward(ctx, x);
             x        = mlp->forward(ctx, x);
-            x        = ggml_add_inplace(ctx, x, residual);
+            x        = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             return x;
         }
@@ -761,8 +756,7 @@ namespace Qwen {
             blocks["norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
                                     struct ggml_tensor* input_pos,
                                     std::vector<std::pair<int, ggml_tensor*>> image_embeds) {
@@ -777,7 +771,7 @@ namespace Qwen {
             if (image_embeds.size() > 0) {
                 GGML_ASSERT(x->ne[2] == 1);  // N == 1
 
-                auto raw_x              = ggml_cast(ctx, x, image_embeds[0].second->type);
+                auto raw_x              = ggml_cast(ctx->ggml_ctx, x, image_embeds[0].second->type);
                 int64_t txt_token_start = 0;
                 int64_t txt_token_end   = 0;
 
@@ -791,23 +785,23 @@ namespace Qwen {
                     }
                     txt_token_end = image_embeds[i].first;
 
-                    auto txt_embed = ggml_ext_slice(ctx, raw_x, 1, txt_token_start, txt_token_end);
+                    auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
                     if (input_embed == nullptr) {
                         input_embed = txt_embed;
                     } else {
-                        input_embed = ggml_concat(ctx, input_embed, txt_embed, 1);
+                        input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
                     }
 
                     auto image_embed = image_embeds[i].second;
-                    input_embed      = ggml_concat(ctx, input_embed, image_embed, 1);
+                    input_embed      = ggml_concat(ctx->ggml_ctx, input_embed, image_embed, 1);
                 }
 
                 txt_token_start = image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1];
                 txt_token_end   = raw_x->ne[1];
 
-                auto final_txt_embed = ggml_ext_slice(ctx, raw_x, 1, txt_token_start, txt_token_end);
+                auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
 
-                input_embed = ggml_concat(ctx, input_embed, final_txt_embed, 1);
+                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
                 GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);
 
                 x = input_embed;
@@ -816,7 +810,7 @@ namespace Qwen {
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<Qwen2_5_VLBlock>(blocks["layers." + std::to_string(i)]);
 
-                x = block->forward(ctx, backend, x, input_pos);
+                x = block->forward(ctx, x, input_pos);
             }
 
             x = norm->forward(ctx, x);
@@ -880,20 +874,18 @@ namespace Qwen {
             }
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
                                     struct ggml_tensor* input_pos,
                                     std::vector<std::pair<int, ggml_tensor*>> image_embeds) {
             // input_ids: [N, n_token]
             auto model = std::dynamic_pointer_cast<Qwen2_5_VLTextModel>(blocks["model"]);
 
-            auto x = model->forward(ctx, backend, input_ids, input_pos, image_embeds);
+            auto x = model->forward(ctx, input_ids, input_pos, image_embeds);
             return x;
         }
 
-        struct ggml_tensor* vision_forward(struct ggml_context* ctx,
-                                           ggml_backend_t backend,
+        struct ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
                                            struct ggml_tensor* pixel_values,
                                            struct ggml_tensor* pe,
                                            struct ggml_tensor* window_index,
@@ -901,7 +893,7 @@ namespace Qwen {
                                            struct ggml_tensor* window_mask) {
             GGML_ASSERT(enable_vision);
             auto vision_model = std::dynamic_pointer_cast<Qwen2_5_VLVisionModel>(blocks["visual"]);
-            return vision_model->forward(ctx, backend, pixel_values, pe, window_index, window_inverse_index, window_mask);
+            return vision_model->forward(ctx, pixel_values, pe, window_index, window_inverse_index, window_mask);
         }
     };
 
@@ -918,13 +910,13 @@ namespace Qwen {
 
         Qwen2_5_VLRunner(ggml_backend_t backend,
                          bool offload_params_to_cpu,
-                         const String2GGMLType& tensor_types,
+                         const String2TensorStorage& tensor_storage_map,
                          const std::string prefix,
                          bool enable_vision_ = false)
             : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
             bool have_vision_weight = false;
             bool llama_cpp_style    = false;
-            for (auto pair : tensor_types) {
+            for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find(prefix) == std::string::npos)
                     continue;
@@ -948,7 +940,7 @@ namespace Qwen {
                 }
             }
             model = Qwen2_5_VL(params, enable_vision, llama_cpp_style);
-            model.init(params_ctx, tensor_types, prefix);
+            model.init(params_ctx, tensor_storage_map, prefix);
         }
 
         std::string get_desc() override {
@@ -959,23 +951,21 @@ namespace Qwen {
             model.get_param_tensors(tensors, prefix);
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
+        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
                                     struct ggml_tensor* input_pos,
                                     std::vector<std::pair<int, ggml_tensor*>> image_embeds) {
-            auto hidden_states = model.forward(ctx, backend, input_ids, input_pos, image_embeds);  // [N, n_token, hidden_size]
+            auto hidden_states = model.forward(ctx, input_ids, input_pos, image_embeds);  // [N, n_token, hidden_size]
             return hidden_states;
         }
 
-        struct ggml_tensor* vision_forward(struct ggml_context* ctx,
-                                           ggml_backend_t backend,
+        struct ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
                                            struct ggml_tensor* pixel_values,
                                            struct ggml_tensor* input_pos,
                                            struct ggml_tensor* window_index,
                                            struct ggml_tensor* window_inverse_index,
                                            struct ggml_tensor* window_mask) {
-            auto hidden_states = model.vision_forward(ctx, backend, pixel_values, input_pos, window_index, window_inverse_index, window_mask);
+            auto hidden_states = model.vision_forward(ctx, pixel_values, input_pos, window_index, window_inverse_index, window_mask);
             return hidden_states;
         }
 
@@ -1002,7 +992,9 @@ namespace Qwen {
                                                 n_tokens * 4);
             set_backend_tensor_data(input_pos, input_pos_vec.data());
 
-            struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, input_pos, image_embeds);
+            auto runner_ctx = get_context();
+
+            struct ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, input_pos, image_embeds);
 
             ggml_build_forward_expand(gf, hidden_states);
 
@@ -1167,8 +1159,8 @@ namespace Qwen {
             // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
-            struct ggml_tensor* hidden_states = vision_forward(compute_ctx,
-                                                               runtime_backend,
+            auto runnter_ctx                  = get_context();
+            struct ggml_tensor* hidden_states = vision_forward(&runnter_ctx,
                                                                pixel_values,
                                                                pe,
                                                                window_index,
@@ -1196,10 +1188,10 @@ namespace Qwen {
 
         Qwen2_5_VLEmbedder(ggml_backend_t backend,
                            bool offload_params_to_cpu,
-                           const String2GGMLType& tensor_types = {},
-                           const std::string prefix            = "",
-                           bool enable_vision                  = false)
-            : model(backend, offload_params_to_cpu, tensor_types, prefix, enable_vision) {
+                           const String2TensorStorage& tensor_storage_map = {},
+                           const std::string prefix                       = "",
+                           bool enable_vision                             = false)
+            : model(backend, offload_params_to_cpu, tensor_storage_map, prefix, enable_vision) {
         }
 
         void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -1350,22 +1342,21 @@ namespace Qwen {
             ggml_type model_data_type = GGML_TYPE_F16;
 
             ModelLoader model_loader;
-            if (!model_loader.init_from_file(file_path, "qwen2vl.")) {
+            if (!model_loader.init_from_file_and_convert_name(file_path, "qwen2vl.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }
 
-            auto tensor_types = model_loader.tensor_storages_types;
-            for (auto& item : tensor_types) {
-                // LOG_DEBUG("%s %u", item.first.c_str(), item.second);
-                if (ends_with(item.first, "weight")) {
-                    item.second = model_data_type;
+            auto& tensor_storage_map = model_loader.get_tensor_storage_map();
+            for (auto& [name, tensor_storage] : tensor_storage_map) {
+                if (ends_with(name, "weight")) {
+                    tensor_storage.expected_type = model_data_type;
                 }
             }
 
             std::shared_ptr<Qwen2_5_VLEmbedder> qwenvl = std::make_shared<Qwen2_5_VLEmbedder>(backend,
                                                                                               false,
-                                                                                              tensor_types,
+                                                                                              tensor_storage_map,
                                                                                               "qwen2vl",
                                                                                               true);
 
