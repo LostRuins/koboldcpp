@@ -2377,7 +2377,7 @@ def format_jinja(messages,tools):
         text = jinja_compiled_template.render(messages=messages, tools=tools, add_generation_prompt=True, bos_token="", eos_token="")
         return text if text else None
     except Exception as e:
-        print("Jinja formatting failed: {e}")
+        print(f"Jinja formatting failed: {e}")
         return None
 
 def remove_outer_tags(inputstr):
