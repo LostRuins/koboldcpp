@@ -1361,7 +1361,6 @@ def fetch_gpu_properties(testCL,testCU,testVK,testmemory=False):
     gpumem_ignore_limit_max = 1024*1024*1024*300 #300 gb max
 
     if testCU:
-
         cumem, freecumem = detect_memory_cu(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
         MaxMemory[0] = max(cumem,MaxMemory[0])
         MaxFreeMemory[0] = max(freecumem,MaxFreeMemory[0])
@@ -1369,14 +1368,12 @@ def fetch_gpu_properties(testCL,testCU,testVK,testmemory=False):
             print(f'detected CUDA memory: {cumem/(1024*1024)} MB, {freecumem/(1024*102)} MB free')
 
     if testVK:
-
         vkmem = detect_memory_vk(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
         MaxMemory[0] = max(vkmem,MaxMemory[0])
         if testmemory:
             print(f'detected Vulkan memory: {vkmem/(1024*1024)} MB')
 
     if testCL:
-
         clmem = detect_memory_cl(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
         MaxMemory[0] = max(clmem,MaxMemory[0])
         if testmemory:
