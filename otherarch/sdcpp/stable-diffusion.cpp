@@ -1807,7 +1807,9 @@ public:
         } else {
             latent = gaussian_latent_sample(work_ctx, vae_output);
         }
-        process_latent_in(latent);
+        if (!use_tiny_autoencoder) {
+            process_latent_in(latent);
+        }
         if (sd_version_is_qwen_image(version)) {
             latent = ggml_reshape_4d(work_ctx, latent, latent->ne[0], latent->ne[1], latent->ne[3], 1);
         }
@@ -2359,7 +2361,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
             }
 
             ggml_ext_tensor_iter(init_img, [&](ggml_tensor* init_img, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
-                float value = sd_image_get_f32(processed_id_images[i3], i0, i1, i2);
+                float value = sd_image_get_f32(processed_id_images[i3], i0, i1, i2, false);
                 ggml_ext_tensor_set_f32(init_img, value, i0, i1, i2, i3);
             });
 
