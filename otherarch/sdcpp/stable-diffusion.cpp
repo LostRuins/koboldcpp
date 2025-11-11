@@ -1043,7 +1043,7 @@ public:
             LOG_WARN("can not find %s for lora %s", st_file_path.c_str(), lora_path.c_str());
             return;
         }
-        LoraModel lora(backend, file_path);
+        LoraModel lora(backend, file_path, "", version);
         if (!lora.load_from_file(false, n_threads)) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
             return;
