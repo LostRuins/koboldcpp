@@ -1049,7 +1049,7 @@ namespace Qwen {
         }
 
         struct ggml_cgraph* build_encode_image_graph(struct ggml_tensor* image) {
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, QWENVL_GRAPH_SIZE, false);
+            struct ggml_cgraph* gf = new_graph_custom(QWENVL_GRAPH_SIZE);
 
             GGML_ASSERT(image->ne[1] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);

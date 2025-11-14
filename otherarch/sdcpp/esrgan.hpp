@@ -344,7 +344,7 @@ struct ESRGAN : public GGMLRunner {
         if (!rrdb_net)
             return nullptr;
         constexpr int kGraphNodes = 1 << 16;  // 65k
-        struct ggml_cgraph* gf    = ggml_new_graph_custom(compute_ctx, kGraphNodes, /*grads*/ false);
+        struct ggml_cgraph* gf    = new_graph_custom(kGraphNodes);
         x                         = to_backend(x);
 
         auto runner_ctx         = get_context();

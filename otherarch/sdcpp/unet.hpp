@@ -7,7 +7,7 @@
 
 /*==================================================== UnetModel =====================================================*/
 
-#define UNET_GRAPH_SIZE 10240
+#define UNET_GRAPH_SIZE 102400
 
 class SpatialVideoTransformer : public SpatialTransformer {
 protected:
@@ -612,7 +612,7 @@ struct UNetModelRunner : public GGMLRunner {
                                     int num_video_frames                      = -1,
                                     std::vector<struct ggml_tensor*> controls = {},
                                     float control_strength                    = 0.f) {
-        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, UNET_GRAPH_SIZE, false);
+        struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
 
         if (num_video_frames == -1) {
             num_video_frames = x->ne[3];

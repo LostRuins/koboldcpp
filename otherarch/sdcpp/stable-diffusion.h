@@ -134,6 +134,13 @@ enum preview_t {
     PREVIEW_COUNT
 };
 
+enum lora_apply_mode_t {
+    LORA_APPLY_AUTO,
+    LORA_APPLY_IMMEDIATELY,
+    LORA_APPLY_AT_RUNTIME,
+    LORA_APPLY_MODE_COUNT,
+};
+
 typedef struct {
     bool enabled;
     int tile_size_x;
@@ -165,6 +172,7 @@ typedef struct {
     enum sd_type_t wtype;
     enum rng_type_t rng_type;
     enum prediction_t prediction;
+    enum lora_apply_mode_t lora_apply_mode;
     bool offload_params_to_cpu;
     bool keep_clip_on_cpu;
     bool keep_control_net_on_cpu;
@@ -267,7 +275,7 @@ typedef void (*sd_preview_cb_t)(int step, int frame_count, sd_image_t* frames, b
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
-SD_API void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy);
+SD_API void sd_set_preview_callback(sd_preview_cb_t cb, enum preview_t mode, int interval, bool denoised, bool noisy);
 SD_API int32_t sd_get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
@@ -283,6 +291,8 @@ SD_API const char* sd_prediction_name(enum prediction_t prediction);
 SD_API enum prediction_t str_to_prediction(const char* str);
 SD_API const char* sd_preview_name(enum preview_t preview);
 SD_API enum preview_t str_to_preview(const char* str);
+SD_API const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode);
+SD_API enum lora_apply_mode_t str_to_lora_apply_mode(const char* str);
 
 SD_API void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params);
 SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);

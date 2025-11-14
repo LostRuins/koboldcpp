@@ -1243,7 +1243,7 @@ namespace Flux {
                                         bool increase_ref_index               = false,
                                         std::vector<int> skip_layers          = {}) {
             GGML_ASSERT(x->ne[3] == 1);
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
+            struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE);
 
             struct ggml_tensor* mod_index_arange = nullptr;
             struct ggml_tensor* dct              = nullptr;  // for chroma radiance

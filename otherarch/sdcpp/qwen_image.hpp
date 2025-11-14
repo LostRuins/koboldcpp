@@ -543,7 +543,7 @@ namespace Qwen {
                                         std::vector<ggml_tensor*> ref_latents = {},
                                         bool increase_ref_index               = false) {
             GGML_ASSERT(x->ne[3] == 1);
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, QWEN_IMAGE_GRAPH_SIZE, false);
+            struct ggml_cgraph* gf = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE);
 
             x         = to_backend(x);
             context   = to_backend(context);

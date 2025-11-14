@@ -17,6 +17,7 @@
 #include "vae.hpp"
 
 #include "latent-preview.h"
+#include "name_conversion.h"
 
 const char* model_version_to_str[] = {
     "SD 1.x",
@@ -108,10 +109,14 @@ public:
     std::shared_ptr<DiffusionModel> high_noise_diffusion_model;
     std::shared_ptr<VAE> first_stage_model;
     std::shared_ptr<TinyAutoEncoder> tae_first_stage;
-    std::shared_ptr<ControlNet> control_net = nullptr;
+    std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<PhotoMakerIDEncoder> pmid_model;
     std::shared_ptr<LoraModel> pmid_lora;
     std::shared_ptr<PhotoMakerIDEmbed> pmid_id_embeds;
+    std::vector<std::shared_ptr<LoraModel>> cond_stage_lora_models;
+    std::vector<std::shared_ptr<LoraModel>> diffusion_lora_models;
+    std::vector<std::shared_ptr<LoraModel>> first_stage_lora_models;
+    bool apply_lora_immediately = false;
 
     std::string taesd_path;
     bool use_tiny_autoencoder            = false;
@@ -448,6 +453,25 @@ public:
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
+        if (sd_ctx_params->lora_apply_mode == LORA_APPLY_AUTO) {
+            bool have_quantized_weight = false;
+            for (const auto& [type, _] : wtype_stat) {
+                if (ggml_is_quantized(type)) {
+                    have_quantized_weight = true;
+                    break;
+                }
+            }
+            if (have_quantized_weight) {
+                apply_lora_immediately = false;
+            } else {
+                apply_lora_immediately = true;
+            }
+        } else if (sd_ctx_params->lora_apply_mode == LORA_APPLY_IMMEDIATELY) {
+            apply_lora_immediately = true;
+        } else {
+            apply_lora_immediately = false;
+        }
+
         if (sd_version_is_sdxl(version)) {
             scale_factor = 0.13025f;
         } else if (sd_version_is_sd3(version)) {
@@ -693,8 +717,14 @@ public:
               if (version != VERSION_SDXL) { // kcpp
                 printf("\n!!!!\nWARNING: PhotoMaker is only compatible with SDXL models. PhotoMaker will be disabled!\n!!!!\n");
               } else {
-                pmid_lora = std::make_shared<LoraModel>(backend, sd_ctx_params->photo_maker_path, "", version);
-                if (!pmid_lora->load_from_file(true, n_threads)) {
+                pmid_lora               = std::make_shared<LoraModel>("pmid", backend, sd_ctx_params->photo_maker_path, "", version);
+                auto lora_tensor_filter = [&](const std::string& tensor_name) {
+                    if (starts_with(tensor_name, "lora.model")) {
+                        return true;
+                    }
+                    return false;
+                };
+                if (!pmid_lora->load_from_file(n_threads, lora_tensor_filter)) {
                     LOG_WARN("load photomaker lora tensors from %s failed", sd_ctx_params->photo_maker_path);
                     return false;
                 }
@@ -1043,8 +1073,8 @@ public:
             LOG_WARN("can not find %s for lora %s", st_file_path.c_str(), lora_path.c_str());
             return;
         }
-        LoraModel lora(backend, file_path, "", version);
-        if (!lora.load_from_file(false, n_threads)) {
+        LoraModel lora(file_path, backend, file_path, "", version);
+        if (!lora.load_from_file(n_threads)) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
             return;
         }
@@ -1060,8 +1090,11 @@ public:
                  (t1 - t0) * 1.0f / 1000);
     }
 
-    void apply_lora(std::string lora_name, float multiplier) {
-        int64_t t0                 = ggml_time_ms();
+    std::shared_ptr<LoraModel> load_lora_model_from_file(const std::string& lora_id,
+                                                         float multiplier,
+                                                         ggml_backend_t backend,
+                                                         LoraModel::filter_t lora_tensor_filter = nullptr) {
+        std::string lora_name      = lora_id;
         std::string high_noise_tag = "|high_noise|";
         bool is_high_noise         = false;
         if (starts_with(lora_name, high_noise_tag)) {
@@ -1078,25 +1111,19 @@ public:
             file_path = ckpt_file_path;
         } else {
             LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
-            return;
+            return nullptr;
         }
-        LoraModel lora(backend, file_path, is_high_noise ? "model.high_noise_" : "", version);
-        if (!lora.load_from_file(false, n_threads)) {
+        auto lora = std::make_shared<LoraModel>(lora_id, backend, file_path, is_high_noise ? "model.high_noise_" : "", version);
+        if (!lora->load_from_file(n_threads, lora_tensor_filter)) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
-            return;
+            return nullptr;
         }
 
-        lora.multiplier = multiplier;
-        // TODO: send version?
-        lora.apply(tensors, version, n_threads);
-        lora.free_params_buffer();
-
-        int64_t t1 = ggml_time_ms();
-
-        LOG_INFO("lora '%s' applied, taking %.2fs", lora_name.c_str(), (t1 - t0) * 1.0f / 1000);
+        lora->multiplier = multiplier;
+        return lora;
     }
 
-    void apply_loras(const std::unordered_map<std::string, float>& lora_state) {
+    void apply_loras_immediately(const std::unordered_map<std::string, float>& lora_state) {
         std::unordered_map<std::string, float> lora_state_diff;
         for (auto& kv : lora_state) {
             const std::string& lora_name = kv.first;
@@ -1117,10 +1144,147 @@ public:
         }
 
         for (auto& kv : lora_state_diff) {
-            apply_lora(kv.first, kv.second);
+            int64_t t0 = ggml_time_ms();
+
+            auto lora = load_lora_model_from_file(kv.first, kv.second, backend);
+            lora->apply(tensors, version, n_threads);
+            lora->free_params_buffer();
+
+            int64_t t1 = ggml_time_ms();
+
+            LOG_INFO("lora '%s' applied, taking %.2fs", kv.first.c_str(), (t1 - t0) * 1.0f / 1000);
         }
 
         curr_lora_state = lora_state;
+    }
+
+    void apply_loras_at_runtime(const std::unordered_map<std::string, float>& lora_state) {
+        cond_stage_lora_models.clear();
+        diffusion_lora_models.clear();
+        first_stage_lora_models.clear();
+        if (cond_stage_model) {
+            std::vector<std::shared_ptr<LoraModel>> lora_models;
+            auto lora_state_diff = lora_state;
+            for (auto& lora_model : cond_stage_lora_models) {
+                auto iter = lora_state_diff.find(lora_model->lora_id);
+
+                if (iter != lora_state_diff.end()) {
+                    lora_model->multiplier = iter->second;
+                    lora_models.push_back(lora_model);
+                    lora_state_diff.erase(iter);
+                }
+            }
+            cond_stage_lora_models  = lora_models;
+            auto lora_tensor_filter = [&](const std::string& tensor_name) {
+                if (is_cond_stage_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            for (auto& kv : lora_state_diff) {
+                const std::string& lora_id = kv.first;
+                float multiplier           = kv.second;
+
+                auto lora = load_lora_model_from_file(lora_id, multiplier, clip_backend, lora_tensor_filter);
+                if (lora && !lora->lora_tensors.empty()) {
+                    lora->preprocess_lora_tensors(tensors);
+                    cond_stage_lora_models.push_back(lora);
+                }
+            }
+            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(cond_stage_lora_models);
+            cond_stage_model->set_weight_adapter(multi_lora_adapter);
+        }
+        if (diffusion_model) {
+            std::vector<std::shared_ptr<LoraModel>> lora_models;
+            auto lora_state_diff = lora_state;
+            for (auto& lora_model : diffusion_lora_models) {
+                auto iter = lora_state_diff.find(lora_model->lora_id);
+
+                if (iter != lora_state_diff.end()) {
+                    lora_model->multiplier = iter->second;
+                    lora_models.push_back(lora_model);
+                    lora_state_diff.erase(iter);
+                }
+            }
+            diffusion_lora_models   = lora_models;
+            auto lora_tensor_filter = [&](const std::string& tensor_name) {
+                if (is_diffusion_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            for (auto& kv : lora_state_diff) {
+                const std::string& lora_name = kv.first;
+                float multiplier             = kv.second;
+
+                auto lora = load_lora_model_from_file(lora_name, multiplier, backend, lora_tensor_filter);
+                if (lora && !lora->lora_tensors.empty()) {
+                    lora->preprocess_lora_tensors(tensors);
+                    diffusion_lora_models.push_back(lora);
+                }
+            }
+            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(diffusion_lora_models);
+            diffusion_model->set_weight_adapter(multi_lora_adapter);
+            if (high_noise_diffusion_model) {
+                high_noise_diffusion_model->set_weight_adapter(multi_lora_adapter);
+            }
+        }
+
+        if (first_stage_model) {
+            std::vector<std::shared_ptr<LoraModel>> lora_models;
+            auto lora_state_diff = lora_state;
+            for (auto& lora_model : first_stage_lora_models) {
+                auto iter = lora_state_diff.find(lora_model->lora_id);
+
+                if (iter != lora_state_diff.end()) {
+                    lora_model->multiplier = iter->second;
+                    lora_models.push_back(lora_model);
+                    lora_state_diff.erase(iter);
+                }
+            }
+            first_stage_lora_models = lora_models;
+            auto lora_tensor_filter = [&](const std::string& tensor_name) {
+                if (is_first_stage_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            for (auto& kv : lora_state_diff) {
+                const std::string& lora_name = kv.first;
+                float multiplier             = kv.second;
+
+                auto lora = load_lora_model_from_file(lora_name, multiplier, vae_backend, lora_tensor_filter);
+                if (lora && !lora->lora_tensors.empty()) {
+                    lora->preprocess_lora_tensors(tensors);
+                    first_stage_lora_models.push_back(lora);
+                }
+            }
+            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(first_stage_lora_models);
+            first_stage_model->set_weight_adapter(multi_lora_adapter);
+        }
+    }
+
+    void lora_stat() {
+        if (!cond_stage_lora_models.empty()) {
+            LOG_INFO("cond_stage_lora_models:");
+            for (auto& lora_model : cond_stage_lora_models) {
+                lora_model->stat();
+            }
+        }
+
+        if (!diffusion_lora_models.empty()) {
+            LOG_INFO("diffusion_lora_models:");
+            for (auto& lora_model : diffusion_lora_models) {
+                lora_model->stat();
+            }
+        }
+
+        if (!first_stage_lora_models.empty()) {
+            LOG_INFO("first_stage_lora_models:");
+            for (auto& lora_model : first_stage_lora_models) {
+                lora_model->stat();
+            }
+        }
     }
 
     std::string apply_loras_from_prompt(const std::string& prompt) {
@@ -1136,10 +1300,18 @@ public:
             printf("\nWarning: not applying LoRAs requested by prompt!\n");
         }
         int64_t t0 = ggml_time_ms();
-        apply_loras(lora_f2m);
+        if (apply_lora_immediately) {
+            LOG_INFO("apply lora immediately");
+            apply_loras_immediately(lora_f2m);
+        } else {
+            LOG_INFO("apply at runtime");
+            apply_loras_at_runtime(lora_f2m);
+        }
         int64_t t1 = ggml_time_ms();
-        LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-        LOG_DEBUG("prompt after extract and remove lora: \"%s\"", result_pair.second.c_str());
+        if (!lora_f2m.empty()) {
+            LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+            LOG_DEBUG("prompt after extract and remove lora: \"%s\"", result_pair.second.c_str());
+        }
         return result_pair.second;
     }
 
@@ -2239,6 +2411,28 @@ enum preview_t str_to_preview(const char* str) {
     return PREVIEW_COUNT;
 }
 
+const char* lora_apply_mode_to_str[] = {
+    "auto",
+    "immediately",
+    "at_runtime",
+};
+
+const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode) {
+    if (mode < LORA_APPLY_MODE_COUNT) {
+        return lora_apply_mode_to_str[mode];
+    }
+    return NONE_STR;
+}
+
+enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
+    for (int i = 0; i < LORA_APPLY_MODE_COUNT; i++) {
+        if (!strcmp(str, lora_apply_mode_to_str[i])) {
+            return (enum lora_apply_mode_t)i;
+        }
+    }
+    return LORA_APPLY_MODE_COUNT;
+}
+
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     *sd_ctx_params                         = {};
     sd_ctx_params->vae_decode_only         = true;
@@ -2247,6 +2441,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->wtype                   = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                = CUDA_RNG;
     sd_ctx_params->prediction              = DEFAULT_PRED;
+    sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -2832,6 +3027,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
     }
+
+    sd_ctx->sd->lora_stat();
+
     sd_image_t* result_images = (sd_image_t*)calloc(batch_count, sizeof(sd_image_t));
     if (result_images == nullptr) {
         ggml_free(work_ctx);
@@ -3500,6 +3698,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
     }
+
+    sd_ctx->sd->lora_stat();
 
     sd_image_t* result_images = (sd_image_t*)calloc(vid->ne[2], sizeof(sd_image_t));
     if (result_images == nullptr) {

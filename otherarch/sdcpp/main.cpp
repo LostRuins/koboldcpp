@@ -137,7 +137,8 @@ struct SDParams {
     int chroma_t5_mask_pad   = 1;
     float flow_shift         = INFINITY;
 
-    prediction_t prediction = DEFAULT_PRED;
+    prediction_t prediction           = DEFAULT_PRED;
+    lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
     bool force_sdxl_vae_conv_scale       = false;
@@ -209,6 +210,7 @@ void print_params(SDParams params) {
     printf("    high_noise_sample_params:          %s\n", SAFE_STR(high_noise_sample_params_str));
     printf("    moe_boundary:                      %.3f\n", params.moe_boundary);
     printf("    prediction:                        %s\n", sd_prediction_name(params.prediction));
+    printf("    lora_apply_mode:                   %s\n", sd_lora_apply_mode_name(params.lora_apply_mode));
     printf("    flow_shift:                        %.2f\n", params.flow_shift);
     printf("    strength(img2img):                 %.2f\n", params.strength);
     printf("    rng:                               %s\n", sd_rng_type_name(params.rng_type));
@@ -926,6 +928,20 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_lora_apply_mode_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg        = argv[index];
+        params.lora_apply_mode = str_to_lora_apply_mode(arg);
+        if (params.lora_apply_mode == LORA_APPLY_MODE_COUNT) {
+            fprintf(stderr, "error: invalid lora apply model %s\n",
+                    arg);
+            return -1;
+        }
+        return 1;
+    };
+
     auto on_sample_method_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
@@ -1123,6 +1139,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--prediction",
          "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow]",
          on_prediction_arg},
+        {"",
+         "--lora-apply-mode",
+         "the way to apply LoRA, one of [auto, immediately, at_runtime], default is auto. "
+         "In auto mode, if the model weights contain any quantized parameters, the at_runtime mode will be used; otherwise, immediately will be used."
+         "The immediately mode may have precision and compatibility issues with quantized parameters, "
+         "but it usually offers faster inference speed and, in some cases, lower memory usage"
+         "The at_runtime mode, on the other hand, is exactly the opposite.",
+         on_lora_apply_mode_arg},
         {"",
          "--scheduler",
          "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete",
@@ -1738,6 +1762,7 @@ int main(int argc, const char* argv[]) {
         params.wtype,
         params.rng_type,
         params.prediction,
+        params.lora_apply_mode,
         params.offload_params_to_cpu,
         params.clip_on_cpu,
         params.control_net_cpu,

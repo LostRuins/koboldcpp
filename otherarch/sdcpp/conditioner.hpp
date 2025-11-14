@@ -34,6 +34,7 @@ struct Conditioner {
     virtual void free_params_buffer()                                                      = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors)    = 0;
     virtual size_t get_params_buffer_size()                                                = 0;
+    virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
     virtual std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
                                                                                           int n_threads,
                                                                                           const ConditionerParams& conditioner_params) {
@@ -106,6 +107,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             buffer_size += text_model2->get_params_buffer_size();
         }
         return buffer_size;
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        text_model->set_weight_adapter(adapter);
+        if (sd_version_is_sdxl(version)) {
+            text_model2->set_weight_adapter(adapter);
+        }
     }
 
     bool load_embedding(std::string embd_name, std::string embd_path, std::vector<int32_t>& bpe_tokens) {
@@ -764,6 +772,18 @@ struct SD3CLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        if (clip_l) {
+            clip_l->set_weight_adapter(adapter);
+        }
+        if (clip_g) {
+            clip_g->set_weight_adapter(adapter);
+        }
+        if (t5) {
+            t5->set_weight_adapter(adapter);
+        }
+    }
+
     std::vector<std::pair<std::vector<int>, std::vector<float>>> tokenize(std::string text,
                                                                           size_t max_length = 0,
                                                                           bool padding      = false) {
@@ -1160,6 +1180,15 @@ struct FluxCLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {
+        if (clip_l) {
+            clip_l->set_weight_adapter(adapter);
+        }
+        if (t5) {
+            t5->set_weight_adapter(adapter);
+        }
+    }
+
     std::vector<std::pair<std::vector<int>, std::vector<float>>> tokenize(std::string text,
                                                                           size_t max_length = 0,
                                                                           bool padding      = false) {
@@ -1400,6 +1429,12 @@ struct T5CLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        if (t5) {
+            t5->set_weight_adapter(adapter);
+        }
+    }
+
     std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
                                                                                   size_t max_length = 0,
                                                                                   bool padding      = false) {
@@ -1587,6 +1622,12 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
         size_t buffer_size = 0;
         buffer_size += qwenvl->get_params_buffer_size();
         return buffer_size;
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        if (qwenvl) {
+            qwenvl->set_weight_adapter(adapter);
+        }
     }
 
     std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,

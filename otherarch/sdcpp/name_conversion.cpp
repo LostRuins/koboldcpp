@@ -855,6 +855,49 @@ std::string convert_sep_to_dot(std::string name) {
     return name;
 }
 
+std::vector<std::string> cond_stage_model_prefix_vec = {
+    "cond_stage_model.1.",
+    "cond_stage_model.",
+    "conditioner.embedders.",
+    "text_encoders.",
+};
+
+std::vector<std::string> diffuison_model_prefix_vec = {
+    "model.diffusion_model.",
+};
+
+std::vector<std::string> first_stage_model_prefix_vec = {
+    "first_stage_model.",
+    "vae.",
+};
+
+bool is_cond_stage_model_name(const std::string& name) {
+    for (const auto& prefix : cond_stage_model_prefix_vec) {
+        if (starts_with(name, prefix) || starts_with(name, "lora." + prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_diffusion_model_name(const std::string& name) {
+    for (const auto& prefix : diffuison_model_prefix_vec) {
+        if (starts_with(name, prefix) || starts_with(name, "lora." + prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_first_stage_model_name(const std::string& name) {
+    for (const auto& prefix : first_stage_model_prefix_vec) {
+        if (starts_with(name, prefix) || starts_with(name, "lora." + prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string convert_tensor_name(std::string name, SDVersion version) {
     bool is_lora                             = false;
     bool is_lycoris_underline                = false;
@@ -956,9 +999,6 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     // diffusion model
     {
-        std::vector<std::string> diffuison_model_prefix_vec = {
-            "model.diffusion_model.",
-        };
         for (const auto& prefix : diffuison_model_prefix_vec) {
             if (starts_with(name, prefix)) {
                 name = convert_diffusion_model_name(name.substr(prefix.size()), prefix, version);
@@ -970,12 +1010,6 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     // cond_stage_model
     {
-        std::vector<std::string> cond_stage_model_prefix_vec = {
-            "cond_stage_model.1.",
-            "cond_stage_model.",
-            "conditioner.embedders.",
-            "text_encoders.",
-        };
         for (const auto& prefix : cond_stage_model_prefix_vec) {
             if (starts_with(name, prefix)) {
                 name = convert_cond_stage_model_name(name.substr(prefix.size()), prefix);
@@ -987,10 +1021,6 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     // first_stage_model
     {
-        std::vector<std::string> first_stage_model_prefix_vec = {
-            "first_stage_model.",
-            "vae.",
-        };
         for (const auto& prefix : first_stage_model_prefix_vec) {
             if (starts_with(name, prefix)) {
                 name = convert_first_stage_model_name(name.substr(prefix.size()), prefix);

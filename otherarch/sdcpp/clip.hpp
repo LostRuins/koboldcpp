@@ -936,7 +936,7 @@ struct CLIPTextModelRunner : public GGMLRunner {
                                     size_t max_token_idx         = 0,
                                     bool return_pooled           = false,
                                     int clip_skip                = -1) {
-        struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
+        struct ggml_cgraph* gf = new_graph_custom(2048);
 
         input_ids = to_backend(input_ids);
 

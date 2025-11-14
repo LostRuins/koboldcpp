@@ -870,7 +870,7 @@ struct MMDiTRunner : public GGMLRunner {
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* y,
                                     std::vector<int> skip_layers = std::vector<int>()) {
-        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, MMDIT_GRAPH_SIZE, false);
+        struct ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE);
 
         x         = to_backend(x);
         context   = to_backend(context);

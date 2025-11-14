@@ -380,7 +380,7 @@ struct ControlNet : public GGMLRunner {
                                     struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* y = nullptr) {
-        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, CONTROL_NET_GRAPH_SIZE, false);
+        struct ggml_cgraph* gf = new_graph_custom(CONTROL_NET_GRAPH_SIZE);
 
         x = to_backend(x);
         if (guided_hint_cached) {

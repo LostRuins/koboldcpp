@@ -35,8 +35,9 @@ struct DiffusionModel {
     virtual void free_compute_buffer()                                                  = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) = 0;
     virtual size_t get_params_buffer_size()                                             = 0;
-    virtual int64_t get_adm_in_channels()                                               = 0;
-    virtual void set_flash_attn_enabled(bool enabled)                                   = 0;
+    virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter){};
+    virtual int64_t get_adm_in_channels()             = 0;
+    virtual void set_flash_attn_enabled(bool enabled) = 0;
 };
 
 struct UNetModel : public DiffusionModel {
@@ -71,6 +72,10 @@ struct UNetModel : public DiffusionModel {
 
     size_t get_params_buffer_size() override {
         return unet.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        unet.set_weight_adapter(adapter);
     }
 
     int64_t get_adm_in_channels() override {
@@ -130,6 +135,10 @@ struct MMDiTModel : public DiffusionModel {
         return mmdit.get_params_buffer_size();
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        mmdit.set_weight_adapter(adapter);
+    }
+
     int64_t get_adm_in_channels() override {
         return 768 + 1280;
     }
@@ -186,6 +195,10 @@ struct FluxModel : public DiffusionModel {
 
     size_t get_params_buffer_size() override {
         return flux.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        flux.set_weight_adapter(adapter);
     }
 
     int64_t get_adm_in_channels() override {
@@ -251,6 +264,10 @@ struct WanModel : public DiffusionModel {
         return wan.get_params_buffer_size();
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        wan.set_weight_adapter(adapter);
+    }
+
     int64_t get_adm_in_channels() override {
         return 768;
     }
@@ -311,6 +328,10 @@ struct QwenImageModel : public DiffusionModel {
 
     size_t get_params_buffer_size() override {
         return qwen_image.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        qwen_image.set_weight_adapter(adapter);
     }
 
     int64_t get_adm_in_channels() override {
