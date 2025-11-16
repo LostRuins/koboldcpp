@@ -40,6 +40,7 @@ struct kcpp_params {
     int32_t mirostat          = 0;     // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
     float   mirostat_tau      = 5.00f; // target entropy
     float   mirostat_eta      = 0.10f; // learning rate
+    int32_t mirostat_swap     = 1;     // 0 = disabled, 1 = swapped tau + eta
     float   dry_multiplier    = 0.0f;  // penalty multiplier, 0.0 = disabled
     float   dry_base          = 1.75f; // exponential base
     int32_t dry_allowed_length = 2;    // repeated sequences longer than this are penalized

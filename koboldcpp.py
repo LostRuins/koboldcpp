@@ -240,6 +240,7 @@ class generation_inputs(ctypes.Structure):
                 ("mirostat", ctypes.c_int),
                 ("mirostat_tau", ctypes.c_float),
                 ("mirostat_eta", ctypes.c_float),
+                ("mirostat_swap", ctypes.c_int),
                 ("xtc_threshold", ctypes.c_float),
                 ("xtc_probability", ctypes.c_float),
                 ("sampler_order", ctypes.c_int * sampler_order_max),
@@ -1495,6 +1496,7 @@ def generate(genparams, stream_flag=False):
     mirostat = tryparseint(genparams.get('mirostat', 0),0)
     mirostat_tau = tryparsefloat(genparams.get('mirostat_tau', 5.0),5.0)
     mirostat_eta = tryparsefloat(genparams.get('mirostat_eta', 0.1),0.1)
+    mirostat_swap = tryparseint(genparams.get('mirostat_swap', 1),1)
     dry_multiplier = tryparsefloat(genparams.get('dry_multiplier', 0.0),0.0)
     dry_base = tryparsefloat(genparams.get('dry_base', 1.75),1.75)
     dry_allowed_length = tryparseint(genparams.get('dry_allowed_length', 2),2)
@@ -1594,8 +1596,9 @@ def generate(genparams, stream_flag=False):
         inputs.mirostat = mirostat
         inputs.mirostat_tau = mirostat_tau
         inputs.mirostat_eta = mirostat_eta
+        inputs.mirostat_swap = mirostat_swap
     else:
-        inputs.mirostat = inputs.mirostat_tau = inputs.mirostat_eta = 0
+        inputs.mirostat = inputs.mirostat_tau = inputs.mirostat_eta = inputs.mirostat_swap = 0
     inputs.dry_multiplier = dry_multiplier
     inputs.dry_base = dry_base
     inputs.xtc_threshold = xtc_threshold

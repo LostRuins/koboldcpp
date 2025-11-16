@@ -1644,7 +1644,7 @@ void sample_guidance(struct llama_context * ctx, struct llama_context * guidance
 }
 
 int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float temp, std::mt19937 & rng,
-int mirostat, float mirostat_tau, float mirostat_eta, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
+int mirostat, float mirostat_tau, float mirostat_eta, int mirostat_swap, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
 const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor)
 {
     // printf("SampleLogits called with: n_ctx=%d, n_vocab=%d, rep_pen_range=%d, rep_pen=%f, rep_pen_slope=%f, presence_penalty=%f, top_k=%f, top_a=%f, top_p=%f, min_p=%f, typical_p=%f, tfs=%f, nsigma=%f, temp=%f, mirostat=%d, mirostat_tau=%f, mirostat_eta=%f, dry_multiplier=%f, dry_base=%f, dry_allowed_length=%d, dry_penalty_last_n=%d, xtc_threshold=%f, xtc_probability=%f, sampler_order_size=%zu, dynatemp_range=%f, dynatemp_exponent=%f, smoothing_factor=%f\n",
@@ -1692,11 +1692,19 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         sample_temperature(&candidates_p, temp, smoothing_factor);
         if (mirostat == 1)
         {
-            id = sample_token_mirostat(n_vocab, &candidates_p, rng, mirostat_tau, mirostat_eta, mirostat_m, &mirostat_mu);
+            if (mirostat_swap == 1) {
+                id = sample_token_mirostat(n_vocab, &candidates_p, rng, mirostat_tau, mirostat_eta, mirostat_m, &mirostat_mu);
+            } else {
+                id = sample_token_mirostat(n_vocab, &candidates_p, rng, mirostat_eta, mirostat_tau, mirostat_m, &mirostat_mu);
+            }
         }
         else
         {
-            id = sample_token_mirostat_v2(&candidates_p, rng, mirostat_tau, mirostat_eta, &mirostat_mu);
+            if (mirostat_swap == 1) {
+                id = sample_token_mirostat_v2(&candidates_p, rng, mirostat_tau, mirostat_eta, &mirostat_mu);
+            } else {
+                id = sample_token_mirostat_v2(&candidates_p, rng, mirostat_eta, mirostat_tau, &mirostat_mu);
+            }
         }
     }
     else
@@ -3427,6 +3435,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     kcpp_data->mirostat = inputs.mirostat;
     kcpp_data->mirostat_eta = inputs.mirostat_eta;
     kcpp_data->mirostat_tau = inputs.mirostat_tau;
+    kcpp_data->mirostat_swap = inputs.mirostat_swap;
     kcpp_data->dry_multiplier = inputs.dry_multiplier;
     kcpp_data->dry_base = inputs.dry_base;
     kcpp_data->dry_allowed_length = inputs.dry_allowed_length;
@@ -4213,7 +4222,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
 
                 id = SampleLogits(logitsPtr, nctx, n_vocab, last_n_size, repeat_penalty, kcpp_data->rep_pen_slope, presence_penalty,
                 top_k, top_a, top_p, min_p, typical_p, tfs_z, nsigma, temp, rng,
-                kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta,
+                kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta, kcpp_data->mirostat_swap,
                 kcpp_data->dry_multiplier, kcpp_data->dry_base,
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,
                 sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor);
