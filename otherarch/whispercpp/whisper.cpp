@@ -12,6 +12,10 @@
 #include "ggml-cuda.h"
 #endif
 
+#ifdef GGML_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
+
 #ifdef GGML_USE_SYCL
 #include "ggml-sycl.h"
 #endif
@@ -1258,6 +1262,16 @@ static ggml_backend_t whisper_backend_init(const whisper_context_params & params
         backend_gpu = ggml_backend_sycl_init(params.gpu_device);
         if (!backend_gpu) {
             WHISPER_LOG_ERROR("%s: ggml_backend_sycl_init() failed\n", __func__);
+        }
+    }
+#endif
+
+#ifdef GGML_USE_VULKAN
+    if (params.use_gpu) {
+        WHISPER_LOG_INFO("%s: using Vulkan backend\n", __func__);
+        backend_gpu = ggml_backend_vk_init(params.gpu_device);
+        if (!backend_gpu) {
+            WHISPER_LOG_ERROR("%s: ggml_backend_vk_init() failed\n", __func__);
         }
     }
 #endif

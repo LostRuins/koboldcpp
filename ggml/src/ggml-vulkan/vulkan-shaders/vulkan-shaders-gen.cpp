@@ -90,7 +90,7 @@ enum MatMulIdType {
 
 namespace {
 
-void execute_command(const std::string& command, std::string& stdout_str, std::string& stderr_str) {
+void execute_command(std::vector<std::string>& command, std::string& stdout_str, std::string& stderr_str) {
 #ifdef _WIN32
     HANDLE stdout_read, stdout_write;
     HANDLE stderr_read, stderr_write;
@@ -113,8 +113,10 @@ void execute_command(const std::string& command, std::string& stdout_str, std::s
     si.hStdOutput = stdout_write;
     si.hStdError = stderr_write;
 
-    std::vector<char> cmd(command.begin(), command.end());
-    cmd.push_back('\0');
+    std::string cmd;
+    for (const auto& part : command) {
+        cmd += part + " ";
+    }
 
     if (!CreateProcessA(NULL, cmd.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
         throw std::runtime_error("Failed to create process");
@@ -152,6 +154,12 @@ void execute_command(const std::string& command, std::string& stdout_str, std::s
         throw std::runtime_error("Failed to fork process");
     }
 
+    std::vector<char*> argv;
+    for (std::string& part : command) {
+        argv.push_back(part.data());
+    }
+    argv.push_back(nullptr);
+
     if (pid == 0) {
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
@@ -159,7 +167,7 @@ void execute_command(const std::string& command, std::string& stdout_str, std::s
         dup2(stderr_pipe[1], STDERR_FILENO);
         close(stdout_pipe[1]);
         close(stderr_pipe[1]);
-        execl("/bin/sh", "sh", "-c", command.c_str(), (char*) nullptr);
+        execvp(argv[0], argv.data());
         _exit(EXIT_FAILURE);
     } else {
         close(stdout_pipe[1]);
@@ -330,23 +338,28 @@ compile_count_guard acquire_compile_slot() {
 void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
     std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
 
+    #ifdef _WIN32
+        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, "\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
+    #else
+        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, in_path, "-o", out_path};
+    #endif
+
     // disable spirv-opt for coopmat shaders for https://github.com/ggerganov/llama.cpp/issues/10734
     // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
     // disable spirv-opt for rope shaders for https://github.com/ggml-org/llama.cpp/issues/16860
-    std::string opt_level = (coopmat || name.find("bf16") != std::string::npos || name.find("rope") != std::string::npos) ? "" : "-O";
+    if (!coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos) {
+        cmd.push_back("-O");
+    }
 
     std::cout << "string_to_spv: " << name << "\n";
-
-    #ifdef _WIN32
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, "\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
-    #else
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, in_path, "-o",  out_path};
-    #endif
-
     if (dep_file) {
         cmd.push_back("-MD");
         cmd.push_back("-MF");
+#ifdef _WIN32
         cmd.push_back("\"" + target_cpp + ".d\"");
+#else
+        cmd.push_back(target_cpp + ".d");
+#endif
     }
 
     #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
@@ -370,9 +383,13 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
         // }
         // std::cout << std::endl;
 
-        execute_command(command, stdout_str, stderr_str);
+        execute_command(cmd, stdout_str, stderr_str);
         if (!stderr_str.empty()) {
-            std::cerr << "cannot compile " << name << "\n\n" << command << "\n\n" << stderr_str << std::endl;
+            std::cerr << "cannot compile " << name << "\n\n";
+            for (const auto& part : cmd) {
+                std::cerr << part << " ";
+            }
+            std::cerr << "\n\n" << stderr_str << std::endl;
             return;
         }
 
@@ -448,7 +465,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
     base_dict["ACC_TYPE"     ] = f16acc ? "float16_t" : "float";
     base_dict["ACC_TYPE_VEC2"] = f16acc ? "f16vec2"   : "vec2";
     if (f16acc) {
-        base_dict["ACC_TYPE_MAX"] = "\"float16_t(65504.0)\"";
+        base_dict["ACC_TYPE_MAX"] = "float16_t(65504.0)";
     }
 
     if (coopmat) {
@@ -628,7 +645,7 @@ void process_shaders() {
         fa_base_dict["ACC_TYPE"] = f16acc ? "float16_t" : "float";
         fa_base_dict["ACC_TYPEV4"] = f16acc ? "f16vec4" : "vec4";
         if (f16acc) {
-            fa_base_dict["ACC_TYPE_MAX"] = "\"float16_t(65504.0)\"";
+            fa_base_dict["ACC_TYPE_MAX"] = "float16_t(65504.0)";
         }
 
         for (const auto& tname : type_names) {
@@ -802,6 +819,9 @@ void process_shaders() {
 
     string_to_spv("cos_f32", "cos.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
+    string_to_spv("log_f32", "log.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+    string_to_spv("log_f16", "log.comp", {{"A_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}, {"FLOAT_TYPE", "float"}});
+
     string_to_spv("clamp_f32", "clamp.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
     string_to_spv("pad_f32", "pad.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
@@ -827,6 +847,8 @@ void process_shaders() {
     string_to_spv("silu_f32",       "silu.comp",        {{"A_TYPE", "float"},       {"D_TYPE", "float"}});
     string_to_spv("relu_f16",       "relu.comp",        {{"A_TYPE", "float16_t"},   {"D_TYPE", "float16_t"}});
     string_to_spv("relu_f32",       "relu.comp",        {{"A_TYPE", "float"},       {"D_TYPE", "float"}});
+    string_to_spv("neg_f16",        "neg.comp",         {{"A_TYPE", "float16_t"},   {"D_TYPE", "float16_t"}});
+    string_to_spv("neg_f32",        "neg.comp",         {{"A_TYPE", "float"},       {"D_TYPE", "float"}});
     string_to_spv("tanh_f16",       "tanh.comp",        {{"A_TYPE", "float16_t"},   {"D_TYPE", "float16_t"}});
     string_to_spv("tanh_f32",       "tanh.comp",        {{"A_TYPE", "float"},       {"D_TYPE", "float"}});
     string_to_spv("sigmoid_f16",    "sigmoid.comp",     {{"A_TYPE", "float16_t"},   {"D_TYPE", "float16_t"}});
@@ -835,6 +857,8 @@ void process_shaders() {
     string_to_spv("hardsigmoid_f32","hardsigmoid.comp", {{"A_TYPE", "float"},       {"D_TYPE", "float"}});
     string_to_spv("hardswish_f16",  "hardswish.comp",   {{"A_TYPE", "float16_t"},   {"D_TYPE", "float16_t"}});
     string_to_spv("hardswish_f32",  "hardswish.comp",   {{"A_TYPE", "float"},       {"D_TYPE", "float"}});
+    string_to_spv("abs_f16",        "abs.comp",         {{"A_TYPE", "float16_t"},   {"D_TYPE", "float16_t"}});
+    string_to_spv("abs_f32",        "abs.comp",         {{"A_TYPE", "float"},       {"D_TYPE", "float"}});
 
     for (auto rte : {false, true}) {
         std::string suffix = rte ? "_rte" : "";
@@ -1227,11 +1251,6 @@ int main(int argc, char** argv) {
 
     if (args.find("--glslc") != args.end()) {
         GLSLC = args["--glslc"]; // Path to glslc
-
-        // if (!std::filesystem::exists(GLSLC) || !std::filesystem::is_regular_file(GLSLC)) {
-        //     std::cerr << "Error: glslc not found at " << GLSLC << std::endl;
-        //     return EXIT_FAILURE;
-        // }
     }
     if (args.find("--source") != args.end()) {
         input_filepath = args["--source"]; // The shader source file to compile

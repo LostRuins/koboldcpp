@@ -1477,7 +1477,7 @@ void sample_top_n_sigma(llama_token_data_array * cur_p, float nsigma) {
     sample_softmax(cur_p);
 }
 
-void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val, float smoothing_factor) {
+void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val, float smoothing_factor, float smoothing_curve) {
     // no need to do anything if there is only one (or zero) candidates
     if (cur_p->size <= 1) {
         return;
@@ -1525,19 +1525,20 @@ void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_te
     // Only apply smoothing if smoothing_factor is > 0. Do not change base implementation otherwise.
     if (smoothing_factor > 0 && cur_p->size > 1) {
         sample_softmax(cur_p);
-        float h = cur_p->data[0].logit; // Find the maximum logit for h to be added after the transformation
-        // Apply quadratic transformation using the smoothing_factor
-        for (size_t i = 0; i < cur_p->size; ++i)
-        {
+        float h = cur_p->data[0].logit; // Find the maximum logit for h to be added after the transformation      
+        // Apply the modified quadratic transformation using the smoothing_factor and smoothing_curve
+        for (size_t i = 0; i < cur_p->size; ++i) {
             float logit_shifted = cur_p->data[i].logit - h;
-            cur_p->data[i].logit = -smoothing_factor * logit_shifted * logit_shifted + h;
+            float k = (3 - smoothing_curve) / 2;
+            float s = (smoothing_curve - 1) / 2;
+            cur_p->data[i].logit = -(k * smoothing_factor * logit_shifted * logit_shifted) + (s * smoothing_factor * logit_shifted * logit_shifted * logit_shifted) + h;
         }
         sample_softmax(cur_p);
     }
 
 }
 
-void sample_temperature(llama_token_data_array * candidates_p, float temp, float smoothing_factor)
+void sample_temperature(llama_token_data_array * candidates_p, float temp, float smoothing_factor, float smoothing_curve)
 {
     bool isgreedy = false;
     if (temp <= 0)
@@ -1555,11 +1556,12 @@ void sample_temperature(llama_token_data_array * candidates_p, float temp, float
     if (smoothing_factor > 0 && candidates_p->size > 1) {
         sample_softmax(candidates_p);
         float h = candidates_p->data[0].logit; // Find the maximum logit for h to be added after the transformation
-        // Apply quadratic transformation using the smoothing_factor
-        for (size_t i = 0; i < candidates_p->size; ++i)
-        {
+        // Apply the modified quadratic transformation using the smoothing_factor and smoothing_curve
+        for (size_t i = 0; i < candidates_p->size; ++i) {
             float logit_shifted = candidates_p->data[i].logit - h;
-            candidates_p->data[i].logit = -smoothing_factor * logit_shifted * logit_shifted + h;
+            float k = (3 - smoothing_curve) / 2;
+            float s = (smoothing_curve - 1) / 2;
+            candidates_p->data[i].logit = -(k * smoothing_factor * logit_shifted * logit_shifted) + (s * smoothing_factor * logit_shifted * logit_shifted * logit_shifted) + h;
         }
         sample_softmax(candidates_p);
     }
@@ -1645,7 +1647,7 @@ void sample_guidance(struct llama_context * ctx, struct llama_context * guidance
 
 int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float temp, std::mt19937 & rng,
 int mirostat, float mirostat_tau, float mirostat_eta, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
-const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor)
+const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve)
 {
     // printf("SampleLogits called with: n_ctx=%d, n_vocab=%d, rep_pen_range=%d, rep_pen=%f, rep_pen_slope=%f, presence_penalty=%f, top_k=%f, top_a=%f, top_p=%f, min_p=%f, typical_p=%f, tfs=%f, nsigma=%f, temp=%f, mirostat=%d, mirostat_tau=%f, mirostat_eta=%f, dry_multiplier=%f, dry_base=%f, dry_allowed_length=%d, dry_penalty_last_n=%d, xtc_threshold=%f, xtc_probability=%f, sampler_order_size=%zu, dynatemp_range=%f, dynatemp_exponent=%f, smoothing_factor=%f\n",
     // n_ctx, n_vocab, rep_pen_range, rep_pen, rep_pen_slope, presence_penalty, top_k, top_a, top_p, min_p, typical_p, tfs, nsigma, temp, mirostat, mirostat_tau, mirostat_eta, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, xtc_threshold, xtc_probability, sampler_order.size(), dynatemp_range, dynatemp_exponent, smoothing_factor);
@@ -1689,7 +1691,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
         static float mirostat_mu = 2.0f * mirostat_tau;
         const int mirostat_m = 100;
         sample_rep_pen(n_ctx, rep_pen_range, rep_pen, rep_pen_slope, presence_penalty, &candidates_p);
-        sample_temperature(&candidates_p, temp, smoothing_factor);
+        sample_temperature(&candidates_p, temp, smoothing_factor, smoothing_curve);
         if (mirostat == 1)
         {
             id = sample_token_mirostat(n_vocab, &candidates_p, rng, mirostat_tau, mirostat_eta, mirostat_m, &mirostat_mu);
@@ -1730,11 +1732,11 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                         dynatemp_min = dynatemp_min<0?0:dynatemp_min;
                         dynatemp_max = dynatemp_max<0?0:dynatemp_max;
                         dynatemp_exponent = dynatemp_exponent<0?0:dynatemp_exponent;
-                        sample_entropy(&candidates_p, dynatemp_min, dynatemp_max, dynatemp_exponent, smoothing_factor);
+                        sample_entropy(&candidates_p, dynatemp_min, dynatemp_max, dynatemp_exponent, smoothing_factor, smoothing_curve);
                     }
                     else
                     {
-                        sample_temperature(&candidates_p, temp, smoothing_factor);
+                        sample_temperature(&candidates_p, temp, smoothing_factor, smoothing_curve);
                     }
                     if (nsigma > 0.0f)
                     {
@@ -1809,7 +1811,7 @@ static void load_grammar(const std::string & gammarstr)
 }
 
 static bool kcpp_eval_image(llama_context * ctx_llama, float * img_embd, int num_img_tokens, int n_batch, int * n_past) {
-    int n_embd  = llama_n_embd(llama_get_model(ctx_llama));
+    int n_embd  = llama_model_n_embd_inp(llama_get_model(ctx_llama));
 
     for (int i = 0; i < num_img_tokens; i += n_batch) {
         int n_eval = num_img_tokens - i;
@@ -2217,6 +2219,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             printf("CUDA: Set main device to %d\n",kcpp_parseinfo_maindevice);
         }
         printf("CUDA MMQ: %s\n",(inputs.use_mmq?"True":"False"));
+        printf("---\nInitializing CUDA/HIP, please wait, the following step may take a few minutes (only for first launch)...\n---\n");
         ggml_cuda_set_mul_mat_q(inputs.use_mmq);
         #endif
         if((file_format_meta.model_architecture == GGUFArch::ARCH_QWEN2 || file_format_meta.model_architecture == GGUFArch::ARCH_QWEN2VL) && !kcpp_data->flash_attn)
@@ -2473,9 +2476,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 set_clip_uses_gpu(false);
                 printf("Clip forced to use CPU!\n");
             }
-             clip_context_params ctx_clip_params {
+            clip_context_params ctx_clip_params {
                 /* use_gpu           */ true,
-                /* verbosity         */ static_cast<ggml_log_level>(1),
                 /* flash_attn_type   */ (kcpp_data->flash_attn?CLIP_FLASH_ATTN_TYPE_ENABLED:CLIP_FLASH_ATTN_TYPE_DISABLED),
                 /* image_min_tokens  */ -1,
                 /* image_max_tokens  */ -1,
@@ -2487,7 +2489,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 fprintf(stderr, "%s: error: failed to load mmproj model!\n", __func__);
                 return ModelLoadResult::FAIL;
             }
-            const int n_embd_llm  = llama_n_embd(llamamodel);
+            const int n_embd_llm  = llama_model_n_embd_inp(llamamodel);
             int n_embd_clip_a = -1;
             int n_embd_clip_v = -1;
             if (clp_ctx_v)
@@ -3441,6 +3443,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     kcpp_data->dynatemp_exponent = inputs.dynatemp_exponent;
     kcpp_data->n_ctx = inputs.max_context_length;
     kcpp_data->smoothing_factor = inputs.smoothing_factor;
+    kcpp_data->smoothing_curve = inputs.smoothing_curve;
 
     // Parse dry sequence breakers / restart sequences
     kcpp_data->dry_sequence_breakers.clear();
@@ -4114,6 +4117,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             const float dynatemp_range = kcpp_data->dynatemp_range;
             const float dynatemp_exponent = kcpp_data->dynatemp_exponent;
             const float smoothing_factor = kcpp_data->smoothing_factor;
+            const float smoothing_curve = kcpp_data->smoothing_curve;
 
             if (!startedsampling)
             {
@@ -4220,7 +4224,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta,
                 kcpp_data->dry_multiplier, kcpp_data->dry_base,
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,
-                sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor);
+                sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve);
 
                 if(draft_used)
                 {

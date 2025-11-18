@@ -33,6 +33,7 @@ struct kcpp_params {
     float   typical_p         = 1.00f; // 1.0 = disabled
     float   temp              = 0.80f; // 1.0 = disabled
     float   smoothing_factor  = 0.00f; // 0.00 = disabled
+    float   smoothing_curve   = 1.00f; // 1.0 = disabled
     float   repeat_penalty    = 1.10f; // 1.0 = disabled
     int32_t repeat_last_n     = 64;    // last n tokens to penalize (0 = disable penalty, -1 = context size)
     float   rep_pen_slope     = 1.0f;

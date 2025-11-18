@@ -103,8 +103,8 @@ struct generation_inputs
     const float rep_pen_slope = 1.0f;
     const float presence_penalty = 0.0f;
     const int mirostat = 0;
-    const float mirostat_eta = 0.0f;
     const float mirostat_tau = 0.0f;
+    const float mirostat_eta = 0.0f;
     const float xtc_threshold = 0.0f;
     const float xtc_probability = 0.0f;
     const samplers sampler_order[KCPP_SAMPLER_MAX] = {};
@@ -119,6 +119,7 @@ struct generation_inputs
     const float dynatemp_range = 0.0f;
     const float dynatemp_exponent = 1.0f;
     const float smoothing_factor = 0.0f;
+    const float smoothing_curve = 1.0f;
     const float dry_multiplier = 0.0f;
     const float dry_base = 0.0f;
     const int dry_allowed_length = 0;

@@ -173,7 +173,7 @@ static struct ggml_tensor * build_noise_block(ggml_context * ctx, kokoro_noise_r
 
 static struct ggml_tensor * build_sin_gen(ggml_context * ctx, kokoro_model * model, kokoro_context * kctx, struct ggml_tensor * x, int harmonic_num, int sequence_length, float voice_threshold, float sin_amp, float noise_std) {
 	struct ggml_tensor * cur = ggml_mul(ctx, ggml_repeat(ctx, x, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, x->ne[0], harmonic_num)), model->harmonic_sampling_norm);
-	cur = ggml_mul(ctx, ggml_cumsum(ctx, ggml_mod(ctx, cur, 1.0f)), model->sampling_factor_scalar);
+	cur = ggml_mul(ctx, ggml_cumsum_tts(ctx, ggml_mod(ctx, cur, 1.0f)), model->sampling_factor_scalar);
 	cur = ggml_upscale_linear(ctx, cur, 300);
 	struct ggml_tensor * upscaled = ggml_upscale_ext(ctx, x, x->ne[0]*300, x->ne[1], x->ne[2], x->ne[3],GGML_SCALE_MODE_NEAREST);
 

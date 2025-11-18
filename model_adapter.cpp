@@ -221,7 +221,7 @@ std::string gguf_get_model_arch(const std::string & gguf_filename)
                 }
            }
        }
-       else if(vocabsiz < 31998 || vocabsiz > 33000)
+       else if((vocabsiz < 31998 || vocabsiz > 33000) && vocabsiz<51864) //avoid whisper false positive
        {
            //anything outside the llama v1 range is assumed to be NeoX
            fileformat = FileFormat::NEOX_6;
@@ -268,7 +268,11 @@ std::string gguf_get_model_arch(const std::string & gguf_filename)
                     }
                 }
            }
-
+       } 
+       else if (vocabsiz>=51864 && vocabsiz<=51865)
+       {
+            printf("\nWhisper model detected - you should load it as a whisper model instead, not a text model!\n");
+            fileformat = FileFormat::BADFORMAT; //known whisper formats, do not proceed
        }
     }
     else if(magic == 0x67676d66) //v2 format ggmf

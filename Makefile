@@ -715,7 +715,7 @@ sampling.o: common/sampling.cpp common/common.h common/sampling.h common/log.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 console.o: common/console.cpp common/console.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-expose.o: expose.cpp expose.h
+expose.o: expose.cpp expose.h model_adapter.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # sd.cpp objects
@@ -730,6 +730,8 @@ sdcpp_vulkan.o: otherarch/sdcpp/sdtype_adapter.cpp otherarch/sdcpp/stable-diffus
 #whisper objects
 whispercpp_default.o: otherarch/whispercpp/whisper_adapter.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+whispercpp_vulkan.o: otherarch/whispercpp/whisper_adapter.cpp
+	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) -c $< -o $@
 whispercpp_cublas.o: otherarch/whispercpp/whisper_adapter.cpp
 	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(HIPFLAGS) -c $< -o $@
 
@@ -942,10 +944,10 @@ koboldcpp_hipblas:
 endif
 
 ifdef VULKAN_BUILD
-koboldcpp_vulkan: ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_default.o tts_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_FULL) $(OBJS)
+koboldcpp_vulkan: ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_vulkan.o tts_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(VULKAN_BUILD)
 ifdef NOAVX2_BUILD
-koboldcpp_vulkan_noavx2: ggml_v4_vulkan_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml-binops.o ggml-unops.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o expose.o gpttype_adapter_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o sdcpp_vulkan.o whispercpp_default.o tts_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_SIMPLE) $(OBJS)
+koboldcpp_vulkan_noavx2: ggml_v4_vulkan_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml-binops.o ggml-unops.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o expose.o gpttype_adapter_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o sdcpp_vulkan.o whispercpp_vulkan.o tts_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_SIMPLE) $(OBJS)
 	$(VULKAN_BUILD)
 else
 koboldcpp_vulkan_noavx2:

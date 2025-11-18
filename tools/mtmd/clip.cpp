@@ -46,8 +46,7 @@
 #include <functional>
 #include <filesystem>
 
-// TODO: allow to pass callback from user code
-struct clip_logger_state g_logger_state = {GGML_LOG_LEVEL_CONT, clip_log_callback_default, NULL};
+struct clip_logger_state g_logger_state = {clip_log_callback_default, NULL};
 
 enum ffn_op_type {
     FFN_GELU,
@@ -3568,7 +3567,6 @@ struct clip_model_loader {
 };
 
 struct clip_init_result clip_init(const char * fname, struct clip_context_params ctx_params) {
-    g_logger_state.verbosity_thold = ctx_params.verbosity;
     clip_ctx * ctx_vision = nullptr;
     clip_ctx * ctx_audio = nullptr;
 
@@ -5170,11 +5168,12 @@ bool clip_model_quantize(const char * fname_inp, const char * fname_out, const i
     assert(itype < GGML_TYPE_COUNT);
     ggml_type type = static_cast<ggml_type>(itype);
 
-    auto ccparams = clip_context_params{
-        /* use_gpu */   false,
-        /* verbosity */ GGML_LOG_LEVEL_DEBUG,
+    auto ccparams = clip_context_params {
+        /* use_gpu           */ true,
+        /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_DISABLED,
+        /* image_min_tokens  */ -1,
+        /* image_max_tokens  */ -1,
     };
-    g_logger_state.verbosity_thold = ccparams.verbosity;
 
     clip_ctx * ctx_clip = new clip_ctx(ccparams);
     clip_model_loader loader(fname_inp);
