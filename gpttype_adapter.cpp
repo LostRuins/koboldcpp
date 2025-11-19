@@ -1477,7 +1477,7 @@ void sample_top_n_sigma(llama_token_data_array * cur_p, float nsigma) {
     sample_softmax(cur_p);
 }
 
-void sample_top_h(llama_token_data_array * cur_p, float temp, float dyna, float exp, float coef, size_t top_n) {
+void sample_top_h(llama_token_data_array * cur_p, float coef, size_t top_n) {
     if (temp <= 0 || (coef < 0 || coef > 1) || cur_p->size < 2) {
         return;
     }
@@ -1485,62 +1485,8 @@ void sample_top_h(llama_token_data_array * cur_p, float temp, float dyna, float 
     std::vector<llama_token_data> top_n_tokens;
     std::vector<llama_token_data> keep_tokens;
 
-    // Apply Temperature to logits beforehand
-    if (dyna != 0)
-    { // Apply Dyna. Temp.
-        float dynatemp_min = temp - dyna;
-        float dynatemp_max = temp + dyna;
-        //do not allow negative values
-        dynatemp_min = dynatemp_min < 0 ? 0 : dynatemp_min;
-        dynatemp_max = dynatemp_max < 0 ? 0 : dynatemp_max;
-        exp = exp < 0 ? 0 : exp;
-
-        float max_entropy = -logf(1.0f / cur_p->size);
-
-        sample_softmax(cur_p);
-
-        // Calculate entropy of the softmax probabilities
-        float entropy = 0.0f;
-        for (size_t i = 0; i < cur_p->size; ++i) {
-            float prob = cur_p->data[i].p;
-            if (prob > 0.0f) {  // Ensure no log(0)
-                entropy -= prob * logf(prob);
-            }
-        }
-
-        // Normalize the entropy (max_entropy cannot be 0 here because we checked cur_p->size != 1 above)
-        float normalized_entropy = entropy / max_entropy;
-
-        // Map the normalized entropy to the desired temperature range using the power function
-        float dyn_temp = min_temp + (max_temp - min_temp) * powf(normalized_entropy, exponent_val);
-
-        // Apply the dynamically calculated temperature scaling
-        for (size_t i = 0; i < cur_p->size; ++i) {
-            cur_p->data[i].logit /= dyn_temp;
-        }
-
-        // Re-compute softmax probabilities after scaling logits with dynamic temperature
-        const double max_l_double = cur_p->data[0].logit;
-
-        double cum_sum_double = 0.0;
-        for (size_t i = 0; i < cur_p->size; ++i) {
-            double p         = exp(cur_p->data[i].logit - max_l_double);
-            cur_p->data[i].p = p;  // Store the scaled probability
-            cum_sum_double += p;
-        }
-
-        for (size_t i = 0; i < cur_p->size; ++i) {
-            cur_p->data[i].p /= cum_sum_double;  // Re-normalize the probabilities
-        }
-    }
-    else
-    { // Apply regular Temp.
-    
-        for (size_t i = 0; i < cur_p->size; ++i) {
-            cur_p->data[i].logit /= temp;
-
-        sample_softmax(cur_p);
-    }
+    // Sort and normalize logits
+    sample_softmax(cur_p);
     
 
     // Grab the top 100 most probable tokens
@@ -1565,16 +1511,14 @@ void sample_top_h(llama_token_data_array * cur_p, float temp, float dyna, float 
     float tau = ((entropy - log2(alpha)) * alpha) * coef;
 
     
-    size_t ind   = 1;
     float  sigma = top_n_tokens[0].p;
     float  H     = -top_n_tokens[0].p * log2(top_n_tokens[0].p);
     // Find wich tokens to keep from top_n_tokens
     for (size_t i = 0; i < top_n_tokens.size(); ++i) {
         keep_tokens.push_back(top_n_tokens[i]);
-        ind += 1;
 
-        H -= top_n_tokens[ind - 1].p * log2(top_n_tokens[ind - 1].p);
-        sigma += top_n_tokens[ind - 1].p;
+        H -= top_n_tokens[i + 1].p * log2(top_n_tokens[i + 1].p);
+        sigma += top_n_tokens[i + 1].p;
         float entropy_diff = ((H / sigma) + log2(sigma));
 
         if (entropy_diff > (tau / sigma + log2(sigma))) {
@@ -1836,7 +1780,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                 case KCPP_SAMPLER_TEMP:
                     if (top_h != 0 && temp > 0.0f)
                     {
-                        sample_top_h(&candidates_p, temp, dynatemp_range, dynatemp_exponent, top_h, 100);
+                        
                     }
                     else if (dynatemp_range!=0)
                     {
@@ -1852,6 +1796,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                     {
                         sample_temperature(&candidates_p, temp, smoothing_factor, smoothing_curve);
                     }
+                    sample_top_h(&candidates_p, top_h, 100);
                     if (nsigma > 0.0f)
                     {
                         sample_top_n_sigma(&candidates_p, nsigma);
