@@ -1482,23 +1482,30 @@ void sample_top_h(llama_token_data_array * cur_p, float temp, float coef, size_t
         return;
     }
 
+    std::vector<llama_token_data> top_n_tokens;
+    std::vector<llama_token_data> keep_tokens;
+
+    // Apply Temperature to logits beforehand.
     for (size_t i = 0; i < cur_p->size; ++i) {
         cur_p->data[i].logit /= temp;
     }
 
+    // Sort and normalize tokens
     sample_softmax(cur_p);
 
-    std::vector<llama_token_data> top_n_tokens;
+    // Grab the top 100 most probable tokens
     for (size_t i = 0; i < top_n && i < cur_p->size; ++i) {
         top_n_tokens.push_back(cur_p->data[i]);
     }
 
     float alpha = 0.0f;
+    float entropy;
+
+    // Calculate entropy threshold
     for (size_t i = 0; i < top_n_tokens.size(); ++i) {
         alpha += top_n_tokens[i].p;
     }
 
-    float                         entropy;
     std::vector<llama_token_data> entropy_tokens = top_n_tokens;
     for (size_t i = 0; i < entropy_tokens.size(); ++i) {
         entropy_tokens[i].p /= alpha;
@@ -1507,12 +1514,12 @@ void sample_top_h(llama_token_data_array * cur_p, float temp, float coef, size_t
 
     float tau = ((entropy - log2(alpha)) * alpha) * coef;
 
-    std::vector<llama_token_data> keep_tokens;
+    
 
     size_t ind   = 1;
     float  sigma = top_n_tokens[0].p;
     float  H     = -top_n_tokens[0].p * log2(top_n_tokens[0].p);
-
+    // Find wich tokens to keep from top_n_tokens
     for (size_t i = 0; i < top_n_tokens.size(); ++i) {
         keep_tokens.push_back(top_n_tokens[i]);
         ind += 1;
@@ -1526,6 +1533,7 @@ void sample_top_h(llama_token_data_array * cur_p, float temp, float coef, size_t
         }
     }
 
+    // Replace cur_p with keep_tokens
     std::copy(keep_tokens.begin(), keep_tokens.end(), cur_p->data);
     cur_p->size = keep_tokens.size();
 }
