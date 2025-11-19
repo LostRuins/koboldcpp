@@ -1477,6 +1477,59 @@ void sample_top_n_sigma(llama_token_data_array * cur_p, float nsigma) {
     sample_softmax(cur_p);
 }
 
+void sample_top_h(llama_token_data_array * cur_p, float temp, float coef, size_t top_n) {
+    if (temp <= 0 || (coef < 0 || coef > 1) || cur_p->size < 2) {
+        return;
+    }
+
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        cur_p->data[i].logit /= temp;
+    }
+
+    sample_softmax(cur_p);
+
+    std::vector<llama_token_data> top_n_tokens;
+    for (size_t i = 0; i < top_n && i < cur_p->size; ++i) {
+        top_n_tokens.push_back(cur_p->data[i]);
+    }
+
+    float alpha = 0.0f;
+    for (size_t i = 0; i < top_n_tokens.size(); ++i) {
+        alpha += top_n_tokens[i].p;
+    }
+
+    float                         entropy;
+    std::vector<llama_token_data> entropy_tokens = top_n_tokens;
+    for (size_t i = 0; i < entropy_tokens.size(); ++i) {
+        entropy_tokens[i].p /= alpha;
+        entropy -= entropy_tokens[i].p * log2(entropy_tokens[i].p);
+    }
+
+    float tau = ((entropy - log2(alpha)) * alpha) * coef;
+
+    std::vector<llama_token_data> keep_tokens;
+
+    size_t ind   = 1;
+    float  sigma = top_n_tokens[0].p;
+    float  H     = -top_n_tokens[0].p * log2(top_n_tokens[0].p);
+
+    for (size_t i = 0; i < top_n_tokens.size(); ++i) {
+        keep_tokens.push_back(top_n_tokens[i]);
+        ind += 1;
+
+        H -= top_n_tokens[ind - 1].p * log2(top_n_tokens[ind - 1].p);
+        sigma += top_n_tokens[ind - 1].p;
+        float entropy_diff = ((H / sigma) + log2(sigma));
+
+        if (entropy_diff > (tau / sigma + log2(sigma))) {
+            break;
+        }
+    }
+
+    std::copy(keep_tokens.begin(), keep_tokens.end(), cur_p->data);
+    cur_p->size = keep_tokens.size();
+}
+
 void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val, float smoothing_factor, float smoothing_curve) {
     // no need to do anything if there is only one (or zero) candidates
     if (cur_p->size <= 1) {
