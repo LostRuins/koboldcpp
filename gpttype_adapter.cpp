@@ -1834,7 +1834,8 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                     sampler_typical(&candidates_p, typical_p, 1);
                     break;
                 case KCPP_SAMPLER_TEMP:
-                    if (top_h != 0) {
+                    if (top_h != 0 && temp > 0.0f)
+                    {
                         sample_top_h(&candidates_p, temp, dynatemp_range, dynatemp_exponent, top_h, 100);
                     }
                     else if (dynatemp_range!=0)
