@@ -1698,7 +1698,7 @@ void sample_guidance(struct llama_context * ctx, struct llama_context * guidance
     }
 }
 
-int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float temp, std::mt19937 & rng,
+int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float top_h, float temp, std::mt19937 & rng,
 int mirostat, float mirostat_tau, float mirostat_eta, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
 const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve)
 {
@@ -1777,7 +1777,10 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                     sampler_typical(&candidates_p, typical_p, 1);
                     break;
                 case KCPP_SAMPLER_TEMP:
-                    if (dynatemp_range!=0)
+                    if (top_h != 0) {
+                        sample_top_h(&candidates_p, temp, top_h, 100);
+                    }
+                    else if (dynatemp_range!=0)
                     {
                         float dynatemp_min = temp - dynatemp_range;
                         float dynatemp_max = temp + dynatemp_range;
@@ -3478,6 +3481,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     kcpp_data->typical_p = inputs.typical_p;
     kcpp_data->tfs_z = inputs.tfs;
     kcpp_data->nsigma = inputs.nsigma;
+    kcpp_data->top_h = inputs.top_h;
     kcpp_data->temp = inputs.temperature;
     kcpp_data->repeat_last_n = inputs.rep_pen_range;
     kcpp_data->rep_pen_slope = inputs.rep_pen_slope;
@@ -4167,6 +4171,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             const float typical_p = kcpp_data->typical_p;
             const float tfs_z = kcpp_data->tfs_z;
             const float nsigma = kcpp_data->nsigma;
+            const float top_h = kcpp_data->top_h;
             const float dynatemp_range = kcpp_data->dynatemp_range;
             const float dynatemp_exponent = kcpp_data->dynatemp_exponent;
             const float smoothing_factor = kcpp_data->smoothing_factor;
@@ -4273,7 +4278,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 }
 
                 id = SampleLogits(logitsPtr, nctx, n_vocab, last_n_size, repeat_penalty, kcpp_data->rep_pen_slope, presence_penalty,
-                top_k, top_a, top_p, min_p, typical_p, tfs_z, nsigma, temp, rng,
+                top_k, top_a, top_p, min_p, typical_p, tfs_z, nsigma, top_h, temp, rng,
                 kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta,
                 kcpp_data->dry_multiplier, kcpp_data->dry_base,
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,
