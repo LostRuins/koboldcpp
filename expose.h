@@ -98,6 +98,7 @@ struct generation_inputs
     const float typical_p = 0;
     const float tfs = 0;
     const float nsigma = 0.0f;
+    const float top_h = 0.0f;
     const float rep_pen = 0;
     const int rep_pen_range = 0;
     const float rep_pen_slope = 1.0f;

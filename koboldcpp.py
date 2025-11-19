@@ -239,6 +239,7 @@ class generation_inputs(ctypes.Structure):
                 ("typical_p", ctypes.c_float),
                 ("tfs", ctypes.c_float),
                 ("nsigma", ctypes.c_float),
+                ("top_h", ctypes.c_float),
                 ("rep_pen", ctypes.c_float),
                 ("rep_pen_range", ctypes.c_int),
                 ("rep_pen_slope", ctypes.c_float),
@@ -1524,6 +1525,7 @@ def generate(genparams, stream_flag=False):
     typical_p = tryparsefloat(genparams.get('typical', 1.0),1.0)
     tfs = tryparsefloat(genparams.get('tfs', 1.0),1.0)
     nsigma = tryparsefloat(genparams.get('nsigma', 0.0),0.0)
+    top_h = tryparsefloat(genparams.get('top_h', 0.0), 0.0)
     rep_pen = tryparsefloat(genparams.get('rep_pen', adapter_obj.get("rep_pen", 1.0)),1.0)
     rep_pen_range = tryparseint(genparams.get('rep_pen_range', 320),320)
     rep_pen_slope = tryparsefloat(genparams.get('rep_pen_slope', 1.0),1.0)
@@ -1613,6 +1615,7 @@ def generate(genparams, stream_flag=False):
     inputs.typical_p = typical_p
     inputs.tfs = tfs
     inputs.nsigma = nsigma
+    inputs.top_h = top_h
     inputs.rep_pen = rep_pen
     inputs.rep_pen_range = rep_pen_range
     inputs.rep_pen_slope = rep_pen_slope
