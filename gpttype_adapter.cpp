@@ -1778,11 +1778,7 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
                     sampler_typical(&candidates_p, typical_p, 1);
                     break;
                 case KCPP_SAMPLER_TEMP:
-                    if (top_h != 0 && temp > 0.0f)
-                    {
-                        
-                    }
-                    else if (dynatemp_range!=0)
+                    if (dynatemp_range!=0)
                     {
                         float dynatemp_min = temp - dynatemp_range;
                         float dynatemp_max = temp + dynatemp_range;
