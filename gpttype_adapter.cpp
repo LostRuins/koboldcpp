@@ -1540,13 +1540,10 @@ void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_te
 
 void sample_temperature(llama_token_data_array * candidates_p, float temp, float smoothing_factor, float smoothing_curve)
 {
-    bool isgreedy = false;
     if (temp <= 0)
     {
-        // Imitate greedy sampling
-        temp = 0.00390625f; //cannot be zero else div0, this is 1/256
-        smoothing_factor = 0;
-        isgreedy = true;
+        sample_top_k(candidates_p, 1);  //only want first candidate
+        return;
     }
 
     for (size_t i = 0; i < candidates_p->size; ++i) {
@@ -1564,11 +1561,6 @@ void sample_temperature(llama_token_data_array * candidates_p, float temp, float
             candidates_p->data[i].logit = -(k * smoothing_factor * logit_shifted * logit_shifted) + (s * smoothing_factor * logit_shifted * logit_shifted * logit_shifted) + h;
         }
         sample_softmax(candidates_p);
-    }
-
-    if(isgreedy)
-    {
-        sample_top_k(candidates_p, 1); //only want first candidate
     }
 }
 
