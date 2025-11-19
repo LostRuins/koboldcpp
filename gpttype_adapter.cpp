@@ -1482,53 +1482,48 @@ void sample_top_h(llama_token_data_array * cur_p, float coef, size_t top_n) {
         return;
     }
 
-    std::vector<llama_token_data> top_n_tokens;
-    std::vector<llama_token_data> keep_tokens;
+    top_n = std::min(top_n, cur_p->size);
 
     // Sort and normalize logits
     sample_softmax(cur_p);
-    
-
-    // Grab the top 100 most probable tokens
-    for (size_t i = 0; i < top_n && i < cur_p->size; ++i) {
-        top_n_tokens.push_back(cur_p->data[i]);
-    }
 
     float alpha = 0.0f;
+    // Calculate sum of probabilities of the top 100 most probable tokens
+    for (size_t i = 0; i < top_n; ++i) {
+        alpha += cur_p->data[i].p;
+    }
+
     float entropy = 0.0f;
-
-    // Calculate entropy threshold
-    for (size_t i = 0; i < top_n_tokens.size(); ++i) {
-        alpha += top_n_tokens[i].p;
+    // Calculate entropy
+    for (size_t i = 0; i < top_n; ++i) {
+        float entropy_a = cur_p->data[i].p / alpha;
+        entropy -= entropy_a * log2(entropy_a);
     }
 
-    std::vector<llama_token_data> entropy_tokens = top_n_tokens;
-    for (size_t i = 0; i < entropy_tokens.size(); ++i) {
-        entropy_tokens[i].p /= alpha;
-        entropy -= entropy_tokens[i].p * log2(entropy_tokens[i].p);
-    }
-
+    // Caclulate tau
     float tau = ((entropy - log2(alpha)) * alpha) * coef;
 
-    
-    float  sigma = top_n_tokens[0].p;
-    float  H     = -top_n_tokens[0].p * log2(top_n_tokens[0].p);
-    // Find wich tokens to keep from top_n_tokens
-    for (size_t i = 0; i < top_n_tokens.size(); ++i) {
-        keep_tokens.push_back(top_n_tokens[i]);
+    size_t keep_tokens = 0;
+    float  sigma       = cur_p->data[0].p;
+    float  H           = -cur_p->data[0].p * log2(cur_p->data[0].p);
+    // Find which tokens to keep from entropy thresholding
+    for (size_t i = 0; i < top_n; ++i) {
+        keep_tokens++;
 
-        H -= top_n_tokens[i + 1].p * log2(top_n_tokens[i + 1].p);
-        sigma += top_n_tokens[i + 1].p;
+        float next_p = cur_p->data[i + 1].p;
+        H -= next_p * log2(next_p);
+        sigma += next_p;
+
         float entropy_diff = ((H / sigma) + log2(sigma));
+        float threshold    = (tau / sigma + log2(sigma));
 
-        if (entropy_diff > (tau / sigma + log2(sigma))) {
+        if (entropy_diff > threshold) {
             break;
         }
     }
 
-    // Replace cur_p with keep_tokens
-    std::copy(keep_tokens.begin(), keep_tokens.end(), cur_p->data);
-    cur_p->size = keep_tokens.size();
+    // Trim down to keep_tokens mask
+    cur_p->size = keep_tokens;
 }
 
 void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val, float smoothing_factor, float smoothing_curve) {
