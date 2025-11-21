@@ -2523,80 +2523,46 @@ def extract_all_names_from_tool_array(tools_array):
     return toolnames
 
 #returns the found JSON of the correct tool to use, or None if no tool is suitable
-#returns the found JSON of the correct tool to use, or None if no tool is suitable
 def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_followup_tool):
     # tools handling: Check if user is passing a openai tools array, if so add to end of prompt before assistant prompt unless tool_choice has been set to None
     tools_array = genparams.get('tools', [])
     chosen_tool = genparams.get('tool_choice', "auto")
-    messages = genparams.get("messages")
-
     # first handle auto mode, determine whether a tool is needed
     used_tool_json = None
-
-    if not curr_ctx or not messages:
+    if not curr_ctx:
         return None
-
     if tools_array and len(tools_array) > 0 and chosen_tool is not None and chosen_tool!="none":
-        # extract the last 6 user messages and AI responses
-        # from the messages array
-        messages_truncated = messages[-6:]
-
-        # get user's last message
-        last_user_message = ""
-        for message in messages_truncated:
-            if message['role'] == "user":
-                last_user_message = message['content']
-
-        # get last tool call results
-        tool_call_results = []
-        for message in reversed(messages_truncated):
-            # we get only the tool call results
-            # since the last user request
-            if message['role'] == "tool":
-                tool_call_results.append(message['content'])
-            else:
-                break
-        tool_call_results = list(reversed(tool_call_results))
-
         # pass only the essential tool call information
-        # to the model, to reduce the size of the prompt
-        # it needs to process
+        # to the model, to reduce the size of the prompt it needs to process
         tools_array_filtered = []
         for tool_dict in tools_array:
             tool_data = tool_dict['function']
-
             tool_props = {}
             for prop_name, prop_data in tool_data['parameters']['properties'].items():
                 tool_props[prop_name] = prop_data['type']
-
             tools_array_filtered.append({
                 "name": tool_data['name'],
                 "description": tool_data['description'],
                 "properties": tool_props
             })
-
         tools_string = json.dumps(tools_array_filtered, indent=0)
 
         should_use_tools = True
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
-
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO"'
-
             if not is_followup_tool:
-                # if you want a different template, you can set 'custom_tools_prompt' in the chat completions adapter as follows
-                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's request, or is a tool call optional? Explain your reasoning in one sentence. State your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"User's request: {last_user_message}\n\nChat history: {messages_truncated}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's request, or is a tool call optional? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt_processed = f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
             else:
-                custom_tools_prompt = "If user's request was to generate any kind of non-text media, no further action is needed and the answer should be no, regardless of what the tool call response was. Otherwise, given the tool call response to the user's request, is another tool call needed to further answer user's message? State your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"User's request: {last_user_message}\n\nTool call responses: {tool_call_results}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt = "Given the tool call response to the user's request, is another tool call needed to further answer user's message? Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt_processed = f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
-            # the result is a short explanation by the LLM on why a tool call
-            # is or is not needed, along with it's final decision at the end.
+            # the result is a short explanation by the LLM on why a tool call is or is not needed, along with it's final decision at the end.
             temp_poll = {
                 "prompt": custom_tools_prompt_processed,
-                "max_length":500,
+                "max_length":300,
                 "temperature":0.1,
                 "top_k":1,
                 "rep_pen":1,
@@ -2605,11 +2571,9 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             temp_poll_result = generate(genparams=temp_poll)
             temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
 
-            # then we take that final decision
-            # and translate it to a simple "yes" or "no" using
-            # another call to the model
+            # then we take that final decision and translate it to a simple "yes" or "no" using another call to the model
             temp_poll_check = {
-                "prompt": f"LLM's reasoning: {temp_poll_text}\n\nDid the LLM's final decision state a tool call is needed? (one word answer: yes or no)",
+                "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\nSo final decision, did the AI decide that a tool call is required? (one word answer: yes or no):",
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
@@ -2624,22 +2588,15 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 should_use_tools = False
 
             if not args.quiet:
-                print()
-                print("[TOOLCALL REQUEST]")
-                print(f"Request: {last_user_message}")
-                print(f"Prompt: {custom_tools_prompt}")
-                if is_followup_tool:
-                    print(f"Previous tool call results: {tool_call_results}")
-                print(f"Decision: {temp_poll_check_text}")
-                print(f"Reasoning: {temp_poll_text}")
-
+                print(f"\n[TOOLCALL DECISION] Should use tools? ({should_use_tools})")
+                if args.debugmode >= 1:
+                    print(f"[TOOLCALL REASONING]: {temp_poll_text}")
                 if chosen_tool != "auto":
                     print(f"Chosen tool: {chosen_tool}")
 
         if should_use_tools:
             #first, try and extract a specific tool if selected
             used_tool_json = extract_tool_info_from_tool_array(chosen_tool, tools_array)
-
             if used_tool_json: #already found the tool we want, remove all others
                 pass
             elif len(tools_array)==1:
@@ -2655,9 +2612,9 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                         pollgrammar += "\"" + name + "\""
                     pollgrammar = r'root ::= ' + pollgrammar
 
-                    decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the LLM reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
+                    decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the AI reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
                     temp_poll = {
-                        "prompt": f"Chat history: {messages_truncated}\n\nPrevious toolcall responses:  {tool_call_results}\n\nLLM's reasoning: {temp_poll_text}\n\nTool List:\n{tools_string}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
                         "max_length":16,
                         "temperature":0.1,
                         "top_k":1,
@@ -2666,7 +2623,6 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                         "grammar":pollgrammar
                         }
                     temp_poll_result = generate(genparams=temp_poll)
-
                     if temp_poll_result:
                         raw = temp_poll_result['text'].lower()
 
@@ -2674,7 +2630,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                             if name.lower() in raw:
                                 used_tool_json = extract_tool_info_from_tool_array(name, tools_array)
                                 if not args.quiet:
-                                    print(f"\n\nAttempting to use tool: {name}\n")
+                                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {name}")
                                 break
 
     return used_tool_json
@@ -2784,7 +2740,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             assistant_message_start = adapter_obj.get("assistant_start", "\n### Response:\n")
             assistant_message_end = adapter_obj.get("assistant_end", "")
             assistant_message_gen = adapter_obj.get("assistant_gen", assistant_message_start)
-            tools_message_start = adapter_obj.get("tools_start", "\nTool Results:\n")
+            tools_message_start = adapter_obj.get("tools_start", "")
             tools_message_end = adapter_obj.get("tools_end", "")
             images_added = []
             audio_added = []
@@ -2837,6 +2793,9 @@ ws ::= | " " | "\n" [ \t]{0,20}
                         messages_string += assistant_message_start
                     elif message['role'] == "tool":
                         messages_string += tools_message_start
+                        tcid = message.get("tool_call_id","")
+                        tcid = ("" if not tcid else f" {tcid}")
+                        messages_string += f"\nReceived results of function call{tcid}:\n"
 
                     # content can be a string or an array of objects
                     curr_content = message.get("content",None)
@@ -2848,9 +2807,16 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     if not curr_content:
                         if "tool_calls" in message:
                             try:
-                                if len(message.get("tool_calls"))>0:
-                                    tcfnname = message.get("tool_calls")[0].get("function").get("name")
-                                    messages_string += f"\n(Made a function call to {tcfnname})\n"
+                                nlstart = True
+                                for tc in message.get("tool_calls"):
+                                    if nlstart:
+                                        nlstart = False
+                                        messages_string += "\n"
+                                    tcid = tc.get("id","")
+                                    tcfnname = tc.get("function").get("name")
+                                    tcfnargs = tc.get("function").get("arguments","")
+                                    tcfnargs = (f" with arguments={tcfnargs}" if tcfnargs else "")
+                                    messages_string += f"(Made a function call {tcid} to {tcfnname}{tcfnargs})\n"
                             except Exception:
                                 messages_string += "\n(Made a function call)\n"
                         pass  # do nothing
