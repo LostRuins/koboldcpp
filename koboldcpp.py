@@ -2812,6 +2812,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     message_index += 1
                     if message['role'] == "system":
                         messages_string += system_message_start
+
+                        tools_array = genparams.get("tools")
                         if message_index == 1 and tools_array and len(tools_array) > 0:
                             # NOTE: This is an *extremely* hacky way to do this but i didn't know how to work with koboldcpp's systems properly
                             # you get the idea. Please correct this to work properly with your existing systems!
