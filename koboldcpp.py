@@ -2575,7 +2575,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
                 custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
             else:
-                custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message? Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
                 custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\nTool call responses: {tool_call_results}\n\n{custom_tools_prompt}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
