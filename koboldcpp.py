@@ -2660,6 +2660,21 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
     return used_tool_json
 
+def compress_tools_array(tools_array):
+    tools_array_filtered = []
+    for tool_dict in tools_array:
+        tool_data = tool_dict['function']
+        tool_props = {}
+        for prop_name, prop_data in tool_data['parameters']['properties'].items():
+            tool_props[prop_name] = prop_data['type']
+        tools_array_filtered.append({
+            "name": tool_data['name'],
+            "description": tool_data['description'],
+            "properties": tool_props
+        })
+
+    return tools_array_filtered
+
 def transform_genparams(genparams, api_format, use_jinja):
     global chatcompl_adapter, maxctx
 
@@ -2808,37 +2823,22 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 if jinjatools and len(jinjatools)>0:
                     genparams["using_openai_tools"] = True
             else:
+                if jinjatools:
+                    # inject the tools list at the top of the context window, even if context has shifted
+                    # this drastically speeds up the tool processing, and it also makes the LLM aware of what tools are available to it at all times
+                    tools_string = json.dumps(compress_tools_array(jinjatools), indent=0)
+                    messages_array.insert(0, {
+                        "role": "system",
+                        "content": f"### Available Tools:\n{tools_string}",
+                    })
+
+                    # P.S. it might be a good idea to add a proper way to add stickied system messages, if that doesn't exist already.
+                    # - Rose22
+
                 for message in messages_array:
                     message_index += 1
                     if message['role'] == "system":
                         messages_string += system_message_start
-
-                        tools_array = genparams.get("tools")
-                        if message_index == 1 and tools_array and len(tools_array) > 0:
-                            # NOTE: This is an *extremely* hacky way to do this but i didn't know how to work with koboldcpp's systems properly
-                            # you get the idea. Please correct this to work properly with your existing systems!
-                            # Adding the tools array to the context by default makes the LLM able to see what tools are available at any time,
-                            # and fully speeds up the toolcall logic by never removing the toolcall list from context,
-                            # which when context shift is active just makes things pretty much instant after the tool call list
-                            # has been processed in the beginning of a conversation.
-                            # - Rose22
-
-                            # pass only the essential tool call information
-                            # to the model, to reduce the size of the prompt it needs to process
-                            tools_array_filtered = []
-                            for tool_dict in tools_array:
-                                tool_data = tool_dict['function']
-                                tool_props = {}
-                                for prop_name, prop_data in tool_data['parameters']['properties'].items():
-                                    tool_props[prop_name] = prop_data['type']
-                                tools_array_filtered.append({
-                                    "name": tool_data['name'],
-                                    "description": tool_data['description'],
-                                    "properties": tool_props
-                                })
-
-                            tools_string = json.dumps(tools_array_filtered, indent=0)
-                            messages_string += f"### Tool List:{tools_string}\n"
                     elif message['role'] == "user":
                         messages_string += user_message_start
                     elif message['role'] == "assistant":
@@ -2925,7 +2925,6 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 messages_string += assistant_message_gen
 
             genparams["prompt"] = messages_string
-            print(messages_string)
             if len(images_added)>0:
                 genparams["images"] = images_added
             if len(audio_added)>0:
