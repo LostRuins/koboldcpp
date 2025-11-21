@@ -2567,16 +2567,19 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             })
         tools_string = json.dumps(tools_array_filtered, indent=0)
 
+        # TODO: there has to be some way to cache the tools list? depending on how many tools there are, it takes a lot of time to process
+        # Found! i used a hacky way for now. It's in transform_genparams(). search for my name!
+
         should_use_tools = True
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO"'
             if not is_followup_tool:
                 custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\n{custom_tools_prompt}{assistant_message_start}"
             else:
                 custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\nTool call responses: {tool_call_results}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool call responses: {tool_call_results}\n\n{custom_tools_prompt}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
             # the result is a short explanation by the LLM on why a tool call is or is not needed, along with it's final decision at the end.
@@ -2593,7 +2596,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
             # then we take that final decision and translate it to a simple "yes" or "no" using another call to the model
             temp_poll_check = {
-                "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\nSo final decision, did the AI decide that a tool call is required? (one word answer: yes or no):",
+                "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nAI reasoning: {temp_poll_text}\n\nSo final decision, did the AI decide that a tool call is required? (one word answer: yes or no):",
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
@@ -2636,7 +2639,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
                     decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the AI reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
                     temp_poll = {
-                        "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
                         "max_length":16,
                         "temperature":0.1,
                         "top_k":1,
@@ -2809,6 +2812,31 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     message_index += 1
                     if message['role'] == "system":
                         messages_string += system_message_start
+                        if message_index == 1 and tools_array and len(tools_array) > 0:
+                            # NOTE: This is an *extremely* hacky way to do this but i didn't know how to work with koboldcpp's systems properly
+                            # you get the idea. Please correct this to work properly with your existing systems!
+                            # Adding the tools array to the context by default makes the LLM able to see what tools are available at any time,
+                            # and fully speeds up the toolcall logic by never removing the toolcall list from context,
+                            # which when context shift is active just makes things pretty much instant after the tool call list
+                            # has been processed in the beginning of a conversation.
+                            # - Rose22
+
+                            # pass only the essential tool call information
+                            # to the model, to reduce the size of the prompt it needs to process
+                            tools_array_filtered = []
+                            for tool_dict in tools_array:
+                                tool_data = tool_dict['function']
+                                tool_props = {}
+                                for prop_name, prop_data in tool_data['parameters']['properties'].items():
+                                    tool_props[prop_name] = prop_data['type']
+                                tools_array_filtered.append({
+                                    "name": tool_data['name'],
+                                    "description": tool_data['description'],
+                                    "properties": tool_props
+                                })
+
+                            tools_string = json.dumps(tools_array_filtered, indent=0)
+                            messages_string += f"### Tool List:{tools_string}\n"
                     elif message['role'] == "user":
                         messages_string += user_message_start
                     elif message['role'] == "assistant":
@@ -2895,6 +2923,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 messages_string += assistant_message_gen
 
             genparams["prompt"] = messages_string
+            print(messages_string)
             if len(images_added)>0:
                 genparams["images"] = images_added
             if len(audio_added)>0:
