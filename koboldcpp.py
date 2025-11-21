@@ -2527,10 +2527,30 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
     # tools handling: Check if user is passing a openai tools array, if so add to end of prompt before assistant prompt unless tool_choice has been set to None
     tools_array = genparams.get('tools', [])
     chosen_tool = genparams.get('tool_choice', "auto")
+    messages = genparams.get('messages')
+
     # first handle auto mode, determine whether a tool is needed
     used_tool_json = None
     if not curr_ctx:
         return None
+
+    # get user's last message
+    last_user_message = ""
+    for message in messages:
+        if message['role'] == "user":
+            last_user_message = message['content']
+
+    # get last tool call results
+    tool_call_results = []
+    for message in reversed(messages):
+        # we get only the tool call results
+        # since the last user request
+        if message['role'] == "tool":
+            tool_call_results.append(message['content'])
+        else:
+            break
+    tool_call_results = list(reversed(tool_call_results))
+
     if tools_array and len(tools_array) > 0 and chosen_tool is not None and chosen_tool!="none":
         # pass only the essential tool call information
         # to the model, to reduce the size of the prompt it needs to process
@@ -2552,11 +2572,11 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             # note: message string already contains the instruct start tag!
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO"'
             if not is_followup_tool:
-                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's request, or is a tool call optional? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
             else:
-                custom_tools_prompt = "Given the tool call response to the user's request, is another tool call needed to further answer user's message? Be brief, state your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message? Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\nTool call responses: {tool_call_results}\n\n{custom_tools_prompt}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
             # the result is a short explanation by the LLM on why a tool call is or is not needed, along with it's final decision at the end.
@@ -2573,7 +2593,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
             # then we take that final decision and translate it to a simple "yes" or "no" using another call to the model
             temp_poll_check = {
-                "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\nSo final decision, did the AI decide that a tool call is required? (one word answer: yes or no):",
+                "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\nSo final decision, did the AI decide that a tool call is required? (one word answer: yes or no):",
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
@@ -2589,8 +2609,10 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
             if not args.quiet:
                 print(f"\n[TOOLCALL DECISION] Should use tools? ({should_use_tools})")
-                if args.debugmode >= 1:
-                    print(f"[TOOLCALL REASONING]: {temp_poll_text}")
+                #f args.debugmode >= 1:
+                print(f"[TOOLCALL REASONING]: {temp_poll_text}")
+                    #full = temp_poll_check["prompt"]
+                    #print(f"[TOOLCALL DETAILS]: {full}")
                 if chosen_tool != "auto":
                     print(f"Chosen tool: {chosen_tool}")
 
@@ -2614,7 +2636,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
                     decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the AI reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
                     temp_poll = {
-                        "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
                         "max_length":16,
                         "temperature":0.1,
                         "top_k":1,
