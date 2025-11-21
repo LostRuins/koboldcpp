@@ -1478,7 +1478,7 @@ void sample_top_n_sigma(llama_token_data_array * cur_p, float nsigma) {
 }
 
 void sample_top_h(llama_token_data_array * cur_p, float coef, size_t top_n) {
-    if ((coef < 0 || coef > 1) || cur_p->size < 2) {
+    if ((coef < 0.0f || coef => 1.0f) || cur_p->size < 2) {
         return;
     }
 
