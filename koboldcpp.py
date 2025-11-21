@@ -2365,7 +2365,7 @@ def is_ipv6_supported():
     except Exception:
         return False
 
-def format_jinja(messages, tools):   
+def format_jinja(messages, tools):
     try:
         def strftime_now(format='%Y-%m-%d %H:%M:%S'):
             return datetime.now().strftime(format)
@@ -2389,7 +2389,7 @@ def format_jinja(messages, tools):
 
 def remove_outer_tags(inputstr):
     try:
-        stripped = inputstr.strip() 
+        stripped = inputstr.strip()
         match = re.match(r'^<([^\s<>]+)>(.*?)</\1>\s*$', stripped, re.DOTALL) # Try angle brackets first
         if match:
             return match.group(2).strip()
@@ -2399,10 +2399,10 @@ def remove_outer_tags(inputstr):
         return stripped # If no match, return original string
     except Exception:
         return stripped
-    
-def normalize_tool_call(obj): # Normalize various tool call formats to OpenAI format   
+
+def normalize_tool_call(obj): # Normalize various tool call formats to OpenAI format
     if "type" in obj and "function" in obj: # Already in OpenAI format
-        return obj    
+        return obj
     if "name" in obj and ("arguments" in obj or "parameters" in obj):
         args = obj.get("arguments", obj.get("parameters", {}))
         return {
@@ -2422,13 +2422,13 @@ def normalize_tool_call(obj): # Normalize various tool call formats to OpenAI fo
                     "arguments": func.get("arguments", func.get("parameters", {}))
                 }
             }
-        
+
     return obj
 
 # Used to parse json for openai tool calls
 def extract_json_from_string(input_string):
     parsed_json = None
-    input_string = remove_outer_tags(input_string) #if we detected wrapper tags, remove them    
+    input_string = remove_outer_tags(input_string) #if we detected wrapper tags, remove them
 
     try: # First check if model exported perfect json
         parsed_json = json.loads(input_string)
@@ -2527,75 +2527,42 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
     # tools handling: Check if user is passing a openai tools array, if so add to end of prompt before assistant prompt unless tool_choice has been set to None
     tools_array = genparams.get('tools', [])
     chosen_tool = genparams.get('tool_choice', "auto")
-    messages = genparams.get("messages")
-
     # first handle auto mode, determine whether a tool is needed
     used_tool_json = None
-
-    if not curr_ctx or not messages:
+    if not curr_ctx:
         return None
-
     if tools_array and len(tools_array) > 0 and chosen_tool is not None and chosen_tool!="none":
-        # extract the last 6 user messages and AI responses
-        # from the messages array
-        messages_truncated = messages[-6:]
-
-        # get user's last message
-        last_user_message = ""
-        for message in messages_truncated:
-            if message['role'] == "user":
-                last_user_message = message['content']
-
-        # get last tool call results
-        tool_call_results = []
-        for message in reversed(messages_truncated):
-            # we get only the tool call results
-            # since the last user request
-            if message['role'] == "tool":
-                tool_call_results.append(message['content'])
-            else:
-                break
-        tool_call_results = list(reversed(tool_call_results))
-
         # pass only the essential tool call information
-        # to the model, to reduce the size of the prompt
-        # it needs to process
+        # to the model, to reduce the size of the prompt it needs to process
         tools_array_filtered = []
         for tool_dict in tools_array:
             tool_data = tool_dict['function']
-
             tool_props = {}
             for prop_name, prop_data in tool_data['parameters']['properties'].items():
                 tool_props[prop_name] = prop_data['type']
-
             tools_array_filtered.append({
                 "name": tool_data['name'],
                 "description": tool_data['description'],
                 "properties": tool_props
             })
-
         tools_string = json.dumps(tools_array_filtered, indent=0)
 
         should_use_tools = True
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
-
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO"'
-
             if not is_followup_tool:
-                # if you want a different template, you can set 'custom_tools_prompt' in the chat completions adapter as follows
-                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's request, or is a tool call optional? Explain your reasoning in one sentence. State your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"User's request: {last_user_message}\n\nChat history: {messages_truncated}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's request, or is a tool call optional? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt_processed = f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
             else:
-                custom_tools_prompt = "If user's request was to generate any kind of non-text media, no further action is needed and the answer should be no, regardless of what the tool call response was. Otherwise, given the tool call response to the user's request, is another tool call needed to further answer user's message? State your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"User's request: {last_user_message}\n\nTool call responses: {tool_call_results}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt = "Given the tool call response to the user's request, is another tool call needed to further answer user's message? Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt_processed = f"{curr_ctx}\n\nTool List:\n{tools_string}\n\n{custom_tools_prompt}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
-            # the result is a short explanation by the LLM on why a tool call
-            # is or is not needed, along with it's final decision at the end.
+            # the result is a short explanation by the LLM on why a tool call is or is not needed, along with it's final decision at the end.
             temp_poll = {
                 "prompt": custom_tools_prompt_processed,
-                "max_length":500,
+                "max_length":300,
                 "temperature":0.1,
                 "top_k":1,
                 "rep_pen":1,
@@ -2604,11 +2571,9 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             temp_poll_result = generate(genparams=temp_poll)
             temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
 
-            # then we take that final decision
-            # and translate it to a simple "yes" or "no" using
-            # another call to the model
+            # then we take that final decision and translate it to a simple "yes" or "no" using another call to the model
             temp_poll_check = {
-                "prompt": f"LLM's reasoning: {temp_poll_text}\n\nDid the LLM's final decision state a tool call is needed? (one word answer: yes or no)",
+                "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\nSo final decision, did the AI decide that a tool call is required? (one word answer: yes or no):",
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
@@ -2623,22 +2588,15 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 should_use_tools = False
 
             if not args.quiet:
-                print()
-                print("[TOOLCALL REQUEST]")
-                print(f"Request: {last_user_message}")
-                print(f"Prompt: {custom_tools_prompt}")
-                if is_followup_tool:
-                    print(f"Previous tool call results: {tool_call_results}")
-                print(f"Decision: {temp_poll_check_text}")
-                print(f"Reasoning: {temp_poll_text}")
-
+                print(f"\n[TOOLCALL DECISION] Should use tools? ({should_use_tools})")
+                if args.debugmode >= 1:
+                    print(f"[TOOLCALL REASONING]: {temp_poll_text}")
                 if chosen_tool != "auto":
                     print(f"Chosen tool: {chosen_tool}")
 
         if should_use_tools:
             #first, try and extract a specific tool if selected
             used_tool_json = extract_tool_info_from_tool_array(chosen_tool, tools_array)
-
             if used_tool_json: #already found the tool we want, remove all others
                 pass
             elif len(tools_array)==1:
@@ -2654,9 +2612,9 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                         pollgrammar += "\"" + name + "\""
                     pollgrammar = r'root ::= ' + pollgrammar
 
-                    decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the LLM reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
+                    decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the AI reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
                     temp_poll = {
-                        "prompt": f"Chat history: {messages_truncated}\n\nPrevious toolcall responses:  {tool_call_results}\n\nLLM's reasoning: {temp_poll_text}\n\nTool List:\n{tools_string}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "prompt": f"{curr_ctx}\n\nTool List:\n{tools_string}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
                         "max_length":16,
                         "temperature":0.1,
                         "top_k":1,
@@ -2665,7 +2623,6 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                         "grammar":pollgrammar
                         }
                     temp_poll_result = generate(genparams=temp_poll)
-
                     if temp_poll_result:
                         raw = temp_poll_result['text'].lower()
 
@@ -2673,7 +2630,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                             if name.lower() in raw:
                                 used_tool_json = extract_tool_info_from_tool_array(name, tools_array)
                                 if not args.quiet:
-                                    print(f"\n\nAttempting to use tool: {name}\n")
+                                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {name}")
                                 break
 
     return used_tool_json
@@ -2783,7 +2740,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             assistant_message_start = adapter_obj.get("assistant_start", "\n### Response:\n")
             assistant_message_end = adapter_obj.get("assistant_end", "")
             assistant_message_gen = adapter_obj.get("assistant_gen", assistant_message_start)
-            tools_message_start = adapter_obj.get("tools_start", "\nTool Results:\n")
+            tools_message_start = adapter_obj.get("tools_start", "")
             tools_message_end = adapter_obj.get("tools_end", "")
             images_added = []
             audio_added = []
@@ -2819,8 +2776,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
             attachedaudid = 0
             jinja_output = None
             jinjatools = genparams.get('tools', [])
-            if use_jinja and cached_chat_template:                
-                jinja_output = format_jinja(messages_array,jinjatools)                
+            if use_jinja and cached_chat_template:
+                jinja_output = format_jinja(messages_array,jinjatools)
             if jinja_output:
                 messages_string = jinja_output
                 if jinjatools and len(jinjatools)>0:
@@ -2836,6 +2793,9 @@ ws ::= | " " | "\n" [ \t]{0,20}
                         messages_string += assistant_message_start
                     elif message['role'] == "tool":
                         messages_string += tools_message_start
+                        tcid = message.get("tool_call_id","")
+                        tcid = ("" if not tcid else f" {tcid}")
+                        messages_string += f"\nReceived results of function call{tcid}:\n"
 
                     # content can be a string or an array of objects
                     curr_content = message.get("content",None)
@@ -2847,9 +2807,16 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     if not curr_content:
                         if "tool_calls" in message:
                             try:
-                                if len(message.get("tool_calls"))>0:
-                                    tcfnname = message.get("tool_calls")[0].get("function").get("name")
-                                    messages_string += f"\n(Made a function call to {tcfnname})\n"
+                                nlstart = True
+                                for tc in message.get("tool_calls"):
+                                    if nlstart:
+                                        nlstart = False
+                                        messages_string += "\n"
+                                    tcid = tc.get("id","")
+                                    tcfnname = tc.get("function").get("name")
+                                    tcfnargs = tc.get("function").get("arguments","")
+                                    tcfnargs = (f" with arguments={tcfnargs}" if tcfnargs else "")
+                                    messages_string += f"(Made a function call {tcid} to {tcfnname}{tcfnargs})\n"
                             except Exception:
                                 messages_string += "\n(Made a function call)\n"
                         pass  # do nothing
@@ -2904,7 +2871,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     elif message['role'] == "tool":
                         messages_string += tools_message_end
                 messages_string += assistant_message_gen
-                
+
             genparams["prompt"] = messages_string
             if len(images_added)>0:
                 genparams["images"] = images_added
@@ -3578,7 +3545,7 @@ Change Mode<br>
                 response_body = embedded_kailite
             else:
                 response_body = (f"Embedded KoboldAI Lite is not found.<br>You will have to connect via the main KoboldAI client, or <a href='https://lite.koboldai.net?local=1&port={self.port}'>use this URL</a> to connect.").encode()
-            
+
 
         elif self.path in ["/noscript", "/noscript?"] or self.path.startswith(('/noscript?','noscript?')): #it's possible for the root url to have ?params without /
             self.noscript_webui()
@@ -3781,7 +3748,7 @@ Change Mode<br>
         elif self.path.endswith(('/.well-known/serviceinfo')):
             response_body = (json.dumps({"version":"0.2","software":{"name":"KoboldCpp","version":KcppVersion,"repository":"https://github.com/LostRuins/koboldcpp","homepage":"https://github.com/LostRuins/koboldcpp","logo":"https://raw.githubusercontent.com/LostRuins/koboldcpp/refs/heads/concedo/niko.ico"},"api":{"koboldai":{"name":"KoboldAI API","rel_url":"/api","documentation":"https://lite.koboldai.net/koboldcpp_api","version":KcppVersion},"openai":{"name":"OpenAI API","rel_url ":"/v1","documentation":"https://openai.com/documentation/api","version":KcppVersion}}}).encode())
 
-        elif self.path=="/props":           
+        elif self.path=="/props":
             response_body = (json.dumps({
                 "chat_template": cached_chat_template,
                 "id": 0,
@@ -3813,16 +3780,16 @@ Change Mode<br>
                 response_body = embedded_kcpp_docs
             else:
                 response_body = ("KoboldCpp API is running!\n\nAPI usage reference can be found at the wiki: https://github.com/LostRuins/koboldcpp/wiki").encode()
-           
+
         elif self.path=="/lcpp":
             content_type = 'text/html'
             # IMPORTANT: svelte needs a patch to accept this as a non-redirect path. Search for `r.pathname === e + "/index.html"` and add desired path there.
             if supports_gzip and embedded_lcpp_ui_gz is not None:
                 response_body = embedded_lcpp_ui_gz
-                content_encoding = 'gzip'           
+                content_encoding = 'gzip'
             else:
                 response_body = ("Llama.cpp UI is not available. Please use the KoboldAI Lite UI instead.").encode()
-           
+
         elif self.path.startswith(("/sdui")):
             content_type = 'text/html'
             if supports_gzip and embedded_kcpp_sdui_gz is not None:
@@ -3831,7 +3798,7 @@ Change Mode<br>
             elif embedded_kcpp_sdui is not None:
                 response_body = embedded_kcpp_sdui
             else:
-                response_body = ("KoboldCpp API is running, but KCPP SDUI is not loaded").encode()               
+                response_body = ("KoboldCpp API is running, but KCPP SDUI is not loaded").encode()
 
         elif self.path=="/v1":
             content_type = 'text/html'
@@ -4468,14 +4435,14 @@ Change Mode<br>
                             try:
                                 toolsdata_res = gendat['choices'][0]['message']['tool_calls']
                                 if toolsdata_res and len(toolsdata_res)>0:
-                                    toolsdata_res[0]["index"] = 0 # need to add an index for OWUI                               
+                                    toolsdata_res[0]["index"] = 0 # need to add an index for OWUI
                             except Exception:
                                 toolsdata_res = []
                             try:
                                 content_text = gendat['choices'][0]['message'].get('content', None)
                             except Exception:
                                 content_text = None
-                                
+
                            # Send role chunk first
                             chunk_role = json.dumps({
                                 "id": "koboldcpp",
@@ -5801,13 +5768,13 @@ def show_gui():
     quantkv_var.trace_add("write", toggleflashattn)
     makecheckbox(tokens_tab, "No BOS Token", nobostoken_var, 43, tooltiptxt="Prevents BOS token from being added at the start of any prompt. Usually NOT recommended for most models.")
     makecheckbox(tokens_tab, "Enable Guidance", enableguidance_var, 43,padx=(200 if corrupt_scaler else 140), tooltiptxt="Enables the use of Classifier-Free-Guidance, which allows the use of negative prompts. Has performance and memory impact.")
-    def togglejinja(a,b,c):       
+    def togglejinja(a,b,c):
         if jinja_var.get()==1:
             jinjatoolsbox.grid()
         else:
             jinja_tools_var.set(0)
             jinjatoolsbox.grid_remove()
-        changed_gpulayers_estimate()    
+        changed_gpulayers_estimate()
     makecheckbox(tokens_tab, "Use Jinja", jinja_var, row=45, command=togglejinja, tooltiptxt="Enables using jinja chat template formatting for chat completions endpoint. Other endpoints are unaffected.")
     jinjatoolsbox = makecheckbox(tokens_tab, "Jinja for Tools", jinja_tools_var, row=45 ,padx=(200 if corrupt_scaler else 140), tooltiptxt="Allows jinja even with tool calls. If unchecked, jinja will be disabled when tools are used.")
     jinja_var.trace_add("write", togglejinja)
@@ -5815,7 +5782,7 @@ def show_gui():
     makelabelentry(tokens_tab, "MoE CPU Layers:", moecpu_var, row=55, padx=(490 if corrupt_scaler else 320), singleline=True, tooltip="Force Mixture of Experts (MoE) weights of the first N layers to the CPU.\nSetting it higher than GPU layers has no effect.", labelpadx=(300 if corrupt_scaler else 210))
     makelabelentry(tokens_tab, "Override KV:", override_kv_var, row=57, padx=(220 if corrupt_scaler else 120), singleline=True, width=150, tooltip="Override metadata value by key. Separate multiple values with commas. Format is name=type:value. Types: int, float, bool, str")
     makelabelentry(tokens_tab, "Override Tensors:", override_tensors_var, row=59, padx=(220 if corrupt_scaler else 120), singleline=True, width=150, tooltip="Override selected backend for specific tensors matching tensor_name_regex_pattern=buffer_type, same as in llama.cpp.")
-   
+
     # Model Tab
     model_tab = tabcontent["Loaded Files"]
 
@@ -6689,6 +6656,7 @@ def run_horde_worker(args, api_key, worker_name):
                 print_with_time(f"Horde Worker Paused for {penaltytime} min - Too many errors. It will resume automatically, but you should restart it.")
                 print_with_time("Caution: Too many failed jobs may lead to entering maintenance mode.")
                 time.sleep(60 * penaltytime)
+                print_with_time("Horde Worker Resumed")
             else:
                  print_with_time("Horde Worker Exit limit reached, too many errors.")
 
@@ -7476,7 +7444,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         if isinstance(args.chatcompletionsadapter, str) and os.path.exists(args.chatcompletionsadapter):
             ccadapter_path = os.path.abspath(args.chatcompletionsadapter)
         elif isinstance(args.chatcompletionsadapter, str) and adapt_dir:
-            filename = args.chatcompletionsadapter          
+            filename = args.chatcompletionsadapter
             if not filename.endswith(".json"):
                 filename += ".json"
             #strip to just the filename
@@ -7796,7 +7764,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         if not loadok:
             exitcounter = 999
             exit_with_error(3,"Could not load text model: " + modelname)
-    
+
         # The chat completions adapter is a list that needs derivation from chat templates
         # Try to derive chat completions adapter from chat template, now that we have the model loaded
         if not args.nomodel and args.model_param:
