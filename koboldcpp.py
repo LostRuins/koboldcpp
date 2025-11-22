@@ -2531,7 +2531,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
     # first handle auto mode, determine whether a tool is needed
     used_tool_json = None
-    if not curr_ctx:
+    if not curr_ctx or not messages:
         return None
 
     # get user's last message
