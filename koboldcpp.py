@@ -2574,7 +2574,7 @@ Respond with a JSON object using this structure:
 }
 
 Rules:
-- Output only the JSON object
+- Output only the JSON object. Do NOT add anything before or after the json object.
 - final_decision must be exactly "yes" or "no"
 - tool_name must be either an exact tool name, or if no tool is required, an empty string: ""
 - Use proper JSON escaping: \" for quotes, \n for newlines
@@ -2582,7 +2582,7 @@ Rules:
 """
 
             if not is_followup_tool:
-                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional?"
+                custom_tools_prompt = "Is calling one of the tools listed above absolutely essential to answer user's current request, or is a tool call optional?"
                 custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}\n\n{custom_tools_prompt}{custom_tools_prompt_json_format}{assistant_message_start}"
             else:
                 custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message?"
@@ -2669,14 +2669,17 @@ Rules:
         if should_use_tools:
             #first, try and extract a specific tool if selected
             used_tool_json = extract_tool_info_from_tool_array(chosen_tool, tools_array)
-            if used_tool_json: #already found the tool we want, remove all others
-                pass
-            elif poll_use_json and json_tool_name:
+            if poll_use_json and json_tool_name:
+                if json_tool_name == "":
+                    return None
+
                 # if the ai's json stated a tool to use, just use that and skip the extra processing!
                 used_tool_json = extract_tool_info_from_tool_array(json_tool_name, tools_array)
 
                 if not args.quiet:
                     print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {json_tool_name} | Source: JSON response")
+            elif used_tool_json: #already found the tool we want, remove all others
+                pass
             elif len(tools_array)==1:
                 used_tool_json = tools_array[0]
             else: # we have to find the tool we want the old fashioned way
