@@ -2527,29 +2527,34 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
     # tools handling: Check if user is passing a openai tools array, if so add to end of prompt before assistant prompt unless tool_choice has been set to None
     tools_array = genparams.get('tools', [])
     chosen_tool = genparams.get('tool_choice', "auto")
-    messages = genparams.get('messages')
+    messages = genparams.get('messages',[])
+    toolmem = genparams.get("memory","")
 
     # first handle auto mode, determine whether a tool is needed
     used_tool_json = None
-    if not curr_ctx or not messages:
+    if not curr_ctx:
         return None
 
-    # get user's last message
+    # get user's last message and last tool call results
     last_user_message = ""
-    for message in messages:
-        if message['role'] == "user":
-            last_user_message = message['content']
+    tool_call_results = ""
 
-    # get last tool call results
-    tool_call_results = []
-    for message in reversed(messages):
-        # we get only the tool call results
-        # since the last user request
-        if message['role'] == "tool":
-            tool_call_results.append(message['content'])
-        else:
-            break
-    tool_call_results = list(reversed(tool_call_results))
+    if messages:
+        reversed_messages = list(reversed(messages))
+        for message in reversed_messages:
+            if message["role"] == "user":
+                last_user_message = message["content"]
+                last_user_message = f"\n\nUser's current request: {last_user_message}"
+                break
+        tool_call_chunk = []
+        for message in reversed_messages:
+            if message["role"] == "tool":
+                tool_call_chunk.append(message["content"])
+            else:
+                break
+        # tmp_tool_replies = list(reversed(tool_call_chunk))
+        # if tmp_tool_replies and len(tmp_tool_replies)>0:
+        #     tool_call_results = f"\n\nTool call responses: {tmp_tool_replies}"
 
     if tools_array and len(tools_array) > 0 and chosen_tool is not None and chosen_tool!="none":
         # pass only the essential tool call information
@@ -2565,26 +2570,23 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 "description": tool_data['description'],
                 "properties": tool_props
             })
-        tools_string = json.dumps(tools_array_filtered, indent=0)
-
-        # TODO: there has to be some way to cache the tools list? depending on how many tools there are, it takes a lot of time to process
-        # Found! i used a hacky way for now. It's in transform_genparams(). search for my name!
 
         should_use_tools = True
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
-            pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO"'
+            pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO" | " yes" | " no" | " Yes" | " No" | " YES" | " NO"'
             if not is_followup_tool:
                 custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional? Explain your reasoning in one sentence. Be brief. Always state your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}\n\n{custom_tools_prompt}{assistant_message_start}"
             else:
                 custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message? Explain your reasoning in one sentence. Be brief. Always state your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool call responses: {tool_call_results}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}{tool_call_results}\n\n{custom_tools_prompt}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
             # the result is a short explanation by the LLM on why a tool call is or is not needed, along with it's final decision at the end.
             temp_poll = {
                 "prompt": custom_tools_prompt_processed,
+                "memory": toolmem,
                 "max_length":300,
                 "temperature":0.1,
                 "top_k":1,
@@ -2596,7 +2598,8 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
             # then we take that final decision and translate it to a simple "yes" or "no" using another call to the model
             temp_poll_check = {
-                "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nAI reasoning: {temp_poll_text}\n\nDid the AI's final decision state that a tool call is required? If there was no final decision stated, default to no. (one word answer: yes or no):",
+                "prompt": f"{custom_tools_prompt_processed}\n\nAI reasoning: {temp_poll_text}\n\nDid the AI's final decision state that {('another' if is_followup_tool else 'a')} tool call is required? (one word answer: yes or no):",
+                "memory": toolmem,
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
@@ -2611,12 +2614,8 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 should_use_tools = False
 
             if not args.quiet:
-                print(f"\n[TOOLCALL DECISION] Should use tools? ({should_use_tools})")
-                print(f"[TOOLCALL REASONING]: {temp_poll_text}")
-
-                if args.debugmode >= 1:
-                    full = temp_poll_check["prompt"]
-                    print(f"[TOOLCALL DETAILS]: {full}")
+                print(f"\n[TOOLCALL REASONING]: {temp_poll_text}")
+                print(f"[TOOLCALL DECISION] Should use tools? ({should_use_tools})")
 
                 if chosen_tool != "auto":
                     print(f"Chosen tool: {chosen_tool}")
@@ -2641,7 +2640,8 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
                     decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the AI reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
                     temp_poll = {
-                        "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "prompt": f"{curr_ctx}{last_user_message}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
+                        "memory": toolmem,
                         "max_length":16,
                         "temperature":0.1,
                         "top_k":1,
@@ -2827,15 +2827,10 @@ ws ::= | " " | "\n" [ \t]{0,20}
             else:
                 if jinjatools:
                     # inject the tools list at the top of the context window, even if context has shifted
-                    # this drastically speeds up the tool processing, and it also makes the LLM aware of what tools are available to it at all times
-                    tools_string = json.dumps(compress_tools_array(jinjatools), indent=0)
-                    messages_array.insert(0, {
-                        "role": "system",
-                        "content": f"### Available Tools:\n{tools_string}",
-                    })
-
-                    # P.S. it might be a good idea to add a proper way to add stickied system messages, if that doesn't exist already.
-                    # - Rose22
+                    # uses koboldcpp's special memory parameter
+                    tools_string = f"{system_message_start}### Available Tools:\n{json.dumps(compress_tools_array(jinjatools), indent=0)}{system_message_end}"
+                    exist_mem = genparams.get('memory', "")
+                    genparams["memory"] = tools_string + exist_mem
 
                 for message in messages_array:
                     message_index += 1
