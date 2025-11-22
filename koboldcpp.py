@@ -2565,7 +2565,19 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
-            custom_tools_prompt_json_format = "Always provide your answer in a valid structured JSON format, containing these fields:\n-\"reasoning\": your reasoning\n\"final_decision\": your final decision as a one word answer of \"yes\" or \"no\"\n- \"tool_name\": the name of the tool to call.\n"
+            custom_tools_prompt_json_format = """Your response MUST be valid JSON with this exact structure:
+{
+    "reasoning": "Your reasoning here",
+    "final_decision": "yes" or "no",
+    "tool_name": "tool name here"
+}
+
+Important:
+- Use double quotes for all strings
+- Ensure proper escaping if the reasoning contains quotes
+- Do not add any text outside the JSON object
+- Valid values for final_decision are ONLY "yes" or "no"
+"""
 
             if not is_followup_tool:
                 custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional?"
@@ -2660,6 +2672,9 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             elif poll_use_json and json_tool_name:
                 # if the ai's json stated a tool to use, just use that and skip the extra processing!
                 used_tool_json = extract_tool_info_from_tool_array(json_tool_name, tools_array)
+
+                if not args.quiet:
+                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {json_tool_name}")
             elif len(tools_array)==1:
                 used_tool_json = tools_array[0]
             else: # we have to find the tool we want the old fashioned way
