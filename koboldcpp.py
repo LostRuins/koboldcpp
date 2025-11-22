@@ -2559,23 +2559,10 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
     if tools_array and len(tools_array) > 0 and chosen_tool is not None and chosen_tool!="none":
         # pass only the essential tool call information
         # to the model, to reduce the size of the prompt it needs to process
-        tools_array_filtered = []
-        for tool_dict in tools_array:
-            tool_data = tool_dict['function']
-            tool_props = {}
-            for prop_name, prop_data in tool_data['parameters']['properties'].items():
-                tool_props[prop_name] = prop_data['type']
-            tools_array_filtered.append({
-                "name": tool_data['name'],
-                "description": tool_data['description'],
-                "properties": tool_props
-            })
-
         should_use_tools = True
 
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
-            pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO" | " yes" | " no" | " Yes" | " No" | " YES" | " NO"'
             custom_tools_prompt_json_format = "Always provide your answer in a valid structured JSON format, containing two seperate entries: your reasoning, and your final decision as a one word answer of \"yes\" or \"no\"."
 
             if not is_followup_tool:
@@ -2626,6 +2613,8 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 # if it's not valid json, fall back to the extra prompt to let the LLM figure it out
 
                 # take the AI's answer to our temp poll prompt and translate it to a simple "yes" or "no" using another call to the model
+                pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO" | " yes" | " no" | " Yes" | " No" | " YES" | " NO"'
+
                 temp_poll_check = {
                     "prompt": f"{custom_tools_prompt_processed}\n\nAI reasoning: {temp_poll_text}\n\nDid the AI's final decision state that {('another' if is_followup_tool else 'a')} tool call is required? (one word answer: yes or no):",
                     "memory": toolmem,
