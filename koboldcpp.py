@@ -2666,15 +2666,14 @@ def compress_tools_array(tools_array):
     tools_array_filtered = []
     for tool_dict in tools_array:
         tool_data = tool_dict['function']
-        tools_array_filtered.append(tool_data['name'])
-        # tool_props = {}
-        # for prop_name, prop_data in tool_data['parameters']['properties'].items():
-        #     tool_props[prop_name] = prop_data['type']
-        # tools_array_filtered.append({
-        #     "name": tool_data['name'],
-        #     "description": tool_data['description'],
-        #     "properties": tool_props
-        # })
+        tool_props = {}
+        for prop_name, prop_data in tool_data['parameters']['properties'].items():
+            tool_props[prop_name] = prop_data['type']
+        tools_array_filtered.append({
+            "name": tool_data['name'],
+            "description": tool_data['description'],
+            "properties": tool_props
+        })
 
     return tools_array_filtered
 
