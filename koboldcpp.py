@@ -4309,10 +4309,6 @@ Change Mode<br>
             is_embeddings = False
             response_body = None
             use_jinja = args.jinja
-            if use_jinja and not args.jinja_tools:
-                tmptools = genparams.get('tools', [])
-                if tmptools and len(tmptools) > 0:
-                    use_jinja = False # not allowed to use tools with jinja
 
             if self.path.endswith('/api/admin/check_state'):
                 if global_memory and args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
@@ -4447,6 +4443,11 @@ Change Mode<br>
                 trunc_len = 8000
                 if args.debugmode >= 1:
                     trunc_len = 32000
+
+                if use_jinja and not args.jinja_tools:
+                    tmptools = genparams.get('tools', [])
+                    if tmptools and len(tmptools) > 0:
+                        use_jinja = False # not allowed to use tools with jinja
 
                 printablegenparams_raw = truncate_long_json(genparams,trunc_len)
                 utfprint("\nInput: " + json.dumps(printablegenparams_raw,ensure_ascii=False),1)
