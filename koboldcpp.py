@@ -2612,10 +2612,15 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 final_decision_str = "no"
                 for key in temp_poll_data.keys():
                     if "final" in key or "decision" in key or "conclusion" in key:
-                        final_decision_str = temp_poll_data[key]
+                        final_decision_str = temp_poll_data[key].lower()
                         break
 
-                if "yes" not in final_decision_str.lower():
+                if (
+                    "yes" not in final_decision_str and
+                    "essential" not in final_decision_str and
+                    "required" not in final_decision_str and
+                    "needed" not in final_decision_str
+                ):
                     should_use_tools = False
             else:
                 # if it's not valid json, fall back to the extra prompt to let the LLM figure it out
