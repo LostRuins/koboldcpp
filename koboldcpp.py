@@ -2828,7 +2828,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 if jinjatools:
                     # inject the tools list at the top of the context window, even if context has shifted
                     # uses koboldcpp's special memory parameter
-                    tools_string = f"{system_message_start}### Available Tools:\n{json.dumps(compress_tools_array(jinjatools), indent=0)}{system_message_end}"
+                    tools_string = f"{system_message_start}### Available Tools:\n{json.dumps(compress_tools_array(jinjatools), indent=0)}{system_message_end}\n"
                     exist_mem = genparams.get('memory', "")
                     genparams["memory"] = tools_string + exist_mem
 
