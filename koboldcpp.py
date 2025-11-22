@@ -2572,15 +2572,18 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             })
 
         should_use_tools = True
+
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO" | " yes" | " no" | " Yes" | " No" | " YES" | " NO"'
+            custom_tools_prompt_json_format = "Always provide your answer in a valid structured JSON format, containing two seperate entries: your reasoning, and your final decision."
+
             if not is_followup_tool:
-                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional? Explain your reasoning in one sentence. Be brief. Always state your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional?"
+                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}\n\n{custom_tools_prompt}{custom_tools_prompt_json_format}{assistant_message_start}"
             else:
-                custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message? Explain your reasoning in one sentence. Be brief. Always state your final decision at the end. Don't use emojis."
-                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}{tool_call_results}\n\n{custom_tools_prompt}{assistant_message_start}"
+                custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message?"
+                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}{tool_call_results}\n\n{custom_tools_prompt}{custom_tools_prompt_json_format}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
             # the result is a short explanation by the LLM on why a tool call is or is not needed, along with it's final decision at the end.
