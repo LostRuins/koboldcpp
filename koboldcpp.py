@@ -2572,11 +2572,12 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
     "tool_name": "tool name here"
 }
 
-Important:
-- Use double quotes for all strings
-- Ensure proper escaping if the reasoning contains quotes
-- Do not add any text outside the JSON object
-- Valid values for final_decision are ONLY "yes" or "no"
+CRITICAL RULES:
+- Output ONLY the JSON object
+- Use double quotes for ALL keys and string values
+- Escape any double quotes within strings with backslash: \\"
+- final_decision must be exactly "yes" or "no" (lowercase)
+- Ensure all brackets and braces are properly closed
 """
 
             if not is_followup_tool:
