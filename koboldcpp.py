@@ -2576,7 +2576,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO" | " yes" | " no" | " Yes" | " No" | " YES" | " NO"'
-            custom_tools_prompt_json_format = "Always provide your answer in a valid structured JSON format, containing two seperate entries: your reasoning, and your final decision."
+            custom_tools_prompt_json_format = "Always provide your answer in a valid structured JSON format, containing two seperate entries: your reasoning, and your final decision as a one word answer of \"yes\" or \"no\"."
 
             if not is_followup_tool:
                 custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional?"
@@ -2599,22 +2599,43 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             temp_poll_result = generate(genparams=temp_poll)
             temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
 
-            # then we take that final decision and translate it to a simple "yes" or "no" using another call to the model
-            temp_poll_check = {
-                "prompt": f"{custom_tools_prompt_processed}\n\nAI reasoning: {temp_poll_text}\n\nDid the AI's final decision state that {('another' if is_followup_tool else 'a')} tool call is required? (one word answer: yes or no):",
-                "memory": toolmem,
-                "max_length":5,
-                "temperature":0.1,
-                "top_k":1,
-                "rep_pen":1,
-                "ban_eos_token":False,
-                "grammar": pollgrammar
-            }
-            temp_poll_check_result = generate(genparams=temp_poll_check)
-            temp_poll_check_text = temp_poll_check_result['text'].lower()
+            # is the output valid json? then take the final decision and skip the extra processing prompt.
+            temp_poll_use_json = False
+            try:
+                temp_poll_data = json.loads(temp_poll_text)
+                temp_poll_use_json = True
+            except:
+                 if not args.quiet:
+                    print(f"\n[TOOLCALL REASONING]: Invalid JSON detected. Falling back on AI processing to determine final answer.\n")
 
-            if temp_poll_result and "yes" not in temp_poll_check_text:
-                should_use_tools = False
+            if temp_poll_use_json:
+                final_decision_str = "no"
+                for key in temp_poll_data.keys():
+                    if "final" in key or "decision" in key or "conclusion" in key:
+                        final_decision_str = temp_poll_data[key]
+                        break
+
+                if "yes" not in final_decision_str.lower():
+                    should_use_tools = False
+            else:
+                # if it's not valid json, fall back to the extra prompt to let the LLM figure it out
+
+                # take the AI's answer to our temp poll prompt and translate it to a simple "yes" or "no" using another call to the model
+                temp_poll_check = {
+                    "prompt": f"{custom_tools_prompt_processed}\n\nAI reasoning: {temp_poll_text}\n\nDid the AI's final decision state that {('another' if is_followup_tool else 'a')} tool call is required? (one word answer: yes or no):",
+                    "memory": toolmem,
+                    "max_length":5,
+                    "temperature":0.1,
+                    "top_k":1,
+                    "rep_pen":1,
+                    "ban_eos_token":False,
+                    "grammar": pollgrammar
+                }
+                temp_poll_check_result = generate(genparams=temp_poll_check)
+                temp_poll_check_text = temp_poll_check_result['text'].lower()
+
+                if temp_poll_result and "yes" not in temp_poll_check_text:
+                    should_use_tools = False
 
             if not args.quiet:
                 print(f"\n[TOOLCALL REASONING]: {temp_poll_text}")
