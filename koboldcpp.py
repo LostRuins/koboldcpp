@@ -2566,23 +2566,19 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
             custom_tools_prompt_json_format = """
-Your response MUST be valid JSON with this EXACT structure:
+Respond with a JSON object using this structure:
 {
     "reasoning": "Your reasoning here",
     "final_decision": "yes" or "no",
-    "tool_name": "exact_tool_name_here"
+    "tool_name": "exact_tool_name_here" or ""
 }
 
-CRITICAL REQUIREMENTS:
-1. Output ONLY the JSON object - no text before or after
-2. Use double quotes for ALL keys and string values
-3. Escape special characters properly:
-- Double quotes within strings: \\"
-- Newlines: \\n
-- Backslashes: \\\\
-4. final_decision MUST be exactly "yes" or "no" (no variations)
-5. tool_name must match exactly one of the available tools
-6. Do NOT include comments or trailing commas
+Rules:
+- Output only the JSON object
+- final_decision must be exactly "yes" or "no"
+- tool_name must be either an exact tool name, or if no tool is required, an empty string: ""
+- Use proper JSON escaping: \" for quotes, \n for newlines
+- No comments or trailing commas
 """
 
             if not is_followup_tool:
@@ -2680,7 +2676,7 @@ CRITICAL REQUIREMENTS:
                 used_tool_json = extract_tool_info_from_tool_array(json_tool_name, tools_array)
 
                 if not args.quiet:
-                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {json_tool_name}")
+                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {json_tool_name} | Source: JSON response")
             elif len(tools_array)==1:
                 used_tool_json = tools_array[0]
             else: # we have to find the tool we want the old fashioned way
@@ -2713,7 +2709,7 @@ CRITICAL REQUIREMENTS:
                             if name.lower() in raw:
                                 used_tool_json = extract_tool_info_from_tool_array(name, tools_array)
                                 if not args.quiet:
-                                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {name}")
+                                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {name} | Source: Tool name prompt")
                                 break
 
     return used_tool_json
