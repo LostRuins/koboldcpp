@@ -2575,10 +2575,10 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             # note: message string already contains the instruct start tag!
             pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO"'
             if not is_followup_tool:
-                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional? Explain your reasoning in one sentence. Be brief. Always state your final decision at the end. Don't use emojis."
                 custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\n{custom_tools_prompt}{assistant_message_start}"
             else:
-                custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message? Explain your reasoning in one sentence. Be brief, state your final decision at the end. Don't use emojis."
+                custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message? Explain your reasoning in one sentence. Be brief. Always state your final decision at the end. Don't use emojis."
                 custom_tools_prompt_processed = f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nTool call responses: {tool_call_results}\n\n{custom_tools_prompt}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
@@ -2596,7 +2596,7 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
             # then we take that final decision and translate it to a simple "yes" or "no" using another call to the model
             temp_poll_check = {
-                "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nAI reasoning: {temp_poll_text}\n\nSo final decision, did the AI decide that a tool call is required? (one word answer: yes or no):",
+                "prompt": f"{curr_ctx}\n\nUser's current request: {last_user_message}\n\nAI reasoning: {temp_poll_text}\n\nDid the AI's final decision state that a tool call is required? If there was no final decision stated, default to no. (one word answer: yes or no):",
                 "max_length":5,
                 "temperature":0.1,
                 "top_k":1,
@@ -2612,10 +2612,12 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
             if not args.quiet:
                 print(f"\n[TOOLCALL DECISION] Should use tools? ({should_use_tools})")
-                #f args.debugmode >= 1:
                 print(f"[TOOLCALL REASONING]: {temp_poll_text}")
-                    #full = temp_poll_check["prompt"]
-                    #print(f"[TOOLCALL DETAILS]: {full}")
+
+                if args.debugmode >= 1:
+                    full = temp_poll_check["prompt"]
+                    print(f"[TOOLCALL DETAILS]: {full}")
+
                 if chosen_tool != "auto":
                     print(f"Chosen tool: {chosen_tool}")
 
@@ -2912,7 +2914,6 @@ ws ::= | " " | "\n" [ \t]{0,20}
                                 pass
                             tool_json_formatting_instruction = f"\nPlease use the provided schema to fill the parameters to create a function call for {toolname}, in the following format: " + json.dumps([{"id": "call_001", "type": "function", "function": {"name": f"{toolname}", "arguments": {"first property key": "first property value", "second property key": "second property value"}}}], indent=0)
                             messages_string += f"\n\nJSON Schema:\n{used_tool_json}\n\n{tool_json_formatting_instruction}{assistant_message_start}"
-
 
                     if message['role'] == "system":
                         messages_string += system_message_end
