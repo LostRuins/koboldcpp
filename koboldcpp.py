@@ -2560,10 +2560,12 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
         # pass only the essential tool call information
         # to the model, to reduce the size of the prompt it needs to process
         should_use_tools = True
+        poll_use_json = False
+        json_tool_name = None
 
         if chosen_tool=="auto":
             # note: message string already contains the instruct start tag!
-            custom_tools_prompt_json_format = "Always provide your answer in a valid structured JSON format, containing two seperate entries: your reasoning, and your final decision as a one word answer of \"yes\" or \"no\"."
+            custom_tools_prompt_json_format = "Always provide your answer in a valid structured JSON format, containing these fields:\n-\"reasoning\": your reasoning\n\"final_decision\": your final decision as a one word answer of \"yes\" or \"no\"\n- \"tool_name\": the name of the tool to call.\n"
 
             if not is_followup_tool:
                 custom_tools_prompt = "Is one of the tool calls listed above absolutely essential to answer user's current request, or is a tool call optional?"
@@ -2587,20 +2589,32 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
 
             # is the output valid json? then take the final decision and skip the extra processing prompt.
-            temp_poll_use_json = False
             try:
                 temp_poll_data = json.loads(temp_poll_text)
-                temp_poll_use_json = True
+                poll_use_json = True
             except:
                  if not args.quiet:
                     print(f"\n[TOOLCALL REASONING]: Invalid JSON detected. Falling back on AI processing to determine final answer.\n")
 
-            if temp_poll_use_json:
+            if poll_use_json:
                 final_decision_str = "no"
+                final_decision_found = False
+                tool_found = False
                 for key in temp_poll_data.keys():
-                    if "final" in key or "decision" in key or "conclusion" in key:
+                    if not final_decision_found and (
+                        "final" in key or
+                        "decision" in key or
+                        "conclusion" in key
+                    ):
                         final_decision_str = temp_poll_data[key].lower()
-                        break
+                        final_decision_found = True
+
+                    if not tool_found and (
+                        "tool" in key or
+                        "name" in key or
+                        "function" in key
+                    ):
+                        json_tool_name = temp_poll_data[key]
 
                 if (
                     "yes" not in final_decision_str and
@@ -2643,6 +2657,9 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
             used_tool_json = extract_tool_info_from_tool_array(chosen_tool, tools_array)
             if used_tool_json: #already found the tool we want, remove all others
                 pass
+            elif poll_use_json and json_tool_name:
+                # if the ai's json stated a tool to use, just use that and skip the extra processing!
+                used_tool_json = extract_tool_info_from_tool_array(json_tool_name, tools_array)
             elif len(tools_array)==1:
                 used_tool_json = tools_array[0]
             else: # we have to find the tool we want the old fashioned way
