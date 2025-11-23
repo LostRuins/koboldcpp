@@ -454,57 +454,7 @@ def get_default_threads():
         default_threads = 48
     return default_threads
 
-def get_system_ram() -> int:
-    """
-    Detect total system RAM in bytes (cross-platform: Linux and Windows).
-    Returns RAM in bytes, or 0 if detection fails.
-    """
-    try:
-        # 1. WINDOWS
-        if os.name == 'nt':
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-            meminfo = MEMORYSTATUSEX()
-            meminfo.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(meminfo))
-            return meminfo.ullTotalPhys
 
-        # 2. MACOS
-        elif sys.platform == 'darwin':
-            cmd = ['sysctl', '-n', 'hw.memsize']
-            mem = subprocess.check_output(cmd).strip()
-            return int(mem)
-
-        # 3. LINUX / UNIX / ANDROID
-        else:
-            try:
-                pages = os.sysconf("SC_PHYS_PAGES")
-                page_size = os.sysconf("SC_PAGE_SIZE")
-                if pages > 0 and page_size > 0:
-                    return pages * page_size
-            except (ValueError, AttributeError):
-                pass
-            
-            if os.path.isfile('/proc/meminfo'):
-                with open('/proc/meminfo', 'r') as f:
-                    for line in f:
-                        if line.startswith('MemTotal:'):
-                            parts = line.split()
-                            return int(parts[1]) * 1024
-            return 0
-
-    except Exception as e:
-        return 0
 
 def pick_existant_file(ntoption,nonntoption):
     precompiled_prefix = "precompiled_"
@@ -1576,19 +1526,9 @@ def load_model(model_filename):
 
     # Initialize Smart Cache if enabled
     if ret and args.smartcache:
-        # Clamp RAM size to 90% of system RAM
-        max_ram_gb = args.smartcacherammaxsize
-        system_ram_bytes = get_system_ram()
-        if system_ram_bytes > 0:
-            system_ram_gb = system_ram_bytes / (1024**3)
-            max_allowed_gb = system_ram_gb * 0.9
-            if max_ram_gb > max_allowed_gb:
-                print(f"[Smart Cache] Warning: RAM limit {max_ram_gb:.1f}GB exceeds 90% of system RAM ({max_allowed_gb:.1f}GB), clamping to {max_allowed_gb:.1f}GB")
-                max_ram_gb = max_allowed_gb
-
-        handle.smart_cache_create(max_ram_gb)
+        handle.smart_cache_create(args.smartcacherammaxsize)
         handle.smart_cache_set_enabled(True)
-        print(f"[Smart Cache] Initialized with {max_ram_gb:.1f}GB RAM limit")
+        print(f"[Smart Cache] Initialized with {args.smartcacherammaxsize:.1f}GB RAM limit")
 
     return ret
 
@@ -5066,26 +5006,17 @@ def show_gui():
     antirunopts = [opt.replace("Use ", "") for lib, opt in lib_option_pairs if opt not in runopts]
     quantkv_text = ["F16 (Off)","8-Bit","4-Bit"]
 
-    # Generate Smart Cache RAM size options dynamically based on system RAM
+    # Generate Smart Cache RAM size options dynamically
     smartcacherammaxsize_text = []
-    system_ram_bytes = get_system_ram()
-    if system_ram_bytes > 0:
-        system_ram_gb = system_ram_bytes / (1024**3)
-        max_allowed_gb = int(system_ram_gb * 0.9)  # 90% of system RAM
-
-        # Generate range: 2, 4, 6, 8, 10, 12, ..., up to max_allowed_gb
-        for gb in range(2, min(max_allowed_gb + 1, 257), 2):
-            smartcacherammaxsize_text.append(str(gb))
-
-        # Add max_allowed_gb if not already in list
-        if str(max_allowed_gb) not in smartcacherammaxsize_text and max_allowed_gb >= 2:
-            smartcacherammaxsize_text.append(str(max_allowed_gb))
-
-        # Sort numerically
-        smartcacherammaxsize_text = sorted(smartcacherammaxsize_text, key=int)
-    else:
-        # Fallback if RAM detection fails
-        smartcacherammaxsize_text = ["2", "4", "6", "8", "10", "12", "16", "20", "24", "32"]
+    # 1GB steps from 4 to 16
+    for gb in range(4, 17, 1):
+        smartcacherammaxsize_text.append(str(gb))
+    # 2GB steps from 18 to 32
+    for gb in range(18, 33, 2):
+        smartcacherammaxsize_text.append(str(gb))
+    # 4GB steps from 36 to 112
+    for gb in range(36, 113, 4):
+        smartcacherammaxsize_text.append(str(gb))
 
     # Find default index for 10GB
     default_ram_idx = 0
