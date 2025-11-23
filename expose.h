@@ -1,6 +1,16 @@
 #pragma once
 #include <cstdint>
 
+// Forward declarations for Smart Cache
+namespace SmartCache {
+    class SmartCacheManager;
+    struct SmartCacheMetrics;
+}
+
+// Smart Cache globals (defined in expose.cpp)
+extern SmartCache::SmartCacheManager* g_smart_cache_manager;
+extern SmartCache::SmartCacheMetrics g_smart_cache_metrics;
+
 const int tensor_split_max = 16;
 const int images_max = 8;
 const int audio_max = 4;

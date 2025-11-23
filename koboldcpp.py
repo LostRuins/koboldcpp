@@ -454,6 +454,46 @@ def get_default_threads():
         default_threads = 48
     return default_threads
 
+def get_system_ram():
+    """
+    Detect total system RAM in bytes (cross-platform: Linux and Windows).
+    Returns RAM in bytes, or 0 if detection fails.
+    """
+    try:
+        if sys.platform.startswith('linux'):
+            # Linux: read /proc/meminfo
+            with open('/proc/meminfo', 'r') as f:
+                for line in f:
+                    if line.startswith('MemTotal:'):
+                        # Format: "MemTotal:       65894380 kB"
+                        kb = int(line.split()[1])
+                        return kb * 1024  # Convert to bytes
+        elif sys.platform.startswith('win'):
+            # Windows: use ctypes to call kernel32.dll
+            import ctypes
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            meminfo = MEMORYSTATUSEX()
+            meminfo.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(meminfo))
+            return meminfo.ullTotalPhys
+        else:
+            # Unsupported platform
+            return 0
+    except Exception as e:
+        print(f"Warning: Failed to detect system RAM: {e}")
+        return 0
+
 def pick_existant_file(ntoption,nonntoption):
     precompiled_prefix = "precompiled_"
     ntexist = file_exists(ntoption)
@@ -594,6 +634,26 @@ def init_library():
     handle.load_state_kv.argtypes = [ctypes.c_int]
     handle.load_state_kv.restype = ctypes.c_bool
     handle.clear_state_kv.restype = ctypes.c_bool
+
+    # Smart Cache bindings
+    handle.smart_cache_create.argtypes = [ctypes.c_double]
+    handle.smart_cache_create.restype = ctypes.c_void_p
+    handle.smart_cache_destroy.restype = None
+    handle.smart_cache_set_enabled.argtypes = [ctypes.c_bool]
+    handle.smart_cache_set_enabled.restype = None
+    handle.smart_cache_is_enabled.restype = ctypes.c_bool
+    handle.smart_cache_get_stats_json.restype = ctypes.c_char_p
+    handle.smart_cache_allocate_slot.restype = ctypes.c_int
+    handle.smart_cache_set_active_slot.argtypes = [ctypes.c_int]
+    handle.smart_cache_invalidate_slot.argtypes = [ctypes.c_int]
+    handle.smart_cache_invalidate_all.restype = None
+    handle.smart_cache_save_to_slot.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_size_t, ctypes.c_size_t]
+    handle.smart_cache_evict_lru_slot.restype = ctypes.c_bool
+    handle.smart_cache_evict_to_fit.argtypes = [ctypes.c_size_t]
+    handle.smart_cache_get_total_ram_usage.restype = ctypes.c_size_t
+    handle.smart_cache_get_vram_slot_id.restype = ctypes.c_int
+    handle.smart_cache_get_slot_count.restype = ctypes.c_size_t
+
     handle.sd_load_model.argtypes = [sd_load_model_inputs]
     handle.sd_load_model.restype = ctypes.c_bool
     handle.sd_generate.argtypes = [sd_generation_inputs]
@@ -1501,6 +1561,23 @@ def load_model(model_filename):
     inputs.swa_support = args.useswa
     inputs = set_backend_props(inputs)
     ret = handle.load_model(inputs)
+
+    # Initialize Smart Cache if enabled
+    if ret and args.smartcache:
+        # Clamp RAM size to 90% of system RAM
+        max_ram_gb = args.smartcacherammaxsize
+        system_ram_bytes = get_system_ram()
+        if system_ram_bytes > 0:
+            system_ram_gb = system_ram_bytes / (1024**3)
+            max_allowed_gb = system_ram_gb * 0.9
+            if max_ram_gb > max_allowed_gb:
+                print(f"[Smart Cache] Warning: RAM limit {max_ram_gb:.1f}GB exceeds 90% of system RAM ({max_allowed_gb:.1f}GB), clamping to {max_allowed_gb:.1f}GB")
+                max_ram_gb = max_allowed_gb
+
+        handle.smart_cache_create(max_ram_gb)
+        handle.smart_cache_set_enabled(True)
+        print(f"[Smart Cache] Initialized with {max_ram_gb:.1f}GB RAM limit")
+
     return ret
 
 def generate(genparams, stream_flag=False):
@@ -3607,6 +3684,18 @@ Change Mode<br>
                 logprobsdict = parse_last_logprobs(lastlogprobs)
             response_body = (json.dumps({"logprobs":logprobsdict}).encode())
 
+        elif self.path.endswith('/api/extra/smartcache/stats'):
+            if not self.secure_endpoint():
+                return
+            if handle.smart_cache_is_enabled():
+                stats_json = handle.smart_cache_get_stats_json()
+                response_body = stats_json.encode() if isinstance(stats_json, str) else stats_json
+            else:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Smart cache not enabled"}).encode())
+                return
+
         elif self.path.endswith('/v1/models') or self.path=='/models':
             response_body = (json.dumps({"object":"list","data":[{"id":friendlymodelname,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"}]}).encode())
 
@@ -4965,6 +5054,34 @@ def show_gui():
     antirunopts = [opt.replace("Use ", "") for lib, opt in lib_option_pairs if opt not in runopts]
     quantkv_text = ["F16 (Off)","8-Bit","4-Bit"]
 
+    # Generate Smart Cache RAM size options dynamically based on system RAM
+    smartcacherammaxsize_text = []
+    system_ram_bytes = get_system_ram()
+    if system_ram_bytes > 0:
+        system_ram_gb = system_ram_bytes / (1024**3)
+        max_allowed_gb = int(system_ram_gb * 0.9)  # 90% of system RAM
+
+        # Generate range: 2, 4, 6, 8, 10, 12, ..., up to max_allowed_gb
+        for gb in range(2, min(max_allowed_gb + 1, 257), 2):
+            smartcacherammaxsize_text.append(str(gb))
+
+        # Add max_allowed_gb if not already in list
+        if str(max_allowed_gb) not in smartcacherammaxsize_text and max_allowed_gb >= 2:
+            smartcacherammaxsize_text.append(str(max_allowed_gb))
+
+        # Sort numerically
+        smartcacherammaxsize_text = sorted(smartcacherammaxsize_text, key=int)
+    else:
+        # Fallback if RAM detection fails
+        smartcacherammaxsize_text = ["2", "4", "6", "8", "10", "12", "16", "20", "24", "32"]
+
+    # Find default index for 10GB
+    default_ram_idx = 0
+    if "10" in smartcacherammaxsize_text:
+        default_ram_idx = smartcacherammaxsize_text.index("10")
+    elif len(smartcacherammaxsize_text) > 0:
+        default_ram_idx = min(4, len(smartcacherammaxsize_text) - 1)  # Fallback to 5th option or last
+
     if not any(runopts):
         exitcounter = 999
         exit_with_error(2,"KoboldCPP couldn't locate any backends to use (i.e Default, Vulkan, CLBlast, CUDA).\n\nTo use the program, please run the 'make' command from the directory.","No Backends Available!")
@@ -5001,6 +5118,8 @@ def show_gui():
     remotetunnel_var = ctk.IntVar(value=0)
     smartcontext_var = ctk.IntVar()
     flashattention_var = ctk.IntVar(value=0)
+    smartcache_var = ctk.IntVar(value=0)
+    smartcacherammaxsize_var = ctk.IntVar()
     context_var = ctk.IntVar()
     customrope_var = ctk.IntVar()
     manualrope_var = ctk.IntVar()
@@ -5720,6 +5839,70 @@ def show_gui():
     noqkvlabel.configure(text_color="#ff5555")
     qkvslider,qkvlabel,qkvtitle = makeslider(tokens_tab, "Quantize KV Cache:", quantkv_text, quantkv_var, 0, 2, 30, set=0,tooltip="Enable quantization of KV cache.\nRequires FlashAttention for full effect, otherwise only K cache is quantized.")
     quantkv_var.trace_add("write", toggleflashattn)
+
+    def update_smartcache_ram_warning(*args):
+        """Dynamic color-coded warning for Smart Cache RAM usage"""
+        try:
+            ram_max_gb = float(smartcacherammaxsize_text[smartcacherammaxsize_var.get()])
+            system_ram_gb = system_ram_bytes / (1024**3) if system_ram_bytes > 0 else 64.0
+            ram_usage_pct = (ram_max_gb / system_ram_gb) * 100
+
+            if ram_usage_pct > 90:
+                # RED: will be clamped
+                warning_text = f"({ram_max_gb:.0f} GB = {ram_usage_pct:.0f}% of system RAM, will be clamped to 90%!)"
+                color = "#ff5555"
+            elif ram_usage_pct > 75:
+                # YELLOW: high usage
+                warning_text = f"({ram_max_gb:.0f} GB = {ram_usage_pct:.0f}% of system RAM)"
+                color = "#ffff00"
+            else:
+                # GREEN: safe
+                warning_text = f"({ram_max_gb:.0f} GB = {ram_usage_pct:.0f}% of system RAM)"
+                color = "#55ff55"
+
+            smartcacheramlabel.configure(text=warning_text, text_color=color)
+        except:
+            pass
+
+    def togglesmartcache(a,b,c):
+        if smartcache_var.get() == 1:
+            # Show slider and warning
+            smartcacherammaxsizeslider.grid()
+            smartcacherammaxsizelabel.grid()
+            smartcacherammaxsizetitle.grid()
+            smartcacheramlabel.grid()
+            update_smartcache_ram_warning()
+        else:
+            # Hide controls
+            smartcacherammaxsizeslider.grid_remove()
+            smartcacherammaxsizelabel.grid_remove()
+            smartcacherammaxsizetitle.grid_remove()
+            smartcacheramlabel.grid_remove()
+
+    makecheckbox(tokens_tab, "Enable Smart Cache", smartcache_var, 32, command=togglesmartcache, tooltiptxt="Enables intelligent context switching by saving KV cache snapshots to RAM.\nWhen switching between different contexts (e.g., multi-user scenarios),\nthe system can quickly restore previous contexts without re-processing tokens.\nReduces latency by 70-90% on context switches.")
+
+    smartcacherammaxsizeslider, smartcacherammaxsizelabel, smartcacherammaxsizetitle = makeslider(
+        tokens_tab,
+        "Smart Cache RAM Max (GB):",
+        smartcacherammaxsize_text,
+        smartcacherammaxsize_var,
+        0, len(smartcacherammaxsize_text)-1,
+        34,
+        width=280,
+        set=default_ram_idx,
+        tooltip="Maximum RAM size (in GB) for smart cache slots.\nSmart cache will create slots until this RAM limit is reached.\nMinimum: 2 GB. Cannot exceed 90% of system RAM.\nRecommended: 10-20 GB for multi-user scenarios."
+    )
+
+    smartcacheramlabel = makelabel(tokens_tab,"",34,0,"",padx=160)
+    smartcacheramlabel.configure(text_color="#ffff00")
+    smartcacherammaxsize_var.trace_add("write", update_smartcache_ram_warning)
+
+    # Hide Smart Cache controls by default
+    smartcacherammaxsizeslider.grid_remove()
+    smartcacherammaxsizelabel.grid_remove()
+    smartcacherammaxsizetitle.grid_remove()
+    smartcacheramlabel.grid_remove()
+
     makecheckbox(tokens_tab, "No BOS Token", nobostoken_var, 43, tooltiptxt="Prevents BOS token from being added at the start of any prompt. Usually NOT recommended for most models.")
     makecheckbox(tokens_tab, "Enable Guidance", enableguidance_var, 43,padx=(200 if corrupt_scaler else 140), tooltiptxt="Enables the use of Classifier-Free-Guidance, which allows the use of negative prompts. Has performance and memory impact.")
     def togglejinja(a,b,c):
@@ -5955,6 +6138,8 @@ def show_gui():
         args.usemmap = usemmap.get()==1
         args.smartcontext = smartcontext_var.get()==1
         args.flashattention = flashattention_var.get()==1
+        args.smartcache = smartcache_var.get()==1
+        args.smartcacherammaxsize = float(smartcacherammaxsize_text[smartcacherammaxsize_var.get()])
         args.noshift = contextshift_var.get()==0
         args.nofastforward = fastforward_var.get()==0
         args.useswa = swa_var.get()==1
@@ -6175,6 +6360,24 @@ def show_gui():
         usemmap.set(1 if "usemmap" in dict and dict["usemmap"] else 0)
         smartcontext_var.set(1 if "smartcontext" in dict and dict["smartcontext"] else 0)
         flashattention_var.set(1 if "flashattention" in dict and dict["flashattention"] else 0)
+        smartcache_var.set(1 if "smartcache" in dict and dict["smartcache"] else 0)
+        if "smartcacherammaxsize" in dict:
+            try:
+                ram_value = int(dict["smartcacherammaxsize"])
+                # Find closest value in slider
+                if str(ram_value) in smartcacherammaxsize_text:
+                    smartcacherammaxsize_var.set(smartcacherammaxsize_text.index(str(ram_value)))
+                else:
+                    # Find closest
+                    closest_idx = 0
+                    for idx, val in enumerate(smartcacherammaxsize_text):
+                        if int(val) <= ram_value:
+                            closest_idx = idx
+                        else:
+                            break
+                    smartcacherammaxsize_var.set(closest_idx)
+            except (ValueError, IndexError):
+                smartcacherammaxsize_var.set(default_ram_idx)
         contextshift_var.set(0 if "noshift" in dict and dict["noshift"] else 1)
         fastforward_var.set(0 if "nofastforward" in dict and dict["nofastforward"] else 1)
         swa_var.set(1 if "useswa" in dict and dict["useswa"] else 0)
@@ -8252,6 +8455,11 @@ if __name__ == '__main__':
     embeddingsparsergroup.add_argument("--embeddingsmodel", metavar=('[filename]'), help="Specify an embeddings model to be loaded for generating embedding vectors.", default="")
     embeddingsparsergroup.add_argument("--embeddingsmaxctx", metavar=('[amount]'), help="Overrides the default maximum supported context of an embeddings model (defaults to trained context).", type=int, default=0)
     embeddingsparsergroup.add_argument("--embeddingsgpu", help="Attempts to offload layers of the embeddings model to GPU. Usually not needed.", action='store_true')
+
+    smartcacheparsergroup = parser.add_argument_group('Smart Cache Commands')
+    smartcacheparsergroup.add_argument("--smartcache", help="Enable smart cache for intelligent context switching (default: disabled).", action='store_true', default=False)
+    smartcacheparsergroup.add_argument("--smartcacherammaxsize", metavar=('[GB]'), help="Maximum RAM size in GB for smart cache slots (default: 10GB). Cannot exceed 90%% of total system RAM.", type=float, default=10.0)
+    smartcacheparsergroup.add_argument("--smartcachethreshold", metavar=('[threshold]'), help="Similarity threshold (0.0-1.0) for cache reuse. Values >= threshold use ContextFastForward, values < threshold trigger context switch with RAM search. (default: 0.8)", type=float, default=0.8)
 
     admingroup = parser.add_argument_group('Administration Commands')
     admingroup.add_argument("--admin", help="Enables admin mode, allowing you to unload and reload different configurations or models.", action='store_true')

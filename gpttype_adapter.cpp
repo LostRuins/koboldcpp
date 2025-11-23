@@ -40,6 +40,7 @@
 #include "neox_v2.cpp"
 #include "neox_v3.cpp"
 #include "mpt_v3.cpp"
+#include "smart_cache.cpp"
 #include "tools/mtmd/clip.h"
 #include "tools/mtmd/llava.h"
 #include "tools/mtmd/mtmd-audio.h"
@@ -1822,6 +1823,28 @@ static bool kcpp_eval_image(llama_context * ctx_llama, float * img_embd, int num
 }
 
 //given an old GGUF context and a new context that has some middle portion removed,
+// Compute prefix match token count (for Smart Cache)
+// Returns absolute number of matching prefix tokens
+int ComputePrefixTokens(
+    const std::vector<int>& a,
+    const std::vector<int>& b)
+{
+    if (a.empty() || b.empty()) return 0;
+
+    int common = 0;
+    size_t min_len = std::min(a.size(), b.size());
+
+    for (size_t i = 0; i < min_len; ++i) {
+        if (a[i] == b[i]) {
+            common++;
+        } else {
+            break;
+        }
+    }
+
+    return common;  // Return count, not percentage
+}
+
 //find and remove the middle portion from the old context from the KV. Does not fast forward after this destructive action
 void PurgeMissingTokens(llama_context * ctx, llama_context * draft_ctx, std::vector<int> &current_context_tokens, std::vector<int> &new_context_tokens, const int genamt, const int nctx)
 {
@@ -3813,6 +3836,126 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     else
     {
         bool triggersc = kcpp_data->use_smartcontext;
+
+        // =====================================================================
+        // SMART CACHE ORCHESTRATION
+        // =====================================================================
+        // Simple context switching based on absolute token count (MIN_TOKENS)
+        // - If VRAM prefix >= MIN_TOKENS → VRAM HIT (reuse via ContextFastForward)
+        // - Else → Save VRAM to RAM, search RAM for best match >= MIN_TOKENS
+        if (!blank_prompt && g_smart_cache_manager != nullptr &&
+            g_smart_cache_manager->is_enabled() && total_gens > 0 &&
+            file_format == FileFormat::GGUF_GENERIC)
+        {
+            const int MIN_TOKENS = std::min(std::max(nctx / 8, 1024), 4096);
+            const size_t vram_token_count = current_context_tokens.size();
+            const size_t prompt_token_count = embd_inp.size();
+
+            g_smart_cache_metrics.total_requests++;
+
+            // Skip if prompt too small
+            if (prompt_token_count < static_cast<size_t>(MIN_TOKENS))
+            {
+                if (debugmode == 1) {
+                    printf("\n[Smart Cache] Skip (prompt %zu < min %d tokens)", prompt_token_count, MIN_TOKENS);
+                }
+            }
+            else
+            {
+                // 1. Check VRAM context prefix match
+                int vram_prefix_count = ComputePrefixTokens(current_context_tokens, embd_inp);
+
+                if (debugmode == 1) {
+                    printf("\n[Smart Cache] VRAM prefix=%d/%zu, min=%d",
+                           vram_prefix_count, vram_token_count, MIN_TOKENS);
+                }
+
+                if (vram_prefix_count >= MIN_TOKENS)
+                {
+                    // ========== VRAM HIT ==========
+                    // Let PurgeMissingTokens + ContextFastForward handle reuse
+                    g_smart_cache_metrics.record_hit(1.0f, vram_prefix_count);
+                    if (debugmode == 1) {
+                        printf(" → VRAM HIT");
+                    }
+                }
+                else
+                {
+                    // ========== CONTEXT SWITCH ==========
+                    g_smart_cache_metrics.record_context_switch();
+
+                    if (debugmode == 1) {
+                        printf(" → Context switch");
+                    }
+
+                    // 2. Save VRAM to RAM (if large enough)
+                    if (vram_token_count >= static_cast<size_t>(MIN_TOKENS))
+                    {
+                        int vram_slot_id = g_smart_cache_manager->get_vram_slot_id();
+                        if (vram_slot_id == -1) {
+                            vram_slot_id = g_smart_cache_manager->allocate_slot();
+                            g_smart_cache_manager->set_active_slot(vram_slot_id);
+                        }
+
+                        size_t kv_size = llama_state_get_size(llama_ctx_v4);
+                        g_smart_cache_manager->evict_lru_slots_to_fit(kv_size);
+
+                        size_t saved_bytes = gpttype_save_state_kv(vram_slot_id);
+                        if (saved_bytes > 0) {
+                            g_smart_cache_manager->save_to_slot(
+                                vram_slot_id,
+                                current_context_tokens,
+                                saved_bytes
+                            );
+                            g_smart_cache_metrics.record_save_to_ram();
+
+                            if (debugmode == 1) {
+                                printf(", saved slot %d (%zu MB)", vram_slot_id, saved_bytes / (1024*1024));
+                            }
+
+                            // Clear VRAM KV cache AND token array
+                            gpttype_clear_state_kv(true);
+                            current_context_tokens.clear();
+                        }
+                    }
+
+                    // 3. Search RAM slots for best match
+                    int best_slot = g_smart_cache_manager->find_best_match(embd_inp, MIN_TOKENS);
+
+                    if (best_slot >= 0)
+                    {
+                        // ========== RAM HIT ==========
+                        bool load_success = gpttype_load_state_kv(best_slot);
+                        if (load_success) {
+                            const std::vector<int>* slot_tokens = g_smart_cache_manager->get_slot_tokens(best_slot);
+                            if (slot_tokens) {
+                                int prefix_count = ComputePrefixTokens(*slot_tokens, embd_inp);
+                                current_context_tokens = *slot_tokens;
+
+                                g_smart_cache_metrics.record_hit(1.0f, prefix_count);
+
+                                if (debugmode == 1) {
+                                    printf("\n[Smart Cache] → RAM HIT slot %d (prefix %d tokens)", best_slot, prefix_count);
+                                }
+
+                                g_smart_cache_manager->set_active_slot(best_slot);
+                                g_smart_cache_manager->invalidate_slot(best_slot);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // ========== RAM MISS ==========
+                        g_smart_cache_metrics.record_miss(0.0f);
+                        if (debugmode == 1) {
+                            printf("\n[Smart Cache] → RAM MISS (no slot with >= %d prefix)", MIN_TOKENS);
+                        }
+                        // Proceed with cold prefill
+                    }
+                }
+            }
+        }
+
         if(!blank_prompt) //special case for blank prompts, no fast forward or shifts
         {
             if(kcpp_data->use_fastforward && kcpp_data->use_contextshift && (file_format == FileFormat::GGUF_GENERIC))

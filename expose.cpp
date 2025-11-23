@@ -19,6 +19,11 @@
 #include <cstdint>
 #include "expose.h"
 #include "model_adapter.cpp"
+#include "smart_cache.h"
+
+// Global Smart Cache instance (initialized by Python)
+SmartCache::SmartCacheManager* g_smart_cache_manager = nullptr;
+SmartCache::SmartCacheMetrics g_smart_cache_metrics;
 
 extern "C"
 {
@@ -409,5 +414,178 @@ extern "C"
     bool clear_state_kv()
     {
         return gpttype_clear_state_kv(true);
+    }
+
+    // =========================================================================
+    // Smart Cache Functions
+    // =========================================================================
+
+    void* smart_cache_create(double max_ram_gb)
+    {
+        if (g_smart_cache_manager != nullptr) {
+            delete g_smart_cache_manager;
+        }
+        g_smart_cache_manager = new SmartCache::SmartCacheManager(max_ram_gb);
+        g_smart_cache_metrics.reset();
+        return g_smart_cache_manager;
+    }
+
+    void smart_cache_destroy()
+    {
+        if (g_smart_cache_manager != nullptr) {
+            delete g_smart_cache_manager;
+            g_smart_cache_manager = nullptr;
+        }
+    }
+
+    void smart_cache_set_enabled(bool enabled)
+    {
+        if (g_smart_cache_manager != nullptr) {
+            g_smart_cache_manager->set_enabled(enabled);
+        }
+    }
+
+    bool smart_cache_is_enabled()
+    {
+        return (g_smart_cache_manager != nullptr && g_smart_cache_manager->is_enabled());
+    }
+
+    int smart_cache_allocate_slot()
+    {
+        if (g_smart_cache_manager == nullptr) return -1;
+        return g_smart_cache_manager->allocate_slot();
+    }
+
+    void smart_cache_set_active_slot(int slot_id)
+    {
+        if (g_smart_cache_manager != nullptr) {
+            g_smart_cache_manager->set_active_slot(slot_id);
+        }
+    }
+
+    void smart_cache_invalidate_slot(int slot_id)
+    {
+        if (g_smart_cache_manager != nullptr) {
+            g_smart_cache_manager->invalidate_slot(slot_id);
+        }
+    }
+
+    void smart_cache_invalidate_all()
+    {
+        if (g_smart_cache_manager != nullptr) {
+            g_smart_cache_manager->invalidate_all();
+        }
+    }
+
+    void smart_cache_save_to_slot(int slot_id, const int* tokens, size_t token_count, size_t ram_size_bytes)
+    {
+        if (g_smart_cache_manager == nullptr || tokens == nullptr) return;
+        std::vector<int> token_vec(tokens, tokens + token_count);
+        g_smart_cache_manager->save_to_slot(slot_id, token_vec, ram_size_bytes);
+    }
+
+    bool smart_cache_evict_lru_slot()
+    {
+        if (g_smart_cache_manager == nullptr) return false;
+        return g_smart_cache_manager->evict_one_lru_slot();
+    }
+
+    void smart_cache_evict_to_fit(size_t required_bytes)
+    {
+        if (g_smart_cache_manager != nullptr) {
+            g_smart_cache_manager->evict_lru_slots_to_fit(required_bytes);
+        }
+    }
+
+    size_t smart_cache_get_total_ram_usage()
+    {
+        if (g_smart_cache_manager == nullptr) return 0;
+        return g_smart_cache_manager->get_total_ram_usage();
+    }
+
+    int smart_cache_get_vram_slot_id()
+    {
+        if (g_smart_cache_manager == nullptr) return -1;
+        return g_smart_cache_manager->get_vram_slot_id();
+    }
+
+    size_t smart_cache_get_slot_count()
+    {
+        if (g_smart_cache_manager == nullptr) return 0;
+        return g_smart_cache_manager->get_slot_count();
+    }
+
+    // Search for best matching slot (returns slot_id or -1)
+    // NOTE: This binding is not actively used - logic runs in C++ (gpttype_adapter.cpp)
+    int smart_cache_find_best_match(
+        const int* prompt_tokens,
+        size_t prompt_len,
+        int min_tokens
+    )
+    {
+        if (g_smart_cache_manager == nullptr || prompt_tokens == nullptr) {
+            return -1;
+        }
+
+        std::vector<int> prompt_vec(prompt_tokens, prompt_tokens + prompt_len);
+        return g_smart_cache_manager->find_best_match(prompt_vec, min_tokens);
+    }
+
+    // Metrics
+    void smart_cache_record_hit(float similarity, size_t tokens_saved)
+    {
+        g_smart_cache_metrics.record_hit(similarity, tokens_saved);
+    }
+
+    void smart_cache_record_miss(float similarity)
+    {
+        g_smart_cache_metrics.record_miss(similarity);
+    }
+
+    void smart_cache_record_context_switch()
+    {
+        g_smart_cache_metrics.record_context_switch();
+    }
+
+    void smart_cache_record_save_to_ram()
+    {
+        g_smart_cache_metrics.record_save_to_ram();
+    }
+
+    // Get statistics (returns JSON string - Python must free it)
+    const char* smart_cache_get_stats_json()
+    {
+        static std::string stats_json;
+
+        char buffer[2048];
+        snprintf(buffer, sizeof(buffer),
+            "{"
+            "\"total_requests\":%llu,"
+            "\"cache_hits\":%llu,"
+            "\"cache_misses\":%llu,"
+            "\"hit_rate\":%.3f,"
+            "\"context_switches\":%llu,"
+            "\"saves_to_ram\":%llu,"
+            "\"tokens_saved\":%llu,"
+            "\"avg_similarity_hit\":%.3f,"
+            "\"avg_similarity_miss\":%.3f,"
+            "\"ram_usage_mb\":%.1f,"
+            "\"total_slots\":%zu"
+            "}",
+            (unsigned long long)g_smart_cache_metrics.total_requests,
+            (unsigned long long)g_smart_cache_metrics.cache_hits,
+            (unsigned long long)g_smart_cache_metrics.cache_misses,
+            g_smart_cache_metrics.get_hit_rate(),
+            (unsigned long long)g_smart_cache_metrics.context_switches,
+            (unsigned long long)g_smart_cache_metrics.saves_to_ram,
+            (unsigned long long)g_smart_cache_metrics.total_saved_prefill_tokens,
+            g_smart_cache_metrics.get_avg_similarity_hit(),
+            g_smart_cache_metrics.get_avg_similarity_miss(),
+            (g_smart_cache_manager ? g_smart_cache_manager->get_total_ram_usage() / (1024.0 * 1024.0) : 0.0),
+            (g_smart_cache_manager ? g_smart_cache_manager->get_slot_count() : 0)
+        );
+
+        stats_json = buffer;
+        return stats_json.c_str();
     }
 }
