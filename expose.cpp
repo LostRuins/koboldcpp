@@ -520,7 +520,9 @@ extern "C"
     int smart_cache_find_best_match(
         const int* prompt_tokens,
         size_t prompt_len,
-        int min_tokens
+        int min_tokens,
+        int genamt,
+        int nctx
     )
     {
         if (g_smart_cache_manager == nullptr || prompt_tokens == nullptr) {
@@ -528,18 +530,18 @@ extern "C"
         }
 
         std::vector<int> prompt_vec(prompt_tokens, prompt_tokens + prompt_len);
-        return g_smart_cache_manager->find_best_match(prompt_vec, min_tokens);
+        return g_smart_cache_manager->find_best_match(prompt_vec, min_tokens, genamt, nctx);
     }
 
     // Metrics
     void smart_cache_record_hit(float similarity, size_t tokens_saved)
     {
-        g_smart_cache_metrics.record_hit(similarity, tokens_saved);
+        g_smart_cache_metrics.record_ram_hit(similarity, tokens_saved);
     }
 
     void smart_cache_record_miss(float similarity)
     {
-        g_smart_cache_metrics.record_miss(similarity);
+        g_smart_cache_metrics.record_ram_miss(similarity);
     }
 
     void smart_cache_record_context_switch()
@@ -561,9 +563,11 @@ extern "C"
         snprintf(buffer, sizeof(buffer),
             "{"
             "\"total_requests\":%llu,"
-            "\"cache_hits\":%llu,"
-            "\"cache_misses\":%llu,"
-            "\"hit_rate\":%.3f,"
+            "\"requests_skipped\":%llu,"
+            "\"vram_reuse\":%llu,"
+            "\"ram_hits\":%llu,"
+            "\"ram_misses\":%llu,"
+            "\"ram_hit_rate\":%.3f,"
             "\"context_switches\":%llu,"
             "\"saves_to_ram\":%llu,"
             "\"tokens_saved\":%llu,"
@@ -573,9 +577,11 @@ extern "C"
             "\"total_slots\":%zu"
             "}",
             (unsigned long long)g_smart_cache_metrics.total_requests,
-            (unsigned long long)g_smart_cache_metrics.cache_hits,
-            (unsigned long long)g_smart_cache_metrics.cache_misses,
-            g_smart_cache_metrics.get_hit_rate(),
+            (unsigned long long)g_smart_cache_metrics.requests_skipped,
+            (unsigned long long)g_smart_cache_metrics.vram_reuse,
+            (unsigned long long)g_smart_cache_metrics.ram_hits,
+            (unsigned long long)g_smart_cache_metrics.ram_misses,
+            g_smart_cache_metrics.get_ram_hit_rate(),
             (unsigned long long)g_smart_cache_metrics.context_switches,
             (unsigned long long)g_smart_cache_metrics.saves_to_ram,
             (unsigned long long)g_smart_cache_metrics.total_saved_prefill_tokens,

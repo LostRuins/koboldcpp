@@ -1823,7 +1823,8 @@ static bool kcpp_eval_image(llama_context * ctx_llama, float * img_embd, int num
 }
 
 //given an old GGUF context and a new context that has some middle portion removed,
-// Compute prefix match token count (for Smart Cache)
+// Helper: Compute exact prefix match (tokens identical from start until first mismatch)
+// Used for statistics and debugging - does NOT consider LCS
 // Returns absolute number of matching prefix tokens
 int ComputePrefixTokens(
     const std::vector<int>& a,
@@ -1838,30 +1839,36 @@ int ComputePrefixTokens(
         if (a[i] == b[i]) {
             common++;
         } else {
-            break;
+            break; // Stop at first mismatch
         }
     }
 
-    return common;  // Return count, not percentage
+    return common;
 }
 
-//find and remove the middle portion from the old context from the KV. Does not fast forward after this destructive action
-void PurgeMissingTokens(llama_context * ctx, llama_context * draft_ctx, std::vector<int> &current_context_tokens, std::vector<int> &new_context_tokens, const int genamt, const int nctx)
+// Helper: compute purge parameters without modifying anything
+// Factorized from PurgeMissingTokens - EXACT logic from concedo_experimental
+// Returns true if purge is possible and worthwhile
+// Outputs: trimstart (prefix length), purge_offset, purge_length
+bool compute_purge_parameters(
+    const std::vector<int>& current_context_tokens,
+    const std::vector<int>& new_context_tokens,
+    const int genamt,
+    const int nctx,
+    int* out_trimstart,
+    int* out_purge_offset,
+    int* out_purge_length)
 {
-    //scan from start old and new ctx, until first mismatch found, save as p0
-    //check remaining old and new ctx for longest common subseq, which needs to be at 256 tokens
-    //test: longest common subseq (LCQ) MUST start within 0 tokens from end of memory, otherwise purge fails
-    //if passed, save beginning of LCQ from old ctx as p1
-    //remove all tokens from old ctx between p0 and p1, updating both arrays and kv, then continue as normal
-
-    const int ShortfallThreshold = 200 + std::min((nctx/30),140); //dont trigger shifting if the distance between trimstart and currhead < this
-    const int SlackAllowance = 60 + std::min((nctx/60),70); //in case the end text is slightly modified, be forgiving
+    const int ShortfallThreshold = 200 + std::min((nctx/30),140);
+    const int SlackAllowance = 60 + std::min((nctx/60),70);
 
     int trimstart = 0;
     int new_tokens_len = new_context_tokens.size();
+    int curr_tokens_len = current_context_tokens.size();
     bool purgeneeded = true;
 
-    for (int i = 0; i < current_context_tokens.size(); ++i)
+    // Calculate prefix match
+    for (int i = 0; i < curr_tokens_len; ++i)
     {
         if (current_context_tokens[i] == new_context_tokens[i])
         {
@@ -1878,14 +1885,17 @@ void PurgeMissingTokens(llama_context * ctx, llama_context * draft_ctx, std::vec
         }
     }
 
-    //printf("\nPN: %d, NTL: %d, CCT: %d,TS:%d, diff:%d, sft:%d\n",purgeneeded,new_tokens_len,current_context_tokens.size(),trimstart,(new_tokens_len - trimstart),ShortfallThreshold);
+    *out_trimstart = trimstart;
+    *out_purge_offset = 0;
+    *out_purge_length = 0;
 
-    if(!purgeneeded || new_tokens_len < 6 || current_context_tokens.size() < 6 || new_tokens_len - trimstart < ShortfallThreshold)
+    // Early exit conditions (EXACT logic from concedo_experimental)
+    if(!purgeneeded || new_tokens_len < 6 || curr_tokens_len < 6 || new_tokens_len - trimstart < ShortfallThreshold)
     {
-        return; //no purge is needed
+        return false; //no purge is needed
     }
 
-    //at least this many tokens need to match, otherwise don't bother trimming
+    // Calculate LCS threshold (EXACT formula from concedo_experimental)
     const int LCSTokThreshold = std::max(std::min((new_tokens_len - trimstart) - (genamt+SlackAllowance), (int)(nctx*0.45)), ShortfallThreshold-SlackAllowance);
 
     auto curr_ctx_without_memory = std::vector<int>(current_context_tokens.begin() + trimstart, current_context_tokens.end());
@@ -1893,34 +1903,51 @@ void PurgeMissingTokens(llama_context * ctx, llama_context * draft_ctx, std::vec
 
     auto shared = LongestCommonSubseq(curr_ctx_without_memory, new_ctx_without_memory);
 
-    //printf("\nSharedSize: %d, LCSTokThreshold: %d, ArrPass: %d\n",shared.size(),LCSTokThreshold,ArrStartWith(new_ctx_without_memory, shared));
-    if (shared.size() > LCSTokThreshold && ArrStartWith(new_ctx_without_memory, shared)) // enough tokens in common
+    // Check if LCS is sufficient and starts at beginning (EXACT logic from concedo_experimental)
+    if (shared.size() > LCSTokThreshold && ArrStartWith(new_ctx_without_memory, shared))
     {
-        int found = ArrFindIndexOf(current_context_tokens,shared);
-        if(found>=0 && found > trimstart)
+        int found = ArrFindIndexOf(current_context_tokens, shared);
+        if(found >= 0 && found > trimstart)
         {
-
-            //extract the unwanted tokens out from context and KV
-            int diff = found - trimstart;
-            llama_memory_seq_rm(llama_get_memory(ctx), 0, trimstart, trimstart + diff);
-            llama_memory_seq_add(llama_get_memory(ctx), 0, trimstart + diff, -1, -diff);
-            if(draft_ctx)
-            {
-                llama_memory_seq_rm(llama_get_memory(draft_ctx), 0, trimstart, trimstart + diff);
-                llama_memory_seq_add(llama_get_memory(draft_ctx), 0, trimstart + diff, -1, -diff);
-            }
-
-            for (size_t i = trimstart + diff; i < current_context_tokens.size() - 1; i++)
-            {
-                current_context_tokens[i - diff] = current_context_tokens[i];
-            }
-
-            printf("\n[Context Shifting: Erased %d tokens at position %d]", diff, trimstart + 1);
-
-            current_context_tokens.resize(current_context_tokens.size() - diff);
+            *out_purge_offset = trimstart;
+            *out_purge_length = found - trimstart;
+            return true; // Purge is possible
         }
     }
 
+    return false; // No purge possible
+}
+
+//find and remove the middle portion from the old context from the KV. Does not fast forward after this destructive action
+void PurgeMissingTokens(llama_context * ctx, llama_context * draft_ctx, std::vector<int> &current_context_tokens, std::vector<int> &new_context_tokens, const int genamt, const int nctx)
+{
+    int trimstart, purge_offset, purge_length;
+
+    // Use factorized helper to compute purge parameters
+    if (!compute_purge_parameters(current_context_tokens, new_context_tokens, genamt, nctx,
+                                   &trimstart, &purge_offset, &purge_length))
+    {
+        return; // No purge needed or possible
+    }
+
+    // Execute the purge (remove tokens from KV cache and array)
+    int diff = purge_length;
+    llama_memory_seq_rm(llama_get_memory(ctx), 0, purge_offset, purge_offset + diff);
+    llama_memory_seq_add(llama_get_memory(ctx), 0, purge_offset + diff, -1, -diff);
+    if(draft_ctx)
+    {
+        llama_memory_seq_rm(llama_get_memory(draft_ctx), 0, purge_offset, purge_offset + diff);
+        llama_memory_seq_add(llama_get_memory(draft_ctx), 0, purge_offset + diff, -1, -diff);
+    }
+
+    for (size_t i = purge_offset + diff; i < current_context_tokens.size() - 1; i++)
+    {
+        current_context_tokens[i - diff] = current_context_tokens[i];
+    }
+
+    printf("\n[Context Shifting: Erased %d tokens at position %d]", diff, purge_offset + 1);
+
+    current_context_tokens.resize(current_context_tokens.size() - diff);
 }
 
 static int GetBatchSize(int desiredBlasBatchSize,FileFormat in_file_format)
@@ -3851,32 +3878,77 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             const size_t vram_token_count = current_context_tokens.size();
             const size_t prompt_token_count = embd_inp.size();
 
-            g_smart_cache_metrics.total_requests++;
-
-            // Skip if prompt too small
+            // Skip if prompt too small (but save VRAM if it's large enough)
             if (prompt_token_count < static_cast<size_t>(MIN_TOKENS))
             {
+                g_smart_cache_metrics.record_skip();
+
                 if (debugmode == 1) {
-                    printf("\n[Smart Cache] Skip (prompt %zu < min %d tokens)", prompt_token_count, MIN_TOKENS);
+                    printf("\n[Smart Cache] Skip search (prompt %zu < min %d tokens)", prompt_token_count, MIN_TOKENS);
+                }
+
+                // CRITICAL: Save current VRAM context before it gets overwritten
+                // Even if new prompt is small, preserve large VRAM context for future reuse
+                if (vram_token_count >= static_cast<size_t>(MIN_TOKENS))
+                {
+                    int vram_slot_id = g_smart_cache_manager->get_vram_slot_id();
+                    if (vram_slot_id == -1) {
+                        vram_slot_id = g_smart_cache_manager->allocate_slot();
+                        g_smart_cache_manager->set_active_slot(vram_slot_id);
+                    }
+
+                    size_t kv_size = llama_state_get_size(llama_ctx_v4);
+                    g_smart_cache_manager->evict_lru_slots_to_fit(kv_size);
+
+                    size_t saved_bytes = gpttype_save_state_kv(vram_slot_id);
+                    if (saved_bytes > 0) {
+                        g_smart_cache_manager->save_to_slot(
+                            vram_slot_id,
+                            current_context_tokens,
+                            saved_bytes
+                        );
+                        g_smart_cache_metrics.record_save_to_ram();
+
+                        // CRITICAL: Release this slot from VRAM so it can be found in RAM searches
+                        // The slot is now saved to RAM and no longer represents active VRAM context
+                        g_smart_cache_manager->set_active_slot(-1);
+
+                        if (debugmode == 1) {
+                            printf(", saved to RAM slot %d (%zu MB), released from VRAM", vram_slot_id, saved_bytes / (1024*1024));
+                        }
+                    }
                 }
             }
             else
             {
-                // 1. Check VRAM context prefix match
-                int vram_prefix_count = ComputePrefixTokens(current_context_tokens, embd_inp);
+                // 1. Check if VRAM context can be reused (prefix + LCS check)
+                int trimstart, purge_offset, purge_length;
+                bool can_reuse_vram = compute_purge_parameters(
+                    current_context_tokens, embd_inp,
+                    inputs.max_length, nctx,
+                    &trimstart, &purge_offset, &purge_length
+                );
 
-                if (debugmode == 1) {
-                    printf("\n[Smart Cache] VRAM prefix=%d/%zu, min=%d",
-                           vram_prefix_count, vram_token_count, MIN_TOKENS);
+                // Calculate total reusable tokens (prefix + LCS)
+                int reusable_tokens = trimstart;
+                if (can_reuse_vram && purge_length > 0) {
+                    // Can purge gap → reusable = prefix + (total - gap)
+                    reusable_tokens = current_context_tokens.size() - purge_length;
                 }
 
-                if (vram_prefix_count >= MIN_TOKENS)
+                if (debugmode == 1) {
+                    printf("\n[Smart Cache] VRAM reusable=%d/%zu (prefix=%d, purge=%s), min=%d",
+                           reusable_tokens, vram_token_count, trimstart,
+                           can_reuse_vram ? "YES" : "NO", MIN_TOKENS);
+                }
+
+                if (reusable_tokens >= MIN_TOKENS)
                 {
-                    // ========== VRAM HIT ==========
-                    // Let PurgeMissingTokens + ContextFastForward handle reuse
-                    g_smart_cache_metrics.record_hit(1.0f, vram_prefix_count);
+                    // ========== VRAM REUSE ==========
+                    // Normal KoboldCpp behavior - PurgeMissingTokens + ContextFastForward handle reuse
+                    g_smart_cache_metrics.record_vram_reuse(reusable_tokens);
                     if (debugmode == 1) {
-                        printf(" → VRAM HIT");
+                        printf(" → VRAM reuse (normal behavior)");
                     }
                 }
                 else
@@ -3910,8 +3982,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                             g_smart_cache_metrics.record_save_to_ram();
 
                             if (debugmode == 1) {
-                                printf(", saved slot %d (%zu MB)", vram_slot_id, saved_bytes / (1024*1024));
+                                printf(", saved to RAM slot %d (%zu MB)", vram_slot_id, saved_bytes / (1024*1024));
                             }
+
+                            // Release slot from VRAM tracking (now in RAM only)
+                            g_smart_cache_manager->set_active_slot(-1);
 
                             // Clear VRAM KV cache AND token array
                             gpttype_clear_state_kv(true);
@@ -3919,8 +3994,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         }
                     }
 
-                    // 3. Search RAM slots for best match
-                    int best_slot = g_smart_cache_manager->find_best_match(embd_inp, MIN_TOKENS);
+                    // 3. Search RAM slots for best match (using prefix + LCS like VRAM check)
+                    int best_slot = g_smart_cache_manager->find_best_match(embd_inp, MIN_TOKENS, inputs.max_length, nctx);
 
                     if (best_slot >= 0)
                     {
@@ -3929,13 +4004,19 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         if (load_success) {
                             const std::vector<int>* slot_tokens = g_smart_cache_manager->get_slot_tokens(best_slot);
                             if (slot_tokens) {
+                                // Calculate prefix for statistics (exact match from start)
                                 int prefix_count = ComputePrefixTokens(*slot_tokens, embd_inp);
                                 current_context_tokens = *slot_tokens;
 
-                                g_smart_cache_metrics.record_hit(1.0f, prefix_count);
+                                // Calculate similarity percentage based on prefix only
+                                size_t min_len = std::min(slot_tokens->size(), embd_inp.size());
+                                float similarity = min_len > 0 ? (float)prefix_count / min_len : 0.0f;
+
+                                g_smart_cache_metrics.record_ram_hit(similarity, prefix_count);
 
                                 if (debugmode == 1) {
-                                    printf("\n[Smart Cache] → RAM HIT slot %d (prefix %d tokens)", best_slot, prefix_count);
+                                    printf("\n[Smart Cache] → RAM HIT slot %d (loaded %zu tokens, prefix match %d, sim %.3f)",
+                                           best_slot, slot_tokens->size(), prefix_count, similarity);
                                 }
 
                                 g_smart_cache_manager->set_active_slot(best_slot);
@@ -3946,9 +4027,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     else
                     {
                         // ========== RAM MISS ==========
-                        g_smart_cache_metrics.record_miss(0.0f);
+                        g_smart_cache_metrics.record_ram_miss(0.0f);
                         if (debugmode == 1) {
-                            printf("\n[Smart Cache] → RAM MISS (no slot with >= %d prefix)", MIN_TOKENS);
+                            printf("\n[Smart Cache] → RAM MISS (no slot with >= %d reusable tokens)", MIN_TOKENS);
                         }
                         // Proceed with cold prefill
                     }
