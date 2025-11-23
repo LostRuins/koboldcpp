@@ -2552,41 +2552,31 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 tool_call_chunk.append(message["content"])
             else:
                 break
-        # tmp_tool_replies = list(reversed(tool_call_chunk))
-        # if tmp_tool_replies and len(tmp_tool_replies)>0:
-        #     tool_call_results = f"\n\nTool call responses: {tmp_tool_replies}"
+        tmp_tool_replies = list(reversed(tool_call_chunk))
+        if tmp_tool_replies and len(tmp_tool_replies)>0:
+            tool_call_results = f"\n\nTool call responses: {tmp_tool_replies}"
 
     if tools_array and len(tools_array) > 0 and chosen_tool is not None and chosen_tool!="none":
-        # pass only the essential tool call information
-        # to the model, to reduce the size of the prompt it needs to process
         should_use_tools = True
-        poll_use_json = False
-        json_tool_name = None
-
-        if chosen_tool=="auto":
+        if chosen_tool=="auto" or chosen_tool=="required":
             # note: message string already contains the instruct start tag!
-            custom_tools_prompt_json_format = """
-Respond with a JSON object using this structure:
-{
-    "reasoning": "Your reasoning here",
-    "final_decision": "yes" or "no",
-    "tool_name": "exact_tool_name_here" or ""
-}
-
-Rules:
-- Output only the JSON object. Do NOT add anything before or after the json object.
-- final_decision must be exactly "yes" or "no"
-- tool_name must be either an exact tool name, or if no tool is required, an empty string: ""
-- Use proper JSON escaping: \" for quotes, \n for newlines
-- No comments or trailing commas
-"""
+            temptoolnames = extract_all_names_from_tool_array(tools_array)
+            tempjson = {}
+            if chosen_tool=="required":
+                custom_tools_prompt_json_format = "Respond with a JSON object using this structure:\r\n{\r\n    \"tool_name\": \"exact_tool_name_here\"\r\n}\r\n\r\nRules:\r\n- You must pick one of the tools to use, pick the most suitable tool."
+                tempjson = {"type":"object","properties":{"tool_name":{"type":"string","enum":temptoolnames}},"required":["tool_name"],"additionalProperties":False}
+            else:
+                temptoolnames.append("null")
+                custom_tools_prompt_json_format = "Respond with a JSON object using this structure:\r\n{\r\n    \"reasoning\": \"Your reasoning here\",\r\n    \"final_decision\": \"yes\" or \"no\",\r\n    \"tool_name\": \"exact_tool_name_here\" or \"null\"\r\n}\r\n\r\nRules:\r\n- Output only the JSON object. Do NOT add anything before or after the json object.\r\n- final_decision must be exactly \"yes\" or \"no\"\r\n- tool_name must be either an exact tool name, or if no tool is required, an empty string: \"\"\r\n- Keep reasoning short, maximum one or two sentences.\r\n- No unnecessary comments"
+                tempjson = {"type":"object","properties":{"reasoning":{"type":"string"},"final_decision":{"type":"string","enum":["yes","no","Yes","No","YES","NO"," yes"," no"," Yes"," No"," YES"," NO"]},"tool_name":{"type":"string","enum":temptoolnames}},"required":["reasoning","final_decision","tool_name"],"additionalProperties":False}
+            toolquerygrammar = convert_json_to_gbnf(tempjson)
 
             if not is_followup_tool:
                 custom_tools_prompt = "Is calling one of the tools listed above absolutely essential to answer user's current request, or is a tool call optional?"
-                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}\n\n{custom_tools_prompt}{custom_tools_prompt_json_format}{assistant_message_start}"
+                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}\n\n{custom_tools_prompt} {custom_tools_prompt_json_format}{assistant_message_start}"
             else:
                 custom_tools_prompt = "Given the tool call response to the user's current request, is another tool call needed to further answer user's message?"
-                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}{tool_call_results}\n\n{custom_tools_prompt}{custom_tools_prompt_json_format}{assistant_message_start}"
+                custom_tools_prompt_processed = f"{curr_ctx}{last_user_message}{tool_call_results}\n\n{custom_tools_prompt} {custom_tools_prompt_json_format}{assistant_message_start}"
 
             # first, prompt to see if a tool call is needed using the prompt above.
             # the result is a short explanation by the LLM on why a tool call is or is not needed, along with it's final decision at the end.
@@ -2597,88 +2587,27 @@ Rules:
                 "temperature":0.1,
                 "top_k":1,
                 "rep_pen":1,
-                "ban_eos_token":False
+                "ban_eos_token":False,
+                "grammar":toolquerygrammar
             }
             temp_poll_result = generate(genparams=temp_poll)
             temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
+            temp_poll_data_arr = extract_json_from_string(temp_poll_text)
+            temp_poll_data = temp_poll_data_arr[0] if (temp_poll_data_arr and len(temp_poll_data_arr)>0) else None
 
-            # is the output valid json? then take the final decision and skip the extra processing prompt.
-            try:
-                temp_poll_data = json.loads(temp_poll_text)
-                poll_use_json = True
-            except:
-                 if not args.quiet:
-                    print(f"\n[TOOLCALL REASONING]: Invalid JSON detected. Falling back on AI processing to determine final answer.\n")
-
-            if poll_use_json:
-                final_decision_str = "no"
-                final_decision_found = False
-                tool_found = False
-                for key in temp_poll_data.keys():
-                    if not final_decision_found and (
-                        "final" in key or
-                        "decision" in key or
-                        "conclusion" in key
-                    ):
-                        final_decision_str = temp_poll_data[key].lower()
-                        final_decision_found = True
-
-                    if not tool_found and (
-                        "tool" in key or
-                        "name" in key or
-                        "function" in key
-                    ):
-                        json_tool_name = temp_poll_data[key]
-
-                if (
-                    "yes" not in final_decision_str and
-                    "essential" not in final_decision_str and
-                    "required" not in final_decision_str and
-                    "needed" not in final_decision_str
-                ):
+            if temp_poll_data:
+                if chosen_tool!="required" and ("yes" not in temp_poll_data.get("final_decision","").lower() or "null" in temp_poll_data.get("tool_name","").lower()):
                     should_use_tools = False
-            else:
-                # if it's not valid json, fall back to the extra prompt to let the LLM figure it out
-
-                # take the AI's answer to our temp poll prompt and translate it to a simple "yes" or "no" using another call to the model
-                pollgrammar = r'root ::= "yes" | "no" | "Yes" | "No" | "YES" | "NO" | " yes" | " no" | " Yes" | " No" | " YES" | " NO"'
-
-                temp_poll_check = {
-                    "prompt": f"{custom_tools_prompt_processed}\n\nAI reasoning: {temp_poll_text}\n\nDid the AI's final decision state that {('another' if is_followup_tool else 'a')} tool call is required? (one word answer: yes or no):",
-                    "memory": toolmem,
-                    "max_length":5,
-                    "temperature":0.1,
-                    "top_k":1,
-                    "rep_pen":1,
-                    "ban_eos_token":False,
-                    "grammar": pollgrammar
-                }
-                temp_poll_check_result = generate(genparams=temp_poll_check)
-                temp_poll_check_text = temp_poll_check_result['text'].lower()
-
-                if temp_poll_result and "yes" not in temp_poll_check_text:
-                    should_use_tools = False
+                elif (chosen_tool=="auto" or chosen_tool=="required") and "null" not in temp_poll_data.get("tool_name","").lower():
+                    chosen_tool = temp_poll_data.get("tool_name","").lower().strip()
 
             if not args.quiet:
                 print(f"\n[TOOLCALL REASONING]: {temp_poll_text}")
-                print(f"[TOOLCALL DECISION] Should use tools? ({should_use_tools})")
-
-                if chosen_tool != "auto":
-                    print(f"Chosen tool: {chosen_tool}")
 
         if should_use_tools:
             #first, try and extract a specific tool if selected
             used_tool_json = extract_tool_info_from_tool_array(chosen_tool, tools_array)
-            if poll_use_json and json_tool_name:
-                if json_tool_name == "":
-                    return None
-
-                # if the ai's json stated a tool to use, just use that and skip the extra processing!
-                used_tool_json = extract_tool_info_from_tool_array(json_tool_name, tools_array)
-
-                if not args.quiet:
-                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {json_tool_name} | Source: JSON response")
-            elif used_tool_json: #already found the tool we want, remove all others
+            if used_tool_json: #already found the tool we want, remove all others
                 pass
             elif len(tools_array)==1:
                 used_tool_json = tools_array[0]
@@ -2686,34 +2615,6 @@ Rules:
                 toolnames = extract_all_names_from_tool_array(tools_array)
                 if len(toolnames) == 1:
                     used_tool_json = extract_tool_info_from_tool_array(toolnames[0], tools_array)
-                else:
-                    pollgrammar = ""
-                    for name in toolnames:
-                        pollgrammar += ("" if pollgrammar=="" else " | ")
-                        pollgrammar += "\"" + name + "\""
-                    pollgrammar = r'root ::= ' + pollgrammar
-
-                    decide_tool_prompt = "Which of the listed tools should be used next? Pick exactly one. If the AI reasoning includes a suggested tool to call, select that one. (Reply directly with the selected tool's name):"
-                    temp_poll = {
-                        "prompt": f"{curr_ctx}{last_user_message}\n\nAI reasoning: {temp_poll_text}\n\n{decide_tool_prompt}{assistant_message_start}",
-                        "memory": toolmem,
-                        "max_length":16,
-                        "temperature":0.1,
-                        "top_k":1,
-                        "rep_pen":1,
-                        "ban_eos_token":False,
-                        "grammar":pollgrammar
-                        }
-                    temp_poll_result = generate(genparams=temp_poll)
-                    if temp_poll_result:
-                        raw = temp_poll_result['text'].lower()
-
-                        for name in toolnames:
-                            if name.lower() in raw:
-                                used_tool_json = extract_tool_info_from_tool_array(name, tools_array)
-                                if not args.quiet:
-                                    print(f"\n[TOOLCALL CHOICE] Attempting to use tool: {name} | Source: Tool name prompt")
-                                break
 
     return used_tool_json
 
@@ -2722,7 +2623,9 @@ def compress_tools_array(tools_array):
     for tool_dict in tools_array:
         tool_data = tool_dict['function']
         tool_props = {}
-        for prop_name, prop_data in tool_data['parameters']['properties'].items():
+        params = tool_data.get("parameters", {})
+        props = params.get("properties", {})
+        for prop_name, prop_data in props.items():
             tool_props[prop_name] = prop_data['type']
         tools_array_filtered.append({
             "name": tool_data['name'],
