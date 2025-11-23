@@ -454,23 +454,14 @@ def get_default_threads():
         default_threads = 48
     return default_threads
 
-def get_system_ram():
+def get_system_ram() -> int:
     """
     Detect total system RAM in bytes (cross-platform: Linux and Windows).
     Returns RAM in bytes, or 0 if detection fails.
     """
     try:
-        if sys.platform.startswith('linux'):
-            # Linux: read /proc/meminfo
-            with open('/proc/meminfo', 'r') as f:
-                for line in f:
-                    if line.startswith('MemTotal:'):
-                        # Format: "MemTotal:       65894380 kB"
-                        kb = int(line.split()[1])
-                        return kb * 1024  # Convert to bytes
-        elif sys.platform.startswith('win'):
-            # Windows: use ctypes to call kernel32.dll
-            import ctypes
+        # 1. WINDOWS
+        if os.name == 'nt':
             class MEMORYSTATUSEX(ctypes.Structure):
                 _fields_ = [
                     ("dwLength", ctypes.c_ulong),
@@ -487,11 +478,32 @@ def get_system_ram():
             meminfo.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
             ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(meminfo))
             return meminfo.ullTotalPhys
+
+        # 2. MACOS
+        elif sys.platform == 'darwin':
+            cmd = ['sysctl', '-n', 'hw.memsize']
+            mem = subprocess.check_output(cmd).strip()
+            return int(mem)
+
+        # 3. LINUX / UNIX / ANDROID
         else:
-            # Unsupported platform
+            try:
+                pages = os.sysconf("SC_PHYS_PAGES")
+                page_size = os.sysconf("SC_PAGE_SIZE")
+                if pages > 0 and page_size > 0:
+                    return pages * page_size
+            except (ValueError, AttributeError):
+                pass
+            
+            if os.path.isfile('/proc/meminfo'):
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemTotal:'):
+                            parts = line.split()
+                            return int(parts[1]) * 1024
             return 0
+
     except Exception as e:
-        print(f"Warning: Failed to detect system RAM: {e}")
         return 0
 
 def pick_existant_file(ntoption,nonntoption):
