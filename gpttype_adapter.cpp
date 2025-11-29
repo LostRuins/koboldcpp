@@ -3754,7 +3754,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     if (debugmode==1 && !is_quiet)
     {
         std::string outstr = "";
-        printf("\n\n[Debug: Dump %d Raw Input Tokens]\n",embd_inp.size());
+        printf("\n\n[Debug: Dump %zu Raw Input Tokens]\n",embd_inp.size());
         outstr += get_tok_vec_str(embd_inp);
         printf("%s\n", RemoveBell(outstr).c_str());
     }
@@ -3988,7 +3988,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                             int32_t decode_status2 = llama_decode(llama_ctx_v4, smallbatch.batch);
                             if(debugmode==1 && !is_quiet)
                             {
-                                printf("Retry chunk: %d at %d... status: %s\n",chunk.size(),temp_past,(decode_status2==0?"ok":"fail"));
+                                printf("Retry chunk: %zu at %d... status: %s\n",chunk.size(),temp_past,(decode_status2==0?"ok":"fail"));
                             }
                             evalres = (evalres && (decode_status2==0));
                             temp_past += chunk.size();

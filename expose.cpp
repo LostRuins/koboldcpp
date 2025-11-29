@@ -187,7 +187,7 @@ extern "C"
             }
             else if(file_format==FileFormat::GGUF_GENERIC)
             {
-                printf("\n---\nIdentified as GGUF model.\nAttempting to Load...\n---\n", file_format);
+                printf("\n---\nIdentified as GGUF model.\nAttempting to Load...\n---\n");
             }
             else if(file_format==FileFormat::GGML || file_format==FileFormat::GGHF || file_format==FileFormat::GGJT || file_format==FileFormat::GGJT_2 || file_format==FileFormat::GGJT_3)
             {

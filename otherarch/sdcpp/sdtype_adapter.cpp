@@ -916,7 +916,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         if(!sd_is_quiet && sddebugmode==1)
         {
-            printf("\nImageGen References: RefImg=%d Wan=%d Photomaker=%d\n",reference_imgs.size(),wan_imgs.size(),photomaker_imgs.size());
+            printf("\nImageGen References: RefImg=%zu Wan=%zu Photomaker=%zu\n",reference_imgs.size(),wan_imgs.size(),photomaker_imgs.size());
         }
     }
 

@@ -5264,7 +5264,7 @@ bool clip_model_quantize(const char * fname_inp, const char * fname_out, const i
                 const int64_t blck_size = ggml_blck_size(type);
                 if(d==0 && cur->ne[d] % blck_size != 0)
                 {
-                    printf("\nSkipping %s because %d is not divisible by %d\n",name.c_str(),cur->ne[d],blck_size);
+                    printf("\nSkipping %s because %" PRId64 " is not divisible by %ld\n",name.c_str(),cur->ne[d],blck_size);
                     quantize = false;
                     break;
                 }
