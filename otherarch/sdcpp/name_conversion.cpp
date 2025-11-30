@@ -127,7 +127,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"token_embd.", "shared."},
     };
 
-    static const std::vector<std::pair<std::string, std::string>> qwenvl_name_map{
+    static const std::vector<std::pair<std::string, std::string>> llm_name_map{
         {"token_embd.", "model.embed_tokens."},
         {"blk.", "model.layers."},
         {"attn_q.", "self_attn.q_proj."},
@@ -142,7 +142,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"output_norm.", "model.norm."},
     };
 
-    static const std::vector<std::pair<std::string, std::string>> qwenvl_vision_name_map{
+    static const std::vector<std::pair<std::string, std::string>> llm_vision_name_map{
         {"mm.", "merger.mlp."},
         {"v.post_ln.", "merger.ln_q."},
         {"v.patch_embd.weight", "patch_embed.proj.0.weight"},
@@ -161,11 +161,11 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
     };
     if (contains(name, "t5xxl")) {
         replace_with_name_map(name, t5_name_map);
-    } else if (contains(name, "qwen2vl")) {
-        if (contains(name, "qwen2vl.visual")) {
-            replace_with_name_map(name, qwenvl_vision_name_map);
+    } else if (contains(name, "llm")) {
+        if (contains(name, "llm.visual")) {
+            replace_with_name_map(name, llm_vision_name_map);
         } else {
-            replace_with_name_map(name, qwenvl_name_map);
+            replace_with_name_map(name, llm_name_map);
         }
     } else {
         name = convert_open_clip_to_hf_clip_name(name);
@@ -620,7 +620,7 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_unet_to_original_sdxl(name);
     } else if (sd_version_is_sd3(version)) {
         name = convert_diffusers_dit_to_original_sd3(name);
-    } else if (sd_version_is_flux(version)) {
+    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version)) {
         name = convert_diffusers_dit_to_original_flux(name);
     }
     return name;
@@ -722,6 +722,11 @@ std::string convert_diffusers_vae_to_original_sd1(std::string name) {
 }
 
 std::string convert_first_stage_model_name(std::string name, std::string prefix) {
+    static std::unordered_map<std::string, std::string> vae_name_map = {
+        {"decoder.post_quant_conv.", "post_quant_conv."},
+        {"encoder.quant_conv.", "quant_conv."},
+    };
+    replace_with_prefix_map(name, vae_name_map);
     name = convert_diffusers_vae_to_original_sd1(name);
     return name;
 }

@@ -21,6 +21,8 @@ std::string sd_load_merges();
 std::string sd_load_t5();
 std::string sd_load_umt5();
 std::string sd_load_qwen2_merges();
+std::string sd_load_mistral_merges();
+std::string sd_load_mistral_vocab_json();
 
 #include "flux.hpp"
 #include "stable-diffusion.cpp"
@@ -158,6 +160,26 @@ std::string sd_load_qwen2_merges()
     std::string filepath = executable_path + "embd_res/qwen2_merges_utf8_c_str.embd";
     qwenmergesstr = read_str_from_disk(filepath);
     return qwenmergesstr;
+}
+std::string sd_load_mistral_merges()
+{
+    static std::string mistralmergesstr;  // cached string
+    if (!mistralmergesstr.empty()) {
+        return mistralmergesstr;  // already loaded
+    }
+    std::string filepath = executable_path + "embd_res/mistral2_merges_utf8_c_str.embd";
+    mistralmergesstr = read_str_from_disk(filepath);
+    return mistralmergesstr;
+}
+std::string sd_load_mistral_vocab_json()
+{
+    static std::string mistralvocabstr;  // cached string
+    if (!mistralvocabstr.empty()) {
+        return mistralvocabstr;  // already loaded
+    }
+    std::string filepath = executable_path + "embd_res/mistral2_vocab_json.embd";
+    mistralvocabstr = read_str_from_disk(filepath);
+    return mistralvocabstr;
 }
 std::string sd_load_t5()
 {

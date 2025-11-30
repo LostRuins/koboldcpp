@@ -56,6 +56,7 @@ sd_progress_cb_t sd_get_progress_callback();
 void* sd_get_progress_callback_data();
 
 sd_preview_cb_t sd_get_preview_callback();
+void* sd_get_preview_callback_data();
 preview_t sd_get_preview_mode();
 int sd_get_preview_interval();
 bool sd_should_preview_denoised();

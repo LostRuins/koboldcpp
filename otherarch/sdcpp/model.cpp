@@ -19,6 +19,7 @@
 #include "util.h"
 #ifndef KCPP_NO_BAKE_SD_VOCAB
 #include "vocab.hpp"
+#include "vocab_mistral.hpp"
 #include "vocab_qwen.hpp"
 #include "vocab_umt5.hpp"
 #endif
@@ -120,8 +121,9 @@ const char* unused_tensors[] = {
     "denoiser.sigmas",
     "edm_vpred.sigma_max",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
-    "text_encoders.qwen2vl.output.weight",
-    "text_encoders.qwen2vl.lm_head.",
+    "text_encoders.llm.output.weight",
+    "text_encoders.llm.lm_head.",
+    "first_stage_model.bn.",
 };
 
 bool is_unused_tensor(std::string name) {
@@ -136,10 +138,10 @@ bool is_unused_tensor(std::string name) {
 std::string kcpp_fix_wrong_img_tensor_name(const std::string& name) //kcpp function that fixes common wrong tensor names
 {
     if (starts_with(name, "text_encoders.qwen25_7b.transformer.model.")) {
-        return "text_encoders.qwen2vl.model." + name.substr(strlen("text_encoders.qwen25_7b.transformer.model."));
+        return "text_encoders.llm.model." + name.substr(strlen("text_encoders.qwen25_7b.transformer.model."));
     }
     if (starts_with(name, "text_encoders.qwen25_7b.transformer.visual.")) {
-        return "text_encoders.qwen2vl.visual." + name.substr(strlen("text_encoders.qwen25_7b.transformer.visual."));
+        return "text_encoders.llm.visual." + name.substr(strlen("text_encoders.qwen25_7b.transformer.visual."));
     }
     if (starts_with(name, "text_encoders.umt5xxl.")) {
         return "text_encoders.t5xxl." + name.substr(strlen("text_encoders.umt5xxl."));
@@ -1120,6 +1122,9 @@ SDVersion ModelLoader::get_sd_version() {
             if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
                 return VERSION_QWEN_IMAGE;
             }
+            if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
+                return VERSION_FLUX2;
+            }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
                 is_wan = true;
             }
@@ -1383,6 +1388,24 @@ std::string ModelLoader::load_qwen2_merges() {
     return merges_utf8_str;
 #else
     return sd_load_qwen2_merges();
+#endif
+}
+
+std::string ModelLoader::load_mistral_merges() {
+#ifndef KCPP_NO_BAKE_SD_VOCAB
+    std::string merges_utf8_str(reinterpret_cast<const char*>(mistral_merges_utf8_c_str), sizeof(mistral_merges_utf8_c_str));
+    return merges_utf8_str;
+#else
+    return sd_load_mistral_merges();
+#endif
+}
+
+std::string ModelLoader::load_mistral_vocab_json() {
+#ifndef KCPP_NO_BAKE_SD_VOCAB
+    std::string json_str(reinterpret_cast<const char*>(mistral_vocab_json_utf8_c_str), sizeof(mistral_vocab_json_utf8_c_str));
+    return json_str;
+#else
+    return sd_load_mistral_vocab_json();
 #endif
 }
 

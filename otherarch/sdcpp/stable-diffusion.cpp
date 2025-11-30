@@ -46,6 +46,7 @@ const char* model_version_to_str[] = {
     "Wan 2.2 I2V",
     "Wan 2.2 TI2V",
     "Qwen Image",
+    "Flux.2",
 };
 
 const char* sampling_methods_str[] = {
@@ -265,7 +266,7 @@ public:
         bool iswan = (tempver==VERSION_WAN2 || tempver==VERSION_WAN2_2_I2V || tempver==VERSION_WAN2_2_TI2V);
         bool isqwenimg = (tempver==VERSION_QWEN_IMAGE);
 
-        //kcpp qol fallback: if qwen image, and they loaded the qwen2vl as t5 by mistake
+        //kcpp qol fallback: if qwen image, and they loaded the qwen2vl llm as t5 by mistake
         if(isqwenimg && t5_path_fixed!="")
         {
             if(clipl_path_fixed=="" && clipg_path_fixed=="")
@@ -300,8 +301,8 @@ public:
             }
             if(isqwenimg)
             {
-                prefix = "text_encoders.qwen2vl.";
-                LOG_INFO("swap qwen2vl from '%s'", clipl_path_fixed.c_str());
+                prefix = "text_encoders.llm.";
+                LOG_INFO("swap llm from '%s'", clipl_path_fixed.c_str());
             }
             if (!model_loader.init_from_file(clipl_path_fixed.c_str(), prefix)) {
                 LOG_WARN("loading clip_l from '%s' failed", clipl_path_fixed.c_str());
@@ -318,8 +319,8 @@ public:
             }
             if(isqwenimg)
             {
-                prefix = "text_encoders.qwen2vl.visual.";
-                LOG_INFO("swap qwen2vl mmproj from '%s'", clipg_path_fixed.c_str());
+                prefix = "text_encoders.llm.visual.";
+                LOG_INFO("swap llm mmproj from '%s'", clipg_path_fixed.c_str());
             }
             if (!model_loader.init_from_file(clipg_path_fixed.c_str(), prefix)) {
                 LOG_WARN("loading clip_g from '%s' failed", clipg_path_fixed.c_str());
@@ -341,17 +342,17 @@ public:
             }
         }
 
-        if (strlen(SAFE_STR(sd_ctx_params->qwen2vl_path)) > 0) {
-            LOG_INFO("loading qwen2vl from '%s'", sd_ctx_params->qwen2vl_path);
-            if (!model_loader.init_from_file(sd_ctx_params->qwen2vl_path, "text_encoders.qwen2vl.")) {
-                LOG_WARN("loading qwen2vl from '%s' failed", sd_ctx_params->qwen2vl_path);
+        if (strlen(SAFE_STR(sd_ctx_params->llm_path)) > 0) {
+            LOG_INFO("loading llm from '%s'", sd_ctx_params->llm_path);
+            if (!model_loader.init_from_file(sd_ctx_params->llm_path, "text_encoders.llm.")) {
+                LOG_WARN("loading llm from '%s' failed", sd_ctx_params->llm_path);
             }
         }
 
-        if (strlen(SAFE_STR(sd_ctx_params->qwen2vl_vision_path)) > 0) {
-            LOG_INFO("loading qwen2vl vision from '%s'", sd_ctx_params->qwen2vl_vision_path);
-            if (!model_loader.init_from_file(sd_ctx_params->qwen2vl_vision_path, "text_encoders.qwen2vl.visual.")) {
-                LOG_WARN("loading qwen2vl vision from '%s' failed", sd_ctx_params->qwen2vl_vision_path);
+        if (strlen(SAFE_STR(sd_ctx_params->llm_vision_path)) > 0) {
+            LOG_INFO("loading llm vision from '%s'", sd_ctx_params->llm_vision_path);
+            if (!model_loader.init_from_file(sd_ctx_params->llm_vision_path, "text_encoders.llm.visual.")) {
+                LOG_WARN("loading llm vision from '%s' failed", sd_ctx_params->llm_vision_path);
             }
         }
 
@@ -390,7 +391,7 @@ public:
 
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
         for (auto& [name, tensor_storage] : tensor_storage_map) {
-            if (contains(name, "qwen2vl") &&
+            if (contains(name, "llm") &&
                 ends_with(name, "weight") &&
                 (tensor_storage.type == GGML_TYPE_F32 || tensor_storage.type == GGML_TYPE_BF16)) {
                 tensor_storage.expected_type = GGML_TYPE_F16;
@@ -500,8 +501,11 @@ public:
         } else if (sd_version_is_flux(version)) {
             scale_factor = 0.3611f;
             shift_factor = 0.1159f;
-        } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
+        } else if (sd_version_is_wan(version) ||
+                   sd_version_is_qwen_image(version) ||
+                   sd_version_is_flux2(version)) {
             scale_factor = 1.0f;
+            shift_factor = 0.f;
         }
 
         if (sd_version_is_control(version)) {
@@ -557,6 +561,17 @@ public:
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
+            } else if (sd_version_is_flux2(version)) {
+                bool is_chroma   = false;
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 version);
+                diffusion_model  = std::make_shared<FluxModel>(backend,
+                                                              offload_params_to_cpu,
+                                                              tensor_storage_map,
+                                                              version,
+                                                              sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
@@ -590,11 +605,12 @@ public:
                 if (!vae_decode_only) {
                     enable_vision = true;
                 }
-                cond_stage_model = std::make_shared<Qwen2_5_VLCLIPEmbedder>(clip_backend,
-                                                                            offload_params_to_cpu,
-                                                                            tensor_storage_map,
-                                                                            "",
-                                                                            enable_vision);
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 version,
+                                                                 "",
+                                                                 enable_vision);
                 diffusion_model  = std::make_shared<QwenImageModel>(backend,
                                                                    offload_params_to_cpu,
                                                                    tensor_storage_map,
@@ -793,7 +809,7 @@ public:
             ignore_tensors.insert("first_stage_model.encoder");
             ignore_tensors.insert("first_stage_model.conv1");
             ignore_tensors.insert("first_stage_model.quant");
-            ignore_tensors.insert("text_encoders.qwen2vl.visual.");
+            ignore_tensors.insert("text_encoders.llm.visual.");
         }
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
@@ -911,6 +927,11 @@ public:
                     denoiser = std::make_shared<FluxFlowDenoiser>(shift);
                     break;
                 }
+                case FLUX2_FLOW_PRED: {
+                    LOG_INFO("running in Flux2 FLOW mode");
+                    denoiser = std::make_shared<Flux2FlowDenoiser>();
+                    break;
+                }
                 default: {
                     LOG_ERROR("Unknown parametrization %i", sd_ctx_params->prediction);
                     return false;
@@ -955,6 +976,9 @@ public:
                     }
                 }
                 denoiser = std::make_shared<FluxFlowDenoiser>(shift);
+            } else if (sd_version_is_flux2(version)) {
+                LOG_INFO("running in Flux2 FLOW mode");
+                denoiser = std::make_shared<Flux2FlowDenoiser>();
             } else if (sd_version_is_wan(version)) {
                 LOG_INFO("running in FLOW mode");
                 float shift = sd_ctx_params->flow_shift;
@@ -1131,6 +1155,9 @@ public:
             int64_t t0 = ggml_time_ms();
 
             auto lora = load_lora_model_from_file(kv.first, kv.second, backend);
+            if (!lora || lora->lora_tensors.empty()) {
+                continue;
+            }
             lora->apply(tensors, version, n_threads);
             lora->free_params_buffer();
 
@@ -1454,7 +1481,8 @@ public:
                        enum SDVersion version,
                        preview_t preview_mode,
                        ggml_tensor* result,
-                       std::function<void(int, int, sd_image_t*, bool)> step_callback,
+                       std::function<void(int, int, sd_image_t*, bool, void*)> step_callback,
+                       void* step_callback_data,
                        bool is_noisy) {
         const uint32_t channel = 3;
         uint32_t width         = latents->ne[0];
@@ -1525,7 +1553,7 @@ public:
             for (int i = 0; i < frames; i++) {
                 images[i] = {width, height, channel, data + i * width * height * channel};
             }
-            step_callback(step, frames, images, is_noisy);
+            step_callback(step, frames, images, is_noisy, step_callback_data);
             free(data);
             free(images);
         } else {
@@ -1579,7 +1607,7 @@ public:
                 images[i].data    = ggml_tensor_to_sd_image(result, i, ggml_n_dims(latents) == 4);
             }
 
-            step_callback(step, frames, images, is_noisy);
+            step_callback(step, frames, images, is_noisy, step_callback_data);
 
             ggml_ext_tensor_scale_inplace(result, 0);
             for (int i = 0; i < frames; i++) {
@@ -1728,8 +1756,9 @@ public:
         }
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
-            auto sd_preview_cb   = sd_get_preview_callback();
-            auto sd_preview_mode = sd_get_preview_mode();
+            auto sd_preview_cb      = sd_get_preview_callback();
+            auto sd_preview_cb_data = sd_get_preview_callback_data();
+            auto sd_preview_mode    = sd_get_preview_mode();
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
@@ -1798,7 +1827,7 @@ public:
             }
             if (sd_preview_cb != nullptr && sd_should_preview_noisy()) {
                 if (step % sd_get_preview_interval() == 0) {
-                    preview_image(work_ctx, step, noised_input, version, sd_preview_mode, preview_tensor, sd_preview_cb, true);
+                    preview_image(work_ctx, step, noised_input, version, sd_preview_mode, preview_tensor, sd_preview_cb, sd_preview_cb_data, true);
                 }
             }
 
@@ -1946,7 +1975,7 @@ public:
 
             if (sd_preview_cb != nullptr && sd_should_preview_denoised()) {
                 if (step % sd_get_preview_interval() == 0) {
-                    preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb, false);
+                    preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb, sd_preview_cb_data, false);
                 }
             }
 
@@ -1997,6 +2026,8 @@ public:
         int vae_scale_factor = 8;
         if (version == VERSION_WAN2_2_TI2V) {
             vae_scale_factor = 16;
+        } else if (sd_version_is_flux2(version)) {
+            vae_scale_factor = 16;
         } else if (version == VERSION_CHROMA_RADIANCE) {
             vae_scale_factor = 1;
         }
@@ -2010,11 +2041,18 @@ public:
                 latent_channel = 48;
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 latent_channel = 3;
+            } else if (sd_version_is_flux2(version)) {
+                latent_channel = 128;
             } else {
                 latent_channel = 16;
             }
         }
         return latent_channel;
+    }
+
+    int get_image_seq_len(int h, int w) {
+        int vae_scale_factor = get_vae_scale_factor();
+        return (h / vae_scale_factor) * (w / vae_scale_factor);
     }
 
     ggml_tensor* generate_init_latent(ggml_context* work_ctx,
@@ -2040,32 +2078,84 @@ public:
         return init_latent;
     }
 
+    void get_latents_mean_std_vec(ggml_tensor* latent, int channel_dim, std::vector<float>& latents_mean_vec, std::vector<float>& latents_std_vec) {
+        GGML_ASSERT(latent->ne[channel_dim] == 16 || latent->ne[channel_dim] == 48 || latent->ne[channel_dim] == 128);
+        if (latent->ne[channel_dim] == 16) {
+            latents_mean_vec = {-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
+                                0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f};
+            latents_std_vec  = {2.8184f, 1.4541f, 2.3275f, 2.6558f, 1.2196f, 1.7708f, 2.6052f, 2.0743f,
+                                3.2687f, 2.1526f, 2.8652f, 1.5579f, 1.6382f, 1.1253f, 2.8251f, 1.9160f};
+        } else if (latent->ne[channel_dim] == 48) {
+            latents_mean_vec = {-0.2289f, -0.0052f, -0.1323f, -0.2339f, -0.2799f, 0.0174f, 0.1838f, 0.1557f,
+                                -0.1382f, 0.0542f, 0.2813f, 0.0891f, 0.1570f, -0.0098f, 0.0375f, -0.1825f,
+                                -0.2246f, -0.1207f, -0.0698f, 0.5109f, 0.2665f, -0.2108f, -0.2158f, 0.2502f,
+                                -0.2055f, -0.0322f, 0.1109f, 0.1567f, -0.0729f, 0.0899f, -0.2799f, -0.1230f,
+                                -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
+                                0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
+            latents_std_vec  = {
+                 0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                 0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                 0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                 0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                 0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                 0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+        } else if (latent->ne[channel_dim] == 128) {
+            // flux2
+            latents_mean_vec = {-0.0676f, -0.0715f, -0.0753f, -0.0745f, 0.0223f, 0.0180f, 0.0142f, 0.0184f,
+                                -0.0001f, -0.0063f, -0.0002f, -0.0031f, -0.0272f, -0.0281f, -0.0276f, -0.0290f,
+                                -0.0769f, -0.0672f, -0.0902f, -0.0892f, 0.0168f, 0.0152f, 0.0079f, 0.0086f,
+                                0.0083f, 0.0015f, 0.0003f, -0.0043f, -0.0439f, -0.0419f, -0.0438f, -0.0431f,
+                                -0.0102f, -0.0132f, -0.0066f, -0.0048f, -0.0311f, -0.0306f, -0.0279f, -0.0180f,
+                                0.0030f, 0.0015f, 0.0126f, 0.0145f, 0.0347f, 0.0338f, 0.0337f, 0.0283f,
+                                0.0020f, 0.0047f, 0.0047f, 0.0050f, 0.0123f, 0.0081f, 0.0081f, 0.0146f,
+                                0.0681f, 0.0679f, 0.0767f, 0.0732f, -0.0462f, -0.0474f, -0.0392f, -0.0511f,
+                                -0.0528f, -0.0477f, -0.0470f, -0.0517f, -0.0317f, -0.0316f, -0.0345f, -0.0283f,
+                                0.0510f, 0.0445f, 0.0578f, 0.0458f, -0.0412f, -0.0458f, -0.0487f, -0.0467f,
+                                -0.0088f, -0.0106f, -0.0088f, -0.0046f, -0.0376f, -0.0432f, -0.0436f, -0.0499f,
+                                0.0118f, 0.0166f, 0.0203f, 0.0279f, 0.0113f, 0.0129f, 0.0016f, 0.0072f,
+                                -0.0118f, -0.0018f, -0.0141f, -0.0054f, -0.0091f, -0.0138f, -0.0145f, -0.0187f,
+                                0.0323f, 0.0305f, 0.0259f, 0.0300f, 0.0540f, 0.0614f, 0.0495f, 0.0590f,
+                                -0.0511f, -0.0603f, -0.0478f, -0.0524f, -0.0227f, -0.0274f, -0.0154f, -0.0255f,
+                                -0.0572f, -0.0565f, -0.0518f, -0.0496f, 0.0116f, 0.0054f, 0.0163f, 0.0104f};
+            latents_std_vec  = {
+                 1.8029f, 1.7786f, 1.7868f, 1.7837f, 1.7717f, 1.7590f, 1.7610f, 1.7479f,
+                 1.7336f, 1.7373f, 1.7340f, 1.7343f, 1.8626f, 1.8527f, 1.8629f, 1.8589f,
+                 1.7593f, 1.7526f, 1.7556f, 1.7583f, 1.7363f, 1.7400f, 1.7355f, 1.7394f,
+                 1.7342f, 1.7246f, 1.7392f, 1.7304f, 1.7551f, 1.7513f, 1.7559f, 1.7488f,
+                 1.8449f, 1.8454f, 1.8550f, 1.8535f, 1.8240f, 1.7813f, 1.7854f, 1.7945f,
+                 1.8047f, 1.7876f, 1.7695f, 1.7676f, 1.7782f, 1.7667f, 1.7925f, 1.7848f,
+                 1.7579f, 1.7407f, 1.7483f, 1.7368f, 1.7961f, 1.7998f, 1.7920f, 1.7925f,
+                 1.7780f, 1.7747f, 1.7727f, 1.7749f, 1.7526f, 1.7447f, 1.7657f, 1.7495f,
+                 1.7775f, 1.7720f, 1.7813f, 1.7813f, 1.8162f, 1.8013f, 1.8023f, 1.8033f,
+                 1.7527f, 1.7331f, 1.7563f, 1.7482f, 1.7610f, 1.7507f, 1.7681f, 1.7613f,
+                 1.7665f, 1.7545f, 1.7828f, 1.7726f, 1.7896f, 1.7999f, 1.7864f, 1.7760f,
+                 1.7613f, 1.7625f, 1.7560f, 1.7577f, 1.7783f, 1.7671f, 1.7810f, 1.7799f,
+                 1.7201f, 1.7068f, 1.7265f, 1.7091f, 1.7793f, 1.7578f, 1.7502f, 1.7455f,
+                 1.7587f, 1.7500f, 1.7525f, 1.7362f, 1.7616f, 1.7572f, 1.7444f, 1.7430f,
+                 1.7509f, 1.7610f, 1.7634f, 1.7612f, 1.7254f, 1.7135f, 1.7321f, 1.7226f,
+                 1.7664f, 1.7624f, 1.7718f, 1.7664f, 1.7457f, 1.7441f, 1.7569f, 1.7530f};
+        }
+    }
+
     void process_latent_in(ggml_tensor* latent) {
-        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
-            GGML_ASSERT(latent->ne[3] == 16 || latent->ne[3] == 48);
-            std::vector<float> latents_mean_vec = {-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
-                                                   0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f};
-            std::vector<float> latents_std_vec  = {2.8184f, 1.4541f, 2.3275f, 2.6558f, 1.2196f, 1.7708f, 2.6052f, 2.0743f,
-                                                   3.2687f, 2.1526f, 2.8652f, 1.5579f, 1.6382f, 1.1253f, 2.8251f, 1.9160f};
-            if (latent->ne[3] == 48) {
-                latents_mean_vec = {-0.2289f, -0.0052f, -0.1323f, -0.2339f, -0.2799f, 0.0174f, 0.1838f, 0.1557f,
-                                    -0.1382f, 0.0542f, 0.2813f, 0.0891f, 0.1570f, -0.0098f, 0.0375f, -0.1825f,
-                                    -0.2246f, -0.1207f, -0.0698f, 0.5109f, 0.2665f, -0.2108f, -0.2158f, 0.2502f,
-                                    -0.2055f, -0.0322f, 0.1109f, 0.1567f, -0.0729f, 0.0899f, -0.2799f, -0.1230f,
-                                    -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
-                                    0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
-                latents_std_vec  = {
-                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
-                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
-                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
-                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
-                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
-                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
-            }
+        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_flux2(version)) {
+            int channel_dim = sd_version_is_flux2(version) ? 2 : 3;
+            std::vector<float> latents_mean_vec;
+            std::vector<float> latents_std_vec;
+            get_latents_mean_std_vec(latent, channel_dim, latents_mean_vec, latents_std_vec);
+
+            float mean;
+            float std_;
             for (int i = 0; i < latent->ne[3]; i++) {
-                float mean = latents_mean_vec[i];
-                float std_ = latents_std_vec[i];
+                if (channel_dim == 3) {
+                    mean = latents_mean_vec[i];
+                    std_ = latents_std_vec[i];
+                }
                 for (int j = 0; j < latent->ne[2]; j++) {
+                    if (channel_dim == 2) {
+                        mean = latents_mean_vec[i];
+                        std_ = latents_std_vec[i];
+                    }
                     for (int k = 0; k < latent->ne[1]; k++) {
                         for (int l = 0; l < latent->ne[0]; l++) {
                             float value = ggml_ext_tensor_get_f32(latent, l, k, j, i);
@@ -2087,31 +2177,24 @@ public:
     }
 
     void process_latent_out(ggml_tensor* latent) {
-        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
-            GGML_ASSERT(latent->ne[3] == 16 || latent->ne[3] == 48);
-            std::vector<float> latents_mean_vec = {-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
-                                                   0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f};
-            std::vector<float> latents_std_vec  = {2.8184f, 1.4541f, 2.3275f, 2.6558f, 1.2196f, 1.7708f, 2.6052f, 2.0743f,
-                                                   3.2687f, 2.1526f, 2.8652f, 1.5579f, 1.6382f, 1.1253f, 2.8251f, 1.9160f};
-            if (latent->ne[3] == 48) {
-                latents_mean_vec = {-0.2289f, -0.0052f, -0.1323f, -0.2339f, -0.2799f, 0.0174f, 0.1838f, 0.1557f,
-                                    -0.1382f, 0.0542f, 0.2813f, 0.0891f, 0.1570f, -0.0098f, 0.0375f, -0.1825f,
-                                    -0.2246f, -0.1207f, -0.0698f, 0.5109f, 0.2665f, -0.2108f, -0.2158f, 0.2502f,
-                                    -0.2055f, -0.0322f, 0.1109f, 0.1567f, -0.0729f, 0.0899f, -0.2799f, -0.1230f,
-                                    -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
-                                    0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
-                latents_std_vec  = {
-                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
-                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
-                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
-                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
-                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
-                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
-            }
+        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_flux2(version)) {
+            int channel_dim = sd_version_is_flux2(version) ? 2 : 3;
+            std::vector<float> latents_mean_vec;
+            std::vector<float> latents_std_vec;
+            get_latents_mean_std_vec(latent, channel_dim, latents_mean_vec, latents_std_vec);
+
+            float mean;
+            float std_;
             for (int i = 0; i < latent->ne[3]; i++) {
-                float mean = latents_mean_vec[i];
-                float std_ = latents_std_vec[i];
+                if (channel_dim == 3) {
+                    mean = latents_mean_vec[i];
+                    std_ = latents_std_vec[i];
+                }
                 for (int j = 0; j < latent->ne[2]; j++) {
+                    if (channel_dim == 2) {
+                        mean = latents_mean_vec[i];
+                        std_ = latents_std_vec[i];
+                    }
                     for (int k = 0; k < latent->ne[1]; k++) {
                         for (int l = 0; l < latent->ne[0]; l++) {
                             float value = ggml_ext_tensor_get_f32(latent, l, k, j, i);
@@ -2258,6 +2341,7 @@ public:
         if (use_tiny_autoencoder ||
             sd_version_is_qwen_image(version) ||
             sd_version_is_wan(version) ||
+            sd_version_is_flux2(version) ||
             version == VERSION_CHROMA_RADIANCE) {
             latent = vae_output;
         } else if (version == VERSION_SD1_PIX2PIX) {
@@ -2463,6 +2547,7 @@ const char* prediction_to_str[] = {
     "edm_v",
     "sd3_flow",
     "flux_flow",
+    "flux2_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -2567,8 +2652,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "clip_g_path: %s\n"
              "clip_vision_path: %s\n"
              "t5xxl_path: %s\n"
-             "qwen2vl_path: %s\n"
-             "qwen2vl_vision_path: %s\n"
+             "llm_path: %s\n"
+             "llm_vision_path: %s\n"
              "diffusion_model_path: %s\n"
              "high_noise_diffusion_model_path: %s\n"
              "vae_path: %s\n"
@@ -2598,8 +2683,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->clip_g_path),
              SAFE_STR(sd_ctx_params->clip_vision_path),
              SAFE_STR(sd_ctx_params->t5xxl_path),
-             SAFE_STR(sd_ctx_params->qwen2vl_path),
-             SAFE_STR(sd_ctx_params->qwen2vl_vision_path),
+             SAFE_STR(sd_ctx_params->llm_path),
+             SAFE_STR(sd_ctx_params->llm_vision_path),
              SAFE_STR(sd_ctx_params->diffusion_model_path),
              SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path),
              SAFE_STR(sd_ctx_params->vae_path),
@@ -3233,7 +3318,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
 
     int sample_steps          = sd_img_gen_params->sample_params.sample_steps;
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps, sd_img_gen_params->sample_params.scheduler, sd_ctx->sd->version);
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
+                                                                 sd_ctx->sd->get_image_seq_len(height, width),
+                                                                 sd_img_gen_params->sample_params.scheduler,
+                                                                 sd_ctx->sd->version);
 
     ggml_tensor* init_latent   = nullptr;
     ggml_tensor* concat_latent = nullptr;
@@ -3486,7 +3574,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     if (high_noise_sample_steps > 0) {
         total_steps += high_noise_sample_steps;
     }
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps, sd_vid_gen_params->sample_params.scheduler, sd_ctx->sd->version);
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps, 0, sd_vid_gen_params->sample_params.scheduler, sd_ctx->sd->version);
 
     if (high_noise_sample_steps < 0) {
         // timesteps ∝ sigmas for Flow models (like wan2.2 a14b)

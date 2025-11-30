@@ -70,8 +70,8 @@ struct SDParams {
     std::string clip_g_path;
     std::string clip_vision_path;
     std::string t5xxl_path;
-    std::string qwen2vl_path;
-    std::string qwen2vl_vision_path;
+    std::string llm_path;
+    std::string llm_vision_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
     std::string vae_path;
@@ -151,6 +151,7 @@ struct SDParams {
     preview_t preview_method = PREVIEW_NONE;
     int preview_interval     = 1;
     std::string preview_path = "preview.png";
+    float preview_fps        = 16;
     bool taesd_preview       = false;
     bool preview_noisy       = false;
 
@@ -174,8 +175,8 @@ void print_params(SDParams params) {
     printf("    clip_g_path:                       %s\n", params.clip_g_path.c_str());
     printf("    clip_vision_path:                  %s\n", params.clip_vision_path.c_str());
     printf("    t5xxl_path:                        %s\n", params.t5xxl_path.c_str());
-    printf("    qwen2vl_path:                      %s\n", params.qwen2vl_path.c_str());
-    printf("    qwen2vl_vision_path:               %s\n", params.qwen2vl_vision_path.c_str());
+    printf("    llm_path:                          %s\n", params.llm_path.c_str());
+    printf("    llm_vision_path:                   %s\n", params.llm_vision_path.c_str());
     printf("    diffusion_model_path:              %s\n", params.diffusion_model_path.c_str());
     printf("    high_noise_diffusion_model_path:   %s\n", params.high_noise_diffusion_model_path.c_str());
     printf("    vae_path:                          %s\n", params.vae_path.c_str());
@@ -533,13 +534,21 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "path to the t5xxl text encoder",
          &params.t5xxl_path},
         {"",
+         "--llm",
+         "path to the llm text encoder. For example: (qwenvl2.5 for qwen-image, mistral-small3.2 for flux2, ...)",
+         &params.llm_path},
+        {"",
+         "--llm_vision",
+         "path to the llm vit",
+         &params.llm_vision_path},
+        {"",
          "--qwen2vl",
-         "path to the qwen2vl text encoder",
-         &params.qwen2vl_path},
+         "alias of --llm. Deprecated.",
+         &params.llm_path},
         {"",
          "--qwen2vl_vision",
-         "path to the qwen2vl vit",
-         &params.qwen2vl_vision_path},
+         "alias of --llm_vision. Deprecated.",
+         &params.llm_vision_path},
         {"",
          "--diffusion-model",
          "path to the standalone diffusion model",
@@ -1185,7 +1194,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_sample_method_arg},
         {"",
          "--prediction",
-         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow]",
+         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, flux2_flow]",
          on_prediction_arg},
         {"",
          "--lora-apply-mode",
@@ -1230,7 +1239,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_relative_tile_size_arg},
         {"",
          "--preview",
-         std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")\n",
+         std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")",
          on_preview_arg},
         {"",
          "--easycache",
@@ -1428,7 +1437,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
         parameter_string += " " + std::string(sd_scheduler_name(params.sample_params.scheduler));
     }
     parameter_string += ", ";
-    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path, params.qwen2vl_path, params.qwen2vl_vision_path}) {
+    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path, params.llm_path, params.llm_vision_path}) {
         if (!te.empty()) {
             parameter_string += "TE: " + sd_basename(te) + ", ";
         }
@@ -1630,25 +1639,22 @@ bool load_images_from_dir(const std::string dir,
     return true;
 }
 
-std::string preview_path;
-float preview_fps;
-
-void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) {
+void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data) {
     (void)step;
     (void)is_noisy;
+    SDParams* params = (SDParams*)data;
     // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
     // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
-        stbi_write_png(preview_path.c_str(), image->width, image->height, image->channel, image->data, 0);
+        stbi_write_png(params->preview_path.c_str(), image->width, image->height, image->channel, image->data, 0);
     } else {
-        create_mjpg_avi_from_sd_images(preview_path.c_str(), image, frame_count, preview_fps);
+        create_mjpg_avi_from_sd_images(params->preview_path.c_str(), image, frame_count, params->preview_fps);
     }
 }
 
 int main(int argc, const char* argv[]) {
     SDParams params;
     parse_args(argc, argv, params);
-    preview_path = params.preview_path;
     if (params.video_frames > 4) {
         size_t last_dot_pos   = params.preview_path.find_last_of(".");
         std::string base_path = params.preview_path;
@@ -1659,12 +1665,12 @@ int main(int argc, const char* argv[]) {
             std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
         }
         if (file_ext == ".png") {
-            preview_path = base_path + ".avi";
+            params.preview_path = base_path + ".avi";
         }
     }
-    preview_fps = params.fps;
+    params.preview_fps = params.fps;
     if (params.preview_method == PREVIEW_PROJ)
-        preview_fps /= 4.0f;
+        params.preview_fps /= 4.0f;
 
     params.sample_params.guidance.slg.layers                 = params.skip_layers.data();
     params.sample_params.guidance.slg.layer_count            = params.skip_layers.size();
@@ -1672,7 +1678,7 @@ int main(int argc, const char* argv[]) {
     params.high_noise_sample_params.guidance.slg.layer_count = params.high_noise_skip_layers.size();
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
-    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval, !params.preview_noisy, params.preview_noisy);
+    sd_set_preview_callback(step_callback, params.preview_method, params.preview_interval, !params.preview_noisy, params.preview_noisy, (void*)&params);
 
     if (params.verbose) {
         print_params(params);
@@ -1845,8 +1851,8 @@ int main(int argc, const char* argv[]) {
         params.clip_g_path.c_str(),
         params.clip_vision_path.c_str(),
         params.t5xxl_path.c_str(),
-        params.qwen2vl_path.c_str(),
-        params.qwen2vl_vision_path.c_str(),
+        params.llm_path.c_str(),
+        params.llm_vision_path.c_str(),
         params.diffusion_model_path.c_str(),
         params.high_noise_diffusion_model_path.c_str(),
         params.vae_path.c_str(),

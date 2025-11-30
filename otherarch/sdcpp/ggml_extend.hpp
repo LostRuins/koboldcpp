@@ -766,6 +766,21 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_ext_chunk(struct ggml_co
     return chunks;
 }
 
+__STATIC_INLINE__ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x) {
+    // x: [ne3, ne2, ne1, ne0]
+    // return: [ne3, ne2, ne1, ne0/2]
+
+    auto x_vec = ggml_ext_chunk(ctx, x, 2, 0);
+    auto x1    = x_vec[0];  // [ne3, ne2, ne1, ne0/2]
+    auto x2    = x_vec[1];  // [ne3, ne2, ne1, ne0/2]
+
+    x1 = ggml_gelu_inplace(ctx, x1);
+
+    x = ggml_mul(ctx, x1, x2);  // [ne3, ne2, ne1, ne0/2]
+
+    return x;
+}
+
 typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
 __STATIC_INLINE__ void sd_tiling_calc_tiles(int& num_tiles_dim,
@@ -1132,6 +1147,14 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_ones(struct ggml_context* ctx,
 }
 
 __STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_tensor* a) {
+#ifdef SD_USE_VULKAN
+    auto zero_index = ggml_get_tensor(ctx, "ggml_runner_build_in_tensor:zero_int");
+    auto out        = ggml_reshape_1d(ctx, a, ggml_nelements(a));
+    out             = ggml_get_rows(ctx, out, zero_index);
+    out             = ggml_reshape(ctx, out, a);
+    // auto out = ggml_cast(ctx, a, GGML_TYPE_F32);
+    return out;
+#else
     auto out         = ggml_reshape_2d(ctx, a, 1, ggml_nelements(a));
     ggml_tensor* one = ggml_ext_ones(ctx, 1, 1, 1, 1);  // [1,]
     if (ggml_is_transposed(out)) {
@@ -1139,7 +1162,8 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_tensor*
     } else {
         out = ggml_mul_mat(ctx, out, one);
     }
-    out = ggml_reshape(ctx, out, a);
+    out                    = ggml_reshape(ctx, out, a);
+#endif
     return out;
 }
 
@@ -1547,6 +1571,9 @@ protected:
     std::vector<float> one_vec = {1.f};
     ggml_tensor* one_tensor    = nullptr;
 
+    std::vector<int> zero_int_vec = {0};
+    ggml_tensor* zero_int_tensor  = nullptr;
+
     std::map<struct ggml_tensor*, const void*> backend_tensor_data_map;
     std::map<std::string, struct ggml_tensor*> cache_tensor_map;  // name -> tensor
     const std::string final_result_name = "ggml_runner_final_result_tensor";
@@ -1617,10 +1644,15 @@ protected:
         one_tensor = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, 1);
         ggml_set_name(one_tensor, "ggml_runner_build_in_tensor:one");
         set_backend_tensor_data(one_tensor, one_vec.data());
+
+        zero_int_tensor = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, 1);
+        ggml_set_name(zero_int_tensor, "ggml_runner_build_in_tensor:zero_int");
+        set_backend_tensor_data(zero_int_tensor, zero_int_vec.data());
     }
 
     void prepare_build_in_tensor_after(struct ggml_cgraph* gf) {
         ggml_build_forward_expand(gf, one_tensor);
+        ggml_build_forward_expand(gf, zero_int_tensor);
     }
 
     struct ggml_cgraph* new_graph_custom(size_t graph_size) {

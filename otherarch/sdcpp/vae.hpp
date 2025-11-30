@@ -487,6 +487,7 @@ public:
 // ldm.models.autoencoder.AutoencoderKL
 class AutoencodingEngine : public GGMLBlock {
 protected:
+    SDVersion version;
     bool decode_only       = true;
     bool use_video_decoder = false;
     bool use_quant         = true;
@@ -507,10 +508,15 @@ public:
                        bool decode_only           = true,
                        bool use_linear_projection = false,
                        bool use_video_decoder     = false)
-        : decode_only(decode_only), use_video_decoder(use_video_decoder) {
+        : version(version), decode_only(decode_only), use_video_decoder(use_video_decoder) {
         if (sd_version_is_dit(version)) {
-            dd_config.z_channels = 16;
-            use_quant            = false;
+            if (sd_version_is_flux2(version)) {
+                dd_config.z_channels = 32;
+                embed_dim            = 32;
+            } else {
+                use_quant            = false;
+                dd_config.z_channels = 16;
+            }
         }
         if (use_video_decoder) {
             use_quant = false;
@@ -547,6 +553,24 @@ public:
 
     struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
+        if (sd_version_is_flux2(version)) {
+            // [N, C*p*p, h, w] -> [N, C, h*p, w*p]
+            int64_t p = 2;
+
+            int64_t N = z->ne[3];
+            int64_t C = z->ne[2] / p / p;
+            int64_t h = z->ne[1];
+            int64_t w = z->ne[0];
+            int64_t H = h * p;
+            int64_t W = w * p;
+
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, w * h, p * p, C, N);                           // [N, C, p*p, h*w]
+            z = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, z, 1, 0, 2, 3));  // [N, C, h*w, p*p]
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, p, p, w, h * C * N);                           // [N*C*h, w, p, p]
+            z = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, z, 0, 2, 1, 3));  // [N*C*h, p, w, p]
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, W, H, C, N);                                   // [N, C, h*p, w*p]
+        }
+
         if (use_quant) {
             auto post_quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["post_quant_conv"]);
             z                    = post_quant_conv->forward(ctx, z);  // [N, z_channels, h, w]
@@ -563,12 +587,30 @@ public:
         // x: [N, in_channels, h, w]
         auto encoder = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
 
-        auto h = encoder->forward(ctx, x);  // [N, 2*z_channels, h/8, w/8]
+        auto z = encoder->forward(ctx, x);  // [N, 2*z_channels, h/8, w/8]
         if (use_quant) {
             auto quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["quant_conv"]);
-            h               = quant_conv->forward(ctx, h);  // [N, 2*embed_dim, h/8, w/8]
+            z               = quant_conv->forward(ctx, z);  // [N, 2*embed_dim, h/8, w/8]
         }
-        return h;
+        if (sd_version_is_flux2(version)) {
+            z = ggml_ext_chunk(ctx->ggml_ctx, z, 2, 2)[0];
+
+            // [N, C, H, W] -> [N, C*p*p, H/p, W/p]
+            int64_t p = 2;
+            int64_t N = z->ne[3];
+            int64_t C = z->ne[2];
+            int64_t H = z->ne[1];
+            int64_t W = z->ne[0];
+            int64_t h = H / p;
+            int64_t w = W / p;
+
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, p, w, p, h * C * N);                 // [N*C*h, p, w, p]
+            z = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, z, 0, 2, 1, 3));  // [N*C*h, w, p, p]
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, p * p, w * h, C, N);                 // [N, C, h*w, p*p]
+            z = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, z, 1, 0, 2, 3));  // [N, C, p*p, h*w]
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, w, h, p * p * C, N);                 // [N, C*p*p, h*w]
+        }
+        return z;
     }
 };
 

@@ -72,15 +72,28 @@ namespace Rope {
     }
 
     // Generate IDs for image patches and text
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_txt_ids(int bs, int context_len) {
-        return std::vector<std::vector<float>>(bs * context_len, std::vector<float>(3, 0.0));
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_flux_txt_ids(int bs, int context_len, int axes_dim_num) {
+        auto txt_ids = std::vector<std::vector<float>>(bs * context_len, std::vector<float>(axes_dim_num, 0.0f));
+        if (axes_dim_num == 4) {
+            for (int i = 0; i < bs * context_len; i++) {
+                txt_ids[i][3] = (i % context_len);
+            }
+        }
+        return txt_ids;
     }
 
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_img_ids(int h, int w, int patch_size, int bs, int index = 0, int h_offset = 0, int w_offset = 0) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_flux_img_ids(int h,
+                                                                       int w,
+                                                                       int patch_size,
+                                                                       int bs,
+                                                                       int axes_dim_num,
+                                                                       int index    = 0,
+                                                                       int h_offset = 0,
+                                                                       int w_offset = 0) {
         int h_len = (h + (patch_size / 2)) / patch_size;
         int w_len = (w + (patch_size / 2)) / patch_size;
 
-        std::vector<std::vector<float>> img_ids(h_len * w_len, std::vector<float>(3, 0.0));
+        std::vector<std::vector<float>> img_ids(h_len * w_len, std::vector<float>(axes_dim_num, 0.0));
 
         std::vector<float> row_ids = linspace<float>(h_offset, h_len - 1 + h_offset, h_len);
         std::vector<float> col_ids = linspace<float>(w_offset, w_len - 1 + w_offset, w_len);
@@ -153,8 +166,10 @@ namespace Rope {
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_refs_ids(int patch_size,
                                                                    int bs,
+                                                                   int axes_dim_num,
                                                                    const std::vector<ggml_tensor*>& ref_latents,
-                                                                   bool increase_ref_index) {
+                                                                   bool increase_ref_index,
+                                                                   float ref_index_scale) {
         std::vector<std::vector<float>> ids;
         uint64_t curr_h_offset = 0;
         uint64_t curr_w_offset = 0;
@@ -170,7 +185,14 @@ namespace Rope {
                 }
             }
 
-            auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, index, h_offset, w_offset);
+            auto ref_ids = gen_flux_img_ids(ref->ne[1],
+                                            ref->ne[0],
+                                            patch_size,
+                                            bs,
+                                            axes_dim_num,
+                                            static_cast<int>(index * ref_index_scale),
+                                            h_offset,
+                                            w_offset);
             ids          = concat_ids(ids, ref_ids, bs);
 
             if (increase_ref_index) {
@@ -187,15 +209,17 @@ namespace Rope {
                                                                    int w,
                                                                    int patch_size,
                                                                    int bs,
+                                                                   int axes_dim_num,
                                                                    int context_len,
                                                                    const std::vector<ggml_tensor*>& ref_latents,
-                                                                   bool increase_ref_index) {
-        auto txt_ids = gen_txt_ids(bs, context_len);
-        auto img_ids = gen_img_ids(h, w, patch_size, bs);
+                                                                   bool increase_ref_index,
+                                                                   float ref_index_scale) {
+        auto txt_ids = gen_flux_txt_ids(bs, context_len, axes_dim_num);
+        auto img_ids = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num);
 
         auto ids = concat_ids(txt_ids, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_refs_ids(patch_size, bs, ref_latents, increase_ref_index);
+            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, ref_latents, increase_ref_index, ref_index_scale);
             ids           = concat_ids(ids, refs_ids, bs);
         }
         return ids;
@@ -209,9 +233,18 @@ namespace Rope {
                                                      int context_len,
                                                      const std::vector<ggml_tensor*>& ref_latents,
                                                      bool increase_ref_index,
+                                                     float ref_index_scale,
                                                      int theta,
                                                      const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_flux_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
+        std::vector<std::vector<float>> ids = gen_flux_ids(h,
+                                                           w,
+                                                           patch_size,
+                                                           bs,
+                                                           static_cast<int>(axes_dim.size()),
+                                                           context_len,
+                                                           ref_latents,
+                                                           increase_ref_index,
+                                                           ref_index_scale);
         return embed_nd(ids, bs, theta, axes_dim);
     }
 
@@ -232,10 +265,11 @@ namespace Rope {
                 txt_ids_repeated[i * txt_ids.size() + j] = {txt_ids[j], txt_ids[j], txt_ids[j]};
             }
         }
-        auto img_ids = gen_img_ids(h, w, patch_size, bs);
-        auto ids     = concat_ids(txt_ids_repeated, img_ids, bs);
+        int axes_dim_num = 3;
+        auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num);
+        auto ids         = concat_ids(txt_ids_repeated, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_refs_ids(patch_size, bs, ref_latents, increase_ref_index);
+            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, ref_latents, increase_ref_index, 1.f);
             ids           = concat_ids(ids, refs_ids, bs);
         }
         return ids;
