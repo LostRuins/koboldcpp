@@ -1,5 +1,5 @@
-#ifndef __QWENVL_HPP__
-#define __QWENVL_HPP__
+#ifndef __LLM_HPP__
+#define __LLM_HPP__
 
 #include <algorithm>
 #include <fstream>
@@ -256,7 +256,7 @@ namespace LLM {
                 ss << "\"" << token << "\", ";
             }
             ss << "]";
-            // LOG_DEBUG("split prompt \"%s\" to tokens %s", original_text.c_str(), ss.str().c_str());
+            LOG_DEBUG("split prompt \"%s\" to tokens %s", original_text.c_str(), ss.str().c_str());
             // printf("split prompt \"%s\" to tokens %s \n", original_text.c_str(), ss.str().c_str());
             return bpe_tokens;
         }
@@ -469,12 +469,14 @@ namespace LLM {
 
     enum class LLMArch {
         QWEN2_5_VL,
+        QWEN3,
         MISTRAL_SMALL_3_2,
         ARCH_COUNT,
     };
 
     static const char* llm_arch_to_str[] = {
         "qwen2.5vl",
+        "qwen3",
         "mistral_small3.2",
     };
 
@@ -501,6 +503,7 @@ namespace LLM {
         int64_t num_kv_heads      = 4;
         int64_t head_dim          = 128;
         bool qkv_bias             = true;
+        bool qk_norm              = false;
         int64_t vocab_size        = 152064;
         float rms_norm_eps        = 1e-06f;
         LLMVisionParams vision;
@@ -813,14 +816,19 @@ namespace LLM {
         int64_t head_dim;
         int64_t num_heads;
         int64_t num_kv_heads;
+        bool qk_norm;
 
     public:
         Attention(const LLMParams& params)
-            : num_heads(params.num_heads), num_kv_heads(params.num_kv_heads), head_dim(params.head_dim), arch(params.arch) {
+            : arch(params.arch), num_heads(params.num_heads), num_kv_heads(params.num_kv_heads), head_dim(params.head_dim), qk_norm(params.qk_norm) {
             blocks["q_proj"] = std::make_shared<Linear>(params.hidden_size, num_heads * head_dim, params.qkv_bias);
             blocks["k_proj"] = std::make_shared<Linear>(params.hidden_size, num_kv_heads * head_dim, params.qkv_bias);
             blocks["v_proj"] = std::make_shared<Linear>(params.hidden_size, num_kv_heads * head_dim, params.qkv_bias);
             blocks["o_proj"] = std::make_shared<Linear>(num_heads * head_dim, params.hidden_size, false);
+            if (params.qk_norm) {
+                blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim, params.rms_norm_eps);
+                blocks["k_norm"] = std::make_shared<RMSNorm>(head_dim, params.rms_norm_eps);
+            }
         }
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -842,9 +850,20 @@ namespace LLM {
             k = ggml_reshape_4d(ctx->ggml_ctx, k, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
             v = ggml_reshape_4d(ctx->ggml_ctx, v, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
 
+            if (qk_norm) {
+                auto q_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
+                auto k_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
+
+                q = q_norm->forward(ctx, q);
+                k = k_norm->forward(ctx, k);
+            }
+
             if (arch == LLMArch::MISTRAL_SMALL_3_2) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 131072, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 131072, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            } else if (arch == LLMArch::QWEN3) {
+                q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 151936, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 151936, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else {
                 int sections[4] = {16, 24, 24, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -1063,6 +1082,17 @@ namespace LLM {
                 params.qkv_bias          = false;
                 params.vocab_size        = 131072;
                 params.rms_norm_eps      = 1e-5f;
+            } else if (arch == LLMArch::QWEN3) {
+                params.num_layers        = 36;
+                params.hidden_size       = 2560;
+                params.intermediate_size = 9728;
+                params.head_dim          = 128;
+                params.num_heads         = 32;
+                params.num_kv_heads      = 8;
+                params.qkv_bias          = false;
+                params.qk_norm           = true;
+                params.vocab_size        = 151936;
+                params.rms_norm_eps      = 1e-6f;
             }
             bool have_vision_weight = false;
             bool llama_cpp_style    = false;
@@ -1132,7 +1162,7 @@ namespace LLM {
             }
 
             int64_t n_tokens = input_ids->ne[0];
-            if (params.arch == LLMArch::MISTRAL_SMALL_3_2) {
+            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 || params.arch == LLMArch::QWEN3) {
                 input_pos_vec.resize(n_tokens);
                 for (int i = 0; i < n_tokens; ++i) {
                     input_pos_vec[i] = i;
@@ -1420,7 +1450,8 @@ namespace LLM {
 
             struct ggml_context* work_ctx = ggml_init(params);
             GGML_ASSERT(work_ctx != nullptr);
-            bool test_mistral          = true;
+            bool test_mistral          = false;
+            bool test_qwen3            = true;
             bool test_vit              = false;
             bool test_decoder_with_vit = false;
 
@@ -1455,9 +1486,9 @@ namespace LLM {
                 std::pair<int, int> prompt_attn_range;
                 std::string text = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
                 text += img_prompt;
-                prompt_attn_range.first = text.size();
+                prompt_attn_range.first = static_cast<int>(text.size());
                 text += "change 'flux.cpp' to 'edit.cpp'";
-                prompt_attn_range.second = text.size();
+                prompt_attn_range.second = static_cast<int>(text.size());
                 text += "<|im_end|>\n<|im_start|>assistant\n";
 
                 auto tokens_and_weights     = tokenize(text, prompt_attn_range, 0, false);
@@ -1496,9 +1527,9 @@ namespace LLM {
             } else if (test_mistral) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
-                prompt_attn_range.first = text.size();
+                prompt_attn_range.first = static_cast<int>(text.size());
                 text += "a lovely cat";
-                prompt_attn_range.second = text.size();
+                prompt_attn_range.second = static_cast<int>(text.size());
                 text += "[/INST]";
                 auto tokens_and_weights     = tokenize(text, prompt_attn_range, 0, false);
                 std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
@@ -1516,12 +1547,35 @@ namespace LLM {
 
                 print_ggml_tensor(out);
                 LOG_DEBUG("llm test done in %dms", t1 - t0);
+            } else if (test_qwen3) {
+                std::pair<int, int> prompt_attn_range;
+                std::string text        = "<|im_start|>user\n";
+                prompt_attn_range.first = static_cast<int>(text.size());
+                text += "a lovely cat";
+                prompt_attn_range.second = static_cast<int>(text.size());
+                text += "<|im_end|>\n<|im_start|>assistant\n";
+                auto tokens_and_weights     = tokenize(text, prompt_attn_range, 0, false);
+                std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
+                std::vector<float>& weights = std::get<1>(tokens_and_weights);
+                for (auto token : tokens) {
+                    printf("%d ", token);
+                }
+                printf("\n");
+                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
+                struct ggml_tensor* out = nullptr;
+
+                int t0 = ggml_time_ms();
+                model.compute(8, input_ids, {}, {35}, &out, work_ctx);
+                int t1 = ggml_time_ms();
+
+                print_ggml_tensor(out);
+                LOG_DEBUG("llm test done in %dms", t1 - t0);
             } else {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
-                prompt_attn_range.first = text.size();
+                prompt_attn_range.first = static_cast<int>(text.size());
                 text += "a lovely cat";
-                prompt_attn_range.second = text.size();
+                prompt_attn_range.second = static_cast<int>(text.size());
                 text += "<|im_end|>\n<|im_start|>assistant\n";
                 auto tokens_and_weights     = tokenize(text, prompt_attn_range, 0, false);
                 std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
@@ -1563,7 +1617,7 @@ namespace LLM {
                 }
             }
 
-            LLMArch arch = LLMArch::MISTRAL_SMALL_3_2;
+            LLMArch arch = LLMArch::QWEN3;
 
             std::shared_ptr<LLMEmbedder> llm = std::make_shared<LLMEmbedder>(arch,
                                                                              backend,
@@ -1587,6 +1641,6 @@ namespace LLM {
             llm->test();
         }
     };
-};  // Qwen
+};  // LLM
 
-#endif  // __QWENVL_HPP__
+#endif  // __LLM_HPP__

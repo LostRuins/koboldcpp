@@ -6,6 +6,7 @@
 #include "qwen_image.hpp"
 #include "unet.hpp"
 #include "wan.hpp"
+#include "z_image.hpp"
 
 struct DiffusionParams {
     struct ggml_tensor* x                     = nullptr;
@@ -354,6 +355,69 @@ struct QwenImageModel : public DiffusionModel {
                                   true,  // increase_ref_index
                                   output,
                                   output_ctx);
+    }
+};
+
+struct ZImageModel : public DiffusionModel {
+    std::string prefix;
+    ZImage::ZImageRunner z_image;
+
+    ZImageModel(ggml_backend_t backend,
+                bool offload_params_to_cpu,
+                const String2TensorStorage& tensor_storage_map = {},
+                const std::string prefix                       = "model.diffusion_model",
+                SDVersion version                              = VERSION_Z_IMAGE)
+        : prefix(prefix), z_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+    }
+
+    std::string get_desc() override {
+        return z_image.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        z_image.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        z_image.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        z_image.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+        z_image.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return z_image.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        z_image.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 768;
+    }
+
+    void set_flash_attn_enabled(bool enabled) {
+        z_image.set_flash_attention_enabled(enabled);
+    }
+
+    void compute(int n_threads,
+                 DiffusionParams diffusion_params,
+                 struct ggml_tensor** output     = nullptr,
+                 struct ggml_context* output_ctx = nullptr) override {
+        return z_image.compute(n_threads,
+                               diffusion_params.x,
+                               diffusion_params.timesteps,
+                               diffusion_params.context,
+                               diffusion_params.ref_latents,
+                               true,  // increase_ref_index
+                               output,
+                               output_ctx);
     }
 };
 

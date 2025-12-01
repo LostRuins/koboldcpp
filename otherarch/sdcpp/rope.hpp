@@ -379,6 +379,55 @@ namespace Rope {
         return embed_nd(ids, 1, theta, axes_dim);
     }
 
+    __STATIC_INLINE__ int bound_mod(int a, int m) {
+        return (m - (a % m)) % m;
+    }
+
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_z_image_ids(int h,
+                                                                      int w,
+                                                                      int patch_size,
+                                                                      int bs,
+                                                                      int context_len,
+                                                                      int seq_multi_of,
+                                                                      const std::vector<ggml_tensor*>& ref_latents,
+                                                                      bool increase_ref_index) {
+        int padded_context_len = context_len + bound_mod(context_len, seq_multi_of);
+        auto txt_ids           = std::vector<std::vector<float>>(bs * padded_context_len, std::vector<float>(3, 0.0f));
+        for (int i = 0; i < bs * padded_context_len; i++) {
+            txt_ids[i][0] = (i % padded_context_len) + 1.f;
+        }
+
+        int axes_dim_num = 3;
+        int index        = padded_context_len + 1;
+        auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, index);
+
+        int img_pad_len = bound_mod(static_cast<int>(img_ids.size() / bs), seq_multi_of);
+        if (img_pad_len > 0) {
+            std::vector<std::vector<float>> img_pad_ids(bs * img_pad_len, std::vector<float>(3, 0.f));
+            img_ids = concat_ids(img_ids, img_pad_ids, bs);
+        }
+
+        auto ids = concat_ids(txt_ids, img_ids, bs);
+
+        // ignore ref_latents for now
+        return ids;
+    }
+
+    // Generate z_image positional embeddings
+    __STATIC_INLINE__ std::vector<float> gen_z_image_pe(int h,
+                                                        int w,
+                                                        int patch_size,
+                                                        int bs,
+                                                        int context_len,
+                                                        int seq_multi_of,
+                                                        const std::vector<ggml_tensor*>& ref_latents,
+                                                        bool increase_ref_index,
+                                                        int theta,
+                                                        const std::vector<int>& axes_dim) {
+        std::vector<std::vector<float>> ids = gen_z_image_ids(h, w, patch_size, bs, context_len, seq_multi_of, ref_latents, increase_ref_index);
+        return embed_nd(ids, bs, theta, axes_dim);
+    }
+
     __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,
                                                      struct ggml_tensor* x,
                                                      struct ggml_tensor* pe,

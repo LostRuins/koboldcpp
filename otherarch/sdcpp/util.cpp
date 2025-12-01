@@ -60,6 +60,19 @@ void replace_all_chars(std::string& str, char target, char replacement) {
     }
 }
 
+std::string sd_format(const char* fmt, ...) {
+    va_list ap;
+    va_list ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int size = vsnprintf(nullptr, 0, fmt, ap);
+    std::vector<char> buf(size + 1);
+    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
+    va_end(ap2);
+    va_end(ap);
+    return std::string(buf.data(), size);
+}
+
 int round_up_to(int value, int base) {
     if (base <= 0) {
         return value;

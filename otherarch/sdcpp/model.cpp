@@ -46,19 +46,6 @@
 
 #define ST_HEADER_SIZE_LEN 8
 
-static std::string format(const char* fmt, ...) {
-    va_list ap;
-    va_list ap2;
-    va_start(ap, fmt);
-    va_copy(ap2, ap);
-    int size = vsnprintf(NULL, 0, fmt, ap);
-    std::vector<char> buf(size + 1);
-    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
-    va_end(ap2);
-    va_end(ap);
-    return std::string(buf.data(), size);
-}
-
 uint64_t read_u64(uint8_t* buffer) {
     // little endian
     uint64_t value = 0;
@@ -295,8 +282,8 @@ void convert_tensor(void* src,
         } else {
             auto qtype = ggml_get_type_traits(src_type);
             if (qtype->to_float == nullptr) {
-                throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
-                                                ggml_type_name(src_type)));
+                throw std::runtime_error(sd_format("type %s unsupported for integer quantization: no dequantization available",
+                                                   ggml_type_name(src_type)));
             }
             qtype->to_float(src, (float*)dst, n);
         }
@@ -305,8 +292,8 @@ void convert_tensor(void* src,
         // src_type is quantized => dst_type == GGML_TYPE_F16 or dst_type is quantized
         auto qtype = ggml_get_type_traits(src_type);
         if (qtype->to_float == nullptr) {
-            throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
-                                            ggml_type_name(src_type)));
+            throw std::runtime_error(sd_format("type %s unsupported for integer quantization: no dequantization available",
+                                               ggml_type_name(src_type)));
         }
         std::vector<char> buf;
         buf.resize(sizeof(float) * n);
@@ -1124,6 +1111,9 @@ SDVersion ModelLoader::get_sd_version() {
             }
             if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
                 return VERSION_FLUX2;
+            }
+            if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
+                return VERSION_Z_IMAGE;
             }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
                 is_wan = true;
