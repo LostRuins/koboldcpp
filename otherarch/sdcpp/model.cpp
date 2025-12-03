@@ -106,8 +106,12 @@ const char* unused_tensors[] = {
     "model_ema.diffusion_model",
     "embedding_manager",
     "denoiser.sigmas",
-    "edm_vpred.sigma_max",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
+    "ztsnr",  // Found in some SDXL vpred models
+    "edm_vpred.sigma_min", // Found in CosXL
+    // TODO: find another way to avoid the "unknown tensor" for these two
+    // "edm_vpred.sigma_max", // Used to detect CosXL
+    // "v_pred", // Used to detect SDXL vpred models
     "text_encoders.llm.output.weight",
     "text_encoders.llm.lm_head.",
     "first_stage_model.bn.",

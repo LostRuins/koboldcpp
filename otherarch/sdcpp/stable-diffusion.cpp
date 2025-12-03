@@ -2267,12 +2267,12 @@ public:
     }
 
     ggml_tensor* vae_encode(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
-        int64_t t0          = ggml_time_ms();
-        ggml_tensor* result = nullptr;
+        int64_t t0                 = ggml_time_ms();
+        ggml_tensor* result        = nullptr;
         const int vae_scale_factor = get_vae_scale_factor();
         int W                      = x->ne[0] / vae_scale_factor;
         int H                      = x->ne[1] / vae_scale_factor;
-        int C               = get_latent_channel();
+        int C                      = get_latent_channel();
         if (vae_tiling_params.enabled && !encode_video) {
             // TODO wan2.2 vae support?
             int ne2;
@@ -2397,8 +2397,8 @@ public:
         const int vae_scale_factor = get_vae_scale_factor();
         int64_t W                  = x->ne[0] * vae_scale_factor;
         int64_t H                  = x->ne[1] * vae_scale_factor;
-        int64_t C           = 3;
-        ggml_tensor* result = nullptr;
+        int64_t C                  = 3;
+        ggml_tensor* result        = nullptr;
         if (decode_video) {
             int T = x->ne[2];
             if (sd_version_is_wan(version)) {
