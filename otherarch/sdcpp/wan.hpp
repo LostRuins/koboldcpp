@@ -1175,7 +1175,7 @@ namespace WAN {
             return gf;
         }
 
-        void compute(const int n_threads,
+        bool compute(const int n_threads,
                      struct ggml_tensor* z,
                      bool decode_graph,
                      struct ggml_tensor** output,
@@ -1184,7 +1184,7 @@ namespace WAN {
                 auto get_graph = [&]() -> struct ggml_cgraph* {
                     return build_graph(z, decode_graph);
                 };
-                GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+                return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
             } else {  // chunk 1 result is weird
                 ae.clear_cache();
                 int64_t t      = z->ne[2];
@@ -1193,11 +1193,11 @@ namespace WAN {
                     return build_graph_partial(z, decode_graph, i);
                 };
                 struct ggml_tensor* out = nullptr;
-                GGMLRunner::compute(get_graph, n_threads, true, &out, output_ctx);
+                bool res                = GGMLRunner::compute(get_graph, n_threads, true, &out, output_ctx);
                 ae.clear_cache();
                 if (t == 1) {
                     *output = out;
-                    return;
+                    return res;
                 }
 
                 *output = ggml_new_tensor_4d(output_ctx, GGML_TYPE_F32, out->ne[0], out->ne[1], (t - 1) * 4 + 1, out->ne[3]);
@@ -1221,11 +1221,12 @@ namespace WAN {
                 out = ggml_new_tensor_4d(output_ctx, GGML_TYPE_F32, out->ne[0], out->ne[1], 4, out->ne[3]);
 
                 for (i = 1; i < t; i++) {
-                    GGMLRunner::compute(get_graph, n_threads, true, &out);
+                    res = res || GGMLRunner::compute(get_graph, n_threads, true, &out);
                     ae.clear_cache();
                     copy_to_output();
                 }
                 free_cache_ctx_and_buffer();
+                return res;
             }
         }
 
@@ -2194,7 +2195,7 @@ namespace WAN {
             return gf;
         }
 
-        void compute(int n_threads,
+        bool compute(int n_threads,
                      struct ggml_tensor* x,
                      struct ggml_tensor* timesteps,
                      struct ggml_tensor* context,
@@ -2209,7 +2210,7 @@ namespace WAN {
                 return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat, vace_context, vace_strength);
             };
 
-            GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
         }
 
         void test() {

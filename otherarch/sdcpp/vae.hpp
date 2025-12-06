@@ -617,7 +617,7 @@ public:
 struct VAE : public GGMLRunner {
     VAE(ggml_backend_t backend, bool offload_params_to_cpu)
         : GGMLRunner(backend, offload_params_to_cpu) {}
-    virtual void compute(const int n_threads,
+    virtual bool compute(const int n_threads,
                          struct ggml_tensor* z,
                          bool decode_graph,
                          struct ggml_tensor** output,
@@ -629,7 +629,7 @@ struct VAE : public GGMLRunner {
 struct FakeVAE : public VAE {
     FakeVAE(ggml_backend_t backend, bool offload_params_to_cpu)
         : VAE(backend, offload_params_to_cpu) {}
-    void compute(const int n_threads,
+    bool compute(const int n_threads,
                  struct ggml_tensor* z,
                  bool decode_graph,
                  struct ggml_tensor** output,
@@ -641,6 +641,7 @@ struct FakeVAE : public VAE {
             float value = ggml_ext_tensor_get_f32(z, i0, i1, i2, i3);
             ggml_ext_tensor_set_f32(*output, value, i0, i1, i2, i3);
         });
+        return true;
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) override {}
@@ -711,7 +712,7 @@ struct AutoEncoderKL : public VAE {
         return gf;
     }
 
-    void compute(const int n_threads,
+    bool compute(const int n_threads,
                  struct ggml_tensor* z,
                  bool decode_graph,
                  struct ggml_tensor** output,
@@ -722,7 +723,7 @@ struct AutoEncoderKL : public VAE {
         };
         // ggml_set_f32(z, 0.5f);
         // print_ggml_tensor(z);
-        GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
     }
 
     void test() {

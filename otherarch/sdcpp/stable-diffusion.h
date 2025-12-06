@@ -65,11 +65,10 @@ enum scheduler_t {
 };
 
 enum prediction_t {
-    DEFAULT_PRED,
     EPS_PRED,
     V_PRED,
     EDM_V_PRED,
-    SD3_FLOW_PRED,
+    FLOW_PRED,
     FLUX_FLOW_PRED,
     FLUX2_FLOW_PRED,
     PREDICTION_COUNT

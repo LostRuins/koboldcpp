@@ -1191,7 +1191,7 @@ namespace LLM {
             return gf;
         }
 
-        void compute(const int n_threads,
+        bool compute(const int n_threads,
                      struct ggml_tensor* input_ids,
                      std::vector<std::pair<int, ggml_tensor*>> image_embeds,
                      std::set<int> out_layers,
@@ -1200,7 +1200,7 @@ namespace LLM {
             auto get_graph = [&]() -> struct ggml_cgraph* {
                 return build_graph(input_ids, image_embeds, out_layers);
             };
-            GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+            return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
         }
 
         int64_t get_num_image_tokens(int64_t t, int64_t h, int64_t w) {

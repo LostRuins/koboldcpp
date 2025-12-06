@@ -703,7 +703,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
         return gf;
     }
 
-    void compute(const int n_threads,
+    bool compute(const int n_threads,
                  ggml_tensor* pixel_values,
                  bool return_pooled,
                  int clip_skip,
@@ -712,7 +712,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(pixel_values, return_pooled, clip_skip);
         };
-        GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+        return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
     }
 };
 

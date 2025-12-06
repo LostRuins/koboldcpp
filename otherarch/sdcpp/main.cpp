@@ -409,18 +409,18 @@ struct SDCliParams {
                 return -1;
             }
             const char* preview = argv[index];
-            int preview_method  = -1;
+            int preview_found   = -1;
             for (int m = 0; m < PREVIEW_COUNT; m++) {
                 if (!strcmp(preview, previews_str[m])) {
-                    preview_method = m;
+                    preview_found = m;
                 }
             }
-            if (preview_method == -1) {
+            if (preview_found == -1) {
                 fprintf(stderr, "error: preview method %s\n",
                         preview);
                 return -1;
             }
-            preview_method = (preview_t)preview_method;
+            preview_method = (preview_t)preview_found;
             return 1;
         };
 
@@ -515,7 +515,7 @@ struct SDContextParams {
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
 
-    prediction_t prediction           = DEFAULT_PRED;
+    prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};

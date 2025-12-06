@@ -247,7 +247,7 @@ struct TinyAutoEncoder : public GGMLRunner {
         return gf;
     }
 
-    void compute(const int n_threads,
+    bool compute(const int n_threads,
                  struct ggml_tensor* z,
                  bool decode_graph,
                  struct ggml_tensor** output,
@@ -256,7 +256,7 @@ struct TinyAutoEncoder : public GGMLRunner {
             return build_graph(z, decode_graph);
         };
 
-        GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
     }
 };
 

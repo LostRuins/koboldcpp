@@ -107,8 +107,8 @@ const char* unused_tensors[] = {
     "embedding_manager",
     "denoiser.sigmas",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
-    "ztsnr",  // Found in some SDXL vpred models
-    "edm_vpred.sigma_min", // Found in CosXL
+    "ztsnr",                                                        // Found in some SDXL vpred models
+    "edm_vpred.sigma_min",                                          // Found in CosXL
     // TODO: find another way to avoid the "unknown tensor" for these two
     // "edm_vpred.sigma_max", // Used to detect CosXL
     // "v_pred", // Used to detect SDXL vpred models
@@ -138,11 +138,6 @@ std::string kcpp_fix_wrong_img_tensor_name(const std::string& name) //kcpp funct
         return "text_encoders.t5xxl." + name.substr(strlen("text_encoders.umt5xxl."));
     }
     return name;
-}
-
-float bf16_to_f32(uint16_t bfloat16) {
-    uint32_t val_bits = (static_cast<uint32_t>(bfloat16) << 16);
-    return *reinterpret_cast<float*>(&val_bits);
 }
 
 uint16_t f8_e4m3_to_f16(uint8_t f8) {
@@ -225,13 +220,6 @@ uint16_t f8_e5m2_to_f16(uint8_t fp8) {
     }
 
     return fp16_sign | (fp16_exponent << 10) | fp16_mantissa;
-}
-
-void bf16_to_f32_vec(uint16_t* src, float* dst, int64_t n) {
-    // support inplace op
-    for (int64_t i = n - 1; i >= 0; i--) {
-        dst[i] = bf16_to_f32(src[i]);
-    }
 }
 
 void f8_e4m3_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
@@ -523,7 +511,7 @@ ggml_type str_to_ggml_type(const std::string& dtype) {
     if (dtype == "F16") {
         ttype = GGML_TYPE_F16;
     } else if (dtype == "BF16") {
-        ttype = GGML_TYPE_F32;
+        ttype = GGML_TYPE_BF16;
     } else if (dtype == "F32") {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F64") {
@@ -658,10 +646,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
         size_t tensor_data_size = end - begin;
 
-        if (dtype == "BF16") {
-            tensor_storage.is_bf16 = true;
-            GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
-        } else if (dtype == "F8_E4M3") {
+        if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
             // f8 -> f16
             GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
@@ -1597,9 +1582,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     read_time_ms.fetch_add(t1 - t0);
 
                     t0 = ggml_time_ms();
-                    if (tensor_storage.is_bf16) {
-                        bf16_to_f32_vec((uint16_t*)read_buf, (float*)target_buf, tensor_storage.nelements());
-                    } else if (tensor_storage.is_f8_e4m3) {
+                    if (tensor_storage.is_f8_e4m3) {
                         f8_e4m3_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
                     } else if (tensor_storage.is_f8_e5m2) {
                         f8_e5m2_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
