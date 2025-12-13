@@ -1061,29 +1061,6 @@ public:
         return result < -1;
     }
 
-    // kcpp
-    void apply_lora_from_file(const std::string& lora_path, float multiplier) {
-        std::unordered_map<std::string, float> lora_f2m;  // lora_name -> multiplier
-
-        lora_f2m[lora_path] = multiplier;
-
-        LOG_DEBUG("lora %s:%.2f", lora_path.c_str(), multiplier);
-
-        int64_t t0 = ggml_time_ms();
-        if (apply_lora_immediately) {
-            LOG_INFO("apply lora immediately");
-            apply_loras_immediately(lora_f2m);
-        } else {
-            LOG_INFO("apply at runtime");
-            apply_loras_at_runtime(lora_f2m);
-        }
-        int64_t t1 = ggml_time_ms();
-
-        LOG_INFO("lora '%s' applied, taking %.2fs",
-                 lora_path.c_str(),
-                 (t1 - t0) * 1.0f / 1000);
-    }
-
     std::shared_ptr<LoraModel> load_lora_model_from_file(const std::string& lora_id,
                                                          float multiplier,
                                                          ggml_backend_t backend,
