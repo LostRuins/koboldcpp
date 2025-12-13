@@ -151,6 +151,11 @@ typedef struct {
 } sd_tiling_params_t;
 
 typedef struct {
+    const char* name;
+    const char* path;
+} sd_embedding_t;
+
+typedef struct {
     const char* model_path;
     const char* clip_l_path;
     const char* clip_g_path;
@@ -164,7 +169,8 @@ typedef struct {
     const char* taesd_path;
     const char* control_net_path;
     const char* lora_model_dir;
-    const char* embedding_dir;
+    const sd_embedding_t* embeddings;
+    uint32_t embedding_count;
     const char* photo_maker_path;
     const char* tensor_type_rules;
     bool vae_decode_only;
@@ -219,6 +225,8 @@ typedef struct {
     int sample_steps;
     float eta;
     int shifted_timestep;
+    float* custom_sigmas;
+    int custom_sigmas_count;
 } sd_sample_params_t;
 
 typedef struct {
@@ -236,6 +244,14 @@ typedef struct {
 } sd_easycache_params_t;
 
 typedef struct {
+    bool is_high_noise;
+    float multiplier;
+    const char* path;
+} sd_lora_t;
+
+typedef struct {
+    const sd_lora_t* loras;
+    uint32_t lora_count;
     const char* prompt;
     const char* negative_prompt;
     int clip_skip;
@@ -259,6 +275,8 @@ typedef struct {
 } sd_img_gen_params_t;
 
 typedef struct {
+    const sd_lora_t* loras;
+    uint32_t lora_count;
     const char* prompt;
     const char* negative_prompt;
     int clip_skip;
@@ -331,7 +349,8 @@ typedef struct upscaler_ctx_t upscaler_ctx_t;
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         bool offload_params_to_cpu,
                                         bool direct,
-                                        int n_threads);
+                                        int n_threads,
+                                        int tile_size);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
@@ -352,6 +371,9 @@ SD_API bool preprocess_canny(sd_image_t image,
                              float weak,
                              float strong,
                              bool inverse);
+
+SD_API const char* sd_commit(void);
+SD_API const char* sd_version(void);
 
 #ifdef __cplusplus
 }

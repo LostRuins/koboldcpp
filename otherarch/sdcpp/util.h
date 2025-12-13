@@ -22,7 +22,6 @@ int round_up_to(int value, int base);
 
 bool file_exists(const std::string& filename);
 bool is_directory(const std::string& path);
-std::string get_full_path(const std::string& dir, const std::string& filename);
 
 std::u32string utf8_to_utf32(const std::string& utf8_str);
 std::string utf32_to_utf8(const std::u32string& utf32_str);

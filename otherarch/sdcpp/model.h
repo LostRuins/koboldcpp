@@ -45,6 +45,7 @@ enum SDVersion {
     VERSION_QWEN_IMAGE,
     VERSION_FLUX2,
     VERSION_Z_IMAGE,
+    VERSION_OVIS_IMAGE,
     VERSION_COUNT,
 };
 
@@ -90,6 +91,7 @@ static inline bool sd_version_is_flux(SDVersion version) {
         version == VERSION_FLUX_FILL ||
         version == VERSION_FLUX_CONTROLS ||
         version == VERSION_FLEX_2 ||
+        version == VERSION_OVIS_IMAGE ||
         version == VERSION_CHROMA_RADIANCE) {
         return true;
     }

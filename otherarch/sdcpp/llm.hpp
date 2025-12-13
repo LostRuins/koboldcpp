@@ -356,6 +356,10 @@ namespace LLM {
                 "<|fim_pad|>",
                 "<|repo_name|>",
                 "<|file_sep|>",
+                "<tool_response>",
+                "</tool_response>",
+                "<think>",
+                "</think>",
             };
 
             if (merges_utf8_str.size() > 0) {
@@ -859,11 +863,11 @@ namespace LLM {
             }
 
             if (arch == LLMArch::MISTRAL_SMALL_3_2) {
-                q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 131072, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
-                k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 131072, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else if (arch == LLMArch::QWEN3) {
-                q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 151936, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
-                k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 151936, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else {
                 int sections[4] = {16, 24, 24, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -1073,29 +1077,22 @@ namespace LLM {
             : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
             params.arch = arch;
             if (arch == LLMArch::MISTRAL_SMALL_3_2) {
-                params.num_layers        = 40;
-                params.hidden_size       = 5120;
-                params.intermediate_size = 32768;
-                params.head_dim          = 128;
-                params.num_heads         = 32;
-                params.num_kv_heads      = 8;
-                params.qkv_bias          = false;
-                params.vocab_size        = 131072;
-                params.rms_norm_eps      = 1e-5f;
+                params.head_dim     = 128;
+                params.num_heads    = 32;
+                params.num_kv_heads = 8;
+                params.qkv_bias     = false;
+                params.rms_norm_eps = 1e-5f;
             } else if (arch == LLMArch::QWEN3) {
-                params.num_layers        = 36;
-                params.hidden_size       = 2560;
-                params.intermediate_size = 9728;
-                params.head_dim          = 128;
-                params.num_heads         = 32;
-                params.num_kv_heads      = 8;
-                params.qkv_bias          = false;
-                params.qk_norm           = true;
-                params.vocab_size        = 151936;
-                params.rms_norm_eps      = 1e-6f;
+                params.head_dim     = 128;
+                params.num_heads    = 32;
+                params.num_kv_heads = 8;
+                params.qkv_bias     = false;
+                params.qk_norm      = true;
+                params.rms_norm_eps = 1e-6f;
             }
             bool have_vision_weight = false;
             bool llama_cpp_style    = false;
+            params.num_layers       = 0;
             for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find(prefix) == std::string::npos)
@@ -1105,10 +1102,36 @@ namespace LLM {
                     have_vision_weight = true;
                     if (contains(tensor_name, "attn.q_proj")) {
                         llama_cpp_style = true;
-                        break;
+                    }
+                    continue;
+                }
+                pos = tensor_name.find("layers.");
+                if (pos != std::string::npos) {
+                    tensor_name = tensor_name.substr(pos);  // remove prefix
+                    auto items  = split_string(tensor_name, '.');
+                    if (items.size() > 1) {
+                        int block_index = atoi(items[1].c_str());
+                        if (block_index + 1 > params.num_layers) {
+                            params.num_layers = block_index + 1;
+                        }
                     }
                 }
+                if (contains(tensor_name, "embed_tokens.weight")) {
+                    params.hidden_size = pair.second.ne[0];
+                    params.vocab_size  = pair.second.ne[1];
+                }
+                if (contains(tensor_name, "layers.0.mlp.gate_proj.weight")) {
+                    params.intermediate_size = pair.second.ne[1];
+                }
             }
+            if (arch == LLMArch::QWEN3 && params.num_layers == 28) {  // Qwen3 2B
+                params.num_heads = 16;
+            }
+            LOG_DEBUG("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
+                      params.num_layers,
+                      params.vocab_size,
+                      params.hidden_size,
+                      params.intermediate_size);
             if (enable_vision && !have_vision_weight) {
                 LOG_WARN("no vision weights detected, vision disabled");
                 enable_vision = false;

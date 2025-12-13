@@ -72,11 +72,13 @@ namespace Rope {
     }
 
     // Generate IDs for image patches and text
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_flux_txt_ids(int bs, int context_len, int axes_dim_num) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_flux_txt_ids(int bs, int context_len, int axes_dim_num, std::set<int> arange_dims) {
         auto txt_ids = std::vector<std::vector<float>>(bs * context_len, std::vector<float>(axes_dim_num, 0.0f));
-        if (axes_dim_num == 4) {
-            for (int i = 0; i < bs * context_len; i++) {
-                txt_ids[i][3] = (i % context_len);
+        for (int dim = 0; dim < axes_dim_num; dim++) {
+            if (arange_dims.find(dim) != arange_dims.end()) {
+                for (int i = 0; i < bs * context_len; i++) {
+                    txt_ids[i][dim] = (i % context_len);
+                }
             }
         }
         return txt_ids;
@@ -211,10 +213,11 @@ namespace Rope {
                                                                    int bs,
                                                                    int axes_dim_num,
                                                                    int context_len,
+                                                                   std::set<int> txt_arange_dims,
                                                                    const std::vector<ggml_tensor*>& ref_latents,
                                                                    bool increase_ref_index,
                                                                    float ref_index_scale) {
-        auto txt_ids = gen_flux_txt_ids(bs, context_len, axes_dim_num);
+        auto txt_ids = gen_flux_txt_ids(bs, context_len, axes_dim_num, txt_arange_dims);
         auto img_ids = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num);
 
         auto ids = concat_ids(txt_ids, img_ids, bs);
@@ -231,6 +234,7 @@ namespace Rope {
                                                      int patch_size,
                                                      int bs,
                                                      int context_len,
+                                                     std::set<int> txt_arange_dims,
                                                      const std::vector<ggml_tensor*>& ref_latents,
                                                      bool increase_ref_index,
                                                      float ref_index_scale,
@@ -242,6 +246,7 @@ namespace Rope {
                                                            bs,
                                                            static_cast<int>(axes_dim.size()),
                                                            context_len,
+                                                           txt_arange_dims,
                                                            ref_latents,
                                                            increase_ref_index,
                                                            ref_index_scale);
