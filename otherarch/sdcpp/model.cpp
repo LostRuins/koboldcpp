@@ -11,7 +11,6 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
-#include <filesystem>
 
 #include "gguf_reader.hpp"
 #include "model.h"
@@ -317,12 +316,7 @@ bool is_zip_file(const std::string& file_path) {
 }
 
 bool is_gguf_file(const std::string& file_path) {
-    #ifdef _WIN32
-        std::filesystem::path fpath = std::filesystem::u8path(file_path);
-    #else
-        std::filesystem::path fpath = std::filesystem::path(file_path);
-    #endif
-    std::ifstream file(fpath, std::ios::binary);
+    std::ifstream file(sd_get_u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         return false;
     }
@@ -343,12 +337,7 @@ bool is_gguf_file(const std::string& file_path) {
 }
 
 bool is_safetensors_file(const std::string& file_path) {
-    #ifdef _WIN32
-        std::filesystem::path fpath = std::filesystem::u8path(file_path);
-    #else
-        std::filesystem::path fpath = std::filesystem::path(file_path);
-    #endif
-    std::ifstream file(fpath, std::ios::binary);
+    std::ifstream file(sd_get_u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         return false;
     }
@@ -531,12 +520,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
     LOG_DEBUG("init from '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
     file_paths_.push_back(file_path);
     size_t file_index = file_paths_.size() - 1;
-    #ifdef _WIN32
-        std::filesystem::path fpath = std::filesystem::u8path(file_path);
-    #else
-        std::filesystem::path fpath = std::filesystem::path(file_path);
-    #endif
-    std::ifstream file(fpath, std::ios::binary);
+    std::ifstream file(sd_get_u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         LOG_ERROR("failed to open '%s'", file_path.c_str());
         file_paths_.pop_back();
@@ -1482,12 +1466,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     }
                 } else {
                     // kcpp
-                    #ifdef _WIN32
-                        std::filesystem::path fpath = std::filesystem::u8path(file_path);
-                    #else
-                        std::filesystem::path fpath = std::filesystem::path(file_path);
-                    #endif
-                    file.open(fpath, std::ios::binary);
+                    file.open(sd_get_u8path(file_path), std::ios::binary);
                     if (!file.is_open()) {
                         LOG_ERROR("failed to open '%s'", file_path.c_str());
                         failed = true;

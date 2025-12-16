@@ -171,7 +171,7 @@ private:
 
 public:
     bool load(const std::string& file_path) {
-        std::ifstream fin(file_path, std::ios::binary);
+        std::ifstream fin(sd_get_u8path(file_path), std::ios::binary);
         if (!fin) {
             LOG_ERROR("failed to open '%s'", file_path.c_str());
             return false;

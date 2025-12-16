@@ -3,6 +3,7 @@
 #include <cmath>
 #include <codecvt>
 #include <cstdarg>
+#include <filesystem>
 #include <fstream>
 #include <locale>
 #include <regex>
@@ -98,6 +99,11 @@ bool is_directory(const std::string& path) {
     return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
+std::string sd_get_u8path(const std::string& file_path)
+{
+    return std::filesystem::u8path(file_path).string();
+}
+
 #else  // Unix
 #include <dirent.h>
 #include <sys/stat.h>
@@ -110,6 +116,11 @@ bool file_exists(const std::string& filename) {
 bool is_directory(const std::string& path) {
     struct stat buffer;
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
+}
+
+std::string sd_get_u8path(const std::string& file_path)
+{
+    return std::filesystem::path(file_path).string();
 }
 
 #endif

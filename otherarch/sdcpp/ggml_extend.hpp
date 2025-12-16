@@ -19,7 +19,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <filesystem>
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -297,12 +296,7 @@ __STATIC_INLINE__ void ggml_ext_tensor_diff(
 }
 
 __STATIC_INLINE__ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_path) {
-    #ifdef _WIN32
-        std::filesystem::path fpath = std::filesystem::u8path(file_path);
-    #else
-        std::filesystem::path fpath = std::filesystem::path(file_path);
-    #endif
-    std::ifstream file(fpath, std::ios::binary);
+    std::ifstream file(sd_get_u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         LOG_ERROR("failed to open '%s'", file_path.c_str());
         return nullptr;
