@@ -347,6 +347,41 @@ struct SmoothStepScheduler : SigmaScheduler {
     }
 };
 
+// Implementation adapted from https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/15608
+struct KLOptimalScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> sigmas;
+
+        if (n == 0) {
+            return sigmas;
+        }
+        if (n == 1) {
+            sigmas.push_back(sigma_max);
+            sigmas.push_back(0.0f);
+            return sigmas;
+        }
+
+        float alpha_min = std::atan(sigma_min);
+        float alpha_max = std::atan(sigma_max);
+
+        for (uint32_t i = 0; i < n; ++i) {
+            // t goes from 0.0 to 1.0
+            float t = static_cast<float>(i) / static_cast<float>(n-1);
+
+            // Interpolate in the angle domain
+            float angle = t * alpha_min + (1.0f - t) * alpha_max;
+
+            // Convert back to sigma
+            sigmas.push_back(std::tan(angle));
+            }
+
+        // Append the final zero to sigma
+        sigmas.push_back(0.0f);
+    
+        return sigmas;
+    }
+};
+
 struct Denoiser {
     virtual float sigma_min()                                                                = 0;
     virtual float sigma_max()                                                                = 0;
@@ -391,6 +426,10 @@ struct Denoiser {
             case SMOOTHSTEP_SCHEDULER:
                 LOG_INFO("get_sigmas with SmoothStep scheduler");
                 scheduler = std::make_shared<SmoothStepScheduler>();
+                break;
+            case KL_OPTIMAL_SCHEDULER:
+                LOG_INFO("get_sigmas with KL Optimal scheduler");
+                scheduler = std::make_shared<KLOptimalScheduler>();
                 break;
             case LCM_SCHEDULER:
                 LOG_INFO("get_sigmas with LCM scheduler");

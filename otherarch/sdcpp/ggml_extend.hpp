@@ -848,8 +848,6 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     LOG_DEBUG("num tiles : %d, %d ", num_tiles_x, num_tiles_y);
     LOG_DEBUG("optimal overlap : %f, %f (targeting %f)", tile_overlap_factor_x, tile_overlap_factor_y, tile_overlap_factor);
 
-    GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0 && output_width % 2 == 0 && output_height % 2 == 0);  // should be multiple of 2
-
     int tile_overlap_x     = (int32_t)(p_tile_size_x * tile_overlap_factor_x);
     int non_tile_overlap_x = p_tile_size_x - tile_overlap_x;
 

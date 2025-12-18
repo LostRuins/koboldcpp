@@ -87,6 +87,114 @@ static std::string argv_to_utf8(int index, const char** argv) {
 
 #endif
 
+static void print_utf8(FILE* stream, const char* utf8) {
+    if (!utf8)
+        return;
+
+#ifdef _WIN32
+    HANDLE h = (stream == stderr)
+                   ? GetStdHandle(STD_ERROR_HANDLE)
+                   : GetStdHandle(STD_OUTPUT_HANDLE);
+
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (wlen <= 0)
+        return;
+
+    wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
+    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+
+    DWORD written;
+    WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+
+    free(wbuf);
+#else
+    fputs(utf8, stream);
+#endif
+}
+
+static std::string sd_basename(const std::string& path) {
+    size_t pos = path.find_last_of('/');
+    if (pos != std::string::npos) {
+        return path.substr(pos + 1);
+    }
+    pos = path.find_last_of('\\');
+    if (pos != std::string::npos) {
+        return path.substr(pos + 1);
+    }
+    return path;
+}
+
+static void log_print(enum sd_log_level_t level, const char* log, bool verbose, bool color) {
+    int tag_color;
+    const char* level_str;
+    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
+
+    if (!log || (!verbose && level <= SD_LOG_DEBUG)) {
+        return;
+    }
+
+    switch (level) {
+        case SD_LOG_DEBUG:
+            tag_color = 37;
+            level_str = "DEBUG";
+            break;
+        case SD_LOG_INFO:
+            tag_color = 34;
+            level_str = "INFO";
+            break;
+        case SD_LOG_WARN:
+            tag_color = 35;
+            level_str = "WARN";
+            break;
+        case SD_LOG_ERROR:
+            tag_color = 31;
+            level_str = "ERROR";
+            break;
+        default: /* Potential future-proofing */
+            tag_color = 33;
+            level_str = "?????";
+            break;
+    }
+
+    if (color) {
+        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
+    } else {
+        fprintf(out_stream, "[%-5s] ", level_str);
+    }
+    print_utf8(out_stream, log);
+    fflush(out_stream);
+}
+
+#define LOG_BUFFER_SIZE 4096
+
+static bool log_verbose = false;
+static bool log_color   = false;
+
+static void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    static char log_buffer[LOG_BUFFER_SIZE + 1];
+    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%s:%-4d - ", sd_basename(file).c_str(), line);
+
+    if (written >= 0 && written < LOG_BUFFER_SIZE) {
+        vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
+    }
+    size_t len = strlen(log_buffer);
+    if (log_buffer[len - 1] != '\n') {
+        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
+    }
+
+    log_print(level, log_buffer, log_verbose, log_color);
+
+    va_end(args);
+}
+
+#define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
+
 struct StringOption {
     std::string short_name;
     std::string long_name;
@@ -296,11 +404,11 @@ static bool parse_options(int argc, const char** argv, const std::vector<ArgOpti
         }
 
         if (invalid_arg) {
-            fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
+            LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
             return false;
         }
         if (!found_arg) {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
+            LOG_ERROR("error: unknown argument: %s", arg.c_str());
             return false;
         }
     }
@@ -408,6 +516,10 @@ struct SDContextParams {
              "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
              &taesd_path},
             {"",
+             "--tae",
+             "alias of --taesd",
+             &taesd_path},
+            {"",
              "--control-net",
              "path to control net model",
              &control_net_path},
@@ -511,8 +623,8 @@ struct SDContextParams {
             const char* arg = argv[index];
             wtype           = str_to_sd_type(arg);
             if (wtype == SD_TYPE_COUNT) {
-                fprintf(stderr, "error: invalid weight format %s\n",
-                        arg);
+                LOG_ERROR("error: invalid weight format %s",
+                          arg);
                 return -1;
             }
             return 1;
@@ -525,8 +637,8 @@ struct SDContextParams {
             const char* arg = argv[index];
             rng_type        = str_to_rng_type(arg);
             if (rng_type == RNG_TYPE_COUNT) {
-                fprintf(stderr, "error: invalid rng type %s\n",
-                        arg);
+                LOG_ERROR("error: invalid rng type %s",
+                          arg);
                 return -1;
             }
             return 1;
@@ -539,8 +651,8 @@ struct SDContextParams {
             const char* arg  = argv[index];
             sampler_rng_type = str_to_rng_type(arg);
             if (sampler_rng_type == RNG_TYPE_COUNT) {
-                fprintf(stderr, "error: invalid sampler rng type %s\n",
-                        arg);
+                LOG_ERROR("error: invalid sampler rng type %s",
+                          arg);
                 return -1;
             }
             return 1;
@@ -553,8 +665,8 @@ struct SDContextParams {
             const char* arg = argv[index];
             prediction      = str_to_prediction(arg);
             if (prediction == PREDICTION_COUNT) {
-                fprintf(stderr, "error: invalid prediction type %s\n",
-                        arg);
+                LOG_ERROR("error: invalid prediction type %s",
+                          arg);
                 return -1;
             }
             return 1;
@@ -567,8 +679,8 @@ struct SDContextParams {
             const char* arg = argv[index];
             lora_apply_mode = str_to_lora_apply_mode(arg);
             if (lora_apply_mode == LORA_APPLY_MODE_COUNT) {
-                fprintf(stderr, "error: invalid lora apply model %s\n",
-                        arg);
+                LOG_ERROR("error: invalid lora apply model %s",
+                          arg);
                 return -1;
             }
             return 1;
@@ -692,13 +804,13 @@ struct SDContextParams {
 
     bool process_and_check(SDMode mode) {
         if (mode != UPSCALE && model_path.length() == 0 && diffusion_model_path.length() == 0) {
-            fprintf(stderr, "error: the following arguments are required: model_path/diffusion_model\n");
+            LOG_ERROR("error: the following arguments are required: model_path/diffusion_model\n");
             return false;
         }
 
         if (mode == UPSCALE) {
             if (esrgan_path.length() == 0) {
-                fprintf(stderr, "error: upscale mode needs an upscaler model (--upscale-model)\n");
+                LOG_ERROR("error: upscale mode needs an upscaler model (--upscale-model)\n");
                 return false;
             }
         }
@@ -797,7 +909,6 @@ struct SDContextParams {
             vae_path.c_str(),
             taesd_path.c_str(),
             control_net_path.c_str(),
-            lora_model_dir.c_str(),
             embedding_vec.data(),
             static_cast<uint32_t>(embedding_vec.size()),
             photo_maker_path.c_str(),
@@ -864,7 +975,7 @@ static bool is_absolute_path(const std::string& p) {
 
 struct SDGenerationParams {
     std::string prompt;
-    std::string prompt_with_lora; // for metadata record only
+    std::string prompt_with_lora;  // for metadata record only
     std::string negative_prompt;
     int clip_skip   = -1;  // <= 0 represents unspecified
     int width       = 512;
@@ -1116,8 +1227,8 @@ struct SDGenerationParams {
             const char* arg             = argv[index];
             sample_params.sample_method = str_to_sample_method(arg);
             if (sample_params.sample_method == SAMPLE_METHOD_COUNT) {
-                fprintf(stderr, "error: invalid sample method %s\n",
-                        arg);
+                LOG_ERROR("error: invalid sample method %s",
+                          arg);
                 return -1;
             }
             return 1;
@@ -1130,8 +1241,8 @@ struct SDGenerationParams {
             const char* arg                        = argv[index];
             high_noise_sample_params.sample_method = str_to_sample_method(arg);
             if (high_noise_sample_params.sample_method == SAMPLE_METHOD_COUNT) {
-                fprintf(stderr, "error: invalid high noise sample method %s\n",
-                        arg);
+                LOG_ERROR("error: invalid high noise sample method %s",
+                          arg);
                 return -1;
             }
             return 1;
@@ -1144,8 +1255,8 @@ struct SDGenerationParams {
             const char* arg         = argv[index];
             sample_params.scheduler = str_to_scheduler(arg);
             if (sample_params.scheduler == SCHEDULER_COUNT) {
-                fprintf(stderr, "error: invalid scheduler %s\n",
-                        arg);
+                LOG_ERROR("error: invalid scheduler %s",
+                          arg);
                 return -1;
             }
             return 1;
@@ -1226,17 +1337,17 @@ struct SDGenerationParams {
                     try {
                         custom_sigmas.push_back(std::stof(item));
                     } catch (const std::invalid_argument& e) {
-                        fprintf(stderr, "error: invalid float value '%s' in --sigmas\n", item.c_str());
+                        LOG_ERROR("error: invalid float value '%s' in --sigmas", item.c_str());
                         return -1;
                     } catch (const std::out_of_range& e) {
-                        fprintf(stderr, "error: float value '%s' out of range in --sigmas\n", item.c_str());
+                        LOG_ERROR("error: float value '%s' out of range in --sigmas", item.c_str());
                         return -1;
                     }
                 }
             }
 
             if (custom_sigmas.empty() && !sigmas_str.empty()) {
-                fprintf(stderr, "error: could not parse any sigma values from '%s'\n", argv[index]);
+                LOG_ERROR("error: could not parse any sigma values from '%s'", argv[index]);
                 return -1;
             }
             return 1;
@@ -1299,7 +1410,7 @@ struct SDGenerationParams {
              on_high_noise_sample_method_arg},
             {"",
              "--scheduler",
-             "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm], default: discrete",
+             "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm], default: discrete",
              on_scheduler_arg},
             {"",
              "--sigmas",
@@ -1332,7 +1443,7 @@ struct SDGenerationParams {
         try {
             j = json::parse(json_str);
         } catch (...) {
-            fprintf(stderr, "json parse failed %s\n", json_str.c_str());
+            LOG_ERROR("json parse failed %s", json_str.c_str());
             return false;
         }
 
@@ -1441,7 +1552,7 @@ struct SDGenerationParams {
                     }
                 }
                 if (!found) {
-                    printf("can not found lora %s\n", final_path.lexically_normal().string().c_str());
+                    LOG_WARN("can not found lora %s", final_path.lexically_normal().string().c_str());
                     tmp    = m.suffix().str();
                     prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
                     continue;
@@ -1480,17 +1591,17 @@ struct SDGenerationParams {
     bool process_and_check(SDMode mode, const std::string& lora_model_dir) {
         prompt_with_lora = prompt;
         if (width <= 0) {
-            fprintf(stderr, "error: the width must be greater than 0\n");
+            LOG_ERROR("error: the width must be greater than 0\n");
             return false;
         }
 
         if (height <= 0) {
-            fprintf(stderr, "error: the height must be greater than 0\n");
+            LOG_ERROR("error: the height must be greater than 0\n");
             return false;
         }
 
         if (sample_params.sample_steps <= 0) {
-            fprintf(stderr, "error: the sample_steps must be greater than 0\n");
+            LOG_ERROR("error: the sample_steps must be greater than 0\n");
             return false;
         }
 
@@ -1499,7 +1610,7 @@ struct SDGenerationParams {
         }
 
         if (strength < 0.f || strength > 1.f) {
-            fprintf(stderr, "error: can only work with strength in [0.0, 1.0]\n");
+            LOG_ERROR("error: can only work with strength in [0.0, 1.0]\n");
             return false;
         }
 
@@ -1521,31 +1632,31 @@ struct SDGenerationParams {
                 };
                 trim(token);
                 if (token.empty()) {
-                    fprintf(stderr, "error: invalid easycache option '%s'\n", easycache_option.c_str());
+                    LOG_ERROR("error: invalid easycache option '%s'", easycache_option.c_str());
                     return false;
                 }
                 if (idx >= 3) {
-                    fprintf(stderr, "error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
+                    LOG_ERROR("error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
                     return false;
                 }
                 try {
                     values[idx] = std::stof(token);
                 } catch (const std::exception&) {
-                    fprintf(stderr, "error: invalid easycache value '%s'\n", token.c_str());
+                    LOG_ERROR("error: invalid easycache value '%s'", token.c_str());
                     return false;
                 }
                 idx++;
             }
             if (idx != 3) {
-                fprintf(stderr, "error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
+                LOG_ERROR("error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
                 return false;
             }
             if (values[0] < 0.0f) {
-                fprintf(stderr, "error: easycache threshold must be non-negative\n");
+                LOG_ERROR("error: easycache threshold must be non-negative\n");
                 return false;
             }
             if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
-                fprintf(stderr, "error: easycache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
+                LOG_ERROR("error: easycache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
                 return false;
             }
             easycache_params.enabled         = true;
@@ -1585,7 +1696,7 @@ struct SDGenerationParams {
 
         if (mode == UPSCALE) {
             if (init_image_path.length() == 0) {
-                fprintf(stderr, "error: upscale mode needs an init image (--init-img)\n");
+                LOG_ERROR("error: upscale mode needs an init image (--init-img)\n");
                 return false;
             }
         }
@@ -1700,13 +1811,13 @@ uint8_t* load_image_common(bool from_memory,
         image_buffer = (uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel);
     }
     if (image_buffer == nullptr) {
-        fprintf(stderr, "load image from '%s' failed\n", image_path);
+        LOG_ERROR("load image from '%s' failed", image_path);
         return nullptr;
     }
     if (c < expected_channel) {
         fprintf(stderr,
                 "the number of channels for the input image must be >= %d,"
-                "but got %d channels, image_path = %s\n",
+                "but got %d channels, image_path = %s",
                 expected_channel,
                 c,
                 image_path);
@@ -1714,12 +1825,12 @@ uint8_t* load_image_common(bool from_memory,
         return nullptr;
     }
     if (width <= 0) {
-        fprintf(stderr, "error: the width of image must be greater than 0, image_path = %s\n", image_path);
+        LOG_ERROR("error: the width of image must be greater than 0, image_path = %s", image_path);
         free(image_buffer);
         return nullptr;
     }
     if (height <= 0) {
-        fprintf(stderr, "error: the height of image must be greater than 0, image_path = %s\n", image_path);
+        LOG_ERROR("error: the height of image must be greater than 0, image_path = %s", image_path);
         free(image_buffer);
         return nullptr;
     }
@@ -1741,10 +1852,10 @@ uint8_t* load_image_common(bool from_memory,
         }
 
         if (crop_x != 0 || crop_y != 0) {
-            printf("crop input image from %dx%d to %dx%d, image_path = %s\n", width, height, crop_w, crop_h, image_path);
+            LOG_INFO("crop input image from %dx%d to %dx%d, image_path = %s", width, height, crop_w, crop_h, image_path);
             uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
             if (cropped_image_buffer == nullptr) {
-                fprintf(stderr, "error: allocate memory for crop\n");
+                LOG_ERROR("error: allocate memory for crop\n");
                 free(image_buffer);
                 return nullptr;
             }
@@ -1760,13 +1871,13 @@ uint8_t* load_image_common(bool from_memory,
             image_buffer = cropped_image_buffer;
         }
 
-        printf("resize input image from %dx%d to %dx%d\n", width, height, expected_width, expected_height);
+        LOG_INFO("resize input image from %dx%d to %dx%d", width, height, expected_width, expected_height);
         int resized_height = expected_height;
         int resized_width  = expected_width;
 
         uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
         if (resized_image_buffer == nullptr) {
-            fprintf(stderr, "error: allocate memory for resize input image\n");
+            LOG_ERROR("error: allocate memory for resize input image\n");
             free(image_buffer);
             return nullptr;
         }

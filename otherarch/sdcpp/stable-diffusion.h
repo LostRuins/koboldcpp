@@ -60,6 +60,7 @@ enum scheduler_t {
     SGM_UNIFORM_SCHEDULER,
     SIMPLE_SCHEDULER,
     SMOOTHSTEP_SCHEDULER,
+    KL_OPTIMAL_SCHEDULER,
     LCM_SCHEDULER,
     SCHEDULER_COUNT
 };
@@ -168,7 +169,6 @@ typedef struct {
     const char* vae_path;
     const char* taesd_path;
     const char* control_net_path;
-    const char* lora_model_dir;
     const sd_embedding_t* embeddings;
     uint32_t embedding_count;
     const char* photo_maker_path;
@@ -335,7 +335,7 @@ SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
 SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
 
 SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
-SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx);
+SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method);
 
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);

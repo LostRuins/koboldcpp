@@ -136,7 +136,6 @@ public:
 
     std::map<std::string, struct ggml_tensor*> tensors;
 
-    std::string lora_model_dir;
     // lora_name => multiplier
     std::unordered_map<std::string, float> curr_lora_state;
 
@@ -219,7 +218,6 @@ public:
         n_threads               = sd_ctx_params->n_threads;
         vae_decode_only         = sd_ctx_params->vae_decode_only;
         free_params_immediately = sd_ctx_params->free_params_immediately;
-        lora_model_dir          = SAFE_STR(sd_ctx_params->lora_model_dir);
         taesd_path              = SAFE_STR(sd_ctx_params->taesd_path);
         use_tiny_autoencoder    = taesd_path.size() > 0;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
@@ -663,6 +661,9 @@ public:
             if (sd_ctx_params->diffusion_flash_attn) {
                 LOG_INFO("Using flash attention in the diffusion model");
                 diffusion_model->set_flash_attn_enabled(true);
+                if (high_noise_diffusion_model) {
+                    high_noise_diffusion_model->set_flash_attn_enabled(true);
+                }
             }
 
             cond_stage_model->alloc_params_buffer();
@@ -688,14 +689,27 @@ public:
             }
 
             if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
-                first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
-                                                                        offload_params_to_cpu,
-                                                                        tensor_storage_map,
-                                                                        "first_stage_model",
-                                                                        vae_decode_only,
-                                                                        version);
-                first_stage_model->alloc_params_buffer();
-                first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                if (!use_tiny_autoencoder) {
+                    first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
+                                                                            offload_params_to_cpu,
+                                                                            tensor_storage_map,
+                                                                            "first_stage_model",
+                                                                            vae_decode_only,
+                                                                            version);
+                    first_stage_model->alloc_params_buffer();
+                    first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                } else {
+                    tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(vae_backend,
+                                                                             offload_params_to_cpu,
+                                                                             tensor_storage_map,
+                                                                             "decoder",
+                                                                             vae_decode_only,
+                                                                             version);
+                    if (sd_ctx_params->vae_conv_direct) {
+                        LOG_INFO("Using Conv2d direct in the tae model");
+                        tae_first_stage->set_conv2d_direct_enabled(true);
+                    }
+                }
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 first_stage_model = std::make_shared<FakeVAE>(vae_backend,
                                                               offload_params_to_cpu);
@@ -722,14 +736,13 @@ public:
                 }
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
-            }
-            if (use_tiny_autoencoder) {
-                tae_first_stage = std::make_shared<TinyAutoEncoder>(vae_backend,
-                                                                    offload_params_to_cpu,
-                                                                    tensor_storage_map,
-                                                                    "decoder.layers",
-                                                                    vae_decode_only,
-                                                                    version);
+            } else if (use_tiny_autoencoder) {
+                tae_first_stage = std::make_shared<TinyImageAutoEncoder>(vae_backend,
+                                                                         offload_params_to_cpu,
+                                                                         tensor_storage_map,
+                                                                         "decoder.layers",
+                                                                         vae_decode_only,
+                                                                         version);
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the tae model");
                     tae_first_stage->set_conv2d_direct_enabled(true);
@@ -2527,6 +2540,7 @@ const char* scheduler_to_str[] = {
     "sgm_uniform",
     "simple",
     "smoothstep",
+    "kl_optimal",
     "lcm",
 };
 
@@ -2664,7 +2678,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "vae_path: %s\n"
              "taesd_path: %s\n"
              "control_net_path: %s\n"
-             "lora_model_dir: %s\n"
              "photo_maker_path: %s\n"
              "tensor_type_rules: %s\n"
              "vae_decode_only: %s\n"
@@ -2694,7 +2707,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->vae_path),
              SAFE_STR(sd_ctx_params->taesd_path),
              SAFE_STR(sd_ctx_params->control_net_path),
-             SAFE_STR(sd_ctx_params->lora_model_dir),
              SAFE_STR(sd_ctx_params->photo_maker_path),
              SAFE_STR(sd_ctx_params->tensor_type_rules),
              BOOL_STR(sd_ctx_params->vae_decode_only),
@@ -2893,12 +2905,15 @@ enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
     return EULER_A_SAMPLE_METHOD;
 }
 
-enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx) {
+enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method) {
     if (sd_ctx != nullptr && sd_ctx->sd != nullptr) {
         auto edm_v_denoiser = std::dynamic_pointer_cast<EDMVDenoiser>(sd_ctx->sd->denoiser);
         if (edm_v_denoiser) {
             return EXPONENTIAL_SCHEDULER;
         }
+    }
+    if (sample_method == LCM_SAMPLE_METHOD) {
+        return LCM_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
 }
@@ -3334,9 +3349,13 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
             LOG_WARN("sample_steps != custom_sigmas_count - 1, set sample_steps to %d", sample_steps);
         }
     } else {
+        scheduler_t scheduler = sd_img_gen_params->sample_params.scheduler;
+        if (scheduler == SCHEDULER_COUNT) {
+            scheduler = sd_get_default_scheduler(sd_ctx, sample_method);
+        }
         sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
                                                   sd_ctx->sd->get_image_seq_len(height, width),
-                                                  sd_img_gen_params->sample_params.scheduler,
+                                                  scheduler,
                                                   sd_ctx->sd->version);
     }
 
@@ -3619,9 +3638,13 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             }
         }
     } else {
+        scheduler_t scheduler = sd_vid_gen_params->sample_params.scheduler;
+        if (scheduler == SCHEDULER_COUNT) {
+            scheduler = sd_get_default_scheduler(sd_ctx, sample_method);
+        }
         sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps,
                                                   0,
-                                                  sd_vid_gen_params->sample_params.scheduler,
+                                                  scheduler,
                                                   sd_ctx->sd->version);
     }
 
@@ -3746,7 +3769,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         denoise_mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], 1);
         ggml_set_f32(denoise_mask, 1.f);
 
-        sd_ctx->sd->process_latent_out(init_latent);
+        if (!sd_ctx->sd->use_tiny_autoencoder)
+            sd_ctx->sd->process_latent_out(init_latent);
 
         ggml_ext_tensor_iter(init_image_latent, [&](ggml_tensor* t, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
             float value = ggml_ext_tensor_get_f32(t, i0, i1, i2, i3);
@@ -3756,7 +3780,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             }
         });
 
-        sd_ctx->sd->process_latent_in(init_latent);
+        if (!sd_ctx->sd->use_tiny_autoencoder)
+            sd_ctx->sd->process_latent_in(init_latent);
 
         int64_t t2 = ggml_time_ms();
         LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
@@ -3979,7 +4004,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     struct ggml_tensor* vid = sd_ctx->sd->decode_first_stage(work_ctx, final_latent, true);
     int64_t t5              = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t5 - t4) * 1.0f / 1000);
-    if (sd_ctx->sd->free_params_immediately) {
+    if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
     }
 

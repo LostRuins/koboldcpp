@@ -1574,6 +1574,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         i64_to_i32_vec((int64_t*)read_buf, (int32_t*)target_buf, tensor_storage.nelements());
                     }
                     if (tensor_storage.type != dst_tensor->type) {
+                        if (convert_buf == nullptr) {
+                            LOG_ERROR("read tensor data failed: too less memory for conversion");
+                            failed = true;
+                            return;
+                        }
                         convert_tensor((void*)target_buf,
                                        tensor_storage.type,
                                        convert_buf,

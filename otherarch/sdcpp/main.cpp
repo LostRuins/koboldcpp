@@ -31,7 +31,6 @@ struct SDCliParams {
     std::string output_path = "output.png";
 
     bool verbose          = false;
-    bool version          = false;
     bool canny_preprocess = false;
 
     preview_t preview_method = PREVIEW_NONE;
@@ -75,10 +74,6 @@ struct SDCliParams {
              "print extra info",
              true, &verbose},
             {"",
-             "--version",
-             "print stable-diffusion.cpp version",
-             true, &version},
-            {"",
              "--color",
              "colors the logging tags according to level",
              true, &color},
@@ -106,9 +101,8 @@ struct SDCliParams {
                     }
                 }
                 if (mode_found == -1) {
-                    fprintf(stderr,
-                            "error: invalid mode %s, must be one of [%s]\n",
-                            mode_c_str, SD_ALL_MODES_STR);
+                    LOG_ERROR("error: invalid mode %s, must be one of [%s]\n",
+                              mode_c_str, SD_ALL_MODES_STR);
                     exit(1);
                 }
                 mode = (SDMode)mode_found;
@@ -128,8 +122,7 @@ struct SDCliParams {
                 }
             }
             if (preview_found == -1) {
-                fprintf(stderr, "error: preview method %s\n",
-                        preview);
+                LOG_ERROR("error: preview method %s", preview);
                 return -1;
             }
             preview_method = (preview_t)preview_found;
@@ -161,7 +154,7 @@ struct SDCliParams {
 
     bool process_and_check() {
         if (output_path.length() == 0) {
-            fprintf(stderr, "error: the following arguments are required: output_path\n");
+            LOG_ERROR("error: the following arguments are required: output_path");
             return false;
         }
 
@@ -217,18 +210,6 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
         print_usage(argc, argv, options_vec);
         exit(1);
     }
-}
-
-static std::string sd_basename(const std::string& path) {
-    size_t pos = path.find_last_of('/');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    pos = path.find_last_of('\\');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    return path;
 }
 
 std::string get_image_params(const SDCliParams& cli_params, const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {
@@ -288,47 +269,9 @@ std::string get_image_params(const SDCliParams& cli_params, const SDContextParam
     return parameter_string;
 }
 
-/* Enables Printing the log level tag in color using ANSI escape codes */
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     SDCliParams* cli_params = (SDCliParams*)data;
-    int tag_color;
-    const char* level_str;
-    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
-
-    if (!log || (!cli_params->verbose && level <= SD_LOG_DEBUG)) {
-        return;
-    }
-
-    switch (level) {
-        case SD_LOG_DEBUG:
-            tag_color = 37;
-            level_str = "DEBUG";
-            break;
-        case SD_LOG_INFO:
-            tag_color = 34;
-            level_str = "INFO";
-            break;
-        case SD_LOG_WARN:
-            tag_color = 35;
-            level_str = "WARN";
-            break;
-        case SD_LOG_ERROR:
-            tag_color = 31;
-            level_str = "ERROR";
-            break;
-        default: /* Potential future-proofing */
-            tag_color = 33;
-            level_str = "?????";
-            break;
-    }
-
-    if (cli_params->color == true) {
-        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
-    } else {
-        fprintf(out_stream, "[%-5s] ", level_str);
-    }
-    fputs(log, out_stream);
-    fflush(out_stream);
+    log_print(level, log, cli_params->verbose, cli_params->color);
 }
 
 bool load_images_from_dir(const std::string dir,
@@ -338,7 +281,7 @@ bool load_images_from_dir(const std::string dir,
                           int max_image_num   = 0,
                           bool verbose        = false) {
     if (!fs::exists(dir) || !fs::is_directory(dir)) {
-        fprintf(stderr, "'%s' is not a valid directory\n", dir.c_str());
+        LOG_ERROR("'%s' is not a valid directory\n", dir.c_str());
         return false;
     }
 
@@ -360,14 +303,12 @@ bool load_images_from_dir(const std::string dir,
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
         if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
-            if (verbose) {
-                printf("load image %zu from '%s'\n", images.size(), path.c_str());
-            }
+            LOG_DEBUG("load image %zu from '%s'", images.size(), path.c_str());
             int width             = 0;
             int height            = 0;
             uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height, expected_width, expected_height);
             if (image_buffer == nullptr) {
-                fprintf(stderr, "load image from '%s' failed\n", path.c_str());
+                LOG_ERROR("load image from '%s' failed", path.c_str());
                 return false;
             }
 
@@ -408,9 +349,6 @@ int main(int argc, const char* argv[]) {
     SDGenerationParams gen_params;
 
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
-    if (cli_params.verbose || cli_params.version) {
-        std::cout << version_string() << "\n";
-    }
     if (gen_params.video_frames > 4) {
         size_t last_dot_pos   = cli_params.preview_path.find_last_of(".");
         std::string base_path = cli_params.preview_path;
@@ -429,6 +367,8 @@ int main(int argc, const char* argv[]) {
         cli_params.preview_fps /= 4;
 
     sd_set_log_callback(sd_log_cb, (void*)&cli_params);
+    log_verbose = cli_params.verbose;
+    log_color   = cli_params.color;
     sd_set_preview_callback(step_callback,
                             cli_params.preview_method,
                             cli_params.preview_interval,
@@ -436,12 +376,11 @@ int main(int argc, const char* argv[]) {
                             cli_params.preview_noisy,
                             (void*)&cli_params);
 
-    if (cli_params.verbose) {
-        printf("%s", sd_get_system_info());
-        printf("%s\n", cli_params.to_string().c_str());
-        printf("%s\n", ctx_params.to_string().c_str());
-        printf("%s\n", gen_params.to_string().c_str());
-    }
+    LOG_DEBUG("version: %s", version_string().c_str());
+    LOG_DEBUG("%s", sd_get_system_info());
+    LOG_DEBUG("%s", cli_params.to_string().c_str());
+    LOG_DEBUG("%s", ctx_params.to_string().c_str());
+    LOG_DEBUG("%s", gen_params.to_string().c_str());
 
     if (cli_params.mode == CONVERT) {
         bool success = convert(ctx_params.model_path.c_str(),
@@ -450,17 +389,16 @@ int main(int argc, const char* argv[]) {
                                ctx_params.wtype,
                                ctx_params.tensor_type_rules.c_str());
         if (!success) {
-            fprintf(stderr,
-                    "convert '%s'/'%s' to '%s' failed\n",
-                    ctx_params.model_path.c_str(),
-                    ctx_params.vae_path.c_str(),
-                    cli_params.output_path.c_str());
+            LOG_ERROR("convert '%s'/'%s' to '%s' failed",
+                      ctx_params.model_path.c_str(),
+                      ctx_params.vae_path.c_str(),
+                      cli_params.output_path.c_str());
             return 1;
         } else {
-            printf("convert '%s'/'%s' to '%s' success\n",
-                   ctx_params.model_path.c_str(),
-                   ctx_params.vae_path.c_str(),
-                   cli_params.output_path.c_str());
+            LOG_INFO("convert '%s'/'%s' to '%s' success",
+                     ctx_params.model_path.c_str(),
+                     ctx_params.vae_path.c_str(),
+                     cli_params.output_path.c_str());
             return 0;
         }
     }
@@ -503,7 +441,7 @@ int main(int argc, const char* argv[]) {
         int height      = 0;
         init_image.data = load_image_from_file(gen_params.init_image_path.c_str(), width, height, gen_params.width, gen_params.height);
         if (init_image.data == nullptr) {
-            fprintf(stderr, "load image from '%s' failed\n", gen_params.init_image_path.c_str());
+            LOG_ERROR("load image from '%s' failed", gen_params.init_image_path.c_str());
             release_all_resources();
             return 1;
         }
@@ -516,7 +454,7 @@ int main(int argc, const char* argv[]) {
         int height     = 0;
         end_image.data = load_image_from_file(gen_params.end_image_path.c_str(), width, height, gen_params.width, gen_params.height);
         if (end_image.data == nullptr) {
-            fprintf(stderr, "load image from '%s' failed\n", gen_params.end_image_path.c_str());
+            LOG_ERROR("load image from '%s' failed", gen_params.end_image_path.c_str());
             release_all_resources();
             return 1;
         }
@@ -528,7 +466,7 @@ int main(int argc, const char* argv[]) {
         int height      = 0;
         mask_image.data = load_image_from_file(gen_params.mask_image_path.c_str(), width, height, gen_params.width, gen_params.height, 1);
         if (mask_image.data == nullptr) {
-            fprintf(stderr, "load image from '%s' failed\n", gen_params.mask_image_path.c_str());
+            LOG_ERROR("load image from '%s' failed", gen_params.mask_image_path.c_str());
             release_all_resources();
             return 1;
         }
@@ -536,7 +474,7 @@ int main(int argc, const char* argv[]) {
         mask_image.data = (uint8_t*)malloc(gen_params.width * gen_params.height);
         memset(mask_image.data, 255, gen_params.width * gen_params.height);
         if (mask_image.data == nullptr) {
-            fprintf(stderr, "malloc mask image failed\n");
+            LOG_ERROR("malloc mask image failed");
             release_all_resources();
             return 1;
         }
@@ -547,7 +485,7 @@ int main(int argc, const char* argv[]) {
         int height         = 0;
         control_image.data = load_image_from_file(gen_params.control_image_path.c_str(), width, height, gen_params.width, gen_params.height);
         if (control_image.data == nullptr) {
-            fprintf(stderr, "load image from '%s' failed\n", gen_params.control_image_path.c_str());
+            LOG_ERROR("load image from '%s' failed", gen_params.control_image_path.c_str());
             release_all_resources();
             return 1;
         }
@@ -568,7 +506,7 @@ int main(int argc, const char* argv[]) {
             int height            = 0;
             uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height);
             if (image_buffer == nullptr) {
-                fprintf(stderr, "load image from '%s' failed\n", path.c_str());
+                LOG_ERROR("load image from '%s' failed", path.c_str());
                 release_all_resources();
                 return 1;
             }
@@ -616,7 +554,7 @@ int main(int argc, const char* argv[]) {
         num_results = 1;
         results     = (sd_image_t*)calloc(num_results, sizeof(sd_image_t));
         if (results == nullptr) {
-            printf("failed to allocate results array\n");
+            LOG_INFO("failed to allocate results array");
             release_all_resources();
             return 1;
         }
@@ -627,7 +565,7 @@ int main(int argc, const char* argv[]) {
         sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
 
         if (sd_ctx == nullptr) {
-            printf("new_sd_ctx_t failed\n");
+            LOG_INFO("new_sd_ctx_t failed");
             release_all_resources();
             return 1;
         }
@@ -641,7 +579,7 @@ int main(int argc, const char* argv[]) {
         }
 
         if (gen_params.sample_params.scheduler == SCHEDULER_COUNT) {
-            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx);
+            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx, gen_params.sample_params.sample_method);
         }
 
         if (cli_params.mode == IMG_GEN) {
@@ -704,7 +642,7 @@ int main(int argc, const char* argv[]) {
         }
 
         if (results == nullptr) {
-            printf("generate failed\n");
+            LOG_ERROR("generate failed");
             free_sd_ctx(sd_ctx);
             return 1;
         }
@@ -721,7 +659,7 @@ int main(int argc, const char* argv[]) {
                                                         gen_params.upscale_tile_size);
 
         if (upscaler_ctx == nullptr) {
-            printf("new_upscaler_ctx failed\n");
+            LOG_ERROR("new_upscaler_ctx failed");
         } else {
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr) {
@@ -731,7 +669,7 @@ int main(int argc, const char* argv[]) {
                 for (int u = 0; u < gen_params.upscale_repeats; ++u) {
                     sd_image_t upscaled_image = upscale(upscaler_ctx, current_image, upscale_factor);
                     if (upscaled_image.data == nullptr) {
-                        printf("upscale failed\n");
+                        LOG_ERROR("upscale failed");
                         break;
                     }
                     free(current_image.data);
@@ -749,8 +687,8 @@ int main(int argc, const char* argv[]) {
             std::error_code ec;
             fs::create_directories(out_dir, ec);  // OK if already exists
             if (ec) {
-                fprintf(stderr, "failed to create directory '%s': %s\n",
-                        out_dir.string().c_str(), ec.message().c_str());
+                LOG_ERROR("failed to create directory '%s': %s",
+                          out_dir.string().c_str(), ec.message().c_str());
                 return 1;
             }
         }
@@ -780,7 +718,7 @@ int main(int argc, const char* argv[]) {
             vid_output_path = base_path + ".avi";
         }
         create_mjpg_avi_from_sd_images(vid_output_path.c_str(), results, num_results, gen_params.fps);
-        printf("save result MJPG AVI video to '%s'\n", vid_output_path.c_str());
+        LOG_INFO("save result MJPG AVI video to '%s'\n", vid_output_path.c_str());
     } else {
         // appending ".png" to absent or unknown extension
         if (!is_jpg && file_ext_lower != ".png") {
@@ -796,11 +734,11 @@ int main(int argc, const char* argv[]) {
             if (is_jpg) {
                 write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                                           results[i].data, 90, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
-                printf("save result JPEG image to '%s' (%s)\n", final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
+                LOG_INFO("save result JPEG image to '%s' (%s)", final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
             } else {
                 write_ok = stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                                           results[i].data, 0, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
-                printf("save result PNG image to '%s' (%s)\n", final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
+                LOG_INFO("save result PNG image to '%s' (%s)", final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
             }
         }
     }
