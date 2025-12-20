@@ -20,17 +20,21 @@ namespace fs = std::filesystem;
 
 #include "stable-diffusion.h"
 
-// #define STB_IMAGE_IMPLEMENTATION
-//#define STB_IMAGE_STATIC
+namespace { // kcpp
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
 #include "stb_image.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-//#define STB_IMAGE_WRITE_STATIC
+#define STB_IMAGE_WRITE_STATIC
 #include "stb_image_write.h"
 
-// #define STB_IMAGE_RESIZE_IMPLEMENTATION
-//#define STB_IMAGE_RESIZE_STATIC
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#define STB_IMAGE_RESIZE_STATIC
 #include "stb_image_resize.h"
+
+}
 
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
