@@ -744,6 +744,8 @@ namespace Flux {
         int64_t nerf_mlp_ratio   = 4;
         int64_t nerf_depth       = 4;
         int64_t nerf_max_freqs   = 8;
+        bool use_x0              = false;
+        bool use_patch_size_32   = false;
     };
 
     struct FluxParams {
@@ -781,7 +783,7 @@ namespace Flux {
         Flux(FluxParams params)
             : params(params) {
             if (params.version == VERSION_CHROMA_RADIANCE) {
-                std::pair<int, int> kernel_size = {(int)params.patch_size, (int)params.patch_size};
+                std::pair<int, int> kernel_size = {16, 16};
                 std::pair<int, int> stride      = kernel_size;
 
                 blocks["img_in_patch"] = std::make_shared<Conv2d>(params.in_channels,
@@ -1044,6 +1046,15 @@ namespace Flux {
             return img;
         }
 
+        struct ggml_tensor* _apply_x0_residual(GGMLRunnerContext* ctx,
+                                               struct ggml_tensor* predicted,
+                                               struct ggml_tensor* noisy,
+                                               struct ggml_tensor* timesteps) {
+            auto x = ggml_sub(ctx->ggml_ctx, noisy, predicted);
+            x      = ggml_div(ctx->ggml_ctx, x, timesteps);
+            return x;
+        }
+
         struct ggml_tensor* forward_chroma_radiance(GGMLRunnerContext* ctx,
                                                     struct ggml_tensor* x,
                                                     struct ggml_tensor* timestep,
@@ -1067,6 +1078,13 @@ namespace Flux {
 
             auto img      = pad_to_patch_size(ctx->ggml_ctx, x);
             auto orig_img = img;
+
+            if (params.chroma_radiance_params.use_patch_size_32) {
+                // It's supposed to be using GGML_SCALE_MODE_NEAREST, but this seems more stable
+                // Maybe the implementation of nearest-neighbor interpolation in ggml behaves differently than the one in PyTorch?
+                // img = F.interpolate(img, size=(H//2, W//2), mode="nearest")
+                img = ggml_interpolate(ctx->ggml_ctx, img, W / 2, H / 2, C, x->ne[3], GGML_SCALE_MODE_BILINEAR);
+            }
 
             auto img_in_patch = std::dynamic_pointer_cast<Conv2d>(blocks["img_in_patch"]);
 
@@ -1103,6 +1121,10 @@ namespace Flux {
             img_dct = unpatchify(ctx->ggml_ctx, img_dct, (H + pad_h) / patch_size, (W + pad_w) / patch_size);                               // [N, nerf_hidden_size, H, W]
 
             out = nerf_final_layer_conv->forward(ctx, img_dct);  // [N, C, H, W]
+
+            if (params.chroma_radiance_params.use_x0) {
+                out = _apply_x0_residual(ctx, out, orig_img, timestep);
+            }
 
             return out;
         }
@@ -1289,6 +1311,15 @@ namespace Flux {
                 if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
                     // not schnell
                     flux_params.guidance_embed = true;
+                }
+                if (tensor_name.find("__x0__") != std::string::npos) {
+                    LOG_DEBUG("using x0 prediction");
+                    flux_params.chroma_radiance_params.use_x0 = true;
+                }
+                if (tensor_name.find("__32x32__") != std::string::npos) {
+                    LOG_DEBUG("using patch size 32 prediction");
+                    flux_params.chroma_radiance_params.use_patch_size_32 = true;
+                    flux_params.patch_size                               = 32;
                 }
                 if (tensor_name.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
                     // Chroma

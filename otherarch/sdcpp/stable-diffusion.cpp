@@ -836,6 +836,8 @@ public:
         if (stacked_id) {
             ignore_tensors.insert("pmid.unet.");
         }
+        ignore_tensors.insert("model.diffusion_model.__x0__");
+        ignore_tensors.insert("model.diffusion_model.__32x32__");
 
         if (vae_decode_only) {
             ignore_tensors.insert("first_stage_model.encoder");
@@ -970,6 +972,7 @@ public:
                     }
                 } else if (sd_version_is_flux(version)) {
                     pred_type = FLUX_FLOW_PRED;
+
                     if (flow_shift == INFINITY) {
                         flow_shift = 1.0f;  // TODO: validate
                         for (const auto& [name, tensor_storage] : tensor_storage_map) {
@@ -1625,6 +1628,17 @@ public:
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
+        if (cfg_scale < 1.f) {
+            if (cfg_scale == 0.f) {
+                // Diffusers follow the convention from the original paper
+                // (https://arxiv.org/abs/2207.12598v1), so many distilled model docs
+                // recommend 0 as guidance; warn the user that it'll disable prompt folowing
+                LOG_WARN("unconditioned mode, images won't follow the prompt (use cfg-scale=1 for distilled models)");
+            } else {
+                LOG_WARN("cfg value out of expected range may produce unexpected results");
+            }
+        }
+
         float img_cfg_scale = std::isfinite(guidance.img_cfg) ? guidance.img_cfg : guidance.txt_cfg;
         float slg_scale     = guidance.slg.scale;
 
