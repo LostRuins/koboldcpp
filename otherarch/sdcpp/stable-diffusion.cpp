@@ -416,6 +416,14 @@ public:
             {
                 to_replace = "taesd_3.embd";
             }
+            else if(version == VERSION_WAN2_2_TI2V)
+            {
+                to_replace = "taesd_w22.embd";
+            }
+            else if(sd_version_is_wan(version)||sd_version_is_qwen_image(version))
+            {
+                to_replace = "taesd_w21.embd";
+            }
 
             if(to_replace!="")
             {
@@ -427,6 +435,12 @@ public:
             else
             {
                 printf("\nCannot use TAESD: Unknown version %d. TAESD Disabled!\n",version);
+                taesd_path_fixed = "";
+                use_tiny_autoencoder = false;
+            }
+            if (use_tiny_autoencoder && !file_exists(taesd_path_fixed))
+            {
+                printf("\nCannot use TAESD: \"%s\" not found. TAESD Disabled!\n", taesd_path_fixed);
                 taesd_path_fixed = "";
                 use_tiny_autoencoder = false;
             }
