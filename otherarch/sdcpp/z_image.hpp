@@ -324,14 +324,14 @@ namespace ZImage {
             blocks["final_layer"] = std::make_shared<FinalLayer>(z_image_params.hidden_size, z_image_params.patch_size, z_image_params.out_channels);
         }
 
-        struct ggml_tensor* pad_to_patch_size(struct ggml_context* ctx,
+        struct ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
                                               struct ggml_tensor* x) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
 
             int pad_h = (z_image_params.patch_size - H % z_image_params.patch_size) % z_image_params.patch_size;
             int pad_w = (z_image_params.patch_size - W % z_image_params.patch_size) % z_image_params.patch_size;
-            x         = ggml_pad(ctx, x, pad_w, pad_h, 0, 0);  // [N, C, H + pad_h, W + pad_w]
+            x         = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
             return x;
         }
 
@@ -357,10 +357,10 @@ namespace ZImage {
             return x;
         }
 
-        struct ggml_tensor* process_img(struct ggml_context* ctx,
+        struct ggml_tensor* process_img(GGMLRunnerContext* ctx,
                                         struct ggml_tensor* x) {
             x = pad_to_patch_size(ctx, x);
-            x = patchify(ctx, x);
+            x = patchify(ctx->ggml_ctx, x);
             return x;
         }
 
@@ -473,12 +473,12 @@ namespace ZImage {
             int64_t C = x->ne[2];
             int64_t N = x->ne[3];
 
-            auto img             = process_img(ctx->ggml_ctx, x);
+            auto img             = process_img(ctx, x);
             uint64_t n_img_token = img->ne[1];
 
             if (ref_latents.size() > 0) {
                 for (ggml_tensor* ref : ref_latents) {
-                    ref = process_img(ctx->ggml_ctx, ref);
+                    ref = process_img(ctx, ref);
                     img = ggml_concat(ctx->ggml_ctx, img, ref, 1);
                 }
             }
@@ -552,6 +552,8 @@ namespace ZImage {
                                                ref_latents,
                                                increase_ref_index,
                                                z_image_params.theta,
+                                               circular_y_enabled,
+                                               circular_x_enabled,
                                                z_image_params.axes_dim);
             int pos_len = pe_vec.size() / z_image_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);

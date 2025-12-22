@@ -37,8 +37,9 @@ struct DiffusionModel {
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) = 0;
     virtual size_t get_params_buffer_size()                                             = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter){};
-    virtual int64_t get_adm_in_channels()             = 0;
-    virtual void set_flash_attn_enabled(bool enabled) = 0;
+    virtual int64_t get_adm_in_channels()                            = 0;
+    virtual void set_flash_attn_enabled(bool enabled)                = 0;
+    virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
 };
 
 struct UNetModel : public DiffusionModel {
@@ -85,6 +86,10 @@ struct UNetModel : public DiffusionModel {
 
     void set_flash_attn_enabled(bool enabled) {
         unet.set_flash_attention_enabled(enabled);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        unet.set_circular_axes(circular_x, circular_y);
     }
 
     bool compute(int n_threads,
@@ -148,6 +153,10 @@ struct MMDiTModel : public DiffusionModel {
         mmdit.set_flash_attention_enabled(enabled);
     }
 
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        mmdit.set_circular_axes(circular_x, circular_y);
+    }
+
     bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
@@ -208,6 +217,10 @@ struct FluxModel : public DiffusionModel {
 
     void set_flash_attn_enabled(bool enabled) {
         flux.set_flash_attention_enabled(enabled);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        flux.set_circular_axes(circular_x, circular_y);
     }
 
     bool compute(int n_threads,
@@ -277,6 +290,10 @@ struct WanModel : public DiffusionModel {
         wan.set_flash_attention_enabled(enabled);
     }
 
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        wan.set_circular_axes(circular_x, circular_y);
+    }
+
     bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
@@ -343,6 +360,10 @@ struct QwenImageModel : public DiffusionModel {
         qwen_image.set_flash_attention_enabled(enabled);
     }
 
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        qwen_image.set_circular_axes(circular_x, circular_y);
+    }
+
     bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
@@ -404,6 +425,10 @@ struct ZImageModel : public DiffusionModel {
 
     void set_flash_attn_enabled(bool enabled) {
         z_image.set_flash_attention_enabled(enabled);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        z_image.set_circular_axes(circular_x, circular_y);
     }
 
     bool compute(int n_threads,

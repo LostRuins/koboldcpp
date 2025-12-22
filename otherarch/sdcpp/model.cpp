@@ -1837,7 +1837,12 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     return mem_size;
 }
 
-bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* tensor_type_rules) {
+bool convert(const char* input_path,
+             const char* vae_path,
+             const char* output_path,
+             sd_type_t output_type,
+             const char* tensor_type_rules,
+             bool convert_name) {
     ModelLoader model_loader;
 
     if (!model_loader.init_from_file(input_path)) {
@@ -1851,7 +1856,9 @@ bool convert(const char* input_path, const char* vae_path, const char* output_pa
             return false;
         }
     }
-    model_loader.convert_tensors_name();
+    if (convert_name) {
+        model_loader.convert_tensors_name();
+    }
     bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, tensor_type_rules);
     return success;
 }

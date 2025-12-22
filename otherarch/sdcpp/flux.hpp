@@ -860,14 +860,14 @@ namespace Flux {
             }
         }
 
-        struct ggml_tensor* pad_to_patch_size(struct ggml_context* ctx,
+        struct ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
                                               struct ggml_tensor* x) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
 
             int pad_h = (params.patch_size - H % params.patch_size) % params.patch_size;
             int pad_w = (params.patch_size - W % params.patch_size) % params.patch_size;
-            x         = ggml_pad(ctx, x, pad_w, pad_h, 0, 0);  // [N, C, H + pad_h, W + pad_w]
+            x         = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
             return x;
         }
 
@@ -893,11 +893,11 @@ namespace Flux {
             return x;
         }
 
-        struct ggml_tensor* process_img(struct ggml_context* ctx,
+        struct ggml_tensor* process_img(GGMLRunnerContext* ctx,
                                         struct ggml_tensor* x) {
             // img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch_size, pw=patch_size)
             x = pad_to_patch_size(ctx, x);
-            x = patchify(ctx, x);
+            x = patchify(ctx->ggml_ctx, x);
             return x;
         }
 
@@ -1076,7 +1076,7 @@ namespace Flux {
             int pad_h          = (patch_size - H % patch_size) % patch_size;
             int pad_w          = (patch_size - W % patch_size) % patch_size;
 
-            auto img      = pad_to_patch_size(ctx->ggml_ctx, x);
+            auto img      = pad_to_patch_size(ctx, x);
             auto orig_img = img;
 
             if (params.chroma_radiance_params.use_patch_size_32) {
@@ -1150,7 +1150,7 @@ namespace Flux {
             int pad_h          = (patch_size - H % patch_size) % patch_size;
             int pad_w          = (patch_size - W % patch_size) % patch_size;
 
-            auto img            = process_img(ctx->ggml_ctx, x);
+            auto img            = process_img(ctx, x);
             uint64_t img_tokens = img->ne[1];
 
             if (params.version == VERSION_FLUX_FILL) {
@@ -1158,8 +1158,8 @@ namespace Flux {
                 ggml_tensor* masked = ggml_view_4d(ctx->ggml_ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], 0);
                 ggml_tensor* mask   = ggml_view_4d(ctx->ggml_ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 8 * 8, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
 
-                masked = process_img(ctx->ggml_ctx, masked);
-                mask   = process_img(ctx->ggml_ctx, mask);
+                masked = process_img(ctx, masked);
+                mask   = process_img(ctx, mask);
 
                 img = ggml_concat(ctx->ggml_ctx, img, ggml_concat(ctx->ggml_ctx, masked, mask, 0), 0);
             } else if (params.version == VERSION_FLEX_2) {
@@ -1168,21 +1168,21 @@ namespace Flux {
                 ggml_tensor* mask    = ggml_view_4d(ctx->ggml_ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 1, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
                 ggml_tensor* control = ggml_view_4d(ctx->ggml_ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * (C + 1));
 
-                masked  = process_img(ctx->ggml_ctx, masked);
-                mask    = process_img(ctx->ggml_ctx, mask);
-                control = process_img(ctx->ggml_ctx, control);
+                masked  = process_img(ctx, masked);
+                mask    = process_img(ctx, mask);
+                control = process_img(ctx, control);
 
                 img = ggml_concat(ctx->ggml_ctx, img, ggml_concat(ctx->ggml_ctx, ggml_concat(ctx->ggml_ctx, masked, mask, 0), control, 0), 0);
             } else if (params.version == VERSION_FLUX_CONTROLS) {
                 GGML_ASSERT(c_concat != nullptr);
 
-                auto control = process_img(ctx->ggml_ctx, c_concat);
+                auto control = process_img(ctx, c_concat);
                 img          = ggml_concat(ctx->ggml_ctx, img, control, 0);
             }
 
             if (ref_latents.size() > 0) {
                 for (ggml_tensor* ref : ref_latents) {
-                    ref = process_img(ctx->ggml_ctx, ref);
+                    ref = process_img(ctx, ref);
                     img = ggml_concat(ctx->ggml_ctx, img, ref, 1);
                 }
             }
@@ -1472,6 +1472,8 @@ namespace Flux {
                                             increase_ref_index,
                                             flux_params.ref_index_scale,
                                             flux_params.theta,
+                                            circular_y_enabled,
+                                            circular_x_enabled,
                                             flux_params.axes_dim);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);

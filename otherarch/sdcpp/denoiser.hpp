@@ -366,18 +366,18 @@ struct KLOptimalScheduler : SigmaScheduler {
 
         for (uint32_t i = 0; i < n; ++i) {
             // t goes from 0.0 to 1.0
-            float t = static_cast<float>(i) / static_cast<float>(n-1);
+            float t = static_cast<float>(i) / static_cast<float>(n - 1);
 
             // Interpolate in the angle domain
             float angle = t * alpha_min + (1.0f - t) * alpha_max;
 
             // Convert back to sigma
             sigmas.push_back(std::tan(angle));
-            }
+        }
 
         // Append the final zero to sigma
         sigmas.push_back(0.0f);
-    
+
         return sigmas;
     }
 };
