@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include <inttypes.h>
 #include <cinttypes>
 #include <algorithm>
@@ -1256,3 +1257,26 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     total_img_gens += 1;
     return output;
 }
+
+sd_info_outputs sdtype_get_info()
+{
+    using json = nlohmann::json;
+    json j;
+
+    auto available_schedulers = json::array();
+    available_schedulers.push_back("default");
+    for (int i = 0; i < scheduler_t::SCHEDULER_COUNT; i++) {
+        std::string name = sd_scheduler_name((scheduler_t)i);
+        if (name != "NONE") {
+            available_schedulers.push_back(name);
+        }
+    }
+    j["available_schedulers"] = available_schedulers;
+
+    static std::string recent_info = j.dump();
+    sd_info_outputs output;
+    output.status = 0;
+    output.data = recent_info.c_str();
+    return output;
+}
+

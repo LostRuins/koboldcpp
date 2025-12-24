@@ -223,6 +223,11 @@ struct sd_generation_outputs
     const char * data = "";
     const char * data_extra = "";
 };
+struct sd_info_outputs
+{
+    int status = -1;
+    const char * data = "";
+};
 
 struct whisper_load_model_inputs
 {

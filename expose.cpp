@@ -219,6 +219,10 @@ extern "C"
     {
         return sdtype_generate(inputs);
     }
+    sd_info_outputs sd_get_info()
+    {
+        return sdtype_get_info();
+    }
 
     bool whisper_load_model(const whisper_load_model_inputs inputs)
     {

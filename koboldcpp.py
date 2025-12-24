@@ -343,6 +343,10 @@ class sd_generation_outputs(ctypes.Structure):
                 ("data", ctypes.c_char_p),
                 ("data_extra", ctypes.c_char_p)]
 
+class sd_info_outputs(ctypes.Structure):
+    _fields_ = [("status", ctypes.c_int),
+                ("data", ctypes.c_char_p)]
+
 class whisper_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
@@ -624,6 +628,8 @@ def init_library():
     handle.sd_load_model.restype = ctypes.c_bool
     handle.sd_generate.argtypes = [sd_generation_inputs]
     handle.sd_generate.restype = sd_generation_outputs
+    handle.sd_get_info.argtypes = []
+    handle.sd_get_info.restype = sd_info_outputs
     handle.whisper_load_model.argtypes = [whisper_load_model_inputs]
     handle.whisper_load_model.restype = ctypes.c_bool
     handle.whisper_generate.argtypes = [whisper_generation_inputs]
@@ -1768,6 +1774,21 @@ def generate(genparams, stream_flag=False):
                 if sindex != -1 and trim_str!="":
                     outstr = outstr[:sindex]
         return {"text":outstr,"status":ret.status,"stopreason":ret.stopreason,"prompt_tokens":ret.prompt_tokens, "completion_tokens": ret.completion_tokens}
+
+def sd_get_info():
+    info = handle.sd_get_info()
+    if info.status == 0:
+        try:
+            return json.loads(info.data)
+        except Exception:
+            print("An error occurred while decoding sd metadata info")
+    else:
+        print("An error occurred while getting sd metadata info")
+    return {}
+
+def sd_get_available_schedulers():
+    info = sd_get_info()
+    return info.get('available_schedulers', [])
 
 sd_convdirect_choices = ['off', 'vaeonly', 'full']
 
@@ -3773,7 +3794,7 @@ Change Mode<br>
             if friendlysdmodelname=="inactive" or fullsdmodelpath=="":
                 response_body = (json.dumps([]).encode())
             else:
-                response_body = (json.dumps([{"name":name,"label":name} for name in ["default","discrete","karras","exponential","ays","gits","sgm_uniform","simple","smoothstep","kl_optimal","lcm"]]).encode())
+                response_body = (json.dumps([{"name":name,"label":name} for name in sd_get_available_schedulers()]).encode())
         elif clean_path.endswith('/sdapi/v1/latent-upscale-modes'):
            response_body = (json.dumps([]).encode())
         elif clean_path.endswith('/sdapi/v1/upscalers'):
