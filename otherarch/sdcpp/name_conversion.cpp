@@ -960,6 +960,7 @@ bool is_first_stage_model_name(const std::string& name) {
 std::string convert_tensor_name(std::string name, SDVersion version) {
     bool is_lora                             = false;
     bool is_lycoris_underline                = false;
+    bool is_underline                        = false;
     std::vector<std::string> lora_prefix_vec = {
         "lora.lora.",
         "lora.lora_",
@@ -967,12 +968,27 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         "lora.lycoris.",
         "lora.",
     };
+    std::vector<std::string> underline_lora_prefix_vec = {
+        "unet_",
+        "te_",
+        "te1_",
+        "te2_",
+        "te3_",
+        "vae_",
+    };
     for (const auto& prefix : lora_prefix_vec) {
         if (starts_with(name, prefix)) {
             is_lora = true;
             name    = name.substr(prefix.size());
             if (contains(prefix, "lycoris_")) {
                 is_lycoris_underline = true;
+            } else {
+                for (const auto& underline_lora_prefix : underline_lora_prefix_vec) {
+                    if (starts_with(name, underline_lora_prefix)) {
+                        is_underline = true;
+                        break;
+                    }
+                }
             }
             break;
         }
@@ -1034,7 +1050,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
         // LOG_DEBUG("name %s %d", name.c_str(), version);
 
-        if (sd_version_is_unet(version) || sd_version_is_flux(version) || is_lycoris_underline) {
+        if (sd_version_is_unet(version) || is_underline || is_lycoris_underline) {
             name = convert_sep_to_dot(name);
         }
 

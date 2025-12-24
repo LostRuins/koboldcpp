@@ -462,6 +462,8 @@ struct SDContextParams {
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
 
+    bool qwen_image_zero_cond_t = false;
+
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
@@ -630,6 +632,10 @@ struct SDContextParams {
              "--chroma-disable-dit-mask",
              "disable dit mask for chroma",
              false, &chroma_use_dit_mask},
+            {"",
+             "--qwen-image-zero-cond-t",
+             "enable zero_cond_t for qwen image",
+             true, &qwen_image_zero_cond_t},
             {"",
              "--chroma-enable-t5-mask",
              "enable t5 mask for chroma",
@@ -893,6 +899,7 @@ struct SDContextParams {
             << "  circular_x: " << (circular_x ? "true" : "false") << ",\n"
             << "  circular_y: " << (circular_y ? "true" : "false") << ",\n"
             << "  chroma_use_dit_mask: " << (chroma_use_dit_mask ? "true" : "false") << ",\n"
+            << "  qwen_image_zero_cond_t: " << (qwen_image_zero_cond_t ? "true" : "false") << ",\n"
             << "  chroma_use_t5_mask: " << (chroma_use_t5_mask ? "true" : "false") << ",\n"
             << "  chroma_t5_mask_pad: " << chroma_t5_mask_pad << ",\n"
             << "  prediction: " << sd_prediction_name(prediction) << ",\n"
@@ -958,6 +965,7 @@ struct SDContextParams {
             chroma_use_dit_mask,
             chroma_use_t5_mask,
             chroma_t5_mask_pad,
+            qwen_image_zero_cond_t,
             flow_shift,
         };
         return sd_ctx_params;

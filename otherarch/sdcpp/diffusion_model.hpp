@@ -320,8 +320,9 @@ struct QwenImageModel : public DiffusionModel {
                    bool offload_params_to_cpu,
                    const String2TensorStorage& tensor_storage_map = {},
                    const std::string prefix                       = "model.diffusion_model",
-                   SDVersion version                              = VERSION_QWEN_IMAGE)
-        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+                   SDVersion version                              = VERSION_QWEN_IMAGE,
+                   bool zero_cond_t                               = false)
+        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version, zero_cond_t) {
     }
 
     std::string get_desc() override {

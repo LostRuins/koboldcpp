@@ -233,14 +233,17 @@ namespace Flux {
     __STATIC_INLINE__ struct ggml_tensor* modulate(struct ggml_context* ctx,
                                                    struct ggml_tensor* x,
                                                    struct ggml_tensor* shift,
-                                                   struct ggml_tensor* scale) {
+                                                   struct ggml_tensor* scale,
+                                                   bool skip_reshape = false) {
         // x: [N, L, C]
         // scale: [N, C]
         // shift: [N, C]
-        scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
-        shift = ggml_reshape_3d(ctx, shift, shift->ne[0], 1, shift->ne[1]);  // [N, 1, C]
-        x     = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
-        x     = ggml_add(ctx, x, shift);
+        if (!skip_reshape) {
+            scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
+            shift = ggml_reshape_3d(ctx, shift, shift->ne[0], 1, shift->ne[1]);  // [N, 1, C]
+        }
+        x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+        x = ggml_add(ctx, x, shift);
         return x;
     }
 
