@@ -1033,7 +1033,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_pad(struct ggml_context* ctx,
                                                    int p3          = 0,
                                                    bool circular_x = false,
                                                    bool circular_y = false) {
-    return ggml_ext_pad_ext(ctx, x, p0, p0, p1, p1, p2, p2, p3, p3, circular_x, circular_y);
+    return ggml_ext_pad_ext(ctx, x, 0, p0, 0, p1, 0, p2, 0, p3, circular_x, circular_y);
 }
 
 // w: [OC，IC, KH, KW]
@@ -1062,7 +1062,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
     }
 
     if ((p0 != 0 || p1 != 0) && (circular_x || circular_y)) {
-        x  = ggml_ext_pad(ctx, x, p0, p1, 0, 0, circular_x, circular_y);
+        x  = ggml_ext_pad_ext(ctx, x, p0, p0, p1, p1, 0, 0, 0, 0, circular_x, circular_y);
         p0 = 0;
         p1 = 0;
     }
