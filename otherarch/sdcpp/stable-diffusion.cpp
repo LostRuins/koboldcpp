@@ -726,8 +726,8 @@ public:
                 vae_backend = backend;
             }
 
-            if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
-                if (!use_tiny_autoencoder) {
+            if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
+                if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
                     first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
                                                                             offload_params_to_cpu,
                                                                             tensor_storage_map,
@@ -736,57 +736,56 @@ public:
                                                                             version);
                     first_stage_model->alloc_params_buffer();
                     first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                } else if (version == VERSION_CHROMA_RADIANCE) {
+                    first_stage_model = std::make_shared<FakeVAE>(vae_backend,
+                                                                  offload_params_to_cpu);
                 } else {
+                    first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend,
+                                                                        offload_params_to_cpu,
+                                                                        tensor_storage_map,
+                                                                        "first_stage_model",
+                                                                        vae_decode_only,
+                                                                        false,
+                                                                        version);
+                    if (sd_ctx_params->vae_conv_direct) {
+                        LOG_INFO("Using Conv2d direct in the vae model");
+                        first_stage_model->set_conv2d_direct_enabled(true);
+                    }
+                    if (version == VERSION_SDXL &&
+                        (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
+                        float vae_conv_2d_scale = 1.f / 32.f;
+                        LOG_WARN(
+                            "No VAE specified with --vae or --force-sdxl-vae-conv-scale flag set, "
+                            "using Conv2D scale %.3f",
+                            vae_conv_2d_scale);
+                        first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
+                    }
+                    first_stage_model->alloc_params_buffer();
+                    first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                }
+            }
+
+            if (use_tiny_autoencoder) {
+                if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
                     tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(vae_backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map,
                                                                              "decoder",
                                                                              vae_decode_only,
                                                                              version);
-                    if (sd_ctx_params->vae_conv_direct) {
-                        LOG_INFO("Using Conv2d direct in the tae model");
-                        tae_first_stage->set_conv2d_direct_enabled(true);
-                    }
+                } else {
+                    tae_first_stage = std::make_shared<TinyImageAutoEncoder>(vae_backend,
+                                                                             offload_params_to_cpu,
+                                                                             tensor_storage_map,
+                                                                             "decoder.layers",
+                                                                             vae_decode_only,
+                                                                             version);
                 }
-            } else if (version == VERSION_CHROMA_RADIANCE) {
-                first_stage_model = std::make_shared<FakeVAE>(vae_backend,
-                                                              offload_params_to_cpu);
-            } else if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
-                first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend,
-                                                                    offload_params_to_cpu,
-                                                                    tensor_storage_map,
-                                                                    "first_stage_model",
-                                                                    vae_decode_only,
-                                                                    false,
-                                                                    version);
-                if (sd_ctx_params->vae_conv_direct) {
-                    LOG_INFO("Using Conv2d direct in the vae model");
-                    first_stage_model->set_conv2d_direct_enabled(true);
-                }
-                if (version == VERSION_SDXL &&
-                    (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
-                    float vae_conv_2d_scale = 1.f / 32.f;
-                    LOG_WARN(
-                        "No VAE specified with --vae or --force-sdxl-vae-conv-scale flag set, "
-                        "using Conv2D scale %.3f",
-                        vae_conv_2d_scale);
-                    first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
-                }
-                first_stage_model->alloc_params_buffer();
-                first_stage_model->get_param_tensors(tensors, "first_stage_model");
-            } else if (use_tiny_autoencoder) {
-                tae_first_stage = std::make_shared<TinyImageAutoEncoder>(vae_backend,
-                                                                         offload_params_to_cpu,
-                                                                         tensor_storage_map,
-                                                                         "decoder.layers",
-                                                                         vae_decode_only,
-                                                                         version);
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the tae model");
                     tae_first_stage->set_conv2d_direct_enabled(true);
                 }
             }
-            // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
 
             if (strlen(SAFE_STR(sd_ctx_params->control_net_path)) > 0) {
                 ggml_backend_t controlnet_backend = nullptr;
@@ -890,6 +889,7 @@ public:
         }
         ignore_tensors.insert("model.diffusion_model.__x0__");
         ignore_tensors.insert("model.diffusion_model.__32x32__");
+        ignore_tensors.insert("model.diffusion_model.__index_timestep_zero__");
 
         if (vae_decode_only) {
             ignore_tensors.insert("first_stage_model.encoder");

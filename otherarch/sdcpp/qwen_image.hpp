@@ -561,11 +561,13 @@ namespace Qwen {
             : GGMLRunner(backend, offload_params_to_cpu) {
             qwen_image_params.num_layers  = 0;
             qwen_image_params.zero_cond_t = zero_cond_t;
-            LOG_DEBUG("zero_cond_t: %d", zero_cond_t);
             for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find(prefix) == std::string::npos)
                     continue;
+                if (tensor_name.find("__index_timestep_zero__") != std::string::npos) {
+                    qwen_image_params.zero_cond_t = true;
+                }
                 size_t pos = tensor_name.find("transformer_blocks.");
                 if (pos != std::string::npos) {
                     tensor_name = tensor_name.substr(pos);  // remove prefix
@@ -580,6 +582,9 @@ namespace Qwen {
                 }
             }
             LOG_INFO("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
+            if (qwen_image_params.zero_cond_t) {
+                LOG_INFO("use zero_cond_t");
+            }
             qwen_image = QwenImageModel(qwen_image_params);
             qwen_image.init(params_ctx, tensor_storage_map, prefix);
         }
@@ -648,7 +653,7 @@ namespace Qwen {
                     modulate_index_vec.insert(modulate_index_vec.end(), num_ref_img_tokens, 1.f);
                 }
 
-                modulate_index       = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, modulate_index_vec.size());
+                modulate_index = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, modulate_index_vec.size());
                 set_backend_tensor_data(modulate_index, modulate_index_vec.data());
             }
 
