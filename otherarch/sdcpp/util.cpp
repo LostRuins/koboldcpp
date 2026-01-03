@@ -104,9 +104,71 @@ std::string sd_get_u8path(const std::string& file_path)
     return std::filesystem::u8path(file_path).string();
 }
 
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size, HANDLE hfile, HANDLE hmapping)
+        : MmapWrapper(data, size), hfile_(hfile), hmapping_(hmapping) {}
+
+    ~MmapWrapperImpl() override {
+        UnmapViewOfFile(data_);
+        CloseHandle(hmapping_);
+        CloseHandle(hfile_);
+    }
+
+private:
+    HANDLE hfile_;
+    HANDLE hmapping_;
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+    void* mapped_data = nullptr;
+    size_t file_size  = 0;
+
+    HANDLE file_handle = CreateFileA(
+        filename.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
+
+    if (file_handle == INVALID_HANDLE_VALUE) {
+        return nullptr;
+    }
+
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file_handle, &size)) {
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    file_size = static_cast<size_t>(size.QuadPart);
+
+    HANDLE mapping_handle = CreateFileMapping(file_handle, NULL, PAGE_READONLY, 0, 0, NULL);
+
+    if (mapping_handle == NULL) {
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
+
+    if (mapped_data == NULL) {
+        CloseHandle(mapping_handle);
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size, file_handle, mapping_handle);
+}
+
 #else  // Unix
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 bool file_exists(const std::string& filename) {
     struct stat buffer;
@@ -123,7 +185,63 @@ std::string sd_get_u8path(const std::string& file_path)
     return std::filesystem::path(file_path).string();
 }
 
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size)
+        : MmapWrapper(data, size) {}
+
+    ~MmapWrapperImpl() override {
+        munmap(data_, size_);
+    }
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+    int file_descriptor = open(filename.c_str(), O_RDONLY);
+    if (file_descriptor == -1) {
+        return nullptr;
+    }
+
+    int mmap_flags = MAP_PRIVATE;
+
+#ifdef __linux__
+    // performance flags used by llama.cpp
+    // posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+    // mmap_flags |= MAP_POPULATE;
 #endif
+
+    struct stat sb;
+    if (fstat(file_descriptor, &sb) == -1) {
+        close(file_descriptor);
+        return nullptr;
+    }
+
+    size_t file_size = sb.st_size;
+
+    void* mapped_data = mmap(NULL, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+
+    close(file_descriptor);
+
+    if (mapped_data == MAP_FAILED) {
+        return nullptr;
+    }
+
+#ifdef __linux__
+    // performance flags used by llama.cpp
+    // posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+#endif
+
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
+}
+
+#endif
+
+bool MmapWrapper::copy_data(void* buf, size_t n, size_t offset) const {
+    if (offset >= size_ || n > (size_ - offset)) {
+        return false;
+    }
+    std::memcpy(buf, data() + offset, n);
+    return true;
+}
 
 // get_num_physical_cores is copy from
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp

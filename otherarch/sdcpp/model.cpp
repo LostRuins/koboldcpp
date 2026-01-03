@@ -1393,7 +1393,7 @@ std::string ModelLoader::load_umt5_tokenizer_json() {
 #endif
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p) {
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {
     int64_t process_time_ms = 0;
     std::atomic<int64_t> read_time_ms(0);
     std::atomic<int64_t> memcpy_time_ms(0);
@@ -1443,6 +1443,15 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             }
         }
 
+        std::unique_ptr<MmapWrapper> mmapped;
+        if (enable_mmap && !is_zip) {
+            LOG_DEBUG("using mmap for I/O");
+            mmapped = MmapWrapper::create(file_path);
+            if (!mmapped) {
+                LOG_WARN("failed to memory-map '%s'", file_path.c_str());
+            }
+        }
+
         int n_threads = is_zip ? 1 : std::min(num_threads_to_use, (int)file_tensors.size());
         if (n_threads < 1) {
             n_threads = 1;
@@ -1464,8 +1473,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         failed = true;
                         return;
                     }
-                } else {
-                    // kcpp
+                } else if (!mmapped) {
                     file.open(sd_get_u8path(file_path), std::ios::binary);
                     if (!file.is_open()) {
                         LOG_ERROR("failed to open '%s'", file_path.c_str());
@@ -1518,6 +1526,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                                 zip_entry_noallocread(zip, (void*)buf, n);
                             }
                             zip_entry_close(zip);
+                        } else if (mmapped) {
+                            if (!mmapped->copy_data(buf, n, tensor_storage.offset)) {
+                                LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
+                                failed = true;
+                            }
                         } else {
                             file.seekg(tensor_storage.offset);
                             file.read(buf, n);
@@ -1642,7 +1655,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
 bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                                std::set<std::string> ignore_tensors,
-                               int n_threads) {
+                               int n_threads,
+                               bool enable_mmap) {
     std::set<std::string> tensor_names_in_file;
     std::mutex tensor_names_mutex;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
@@ -1685,7 +1699,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, n_threads);
+    bool success = load_tensors(on_new_tensor_cb, n_threads, enable_mmap);
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;

@@ -2,6 +2,7 @@
 #define __UTIL_H__
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,28 @@ sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image);
 sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int target_height);
 
 sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int target_height);
+
+class MmapWrapper {
+public:
+    static std::unique_ptr<MmapWrapper> create(const std::string& filename);
+
+    virtual ~MmapWrapper() = default;
+
+    MmapWrapper(const MmapWrapper&)            = delete;
+    MmapWrapper& operator=(const MmapWrapper&) = delete;
+    MmapWrapper(MmapWrapper&&)                 = delete;
+    MmapWrapper& operator=(MmapWrapper&&)      = delete;
+
+    const uint8_t* data() const { return static_cast<uint8_t*>(data_); }
+    size_t size() const { return size_; }
+    bool copy_data(void* buf, size_t n, size_t offset) const;
+
+protected:
+    MmapWrapper(void* data, size_t size)
+        : data_(data), size_(size) {}
+    void* data_  = nullptr;
+    size_t size_ = 0;
+};
 
 std::string path_join(const std::string& p1, const std::string& p2);
 std::vector<std::string> split_string(const std::string& str, char delimiter);
