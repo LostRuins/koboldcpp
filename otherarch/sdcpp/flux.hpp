@@ -263,7 +263,7 @@ namespace Flux {
                           bool use_yak_mlp      = false,
                           bool use_mlp_silu_act = false)
             : idx(idx), prune_mod(prune_mod) {
-            int64_t mlp_hidden_dim = hidden_size * mlp_ratio;
+            int64_t mlp_hidden_dim = static_cast<int64_t>(hidden_size * mlp_ratio);
 
             if (!prune_mod && !share_modulation) {
                 blocks["img_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
@@ -442,7 +442,7 @@ namespace Flux {
             if (scale <= 0.f) {
                 scale = 1 / sqrt((float)head_dim);
             }
-            mlp_hidden_dim  = hidden_size * mlp_ratio;
+            mlp_hidden_dim  = static_cast<int64_t>(hidden_size * mlp_ratio);
             mlp_mult_factor = 1;
             if (use_yak_mlp || use_mlp_silu_act) {
                 mlp_mult_factor = 2;
@@ -744,38 +744,38 @@ namespace Flux {
 
     struct ChromaRadianceParams {
         int64_t nerf_hidden_size = 64;
-        int64_t nerf_mlp_ratio   = 4;
-        int64_t nerf_depth       = 4;
-        int64_t nerf_max_freqs   = 8;
+        int nerf_mlp_ratio       = 4;
+        int nerf_depth           = 4;
+        int nerf_max_freqs       = 8;
         bool use_x0              = false;
         bool use_patch_size_32   = false;
     };
 
     struct FluxParams {
-        SDVersion version           = VERSION_FLUX;
-        bool is_chroma              = false;
-        int64_t patch_size          = 2;
-        int64_t in_channels         = 64;
-        int64_t out_channels        = 64;
-        int64_t vec_in_dim          = 768;
-        int64_t context_in_dim      = 4096;
-        int64_t hidden_size         = 3072;
-        float mlp_ratio             = 4.0f;
-        int64_t num_heads           = 24;
-        int64_t depth               = 19;
-        int64_t depth_single_blocks = 38;
-        std::vector<int> axes_dim   = {16, 56, 56};
-        int64_t axes_dim_sum        = 128;
-        int theta                   = 10000;
-        bool qkv_bias               = true;
-        bool guidance_embed         = true;
-        int64_t in_dim              = 64;
-        bool disable_bias           = false;
-        bool share_modulation       = false;
-        bool semantic_txt_norm      = false;
-        bool use_yak_mlp            = false;
-        bool use_mlp_silu_act       = false;
-        float ref_index_scale       = 1.f;
+        SDVersion version         = VERSION_FLUX;
+        bool is_chroma            = false;
+        int patch_size            = 2;
+        int64_t in_channels       = 64;
+        int64_t out_channels      = 64;
+        int64_t vec_in_dim        = 768;
+        int64_t context_in_dim    = 4096;
+        int64_t hidden_size       = 3072;
+        float mlp_ratio           = 4.0f;
+        int num_heads             = 24;
+        int depth                 = 19;
+        int depth_single_blocks   = 38;
+        std::vector<int> axes_dim = {16, 56, 56};
+        int axes_dim_sum          = 128;
+        int theta                 = 10000;
+        bool qkv_bias             = true;
+        bool guidance_embed       = true;
+        int64_t in_dim            = 64;
+        bool disable_bias         = false;
+        bool share_modulation     = false;
+        bool semantic_txt_norm    = false;
+        bool use_yak_mlp          = false;
+        bool use_mlp_silu_act     = false;
+        float ref_index_scale     = 1.f;
         ChromaRadianceParams chroma_radiance_params;
     };
 
@@ -969,7 +969,7 @@ namespace Flux {
                 vec = approx->forward(ctx, vec);                                               // [344, N, hidden_size]
 
                 if (y != nullptr) {
-                    txt_img_mask = ggml_pad(ctx->ggml_ctx, y, img->ne[1], 0, 0, 0);
+                    txt_img_mask = ggml_pad(ctx->ggml_ctx, y, static_cast<int>(img->ne[1]), 0, 0, 0);
                 }
             } else {
                 auto time_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
@@ -1072,12 +1072,12 @@ namespace Flux {
                                                     std::vector<int> skip_layers          = {}) {
             GGML_ASSERT(x->ne[3] == 1);
 
-            int64_t W          = x->ne[0];
-            int64_t H          = x->ne[1];
-            int64_t C          = x->ne[2];
-            int64_t patch_size = params.patch_size;
-            int pad_h          = (patch_size - H % patch_size) % patch_size;
-            int pad_w          = (patch_size - W % patch_size) % patch_size;
+            int64_t W      = x->ne[0];
+            int64_t H      = x->ne[1];
+            int64_t C      = x->ne[2];
+            int patch_size = params.patch_size;
+            int pad_h      = (patch_size - H % patch_size) % patch_size;
+            int pad_w      = (patch_size - W % patch_size) % patch_size;
 
             auto img      = pad_to_patch_size(ctx, x);
             auto orig_img = img;
@@ -1146,15 +1146,15 @@ namespace Flux {
                                                 std::vector<int> skip_layers          = {}) {
             GGML_ASSERT(x->ne[3] == 1);
 
-            int64_t W          = x->ne[0];
-            int64_t H          = x->ne[1];
-            int64_t C          = x->ne[2];
-            int64_t patch_size = params.patch_size;
-            int pad_h          = (patch_size - H % patch_size) % patch_size;
-            int pad_w          = (patch_size - W % patch_size) % patch_size;
+            int64_t W      = x->ne[0];
+            int64_t H      = x->ne[1];
+            int64_t C      = x->ne[2];
+            int patch_size = params.patch_size;
+            int pad_h      = (patch_size - H % patch_size) % patch_size;
+            int pad_w      = (patch_size - W % patch_size) % patch_size;
 
-            auto img            = process_img(ctx, x);
-            uint64_t img_tokens = img->ne[1];
+            auto img           = process_img(ctx, x);
+            int64_t img_tokens = img->ne[1];
 
             if (params.version == VERSION_FLUX_FILL) {
                 GGML_ASSERT(c_concat != nullptr);
@@ -1465,11 +1465,11 @@ namespace Flux {
                 txt_arange_dims = {1, 2};
             }
 
-            pe_vec      = Rope::gen_flux_pe(x->ne[1],
-                                            x->ne[0],
+            pe_vec      = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
+                                            static_cast<int>(x->ne[0]),
                                             flux_params.patch_size,
-                                            x->ne[3],
-                                            context->ne[1],
+                                            static_cast<int>(x->ne[3]),
+                                            static_cast<int>(context->ne[1]),
                                             txt_arange_dims,
                                             ref_latents,
                                             increase_ref_index,
@@ -1478,7 +1478,7 @@ namespace Flux {
                                             circular_y_enabled,
                                             circular_x_enabled,
                                             flux_params.axes_dim);
-            int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
+            int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
@@ -1487,10 +1487,10 @@ namespace Flux {
             set_backend_tensor_data(pe, pe_vec.data());
 
             if (version == VERSION_CHROMA_RADIANCE) {
-                int64_t patch_size     = flux_params.patch_size;
-                int64_t nerf_max_freqs = flux_params.chroma_radiance_params.nerf_max_freqs;
-                dct_vec                = fetch_dct_pos(patch_size, nerf_max_freqs);
-                dct                    = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, nerf_max_freqs * nerf_max_freqs, patch_size * patch_size);
+                int patch_size     = flux_params.patch_size;
+                int nerf_max_freqs = flux_params.chroma_radiance_params.nerf_max_freqs;
+                dct_vec            = fetch_dct_pos(patch_size, nerf_max_freqs);
+                dct                = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, nerf_max_freqs * nerf_max_freqs, patch_size * patch_size);
                 // dct->data = dct_vec.data();
                 // print_ggml_tensor(dct);
                 // dct->data = nullptr;
@@ -1577,12 +1577,12 @@ namespace Flux {
 
                 struct ggml_tensor* out = nullptr;
 
-                int t0 = ggml_time_ms();
+                int64_t t0 = ggml_time_ms();
                 compute(8, x, timesteps, context, nullptr, y, guidance, {}, false, &out, work_ctx);
-                int t1 = ggml_time_ms();
+                int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
-                LOG_DEBUG("flux test done in %dms", t1 - t0);
+                LOG_DEBUG("flux test done in %lldms", t1 - t0);
             }
         }
 

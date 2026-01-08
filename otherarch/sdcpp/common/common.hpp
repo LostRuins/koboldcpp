@@ -814,7 +814,7 @@ struct SDContextParams {
     }
 
     void build_embedding_map() {
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
 
         if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
             return;
@@ -1391,10 +1391,10 @@ struct SDGenerationParams {
                 if (!item.empty()) {
                     try {
                         custom_sigmas.push_back(std::stof(item));
-                    } catch (const std::invalid_argument& e) {
+                    } catch (const std::invalid_argument&) {
                         LOG_ERROR("error: invalid float value '%s' in --sigmas", item.c_str());
                         return -1;
-                    } catch (const std::out_of_range& e) {
+                    } catch (const std::out_of_range&) {
                         LOG_ERROR("error: float value '%s' out of range in --sigmas", item.c_str());
                         return -1;
                     }
@@ -1611,7 +1611,7 @@ struct SDGenerationParams {
             return;
         }
         static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
         std::smatch m;
 
         std::string tmp = prompt;

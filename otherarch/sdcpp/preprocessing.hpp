@@ -2,7 +2,7 @@
 #define __PREPROCESSING_HPP__
 
 #include "ggml_extend.hpp"
-#define M_PI_ 3.14159265358979323846
+#define M_PI_ 3.14159265358979323846f
 
 void convolve(struct ggml_tensor* input, struct ggml_tensor* output, struct ggml_tensor* kernel, int padding) {
     struct ggml_init_params params;
@@ -20,13 +20,13 @@ void convolve(struct ggml_tensor* input, struct ggml_tensor* output, struct ggml
 }
 
 void gaussian_kernel(struct ggml_tensor* kernel) {
-    int ks_mid   = kernel->ne[0] / 2;
+    int ks_mid   = static_cast<int>(kernel->ne[0] / 2);
     float sigma  = 1.4f;
     float normal = 1.f / (2.0f * M_PI_ * powf(sigma, 2.0f));
     for (int y = 0; y < kernel->ne[0]; y++) {
-        float gx = -ks_mid + y;
+        float gx = static_cast<float>(-ks_mid + y);
         for (int x = 0; x < kernel->ne[1]; x++) {
-            float gy = -ks_mid + x;
+            float gy = static_cast<float>(-ks_mid + x);
             float k_ = expf(-((gx * gx + gy * gy) / (2.0f * powf(sigma, 2.0f)))) * normal;
             ggml_ext_tensor_set_f32(kernel, k_, x, y);
         }
@@ -46,7 +46,7 @@ void grayscale(struct ggml_tensor* rgb_img, struct ggml_tensor* grayscale) {
 }
 
 void prop_hypot(struct ggml_tensor* x, struct ggml_tensor* y, struct ggml_tensor* h) {
-    int n_elements = ggml_nelements(h);
+    int n_elements = static_cast<int>(ggml_nelements(h));
     float* dx      = (float*)x->data;
     float* dy      = (float*)y->data;
     float* dh      = (float*)h->data;
@@ -56,7 +56,7 @@ void prop_hypot(struct ggml_tensor* x, struct ggml_tensor* y, struct ggml_tensor
 }
 
 void prop_arctan2(struct ggml_tensor* x, struct ggml_tensor* y, struct ggml_tensor* h) {
-    int n_elements = ggml_nelements(h);
+    int n_elements = static_cast<int>(ggml_nelements(h));
     float* dx      = (float*)x->data;
     float* dy      = (float*)y->data;
     float* dh      = (float*)h->data;
@@ -66,7 +66,7 @@ void prop_arctan2(struct ggml_tensor* x, struct ggml_tensor* y, struct ggml_tens
 }
 
 void normalize_tensor(struct ggml_tensor* g) {
-    int n_elements = ggml_nelements(g);
+    int n_elements = static_cast<int>(ggml_nelements(g));
     float* dg      = (float*)g->data;
     float max      = -INFINITY;
     for (int i = 0; i < n_elements; i++) {
@@ -118,7 +118,7 @@ void non_max_supression(struct ggml_tensor* result, struct ggml_tensor* G, struc
 }
 
 void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float low_threshold, float weak, float strong) {
-    int n_elements = ggml_nelements(img);
+    int n_elements = static_cast<int>(ggml_nelements(img));
     float* imd     = (float*)img->data;
     float max      = -INFINITY;
     for (int i = 0; i < n_elements; i++) {
@@ -209,8 +209,8 @@ bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold,
     non_max_supression(image_gray, G, tetha);
     threshold_hystersis(image_gray, high_threshold, low_threshold, weak, strong);
     // to RGB channels
-    for (int iy = 0; iy < img.height; iy++) {
-        for (int ix = 0; ix < img.width; ix++) {
+    for (uint32_t iy = 0; iy < img.height; iy++) {
+        for (uint32_t ix = 0; ix < img.width; ix++) {
             float gray = ggml_ext_tensor_get_f32(image_gray, ix, iy);
             gray       = inverse ? 1.0f - gray : gray;
             ggml_ext_tensor_set_f32(image, gray, ix, iy);

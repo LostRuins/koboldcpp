@@ -117,7 +117,7 @@ struct TaylorSeerState {
                 continue;
             if (o > 0)
                 factorial *= static_cast<float>(o);
-            float coeff = std::pow(static_cast<float>(elapsed), o) / factorial;
+            float coeff = ::powf(static_cast<float>(elapsed), static_cast<float>(o)) / factorial;
             for (size_t i = 0; i < size; i++) {
                 output[i] += coeff * dY_prev[o][i];
             }

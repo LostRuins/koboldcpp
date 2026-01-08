@@ -166,18 +166,18 @@ public:
     AE3DConv(int64_t in_channels,
              int64_t out_channels,
              std::pair<int, int> kernel_size,
-             int64_t video_kernel_size    = 3,
+             int video_kernel_size        = 3,
              std::pair<int, int> stride   = {1, 1},
              std::pair<int, int> padding  = {0, 0},
              std::pair<int, int> dilation = {1, 1},
              bool bias                    = true)
         : Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias) {
-        int64_t kernel_padding  = video_kernel_size / 2;
-        blocks["time_mix_conv"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_channels,
-                                                                             out_channels,
-                                                                             video_kernel_size,
-                                                                             1,
-                                                                             kernel_padding));
+        int kernel_padding      = video_kernel_size / 2;
+        blocks["time_mix_conv"] = std::shared_ptr<GGMLBlock>(new Conv3d(out_channels,
+                                                                        out_channels,
+                                                                        {video_kernel_size, 1, 1},
+                                                                        {1, 1, 1},
+                                                                        {kernel_padding, 0, 0}));
     }
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -186,7 +186,7 @@ public:
         // skip_video always False
         // x: [N, IC, IH, IW]
         // result: [N, OC, OH, OW]
-        auto time_mix_conv = std::dynamic_pointer_cast<Conv3dnx1x1>(blocks["time_mix_conv"]);
+        auto time_mix_conv = std::dynamic_pointer_cast<Conv3d>(blocks["time_mix_conv"]);
 
         x = Conv2d::forward(ctx, x);
         // timesteps = x.shape[0]
@@ -409,8 +409,8 @@ public:
           z_channels(z_channels),
           video_decoder(video_decoder),
           video_kernel_size(video_kernel_size) {
-        size_t num_resolutions = ch_mult.size();
-        int block_in           = ch * ch_mult[num_resolutions - 1];
+        int num_resolutions = static_cast<int>(ch_mult.size());
+        int block_in        = ch * ch_mult[num_resolutions - 1];
 
         blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, block_in, {3, 3}, {1, 1}, {1, 1}));
 
@@ -461,7 +461,7 @@ public:
         h = mid_block_2->forward(ctx, h);  // [N, block_in, h, w]
 
         // upsampling
-        size_t num_resolutions = ch_mult.size();
+        int num_resolutions = static_cast<int>(ch_mult.size());
         for (int i = num_resolutions - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
                 std::string name = "up." + std::to_string(i) + ".block." + std::to_string(j);
@@ -745,12 +745,12 @@ struct AutoEncoderKL : public VAE {
             print_ggml_tensor(x);
             struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             compute(8, x, false, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("encode test done in %dms", t1 - t0);
+            LOG_DEBUG("encode test done in %lldms", t1 - t0);
         }
 
         if (false) {
@@ -763,12 +763,12 @@ struct AutoEncoderKL : public VAE {
             print_ggml_tensor(z);
             struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             compute(8, z, true, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("decode test done in %dms", t1 - t0);
+            LOG_DEBUG("decode test done in %lldms", t1 - t0);
         }
     };
 };

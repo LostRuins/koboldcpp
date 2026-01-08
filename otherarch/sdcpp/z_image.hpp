@@ -239,7 +239,7 @@ namespace ZImage {
     };
 
     struct ZImageParams {
-        int64_t patch_size         = 2;
+        int patch_size             = 2;
         int64_t hidden_size        = 3840;
         int64_t in_channels        = 16;
         int64_t out_channels       = 16;
@@ -249,11 +249,11 @@ namespace ZImage {
         int64_t num_heads          = 30;
         int64_t num_kv_heads       = 30;
         int64_t multiple_of        = 256;
-        float ffn_dim_multiplier   = 8.0 / 3.0f;
+        float ffn_dim_multiplier   = 8.0f / 3.0f;
         float norm_eps             = 1e-5f;
         bool qk_norm               = true;
         int64_t cap_feat_dim       = 2560;
-        float theta                = 256.f;
+        int theta                  = 256;
         std::vector<int> axes_dim  = {32, 48, 48};
         int64_t axes_dim_sum       = 128;
     };
@@ -411,13 +411,13 @@ namespace ZImage {
             auto txt = cap_embedder_1->forward(ctx, cap_embedder_0->forward(ctx, context));  // [N, n_txt_token, hidden_size]
             auto img = x_embedder->forward(ctx, x);                                          // [N, n_img_token, hidden_size]
 
-            int64_t n_txt_pad_token = Rope::bound_mod(n_txt_token, SEQ_MULTI_OF);
+            int64_t n_txt_pad_token = Rope::bound_mod(static_cast<int>(n_txt_token), SEQ_MULTI_OF);
             if (n_txt_pad_token > 0) {
                 auto txt_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, txt_pad_token, txt_pad_token->ne[0], n_txt_pad_token, N, 1);
                 txt                 = ggml_concat(ctx->ggml_ctx, txt, txt_pad_tokens, 1);  // [N, n_txt_token + n_txt_pad_token, hidden_size]
             }
 
-            int64_t n_img_pad_token = Rope::bound_mod(n_img_token, SEQ_MULTI_OF);
+            int64_t n_img_pad_token = Rope::bound_mod(static_cast<int>(n_img_token), SEQ_MULTI_OF);
             if (n_img_pad_token > 0) {
                 auto img_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, img_pad_token, img_pad_token->ne[0], n_img_pad_token, N, 1);
                 img                 = ggml_concat(ctx->ggml_ctx, img, img_pad_tokens, 1);  // [N, n_img_token + n_img_pad_token, hidden_size]
@@ -543,11 +543,11 @@ namespace ZImage {
                 ref_latents[i] = to_backend(ref_latents[i]);
             }
 
-            pe_vec      = Rope::gen_z_image_pe(x->ne[1],
-                                               x->ne[0],
+            pe_vec      = Rope::gen_z_image_pe(static_cast<int>(x->ne[1]),
+                                               static_cast<int>(x->ne[0]),
                                                z_image_params.patch_size,
-                                               x->ne[3],
-                                               context->ne[1],
+                                               static_cast<int>(x->ne[3]),
+                                               static_cast<int>(context->ne[1]),
                                                SEQ_MULTI_OF,
                                                ref_latents,
                                                increase_ref_index,
@@ -555,7 +555,7 @@ namespace ZImage {
                                                circular_y_enabled,
                                                circular_x_enabled,
                                                z_image_params.axes_dim);
-            int pos_len = pe_vec.size() / z_image_params.axes_dim_sum / 2;
+            int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
@@ -619,12 +619,12 @@ namespace ZImage {
 
                 struct ggml_tensor* out = nullptr;
 
-                int t0 = ggml_time_ms();
+                int64_t t0 = ggml_time_ms();
                 compute(8, x, timesteps, context, {}, false, &out, work_ctx);
-                int t1 = ggml_time_ms();
+                int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
-                LOG_DEBUG("z_image test done in %dms", t1 - t0);
+                LOG_DEBUG("z_image test done in %lldms", t1 - t0);
             }
         }
 

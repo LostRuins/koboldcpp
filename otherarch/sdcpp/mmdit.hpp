@@ -97,12 +97,12 @@ public:
 struct TimestepEmbedder : public GGMLBlock {
     // Embeds scalar timesteps into vector representations.
 protected:
-    int64_t frequency_embedding_size;
+    int frequency_embedding_size;
 
 public:
     TimestepEmbedder(int64_t hidden_size,
-                     int64_t frequency_embedding_size = 256,
-                     int64_t out_channels             = 0)
+                     int frequency_embedding_size = 256,
+                     int64_t out_channels         = 0)
         : frequency_embedding_size(frequency_embedding_size) {
         if (out_channels <= 0) {
             out_channels = hidden_size;
@@ -167,11 +167,11 @@ public:
             blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
         }
         if (qk_norm == "rms") {
-            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6));
-            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6));
+            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6f));
+            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6f));
         } else if (qk_norm == "ln") {
-            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6));
-            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6));
+            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6f));
+            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6f));
         }
     }
 
@@ -623,7 +623,7 @@ struct MMDiT : public GGMLBlock {
     // Diffusion model with a Transformer backbone.
 protected:
     int64_t input_size               = -1;
-    int64_t patch_size               = 2;
+    int patch_size                   = 2;
     int64_t in_channels              = 16;
     int64_t d_self                   = -1;  // >=0 for MMdiT-X
     int64_t depth                    = 24;
@@ -943,12 +943,12 @@ struct MMDiTRunner : public GGMLRunner {
 
             struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             compute(8, x, timesteps, context, y, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("mmdit test done in %dms", t1 - t0);
+            LOG_DEBUG("mmdit test done in %lldms", t1 - t0);
         }
     }
 

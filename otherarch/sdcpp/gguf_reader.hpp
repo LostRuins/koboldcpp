@@ -151,7 +151,7 @@ private:
         }
 
         if (n_dims > GGML_MAX_DIMS) {
-            for (int i = GGML_MAX_DIMS; i < n_dims; i++) {
+            for (uint32_t i = GGML_MAX_DIMS; i < n_dims; i++) {
                 info.shape[GGML_MAX_DIMS - 1] *= info.shape[i];  // stack to last dim;
             }
             info.shape.resize(GGML_MAX_DIMS);

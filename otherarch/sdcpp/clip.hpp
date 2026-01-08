@@ -296,7 +296,7 @@ public:
                     size_t max_length = 0,
                     bool padding      = false) {
         if (max_length > 0 && padding) {
-            size_t n = std::ceil(tokens.size() * 1.0 / (max_length - 2));
+            size_t n = static_cast<size_t>(std::ceil(tokens.size() * 1.0 / (max_length - 2)));
             if (n == 0) {
                 n = 1;
             }
@@ -525,10 +525,10 @@ public:
 
 struct CLIPEncoder : public GGMLBlock {
 protected:
-    int64_t n_layer;
+    int n_layer;
 
 public:
-    CLIPEncoder(int64_t n_layer,
+    CLIPEncoder(int n_layer,
                 int64_t d_model,
                 int64_t n_head,
                 int64_t intermediate_size,
@@ -623,10 +623,10 @@ public:
 class CLIPVisionEmbeddings : public GGMLBlock {
 protected:
     int64_t embed_dim;
-    int64_t num_channels;
-    int64_t patch_size;
-    int64_t image_size;
-    int64_t num_patches;
+    int num_channels;
+    int patch_size;
+    int image_size;
+    int num_patches;
     int64_t num_positions;
 
     void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
@@ -641,9 +641,9 @@ protected:
 
 public:
     CLIPVisionEmbeddings(int64_t embed_dim,
-                         int64_t num_channels = 3,
-                         int64_t patch_size   = 14,
-                         int64_t image_size   = 224)
+                         int num_channels = 3,
+                         int patch_size   = 14,
+                         int image_size   = 224)
         : embed_dim(embed_dim),
           num_channels(num_channels),
           patch_size(patch_size),

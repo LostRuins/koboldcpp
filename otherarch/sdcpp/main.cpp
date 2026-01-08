@@ -757,6 +757,7 @@ int main(int argc, const char* argv[]) {
                 gen_params.seed,
                 gen_params.video_frames,
                 gen_params.vace_strength,
+                ctx_params.vae_tiling_params,
                 gen_params.cache_params,
             };
 

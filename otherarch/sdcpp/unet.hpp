@@ -12,7 +12,7 @@
 class SpatialVideoTransformer : public SpatialTransformer {
 protected:
     int64_t time_depth;
-    int64_t max_time_embed_period;
+    int max_time_embed_period;
 
 public:
     SpatialVideoTransformer(int64_t in_channels,
@@ -21,8 +21,8 @@ public:
                             int64_t depth,
                             int64_t context_dim,
                             bool use_linear,
-                            int64_t time_depth            = 1,
-                            int64_t max_time_embed_period = 10000)
+                            int64_t time_depth        = 1,
+                            int max_time_embed_period = 10000)
         : SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear),
           max_time_embed_period(max_time_embed_period) {
         // We will convert unet transformer linear to conv2d 1x1 when loading the weights, so use_linear is always False
@@ -112,9 +112,9 @@ public:
         x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
         x = ggml_reshape_3d(ctx->ggml_ctx, x, inner_dim, w * h, n);                // [N, h * w, inner_dim]
 
-        auto num_frames = ggml_arange(ctx->ggml_ctx, 0, timesteps, 1);
+        auto num_frames = ggml_arange(ctx->ggml_ctx, 0.f, static_cast<float>(timesteps), 1.f);
         // since b is 1, no need to do repeat
-        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, num_frames, in_channels, max_time_embed_period);  // [N, in_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, num_frames, static_cast<int>(in_channels), max_time_embed_period);  // [N, in_channels]
 
         auto emb = time_pos_embed_0->forward(ctx, t_emb);
         emb      = ggml_silu_inplace(ctx->ggml_ctx, emb);
@@ -526,7 +526,7 @@ public:
             auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[controls.size() - 1], control_strength);
             h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
         }
-        int control_offset = controls.size() - 2;
+        int control_offset = static_cast<int>(controls.size() - 2);
 
         // output_blocks
         int output_block_idx = 0;
@@ -615,7 +615,7 @@ struct UNetModelRunner : public GGMLRunner {
         struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
 
         if (num_video_frames == -1) {
-            num_video_frames = x->ne[3];
+            num_video_frames = static_cast<int>(x->ne[3]);
         }
 
         x         = to_backend(x);
@@ -700,12 +700,12 @@ struct UNetModelRunner : public GGMLRunner {
 
             struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             compute(8, x, timesteps, context, nullptr, y, num_video_frames, {}, 0.f, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("unet test done in %dms", t1 - t0);
+            LOG_DEBUG("unet test done in %lldms", t1 - t0);
         }
     }
 };

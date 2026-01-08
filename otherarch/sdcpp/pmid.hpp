@@ -72,7 +72,7 @@ struct PerceiverAttention : public GGMLBlock {
     int heads;     // = heads
 public:
     PerceiverAttention(int dim, int dim_h = 64, int h = 8)
-        : scale(powf(dim_h, -0.5)), dim_head(dim_h), heads(h) {
+        : scale(powf(static_cast<float>(dim_h), -0.5f)), dim_head(dim_h), heads(h) {
         int inner_dim    = dim_head * heads;
         blocks["norm1"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
         blocks["norm2"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));

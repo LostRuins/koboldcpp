@@ -96,7 +96,7 @@ protected:
 
         try {
             data = nlohmann::json::parse(json_str);
-        } catch (const nlohmann::json::parse_error& e) {
+        } catch (const nlohmann::json::parse_error&) {
             status_ = INVLIAD_JSON;
             return;
         }
@@ -168,9 +168,9 @@ protected:
             kMaxTrieResultsSize);
         trie_results_size_ = 0;
         for (const auto& p : *pieces) {
-            const int num_nodes = trie_->commonPrefixSearch(
+            const size_t num_nodes = trie_->commonPrefixSearch(
                 p.first.data(), results.data(), results.size(), p.first.size());
-            trie_results_size_ = std::max(trie_results_size_, num_nodes);
+            trie_results_size_ = std::max(trie_results_size_, static_cast<int>(num_nodes));
         }
 
         if (trie_results_size_ == 0)
@@ -268,7 +268,7 @@ protected:
                 -1;  // The starting position (in utf-8) of this node. The entire best
                      // path can be constructed by backtracking along this link.
         };
-        const int size        = normalized.size();
+        const int size        = static_cast<int>(normalized.size());
         const float unk_score = min_score() - kUnkPenalty;
         // The ends are exclusive.
         std::vector<BestPathNode> best_path_ends_at(size + 1);
@@ -281,7 +281,7 @@ protected:
                 best_path_ends_at[starts_at].best_path_score;
             bool has_single_node = false;
             const int mblen =
-                std::min<int>(OneCharLen(normalized.data() + starts_at),
+                std::min<int>(static_cast<int>(OneCharLen(normalized.data() + starts_at)),
                               size - starts_at);
             while (key_pos < size) {
                 const int ret =
@@ -302,7 +302,7 @@ protected:
                         score + best_path_score_till_here;
                     if (target_node.starts_at == -1 ||
                         candidate_best_path_score > target_node.best_path_score) {
-                        target_node.best_path_score = candidate_best_path_score;
+                        target_node.best_path_score = static_cast<float>(candidate_best_path_score);
                         target_node.starts_at       = starts_at;
                         target_node.id              = ret;
                     }
@@ -394,7 +394,7 @@ public:
                     bool padding      = false) {
         if (max_length > 0 && padding) {
             size_t orig_token_num = tokens.size() - 1;
-            size_t n              = std::ceil(orig_token_num * 1.0 / (max_length - 1));
+            size_t n              = static_cast<size_t>(std::ceil(orig_token_num * 1.0 / (max_length - 1)));
             if (n == 0) {
                 n = 1;
             }
@@ -608,7 +608,7 @@ public:
             }
         }
 
-        k = ggml_scale_inplace(ctx->ggml_ctx, k, sqrt(d_head));
+        k = ggml_scale_inplace(ctx->ggml_ctx, k, ::sqrtf(static_cast<float>(d_head)));
 
         x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
 
@@ -797,7 +797,7 @@ struct T5Runner : public GGMLRunner {
         input_ids      = to_backend(input_ids);
         attention_mask = to_backend(attention_mask);
 
-        relative_position_bucket_vec = compute_relative_position_bucket(input_ids->ne[0], input_ids->ne[0]);
+        relative_position_bucket_vec = compute_relative_position_bucket(static_cast<int>(input_ids->ne[0]), static_cast<int>(input_ids->ne[0]));
 
         // for (int i = 0; i < relative_position_bucket_vec.size(); i++) {
         //     if (i % 77 == 0) {
@@ -984,12 +984,12 @@ struct T5Embedder {
             auto attention_mask     = vector_to_ggml_tensor(work_ctx, masks);
             struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             model.compute(8, input_ids, attention_mask, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("t5 test done in %dms", t1 - t0);
+            LOG_DEBUG("t5 test done in %lldms", t1 - t0);
         }
     }
 

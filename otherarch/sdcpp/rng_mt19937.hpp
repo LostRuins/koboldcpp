@@ -90,7 +90,7 @@ class MT19937RNG : public RNG {
             float u1    = 1.0f - data[j];
             float u2    = data[j + 8];
             float r     = std::sqrt(-2.0f * std::log(u1));
-            float theta = 2.0f * 3.14159265358979323846 * u2;
+            float theta = 2.0f * 3.14159265358979323846f * u2;
             data[j]     = r * std::cos(theta) * std + mean;
             data[j + 8] = r * std::sin(theta) * std + mean;
         }

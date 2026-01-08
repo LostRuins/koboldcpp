@@ -98,10 +98,10 @@ static_assert(GGML_MAX_NAME >= 128, "GGML_MAX_NAME must be at least 128");
 __STATIC_INLINE__ struct ggml_tensor* ggml_ext_mul_n_mode(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, int mode = 0) {
     // reshape A
     // swap 0th and nth axis
-    a       = ggml_cont(ctx, ggml_permute(ctx, a, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0));
-    int ne1 = a->ne[1];
-    int ne2 = a->ne[2];
-    int ne3 = a->ne[3];
+    a           = ggml_cont(ctx, ggml_permute(ctx, a, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0));
+    int64_t ne1 = a->ne[1];
+    int64_t ne2 = a->ne[2];
+    int64_t ne3 = a->ne[3];
     // make 2D
     a = ggml_cont(ctx, ggml_reshape_2d(ctx, a, a->ne[0], (ne3 * ne2 * ne1)));
 
@@ -167,12 +167,12 @@ __STATIC_INLINE__ void ggml_ext_im_set_randn_f32(struct ggml_tensor* tensor, std
     }
 }
 
-__STATIC_INLINE__ void ggml_ext_tensor_set_f32(struct ggml_tensor* tensor, float value, int i0, int i1 = 0, int i2 = 0, int i3 = 0) {
+__STATIC_INLINE__ void ggml_ext_tensor_set_f32(struct ggml_tensor* tensor, float value, int64_t i0, int64_t i1 = 0, int64_t i2 = 0, int64_t i3 = 0) {
     GGML_ASSERT(tensor->nb[0] == sizeof(float));
     *(float*)((char*)(tensor->data) + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0]) = value;
 }
 
-__STATIC_INLINE__ float ggml_ext_tensor_get_f32(const ggml_tensor* tensor, int i0, int i1 = 0, int i2 = 0, int i3 = 0) {
+__STATIC_INLINE__ float ggml_ext_tensor_get_f32(const ggml_tensor* tensor, int64_t i0, int64_t i1 = 0, int64_t i2 = 0, int64_t i3 = 0) {
     if (tensor->buffer != nullptr) {
         float value;
         ggml_backend_tensor_get(tensor, &value, i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0], sizeof(float));
@@ -182,9 +182,9 @@ __STATIC_INLINE__ float ggml_ext_tensor_get_f32(const ggml_tensor* tensor, int i
     return *(float*)((char*)(tensor->data) + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0]);
 }
 
-__STATIC_INLINE__ int ggml_ext_tensor_get_i32(const ggml_tensor* tensor, int i0, int i1 = 0, int i2 = 0, int i3 = 0) {
+__STATIC_INLINE__ int ggml_ext_tensor_get_i32(const ggml_tensor* tensor, int64_t i0, int64_t i1 = 0, int64_t i2 = 0, int64_t i3 = 0) {
     if (tensor->buffer != nullptr) {
-        float value;
+        int value;
         ggml_backend_tensor_get(tensor, &value, i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0], sizeof(int));
         return value;
     }
@@ -192,12 +192,12 @@ __STATIC_INLINE__ int ggml_ext_tensor_get_i32(const ggml_tensor* tensor, int i0,
     return *(int*)((char*)(tensor->data) + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0]);
 }
 
-__STATIC_INLINE__ ggml_fp16_t ggml_ext_tensor_get_f16(const ggml_tensor* tensor, int i0, int i1 = 0, int i2 = 0, int i3 = 0) {
+__STATIC_INLINE__ ggml_fp16_t ggml_ext_tensor_get_f16(const ggml_tensor* tensor, int64_t i0, int64_t i1 = 0, int64_t i2 = 0, int64_t i3 = 0) {
     GGML_ASSERT(tensor->nb[0] == sizeof(ggml_fp16_t));
     return *(ggml_fp16_t*)((char*)(tensor->data) + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0]);
 }
 
-__STATIC_INLINE__ float sd_image_get_f32(sd_image_t image, int iw, int ih, int ic, bool scale = true) {
+__STATIC_INLINE__ float sd_image_get_f32(sd_image_t image, int64_t iw, int64_t ih, int64_t ic, bool scale = true) {
     float value = *(image.data + ih * image.width * image.channel + iw * image.channel + ic);
     if (scale) {
         value /= 255.f;
@@ -205,7 +205,7 @@ __STATIC_INLINE__ float sd_image_get_f32(sd_image_t image, int iw, int ih, int i
     return value;
 }
 
-__STATIC_INLINE__ float sd_image_get_f32(sd_image_f32_t image, int iw, int ih, int ic, bool scale = true) {
+__STATIC_INLINE__ float sd_image_get_f32(sd_image_f32_t image, int64_t iw, int64_t ih, int64_t ic, bool scale = true) {
     float value = *(image.data + ih * image.width * image.channel + iw * image.channel + ic);
     if (scale) {
         value /= 255.f;
@@ -450,8 +450,8 @@ __STATIC_INLINE__ void ggml_ext_tensor_apply_mask(struct ggml_tensor* image_data
     int64_t width    = output->ne[0];
     int64_t height   = output->ne[1];
     int64_t channels = output->ne[2];
-    float rescale_mx = mask->ne[0] / output->ne[0];
-    float rescale_my = mask->ne[1] / output->ne[1];
+    float rescale_mx = 1.f * mask->ne[0] / output->ne[0];
+    float rescale_my = 1.f * mask->ne[1] / output->ne[1];
     GGML_ASSERT(output->type == GGML_TYPE_F32);
     for (int ix = 0; ix < width; ix++) {
         for (int iy = 0; iy < height; iy++) {
@@ -685,7 +685,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_torch_permute(struct ggml_context
 
 __STATIC_INLINE__ struct ggml_tensor* ggml_ext_slice(struct ggml_context* ctx,
                                                      struct ggml_tensor* x,
-                                                     int64_t dim,
+                                                     int dim,
                                                      int64_t start,
                                                      int64_t end) {
     GGML_ASSERT(dim >= 0 && dim < 4);
@@ -785,7 +785,7 @@ __STATIC_INLINE__ void sd_tiling_calc_tiles(int& num_tiles_dim,
                                             int small_dim,
                                             int tile_size,
                                             const float tile_overlap_factor) {
-    int tile_overlap     = (tile_size * tile_overlap_factor);
+    int tile_overlap     = static_cast<int>(tile_size * tile_overlap_factor);
     int non_tile_overlap = tile_size - tile_overlap;
 
     num_tiles_dim     = (small_dim - tile_overlap) / non_tile_overlap;
@@ -1346,7 +1346,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
         // LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         bool can_use_flash_attn = true;
         if (can_use_flash_attn && L_k % 256 != 0) {
-            kv_pad = GGML_PAD(L_k, 256) - L_k;
+            kv_pad = GGML_PAD(L_k, 256) - static_cast<int>(L_k);
         }
 
         if (mask != nullptr) {
@@ -2361,53 +2361,6 @@ public:
     }
 };
 
-class Conv3dnx1x1 : public UnaryBlock {
-protected:
-    int64_t in_channels;
-    int64_t out_channels;
-    int64_t kernel_size;
-    int64_t stride;
-    int64_t padding;
-    int64_t dilation;
-    bool bias;
-
-    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
-        enum ggml_type wtype = GGML_TYPE_F16;
-        params["weight"]     = ggml_new_tensor_4d(ctx, wtype, 1, kernel_size, in_channels, out_channels);  // 5d => 4d
-        if (bias) {
-            enum ggml_type wtype = GGML_TYPE_F32;
-            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
-        }
-    }
-
-public:
-    Conv3dnx1x1(int64_t in_channels,
-                int64_t out_channels,
-                int64_t kernel_size,
-                int64_t stride   = 1,
-                int64_t padding  = 0,
-                int64_t dilation = 1,
-                bool bias        = true)
-        : in_channels(in_channels),
-          out_channels(out_channels),
-          kernel_size(kernel_size),
-          stride(stride),
-          padding(padding),
-          dilation(dilation),
-          bias(bias) {}
-
-    // x: [N, IC, ID, IH*IW]
-    // result: [N, OC, OD, OH*OW]
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
-        struct ggml_tensor* w = params["weight"];
-        struct ggml_tensor* b = nullptr;
-        if (bias) {
-            b = params["bias"];
-        }
-        return ggml_ext_conv_3d_nx1x1(ctx->ggml_ctx, x, w, b, stride, padding, dilation);
-    }
-};
-
 class Conv3d : public UnaryBlock {
 protected:
     int64_t in_channels;
@@ -2523,7 +2476,7 @@ public:
 
 class GroupNorm : public GGMLBlock {
 protected:
-    int64_t num_groups;
+    int num_groups;
     int64_t num_channels;
     float eps;
     bool affine;
@@ -2540,7 +2493,7 @@ protected:
     }
 
 public:
-    GroupNorm(int64_t num_groups,
+    GroupNorm(int num_groups,
               int64_t num_channels,
               float eps   = 1e-05f,
               bool affine = true)

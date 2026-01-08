@@ -303,11 +303,11 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 int class_token = clean_input_ids[class_token_index[0]];
                 class_idx       = tokens_acc + class_token_index[0];
                 std::vector<int> clean_input_ids_tmp;
-                for (uint32_t i = 0; i < class_token_index[0]; i++)
+                for (int i = 0; i < class_token_index[0]; i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                for (uint32_t i = 0; i < (pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs); i++)
+                for (int i = 0; i < (pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs); i++)
                     clean_input_ids_tmp.push_back(class_token);
-                for (uint32_t i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
+                for (int i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
                 clean_input_ids.clear();
                 clean_input_ids = clean_input_ids_tmp;
@@ -322,7 +322,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
         tokenizer.pad_tokens(tokens, weights, max_length, padding);
         int offset = pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs;
-        for (uint32_t i = 0; i < tokens.size(); i++) {
+        for (int i = 0; i < tokens.size(); i++) {
             // if (class_idx + 1 <= i && i < class_idx + 1 + 2*num_input_imgs) // photomaker V2 has num_tokens(=2)*num_input_imgs
             if (class_idx + 1 <= i && i < class_idx + 1 + offset)  // photomaker V2 has num_tokens(=2)*num_input_imgs
                                                                    // hardcode for now
@@ -1584,7 +1584,7 @@ struct T5CLIPEmbedder : public Conditioner {
                                         chunk_hidden_states->ne[0],
                                         ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
 
-        modify_mask_to_attend_padding(t5_attn_mask, ggml_nelements(t5_attn_mask), mask_pad);
+        modify_mask_to_attend_padding(t5_attn_mask, static_cast<int>(ggml_nelements(t5_attn_mask)), mask_pad);
 
         return {hidden_states, t5_attn_mask, nullptr};
     }
@@ -1723,8 +1723,8 @@ struct LLMEmbedder : public Conditioner {
                 double factor        = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
                 int height           = image.height;
                 int width            = image.width;
-                int h_bar            = static_cast<int>(std::round(height / factor)) * factor;
-                int w_bar            = static_cast<int>(std::round(width / factor)) * factor;
+                int h_bar            = static_cast<int>(std::round(height / factor) * factor);
+                int w_bar            = static_cast<int>(std::round(width / factor) * factor);
 
                 if (static_cast<double>(h_bar) * w_bar > max_pixels) {
                     double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
@@ -1752,7 +1752,7 @@ struct LLMEmbedder : public Conditioner {
                 ggml_tensor* image_embed = nullptr;
                 llm->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
                 image_embeds.emplace_back(image_embed_idx, image_embed);
-                image_embed_idx += 1 + image_embed->ne[1] + 6;
+                image_embed_idx += 1 + static_cast<int>(image_embed->ne[1]) + 6;
 
                 img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
                 int64_t num_image_tokens = image_embed->ne[1];
@@ -1799,9 +1799,9 @@ struct LLMEmbedder : public Conditioner {
 
             prompt = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
 
-            prompt_attn_range.first = prompt.size();
+            prompt_attn_range.first = static_cast<int>(prompt.size());
             prompt += conditioner_params.text;
-            prompt_attn_range.second = prompt.size();
+            prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "[/INST]";
         } else if (version == VERSION_OVIS_IMAGE) {

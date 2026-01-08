@@ -166,12 +166,12 @@ float sd_latent_rgb_bias[3] = {-0.017478f, -0.055834f, -0.105825f};
 void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size) {
     size_t buffer_head = 0;
 
-    uint32_t latent_width  = latents->ne[0];
-    uint32_t latent_height = latents->ne[1];
-    uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
+    uint32_t latent_width  = static_cast<uint32_t>(latents->ne[0]);
+    uint32_t latent_height = static_cast<uint32_t>(latents->ne[1]);
+    uint32_t dim           = static_cast<uint32_t>(latents->ne[ggml_n_dims(latents) - 1]);
     uint32_t frames        = 1;
     if (ggml_n_dims(latents) == 4) {
-        frames = latents->ne[2];
+        frames = static_cast<uint32_t>(latents->ne[2]);
     }
 
     uint32_t rgb_width  = latent_width * patch_size;
@@ -179,9 +179,9 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
 
     uint32_t unpatched_dim = dim / (patch_size * patch_size);
 
-    for (int k = 0; k < frames; k++) {
-        for (int rgb_x = 0; rgb_x < rgb_width; rgb_x++) {
-            for (int rgb_y = 0; rgb_y < rgb_height; rgb_y++) {
+    for (uint32_t k = 0; k < frames; k++) {
+        for (uint32_t rgb_x = 0; rgb_x < rgb_width; rgb_x++) {
+            for (uint32_t rgb_y = 0; rgb_y < rgb_height; rgb_y++) {
                 int latent_x = rgb_x / patch_size;
                 int latent_y = rgb_y / patch_size;
 
@@ -197,7 +197,7 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
 
                 float r = 0, g = 0, b = 0;
                 if (latent_rgb_proj != nullptr) {
-                    for (int d = 0; d < unpatched_dim; d++) {
+                    for (uint32_t d = 0; d < unpatched_dim; d++) {
                         float value = *(float*)((char*)latents->data + latent_id + (d * patch_size * patch_size + channel_offset) * latents->nb[ggml_n_dims(latents) - 1]);
                         r += value * latent_rgb_proj[d][0];
                         g += value * latent_rgb_proj[d][1];

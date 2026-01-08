@@ -177,9 +177,9 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
 
         // Write '00dc' chunk (video frame)
         fwrite("00dc", 4, 1, f);
-        write_u32_le(f, jpeg_data.size);
+        write_u32_le(f, (uint32_t)jpeg_data.size);
         index[i].offset = ftell(f) - 8;
-        index[i].size   = jpeg_data.size;
+        index[i].size   = (uint32_t)jpeg_data.size;
         fwrite(jpeg_data.buf, 1, jpeg_data.size, f);
 
         // Align to even byte size

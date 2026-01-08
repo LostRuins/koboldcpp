@@ -319,6 +319,7 @@ typedef struct {
     int64_t seed;
     int video_frames;
     float vace_strength;
+    sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
 } sd_vid_gen_params_t;
 
