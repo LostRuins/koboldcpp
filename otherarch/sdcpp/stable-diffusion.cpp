@@ -309,10 +309,11 @@ public:
         bool isqwenimg = (tempver==VERSION_QWEN_IMAGE);
         bool iszimg = (tempver==VERSION_Z_IMAGE);
         bool isflux2 = (tempver==VERSION_FLUX2);
+        bool isflux2k = (tempver==VERSION_FLUX2_KLEIN);
         bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
 
         //kcpp qol fallback: if qwen image, and they loaded the qwen2vl llm as t5 by mistake
-        if((isqwenimg||iszimg||isflux2||is_ovis) && t5_path_fixed!="")
+        if((isqwenimg||iszimg||isflux2||isflux2k||is_ovis) && t5_path_fixed!="")
         {
             if(clipl_path_fixed=="" && clipg_path_fixed=="")
             {
@@ -344,7 +345,7 @@ public:
                 prefix = "cond_stage_model.transformer.";
                 LOG_INFO("swap clip_vision from '%s'", clipl_path_fixed.c_str());
             }
-            if(isqwenimg||iszimg||isflux2||is_ovis)
+            if(isqwenimg||iszimg||isflux2||isflux2k||is_ovis)
             {
                 prefix = "text_encoders.llm.";
                 LOG_INFO("swap llm from '%s'", clipl_path_fixed.c_str());
