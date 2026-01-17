@@ -127,8 +127,6 @@ public:
             q = q_proj->forward(ctx, h_);  // [N, h * w, in_channels]
             k = k_proj->forward(ctx, h_);  // [N, h * w, in_channels]
             v = v_proj->forward(ctx, h_);  // [N, h * w, in_channels]
-
-            v = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));  // [N, in_channels, h * w]
         } else {
             q = q_proj->forward(ctx, h_);                                              // [N, in_channels, h, w]
             q = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, q, 1, 2, 0, 3));  // [N, h, w, in_channels]
@@ -138,11 +136,12 @@ public:
             k = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, k, 1, 2, 0, 3));  // [N, h, w, in_channels]
             k = ggml_reshape_3d(ctx->ggml_ctx, k, c, h * w, n);                        // [N, h * w, in_channels]
 
-            v = v_proj->forward(ctx, h_);                        // [N, in_channels, h, w]
-            v = ggml_reshape_3d(ctx->ggml_ctx, v, h * w, c, n);  // [N, in_channels, h * w]
+            v = v_proj->forward(ctx, h_);                                              // [N, in_channels, h, w]
+            v = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, v, 1, 2, 0, 3));  // [N, h, w, in_channels]
+            v = ggml_reshape_3d(ctx->ggml_ctx, v, c, h * w, n);                        // [N, h * w, in_channels]
         }
 
-        h_ = ggml_ext_attention(ctx->ggml_ctx, q, k, v, false);  // [N, h * w, in_channels]
+        h_ = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, true, false);
 
         if (use_linear) {
             h_ = proj_out->forward(ctx, h_);  // [N, h * w, in_channels]

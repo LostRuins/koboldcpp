@@ -215,10 +215,13 @@ public:
         } else if (sd_version_is_unet_edit(version)) {
             in_channels = 8;
         }
-        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET) {
+        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET || version == VERSION_SDXS) {
             num_res_blocks = 1;
             channel_mult   = {1, 2, 4};
             tiny_unet      = true;
+            if (version == VERSION_SDXS) {
+                attention_resolutions = {4, 2};  // here just like SDXL
+            }
         }
 
         // dims is always 2

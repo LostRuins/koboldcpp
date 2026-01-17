@@ -594,12 +594,12 @@ int main(int argc, const char* argv[]) {
         }
     } else {
         mask_image.data = (uint8_t*)malloc(gen_params.width * gen_params.height);
-        memset(mask_image.data, 255, gen_params.width * gen_params.height);
         if (mask_image.data == nullptr) {
             LOG_ERROR("malloc mask image failed");
             release_all_resources();
             return 1;
         }
+        memset(mask_image.data, 255, gen_params.width * gen_params.height);
     }
 
     if (gen_params.control_image_path.size() > 0) {

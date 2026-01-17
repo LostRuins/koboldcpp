@@ -1599,9 +1599,29 @@ struct SDGenerationParams {
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
 
+        load_if_exists("steps", sample_params.sample_steps);
+        load_if_exists("high_noise_steps", high_noise_sample_params.sample_steps);
         load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
         load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
         load_if_exists("guidance", sample_params.guidance.distilled_guidance);
+
+        auto load_sampler_if_exists = [&](const char* key, enum sample_method_t& out) {
+            if (j.contains(key) && j[key].is_string()) {
+                enum sample_method_t tmp = str_to_sample_method(j[key].get<std::string>().c_str());
+                if (tmp != SAMPLE_METHOD_COUNT) {
+                    out = tmp;
+                }
+            }
+        };
+        load_sampler_if_exists("sample_method", sample_params.sample_method);
+        load_sampler_if_exists("high_noise_sample_method", high_noise_sample_params.sample_method);
+
+        if (j.contains("scheduler") && j["scheduler"].is_string()) {
+            enum scheduler_t tmp = str_to_scheduler(j["scheduler"].get<std::string>().c_str());
+            if (tmp != SCHEDULER_COUNT) {
+                sample_params.scheduler = tmp;
+            }
+        }
 
         return true;
     }

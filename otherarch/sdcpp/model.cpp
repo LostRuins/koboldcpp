@@ -1063,10 +1063,13 @@ SDVersion ModelLoader::get_sd_version() {
 
     bool is_xl                       = false;
     bool is_flux                     = false;
+    bool is_flux2                    = false;
+    bool has_single_block_47         = false;
     bool is_wan                      = false;
     int64_t patch_embedding_channels = 0;
     bool has_img_emb                 = false;
     bool has_middle_block_1          = false;
+    bool has_output_block_71         = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
         if (!(is_xl)) {
@@ -1083,7 +1086,10 @@ SDVersion ModelLoader::get_sd_version() {
                 return VERSION_QWEN_IMAGE;
             }
             if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
-                return VERSION_FLUX2;
+                is_flux2 = true;
+            }
+            if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {
+                has_single_block_47 = true;
             }
             if (tensor_storage.name.find("model.diffusion_model.double_blocks.0.img_mlp.gate_proj.weight") != std::string::npos) {
                 return VERSION_OVIS_IMAGE;
@@ -1122,6 +1128,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.middle_block.1.") != std::string::npos ||
             tensor_storage.name.find("unet.mid_block.resnets.1.") != std::string::npos) {
             has_middle_block_1 = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos) {
+            has_output_block_71 = true;
         }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
@@ -1163,7 +1172,7 @@ SDVersion ModelLoader::get_sd_version() {
         return VERSION_SDXL;
     }
 
-    if (is_flux) {
+    if (is_flux && !is_flux2) {
         if (input_block_weight.ne[0] == 384) {
             return VERSION_FLUX_FILL;
         }
@@ -1176,6 +1185,13 @@ SDVersion ModelLoader::get_sd_version() {
         return VERSION_FLUX;
     }
 
+    if (is_flux2) {
+        if (has_single_block_47) {
+            return VERSION_FLUX2;
+        }
+        return VERSION_FLUX2_KLEIN;
+    }
+
     if (token_embedding_weight.ne[0] == 768) {
         if (is_inpaint) {
             return VERSION_SD1_INPAINT;
@@ -1184,6 +1200,9 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_SD1_PIX2PIX;
         }
         if (!has_middle_block_1) {
+            if (!has_output_block_71) {
+                return VERSION_SDXS;
+            }
             return VERSION_SD1_TINY_UNET;
         }
         return VERSION_SD1;

@@ -1288,13 +1288,9 @@ namespace Flux {
             } else if (version == VERSION_OVIS_IMAGE) {
                 flux_params.semantic_txt_norm = true;
                 flux_params.use_yak_mlp       = true;
-                flux_params.context_in_dim    = 2048;
                 flux_params.vec_in_dim        = 0;
             } else if (sd_version_is_flux2(version)) {
-                flux_params.context_in_dim   = 15360;
                 flux_params.in_channels      = 128;
-                flux_params.hidden_size      = 6144;
-                flux_params.num_heads        = 48;
                 flux_params.patch_size       = 1;
                 flux_params.out_channels     = 128;
                 flux_params.mlp_ratio        = 3.f;
@@ -1307,12 +1303,12 @@ namespace Flux {
                 flux_params.ref_index_scale  = 10.f;
                 flux_params.use_mlp_silu_act = true;
             }
+            int64_t head_dim = 0;
             for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (!starts_with(tensor_name, prefix))
                     continue;
                 if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
-                    // not schnell
                     flux_params.guidance_embed = true;
                 }
                 if (tensor_name.find("__x0__") != std::string::npos) {
@@ -1344,13 +1340,30 @@ namespace Flux {
                         flux_params.depth_single_blocks = block_depth + 1;
                     }
                 }
+                if (ends_with(tensor_name, "txt_in.weight")) {
+                    flux_params.context_in_dim = pair.second.ne[0];
+                    flux_params.hidden_size    = pair.second.ne[1];
+                }
+                if (ends_with(tensor_name, "single_blocks.0.norm.key_norm.scale")) {
+                    head_dim = pair.second.ne[0];
+                }
+                if (ends_with(tensor_name, "double_blocks.0.txt_attn.norm.key_norm.scale")) {
+                    head_dim = pair.second.ne[0];
+                }
             }
 
-            LOG_INFO("Flux blocks: %d double, %d single", flux_params.depth, flux_params.depth_single_blocks);
+            flux_params.num_heads = static_cast<int>(flux_params.hidden_size / head_dim);
+
+            LOG_INFO("flux: depth = %d, depth_single_blocks = %d, guidance_embed = %s, context_in_dim = %" PRId64
+                     ", hidden_size = %" PRId64 ", num_heads = %d",
+                     flux_params.depth,
+                     flux_params.depth_single_blocks,
+                     flux_params.guidance_embed ? "true" : "false",
+                     flux_params.context_in_dim,
+                     flux_params.hidden_size,
+                     flux_params.num_heads);
             if (flux_params.is_chroma) {
                 LOG_INFO("Using pruned modulation (Chroma)");
-            } else if (!flux_params.guidance_embed) {
-                LOG_INFO("Flux guidance is disabled (Schnell mode)");
             }
 
             flux = Flux(flux_params);
