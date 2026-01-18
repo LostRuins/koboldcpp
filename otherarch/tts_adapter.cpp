@@ -25,6 +25,23 @@
 #define M_PI		3.14159265358979323846
 #endif
 
+//imports required for tts.cpp to work
+#include "ttscommon.h"
+#include "ttscpp.cpp"
+#include "ttstokenizer.cpp"
+#include "ttssampler.cpp"
+#include "parler_model.cpp"
+#include "dac_model.cpp"
+#include "ttsutil.cpp"
+#include "ttst5_encoder_model.cpp"
+#include "phonemizer.cpp"
+#include "tts_model.cpp"
+#include "kokoro_model.cpp"
+#include "dia_model.cpp"
+#include "orpheus_model.cpp"
+#include "snac_model.cpp"
+#include "general_neural_audio_codec.cpp"
+
 enum TTS_VER
 {
     TTS_VER_2,
@@ -46,6 +63,85 @@ struct wav_header {
     char data[4] = {'d', 'a', 't', 'a'};
     uint32_t data_size;
 };
+
+// #include <vector>
+// #include <cstdio>
+// #include <cmath>
+
+// static void audio_post_clean(std::vector<float>& data) { // detect clicks
+//     const float silenceThreshold = 1e-5f;
+//     const float noiseThreshold   = 1e-3f;
+//     const size_t minSilence      = 100;   // samples
+//     const size_t noiseSpan       = 150;   // samples
+//     const size_t minSilence2      = 100;   // samples
+
+//     size_t len = data.size();
+
+//     int silencecounterA = 0;
+//     int noisecounterA   = 0;
+//     int silencecounterB = 0;
+//     int state = 0; // 0 = finding first silence, 1 = measuring noise, 2 = finding second silence
+
+//     size_t noiseStart = 0;
+
+//     for (size_t i = 0; i < len; ++i) {
+//         float sample = std::fabs(data[i]);
+
+//         if (state == 0) { // finding first silence
+//             if (sample < silenceThreshold) {
+//                 silencecounterA++;
+//             } else {
+//                 if (silencecounterA >= minSilence) {
+//                     state = 1;
+//                     noisecounterA = 1;
+//                     noiseStart = i;
+//                 } else {
+//                     silencecounterA = 0;
+//                     noisecounterA = 0;
+//                     silencecounterB = 0;
+//                 }
+//             }
+//         }
+//         if (state == 1) { // measuring noise span
+//             noisecounterA++;
+//             if(sample>noiseThreshold)
+//             {
+//                 state = 0;
+//                 silencecounterA = 0;
+//                 noisecounterA = 0;
+//                 silencecounterB = 0;
+//             }
+//             else if(noisecounterA>noiseSpan)
+//             {
+//                 state = 2;
+//             }
+//         }
+//         if (state == 2) { // finding second silence
+//             if (sample < silenceThreshold) {
+//                 silencecounterB++;
+//                 if (silencecounterB >= minSilence2) {
+//                     // full click detected
+//                     size_t noiseend = noiseStart + noisecounterA - 1;
+//                     //printf("Click detected from %zu to %zu\n", noiseStart, noiseend);
+//                     for(size_t j=noiseStart;j<noiseend;++j)
+//                     {
+//                         data[j] *= 0.01f; //greatly suppress noise
+//                     }
+//                     // reset to search again
+//                     state = 0;
+//                     silencecounterA = 0;
+//                     noisecounterA = 0;
+//                     silencecounterB = 0;
+//                 }
+//             } else {
+//                 state = 0;
+//                 silencecounterA = 0;
+//                 noisecounterA = 0;
+//                 silencecounterB = 0;
+//             }
+//         }
+//     }
+// }
 
 static std::string save_wav16_base64(const std::vector<float> &data, int sample_rate) {
     std::ostringstream oss;
@@ -461,6 +557,32 @@ std::string trim_words(const std::string& input, const std::string& separator, s
     return result.str();
 }
 
+static std::string TruncateToFirstNumberWords(const std::string& input, int limit) {
+    static const std::regex wordRegex(R"(\b[\w'-]+\b)");
+    std::sregex_iterator words_begin(input.begin(), input.end(), wordRegex);
+    std::sregex_iterator words_end;
+    int count = 0;
+    std::size_t cutoffPos = std::string::npos;
+    if(limit<=0)
+    {
+        return "";
+    }
+    for (auto it = words_begin; it != words_end; ++it) {
+        ++count;
+        if (count >= limit) {
+            // position AFTER the last matched word
+            cutoffPos = it->position() + it->length();
+            break;
+        }
+    }
+    if (cutoffPos == std::string::npos) {
+        // fewer than N words, return original
+        return input;
+    }
+    // Preserve everything up to and including the Nth word
+    return input.substr(0, cutoffPos);
+}
+
 static llama_context * ttc_ctx = nullptr; //text to codes ctx
 static llama_context * cts_ctx = nullptr; //codes to speech
 
@@ -481,11 +603,19 @@ static int code_terminate_id = 151670;
 static int nthreads = 4;
 static int tts_max_len = 4096;
 
+//ttscpp specific
+static bool is_ttscpp_file = false;
+static generation_configuration * ttscpp_config = nullptr;
+static struct tts_runner * ttscpp_runner = nullptr;
+static std::string detectedarch = "";
+
 int total_tts_gens = 0;
+static std::string tts_executable_path = "";
 
 bool ttstype_load_model(const tts_load_model_inputs inputs)
 {
     tts_is_quiet = inputs.quiet;
+    tts_executable_path = inputs.executable_path;
 
     //duplicated from expose.cpp
     int cl_parseinfo = inputs.clblast_info; //first digit is whether configured, second is platform, third is devices
@@ -506,7 +636,14 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
             vulkan_info_str += ",";
         }
     }
-    if(vulkan_info_str!="")
+    const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
+    std::vector<ggml_backend_dev_t> devices_override;
+    std::string dev_override_str = inputs.devices_override;
+    if(dev_override_str!="")
+    {
+        devices_override = kcpp_parse_device_list(dev_override_str);
+    }
+    if(!existingenv && vulkan_info_str!="")
     {
         ttsvulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
         putenv((char*)ttsvulkandeviceenv.c_str());
@@ -516,85 +653,205 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
 
     std::string modelfile_ttc = inputs.ttc_model_filename;
     std::string modelfile_cts = inputs.cts_model_filename;
-    printf("\nLoading TTS Model, OuteTTS: %s \nWavTokenizer: %s \n",modelfile_ttc.c_str(),modelfile_cts.c_str());
+    detectedarch = gguf_get_model_arch(modelfile_ttc);
+
+    is_ttscpp_file = false;
+    if (detectedarch!="" && SUPPORTED_ARCHITECTURES.find(detectedarch) != SUPPORTED_ARCHITECTURES.end()) {
+        is_ttscpp_file = true;
+        printf("\nLoading TTS.CPP Model: %s, Arch: %s \n",modelfile_ttc.c_str(), detectedarch.c_str());
+        if(detectedarch=="kokoro")
+        {
+            //setup kokoro IPA
+            populate_kokoro_ipa_map(tts_executable_path);
+        }
+    }else{
+        printf("\nLoading OuteTTS Model, OuteTTS: %s \nWavTokenizer: %s \n",modelfile_ttc.c_str(),modelfile_cts.c_str());
+        if(modelfile_ttc=="" || modelfile_cts=="")
+        {
+            printf("\nWarning: KCPP OuteTTS missing a file! Make sure both TTS and WavTokenizer models are loaded.\n");
+            return false;
+        }
+    }
 
     ttsdebugmode = inputs.debugmode;
-
-    // tts init
-    llama_model_params tts_model_params = llama_model_default_params();
-    llama_context_params tts_ctx_params = llama_context_default_params();
-
-    nthreads = inputs.threads;
-
     tts_max_len = inputs.ttsmaxlen;
 
-    tts_model_params.use_mmap = false;
-    tts_model_params.use_mlock = false;
-    tts_model_params.n_gpu_layers = inputs.gpulayers; //offload if possible
-    tts_model_params.split_mode = llama_split_mode::LLAMA_SPLIT_MODE_LAYER;
-    tts_ctx_params.n_ctx = 8192;
-    tts_ctx_params.offload_kqv = true;
-    tts_ctx_params.n_batch = 8192;
-    tts_ctx_params.n_ubatch = 512;
-    tts_ctx_params.n_threads = nthreads;
-    tts_ctx_params.n_threads_batch = nthreads;
-    tts_ctx_params.flash_attn = inputs.flash_attention;
-
-    llama_model * ttcmodel = llama_model_load_from_file(modelfile_ttc.c_str(), tts_model_params);
-    ttc_ctx = llama_init_from_model(ttcmodel, tts_ctx_params);
-
-    if (ttc_ctx == nullptr) {
-        printf("\nTTS Load Error: Failed to initialize ttc context!\n");
-        return false;
-    }
-
-    llama_model * ctsmodel = llama_model_load_from_file(modelfile_cts.c_str(), tts_model_params);
-
-    tts_ctx_params.embeddings = true; //this requires embeddings instead
-    tts_ctx_params.n_ubatch = tts_ctx_params.n_batch;
-    cts_ctx = llama_init_from_model(ctsmodel, tts_ctx_params);
-
-    if (cts_ctx == nullptr) {
-        printf("\nTTS Load Error: Failed to initialize cts context!\n");
-        return false;
-    }
-
-    std::vector<int> tmp = {1, 2, 3, 4};
-    llama_memory_clear(llama_get_memory(ttc_ctx),true);
-    auto er = llama_decode(ttc_ctx, llama_batch_get_one(tmp.data(), tmp.size()));
-    if(er!=0)
-    {
-        printf("\nTTS Eval returned nonzero: %d\n",er);
-        return false;
-    }
-
-    const llama_vocab * ttcvocab = llama_model_get_vocab(ttcmodel);
-    llama_tokens testoks = common_tokenize(ttcvocab,"<|space|>",false,true);
-    if (testoks.size() == 1) {
-        ttsver = TTS_VER_3;
-        printf("\nUsing v0.3 mode");
-        //note that the final word does NOT have a space at the end.
-        space_id = testoks[0];
-        testoks = common_tokenize(ttcvocab,"<|audio_end|>",false,true);
-        if (testoks.size() == 1) {
-            code_terminate_id = testoks[0];
+    // tts init
+    if (is_ttscpp_file) {
+        ttscpp_config = new generation_configuration("am_echo", 25, 1.0, 1.0, true, "", 1600, 1.0);
+        ttscpp_runner = runner_from_file(modelfile_ttc, inputs.threads, ttscpp_config, true);
+        if (ttscpp_runner == nullptr) {
+            printf("\nTTS Load Error: Failed to initialize TTSCPP!\n");
+            return false;
         }
-    } else {
-        ttsver = TTS_VER_2;
-        printf("\nUsing v0.2 mode");
-    }
+    } else { //outetts only
+        llama_model_params tts_model_params = llama_model_default_params();
+        llama_context_params tts_ctx_params = llama_context_default_params();
 
-    //determine offset of <|0|>
-    testoks = common_tokenize(ttcvocab,"<|0|>",false,true);
-    if (testoks.size() == 1) {
-        cts_offset = testoks[0];
+        nthreads = inputs.threads;
+
+        tts_model_params.use_mmap = false;
+        tts_model_params.use_mlock = false;
+        tts_model_params.n_gpu_layers = inputs.gpulayers; //offload if possible
+        tts_model_params.split_mode = llama_split_mode::LLAMA_SPLIT_MODE_LAYER;
+        int kcpp_parseinfo_maindevice = inputs.kcpp_main_gpu<=0?0:inputs.kcpp_main_gpu;
+        tts_model_params.main_gpu = kcpp_parseinfo_maindevice;
+        tts_ctx_params.n_ctx = 8192;
+        tts_ctx_params.offload_kqv = true;
+        tts_ctx_params.n_batch = 8192;
+        tts_ctx_params.n_ubatch = 512;
+        tts_ctx_params.n_threads = nthreads;
+        tts_ctx_params.n_threads_batch = nthreads;
+        tts_ctx_params.flash_attn_type = (inputs.flash_attention?LLAMA_FLASH_ATTN_TYPE_ENABLED:LLAMA_FLASH_ATTN_TYPE_DISABLED);
+        tts_ctx_params.kv_unified = true;
+
+        if(devices_override.size()>0)
+        {
+            printf("\nOverriding with %d devices...\n",devices_override.size()-1);
+            tts_model_params.devices = devices_override.data();
+        }
+
+        llama_model * ttcmodel = llama_model_load_from_file(modelfile_ttc.c_str(), tts_model_params);
+        ttc_ctx = llama_init_from_model(ttcmodel, tts_ctx_params);
+
+        if (ttc_ctx == nullptr) {
+            printf("\nTTS Load Error: Failed to initialize ttc context!\n");
+            return false;
+        }
+
+        llama_model * ctsmodel = llama_model_load_from_file(modelfile_cts.c_str(), tts_model_params);
+
+        tts_ctx_params.embeddings = true; //this requires embeddings instead
+        tts_ctx_params.n_ubatch = tts_ctx_params.n_batch;
+        cts_ctx = llama_init_from_model(ctsmodel, tts_ctx_params);
+
+        if (cts_ctx == nullptr) {
+            printf("\nTTS Load Error: Failed to initialize cts context!\n");
+            return false;
+        }
+
+        std::vector<int> tmp = {1, 2, 3, 4};
+        llama_memory_clear(llama_get_memory(ttc_ctx),true);
+        auto er = llama_decode(ttc_ctx, llama_batch_get_one(tmp.data(), tmp.size()));
+        if(er!=0)
+        {
+            printf("\nTTS Eval returned nonzero: %d\n",er);
+            return false;
+        }
+
+        const llama_vocab * ttcvocab = llama_model_get_vocab(ttcmodel);
+        llama_tokens testoks = common_tokenize(ttcvocab,"<|space|>",false,true);
+        if (testoks.size() == 1) {
+            ttsver = TTS_VER_3;
+            printf("\nUsing v0.3 mode");
+            //note that the final word does NOT have a space at the end.
+            space_id = testoks[0];
+            testoks = common_tokenize(ttcvocab,"<|audio_end|>",false,true);
+            if (testoks.size() == 1) {
+                code_terminate_id = testoks[0];
+            }
+        } else {
+            ttsver = TTS_VER_2;
+            printf("\nUsing v0.2 mode");
+        }
+
+        //determine offset of <|0|>
+        testoks = common_tokenize(ttcvocab,"<|0|>",false,true);
+        if (testoks.size() == 1) {
+            cts_offset = testoks[0];
+        }
     }
 
     printf("\nTTS Load Complete.\n");
     return true;
 }
 
-tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
+static tts_generation_outputs ttstype_generate_ttscpp(const tts_generation_inputs inputs)
+{
+    tts_generation_outputs output;
+    if(ttscpp_runner==nullptr || ttscpp_config==nullptr)
+    {
+        printf("\nWarning: KCPP TTSCPP not initialized! Make sure TTS model is loaded successfully.\n");
+        output.data = "";
+        output.status = 0;
+        return output;
+    }
+    int speaker_seed = inputs.speaker_seed;
+    std::string voiceused = "am_echo";
+    std::string prompt = inputs.prompt;
+    double ttstime = 0;
+    timer_start();
+
+    std::vector<std::string> vmapper = {};
+    std::vector<std::string> vpermitted = {};
+
+    if(detectedarch=="kokoro")
+    {
+        vmapper = {"am_echo","af_heart","af_nicole","bm_fable","bf_isabella"};
+        vpermitted = {"af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa", "bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis"};
+    }
+    else if(detectedarch=="dia")
+    {
+        vmapper = {"zac", "zoe", "jess", "leo", "mia"};
+        vpermitted = {"zoe", "zac","jess", "leo", "mia", "julia", "leah"};
+    }
+
+    if(speaker_seed>=1 && speaker_seed<=5 && vmapper.size()>=5)
+    {
+        voiceused = vmapper[speaker_seed-1];
+    }
+    else if(vpermitted.size()>0)
+    {
+        //if we can match the voice, use it
+        const std::string cspeaker = inputs.custom_speaker_voice;
+        if (std::find(vpermitted.begin(), vpermitted.end(), cspeaker) != vpermitted.end()) {
+            voiceused = cspeaker;
+        }
+    }
+
+    if(tts_max_len>0)
+    {
+        prompt = TruncateToFirstNumberWords(prompt,tts_max_len);
+    }
+
+    if(ttsdebugmode==1 && !tts_is_quiet)
+    {
+        printf("\nUsing Speaker ID: %d, Voice: %s", speaker_seed, voiceused.c_str());
+        printf("\nInput: %s\n", prompt.c_str());
+    }
+    ttscpp_config->voice = voiceused;
+
+    if(!tts_is_quiet)
+    {
+        printf("\nTTS Generating...");
+    }
+    tts_response response_data;
+    int errorres = generate(ttscpp_runner, prompt, &response_data, ttscpp_config);
+    if(errorres==0)
+    {
+        ttstime = timer_check();
+        printf("\nTTS Generated audio in %.2fs.\n",ttstime);
+        std::vector<float> wavdat = std::vector(response_data.data, response_data.data + response_data.n_outputs);
+        //audio_post_clean(wavdat);
+        last_generated_audio = save_wav16_base64(wavdat, ttscpp_runner->sampling_rate);
+        output.data = last_generated_audio.c_str();
+        output.status = 1;
+        last_generation_settings_audio_seed = 0;
+        last_generation_settings_speaker_seed = speaker_seed;
+        last_generation_settings_prompt = std::string(prompt);
+        total_tts_gens += 1;
+        return output;
+    }
+    else
+    {
+        printf("\nError: TTSCPP generation failed\n");
+        output.data = "";
+        output.status = 0;
+        return output;
+    }
+}
+
+static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inputs inputs)
 {
     tts_generation_outputs output;
 
@@ -1003,5 +1260,14 @@ tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
         total_tts_gens += 1;
 
         return output;
+    }
+}
+
+tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
+{
+    if (is_ttscpp_file) {
+        return ttstype_generate_ttscpp(inputs);
+    } else {
+        return ttstype_generate_outetts(inputs);
     }
 }

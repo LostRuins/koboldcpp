@@ -1,0 +1,8 @@
+{
+  "system_start": "<|start|>developer<|message|>",
+  "system_end": "<|end|>",
+  "user_start": "<|start|>user<|message|>",
+  "user_end": "<|end|>",
+  "assistant_start": "<|start|>assistant<|channel|>analysis<|message|>We can answer immediately.<|end|><|start|>assistant<|channel|>final<|message|>",
+  "assistant_end": "<|end|>"
+}

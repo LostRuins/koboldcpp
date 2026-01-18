@@ -93,12 +93,12 @@ public:
         this->offset = 0;
     }
 
-    void manual_seed(uint64_t seed) {
+    void manual_seed(uint64_t seed) override {
         this->seed   = seed;
         this->offset = 0;
     }
 
-    std::vector<float> randn(uint32_t n) {
+    std::vector<float> randn(uint32_t n) override {
         std::vector<std::vector<uint32_t>> counter(4, std::vector<uint32_t>(n, 0));
         for (uint32_t i = 0; i < n; i++) {
             counter[0][i] = this->offset;

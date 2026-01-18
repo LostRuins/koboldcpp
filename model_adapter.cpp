@@ -82,6 +82,53 @@ void print_tok_vec(std::vector<float> &embd)
     std::cout << "]\n";
 }
 
+bool gguf_tensor_exists(const std::string & gguf_filename, std::string tensor_name, bool exactmatch)
+{
+    struct gguf_init_params ggufparams;
+    ggufparams.no_alloc = true;
+    ggufparams.ctx = NULL;
+    struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), ggufparams);
+    if (!ctx) return false;
+
+    bool found = false;
+
+    int n_tensors = gguf_get_n_tensors(ctx);
+    for (int i = 0; i < n_tensors; i++) {
+        std::string curr_name = gguf_get_tensor_name(ctx, i);
+        if(exactmatch)
+        {
+            if (curr_name == tensor_name) {
+                found = true;
+                break;
+            }
+        }
+        else
+        {
+            if (curr_name.find(tensor_name) != std::string::npos) {
+                found = true;
+                break;
+            }
+        }
+    }
+
+    gguf_free(ctx);
+    return found;
+}
+
+std::string gguf_get_model_arch(const std::string & gguf_filename)
+{
+    struct gguf_init_params ggufparams;
+    ggufparams.no_alloc = true;
+    ggufparams.ctx = NULL;
+    struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), ggufparams);
+    if (!ctx) return "";
+    auto keyidx = gguf_find_key(ctx, "general.architecture");
+    std::string modelarch = "";
+    if (keyidx != -1) { modelarch = gguf_get_val_str(ctx, keyidx); }
+    gguf_free(ctx);
+    return modelarch;
+}
+
 //return val: 0=fail, 1=(original ggml, alpaca), 2=(ggmf), 3=(ggjt)
  FileFormat check_file_format(const std::string & fname, FileFormatExtraMeta * fileformatmeta)
  {
@@ -174,7 +221,7 @@ void print_tok_vec(std::vector<float> &embd)
                 }
            }
        }
-       else if(vocabsiz < 31998 || vocabsiz > 33000)
+       else if((vocabsiz < 31998 || vocabsiz > 33000) && vocabsiz<51864) //avoid whisper false positive
        {
            //anything outside the llama v1 range is assumed to be NeoX
            fileformat = FileFormat::NEOX_6;
@@ -221,7 +268,11 @@ void print_tok_vec(std::vector<float> &embd)
                     }
                 }
            }
-
+       }
+       else if (vocabsiz>=51864 && vocabsiz<=51865)
+       {
+            printf("\nWhisper model detected - you should load it as a whisper model instead, not a text model!\n");
+            fileformat = FileFormat::BADFORMAT; //known whisper formats, do not proceed
        }
     }
     else if(magic == 0x67676d66) //v2 format ggmf
@@ -320,9 +371,10 @@ void print_tok_vec(std::vector<float> &embd)
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_FALCON;
             }
-            else if(modelarch=="mamba")
+            else if(modelarch=="mamba" || modelarch=="mamba2" || modelarch=="nemotron_h" || modelarch=="jamba" || modelarch=="granitehybrid" || modelarch=="lfm2"
+            || modelarch=="plamo2" || modelarch=="falcon-h1") //lazy approach, put all non rwkv RNN models
             {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_MAMBA;
+                fileformatmeta->model_architecture = GGUFArch::ARCH_MAMBALIKE;
             }
             else if(modelarch=="llama" && freq_base_train==10000.0f && (n_tensors==435 || n_tensors==611))
             {
@@ -340,13 +392,21 @@ void print_tok_vec(std::vector<float> &embd)
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_GEMMA3;
             }
-            else if(modelarch=="rwkv6" || modelarch=="rwkv7")
+            else if(modelarch=="gemma3n")
+            {
+                fileformatmeta->model_architecture = GGUFArch::ARCH_GEMMA3N;
+            }
+            else if(modelarch=="rwkv6" || modelarch=="rwkv7" || modelarch=="rwkv6qwen2" || modelarch=="arwkv7")
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_RWKV;
             }
-            else if(modelarch=="glm4")
+            else if(modelarch=="glm4" || modelarch=="glm4moe")
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_GLM4;
+            }
+            else if(modelarch=="gpt-oss")
+            {
+                fileformatmeta->model_architecture = GGUFArch::ARCH_GPTOSS;
             }
             printf("Arch Category: %d\n",fileformatmeta->model_architecture);
 
@@ -453,7 +513,7 @@ void print_tok_vec(std::vector<float> &embd)
 
  void ContextFastForward(std::vector<int> &current_context_tokens, std::vector<int> &embd_inp,
  int &n_past, std::vector<int> &last_n_tokens, const int nctx, std::vector<int> &smartcontext,
- bool useSmartContext, const bool requireFullSubset)
+ bool useSmartContext, const bool requireFullSubset, const int minimum_to_proceed)
  {
      const int SCCtxLenThreshold = nctx * 0.8; //how much context length must be reach to trigger smartcontext
      const int SCInpLenThreshold = nctx * 0.6; //how big must the input array be to trigger smartcontext
@@ -506,6 +566,13 @@ void print_tok_vec(std::vector<float> &embd)
                 break;
             }
         }
+    }
+
+    if(n_past < minimum_to_proceed) //too few tokens to fast forward, so lets start fresh
+    {
+        last_n_tokens.erase(last_n_tokens.end() - n_past, last_n_tokens.end());
+        n_past = 0;
+        fastforwardok = false;
     }
 
     if(fastforwardok)

@@ -1,0 +1,8 @@
+{
+ "system_start": "<seed:bos>system\n",
+ "system_end": "<seed:eos>",
+ "user_start": "<seed:bos>user\n",
+ "user_end": "<seed:eos>",
+ "assistant_start": "<seed:bos>assistant\n",
+ "assistant_end": "<seed:eos>"
+}

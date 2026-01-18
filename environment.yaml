@@ -20,5 +20,7 @@ dependencies:
   - ocl-icd-system
   - libvulkan-loader
   - tk=*=xft_*
+  - psutil
+  - jinja2
   - pip:
     - customtkinter

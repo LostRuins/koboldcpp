@@ -55,13 +55,15 @@ enum GGUFArch
     ARCH_DEFAULT = 0, //used for llama3 and other generic gguf
     ARCH_FALCON = 1,
     ARCH_PHI = 2,
-    ARCH_MAMBA = 3,
+    ARCH_MAMBALIKE = 3,
     ARCH_SOLAR = 4,
     ARCH_QWEN2 = 5,
     ARCH_RWKV = 6,
     ARCH_QWEN2VL = 7,
     ARCH_GEMMA3 = 8,
     ARCH_GLM4 = 9,
+    ARCH_GEMMA3N = 10,
+    ARCH_GPTOSS = 11,
 };
 
 struct FileFormatExtraMeta
@@ -105,6 +107,7 @@ const std::vector<TopPicksData> gpttype_get_top_picks_data();
 
 bool sdtype_load_model(const sd_load_model_inputs inputs);
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs);
+sd_info_outputs sdtype_get_info();
 
 bool whispertype_load_model(const whisper_load_model_inputs inputs);
 whisper_generation_outputs whispertype_generate(const whisper_generation_inputs inputs);
@@ -127,7 +130,9 @@ int ArrFindIndexOf(const std::vector<int> targetArray, const std::vector<int> se
 FileFormat check_file_format(const std::string & fname, FileFormatExtraMeta * fileformatmeta);
 void ContextFastForward(std::vector<int> &current_context_tokens, std::vector<int> &embd_inp,
  int &n_past, std::vector<int> &last_n_tokens, const int nctx, std::vector<int> &smartcontext,
- const bool useSmartContext, const bool requireFullSubset);
+ const bool useSmartContext, const bool requireFullSubset, const int minimum_to_proceed);
+bool gguf_tensor_exists(const std::string & filename, std::string tensor_name, bool exactmatch);
+std::string gguf_get_model_arch(const std::string & filename);
 
 size_t gpttype_calc_new_state_kv();
 size_t gpttype_calc_new_state_tokencount();
@@ -136,3 +141,6 @@ size_t gpttype_calc_old_state_tokencount(int slot);
 size_t gpttype_save_state_kv(int slot);
 bool gpttype_load_state_kv(int slot);
 bool gpttype_clear_state_kv(bool shrink);
+int get_oldest_slot(int excludeSlotId);
+void touch_slot(int slot);
+int get_identical_existing_slot();

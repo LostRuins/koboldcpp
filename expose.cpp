@@ -36,15 +36,7 @@ extern "C"
         mmproj_filename = inputs.mmproj_filename;
         draftmodel_filename = inputs.draftmodel_filename;
 
-        int forceversion = inputs.forceversion;
-
         file_format = check_file_format(model.c_str(),&file_format_meta);
-
-        if(forceversion!=0)
-        {
-            printf("\nWARNING: FILE FORMAT FORCED TO VER %d\nIf incorrect, loading may fail or crash.\n",forceversion);
-            file_format = (FileFormat)forceversion;
-        }
 
         //first digit is whether configured, second is platform, third is devices
         int cl_parseinfo = inputs.clblast_info;
@@ -68,7 +60,8 @@ extern "C"
                 vulkan_info_str += ",";
             }
         }
-        if(vulkan_info_str!="")
+        const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
+        if(!existingenv && vulkan_info_str!="")
         {
             vulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
             putenv((char*)vulkandeviceenv.c_str());
@@ -187,7 +180,7 @@ extern "C"
             }
             else if(file_format==FileFormat::GGUF_GENERIC)
             {
-                printf("\n---\nIdentified as GGUF model.\nAttempting to Load...\n---\n", file_format);
+                printf("\n---\nIdentified as GGUF model.\nAttempting to Load...\n---\n");
             }
             else if(file_format==FileFormat::GGML || file_format==FileFormat::GGHF || file_format==FileFormat::GGJT || file_format==FileFormat::GGJT_2 || file_format==FileFormat::GGJT_3)
             {
@@ -226,6 +219,10 @@ extern "C"
     sd_generation_outputs sd_generate(const sd_generation_inputs inputs)
     {
         return sdtype_generate(inputs);
+    }
+    sd_info_outputs sd_get_info()
+    {
+        return sdtype_get_info();
     }
 
     bool whisper_load_model(const whisper_load_model_inputs inputs)
@@ -268,7 +265,14 @@ extern "C"
     bool has_finished() {
         return generation_finished;
     }
-
+    bool has_audio_support()
+    {
+        return audio_multimodal_supported;
+    }
+    bool has_vision_support()
+    {
+        return vision_multimodal_supported;
+    }
     float get_last_eval_time() {
         return last_eval_time;
     }

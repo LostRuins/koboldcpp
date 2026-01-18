@@ -37,7 +37,6 @@ endif()
 
 # 3rd party libs
 option(LLAMA_CUBLAS                          "llama: use CUDA"                                ON)
-option(LLAMA_CUDA_F16                        "llama: use 16 bit floats for dmmv CUDA kernels"   OFF)
 set(LLAMA_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
                                              "llama: max. batch size for using peer access")
 
@@ -61,6 +60,11 @@ add_compile_definitions(LOG_DISABLE_LOGS)
 add_compile_definitions(GGML_USE_CPU)
 add_compile_definitions(GGML_USE_CPU_REPACK)
 add_compile_definitions(NOMINMAX)
+add_compile_definitions(_REGEX_MAX_STACK_COUNT=5000)
+
+if (GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12)
+    add_compile_definitions(GGML_HIP_ROCWMMA_FATTN_GFX12)
+endif()
 
 if (MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
@@ -71,9 +75,13 @@ endif()
 
 file(GLOB GGML_SOURCES_CUDA "ggml/src/ggml-cuda/*.cu")
 list(APPEND GGML_SOURCES_CUDA "ggml/src/ggml-cuda/ggml-cuda.cu")
+file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-tile*.cu")
+list(APPEND GGML_SOURCES_CUDA ${SRCS})
 file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-mma*.cu")
 list(APPEND GGML_SOURCES_CUDA ${SRCS})
 file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/mmq*.cu")
+list(APPEND GGML_SOURCES_CUDA ${SRCS})
+file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/mmf*.cu")
 list(APPEND GGML_SOURCES_CUDA ${SRCS})
 set(GGML_V3_CUDA_SOURCES otherarch/ggml_v3-cuda.cu otherarch/ggml_v3-cuda.h)
 set(GGML_V2_CUDA_SOURCES otherarch/ggml_v2-cuda.cu otherarch/ggml_v2-cuda.h)
@@ -93,9 +101,6 @@ if (LLAMA_CUBLAS)
         add_compile_definitions(GGML_USE_CUDA)
         add_compile_definitions(SD_USE_CUDA)
 
-        if (LLAMA_CUDA_F16 OR LLAMA_CUDA_DMMV_F16)
-            add_compile_definitions(GGML_CUDA_F16)
-        endif()
         add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${LLAMA_CUDA_PEER_MAX_BATCH_SIZE})
 
         # only build minimal quants required for fattn quant kv
@@ -126,17 +131,18 @@ if (LLAMA_CUBLAS)
         # 70 == (assumed) compute capability at which unrolling a loop in mul_mat_q kernels is faster
         # 75 == int8 tensor cores
         # 80 == Ampere, asynchronous data loading, faster tensor core instructions
-        if (LLAMA_CUDA_F16 OR LLAMA_CUDA_DMMV_F16)
-            set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual") # needed for f16 CUDA intrinsics
+        message("CUDA Toolkit Version: ${CUDAToolkit_VERSION}")
+        if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13)
+                add_compile_definitions(GGML_CUDA_USE_GRAPHS) #try enable cuda graphs on cu12 build
+                add_compile_definitions(KCPP_LIMIT_CUDA_MAX_ARCH=860)
+                set(CMAKE_CUDA_ARCHITECTURES "75-virtual;80-virtual;86-virtual") # lowest CUDA 13 standard
+        elseif(CUDAToolkit_VERSION VERSION_GREATER 12)
+                add_compile_definitions(GGML_CUDA_USE_GRAPHS) #try enable cuda graphs on cu12 build
+                add_compile_definitions(KCPP_LIMIT_CUDA_MAX_ARCH=800)
+                set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;75-virtual;80-virtual") # lowest CUDA 12 standard + lowest for integer intrinsics
         else()
-            message("CUDA Toolkit Version: ${CUDAToolkit_VERSION}")
-            if(CUDAToolkit_VERSION VERSION_GREATER 12)
-                 add_compile_definitions(GGML_CUDA_USE_GRAPHS) #try enable cuda graphs on cu12 build
-                 set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual") # lowest CUDA 12 standard + lowest for integer intrinsics
-            else()
-                 add_compile_definitions(KCPP_LIMIT_CUDA_MAX_ARCH=750) #will cause issues with ggml_cuda_highest_compiled_arch if removed
-                 set(CMAKE_CUDA_ARCHITECTURES "35-virtual;50-virtual;61-virtual;70-virtual;75-virtual") # lowest CUDA 12 standard + lowest for integer intrinsics
-            endif()
+                add_compile_definitions(KCPP_LIMIT_CUDA_MAX_ARCH=750) #will cause issues with ggml_cuda_highest_compiled_arch if removed
+                set(CMAKE_CUDA_ARCHITECTURES "35-virtual;50-virtual;61-virtual;75-virtual") # lowest CUDA 12 standard + lowest for integer intrinsics
         endif()
     endif()
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -175,9 +181,13 @@ if (LLAMA_HIPBLAS)
         message(STATUS "HIP and hipBLAS found")
         file(GLOB GGML_SOURCES_ROCM "ggml/src/ggml-cuda/*.cu")
         list(APPEND GGML_SOURCES_ROCM "ggml/src/ggml-cuda/ggml-cuda.cu")
+        file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-tile*.cu")
+        list(APPEND GGML_SOURCES_ROCM ${SRCS})
         file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-mma*.cu")
         list(APPEND GGML_SOURCES_ROCM ${SRCS})
         file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/mmq*.cu")
+        list(APPEND GGML_SOURCES_ROCM ${SRCS})
+        file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/mmf*.cu")
         list(APPEND GGML_SOURCES_ROCM ${SRCS})
         add_compile_definitions(GGML_USE_HIP GGML_USE_CUDA SD_USE_CUDA GGML_HIP_NO_VMM)
         add_library(ggml-rocm ${GGML_SOURCES_CUDA})
@@ -443,9 +453,13 @@ add_library(common2
             tools/mtmd/clip.h
             src/unicode.h
             src/unicode.cpp
+            src/llama-impl.h
+            src/llama-impl.cpp
             src/unicode-data.cpp
             otherarch/utils.cpp
-            otherarch/utils.h)
+            otherarch/utils.h
+            tools/mtmd/mtmd-audio.cpp
+            tools/mtmd/mtmd-audio.h)
 target_include_directories(common2 PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
 target_compile_features(common2 PUBLIC cxx_std_17) # don't bump
 target_link_libraries(common2 PRIVATE ggml ${LLAMA_EXTRA_LIBS})
@@ -467,7 +481,7 @@ set_target_properties(whisper_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tts_adapter
             otherarch/tts_adapter.cpp)
-target_include_directories(tts_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor ./tools ./common)
+target_include_directories(tts_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor ./otherarch/ttscpp/include ./otherarch/ttscpp/src ./tools ./common)
 target_compile_features(tts_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(tts_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(tts_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -3,9 +3,6 @@
 
 #include "whisper.cpp"
 
-#define DR_WAV_IMPLEMENTATION
-#include "dr_wav.h"
-
 #include <cmath>
 #include <fstream>
 #include <cstdio>
@@ -43,89 +40,25 @@ static bool is_wav_buffer(const std::string buf) {
     return true;
 }
 
-static bool read_wav(const std::string & b64data, std::vector<float>& pcmf32, std::vector<std::vector<float>>& pcmf32s, bool stereo)
+static bool read_wav(const std::string & b64data, std::vector<float>& pcmf32)
 {
-    drwav wav;
-    std::vector<uint8_t> wav_data = kcpp_base64_decode(b64data);
+    std::vector<uint8_t> media_data_buffer = kcpp_base64_decode(b64data);
 
-    if (drwav_init_memory(&wav, wav_data.data(), wav_data.size(), nullptr) == false) {
-        printf("error: failed to open WAV file from stdin\n");
+    bool ok = kcpp_decode_audio_from_buf(media_data_buffer.data(), media_data_buffer.size(), COMMON_SAMPLE_RATE, pcmf32);
+    if (!ok) {
+        printf("\nError: Cannot read input audio file.");
         return false;
     }
-
-    if (wav.channels != 1 && wav.channels != 2) {
-        printf("WAV file must be mono or stereo\n");
-        drwav_uninit(&wav);
-        return false;
-    }
-
-    if (wav.bitsPerSample != 8 && wav.bitsPerSample != 16 && wav.bitsPerSample != 32) {
-        printf("WAV file must be 8-bit, 16-bit or 32-bit. Detected: %d\n",wav.bitsPerSample);
-        drwav_uninit(&wav);
-        return false;
-    }
-
-    const uint64_t n = wav_data.empty() ? wav.totalPCMFrameCount : wav_data.size()/(wav.channels*wav.bitsPerSample/8);
-
-    std::vector<int16_t> pcm16;
-    pcm16.resize(n*wav.channels);
-
-     if (wav.bitsPerSample == 8) {
-        // Handle 8-bit PCM and convert to 16-bit
-        std::vector<uint8_t> pcm8(n * wav.channels);
-        drwav_read_pcm_frames(&wav, n, pcm8.data());
-        drwav_u8_to_s16(pcm16.data(), pcm8.data(), n * wav.channels);
-    } else if (wav.bitsPerSample == 16) {
-        // Handle 16-bit PCM directly
-        drwav_read_pcm_frames_s16(&wav, n, pcm16.data());
-    } else if (wav.bitsPerSample == 32) {
-        // Handle 32-bit PCM and convert to 16-bit
-        std::vector<int32_t> pcm32(n * wav.channels);
-        drwav_read_pcm_frames_s32(&wav, n, pcm32.data());
-        for (uint64_t i = 0; i < n * wav.channels; ++i) {
-            pcm16[i] = static_cast<int16_t>(pcm32[i] >> 16); // Scale down by shifting
-        }
-    }
-    drwav_uninit(&wav);
-
-    std::vector<float> raw_pcm;
-    raw_pcm.resize(n);
 
     if(whisperdebugmode==1 && !whisper_is_quiet)
     {
-        printf("\nwav_data_size: %d, n:%d",wav_data.size(),n);
-    }
-
-    // convert to mono, float
-    if (wav.channels == 1) {
-        for (uint64_t i = 0; i < n; i++) {
-            raw_pcm[i] = float(pcm16[i])/32768.0f;
-        }
-    } else {
-        for (uint64_t i = 0; i < n; i++) {
-            raw_pcm[i] = float(pcm16[2*i] + pcm16[2*i + 1])/65536.0f;
-        }
-    }
-
-    if (wav.sampleRate != COMMON_SAMPLE_RATE) {
-        if(whisperdebugmode==1 && !whisper_is_quiet)
-        {
-            printf("\nResample wav from %" PRIu32 " to %" PRIu32 " (in size: %zu)",
-            wav.sampleRate, COMMON_SAMPLE_RATE, raw_pcm.size());
-        }
-        raw_pcm = resample_wav(raw_pcm, wav.sampleRate, COMMON_SAMPLE_RATE);
-    }
-
-    uint64_t finalsize = raw_pcm.size();
-    pcmf32.resize(finalsize);
-    for (uint64_t i = 0; i < finalsize; i++) {
-        pcmf32[i] = raw_pcm[i];
+        printf("\nwav_data_size: %d",pcmf32.size());
     }
 
     return true;
 }
 
-static std::string output_txt(struct whisper_context * ctx, std::vector<std::vector<float>> pcmf32s) {
+static std::string output_txt(struct whisper_context * ctx) {
 
     std::string outtxt = "";
     const int n_segments = whisper_full_n_segments(ctx);
@@ -162,7 +95,8 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
             vulkan_info_str += ",";
         }
     }
-    if(vulkan_info_str!="")
+    const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
+    if(!existingenv && vulkan_info_str!="")
     {
         whispervulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
         putenv((char*)whispervulkandeviceenv.c_str());
@@ -216,9 +150,8 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
     const std::string langcode = std::string(inputs.langcode);
 
     std::vector<float> pcmf32;               // mono-channel F32 PCM
-    std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
 
-    if (!::read_wav(b64data, pcmf32, pcmf32s, false)) {
+    if (!::read_wav(b64data, pcmf32)) {
         printf("\nWhisper: Failed to read input wav data!\n");
         output.text = "";
         output.status = 0;
@@ -270,7 +203,7 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
     }
 
     // output text transcription
-    whisper_output_text = output_txt(whisper_ctx, pcmf32s);
+    whisper_output_text = output_txt(whisper_ctx);
     std::string ts = get_timestamp_str();
     if(!whisper_is_quiet)
     {

@@ -61,19 +61,58 @@ std::string kcpp_base64_encode(const unsigned char* data, unsigned int data_leng
 std::string kcpp_base64_encode(const std::string &data);
 
 std::string get_timestamp_str();
+std::vector<std::vector<int>> split_big_vector(const std::vector<int>& big_arr, size_t chunk_size);
 std::vector<float> resample_wav(const std::vector<float>& input, uint32_t input_rate, uint32_t output_rate);
 
 int32_t kcpp_quick_sample(float * logits, const int n_logits, const std::vector<int32_t> & last_n_tokens, float rep_pen, float top_p, int top_k, float temp, std::mt19937 & rng);
 
 std::vector<std::string> split_string(const std::string& input, const std::string& separator);
+bool kcpp_decode_audio_from_buf(const unsigned char * buf_in, size_t len, int target_sampler_rate, std::vector<float> & pcmf32_mono);
 
-struct kcpp_embd_batch { //duplcated from llava_embd_batch
-    std::vector<int32_t> pos;
-    std::vector<int32_t> n_seq_id;
-    std::vector<int32_t> seq_id_0;
-    std::vector<int32_t *> seq_ids;
-    std::vector<int8_t> logits;
+std::vector<ggml_backend_dev_t> kcpp_parse_device_list(const std::string & value);
+
+//duplcated and modified from llava_embd_batch
+struct kcpp_embd_batch {
+    std::vector<llama_pos>    pos;
+    std::vector<llama_pos>    pos_view;
+    std::vector<int32_t>      n_seq_id;
+    std::vector<llama_seq_id> seq_id_0;
+    std::vector<llama_seq_id*> seq_ids;
+    std::vector<int8_t>       logits;
     llama_batch batch;
-    kcpp_embd_batch(float * embd, int32_t n_tokens, int32_t npast, bool use_mrope);
-    kcpp_embd_batch(std::vector<llama_token> & tokens, int32_t npast, bool use_mrope, bool return_all_logits);
+
+    llama_batch get_view(int offset, int n_tokens, int n_embd_mmproj);
+
+    // Embedding constructor
+    kcpp_embd_batch(
+        float * embd,
+        int32_t n_tokens,
+        int32_t npast,
+        bool use_mrope,
+        bool mrope_is_image = false,
+        int img_nx = 0,
+        int img_ny = 0
+    );
+
+    // Token constructor
+    kcpp_embd_batch(
+        std::vector<llama_token> & tokens,
+        int32_t npast,
+        bool use_mrope,
+        bool return_all_logits,
+        bool mrope_is_image = false,
+        int img_nx = 0,
+        int img_ny = 0
+    );
+
+private:
+    void init_kcpp_batch(
+        int32_t n_tokens,
+        int32_t npast,
+        bool use_mrope,
+        bool return_all_logits,
+        bool mrope_is_image,
+        int img_nx,
+        int img_ny
+    );
 };

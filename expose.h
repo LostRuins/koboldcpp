@@ -3,7 +3,9 @@
 
 const int tensor_split_max = 16;
 const int images_max = 8;
+const int audio_max = 4;
 const int logprobs_max = 5;
+const int overridekv_max = 4;
 
 // match kobold's sampler list and order
 enum samplers
@@ -54,15 +56,18 @@ struct load_model_inputs
     const int clblast_info = 0;
     const int kcpp_main_gpu = 0;
     const char * vulkan_info = nullptr;
-    const int blasbatchsize = 512;
-    const int forceversion = 0;
+    const int batchsize = 512;
+    const bool autofit = false;
+    const int autofit_tax_mb = 0;
     const int gpulayers = 0;
     const float rope_freq_scale = 1.0f;
     const float rope_freq_base = 10000.0f;
+    const int overridenativecontext = 0;
     const int moe_experts = -1;
+    const int moecpu = 0;
     const bool no_bos_token = false;
     const bool load_guidance = false;
-    const char * override_kv = nullptr;
+    const char * override_kv[overridekv_max] = {};
     const char * override_tensors = nullptr;
     const bool flash_attention = false;
     const float tensor_split[tensor_split_max] = {};
@@ -71,7 +76,11 @@ struct load_model_inputs
     const bool check_slowness = false;
     const bool highpriority = false;
     const bool swa_support = false;
+    const bool smartcache = false;
+    const int smartcacheslots = 0;
+    const bool pipelineparallel = false;
     const float lora_multiplier = 1.0f;
+    const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
 };
@@ -83,6 +92,7 @@ struct generation_inputs
     const char * negative_prompt = nullptr;
     const float guidance_scale = 1;
     const char * images[images_max] = {};
+    const char * audio[audio_max] = {};
     const int max_context_length = 0;
     const int max_length = 0;
     const float temperature = 0.0f;
@@ -98,14 +108,15 @@ struct generation_inputs
     const float rep_pen_slope = 1.0f;
     const float presence_penalty = 0.0f;
     const int mirostat = 0;
-    const float mirostat_eta = 0.0f;
     const float mirostat_tau = 0.0f;
+    const float mirostat_eta = 0.0f;
     const float xtc_threshold = 0.0f;
     const float xtc_probability = 0.0f;
     const samplers sampler_order[KCPP_SAMPLER_MAX] = {};
     const int sampler_len = 0;
     const bool allow_eos_token = false;
     const bool bypass_eos_token = false;
+    const bool tool_call_fix = false; //this prevents close square bracket ] from being generated early.
     const bool render_special = false;
     const bool stream_sse = false;
     const char * grammar = nullptr;
@@ -113,6 +124,9 @@ struct generation_inputs
     const float dynatemp_range = 0.0f;
     const float dynatemp_exponent = 1.0f;
     const float smoothing_factor = 0.0f;
+    const float smoothing_curve = 1.0f;
+    const float adaptive_target = -1.0f;
+    const float adaptive_decay = 0.9f;
     const float dry_multiplier = 0.0f;
     const float dry_base = 0.0f;
     const int dry_allowed_length = 0;
@@ -161,17 +175,25 @@ struct sd_load_model_inputs
     const char * vulkan_info = nullptr;
     const int threads = 0;
     const int quant = 0;
+    const bool flash_attention = false;
+    const bool offload_cpu = false;
+    const bool vae_cpu = false;
+    const bool clip_cpu = false;
+    const bool diffusion_conv_direct = false;
+    const bool vae_conv_direct = false;
     const bool taesd = false;
     const int tiled_vae_threshold = 0;
     const char * t5xxl_filename = nullptr;
-    const char * clipl_filename = nullptr;
-    const char * clipg_filename = nullptr;
+    const char * clip1_filename = nullptr;
+    const char * clip2_filename = nullptr;
     const char * vae_filename = nullptr;
     const char * lora_filename = nullptr;
     const float lora_multiplier = 1.0f;
+    const int lora_apply_mode = 0;
     const char * photomaker_filename = nullptr;
     const int img_hard_limit = 0;
     const int img_soft_limit = 0;
+    const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
 };
@@ -186,14 +208,29 @@ struct sd_generation_inputs
     const bool flip_mask = false;
     const float denoising_strength = 0.0f;
     const float cfg_scale = 0.0f;
+    const float distilled_guidance = -1.0f;
+    const int shifted_timestep = 0;
     const int sample_steps = 0;
     const int width = 0;
     const int height = 0;
     const int seed = 0;
     const char * sample_method = nullptr;
+    const char * scheduler = nullptr;
     const int clip_skip = -1;
+    const int vid_req_frames = 1;
+    const int video_output_type = 0; //0=gif, 1=avi, 2=both
+    const bool remove_limits = false;
+    const bool circular_x = false;
+    const bool circular_y = false;
 };
 struct sd_generation_outputs
+{
+    int status = -1;
+    int animated = 0;
+    const char * data = "";
+    const char * data_extra = "";
+};
+struct sd_info_outputs
 {
     int status = -1;
     const char * data = "";
@@ -206,6 +243,7 @@ struct whisper_load_model_inputs
     const int clblast_info = 0;
     const int kcpp_main_gpu = 0;
     const char * vulkan_info = nullptr;
+    const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
 };
@@ -234,6 +272,7 @@ struct tts_load_model_inputs
     const int gpulayers = 0;
     const bool flash_attention = false;
     const int ttsmaxlen = 4096;
+    const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
 };
@@ -242,6 +281,7 @@ struct tts_generation_inputs
     const char * prompt = nullptr;
     const int speaker_seed = 0;
     const int audio_seed = 0;
+    const char * custom_speaker_voice = "";
     const char * custom_speaker_text = "";
     const char * custom_speaker_data = "";
 };
@@ -263,6 +303,7 @@ struct embeddings_load_model_inputs
     const bool flash_attention = false;
     const bool use_mmap = false;
     const int embeddingsmaxctx = 0;
+    const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
 };
@@ -284,6 +325,8 @@ extern std::string mmproj_filename;
 extern std::string draftmodel_filename;
 extern std::vector<std::string> generated_tokens;
 extern bool generation_finished;
+extern bool audio_multimodal_supported;
+extern bool vision_multimodal_supported;
 extern float last_eval_time;
 extern float last_process_time;
 extern int last_token_count;

@@ -11,6 +11,17 @@
 #include <sstream>
 #include <ctime>
 
+#define MINIAUDIO_IMPLEMENTATION
+#ifndef MTMD_AUDIO_DEBUG
+#   define MA_NO_ENCODING
+#endif
+#define MA_NO_DEVICE_IO
+#define MA_NO_RESOURCE_MANAGER
+#define MA_NO_NODE_GRAPH
+#define MA_NO_ENGINE
+#define MA_NO_GENERATION
+// #define MA_API static
+#include "miniaudio/miniaudio.h"
 
 void utreplace(std::string & str, const std::string & needle, const std::string & replacement) {
     size_t pos = 0;
@@ -345,6 +356,16 @@ std::string get_timestamp_str()
     return timestamp;
 }
 
+//split a big vector into multiple small vectors of chunk size or less
+std::vector<std::vector<int>> split_big_vector(const std::vector<int>& big_arr, size_t chunk_size) {
+    std::vector<std::vector<int>> small_arrs;
+    for (size_t i = 0; i < big_arr.size(); i += chunk_size) {
+        size_t end = std::min(i + chunk_size, big_arr.size());
+        small_arrs.emplace_back(big_arr.begin() + i, big_arr.begin() + end);
+    }
+    return small_arrs;
+}
+
 std::vector<float> resample_wav(const std::vector<float>& input, uint32_t input_rate, uint32_t output_rate) {
 
     size_t input_size = input.size();
@@ -456,92 +477,166 @@ int32_t kcpp_quick_sample(float * logits, const int n_logits, const std::vector<
     return logits_id[idx].second;
 }
 
-kcpp_embd_batch::kcpp_embd_batch(float * embd, int32_t n_tokens, int32_t npast, bool use_mrope)
-{
-     int32_t seq_id = 0;
-        pos.resize(n_tokens * (use_mrope?4:1));
-        std::fill(pos.begin(), pos.end(), 0);
-        n_seq_id.resize(n_tokens);
-        seq_ids.resize(n_tokens + 1);
-        logits.resize(n_tokens);
-        seq_id_0.resize(1);
-        seq_id_0[0] = seq_id;
-        seq_ids [n_tokens] = nullptr;
-        batch = {
-            /*n_tokens       =*/ n_tokens,
-            /*tokens         =*/ nullptr,
-            /*embd           =*/ embd,
-            /*pos            =*/ pos.data(),
-            /*n_seq_id       =*/ n_seq_id.data(),
-            /*seq_id         =*/ seq_ids.data(),
-            /*logits         =*/ logits.data(),
-        };
+void kcpp_embd_batch::init_kcpp_batch(int32_t n_tokens,
+                                      int32_t npast,
+                                      bool    use_mrope,
+                                      bool    return_all_logits,
+                                      bool    mrope_is_image,
+                                      int     img_nx,
+                                      int     img_ny) {
+    const int          n_pos_per_embd = use_mrope ? 4 : 1;
+    const llama_seq_id seq_id         = 0;
 
-        if(!use_mrope)
-        {
-           for (int i = 0; i < n_tokens; i++) {
-                batch.pos     [i] = npast + i;
-                batch.n_seq_id[i] = 1;
-                batch.seq_id  [i] = seq_id_0.data();
-                batch.logits  [i] = false;
+    if (use_mrope && mrope_is_image) {
+        GGML_ASSERT(img_nx > 0 && img_ny > 0);
+        GGML_ASSERT(img_nx * img_ny == n_tokens);
+    }
+
+    pos.resize(n_tokens * n_pos_per_embd);
+    std::fill(pos.begin(), pos.end(), 0);
+
+    n_seq_id.resize(n_tokens);
+    seq_ids.resize(n_tokens + 1);
+    logits.resize(n_tokens);
+    seq_id_0.resize(1);
+
+    seq_id_0[0]       = seq_id;
+    seq_ids[n_tokens] = nullptr;
+
+    batch.pos      = pos.data();
+    batch.n_seq_id = n_seq_id.data();
+    batch.seq_id   = seq_ids.data();
+    batch.logits   = logits.data();
+
+    for (int i = 0; i < n_tokens; ++i) {
+        n_seq_id[i] = 1;
+        seq_ids[i]  = seq_id_0.data();
+        logits[i]   = return_all_logits;
+    }
+
+    // ---- position encoding ----
+    if (!use_mrope) {
+        for (int i = 0; i < n_tokens; ++i) {
+            pos[i] = npast + i;
+        }
+    } else if (!mrope_is_image) {
+        // 1D M-RoPE (audio / embedding stream)
+        for (int i = 0; i < n_tokens; ++i) {
+            pos[i + 0 * n_tokens] = npast + i;
+            pos[i + 1 * n_tokens] = npast + i;
+            pos[i + 2 * n_tokens] = npast + i;
+            pos[i + 3 * n_tokens] = 0;
+        }
+    } else {
+        // 2D image M-RoPE
+        int idx = 0;
+        for (int y = 0; y < img_ny; ++y) {
+            for (int x = 0; x < img_nx; ++x) {
+                pos[idx + 0 * n_tokens] = npast;
+                pos[idx + 1 * n_tokens] = npast + y;
+                pos[idx + 2 * n_tokens] = npast + x;
+                pos[idx + 3 * n_tokens] = 0;
+                ++idx;
             }
         }
-        else
-        {
-            for (int i = 0; i < n_tokens; i++) {
-                batch.n_seq_id[i] = 1;
-                batch.seq_id  [i] = seq_id_0.data();
-                batch.logits  [i] = false;
-            }
-             for (int j = 0; j < batch.n_tokens * 3; j++) {
-                batch.pos[j] = npast + (j % batch.n_tokens);
-            }
-        }
+    }
+
+    // Always request logits for last token
+    logits[n_tokens - 1] = true;
 }
 
-kcpp_embd_batch::kcpp_embd_batch(std::vector<llama_token> & tokens, int32_t npast, bool use_mrope, bool return_all_logits)
-{
-       int32_t seq_id = 0;
-        int32_t n_tokens = tokens.size();
-        pos.resize(n_tokens * (use_mrope?4:1));
-        std::fill(pos.begin(), pos.end(), 0);
-        n_seq_id.resize(n_tokens);
-        seq_ids.resize(n_tokens + 1);
-        logits.resize(n_tokens);
-        seq_id_0.resize(1);
-        seq_id_0[0] = seq_id;
-        seq_ids[n_tokens] = nullptr;
-        batch = {
-            /*n_tokens       =*/ n_tokens,
-            /*tokens         =*/ tokens.data(),
-            /*embd           =*/ nullptr,
-            /*pos            =*/ pos.data(),
-            /*n_seq_id       =*/ n_seq_id.data(),
-            /*seq_id         =*/ seq_ids.data(),
-            /*logits         =*/ logits.data(),
-        };
+//for embeddings
+kcpp_embd_batch::kcpp_embd_batch(float * embd,
+                                 int32_t n_tokens,
+                                 int32_t npast,
+                                 bool    use_mrope,
+                                 bool    mrope_is_image,
+                                 int     img_nx,
+                                 int     img_ny) {
+    batch = {
+        /* n_tokens = */ n_tokens,
+        /* tokens   = */ nullptr,
+        /* embd     = */ embd,
+        /* pos      = */ nullptr,
+        /* n_seq_id = */ nullptr,
+        /* seq_id   = */ nullptr,
+        /* logits   = */ nullptr,
+    };
 
-        if(!use_mrope)
-        {
-           for (int i = 0; i < n_tokens; i++) {
-                batch.pos     [i] = npast + i;
-                batch.n_seq_id[i] = 1;
-                batch.seq_id  [i] = seq_id_0.data();
-                batch.logits  [i] = (return_all_logits?true:false);
-            }
+    init_kcpp_batch(n_tokens, npast, use_mrope,
+                    /*return_all_logits=*/false, mrope_is_image, img_nx, img_ny);
+}
+
+// for tokens
+kcpp_embd_batch::kcpp_embd_batch(std::vector<llama_token> & tokens,
+                                 int32_t                    npast,
+                                 bool                       use_mrope,
+                                 bool                       return_all_logits,
+                                 bool                       mrope_is_image,
+                                 int                        img_nx,
+                                 int                        img_ny) {
+    batch = {
+        /* n_tokens = */ (int32_t) tokens.size(),
+        /* tokens   = */ tokens.data(),
+        /* embd     = */ nullptr,
+        /* pos      = */ nullptr,
+        /* n_seq_id = */ nullptr,
+        /* seq_id   = */ nullptr,
+        /* logits   = */ nullptr,
+    };
+
+    init_kcpp_batch(batch.n_tokens, npast, use_mrope, return_all_logits, mrope_is_image, img_nx, img_ny);
+}
+
+llama_batch kcpp_embd_batch::get_view(int offset, int n_tokens, int n_embd_mmproj) {
+    GGML_ASSERT(offset >= 0);
+    GGML_ASSERT(n_tokens > 0);
+    GGML_ASSERT(offset + n_tokens <= batch.n_tokens);
+
+    const int total_tokens = batch.n_tokens;
+    llama_pos * pos_ptr = nullptr;
+
+    // Detect M-RoPE vs normal RoPE
+    const bool is_mrope = (pos.size() > (size_t)total_tokens);
+
+    pos_view.clear();
+
+    if (is_mrope) {
+        const int n_pos_per_embd = pos.size() / total_tokens;
+        GGML_ASSERT(n_pos_per_embd == 4);
+
+        // Layout:
+        // src: [dim0_all_tokens][dim1_all_tokens][dim2_all_tokens][dim3_all_tokens]
+        // dst: same layout, but only [offset : offset + n_tokens]
+        pos_view.reserve(n_tokens * n_pos_per_embd);
+
+        for (int dim = 0; dim < n_pos_per_embd; ++dim) {
+            const llama_pos * src =
+                pos.data() + dim * total_tokens + offset;
+
+            pos_view.insert(
+                pos_view.end(),
+                src,
+                src + n_tokens
+            );
         }
-        else
-        {
-            for (int i = 0; i < n_tokens; i++) {
-                batch.n_seq_id[i] = 1;
-                batch.seq_id  [i] = seq_id_0.data();
-                batch.logits  [i] = (return_all_logits?true:false);
-            }
-             for (int j = 0; j < batch.n_tokens * 3; j++) {
-                batch.pos[j] = npast + (j % batch.n_tokens);
-            }
-        }
-        batch.logits[n_tokens - 1] = true;
+
+        pos_ptr = pos_view.data();
+    }
+    else {
+        // Normal RoPE: contiguous slice
+        pos_ptr = pos.data() + offset;
+    }
+
+    return {
+        /* n_tokens = */ n_tokens,
+        /* tokens   = */ nullptr,
+        /* embd     = */ batch.embd ? batch.embd + offset*n_embd_mmproj : nullptr,
+        /* pos      = */ pos_ptr,
+        /* n_seq_id = */ batch.n_seq_id + offset,
+        /* seq_id   = */ batch.seq_id   + offset,
+        /* logits   = */ batch.logits   + offset,
+    };
 }
 
 std::vector<std::string> split_string(const std::string& input, const std::string& separator) {
@@ -559,4 +654,98 @@ std::vector<std::string> split_string(const std::string& input, const std::strin
     result.push_back(input.substr(start));
 
     return result;
+}
+
+
+static bool buf_is_audio_file(const char * buf, size_t len) {
+    if (len < 12) {
+        return false;
+    }
+
+    // RIFF ref: https://en.wikipedia.org/wiki/Resource_Interchange_File_Format
+    // WAV ref: https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html
+    bool is_wav = memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WAVE", 4) == 0;
+    bool is_mp3 = len >= 3 && (
+        memcmp(buf, "ID3", 3) == 0 ||
+        // Check for MPEG sync word (simplified check)
+        ((unsigned char)buf[0] == 0xFF && ((unsigned char)buf[1] & 0xE0) == 0xE0)
+    );
+    bool is_flac = memcmp(buf, "fLaC", 4) == 0;
+
+    return is_wav || is_mp3 || is_flac;
+}
+
+// returns true if the buffer is a valid audio file
+bool kcpp_decode_audio_from_buf(const unsigned char * buf_in, size_t len, int target_sampler_rate, std::vector<float> & pcmf32_mono) {
+    if (!buf_is_audio_file((const char *)buf_in, len))
+    {
+        return false;
+    }
+
+    ma_result result;
+    const int channels = 1;
+    ma_decoder_config decoder_config = ma_decoder_config_init(ma_format_f32, channels, target_sampler_rate);
+    ma_decoder decoder;
+
+    result = ma_decoder_init_memory(buf_in, len, &decoder_config, &decoder);
+    if (result != MA_SUCCESS) {
+        return false;
+    }
+
+    ma_uint64 frame_count;
+    ma_uint64 frames_read;
+    result = ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count);
+    if (result != MA_SUCCESS) {
+        ma_decoder_uninit(&decoder);
+        return false;
+    }
+
+    pcmf32_mono.resize(frame_count);
+    result = ma_decoder_read_pcm_frames(&decoder, pcmf32_mono.data(), frame_count, &frames_read);
+    if (result != MA_SUCCESS) {
+        ma_decoder_uninit(&decoder);
+        return false;
+    }
+
+    ma_decoder_uninit(&decoder);
+    return true;
+}
+
+static std::vector<std::string> kcpp_string_split(const std::string & input, char separator)
+{
+    std::vector<std::string> parts;
+    size_t begin_pos = 0;
+    size_t separator_pos = input.find(separator);
+    while (separator_pos != std::string::npos) {
+        std::string part = input.substr(begin_pos, separator_pos - begin_pos);
+        parts.emplace_back(part);
+        begin_pos = separator_pos + 1;
+        separator_pos = input.find(separator, begin_pos);
+    }
+    parts.emplace_back(input.substr(begin_pos, separator_pos - begin_pos));
+    return parts;
+}
+
+//for llama.cpp style device overrides e.g. --device Vulkan0,Vulkan1
+std::vector<ggml_backend_dev_t> kcpp_parse_device_list(const std::string & value) {
+    std::vector<ggml_backend_dev_t> devices;
+    auto dev_names = kcpp_string_split(value, ',');
+    if (dev_names.empty()) {
+        printf("\nkcpp_parse_device_list error: no devices specified\n");
+        return std::vector<ggml_backend_dev_t>();
+    }
+    if (dev_names.size() == 1 && dev_names[0] == "none") {
+        return std::vector<ggml_backend_dev_t>();
+    } else {
+        for (const auto & device : dev_names) {
+            auto * dev = ggml_backend_dev_by_name(device.c_str());
+            if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                printf("\nkcpp_parse_device_list error: invalid device: %s\n",device.c_str());
+                return std::vector<ggml_backend_dev_t>();
+            }
+            devices.push_back(dev);
+        }
+        devices.push_back(nullptr);
+    }
+    return devices;
 }

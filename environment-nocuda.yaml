@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.10
+  - python=3.8
   - cxx-compiler
   - gxx=10
   - pip
@@ -17,5 +17,7 @@ dependencies:
   - ocl-icd-system
   - libvulkan-loader
   - tk=*=xft_*
+  - psutil
+  - jinja2
   - pip:
     - customtkinter

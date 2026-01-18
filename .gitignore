@@ -142,6 +142,7 @@ rocblas.dll
 hipblas.dll
 koboldcpp_hipblas.so
 koboldcpp_hipblas.dll
+.tokenizer_configs
 
 bin/
 conda/

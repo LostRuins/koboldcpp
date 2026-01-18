@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <vector>
+#include <cstring>
 
 
 #if defined(GGML_USE_HIP)
@@ -19,9 +20,21 @@
 // for rocblas_initialize()
 #include "rocblas/rocblas.h"
 #endif // __HIP_PLATFORM_AMD__
+
+#if HIP_VERSION >= 60500000
+#define CUBLAS_COMPUTE_16F HIPBLAS_COMPUTE_16F
+#define CUBLAS_COMPUTE_32F HIPBLAS_COMPUTE_32F
+#define CUBLAS_COMPUTE_32F_FAST_16F HIPBLAS_COMPUTE_32F_FAST_16F
+#define cublasComputeType_t hipblasComputeType_t
+#define cudaDataType_t hipDataType
+#else
 #define CUBLAS_COMPUTE_16F HIPBLAS_R_16F
 #define CUBLAS_COMPUTE_32F HIPBLAS_R_32F
 #define CUBLAS_COMPUTE_32F_FAST_16F HIPBLAS_R_32F
+#define cublasComputeType_t hipblasDatatype_t
+#define cudaDataType_t hipblasDatatype_t
+#endif // HIP_VERSION >= 6050000
+
 #define CUBLAS_GEMM_DEFAULT HIPBLAS_GEMM_DEFAULT
 #define CUBLAS_GEMM_DEFAULT_TENSOR_OP HIPBLAS_GEMM_DEFAULT
 #define CUBLAS_OP_N HIPBLAS_OP_N
@@ -31,7 +44,6 @@
 #define CUDA_R_16F  HIPBLAS_R_16F
 #define CUDA_R_32F  HIPBLAS_R_32F
 #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
-#define cublasComputeType_t hipblasDatatype_t //deprecated, new hipblasComputeType_t not in 5.6
 #define cublasCreate hipblasCreate
 #define cublasGemmEx hipblasGemmEx
 #define cublasGemmBatchedEx hipblasGemmBatchedEx
@@ -41,7 +53,6 @@
 #define cublasSetStream hipblasSetStream
 #define cublasSgemm hipblasSgemm
 #define cublasStatus_t hipblasStatus_t
-#define cudaDataType_t hipblasDatatype_t //deprecated, new hipblasDatatype not in 5.6
 #define cudaDeviceCanAccessPeer hipDeviceCanAccessPeer
 #define cudaDeviceDisablePeerAccess hipDeviceDisablePeerAccess
 #define cudaDeviceEnablePeerAccess hipDeviceEnablePeerAccess
@@ -7857,7 +7868,7 @@ static void ggml_v3_cuda_op_leaky_relu(
     GGML_V3_ASSERT( dst->type == GGML_V3_TYPE_F32);
 
     float negative_slope;
-    memcpy(&negative_slope, dst->op_params, sizeof(float));
+    std::memcpy(&negative_slope, dst->op_params, sizeof(float));
 
     leaky_relu_f32_cuda(src0_dd, dst_dd, ggml_v3_nelements(src0), negative_slope, main_stream);
 
@@ -7891,7 +7902,7 @@ static void ggml_v3_cuda_op_norm(
     const int64_t nrows = ggml_v3_nrows(src0);
 
     float eps;
-    memcpy(&eps, dst->op_params, sizeof(float));
+    std::memcpy(&eps, dst->op_params, sizeof(float));
 
     norm_f32_cuda(src0_dd, dst_dd, ne00, nrows, eps, main_stream);
 
@@ -7977,7 +7988,7 @@ static void ggml_v3_cuda_op_rms_norm(
     const int64_t nrows = ggml_v3_nrows(src0);
 
     float eps;
-    memcpy(&eps, dst->op_params, sizeof(float));
+    std::memcpy(&eps, dst->op_params, sizeof(float));
 
     rms_norm_f32_cuda(src0_dd, dst_dd, ne00, nrows, eps, main_stream);
 
@@ -8370,12 +8381,12 @@ static void ggml_v3_cuda_op_rope(
 
     // RoPE alteration for extended context
     float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
-    memcpy(&freq_base,   (int32_t *) dst->op_params +  5, sizeof(float));
-    memcpy(&freq_scale,  (int32_t *) dst->op_params +  6, sizeof(float));
-    memcpy(&ext_factor,  (int32_t *) dst->op_params +  7, sizeof(float));
-    memcpy(&attn_factor, (int32_t *) dst->op_params +  8, sizeof(float));
-    memcpy(&beta_fast,   (int32_t *) dst->op_params +  9, sizeof(float));
-    memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
+    std::memcpy(&freq_base,   (int32_t *) dst->op_params +  5, sizeof(float));
+    std::memcpy(&freq_scale,  (int32_t *) dst->op_params +  6, sizeof(float));
+    std::memcpy(&ext_factor,  (int32_t *) dst->op_params +  7, sizeof(float));
+    std::memcpy(&attn_factor, (int32_t *) dst->op_params +  8, sizeof(float));
+    std::memcpy(&beta_fast,   (int32_t *) dst->op_params +  9, sizeof(float));
+    std::memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
 
     const int32_t * pos = nullptr;
     if ((mode & 1) == 0) {
@@ -8444,7 +8455,7 @@ static void ggml_v3_cuda_op_alibi(
     //const int n_past = ((int32_t *) dst->op_params)[0];
     const int n_head = ((int32_t *) dst->op_params)[1];
     float max_bias;
-    memcpy(&max_bias, (int32_t *) dst->op_params + 2, sizeof(float));
+    std::memcpy(&max_bias, (int32_t *) dst->op_params + 2, sizeof(float));
 
     //GGML_V3_ASSERT(ne01 + n_past == ne00);
     GGML_V3_ASSERT(n_head == ne02);
@@ -8565,7 +8576,7 @@ static void ggml_v3_cuda_op_soft_max(
     const int64_t nrows_y = src1 ? ggml_v3_nrows(src1) : 1;
 
     float scale = 1.0f;
-    memcpy(&scale, dst->op_params, sizeof(float));
+    std::memcpy(&scale, dst->op_params, sizeof(float));
 
 #if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && CUDART_VERSION >= CUDART_HMAX
 #ifdef GGML_V3_CUDA_F16
@@ -8594,7 +8605,7 @@ static void ggml_v3_cuda_op_scale(
     GGML_V3_ASSERT( dst->type == GGML_V3_TYPE_F32);
 
     float scale;
-    memcpy(&scale, dst->op_params, sizeof(float));
+    std::memcpy(&scale, dst->op_params, sizeof(float));
 
     scale_f32_cuda(src0_dd, dst_dd, scale, ggml_v3_nelements(src0), main_stream);
     CUDA_CHECK(cudaGetLastError());
@@ -8613,8 +8624,8 @@ static void ggml_v3_cuda_op_clamp(
 
     float min;
     float max;
-    memcpy(&min, dst->op_params, sizeof(float));
-    memcpy(&max, (float *) dst->op_params + 1, sizeof(float));
+    std::memcpy(&min, dst->op_params, sizeof(float));
+    std::memcpy(&max, (float *) dst->op_params + 1, sizeof(float));
 
     clamp_f32_cuda(src0_dd, dst_dd, min, max, ggml_v3_nelements(src0), main_stream);
     CUDA_CHECK(cudaGetLastError());
@@ -9643,7 +9654,7 @@ static void ggml_v3_cuda_mul_mat_id(const ggml_v3_tensor * src0, const ggml_v3_t
         CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_v3_nbytes(ids), cudaMemcpyDeviceToHost, stream));
         CUDA_CHECK(cudaStreamSynchronize(stream));
     } else {
-        memcpy(ids_host.data(), ids->data, ggml_v3_nbytes(ids));
+        std::memcpy(ids_host.data(), ids->data, ggml_v3_nbytes(ids));
     }
 
     const ggml_v3_tensor_extra_gpu * src1_extra = (const ggml_v3_tensor_extra_gpu *) src1->extra;
@@ -10020,7 +10031,7 @@ static void ggml_v3_cuda_assign_buffers_impl(struct ggml_v3_tensor * tensor, boo
         char * src0_ddc = (char *) src0_extra->data_device[g_main_device_v3];
         size_t offset = 0;
         if (tensor->op == GGML_V3_OP_VIEW) {
-            memcpy(&offset, tensor->op_params, sizeof(size_t));
+            std::memcpy(&offset, tensor->op_params, sizeof(size_t));
         }
         extra = ggml_v3_cuda_alloc_temp_tensor_extra();
         extra->data_device[g_main_device_v3] = src0_ddc + offset;
@@ -10076,7 +10087,7 @@ void ggml_v3_cuda_assign_scratch_offset(struct ggml_v3_tensor * tensor, size_t o
         char * src0_ddc = (char *) src0_extra->data_device[g_main_device_v3];
         size_t view_offset = 0;
         if (tensor->op == GGML_V3_OP_VIEW) {
-            memcpy(&view_offset, tensor->op_params, sizeof(size_t));
+            std::memcpy(&view_offset, tensor->op_params, sizeof(size_t));
         }
         extra->data_device[g_main_device_v3] = src0_ddc + view_offset;
     } else {

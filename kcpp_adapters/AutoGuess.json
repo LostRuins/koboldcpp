@@ -12,20 +12,7 @@
     }
 }, {
     "search": ["<|im_start|>assistant", "<|im_end|>", "You are provided with function signatures within <tools>"],
-    "name": "ChatML (Qwen 2.5 based).",
-    "adapter": {
-        "system_start": "<|im_start|>system\n",
-        "system_end": "<|im_end|>\n",
-        "user_start": "<|im_start|>user\n",
-        "user_end": "<|im_end|>\n",
-        "assistant_start": "<|im_start|>assistant\n",
-        "assistant_end": "<|im_end|>\n",
-        "tools_start": "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n\n<tools>\n",
-        "tools_end": "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n"
-    }
-}, {
-    "search": ["<|im_start|>assistant", "<|im_end|>"],
-    "name": "ChatML (Generic).",
+    "name": "ChatML (Qwen 2.5 based)",
     "adapter": {
         "system_start": "<|im_start|>system\n",
         "system_end": "<|im_end|>\n",
@@ -35,8 +22,30 @@
         "assistant_end": "<|im_end|>\n"
     }
 }, {
+    "search": ["<|im_user|>{{role_name}}<|im_middle|>", "<|im_assistant|>{{role_name}}<|im_middle|>", "<|im_end|>"],
+    "name": "ChatML (Kimi)",
+    "adapter": {
+        "system_start": "<|im_system|>system<|im_middle|>",
+        "system_end": "<|im_end|>",
+        "user_start": "<|im_user|>user<|im_middle|>",
+        "user_end": "<|im_end|>",
+        "assistant_start": "<|im_assistant|>assistant<|im_middle|>",
+        "assistant_end": "<|im_end|>"
+    }
+}, {
+    "search": ["<|im_user|>", "<|im_system|>system<|im_middle|>", "<|im_end|>"],
+    "name": "ChatML (Kimi Alternate)",
+    "adapter": {
+        "system_start": "<|im_system|>system<|im_middle|>",
+        "system_end": "<|im_end|>",
+        "user_start": "<|im_user|>user<|im_middle|>",
+        "user_end": "<|im_end|>",
+        "assistant_start": "<|im_assistant|>assistant<|im_middle|>",
+        "assistant_end": "<|im_end|>"
+    }
+}, {
     "search": ["System role not supported", "<start_of_turn>"],
-    "name": "Google Gemma 2.",
+    "name": "Google Gemma 2",
     "adapter": {
         "system_start": "<start_of_turn>user\n",
         "system_end": "<end_of_turn>\n",
@@ -47,7 +56,7 @@
     }
 }, {
     "search": ["<start_of_image>", "<start_of_turn>", "<end_of_turn>"],
-    "name": "Google Gemma 3.",
+    "name": "Google Gemma 3",
     "adapter": {
         "system_start": "<start_of_turn>user\n",
         "system_end": "<end_of_turn>\n",
@@ -58,7 +67,7 @@
     }
 }, {
     "search": ["<image_soft_token>", "<start_of_turn>model", "<end_of_turn>"],
-    "name": "Google Gemma 3n.",
+    "name": "Google Gemma 3n",
     "adapter": {
         "system_start": "<start_of_turn>user\n",
         "system_end": "<end_of_turn>\n",
@@ -69,7 +78,7 @@
     }
 },{
     "search": ["<|start_header_id|>assistant<|end_header_id|>"],
-    "name": "Llama 3.x.",
+    "name": "Llama 3.x",
     "adapter": {
         "system_start": "<|start_header_id|>system<|end_header_id|>\n\n",
         "system_end": "<|eot_id|>",
@@ -90,8 +99,19 @@
         "assistant_end": "<|eot|>"
     }
 }, {
+    "search": ["<|start_of_role|>system<|end_of_role|>"],
+    "name": "Granite 4",
+    "adapter": {
+        "system_start": "<|start_of_role|>system<|end_of_role|>",
+        "system_end": "<|end_of_text|>\n",
+        "user_start": "<|start_of_role|>user<|end_of_role|>",
+        "user_end": "<|end_of_text|>\n",
+        "assistant_start": "<|start_of_role|>assistant<|end_of_role|>",
+        "assistant_end": "<|end_of_text|>\n"
+    }
+}, {
     "search": ["[/INST]", "[SYSTEM_PROMPT]"],
-    "name": "Mistral V7 (with system prompt)",
+    "name": "Mistral Tekken",
     "adapter": {
         "system_start": "[SYSTEM_PROMPT]",
         "system_end": "[/SYSTEM_PROMPT]",
@@ -102,24 +122,14 @@
     }
 }, {
     "search": ["[/INST]", "\"[INST] \" + system_message"],
-    "name": "Mistral V3",
+    "name": "Mistral Non-Tekken",
     "adapter": {
         "system_start": "[INST] ",
         "system_end": "[/INST]",
         "user_start": "[INST] ",
         "user_end": "",
-        "assistant_start": "[/INST]",
-        "assistant_end": "</s>"
-    }
-}, {
-    "search": ["[/INST]"],
-    "name": "Mistral (Generic)",
-    "adapter": {
-        "system_start": "[INST]",
-        "system_end": "[/INST]\n",
-        "user_start": "[INST]",
-        "user_end": "",
-        "assistant_start": "[/INST]\n",
+        "assistant_start": "[/INST] ",
+        "assistant_gen": "[/INST]",
         "assistant_end": "</s>"
     }
 }, {
@@ -148,12 +158,12 @@
     "search": ["'<|' + message['role'] + '|>'"],
     "name": "Phi 4 (mini)",
     "adapter": {
-        "system_start": "<|system|>\n",
-        "system_end": "<|end|>\n",
-        "user_start": "<|user|>\n",
-        "user_end": "<|end|>\n",
-        "assistant_start": "<|assistant|>\n",
-        "assistant_end": "<|end|>\n"
+        "system_start": "<|system|>",
+        "system_end": "<|end|>",
+        "user_start": "<|user|>",
+        "user_end": "<|end|>",
+        "assistant_start": "<|assistant|>",
+        "assistant_end": "<|end|>"
     }
 }, {
     "search": ["<|START_OF_TURN_TOKEN|>"],
@@ -178,15 +188,94 @@
         "assistant_end": "<｜end▁of▁sentence｜>"
     }
 }, {
-    "search": ["rwkv-world"],
+    "search": ["<|bom|>","is_last_checked_defined"],
+    "name": "Jamba",
+    "adapter": {
+        "system_start": "<|bom|><|system|> ",
+        "system_end": "<|eom|>",
+        "user_start": "<|bom|><|user|> ",
+        "user_end": "<|eom|>",
+        "assistant_start": "<|bom|><|assistant|> ",
+        "assistant_gen": "<|bom|><|assistant|>",
+        "assistant_end": "<|eom|>"
+    }
+}, {
+    "search": ["<|userprompt|>", "<|endofuserprompt|>", "<|response|>", "<|endofresponse|>"],
+    "name": "Dots",
+    "adapter": {
+        "system_start": "<|system|>",
+        "system_end": "<|endofsystem|>",
+        "user_start": "<|userprompt|>",
+        "user_end": "<|endofuserprompt|>",
+        "assistant_start": "<|response|>",
+        "assistant_end": "<|endofresponse|>"
+    }
+}, {
+    "search": ["<|start|>user<|message|>", "<|channel|>", "<|end|>"],
+    "name": "OpenAI Harmony",
+    "adapter": {
+        "system_start": "<|start|>developer<|message|># Instructions\n\n",
+        "system_end": "\n\n<|end|>",
+        "user_start": "<|start|>user<|message|>",
+        "user_end": "<|end|>",
+        "assistant_start": "<|start|>assistant<|channel|>analysis<|message|>We can answer immediately.<|end|><|start|>assistant<|channel|>final<|message|>",
+        "assistant_end": "<|end|>"
+    }
+}, {
+    "search": ["<seed:bos>", "<seed:eos>"],
+    "name": "Seed OSS",
+    "adapter": {
+        "system_start": "<seed:bos>system\n",
+        "system_end": "<seed:eos>",
+        "user_start": "<seed:bos>user\n",
+        "user_end": "<seed:eos>",
+        "assistant_start": "<seed:bos>assistant\n",
+        "assistant_end": "<seed:eos>"
+    }
+}, {
+    "search": ["rwkv_", "'User: '"],
     "name": "RWKV World",
     "adapter": {
         "system_start": "",
         "system_end": "\n\n",
-        "user_start": "USER: ",
-        "user_end": "\n",
-        "assistant_start": "ASSISTANT: ",
-        "assistant_end": "</s>\n"
+        "user_start": "User: ",
+        "user_end": "\n\n",
+        "assistant_start": "Assistant: ",
+        "assistant_gen": "Assistant:",
+        "assistant_end": "\n\n"
+    }
+}, {
+    "search": ["[/INST]"],
+    "name": "Mistral (Generic)",
+    "adapter": {
+        "system_start": "[INST]",
+        "system_end": "[/INST]",
+        "user_start": "[INST]",
+        "user_end": "",
+        "assistant_start": "[/INST]",
+        "assistant_end": "</s>"
+    }
+}, {
+    "search": ["<|im_start|>assistant", "<|im_end|>"],
+    "name": "ChatML (Generic)",
+    "adapter": {
+        "system_start": "<|im_start|>system\n",
+        "system_end": "<|im_end|>\n",
+        "user_start": "<|im_start|>user\n",
+        "user_end": "<|im_end|>\n",
+        "assistant_start": "<|im_start|>assistant\n",
+        "assistant_end": "<|im_end|>\n"
+    }
+}, {
+    "search": ["[e~[","]~b]user"],
+    "name": "MiniMax",
+    "adapter": {
+		"system_start": "]~!b[]~b]system\n",
+		"system_end": "[e~[\n",
+		"user_start": "]~b]user\n",
+		"user_end": "[e~[\n",
+		"assistant_start": "]~b]ai\n",
+		"assistant_end": "[e~[\n"
     }
 }
 ]

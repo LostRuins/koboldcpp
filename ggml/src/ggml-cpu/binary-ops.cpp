@@ -47,6 +47,7 @@ static inline void vec_binary_op_non_contiguous(const int64_t n, const int64_t n
     }
 }
 
+static bool binop_sameshape_warned = false;
 template <float (*op)(float, float), typename src0_t, typename src1_t, typename dst_t>
 static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
@@ -63,7 +64,14 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
     const bool is_src1_contiguous = (nb10 == sizeof(src1_t));
 
     if (!is_src1_contiguous) { // broadcast not implemented yet for non-contiguous
-        GGML_ASSERT(ggml_are_same_shape(src0, src1));
+        if(!ggml_are_same_shape(src0, src1))
+        {
+            if(!binop_sameshape_warned)
+            {
+                binop_sameshape_warned = true;
+                GGML_ASSERT_CONTINUE(ggml_are_same_shape(src0, src1));
+            }
+        }
     }
 
 #ifdef GGML_USE_ACCELERATE

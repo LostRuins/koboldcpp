@@ -33,6 +33,7 @@ struct kcpp_params {
     float   typical_p         = 1.00f; // 1.0 = disabled
     float   temp              = 0.80f; // 1.0 = disabled
     float   smoothing_factor  = 0.00f; // 0.00 = disabled
+    float   smoothing_curve   = 1.00f; // 1.0 = disabled
     float   repeat_penalty    = 1.10f; // 1.0 = disabled
     int32_t repeat_last_n     = 64;    // last n tokens to penalize (0 = disable penalty, -1 = context size)
     float   rep_pen_slope     = 1.0f;
@@ -49,6 +50,8 @@ struct kcpp_params {
     float xtc_probability      = 0;
     float   dynatemp_range     = 0.0f;  // enables DynaTemp if neq 0. dynatemp_min = temperature - dt_range, dynatemp_max = temperature + dt_range
     float   dynatemp_exponent  = 1.0f;
+    float adaptive_target     = -1.0f; // 0.0 - 1.0, <=0.0 is disabled
+    float adaptive_decay      = 0.9f;
 
     std::string model_filename       = ""; // model path
     std::string prompt               = "";
@@ -57,6 +60,7 @@ struct kcpp_params {
     bool use_contextshift            = false;
     bool use_fastforward             = false;
     bool swa_full                    = true;
+    bool smartcache                  = false;
 };
 
 // default hparams (GPT-J 6B)
@@ -502,11 +506,20 @@ struct mpt_model {
     std::map<std::string, struct ggml_v3_tensor *> tensors;
 };
 
-struct llava_image
+struct media_chunk
+{
+   int32_t clp_image_tokens = 0; //holds number of tokens llava used in this chunk
+   float * clp_img_embd = nullptr; //this holds dynamic memory and must be freed each use!
+   int32_t nx = 0; //only used for 2d roped images
+   int32_t ny = 0;
+};
+struct media_object
 {
     std::string b64data = "";
-    int32_t clp_image_tokens = 0; //holds number of tokens llava used
-    float * clp_img_embd = nullptr; //this holds dynamic memory and must be freed each use!
+    std::vector<media_chunk> mediachunks;
+    bool is_audio = false; //if true its audio, otherwise its vision
+    std::vector<int> chunk_start_seq;
+    std::vector<int> chunk_end_seq;
 };
 
 struct speculative_draft_result
@@ -524,6 +537,8 @@ struct savestate_data
     size_t current_draft_savestate_size = 0;
     std::vector<uint8_t> current_draft_savestate_buffer;
     std::vector<gpt_vocab::id> savestate_context_tokens; //for context clones
+    int64_t last_used = 0; //unix timestamp, updated on save or load
+    std::string media_signature = "";
 };
 
 const float default_norm_eps = 1e-5f;

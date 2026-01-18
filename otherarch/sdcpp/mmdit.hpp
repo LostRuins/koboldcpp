@@ -1,6 +1,8 @@
 #ifndef __MMDIT_HPP__
 #define __MMDIT_HPP__
 
+#include <memory>
+
 #include "ggml_extend.hpp"
 #include "model.h"
 
@@ -25,13 +27,13 @@ public:
         blocks["fc2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_features, out_features, bias));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, n_token, in_features]
         auto fc1 = std::dynamic_pointer_cast<Linear>(blocks["fc1"]);
         auto fc2 = std::dynamic_pointer_cast<Linear>(blocks["fc2"]);
 
         x = fc1->forward(ctx, x);
-        x = ggml_gelu_inplace(ctx, x);
+        x = ggml_gelu_inplace(ctx->ggml_ctx, x);
         x = fc2->forward(ctx, x);
         return x;
     }
@@ -70,7 +72,7 @@ public:
                                                                bias));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, C, H, W]
         // return: [N, H*W, embed_dim]
         auto proj = std::dynamic_pointer_cast<Conv2d>(blocks["proj"]);
@@ -80,13 +82,13 @@ public:
             int64_t H = x->ne[1];
             int pad_h = (patch_size - H % patch_size) % patch_size;
             int pad_w = (patch_size - W % patch_size) % patch_size;
-            x         = ggml_pad(ctx, x, pad_w, pad_h, 0, 0);  // TODO: reflect pad mode
+            x         = ggml_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0);  // TODO: reflect pad mode
         }
         x = proj->forward(ctx, x);
 
         if (flatten) {
-            x = ggml_reshape_3d(ctx, x, x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+            x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
         }
         return x;
     }
@@ -95,26 +97,30 @@ public:
 struct TimestepEmbedder : public GGMLBlock {
     // Embeds scalar timesteps into vector representations.
 protected:
-    int64_t frequency_embedding_size;
+    int frequency_embedding_size;
 
 public:
     TimestepEmbedder(int64_t hidden_size,
-                     int64_t frequency_embedding_size = 256)
+                     int frequency_embedding_size = 256,
+                     int64_t out_channels         = 0)
         : frequency_embedding_size(frequency_embedding_size) {
+        if (out_channels <= 0) {
+            out_channels = hidden_size;
+        }
         blocks["mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(frequency_embedding_size, hidden_size, true, true));
-        blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size, true, true));
+        blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, out_channels, true, true));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* t) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* t) {
         // t: [N, ]
         // return: [N, hidden_size]
         auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
         auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
 
-        auto t_freq = ggml_nn_timestep_embedding(ctx, t, frequency_embedding_size);  // [N, frequency_embedding_size]
+        auto t_freq = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, frequency_embedding_size);  // [N, frequency_embedding_size]
 
         auto t_emb = mlp_0->forward(ctx, t_freq);
-        t_emb      = ggml_silu_inplace(ctx, t_emb);
+        t_emb      = ggml_silu_inplace(ctx->ggml_ctx, t_emb);
         t_emb      = mlp_2->forward(ctx, t_emb);
         return t_emb;
     }
@@ -129,39 +135,15 @@ public:
         blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size, true, true));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, input_dim]
         // return: [N, hidden_size]
         auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
         auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
 
         x = mlp_0->forward(ctx, x);
-        x = ggml_silu_inplace(ctx, x);
+        x = ggml_silu_inplace(ctx->ggml_ctx, x);
         x = mlp_2->forward(ctx, x);
-        return x;
-    }
-};
-
-class RMSNorm : public UnaryBlock {
-protected:
-    int64_t hidden_size;
-    float eps;
-
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
-        params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
-    }
-
-public:
-    RMSNorm(int64_t hidden_size,
-            float eps = 1e-06f)
-        : hidden_size(hidden_size),
-          eps(eps) {}
-
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
-        struct ggml_tensor* w = params["weight"];
-        x                     = ggml_rms_norm(ctx, x, eps);
-        x                     = ggml_mul(ctx, x, w);
         return x;
     }
 };
@@ -185,23 +167,23 @@ public:
             blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
         }
         if (qk_norm == "rms") {
-            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6));
-            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6));
+            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6f));
+            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6f));
         } else if (qk_norm == "ln") {
-            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6));
-            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6));
+            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6f));
+            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6f));
         }
     }
 
-    std::vector<struct ggml_tensor*> pre_attention(struct ggml_context* ctx, struct ggml_tensor* x) {
+    std::vector<struct ggml_tensor*> pre_attention(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
         auto qkv         = qkv_proj->forward(ctx, x);
-        auto qkv_vec     = split_qkv(ctx, qkv);
+        auto qkv_vec     = split_qkv(ctx->ggml_ctx, qkv);
         int64_t head_dim = qkv_vec[0]->ne[0] / num_heads;
-        auto q           = ggml_reshape_4d(ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
-        auto k           = ggml_reshape_4d(ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
-        auto v           = qkv_vec[2];                                                                                   // [N, n_token, n_head*d_head]
+        auto q           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
+        auto k           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
+        auto v           = qkv_vec[2];                                                                                             // [N, n_token, n_head*d_head]
 
         if (qk_norm == "rms" || qk_norm == "ln") {
             auto ln_q = std::dynamic_pointer_cast<UnaryBlock>(blocks["ln_q"]);
@@ -210,13 +192,13 @@ public:
             k         = ln_k->forward(ctx, k);
         }
 
-        q = ggml_reshape_3d(ctx, q, q->ne[0] * q->ne[1], q->ne[2], q->ne[3]);  // [N, n_token, n_head*d_head]
-        k = ggml_reshape_3d(ctx, k, k->ne[0] * k->ne[1], k->ne[2], k->ne[3]);  // [N, n_token, n_head*d_head]
+        q = ggml_reshape_3d(ctx->ggml_ctx, q, q->ne[0] * q->ne[1], q->ne[2], q->ne[3]);  // [N, n_token, n_head*d_head]
+        k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0] * k->ne[1], k->ne[2], k->ne[3]);  // [N, n_token, n_head*d_head]
 
         return {q, k, v};
     }
 
-    struct ggml_tensor* post_attention(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* post_attention(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         GGML_ASSERT(!pre_only);
 
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
@@ -226,10 +208,11 @@ public:
     }
 
     // x: [N, n_token, dim]
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
+                                struct ggml_tensor* x) {
         auto qkv = pre_attention(ctx, x);
-        x        = ggml_nn_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads);  // [N, n_token, dim]
-        x        = post_attention(ctx, x);                                         // [N, n_token, dim]
+        x        = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+        x        = post_attention(ctx, x);                                                                                                                  // [N, n_token, dim]
         return x;
     }
 };
@@ -290,9 +273,9 @@ public:
         blocks["adaLN_modulation.1"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, n_mods * hidden_size));
     }
 
-    std::tuple<std::vector<struct ggml_tensor*>, std::vector<struct ggml_tensor*>, std::vector<struct ggml_tensor*>> pre_attention_x(struct ggml_context* ctx,
-                                                                                                                                     struct ggml_tensor* x,
-                                                                                                                                     struct ggml_tensor* c) {
+    std::tuple<std::vector<ggml_tensor*>, std::vector<ggml_tensor*>, std::vector<ggml_tensor*>> pre_attention_x(GGMLRunnerContext* ctx,
+                                                                                                                struct ggml_tensor* x,
+                                                                                                                struct ggml_tensor* c) {
         GGML_ASSERT(self_attn);
         // x: [N, n_token, hidden_size]
         // c: [N, hidden_size]
@@ -302,35 +285,35 @@ public:
         auto adaLN_modulation_1 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"]);
 
         int64_t n_mods = 9;
-        auto m         = adaLN_modulation_1->forward(ctx, ggml_silu(ctx, c));  // [N, n_mods * hidden_size]
-        m              = ggml_reshape_3d(ctx, m, c->ne[0], n_mods, c->ne[1]);  // [N, n_mods, hidden_size]
-        m              = ggml_cont(ctx, ggml_permute(ctx, m, 0, 2, 1, 3));     // [n_mods, N, hidden_size]
+        auto m         = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));         // [N, n_mods * hidden_size]
+        m              = ggml_reshape_3d(ctx->ggml_ctx, m, c->ne[0], n_mods, c->ne[1]);         // [N, n_mods, hidden_size]
+        m              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, m, 0, 2, 1, 3));  // [n_mods, N, hidden_size]
 
         int64_t offset = m->nb[1] * m->ne[1];
-        auto shift_msa = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, hidden_size]
-        auto scale_msa = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, hidden_size]
-        auto gate_msa  = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 2);  // [N, hidden_size]
+        auto shift_msa = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, hidden_size]
+        auto scale_msa = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, hidden_size]
+        auto gate_msa  = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 2);  // [N, hidden_size]
 
-        auto shift_mlp = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 3);  // [N, hidden_size]
-        auto scale_mlp = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 4);  // [N, hidden_size]
-        auto gate_mlp  = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 5);  // [N, hidden_size]
+        auto shift_mlp = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 3);  // [N, hidden_size]
+        auto scale_mlp = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 4);  // [N, hidden_size]
+        auto gate_mlp  = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 5);  // [N, hidden_size]
 
-        auto shift_msa2 = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 6);  // [N, hidden_size]
-        auto scale_msa2 = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 7);  // [N, hidden_size]
-        auto gate_msa2  = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 8);  // [N, hidden_size]
+        auto shift_msa2 = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 6);  // [N, hidden_size]
+        auto scale_msa2 = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 7);  // [N, hidden_size]
+        auto gate_msa2  = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 8);  // [N, hidden_size]
 
         auto x_norm = norm1->forward(ctx, x);
 
-        auto attn_in = modulate(ctx, x_norm, shift_msa, scale_msa);
+        auto attn_in = modulate(ctx->ggml_ctx, x_norm, shift_msa, scale_msa);
         auto qkv     = attn->pre_attention(ctx, attn_in);
 
-        auto attn2_in = modulate(ctx, x_norm, shift_msa2, scale_msa2);
+        auto attn2_in = modulate(ctx->ggml_ctx, x_norm, shift_msa2, scale_msa2);
         auto qkv2     = attn2->pre_attention(ctx, attn2_in);
 
         return {qkv, qkv2, {x, gate_msa, shift_mlp, scale_mlp, gate_mlp, gate_msa2}};
     }
 
-    std::pair<std::vector<struct ggml_tensor*>, std::vector<struct ggml_tensor*>> pre_attention(struct ggml_context* ctx,
+    std::pair<std::vector<struct ggml_tensor*>, std::vector<struct ggml_tensor*>> pre_attention(GGMLRunnerContext* ctx,
                                                                                                 struct ggml_tensor* x,
                                                                                                 struct ggml_tensor* c) {
         // x: [N, n_token, hidden_size]
@@ -343,33 +326,33 @@ public:
         if (pre_only) {
             n_mods = 2;
         }
-        auto m = adaLN_modulation_1->forward(ctx, ggml_silu(ctx, c));  // [N, n_mods * hidden_size]
-        m      = ggml_reshape_3d(ctx, m, c->ne[0], n_mods, c->ne[1]);  // [N, n_mods, hidden_size]
-        m      = ggml_cont(ctx, ggml_permute(ctx, m, 0, 2, 1, 3));     // [n_mods, N, hidden_size]
+        auto m = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));         // [N, n_mods * hidden_size]
+        m      = ggml_reshape_3d(ctx->ggml_ctx, m, c->ne[0], n_mods, c->ne[1]);         // [N, n_mods, hidden_size]
+        m      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, m, 0, 2, 1, 3));  // [n_mods, N, hidden_size]
 
         int64_t offset = m->nb[1] * m->ne[1];
-        auto shift_msa = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, hidden_size]
-        auto scale_msa = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, hidden_size]
+        auto shift_msa = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, hidden_size]
+        auto scale_msa = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, hidden_size]
         if (!pre_only) {
-            auto gate_msa  = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 2);  // [N, hidden_size]
-            auto shift_mlp = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 3);  // [N, hidden_size]
-            auto scale_mlp = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 4);  // [N, hidden_size]
-            auto gate_mlp  = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 5);  // [N, hidden_size]
+            auto gate_msa  = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 2);  // [N, hidden_size]
+            auto shift_mlp = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 3);  // [N, hidden_size]
+            auto scale_mlp = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 4);  // [N, hidden_size]
+            auto gate_mlp  = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 5);  // [N, hidden_size]
 
-            auto attn_in = modulate(ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
+            auto attn_in = modulate(ctx->ggml_ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
 
             auto qkv = attn->pre_attention(ctx, attn_in);
 
             return {qkv, {x, gate_msa, shift_mlp, scale_mlp, gate_mlp}};
         } else {
-            auto attn_in = modulate(ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
+            auto attn_in = modulate(ctx->ggml_ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
             auto qkv     = attn->pre_attention(ctx, attn_in);
 
-            return {qkv, {NULL, NULL, NULL, NULL, NULL}};
+            return {qkv, {nullptr, nullptr, nullptr, nullptr, nullptr}};
         }
     }
 
-    struct ggml_tensor* post_attention_x(struct ggml_context* ctx,
+    struct ggml_tensor* post_attention_x(GGMLRunnerContext* ctx,
                                          struct ggml_tensor* attn_out,
                                          struct ggml_tensor* attn2_out,
                                          struct ggml_tensor* x,
@@ -392,22 +375,22 @@ public:
         auto norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["norm2"]);
         auto mlp   = std::dynamic_pointer_cast<Mlp>(blocks["mlp"]);
 
-        gate_msa  = ggml_reshape_3d(ctx, gate_msa, gate_msa->ne[0], 1, gate_msa->ne[1]);     // [N, 1, hidden_size]
-        gate_mlp  = ggml_reshape_3d(ctx, gate_mlp, gate_mlp->ne[0], 1, gate_mlp->ne[1]);     // [N, 1, hidden_size]
-        gate_msa2 = ggml_reshape_3d(ctx, gate_msa2, gate_msa2->ne[0], 1, gate_msa2->ne[1]);  // [N, 1, hidden_size]
+        gate_msa  = ggml_reshape_3d(ctx->ggml_ctx, gate_msa, gate_msa->ne[0], 1, gate_msa->ne[1]);     // [N, 1, hidden_size]
+        gate_mlp  = ggml_reshape_3d(ctx->ggml_ctx, gate_mlp, gate_mlp->ne[0], 1, gate_mlp->ne[1]);     // [N, 1, hidden_size]
+        gate_msa2 = ggml_reshape_3d(ctx->ggml_ctx, gate_msa2, gate_msa2->ne[0], 1, gate_msa2->ne[1]);  // [N, 1, hidden_size]
 
         attn_out  = attn->post_attention(ctx, attn_out);
         attn2_out = attn2->post_attention(ctx, attn2_out);
 
-        x            = ggml_add(ctx, x, ggml_mul(ctx, attn_out, gate_msa));
-        x            = ggml_add(ctx, x, ggml_mul(ctx, attn2_out, gate_msa2));
-        auto mlp_out = mlp->forward(ctx, modulate(ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp));
-        x            = ggml_add(ctx, x, ggml_mul(ctx, mlp_out, gate_mlp));
+        x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
+        x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn2_out, gate_msa2));
+        auto mlp_out = mlp->forward(ctx, modulate(ctx->ggml_ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp));
+        x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, mlp_out, gate_mlp));
 
         return x;
     }
 
-    struct ggml_tensor* post_attention(struct ggml_context* ctx,
+    struct ggml_tensor* post_attention(GGMLRunnerContext* ctx,
                                        struct ggml_tensor* attn_out,
                                        struct ggml_tensor* x,
                                        struct ggml_tensor* gate_msa,
@@ -427,19 +410,21 @@ public:
         auto norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["norm2"]);
         auto mlp   = std::dynamic_pointer_cast<Mlp>(blocks["mlp"]);
 
-        gate_msa = ggml_reshape_3d(ctx, gate_msa, gate_msa->ne[0], 1, gate_msa->ne[1]);  // [N, 1, hidden_size]
-        gate_mlp = ggml_reshape_3d(ctx, gate_mlp, gate_mlp->ne[0], 1, gate_mlp->ne[1]);  // [N, 1, hidden_size]
+        gate_msa = ggml_reshape_3d(ctx->ggml_ctx, gate_msa, gate_msa->ne[0], 1, gate_msa->ne[1]);  // [N, 1, hidden_size]
+        gate_mlp = ggml_reshape_3d(ctx->ggml_ctx, gate_mlp, gate_mlp->ne[0], 1, gate_mlp->ne[1]);  // [N, 1, hidden_size]
 
         attn_out = attn->post_attention(ctx, attn_out);
 
-        x            = ggml_add(ctx, x, ggml_mul(ctx, attn_out, gate_msa));
-        auto mlp_out = mlp->forward(ctx, modulate(ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp));
-        x            = ggml_add(ctx, x, ggml_mul(ctx, mlp_out, gate_mlp));
+        x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
+        auto mlp_out = mlp->forward(ctx, modulate(ctx->ggml_ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp));
+        x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, mlp_out, gate_mlp));
 
         return x;
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* c) {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
+                                struct ggml_tensor* x,
+                                struct ggml_tensor* c) {
         // x: [N, n_token, hidden_size]
         // c: [N, hidden_size]
         // return: [N, n_token, hidden_size]
@@ -454,8 +439,8 @@ public:
             auto qkv2          = std::get<1>(qkv_intermediates);
             auto intermediates = std::get<2>(qkv_intermediates);
 
-            auto attn_out  = ggml_nn_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads);     // [N, n_token, dim]
-            auto attn2_out = ggml_nn_attention_ext(ctx, qkv2[0], qkv2[1], qkv2[2], num_heads);  // [N, n_token, dim]
+            auto attn_out  = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);     // [N, n_token, dim]
+            auto attn2_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv2[0], qkv2[1], qkv2[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
             x              = post_attention_x(ctx,
                                               attn_out,
                                               attn2_out,
@@ -471,7 +456,7 @@ public:
             auto qkv               = qkv_intermediates.first;
             auto intermediates     = qkv_intermediates.second;
 
-            auto attn_out = ggml_nn_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads);  // [N, n_token, dim]
+            auto attn_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
             x             = post_attention(ctx,
                                            attn_out,
                                            intermediates[0],
@@ -485,7 +470,7 @@ public:
 };
 
 __STATIC_INLINE__ std::pair<struct ggml_tensor*, struct ggml_tensor*>
-block_mixing(struct ggml_context* ctx,
+block_mixing(GGMLRunnerContext* ctx,
              struct ggml_tensor* context,
              struct ggml_tensor* x,
              struct ggml_tensor* c,
@@ -512,29 +497,29 @@ block_mixing(struct ggml_context* ctx,
     }
     std::vector<struct ggml_tensor*> qkv;
     for (int i = 0; i < 3; i++) {
-        qkv.push_back(ggml_concat(ctx, context_qkv[i], x_qkv[i], 1));
+        qkv.push_back(ggml_concat(ctx->ggml_ctx, context_qkv[i], x_qkv[i], 1));
     }
 
-    auto attn         = ggml_nn_attention_ext(ctx, qkv[0], qkv[1], qkv[2], x_block->num_heads);  // [N, n_context + n_token, hidden_size]
-    attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));                     // [n_context + n_token, N, hidden_size]
-    auto context_attn = ggml_view_3d(ctx,
+    auto attn         = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], x_block->num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_context + n_token, hidden_size]
+    attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));                                                                          // [n_context + n_token, N, hidden_size]
+    auto context_attn = ggml_view_3d(ctx->ggml_ctx,
                                      attn,
                                      attn->ne[0],
                                      attn->ne[1],
                                      context->ne[1],
                                      attn->nb[1],
                                      attn->nb[2],
-                                     0);                                              // [n_context, N, hidden_size]
-    context_attn      = ggml_cont(ctx, ggml_permute(ctx, context_attn, 0, 2, 1, 3));  // [N, n_context, hidden_size]
-    auto x_attn       = ggml_view_3d(ctx,
+                                     0);                                                                  // [n_context, N, hidden_size]
+    context_attn      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, context_attn, 0, 2, 1, 3));  // [N, n_context, hidden_size]
+    auto x_attn       = ggml_view_3d(ctx->ggml_ctx,
                                      attn,
                                      attn->ne[0],
                                      attn->ne[1],
                                      x->ne[1],
                                      attn->nb[1],
                                      attn->nb[2],
-                                     attn->nb[2] * context->ne[1]);             // [n_token, N, hidden_size]
-    x_attn            = ggml_cont(ctx, ggml_permute(ctx, x_attn, 0, 2, 1, 3));  // [N, n_token, hidden_size]
+                                     attn->nb[2] * context->ne[1]);                                 // [n_token, N, hidden_size]
+    x_attn            = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x_attn, 0, 2, 1, 3));  // [N, n_token, hidden_size]
 
     if (!context_block->pre_only) {
         context = context_block->post_attention(ctx,
@@ -545,11 +530,11 @@ block_mixing(struct ggml_context* ctx,
                                                 context_intermediates[3],
                                                 context_intermediates[4]);
     } else {
-        context = NULL;
+        context = nullptr;
     }
 
     if (x_block->self_attn) {
-        auto attn2 = ggml_nn_attention_ext(ctx, x_qkv2[0], x_qkv2[1], x_qkv2[2], x_block->num_heads);  // [N, n_token, hidden_size]
+        auto attn2 = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, x_qkv2[0], x_qkv2[1], x_qkv2[2], x_block->num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
 
         x = x_block->post_attention_x(ctx,
                                       x_attn,
@@ -582,11 +567,11 @@ public:
                bool qkv_bias       = false,
                bool pre_only       = false,
                bool self_attn_x    = false) {
-        blocks["context_block"] = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, pre_only));
+        blocks["context_block"] = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, pre_only, false));
         blocks["x_block"]       = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, false, self_attn_x));
     }
 
-    std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+    std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
                                                                 struct ggml_tensor* context,
                                                                 struct ggml_tensor* x,
                                                                 struct ggml_tensor* c) {
@@ -609,7 +594,7 @@ public:
         blocks["adaLN_modulation.1"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, 2 * hidden_size));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* c) {
         // x: [N, n_token, hidden_size]
@@ -619,15 +604,15 @@ public:
         auto linear             = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
         auto adaLN_modulation_1 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"]);
 
-        auto m = adaLN_modulation_1->forward(ctx, ggml_silu(ctx, c));  // [N, 2 * hidden_size]
-        m      = ggml_reshape_3d(ctx, m, c->ne[0], 2, c->ne[1]);       // [N, 2, hidden_size]
-        m      = ggml_cont(ctx, ggml_permute(ctx, m, 0, 2, 1, 3));     // [2, N, hidden_size]
+        auto m = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));         // [N, 2 * hidden_size]
+        m      = ggml_reshape_3d(ctx->ggml_ctx, m, c->ne[0], 2, c->ne[1]);              // [N, 2, hidden_size]
+        m      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, m, 0, 2, 1, 3));  // [2, N, hidden_size]
 
         int64_t offset = m->nb[1] * m->ne[1];
-        auto shift     = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, hidden_size]
-        auto scale     = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, hidden_size]
+        auto shift     = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, hidden_size]
+        auto scale     = ggml_view_2d(ctx->ggml_ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, hidden_size]
 
-        x = modulate(ctx, norm_final->forward(ctx, x), shift, scale);
+        x = modulate(ctx->ggml_ctx, norm_final->forward(ctx, x), shift, scale);
         x = linear->forward(ctx, x);
 
         return x;
@@ -638,7 +623,7 @@ struct MMDiT : public GGMLBlock {
     // Diffusion model with a Transformer backbone.
 protected:
     int64_t input_size               = -1;
-    int64_t patch_size               = 2;
+    int patch_size                   = 2;
     int64_t in_channels              = 16;
     int64_t d_self                   = -1;  // >=0 for MMdiT-X
     int64_t depth                    = 24;
@@ -652,13 +637,13 @@ protected:
     int64_t hidden_size;
     std::string qk_norm;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "pos_embed") != tensor_types.end()) ? tensor_types[prefix + "pos_embed"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
+        enum ggml_type wtype = GGML_TYPE_F32;
         params["pos_embed"]  = ggml_new_tensor_3d(ctx, wtype, hidden_size, num_patchs, 1);
     }
 
 public:
-    MMDiT(std::map<std::string, enum ggml_type>& tensor_types) {
+    MMDiT(const String2TensorStorage& tensor_storage_map = {}) {
         // input_size is always None
         // learn_sigma is always False
         // register_length is alwalys 0
@@ -671,8 +656,7 @@ public:
         // pos_embed_offset is not used
         // context_embedder_config is always {'target': 'torch.nn.Linear', 'params': {'in_features': 4096, 'out_features': 1536}}
 
-        // read tensors from tensor_types
-        for (auto pair : tensor_types) {
+        for (auto pair : tensor_storage_map) {
             std::string tensor_name = pair.first;
             if (tensor_name.find("model.diffusion_model.") == std::string::npos)
                 continue;
@@ -794,7 +778,7 @@ public:
         return x;
     }
 
-    struct ggml_tensor* forward_core_with_concat(struct ggml_context* ctx,
+    struct ggml_tensor* forward_core_with_concat(GGMLRunnerContext* ctx,
                                                  struct ggml_tensor* x,
                                                  struct ggml_tensor* c_mod,
                                                  struct ggml_tensor* context,
@@ -823,11 +807,11 @@ public:
         return x;
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* t,
-                                struct ggml_tensor* y        = NULL,
-                                struct ggml_tensor* context  = NULL,
+                                struct ggml_tensor* y        = nullptr,
+                                struct ggml_tensor* context  = nullptr,
                                 std::vector<int> skip_layers = std::vector<int>()) {
         // Forward pass of DiT.
         // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -841,19 +825,19 @@ public:
         int64_t w = x->ne[0];
         int64_t h = x->ne[1];
 
-        auto patch_embed = x_embedder->forward(ctx, x);            // [N, H*W, hidden_size]
-        auto pos_embed   = cropped_pos_embed(ctx, h, w);           // [1, H*W, hidden_size]
-        x                = ggml_add(ctx, patch_embed, pos_embed);  // [N, H*W, hidden_size]
+        auto patch_embed = x_embedder->forward(ctx, x);                      // [N, H*W, hidden_size]
+        auto pos_embed   = cropped_pos_embed(ctx->ggml_ctx, h, w);           // [1, H*W, hidden_size]
+        x                = ggml_add(ctx->ggml_ctx, patch_embed, pos_embed);  // [N, H*W, hidden_size]
 
         auto c = t_embedder->forward(ctx, t);  // [N, hidden_size]
-        if (y != NULL && adm_in_channels != -1) {
+        if (y != nullptr && adm_in_channels != -1) {
             auto y_embedder = std::dynamic_pointer_cast<VectorEmbedder>(blocks["y_embedder"]);
 
             y = y_embedder->forward(ctx, y);  // [N, hidden_size]
-            c = ggml_add(ctx, c, y);
+            c = ggml_add(ctx->ggml_ctx, c, y);
         }
 
-        if (context != NULL) {
+        if (context != nullptr) {
             auto context_embedder = std::dynamic_pointer_cast<Linear>(blocks["context_embedder"]);
 
             context = context_embedder->forward(ctx, context);  // [N, L, D] aka [N, L, 1536]
@@ -861,7 +845,7 @@ public:
 
         x = forward_core_with_concat(ctx, x, c, context, skip_layers);  // (N, H*W, patch_size ** 2 * out_channels)
 
-        x = unpatchify(ctx, x, h, w);  // [N, C, H, W]
+        x = unpatchify(ctx->ggml_ctx, x, h, w);  // [N, C, H, W]
 
         return x;
     }
@@ -869,16 +853,15 @@ public:
 struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
-    static std::map<std::string, enum ggml_type> empty_tensor_types;
-
     MMDiTRunner(ggml_backend_t backend,
-                std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
-                const std::string prefix                            = "")
-        : GGMLRunner(backend), mmdit(tensor_types) {
-        mmdit.init(params_ctx, tensor_types, prefix);
+                bool offload_params_to_cpu,
+                const String2TensorStorage& tensor_storage_map = {},
+                const std::string prefix                       = "")
+        : GGMLRunner(backend, offload_params_to_cpu), mmdit(tensor_storage_map) {
+        mmdit.init(params_ctx, tensor_storage_map, prefix);
     }
 
-    std::string get_desc() {
+    std::string get_desc() override {
         return "mmdit";
     }
 
@@ -891,14 +874,15 @@ struct MMDiTRunner : public GGMLRunner {
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* y,
                                     std::vector<int> skip_layers = std::vector<int>()) {
-        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, MMDIT_GRAPH_SIZE, false);
+        struct ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE);
 
         x         = to_backend(x);
         context   = to_backend(context);
         y         = to_backend(y);
         timesteps = to_backend(timesteps);
 
-        struct ggml_tensor* out = mmdit.forward(compute_ctx,
+        auto runner_ctx         = get_context();
+        struct ggml_tensor* out = mmdit.forward(&runner_ctx,
                                                 x,
                                                 timesteps,
                                                 y,
@@ -910,13 +894,13 @@ struct MMDiTRunner : public GGMLRunner {
         return gf;
     }
 
-    void compute(int n_threads,
+    bool compute(int n_threads,
                  struct ggml_tensor* x,
                  struct ggml_tensor* timesteps,
                  struct ggml_tensor* context,
                  struct ggml_tensor* y,
-                 struct ggml_tensor** output     = NULL,
-                 struct ggml_context* output_ctx = NULL,
+                 struct ggml_tensor** output     = nullptr,
+                 struct ggml_context* output_ctx = nullptr,
                  std::vector<int> skip_layers    = std::vector<int>()) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
@@ -926,17 +910,17 @@ struct MMDiTRunner : public GGMLRunner {
             return build_graph(x, timesteps, context, y, skip_layers);
         };
 
-        GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
     }
 
     void test() {
         struct ggml_init_params params;
         params.mem_size   = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-        params.mem_buffer = NULL;
+        params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
         struct ggml_context* work_ctx = ggml_init(params);
-        GGML_ASSERT(work_ctx != NULL);
+        GGML_ASSERT(work_ctx != nullptr);
 
         {
             // cpu f16: pass
@@ -957,14 +941,14 @@ struct MMDiTRunner : public GGMLRunner {
             ggml_set_f32(y, 0.01f);
             // print_ggml_tensor(y);
 
-            struct ggml_tensor* out = NULL;
+            struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             compute(8, x, timesteps, context, y, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("mmdit test done in %dms", t1 - t0);
+            LOG_DEBUG("mmdit test done in %lldms", t1 - t0);
         }
     }
 
@@ -972,7 +956,7 @@ struct MMDiTRunner : public GGMLRunner {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend             = ggml_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
-        std::shared_ptr<MMDiTRunner> mmdit = std::shared_ptr<MMDiTRunner>(new MMDiTRunner(backend));
+        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, false);
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -981,12 +965,12 @@ struct MMDiTRunner : public GGMLRunner {
             mmdit->get_param_tensors(tensors, "model.diffusion_model");
 
             ModelLoader model_loader;
-            if (!model_loader.init_from_file(file_path)) {
+            if (!model_loader.init_from_file_and_convert_name(file_path)) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }
 
-            bool success = model_loader.load_tensors(tensors, backend);
+            bool success = model_loader.load_tensors(tensors);
 
             if (!success) {
                 LOG_ERROR("load tensors from model loader failed");

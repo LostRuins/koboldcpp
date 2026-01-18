@@ -19,9 +19,11 @@ elif [ -t 0 ]; then
     # Running interactively
     echo "[1] - Proceed to install and launch with default model Gemma3-1B"
     echo "[2] - Proceed to install without a model, you can download one later."
-    echo "[3] - Exit script"
+    echo "[3] - Download GGUF model from web URL (Requires already installed)"
+    echo "[4] - Load existing GGUF model from disk (Requires already installed)"
+    echo "[5] - Exit script"
     echo "--------------------------------------------"
-    read -p "Enter your choice [1-3]: " choice
+    read -p "Enter your choice [1-5]: " choice
 else
     # Non-interactive, default to choice 1
     echo "Defaulting to normal install and model download. Run script interactively for other options. Install will start in 3 seconds."
@@ -29,8 +31,45 @@ else
     sleep 3
 fi
 
-if [ "$choice" = "3" ]; then
+# Determine script directory (works for both curl|sh and ./install.sh)
+if [ -f "$0" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"  # Normal execution (./install.sh)
+else
+    SCRIPT_DIR="$(pwd)"  # Piped execution (curl | sh)
+fi
+
+# handle user choice
+if [ "$choice" = "5" ]; then
     echo "Exiting script. Goodbye!"
+    exit 0
+elif [ "$choice" = "4" ]; then
+    echo "[*] Searching for .gguf model files in $SCRIPT_DIR..."
+    MODEL_FILES=$(find "$SCRIPT_DIR" -type f -maxdepth 1 -name "*.gguf" 2>/dev/null)
+    if [ -z "$MODEL_FILES" ]; then
+        echo "No .gguf model files found in $SCRIPT_DIR"
+        exit 1
+    fi
+    echo "Available model files:"
+    i=1
+    for file in $MODEL_FILES; do
+        echo "[$i] $file"
+        eval "MODEL_$i=\"$file\""
+        i=$((i+1))
+    done
+    read -p "Enter the number of the model you want to load: " model_choice
+    # Validate input
+    if ! [[ "$model_choice" =~ ^[0-9]+$ ]] || [ "$model_choice" -lt 1 ] || [ "$model_choice" -ge "$i" ]; then
+        echo "Invalid selection."
+        exit 1
+    fi
+    eval "SELECTED_MODEL=\$MODEL_$model_choice"
+    echo "Now launching with model $SELECTED_MODEL"
+    python koboldcpp.py --model $SELECTED_MODEL
+    exit 0
+elif [ "$choice" = "3" ]; then
+    read -r -p "Please input FULL URL of model you wish to download and run: " SELECTED_MODEL
+    echo "Starting download of model $SELECTED_MODEL"
+    python koboldcpp.py --model $SELECTED_MODEL
     exit 0
 elif [ "$choice" = "2" ]; then
     echo "[*] Install without model download..."
@@ -57,12 +96,6 @@ else
     pkg upgrade -o Dpkg::Options::="--force-confold" -y
 fi
 
-# Determine script directory (works for both curl|sh and ./install.sh)
-if [ -f "$0" ]; then
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"  # Normal execution (./install.sh)
-else
-    SCRIPT_DIR="$(pwd)"  # Piped execution (curl | sh)
-fi
 # Check if koboldcpp.py already exists nearby
 if [ -f "$SCRIPT_DIR/koboldcpp.py" ]; then
     echo "[*] Detected existing koboldcpp.py in $SCRIPT_DIR"

@@ -11,15 +11,14 @@
 #define TIMESTEPS 1000
 #define FLUX_TIMESTEPS 1000
 
-struct SigmaSchedule {
-    int version = 0;
+struct SigmaScheduler {
     typedef std::function<float(float)> t_to_sigma_t;
 
     virtual std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) = 0;
 };
 
-struct DiscreteSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
+struct DiscreteScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         std::vector<float> result;
 
         int t_max = TIMESTEPS - 1;
@@ -42,8 +41,8 @@ struct DiscreteSchedule : SigmaSchedule {
     }
 };
 
-struct ExponentialSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
+struct ExponentialScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         std::vector<float> sigmas;
 
         // Calculate step size
@@ -149,8 +148,11 @@ std::vector<float> log_linear_interpolation(std::vector<float> sigma_in,
 /*
 https://research.nvidia.com/labs/toronto-ai/AlignYourSteps/howto.html
 */
-struct AYSSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
+struct AYSScheduler : SigmaScheduler {
+    SDVersion version;
+    explicit AYSScheduler(SDVersion version)
+        : version(version) {}
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         const std::vector<float> noise_levels[] = {
             /* SD1.5 */
             {14.6146412293f, 6.4745760956f, 3.8636745985f, 2.6946151520f,
@@ -168,24 +170,21 @@ struct AYSSchedule : SigmaSchedule {
         std::vector<float> inputs;
         std::vector<float> results(n + 1);
 
-        switch (version) {
-            case VERSION_SD2: /* fallthrough */
-                LOG_WARN("AYS not designed for SD2.X models");
-            case VERSION_SD1:
-                LOG_INFO("AYS using SD1.5 noise levels");
-                inputs = noise_levels[0];
-                break;
-            case VERSION_SDXL:
-                LOG_INFO("AYS using SDXL noise levels");
-                inputs = noise_levels[1];
-                break;
-            case VERSION_SVD:
-                LOG_INFO("AYS using SVD noise levels");
-                inputs = noise_levels[2];
-                break;
-            default:
-                LOG_ERROR("Version not compatable with AYS scheduler");
-                return results;
+        if (sd_version_is_sd2((SDVersion)version)) {
+            LOG_WARN("AYS_SCHEDULER not designed for SD2.X models");
+        } /* fallthrough */
+        else if (sd_version_is_sd1((SDVersion)version)) {
+            LOG_INFO("AYS_SCHEDULER using SD1.5 noise levels");
+            inputs = noise_levels[0];
+        } else if (sd_version_is_sdxl((SDVersion)version)) {
+            LOG_INFO("AYS_SCHEDULER using SDXL noise levels");
+            inputs = noise_levels[1];
+        } else if (version == VERSION_SVD) {
+            LOG_INFO("AYS_SCHEDULER using SVD noise levels");
+            inputs = noise_levels[2];
+        } else {
+            LOG_ERROR("Version not compatible with AYS_SCHEDULER scheduler");
+            return results;
         }
 
         /* Stretches those pre-calculated reference levels out to the desired
@@ -206,8 +205,8 @@ struct AYSSchedule : SigmaSchedule {
 /*
  * GITS Scheduler: https://github.com/zju-pi/diff-sampler/tree/main/gits-main
  */
-struct GITSSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
+struct GITSScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         if (sigma_max <= 0.0f) {
             return std::vector<float>{};
         }
@@ -235,11 +234,51 @@ struct GITSSchedule : SigmaSchedule {
     }
 };
 
-struct KarrasSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
+struct SGMUniformScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min_in, float sigma_max_in, t_to_sigma_t t_to_sigma_func) override {
+        std::vector<float> result;
+        if (n == 0) {
+            result.push_back(0.0f);
+            return result;
+        }
+        result.reserve(n + 1);
+        int t_max                    = TIMESTEPS - 1;
+        int t_min                    = 0;
+        std::vector<float> timesteps = linear_space(static_cast<float>(t_max), static_cast<float>(t_min), n + 1);
+        for (uint32_t i = 0; i < n; i++) {
+            result.push_back(t_to_sigma_func(timesteps[i]));
+        }
+        result.push_back(0.0f);
+        return result;
+    }
+};
+
+struct LCMScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result;
+        result.reserve(n + 1);
+        const int original_steps = 50;
+        const int k              = TIMESTEPS / original_steps;
+        for (uint32_t i = 0; i < n; i++) {
+            // the rounding ensures we match the training schedule of the LCM model
+            int index    = (i * original_steps) / n;
+            int timestep = (original_steps - index) * k - 1;
+            result.push_back(t_to_sigma(static_cast<float>(timestep)));
+        }
+        result.push_back(0.0f);
+        return result;
+    }
+};
+
+struct KarrasScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         // These *COULD* be function arguments here,
         // but does anybody ever bother to touch them?
         float rho = 7.f;
+
+        if (sigma_min <= 1e-6f) {
+            sigma_min = 1e-6f;
+        }
 
         std::vector<float> result(n + 1);
 
@@ -254,8 +293,100 @@ struct KarrasSchedule : SigmaSchedule {
     }
 };
 
+struct SimpleScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result_sigmas;
+
+        if (n == 0) {
+            return result_sigmas;
+        }
+
+        result_sigmas.reserve(n + 1);
+
+        int model_sigmas_len = TIMESTEPS;
+
+        float step_factor = static_cast<float>(model_sigmas_len) / static_cast<float>(n);
+
+        for (uint32_t i = 0; i < n; ++i) {
+            int offset_from_start_of_py_array = static_cast<int>(static_cast<float>(i) * step_factor);
+            int timestep_index                = model_sigmas_len - 1 - offset_from_start_of_py_array;
+
+            if (timestep_index < 0) {
+                timestep_index = 0;
+            }
+
+            result_sigmas.push_back(t_to_sigma(static_cast<float>(timestep_index)));
+        }
+        result_sigmas.push_back(0.0f);
+        return result_sigmas;
+    }
+};
+
+// Close to Beta Scheduler, but increadably simple in code.
+struct SmoothStepScheduler : SigmaScheduler {
+    static constexpr float smoothstep(float x) {
+        return x * x * (3.0f - 2.0f * x);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result;
+        result.reserve(n + 1);
+
+        const int t_max = TIMESTEPS - 1;
+        if (n == 0) {
+            return result;
+        } else if (n == 1) {
+            result.push_back(t_to_sigma((float)t_max));
+            result.push_back(0.f);
+            return result;
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+            float u = 1.f - float(i) / float(n);
+            result.push_back(t_to_sigma(std::round(smoothstep(u) * t_max)));
+        }
+
+        result.push_back(0.f);
+        return result;
+    }
+};
+
+struct KLOptimalScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> sigmas;
+
+        if (n == 0) {
+            return sigmas;
+        }
+
+        if (n == 1) {
+            sigmas.push_back(sigma_max);
+            sigmas.push_back(0.0f);
+            return sigmas;
+        }
+
+        if (sigma_min <= 1e-6f) {
+            sigma_min = 1e-6f;
+        }
+
+        sigmas.reserve(n + 1);
+
+        float alpha_min = std::atan(sigma_min);
+        float alpha_max = std::atan(sigma_max);
+
+        for (uint32_t i = 0; i < n; ++i) {
+            float t     = static_cast<float>(i) / static_cast<float>(n - 1);
+            float angle = t * alpha_min + (1.0f - t) * alpha_max;
+            sigmas.push_back(std::tan(angle));
+        }
+
+        sigmas.push_back(0.0f);
+
+        return sigmas;
+    }
+};
+
 struct Denoiser {
-    std::shared_ptr<SigmaSchedule> schedule                                                  = std::make_shared<DiscreteSchedule>();
     virtual float sigma_min()                                                                = 0;
     virtual float sigma_max()                                                                = 0;
     virtual float sigma_to_t(float sigma)                                                    = 0;
@@ -264,9 +395,56 @@ struct Denoiser {
     virtual ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) = 0;
     virtual ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent)             = 0;
 
-    virtual std::vector<float> get_sigmas(uint32_t n) {
+    virtual std::vector<float> get_sigmas(uint32_t n, int /*image_seq_len*/, scheduler_t scheduler_type, SDVersion version) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
-        return schedule->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
+        std::shared_ptr<SigmaScheduler> scheduler;
+        switch (scheduler_type) {
+            case DISCRETE_SCHEDULER:
+                LOG_INFO("get_sigmas with discrete scheduler");
+                scheduler = std::make_shared<DiscreteScheduler>();
+                break;
+            case KARRAS_SCHEDULER:
+                LOG_INFO("get_sigmas with Karras scheduler");
+                scheduler = std::make_shared<KarrasScheduler>();
+                break;
+            case EXPONENTIAL_SCHEDULER:
+                LOG_INFO("get_sigmas exponential scheduler");
+                scheduler = std::make_shared<ExponentialScheduler>();
+                break;
+            case AYS_SCHEDULER:
+                LOG_INFO("get_sigmas with Align-Your-Steps scheduler");
+                scheduler = std::make_shared<AYSScheduler>(version);
+                break;
+            case GITS_SCHEDULER:
+                LOG_INFO("get_sigmas with GITS scheduler");
+                scheduler = std::make_shared<GITSScheduler>();
+                break;
+            case SGM_UNIFORM_SCHEDULER:
+                LOG_INFO("get_sigmas with SGM Uniform scheduler");
+                scheduler = std::make_shared<SGMUniformScheduler>();
+                break;
+            case SIMPLE_SCHEDULER:
+                LOG_INFO("get_sigmas with Simple scheduler");
+                scheduler = std::make_shared<SimpleScheduler>();
+                break;
+            case SMOOTHSTEP_SCHEDULER:
+                LOG_INFO("get_sigmas with SmoothStep scheduler");
+                scheduler = std::make_shared<SmoothStepScheduler>();
+                break;
+            case KL_OPTIMAL_SCHEDULER:
+                LOG_INFO("get_sigmas with KL Optimal scheduler");
+                scheduler = std::make_shared<KLOptimalScheduler>();
+                break;
+            case LCM_SCHEDULER:
+                LOG_INFO("get_sigmas with LCM scheduler");
+                scheduler = std::make_shared<LCMScheduler>();
+                break;
+            default:
+                LOG_INFO("get_sigmas with discrete scheduler (default)");
+                scheduler = std::make_shared<DiscreteScheduler>();
+                break;
+        }
+        return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
     }
 };
 
@@ -276,15 +454,15 @@ struct CompVisDenoiser : public Denoiser {
 
     float sigma_data = 1.0f;
 
-    float sigma_min() {
+    float sigma_min() override {
         return sigmas[0];
     }
 
-    float sigma_max() {
+    float sigma_max() override {
         return sigmas[TIMESTEPS - 1];
     }
 
-    float sigma_to_t(float sigma) {
+    float sigma_to_t(float sigma) override {
         float log_sigma = std::log(sigma);
         std::vector<float> dists;
         dists.reserve(TIMESTEPS);
@@ -310,7 +488,7 @@ struct CompVisDenoiser : public Denoiser {
         return t;
     }
 
-    float t_to_sigma(float t) {
+    float t_to_sigma(float t) override {
         int low_idx     = static_cast<int>(std::floor(t));
         int high_idx    = static_cast<int>(std::ceil(t));
         float w         = t - static_cast<float>(low_idx);
@@ -318,7 +496,7 @@ struct CompVisDenoiser : public Denoiser {
         return std::exp(log_sigma);
     }
 
-    std::vector<float> get_scalings(float sigma) {
+    std::vector<float> get_scalings(float sigma) override {
         float c_skip = 1.0f;
         float c_out  = -sigma;
         float c_in   = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
@@ -326,23 +504,48 @@ struct CompVisDenoiser : public Denoiser {
     }
 
     // this function will modify noise/latent
-    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) {
-        ggml_tensor_scale(noise, sigma);
-        ggml_tensor_add(latent, noise);
+    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) override {
+        ggml_ext_tensor_scale_inplace(noise, sigma);
+        ggml_ext_tensor_add_inplace(latent, noise);
         return latent;
     }
 
-    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) {
+    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) override {
         return latent;
     }
 };
 
 struct CompVisVDenoiser : public CompVisDenoiser {
-    std::vector<float> get_scalings(float sigma) {
+    std::vector<float> get_scalings(float sigma) override {
         float c_skip = sigma_data * sigma_data / (sigma * sigma + sigma_data * sigma_data);
         float c_out  = -sigma * sigma_data / std::sqrt(sigma * sigma + sigma_data * sigma_data);
         float c_in   = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
         return {c_skip, c_out, c_in};
+    }
+};
+
+struct EDMVDenoiser : public CompVisVDenoiser {
+    float min_sigma = 0.002f;
+    float max_sigma = 120.0f;
+
+    EDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0)
+        : min_sigma(min_sigma), max_sigma(max_sigma) {
+    }
+
+    float t_to_sigma(float t) override {
+        return std::exp(t * 4 / (float)TIMESTEPS);
+    }
+
+    float sigma_to_t(float s) override {
+        return 0.25f * std::log(s);
+    }
+
+    float sigma_min() override {
+        return min_sigma;
+    }
+
+    float sigma_max() override {
+        return max_sigma;
     }
 };
 
@@ -359,34 +562,35 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     float sigma_data = 1.0f;
 
-    DiscreteFlowDenoiser() {
+    DiscreteFlowDenoiser(float shift = 3.0f)
+        : shift(shift) {
         set_parameters();
     }
 
     void set_parameters() {
         for (int i = 1; i < TIMESTEPS + 1; i++) {
-            sigmas[i - 1] = t_to_sigma(i);
+            sigmas[i - 1] = t_to_sigma(static_cast<float>(i));
         }
     }
 
-    float sigma_min() {
+    float sigma_min() override {
         return sigmas[0];
     }
 
-    float sigma_max() {
+    float sigma_max() override {
         return sigmas[TIMESTEPS - 1];
     }
 
-    float sigma_to_t(float sigma) {
+    float sigma_to_t(float sigma) override {
         return sigma * 1000.f;
     }
 
-    float t_to_sigma(float t) {
+    float t_to_sigma(float t) override {
         t = t + 1;
         return time_snr_shift(shift, t / 1000.f);
     }
 
-    std::vector<float> get_scalings(float sigma) {
+    std::vector<float> get_scalings(float sigma) override {
         float c_skip = 1.0f;
         float c_out  = -sigma;
         float c_in   = 1.0f;
@@ -394,21 +598,21 @@ struct DiscreteFlowDenoiser : public Denoiser {
     }
 
     // this function will modify noise/latent
-    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) {
-        ggml_tensor_scale(noise, sigma);
-        ggml_tensor_scale(latent, 1.0f - sigma);
-        ggml_tensor_add(latent, noise);
+    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) override {
+        ggml_ext_tensor_scale_inplace(noise, sigma);
+        ggml_ext_tensor_scale_inplace(latent, 1.0f - sigma);
+        ggml_ext_tensor_add_inplace(latent, noise);
         return latent;
     }
 
-    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) {
-        ggml_tensor_scale(latent, 1.0f / (1.0f - sigma));
+    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) override {
+        ggml_ext_tensor_scale_inplace(latent, 1.0f / (1.0f - sigma));
         return latent;
     }
 };
 
 float flux_time_shift(float mu, float sigma, float t) {
-    return std::exp(mu) / (std::exp(mu) + std::pow((1.0 / t - 1.0), sigma));
+    return ::expf(mu) / (::expf(mu) + ::powf((1.0f / t - 1.0f), sigma));
 }
 
 struct FluxFlowDenoiser : public Denoiser {
@@ -421,31 +625,35 @@ struct FluxFlowDenoiser : public Denoiser {
         set_parameters(shift);
     }
 
-    void set_parameters(float shift = 1.15f) {
+    void set_shift(float shift) {
         this->shift = shift;
-        for (int i = 1; i < TIMESTEPS + 1; i++) {
-            sigmas[i - 1] = t_to_sigma(i / TIMESTEPS * TIMESTEPS);
+    }
+
+    void set_parameters(float shift) {
+        set_shift(shift);
+        for (int i = 0; i < TIMESTEPS; i++) {
+            sigmas[i] = t_to_sigma(static_cast<float>(i));
         }
     }
 
-    float sigma_min() {
+    float sigma_min() override {
         return sigmas[0];
     }
 
-    float sigma_max() {
+    float sigma_max() override {
         return sigmas[TIMESTEPS - 1];
     }
 
-    float sigma_to_t(float sigma) {
+    float sigma_to_t(float sigma) override {
         return sigma;
     }
 
-    float t_to_sigma(float t) {
+    float t_to_sigma(float t) override {
         t = t + 1;
         return flux_time_shift(shift, 1.0f, t / TIMESTEPS);
     }
 
-    std::vector<float> get_scalings(float sigma) {
+    std::vector<float> get_scalings(float sigma) override {
         float c_skip = 1.0f;
         float c_out  = -sigma;
         float c_in   = 1.0f;
@@ -453,23 +661,55 @@ struct FluxFlowDenoiser : public Denoiser {
     }
 
     // this function will modify noise/latent
-    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) {
-        ggml_tensor_scale(noise, sigma);
-        ggml_tensor_scale(latent, 1.0f - sigma);
-        ggml_tensor_add(latent, noise);
+    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) override {
+        ggml_ext_tensor_scale_inplace(noise, sigma);
+        ggml_ext_tensor_scale_inplace(latent, 1.0f - sigma);
+        ggml_ext_tensor_add_inplace(latent, noise);
         return latent;
     }
 
-    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) {
-        ggml_tensor_scale(latent, 1.0f / (1.0f - sigma));
+    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) override {
+        ggml_ext_tensor_scale_inplace(latent, 1.0f / (1.0f - sigma));
         return latent;
+    }
+};
+
+struct Flux2FlowDenoiser : public FluxFlowDenoiser {
+    Flux2FlowDenoiser() = default;
+
+    float compute_empirical_mu(uint32_t n, int image_seq_len) {
+        const float a1 = 8.73809524e-05f;
+        const float b1 = 1.89833333f;
+        const float a2 = 0.00016927f;
+        const float b2 = 0.45666666f;
+
+        if (image_seq_len > 4300) {
+            float mu = a2 * image_seq_len + b2;
+            return mu;
+        }
+
+        float m_200 = a2 * image_seq_len + b2;
+        float m_10  = a1 * image_seq_len + b1;
+
+        float a  = (m_200 - m_10) / 190.0f;
+        float b  = m_200 - 200.0f * a;
+        float mu = a * n + b;
+
+        return mu;
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version) override {
+        float mu = compute_empirical_mu(n, image_seq_len);
+        LOG_DEBUG("Flux2FlowDenoiser: set shift to %.3f", mu);
+        set_shift(mu);
+        return Denoiser::get_sigmas(n, image_seq_len, scheduler_type, version);
     }
 };
 
 typedef std::function<ggml_tensor*(ggml_tensor*, float, int)> denoise_cb_t;
 
 // k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
-static void sample_k_diffusion(sample_method_t method,
+static bool sample_k_diffusion(sample_method_t method,
                                denoise_cb_t model,
                                ggml_context* work_ctx,
                                ggml_tensor* x,
@@ -479,7 +719,7 @@ static void sample_k_diffusion(sample_method_t method,
     size_t steps = sigmas.size() - 1;
     // sample_euler_ancestral
     switch (method) {
-        case EULER_A: {
+        case EULER_A_SAMPLE_METHOD: {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
@@ -488,6 +728,9 @@ static void sample_k_diffusion(sample_method_t method,
 
                 // denoise
                 ggml_tensor* denoised = model(x, sigma, i + 1);
+                if (denoised == nullptr) {
+                    return false;
+                }
 
                 // d = (x - denoised) / sigma
                 {
@@ -519,7 +762,7 @@ static void sample_k_diffusion(sample_method_t method,
 
                 if (sigmas[i + 1] > 0) {
                     // x = x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
-                    ggml_tensor_set_f32_randn(noise, rng);
+                    ggml_ext_im_set_randn_f32(noise, rng);
                     // noise = load_tensor_from_file(work_ctx, "./rand" + std::to_string(i+1) + ".bin");
                     {
                         float* vec_x     = (float*)x->data;
@@ -532,7 +775,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case EULER:  // Implemented without any sigma churn
+        case EULER_SAMPLE_METHOD:  // Implemented without any sigma churn
         {
             struct ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
 
@@ -541,6 +784,9 @@ static void sample_k_diffusion(sample_method_t method,
 
                 // denoise
                 ggml_tensor* denoised = model(x, sigma, i + 1);
+                if (denoised == nullptr) {
+                    return false;
+                }
 
                 // d = (x - denoised) / sigma
                 {
@@ -565,13 +811,16 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case HEUN: {
+        case HEUN_SAMPLE_METHOD: {
             struct ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 // denoise
                 ggml_tensor* denoised = model(x, sigmas[i], -(i + 1));
+                if (denoised == nullptr) {
+                    return false;
+                }
 
                 // d = (x - denoised) / sigma
                 {
@@ -606,7 +855,10 @@ static void sample_k_diffusion(sample_method_t method,
                     }
 
                     ggml_tensor* denoised = model(x2, sigmas[i + 1], i + 1);
-                    float* vec_denoised   = (float*)denoised->data;
+                    if (denoised == nullptr) {
+                        return false;
+                    }
+                    float* vec_denoised = (float*)denoised->data;
                     for (int j = 0; j < ggml_nelements(x); j++) {
                         float d2 = (vec_x2[j] - vec_denoised[j]) / sigmas[i + 1];
                         vec_d[j] = (vec_d[j] + d2) / 2;
@@ -615,13 +867,16 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case DPM2: {
+        case DPM2_SAMPLE_METHOD: {
             struct ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 // denoise
-                ggml_tensor* denoised = model(x, sigmas[i], i + 1);
+                ggml_tensor* denoised = model(x, sigmas[i], -(i + 1));
+                if (denoised == nullptr) {
+                    return false;
+                }
 
                 // d = (x - denoised) / sigma
                 {
@@ -658,7 +913,10 @@ static void sample_k_diffusion(sample_method_t method,
                     }
 
                     ggml_tensor* denoised = model(x2, sigma_mid, i + 1);
-                    float* vec_denoised   = (float*)denoised->data;
+                    if (denoised == nullptr) {
+                        return false;
+                    }
+                    float* vec_denoised = (float*)denoised->data;
                     for (int j = 0; j < ggml_nelements(x); j++) {
                         float d2 = (vec_x2[j] - vec_denoised[j]) / sigma_mid;
                         vec_x[j] = vec_x[j] + d2 * dt_2;
@@ -667,14 +925,16 @@ static void sample_k_diffusion(sample_method_t method,
             }
 
         } break;
-        case DPMPP2S_A: {
+        case DPMPP2S_A_SAMPLE_METHOD: {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 // denoise
-                ggml_tensor* denoised = model(x, sigmas[i], i + 1);
+                ggml_tensor* denoised = model(x, sigmas[i], -(i + 1));
+                if (denoised == nullptr) {
+                    return false;
+                }
 
                 // get_ancestral_step
                 float sigma_up   = std::min(sigmas[i + 1],
@@ -684,22 +944,15 @@ static void sample_k_diffusion(sample_method_t method,
                 auto sigma_fn    = [](float t) -> float { return exp(-t); };
 
                 if (sigma_down == 0) {
-                    // Euler step
-                    float* vec_d        = (float*)d->data;
+                    // d = (x - denoised) / sigmas[i];
+                    // dt = sigma_down - sigmas[i];
+                    // x += d * dt;
+                    // => x = denoised
                     float* vec_x        = (float*)x->data;
                     float* vec_denoised = (float*)denoised->data;
 
-                    for (int j = 0; j < ggml_nelements(d); j++) {
-                        vec_d[j] = (vec_x[j] - vec_denoised[j]) / sigmas[i];
-                    }
-
-                    // TODO: If sigma_down == 0, isn't this wrong?
-                    // But
-                    // https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/sampling.py#L525
-                    // has this exactly the same way.
-                    float dt = sigma_down - sigmas[i];
-                    for (int j = 0; j < ggml_nelements(d); j++) {
-                        vec_x[j] = vec_x[j] + vec_d[j] * dt;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_denoised[j];
                     }
                 } else {
                     // DPM-Solver++(2S)
@@ -708,7 +961,6 @@ static void sample_k_diffusion(sample_method_t method,
                     float h      = t_next - t;
                     float s      = t + 0.5f * h;
 
-                    float* vec_d        = (float*)d->data;
                     float* vec_x        = (float*)x->data;
                     float* vec_x2       = (float*)x2->data;
                     float* vec_denoised = (float*)denoised->data;
@@ -719,6 +971,9 @@ static void sample_k_diffusion(sample_method_t method,
                     }
 
                     ggml_tensor* denoised = model(x2, sigmas[i + 1], i + 1);
+                    if (denoised == nullptr) {
+                        return false;
+                    }
 
                     // Second half-step
                     for (int j = 0; j < ggml_nelements(x); j++) {
@@ -728,7 +983,7 @@ static void sample_k_diffusion(sample_method_t method,
 
                 // Noise addition
                 if (sigmas[i + 1] > 0) {
-                    ggml_tensor_set_f32_randn(noise, rng);
+                    ggml_ext_im_set_randn_f32(noise, rng);
                     {
                         float* vec_x     = (float*)x->data;
                         float* vec_noise = (float*)noise->data;
@@ -740,7 +995,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case DPMPP2M:  // DPM++ (2M) from Karras et al (2022)
+        case DPMPP2M_SAMPLE_METHOD:  // DPM++ (2M) from Karras et al (2022)
         {
             struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -749,6 +1004,9 @@ static void sample_k_diffusion(sample_method_t method,
             for (int i = 0; i < steps; i++) {
                 // denoise
                 ggml_tensor* denoised = model(x, sigmas[i], i + 1);
+                if (denoised == nullptr) {
+                    return false;
+                }
 
                 float t                 = t_fn(sigmas[i]);
                 float t_next            = t_fn(sigmas[i + 1]);
@@ -779,7 +1037,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case DPMPP2Mv2:  // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
+        case DPMPP2Mv2_SAMPLE_METHOD:  // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
         {
             struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -788,6 +1046,9 @@ static void sample_k_diffusion(sample_method_t method,
             for (int i = 0; i < steps; i++) {
                 // denoise
                 ggml_tensor* denoised = model(x, sigmas[i], i + 1);
+                if (denoised == nullptr) {
+                    return false;
+                }
 
                 float t                 = t_fn(sigmas[i]);
                 float t_next            = t_fn(sigmas[i + 1]);
@@ -822,7 +1083,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case IPNDM:  // iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
+        case IPNDM_SAMPLE_METHOD:  // iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
         {
             int max_order       = 4;
             ggml_tensor* x_next = x;
@@ -838,7 +1099,10 @@ static void sample_k_diffusion(sample_method_t method,
 
                 // Denoising step
                 ggml_tensor* denoised = model(x_cur, sigma, i + 1);
-                float* vec_denoised   = (float*)denoised->data;
+                if (denoised == nullptr) {
+                    return false;
+                }
+                float* vec_denoised = (float*)denoised->data;
                 // d_cur = (x_cur - denoised) / sigma
                 struct ggml_tensor* d_cur = ggml_dup_tensor(work_ctx, x_cur);
                 float* vec_d_cur          = (float*)d_cur->data;
@@ -897,7 +1161,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case IPNDM_V:  // iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
+        case IPNDM_V_SAMPLE_METHOD:  // iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
         {
             int max_order = 4;
             std::vector<ggml_tensor*> buffer_model;
@@ -971,7 +1235,7 @@ static void sample_k_diffusion(sample_method_t method,
                 d_cur = ggml_dup_tensor(work_ctx, x_next);
             }
         } break;
-        case LCM:  // Latent Consistency Models
+        case LCM_SAMPLE_METHOD:  // Latent Consistency Models
         {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
@@ -981,6 +1245,9 @@ static void sample_k_diffusion(sample_method_t method,
 
                 // denoise
                 ggml_tensor* denoised = model(x, sigma, i + 1);
+                if (denoised == nullptr) {
+                    return false;
+                }
 
                 // x = denoised
                 {
@@ -993,7 +1260,7 @@ static void sample_k_diffusion(sample_method_t method,
 
                 if (sigmas[i + 1] > 0) {
                     // x += sigmas[i + 1] * noise_sampler(sigmas[i], sigmas[i + 1])
-                    ggml_tensor_set_f32_randn(noise, rng);
+                    ggml_ext_im_set_randn_f32(noise, rng);
                     // noise = load_tensor_from_file(res_ctx, "./rand" + std::to_string(i+1) + ".bin");
                     {
                         float* vec_x     = (float*)x->data;
@@ -1006,8 +1273,8 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case DDIM_TRAILING:  // Denoising Diffusion Implicit Models
-                             // with the "trailing" timestep spacing
+        case DDIM_TRAILING_SAMPLE_METHOD:  // Denoising Diffusion Implicit Models
+                                           // with the "trailing" timestep spacing
         {
             // See J. Song et al., "Denoising Diffusion Implicit
             // Models", arXiv:2010.02502 [cs.LG]
@@ -1017,9 +1284,9 @@ static void sample_k_diffusion(sample_method_t method,
             // end beta) (which unfortunately k-diffusion's data
             // structure hides from the denoiser), and the sigmas are
             // also needed to invert the behavior of CompVisDenoiser
-            // (k-diffusion's LMSDiscreteScheduler)
+            // (k-diffusion's LMSDiscreteSchedulerr)
             float beta_start = 0.00085f;
-            float beta_end = 0.0120f;
+            float beta_end   = 0.0120f;
             std::vector<double> alphas_cumprod;
             std::vector<double> compvis_sigmas;
 
@@ -1030,8 +1297,9 @@ static void sample_k_diffusion(sample_method_t method,
                     (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
                     (1.0f -
                      std::pow(sqrtf(beta_start) +
-                              (sqrtf(beta_end) - sqrtf(beta_start)) *
-                              ((float)i / (TIMESTEPS - 1)), 2));
+                                  (sqrtf(beta_end) - sqrtf(beta_start)) *
+                                      ((float)i / (TIMESTEPS - 1)),
+                              2));
                 compvis_sigmas[i] =
                     std::sqrt((1 - alphas_cumprod[i]) /
                               alphas_cumprod[i]);
@@ -1044,7 +1312,7 @@ static void sample_k_diffusion(sample_method_t method,
 
             for (int i = 0; i < steps; i++) {
                 // The "trailing" DDIM timestep, see S. Lin et al.,
-                // "Common Diffusion Noise Schedules and Sample Steps
+                // "Common Diffusion Noise Schedulers and Sample Steps
                 // are Flawed", arXiv:2305.08891 [cs], p. 4, Table
                 // 2. Most variables below follow Diffusers naming
                 //
@@ -1059,14 +1327,12 @@ static void sample_k_diffusion(sample_method_t method,
                 // - pred_sample_direction -> "direction pointing to
                 //   x_t"
                 // - pred_prev_sample -> "x_t-1"
-                int timestep =
-                    roundf(TIMESTEPS -
-                           i * ((float)TIMESTEPS / steps)) - 1;
+                int timestep = static_cast<int>(roundf(TIMESTEPS - i * ((float)TIMESTEPS / steps))) - 1;
                 // 1. get previous step value (=t-1)
-                int prev_timestep = timestep - TIMESTEPS / steps;
+                int prev_timestep = timestep - TIMESTEPS / static_cast<int>(steps);
                 // The sigma here is chosen to cause the
                 // CompVisDenoiser to produce t = timestep
-                float sigma = compvis_sigmas[timestep];
+                float sigma = static_cast<float>(compvis_sigmas[timestep]);
                 if (i == 0) {
                     // The function add_noise intializes x to
                     // Diffusers' latents * sigma (as in Diffusers'
@@ -1086,10 +1352,9 @@ static void sample_k_diffusion(sample_method_t method,
                     float* vec_x = (float*)x->data;
                     for (int j = 0; j < ggml_nelements(x); j++) {
                         vec_x[j] *= std::sqrt(sigma * sigma + 1) /
-                            sigma;
+                                    sigma;
                     }
-                }
-                else {
+                } else {
                     // For the subsequent steps after the first one,
                     // at this point x = latents or x = sample, and
                     // needs to be prescaled with x <- sample / c_in
@@ -1124,12 +1389,11 @@ static void sample_k_diffusion(sample_method_t method,
                     }
                 }
                 // 2. compute alphas, betas
-                float alpha_prod_t = alphas_cumprod[timestep];
+                float alpha_prod_t = static_cast<float>(alphas_cumprod[timestep]);
                 // Note final_alpha_cumprod = alphas_cumprod[0] due to
                 // trailing timestep spacing
-                float alpha_prod_t_prev = prev_timestep >= 0 ?
-                    alphas_cumprod[prev_timestep] : alphas_cumprod[0];
-                float beta_prod_t = 1 - alpha_prod_t;
+                float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
+                float beta_prod_t       = 1 - alpha_prod_t;
                 // 3. compute predicted original sample from predicted
                 // noise also called "predicted x_0" of formula (12)
                 // from https://arxiv.org/pdf/2010.02502.pdf
@@ -1145,7 +1409,7 @@ static void sample_k_diffusion(sample_method_t method,
                         vec_pred_original_sample[j] =
                             (vec_x[j] / std::sqrt(sigma * sigma + 1) -
                              std::sqrt(beta_prod_t) *
-                             vec_model_output[j]) *
+                                 vec_model_output[j]) *
                             (1 / std::sqrt(alpha_prod_t));
                     }
                 }
@@ -1159,8 +1423,8 @@ static void sample_k_diffusion(sample_method_t method,
                 // sigma_t = sqrt((1 - alpha_t-1)/(1 - alpha_t)) *
                 // sqrt(1 - alpha_t/alpha_t-1)
                 float beta_prod_t_prev = 1 - alpha_prod_t_prev;
-                float variance = (beta_prod_t_prev / beta_prod_t) *
-                    (1 - alpha_prod_t / alpha_prod_t_prev);
+                float variance         = (beta_prod_t_prev / beta_prod_t) *
+                                 (1 - alpha_prod_t / alpha_prod_t_prev);
                 float std_dev_t = eta * std::sqrt(variance);
                 // 6. compute "direction pointing to x_t" of formula
                 // (12) from https://arxiv.org/pdf/2010.02502.pdf
@@ -1175,16 +1439,16 @@ static void sample_k_diffusion(sample_method_t method,
                         // Two step inner loop without an explicit
                         // tensor
                         float pred_sample_direction =
-                            std::sqrt(1 - alpha_prod_t_prev -
-                                      std::pow(std_dev_t, 2)) *
+                            ::sqrtf(1 - alpha_prod_t_prev -
+                                    ::powf(std_dev_t, 2)) *
                             vec_model_output[j];
                         vec_x[j] = std::sqrt(alpha_prod_t_prev) *
-                            vec_pred_original_sample[j] +
-                            pred_sample_direction;
+                                       vec_pred_original_sample[j] +
+                                   pred_sample_direction;
                     }
                 }
                 if (eta > 0) {
-                    ggml_tensor_set_f32_randn(variance_noise, rng);
+                    ggml_ext_im_set_randn_f32(variance_noise, rng);
                     float* vec_variance_noise =
                         (float*)variance_noise->data;
                     float* vec_x = (float*)x->data;
@@ -1200,15 +1464,15 @@ static void sample_k_diffusion(sample_method_t method,
                 // factor c_in.
             }
         } break;
-        case TCD:  // Strategic Stochastic Sampling (Algorithm 4) in
-                   // Trajectory Consistency Distillation
+        case TCD_SAMPLE_METHOD:  // Strategic Stochastic Sampling (Algorithm 4) in
+                                 // Trajectory Consistency Distillation
         {
             // See J. Zheng et al., "Trajectory Consistency
             // Distillation: Improved Latent Consistency Distillation
             // by Semi-Linear Consistency Function with Trajectory
             // Mapping", arXiv:2402.19159 [cs.CV]
             float beta_start = 0.00085f;
-            float beta_end = 0.0120f;
+            float beta_end   = 0.0120f;
             std::vector<double> alphas_cumprod;
             std::vector<double> compvis_sigmas;
 
@@ -1219,8 +1483,9 @@ static void sample_k_diffusion(sample_method_t method,
                     (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
                     (1.0f -
                      std::pow(sqrtf(beta_start) +
-                              (sqrtf(beta_end) - sqrtf(beta_start)) *
-                              ((float)i / (TIMESTEPS - 1)), 2));
+                                  (sqrtf(beta_end) - sqrtf(beta_start)) *
+                                      ((float)i / (TIMESTEPS - 1)),
+                              2));
                 compvis_sigmas[i] =
                     std::sqrt((1 - alphas_cumprod[i]) /
                               alphas_cumprod[i]);
@@ -1235,13 +1500,10 @@ static void sample_k_diffusion(sample_method_t method,
             for (int i = 0; i < steps; i++) {
                 // Analytic form for TCD timesteps
                 int timestep = TIMESTEPS - 1 -
-                    (TIMESTEPS / original_steps) *
-                    (int)floor(i * ((float)original_steps / steps));
+                               (TIMESTEPS / original_steps) *
+                                   (int)floor(i * ((float)original_steps / steps));
                 // 1. get previous step value
-                int prev_timestep = i >= steps - 1 ? 0 :
-                    TIMESTEPS - 1 - (TIMESTEPS / original_steps) *
-                    (int)floor((i + 1) *
-                               ((float)original_steps / steps));
+                int prev_timestep = i >= steps - 1 ? 0 : TIMESTEPS - 1 - (TIMESTEPS / original_steps) * (int)floor((i + 1) * ((float)original_steps / steps));
                 // Here timestep_s is tau_n' in Algorithm 4. The _s
                 // notation appears to be that from C. Lu,
                 // "DPM-Solver: A Fast ODE Solver for Diffusion
@@ -1253,15 +1515,14 @@ static void sample_k_diffusion(sample_method_t method,
                 // Begin k-diffusion specific workaround for
                 // evaluating F_theta(x; ...) from D(x, sigma), same
                 // as in DDIM (and see there for detailed comments)
-                float sigma = compvis_sigmas[timestep];
+                float sigma = static_cast<float>(compvis_sigmas[timestep]);
                 if (i == 0) {
                     float* vec_x = (float*)x->data;
                     for (int j = 0; j < ggml_nelements(x); j++) {
                         vec_x[j] *= std::sqrt(sigma * sigma + 1) /
-                            sigma;
+                                    sigma;
                     }
-                }
-                else {
+                } else {
                     float* vec_x = (float*)x->data;
                     for (int j = 0; j < ggml_nelements(x); j++) {
                         vec_x[j] *= std::sqrt(sigma * sigma + 1);
@@ -1293,16 +1554,15 @@ static void sample_k_diffusion(sample_method_t method,
                 // is different from the notation alpha_t in
                 // DPM-Solver. In fact, we have alpha_{t_n} =
                 // \sqrt{\hat{alpha_n}}, [...]"
-                float alpha_prod_t = alphas_cumprod[timestep];
-                float beta_prod_t = 1 - alpha_prod_t;
+                float alpha_prod_t = static_cast<float>(alphas_cumprod[timestep]);
+                float beta_prod_t  = 1 - alpha_prod_t;
                 // Note final_alpha_cumprod = alphas_cumprod[0] since
                 // TCD is always "trailing"
-                float alpha_prod_t_prev = prev_timestep >= 0 ?
-                    alphas_cumprod[prev_timestep] : alphas_cumprod[0];
+                float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
                 // The subscript _s are the only portion in this
                 // section (2) unique to TCD
-                float alpha_prod_s = alphas_cumprod[timestep_s];
-                float beta_prod_s = 1 - alpha_prod_s;
+                float alpha_prod_s = static_cast<float>(alphas_cumprod[timestep_s]);
+                float beta_prod_s  = 1 - alpha_prod_s;
                 // 3. Compute the predicted noised sample x_s based on
                 // the model parameterization
                 //
@@ -1317,7 +1577,7 @@ static void sample_k_diffusion(sample_method_t method,
                         vec_pred_original_sample[j] =
                             (vec_x[j] / std::sqrt(sigma * sigma + 1) -
                              std::sqrt(beta_prod_t) *
-                             vec_model_output[j]) *
+                                 vec_model_output[j]) *
                             (1 / std::sqrt(alpha_prod_t));
                     }
                 }
@@ -1339,9 +1599,9 @@ static void sample_k_diffusion(sample_method_t method,
                         // pred_epsilon = model_output
                         vec_x[j] =
                             std::sqrt(alpha_prod_s) *
-                            vec_pred_original_sample[j] +
+                                vec_pred_original_sample[j] +
                             std::sqrt(beta_prod_s) *
-                            vec_model_output[j];
+                                vec_model_output[j];
                     }
                 }
                 // 4. Sample and inject noise z ~ N(0, I) for
@@ -1356,8 +1616,8 @@ static void sample_k_diffusion(sample_method_t method,
                 if (eta > 0 && i != steps - 1) {
                     // In this case, x is still pred_noised_sample,
                     // continue in-place
-                    ggml_tensor_set_f32_randn(noise, rng);
-                    float* vec_x = (float*)x->data;
+                    ggml_ext_im_set_randn_f32(noise, rng);
+                    float* vec_x     = (float*)x->data;
                     float* vec_noise = (float*)noise->data;
                     for (int j = 0; j < ggml_nelements(x); j++) {
                         // Corresponding to (35) in Zheng et
@@ -1366,10 +1626,10 @@ static void sample_k_diffusion(sample_method_t method,
                         vec_x[j] =
                             std::sqrt(alpha_prod_t_prev /
                                       alpha_prod_s) *
-                            vec_x[j] +
+                                vec_x[j] +
                             std::sqrt(1 - alpha_prod_t_prev /
-                                      alpha_prod_s) *
-                            vec_noise[j];
+                                              alpha_prod_s) *
+                                vec_noise[j];
                     }
                 }
             }
@@ -1377,8 +1637,9 @@ static void sample_k_diffusion(sample_method_t method,
 
         default:
             LOG_ERROR("Attempting to sample with nonexisting sample method %i", method);
-            abort();
+            return false;
     }
+    return true;
 }
 
 #endif  // __DENOISER_HPP__

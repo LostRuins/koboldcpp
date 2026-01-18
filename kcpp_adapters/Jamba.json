@@ -1,0 +1,9 @@
+{
+  "system_start": "<|bom|><|system|> ",
+  "system_end": "<|eom|>",
+  "user_start": "<|bom|><|user|> ",
+  "user_end": "<|eom|>",
+  "assistant_start": "<|bom|><|assistant|> ",
+  "assistant_gen": "<|bom|><|assistant|>",
+  "assistant_end": "<|eom|>"
+}

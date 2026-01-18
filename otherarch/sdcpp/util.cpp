@@ -1,10 +1,12 @@
 #include "util.h"
-#include <stdarg.h>
 #include <algorithm>
 #include <cmath>
 #include <codecvt>
+#include <cstdarg>
+#include <filesystem>
 #include <fstream>
 #include <locale>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -28,9 +30,6 @@
 #include "ggml-cpu.h"
 #include "ggml.h"
 #include "stable-diffusion.h"
-
-// #define STB_IMAGE_RESIZE_IMPLEMENTATION //already defined
-#include "stb_image_resize.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
     if (str.length() >= ending.length()) {
@@ -62,7 +61,32 @@ void replace_all_chars(std::string& str, char target, char replacement) {
     }
 }
 
+std::string sd_format(const char* fmt, ...) {
+    va_list ap;
+    va_list ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int size = vsnprintf(nullptr, 0, fmt, ap);
+    std::vector<char> buf(size + 1);
+    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
+    va_end(ap2);
+    va_end(ap);
+    return std::string(buf.data(), size);
+}
+
+int round_up_to(int value, int base) {
+    if (base <= 0) {
+        return value;
+    }
+    if (value % base == 0) {
+        return value;
+    } else {
+        return ((value / base) + 1) * base;
+    }
+}
+
 #ifdef _WIN32  // code for windows
+#define NOMINMAX
 #include <windows.h>
 
 bool file_exists(const std::string& filename) {
@@ -75,60 +99,76 @@ bool is_directory(const std::string& path) {
     return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
-std::string get_full_path(const std::string& dir, const std::string& filename) {
-    std::string full_path = dir + "\\" + filename;
-
-    WIN32_FIND_DATA find_file_data;
-    HANDLE hFind = FindFirstFile(full_path.c_str(), &find_file_data);
-
-    if (hFind != INVALID_HANDLE_VALUE) {
-        FindClose(hFind);
-        return full_path;
-    } else {
-        return "";
-    }
+std::string sd_get_u8path(const std::string& file_path)
+{
+    return std::filesystem::u8path(file_path).string();
 }
 
-std::vector<std::string> get_files_from_dir(const std::string& dir) {
-    std::vector<std::string> files;
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size, HANDLE hfile, HANDLE hmapping)
+        : MmapWrapper(data, size), hfile_(hfile), hmapping_(hmapping) {}
 
-    WIN32_FIND_DATA findFileData;
-    HANDLE hFind;
-
-    char currentDirectory[MAX_PATH];
-    GetCurrentDirectory(MAX_PATH, currentDirectory);
-
-    char directoryPath[MAX_PATH];  // this is absolute path
-    sprintf(directoryPath, "%s\\%s\\*", currentDirectory, dir.c_str());
-
-    // Find the first file in the directory
-    hFind = FindFirstFile(directoryPath, &findFileData);
-
-    // Check if the directory was found
-    if (hFind == INVALID_HANDLE_VALUE) {
-        printf("Unable to find directory.\n");
-        return files;
+    ~MmapWrapperImpl() override {
+        UnmapViewOfFile(data_);
+        CloseHandle(hmapping_);
+        CloseHandle(hfile_);
     }
 
-    // Loop through all files in the directory
-    do {
-        // Check if the found file is a regular file (not a directory)
-        if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            files.push_back(std::string(currentDirectory) + "\\" + dir + "\\" + std::string(findFileData.cFileName));
-        }
-    } while (FindNextFile(hFind, &findFileData) != 0);
+private:
+    HANDLE hfile_;
+    HANDLE hmapping_;
+};
 
-    // Close the handle
-    FindClose(hFind);
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+    void* mapped_data = nullptr;
+    size_t file_size  = 0;
 
-    sort(files.begin(), files.end());
+    HANDLE file_handle = CreateFileA(
+        filename.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
 
-    return files;
+    if (file_handle == INVALID_HANDLE_VALUE) {
+        return nullptr;
+    }
+
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file_handle, &size)) {
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    file_size = static_cast<size_t>(size.QuadPart);
+
+    HANDLE mapping_handle = CreateFileMapping(file_handle, NULL, PAGE_READONLY, 0, 0, NULL);
+
+    if (mapping_handle == NULL) {
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
+
+    if (mapped_data == NULL) {
+        CloseHandle(mapping_handle);
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size, file_handle, mapping_handle);
 }
 
 #else  // Unix
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 bool file_exists(const std::string& filename) {
     struct stat buffer;
@@ -140,48 +180,68 @@ bool is_directory(const std::string& path) {
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
 }
 
-// TODO: add windows version
-std::string get_full_path(const std::string& dir, const std::string& filename) {
-    DIR* dp = opendir(dir.c_str());
-
-    if (dp != nullptr) {
-        struct dirent* entry;
-
-        while ((entry = readdir(dp)) != nullptr) {
-            if (strcasecmp(entry->d_name, filename.c_str()) == 0) {
-                closedir(dp);
-                return dir + "/" + entry->d_name;
-            }
-        }
-
-        closedir(dp);
-    }
-
-    return "";
+std::string sd_get_u8path(const std::string& file_path)
+{
+    return std::filesystem::path(file_path).string();
 }
 
-std::vector<std::string> get_files_from_dir(const std::string& dir) {
-    std::vector<std::string> files;
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size)
+        : MmapWrapper(data, size) {}
 
-    DIR* dp = opendir(dir.c_str());
+    ~MmapWrapperImpl() override {
+        munmap(data_, size_);
+    }
+};
 
-    if (dp != nullptr) {
-        struct dirent* entry;
-
-        while ((entry = readdir(dp)) != nullptr) {
-            std::string fname = dir + "/" + entry->d_name;
-            if (!is_directory(fname))
-                files.push_back(fname);
-        }
-        closedir(dp);
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+    int file_descriptor = open(filename.c_str(), O_RDONLY);
+    if (file_descriptor == -1) {
+        return nullptr;
     }
 
-    sort(files.begin(), files.end());
+    int mmap_flags = MAP_PRIVATE;
 
-    return files;
+#ifdef __linux__
+    // performance flags used by llama.cpp
+    // posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+    // mmap_flags |= MAP_POPULATE;
+#endif
+
+    struct stat sb;
+    if (fstat(file_descriptor, &sb) == -1) {
+        close(file_descriptor);
+        return nullptr;
+    }
+
+    size_t file_size = sb.st_size;
+
+    void* mapped_data = mmap(NULL, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+
+    close(file_descriptor);
+
+    if (mapped_data == MAP_FAILED) {
+        return nullptr;
+    }
+
+#ifdef __linux__
+    // performance flags used by llama.cpp
+    // posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+#endif
+
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
 }
 
 #endif
+
+bool MmapWrapper::copy_data(void* buf, size_t n, size_t offset) const {
+    if (offset >= size_ || n > (size_ - offset)) {
+        return false;
+    }
+    std::memcpy(buf, data() + offset, n);
+    return true;
+}
 
 // get_num_physical_cores is copy from
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
@@ -206,11 +266,11 @@ int32_t sd_get_num_physical_cores() {
 #elif defined(__APPLE__) && defined(__MACH__)
     int32_t num_physical_cores;
     size_t len = sizeof(num_physical_cores);
-    int result = sysctlbyname("hw.perflevel0.physicalcpu", &num_physical_cores, &len, NULL, 0);
+    int result = sysctlbyname("hw.perflevel0.physicalcpu", &num_physical_cores, &len, nullptr, 0);
     if (result == 0) {
         return num_physical_cores;
     }
-    result = sysctlbyname("hw.physicalcpu", &num_physical_cores, &len, NULL, 0);
+    result = sysctlbyname("hw.physicalcpu", &num_physical_cores, &len, nullptr, 0);
     if (result == 0) {
         return num_physical_cores;
     }
@@ -221,8 +281,15 @@ int32_t sd_get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
-static sd_progress_cb_t sd_progress_cb = NULL;
-void* sd_progress_cb_data              = NULL;
+static sd_progress_cb_t sd_progress_cb = nullptr;
+void* sd_progress_cb_data              = nullptr;
+
+static sd_preview_cb_t sd_preview_cb = nullptr;
+static void* sd_preview_cb_data      = nullptr;
+preview_t sd_preview_mode            = PREVIEW_NONE;
+int sd_preview_interval              = 1;
+bool sd_preview_denoised             = true;
+bool sd_preview_noisy                = false;
 
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
@@ -267,7 +334,7 @@ std::string path_join(const std::string& p1, const std::string& p2) {
     return p1 + "/" + p2;
 }
 
-std::vector<std::string> splitString(const std::string& str, char delimiter) {
+std::vector<std::string> split_string(const std::string& str, char delimiter) {
     std::vector<std::string> result;
     size_t start = 0;
     size_t end   = str.find(delimiter);
@@ -284,38 +351,6 @@ std::vector<std::string> splitString(const std::string& str, char delimiter) {
     return result;
 }
 
-sd_image_t* preprocess_id_image(sd_image_t* img) {
-    int shortest_edge   = 224;
-    int size            = shortest_edge;
-    sd_image_t* resized = NULL;
-    uint32_t w          = img->width;
-    uint32_t h          = img->height;
-    uint32_t c          = img->channel;
-
-    // 1. do resize using stb_resize functions
-
-    unsigned char* buf = (unsigned char*)malloc(sizeof(unsigned char) * 3 * size * size);
-    if (!stbir_resize_uint8(img->data, w, h, 0,
-                            buf, size, size, 0,
-                            c)) {
-        fprintf(stderr, "%s: resize operation failed \n ", __func__);
-        return resized;
-    }
-
-    // 2. do center crop (likely unnecessary due to step 1)
-
-    // 3. do rescale
-
-    // 4. do normalize
-
-    // 3 and 4 will need to be done in float format.
-
-    resized = new sd_image_t{(uint32_t)shortest_edge,
-                             (uint32_t)shortest_edge,
-                             3,
-                             buf};
-    return resized;
-}
 
 static int sdloglevel = 0; //-1 = hide all, 0 = normal, 1 = showall
 static bool sdquiet = false;
@@ -344,13 +379,16 @@ void pretty_progress(int step, int steps, float time) {
         }
     }
     progress += "|";
-    printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s",
-           progress.c_str(), step, steps,
-           time > 1.0f || time == 0 ? time : (1.0f / time));
-    fflush(stdout);  // for linux
-    if (step == steps) {
-        printf("\n");
+
+    const char* lf   = (step == steps ? "\n" : "");
+    const char* unit = "s/it";
+    float speed      = time;
+    if (speed < 1.0f && speed > 0.f) {
+        speed = 1.0f / speed;
+        unit  = "it/s";
     }
+    printf("\r%s %i/%i - %.2f%s\033[K%s", progress.c_str(), step, steps, speed, unit, lf);
+    fflush(stdout);  // for linux
 }
 
 std::string ltrim(const std::string& s) {
@@ -371,10 +409,10 @@ std::string trim(const std::string& s) {
     return rtrim(ltrim(s));
 }
 
-static sd_log_cb_t sd_log_cb = NULL;
-void* sd_log_cb_data         = NULL;
+static sd_log_cb_t sd_log_cb = nullptr;
+void* sd_log_cb_data         = nullptr;
 
-#define LOG_BUFFER_SIZE 1024
+#define LOG_BUFFER_SIZE 4096
 
 void log_message(const char* format, ...) {
     if (sdloglevel>0) {
@@ -409,7 +447,10 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     if (written >= 0 && written < LOG_BUFFER_SIZE) {
         vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
     }
-    strncat(log_buffer, "\n", LOG_BUFFER_SIZE - strlen(log_buffer));
+    size_t len = strlen(log_buffer);
+    if (log_buffer[len - 1] != '\n') {
+        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
+    }
 
     if (sd_log_cb) {
         sd_log_cb(level, log_buffer, sd_log_cb_data);
@@ -426,29 +467,60 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
+void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
+    sd_preview_cb       = cb;
+    sd_preview_cb_data  = data;
+    sd_preview_mode     = mode;
+    sd_preview_interval = interval;
+    sd_preview_denoised = denoised;
+    sd_preview_noisy    = noisy;
+}
+
+sd_preview_cb_t sd_get_preview_callback() {
+    return sd_preview_cb;
+}
+void* sd_get_preview_callback_data() {
+    return sd_preview_cb_data;
+}
+
+preview_t sd_get_preview_mode() {
+    return sd_preview_mode;
+}
+int sd_get_preview_interval() {
+    return sd_preview_interval;
+}
+bool sd_should_preview_denoised() {
+    return sd_preview_denoised;
+}
+bool sd_should_preview_noisy() {
+    return sd_preview_noisy;
+}
+
+sd_progress_cb_t sd_get_progress_callback() {
+    return sd_progress_cb;
+}
+void* sd_get_progress_callback_data() {
+    return sd_progress_cb_data;
+}
 const char* sd_get_system_info() {
     static char buffer[1024];
     std::stringstream ss;
     ss << "System Info: \n";
-    ss << "    SSE3 = " << ggml_cpu_has_sse3() << std::endl;
-    ss << "    AVX = " << ggml_cpu_has_avx() << std::endl;
-    ss << "    AVX2 = " << ggml_cpu_has_avx2() << std::endl;
-    ss << "    AVX512 = " << ggml_cpu_has_avx512() << std::endl;
-    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << std::endl;
-    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << std::endl;
-    ss << "    FMA = " << ggml_cpu_has_fma() << std::endl;
-    ss << "    NEON = " << ggml_cpu_has_neon() << std::endl;
-    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << std::endl;
-    ss << "    F16C = " << ggml_cpu_has_f16c() << std::endl;
-    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << std::endl;
-    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << std::endl;
-    ss << "    VSX = " << ggml_cpu_has_vsx() << std::endl;
+    ss << "    SSE3 = " << ggml_cpu_has_sse3() << " | ";
+    ss << "    AVX = " << ggml_cpu_has_avx() << " | ";
+    ss << "    AVX2 = " << ggml_cpu_has_avx2() << " | ";
+    ss << "    AVX512 = " << ggml_cpu_has_avx512() << " | ";
+    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << " | ";
+    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << " | ";
+    ss << "    FMA = " << ggml_cpu_has_fma() << " | ";
+    ss << "    NEON = " << ggml_cpu_has_neon() << " | ";
+    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << " | ";
+    ss << "    F16C = " << ggml_cpu_has_f16c() << " | ";
+    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << " | ";
+    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << " | ";
+    ss << "    VSX = " << ggml_cpu_has_vsx() << " | ";
     snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
     return buffer;
-}
-
-const char* sd_type_name(enum sd_type_t type) {
-    return ggml_type_name((ggml_type)type);
 }
 
 sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
@@ -460,7 +532,7 @@ sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
     // Allocate memory for float data
     converted_image.data = (float*)malloc(image.width * image.height * image.channel * sizeof(float));
 
-    for (int i = 0; i < image.width * image.height * image.channel; i++) {
+    for (uint32_t i = 0; i < image.width * image.height * image.channel; i++) {
         // Convert uint8_t to float
         converted_image.data[i] = (float)image.data[i];
     }
@@ -487,12 +559,12 @@ sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int
             float original_x = (float)x * image.width / target_width;
             float original_y = (float)y * image.height / target_height;
 
-            int x1 = (int)original_x;
-            int y1 = (int)original_y;
-            int x2 = x1 + 1;
-            int y2 = y1 + 1;
+            uint32_t x1 = (uint32_t)original_x;
+            uint32_t y1 = (uint32_t)original_y;
+            uint32_t x2 = std::min(x1 + 1, image.width - 1);
+            uint32_t y2 = std::min(y1 + 1, image.height - 1);
 
-            for (int k = 0; k < image.channel; k++) {
+            for (uint32_t k = 0; k < image.channel; k++) {
                 float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
                 float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
                 float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
@@ -512,9 +584,9 @@ sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int
 }
 
 void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3]) {
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            for (int k = 0; k < image.channel; k++) {
+    for (uint32_t y = 0; y < image.height; y++) {
+        for (uint32_t x = 0; x < image.width; x++) {
+            for (uint32_t k = 0; k < image.channel; k++) {
                 int index         = (y * image.width + x) * image.channel + k;
                 image.data[index] = (image.data[index] - means[k]) / stds[k];
             }
@@ -523,29 +595,32 @@ void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3
 }
 
 // Constants for means and std
-float means[3] = {0.48145466, 0.4578275, 0.40821073};
-float stds[3]  = {0.26862954, 0.26130258, 0.27577711};
+float means[3] = {0.48145466f, 0.4578275f, 0.40821073f};
+float stds[3]  = {0.26862954f, 0.26130258f, 0.27577711f};
 
 // Function to clip and preprocess sd_image_f32_t
-sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size) {
-    float scale = (float)size / fmin(image.width, image.height);
+sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int target_height) {
+    float width_scale  = (float)target_width / image.width;
+    float height_scale = (float)target_height / image.height;
+
+    float scale = std::fmax(width_scale, height_scale);
 
     // Interpolation
-    int new_width       = (int)(scale * image.width);
-    int new_height      = (int)(scale * image.height);
-    float* resized_data = (float*)malloc(new_width * new_height * image.channel * sizeof(float));
+    int resized_width   = (int)(scale * image.width);
+    int resized_height  = (int)(scale * image.height);
+    float* resized_data = (float*)malloc(resized_width * resized_height * image.channel * sizeof(float));
 
-    for (int y = 0; y < new_height; y++) {
-        for (int x = 0; x < new_width; x++) {
-            float original_x = (float)x * image.width / new_width;
-            float original_y = (float)y * image.height / new_height;
+    for (int y = 0; y < resized_height; y++) {
+        for (int x = 0; x < resized_width; x++) {
+            float original_x = (float)x * image.width / resized_width;
+            float original_y = (float)y * image.height / resized_height;
 
-            int x1 = (int)original_x;
-            int y1 = (int)original_y;
-            int x2 = x1 + 1;
-            int y2 = y1 + 1;
+            uint32_t x1 = (uint32_t)original_x;
+            uint32_t y1 = (uint32_t)original_y;
+            uint32_t x2 = std::min(x1 + 1, image.width - 1);
+            uint32_t y2 = std::min(y1 + 1, image.height - 1);
 
-            for (int k = 0; k < image.channel; k++) {
+            for (uint32_t k = 0; k < image.channel; k++) {
                 float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
                 float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
                 float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
@@ -556,26 +631,28 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size) {
 
                 float value = interpolate(v1, v2, v3, v4, x_ratio, y_ratio);
 
-                *(resized_data + y * new_width * image.channel + x * image.channel + k) = value;
+                *(resized_data + y * resized_width * image.channel + x * image.channel + k) = value;
             }
         }
     }
 
     // Clip and preprocess
-    int h = (new_height - size) / 2;
-    int w = (new_width - size) / 2;
+    int h_offset = std::max((int)(resized_height - target_height) / 2, 0);
+    int w_offset = std::max((int)(resized_width - target_width) / 2, 0);
 
     sd_image_f32_t result;
-    result.width   = size;
-    result.height  = size;
+    result.width   = target_width;
+    result.height  = target_height;
     result.channel = image.channel;
-    result.data    = (float*)malloc(size * size * image.channel * sizeof(float));
+    result.data    = (float*)malloc(target_height * target_width * image.channel * sizeof(float));
 
-    for (int k = 0; k < image.channel; k++) {
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
-                *(result.data + i * size * image.channel + j * image.channel + k) =
-                    fmin(fmax(*(resized_data + (i + h) * new_width * image.channel + (j + w) * image.channel + k), 0.0f), 255.0f) / 255.0f;
+    for (uint32_t k = 0; k < image.channel; k++) {
+        for (uint32_t i = 0; i < result.height; i++) {
+            for (uint32_t j = 0; j < result.width; j++) {
+                int src_y = std::min(static_cast<int>(i + h_offset), resized_height - 1);
+                int src_x = std::min(static_cast<int>(j + w_offset), resized_width - 1);
+                *(result.data + i * result.width * image.channel + j * image.channel + k) =
+                    fmin(fmax(*(resized_data + src_y * resized_width * image.channel + src_x * image.channel + k), 0.0f), 255.0f) / 255.0f;
             }
         }
     }
@@ -584,11 +661,11 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size) {
     free(resized_data);
 
     // Normalize
-    for (int k = 0; k < image.channel; k++) {
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
+    for (uint32_t k = 0; k < image.channel; k++) {
+        for (uint32_t i = 0; i < result.height; i++) {
+            for (uint32_t j = 0; j < result.width; j++) {
                 // *(result.data + i * size * image.channel + j * image.channel + k) = 0.5f;
-                int offset  = i * size * image.channel + j * image.channel + k;
+                int offset  = i * result.width * image.channel + j * image.channel + k;
                 float value = *(result.data + offset);
                 value       = (value - means[k]) / stds[k];
                 // value = 0.5f;
@@ -607,6 +684,8 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size) {
 //   (abc) - increases attention to abc by a multiplier of 1.1
 //   (abc:3.12) - increases attention to abc by a multiplier of 3.12
 //   [abc] - decreases attention to abc by a multiplier of 1.1
+//   BREAK - separates the prompt into conceptually distinct parts for sequential processing
+//   B - internal helper pattern; prevents 'B' in 'BREAK' from being consumed as normal text
 //   \( - literal character '('
 //   \[ - literal character '['
 //   \) - literal character ')'
@@ -642,7 +721,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     float round_bracket_multiplier  = 1.1f;
     float square_bracket_multiplier = 1 / 1.1f;
 
-    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|[^\\()\[\]:]+|:)");
+    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|\bBREAK\b|[^\\()\[\]:B]+|:|\bB)");
     std::regex re_break(R"(\s*\bBREAK\b\s*)");
 
     auto multiply_range = [&](int start_position, float multiplier) {
@@ -651,7 +730,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
         }
     };
 
-    std::smatch m;
+    std::smatch m, m2;
     std::string remaining_text = text;
 
     while (std::regex_search(remaining_text, m, re_attention)) {
@@ -675,6 +754,8 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
             square_brackets.pop_back();
         } else if (text == "\\(") {
             res.push_back({text.substr(1), 1.0f});
+        } else if (std::regex_search(text, m2, re_break)) {
+            res.push_back({"BREAK", -1.0f});
         } else {
             res.push_back({text, 1.0f});
         }

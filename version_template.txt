@@ -21,6 +21,7 @@ VSVersionInfo(
                         StringStruct(u'LegalCopyright', u'AGPLv3'),
                         StringStruct(u'OriginalFilename', u'koboldcpp.exe'),
                         StringStruct(u'ProductName', u'koboldcpp'),
+                        StringStruct(u'ProductVersion', u'MYVER_MAJOR.MYVER_MINOR.0.0'),
                     ]
                 )
             ]

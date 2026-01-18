@@ -1,0 +1,93 @@
+name: Koboldcpp Linux ARM64
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Optional commit hash to build from'
+        required: false
+        default: ''
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+jobs:
+  linux-arm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
+
+      - name: Show Commit Used
+        run: |
+          echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
+
+      - name: Install Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk python3-pip python3-dev build-essential \
+              libffi-dev libssl-dev libbz2-dev libreadline-dev libsqlite3-dev \
+              crossbuild-essential-arm64 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Install New GCC for Cross-Compilation
+        run: |
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-12 g++-12 gcc-12-aarch64-linux-gnu g++-12-aarch64-linux-gnu
+          export CC=/usr/bin/aarch64-linux-gnu-gcc-12
+          export CXX=/usr/bin/aarch64-linux-gnu-g++-12
+          export AR=aarch64-linux-gnu-ar
+          export UNAME_M=aarch64
+          export UNAME_S=Linux
+          export PATH=/usr/bin:$PATH
+          make LLAMA_PORTABLE=1
+          chmod +x './create_ver_file.sh'
+          . create_ver_file.sh
+          mkdir -p dist
+          cp './koboldcpp_default.so' dist
+          ls
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+
+      - name: Setup QEMU for ARM64
+        run: |
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+      - name: Build ARM64 PyInstaller
+        run: |
+          docker run --rm \
+            --platform linux/arm64 \
+            -v "${PWD}:/src" \
+            python:3.9-slim \
+            /bin/bash -c "
+              apt-get update && apt-get install -y build-essential && \
+              apt-get update && apt-get install -y gcc-12 g++-12 && \
+              export LD_LIBRARY_PATH=/usr/lib/gcc/x86_64-linux-gnu/12:$LD_LIBRARY_PATH && \
+              pip install customtkinter pyinstaller tk jinja2 && \
+              cd /src && \
+              pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil \
+              --add-data './koboldcpp_default.so:.' \
+              --add-data './kcpp_adapters:./kcpp_adapters' \
+              --add-data './koboldcpp.py:.' \
+              --add-data './json_to_gbnf.py:.' \
+              --add-data './LICENSE.md:.'  \
+              --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' \
+              --add-data './embd_res:./embd_res' \
+              --version-file './version.txt' \
+              --clean --console koboldcpp.py -n 'koboldcpp-linux-arm64'
+            "
+
+      - name: Save artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcpp_linux_arm64_binary
+          path: dist/
+
