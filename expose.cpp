@@ -367,10 +367,12 @@ extern "C"
             itm.option_count = last_logprob_toppicks[i].tokenid.size();
             itm.selected_token = last_logprob_toppicks[i].selected_token.c_str();
             itm.selected_logprob = last_logprob_toppicks[i].selected_logprob;
+            itm.selected_token_id = last_logprob_toppicks[i].selected_tokenid;
             itm.logprobs = last_logprob_toppicks[i].logprobs.data();
             for(int j=0;j<itm.option_count && j<logprobs_max;++j)
             {
                 itm.tokens[j] = last_logprob_toppicks[i].tokens[j].c_str();
+                itm.token_ids[j] = last_logprob_toppicks[i].tokenid[j];
             }
             last_logprob_items.push_back(itm);
         }

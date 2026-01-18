@@ -171,7 +171,9 @@ class logprob_item(ctypes.Structure):
      _fields_ = [("option_count", ctypes.c_int),
                 ("selected_token", ctypes.c_char_p),
                 ("selected_logprob", ctypes.c_float),
+                ("selected_token_id", ctypes.c_int32),
                 ("tokens", ctypes.c_char_p * logprobs_max),
+                ("token_ids", ctypes.c_int32 * logprobs_max),
                 ("logprobs", ctypes.POINTER(ctypes.c_float))]
 class last_logprobs_outputs(ctypes.Structure):
     _fields_ = [("count", ctypes.c_int),
@@ -2661,6 +2663,7 @@ def parse_last_logprobs(lastlogprobs):
     logprobsdict = {}
     logprobsdict['content'] = []
     logprobsdict['tokens'] = []
+    logprobsdict['token_ids'] = []
     logprobsdict['token_logprobs'] = []
     logprobsdict['top_logprobs'] = []
     logprobsdict['text_offset'] = []
@@ -2670,7 +2673,9 @@ def parse_last_logprobs(lastlogprobs):
         logprob_item = lastlogprobs.logprob_items[i]
         toptoken = ctypes.string_at(logprob_item.selected_token).decode("UTF-8","ignore")
         logprobsdict['tokens'].append(toptoken)
+        logprobsdict['token_ids'].append(logprob_item.selected_token_id)
         lp_content_item['token'] = toptoken
+        lp_content_item['token_id'] = logprob_item.selected_token_id
         logprobsdict['token_logprobs'].append(logprob_item.selected_logprob)
         lp_content_item['logprob'] = logprob_item.selected_logprob
         lp_content_item['bytes'] = list(toptoken.encode('utf-8'))
@@ -2684,6 +2689,7 @@ def parse_last_logprobs(lastlogprobs):
             tokstr = ctypes.string_at(logprob_item.tokens[j]).decode("UTF-8","ignore")
             tops[tokstr] = logprob_item.logprobs[j]
             tl_item['token'] = tokstr
+            tl_item['token_id'] = logprob_item.token_ids[j]
             tl_item['bytes'] = list(tokstr.encode('utf-8'))
             lp_content_item['top_logprobs'].append(tl_item)
         logprobsdict['top_logprobs'].append(tops)

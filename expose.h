@@ -158,7 +158,9 @@ struct logprob_item {
     int option_count;
     const char * selected_token;
     float selected_logprob;
+    int32_t selected_token_id;
     const char * tokens[logprobs_max];
+    int32_t token_ids[logprobs_max];
     float * logprobs = nullptr;
 };
 struct last_logprobs_outputs {
