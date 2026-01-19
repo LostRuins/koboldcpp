@@ -37,6 +37,7 @@ const char* model_version_to_str[] = {
     "SDXL",
     "SDXL Inpaint",
     "SDXL Instruct-Pix2Pix",
+    "SDXL (Vega)",
     "SDXL (SSD1B)",
     "SVD",
     "SD3.x",
@@ -763,7 +764,7 @@ public:
                         LOG_INFO("Using Conv2d direct in the vae model");
                         first_stage_model->set_conv2d_direct_enabled(true);
                     }
-                    if (version == VERSION_SDXL &&
+                    if (sd_version_is_sdxl(version) &&
                         (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
                         float vae_conv_2d_scale = 1.f / 32.f;
                         LOG_WARN(

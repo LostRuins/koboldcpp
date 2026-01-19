@@ -201,6 +201,9 @@ public:
             num_head_channels     = 64;
             num_heads             = -1;
             use_linear_projection = true;
+            if (version == VERSION_SDXL_VEGA) {
+                transformer_depth = {1, 1, 2};
+            }
         } else if (version == VERSION_SVD) {
             in_channels           = 8;
             out_channels          = 4;
@@ -319,7 +322,7 @@ public:
         }
         if (!tiny_unet) {
             blocks["middle_block.0"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
-            if (version != VERSION_SDXL_SSD1B) {
+            if (version != VERSION_SDXL_SSD1B && version != VERSION_SDXL_VEGA) {
                 blocks["middle_block.1"] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
                                                                                           n_head,
                                                                                           d_head,
@@ -520,7 +523,7 @@ public:
         // middle_block
         if (!tiny_unet) {
             h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
-            if (version != VERSION_SDXL_SSD1B) {
+            if (version != VERSION_SDXL_SSD1B && version != VERSION_SDXL_VEGA) {
                 h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
                 h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
             }
