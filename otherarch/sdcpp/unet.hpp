@@ -529,7 +529,7 @@ public:
             }
         }
         if (controls.size() > 0) {
-            auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[controls.size() - 1], control_strength);
+            auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, true);
             h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
         }
         int control_offset = static_cast<int>(controls.size() - 2);
@@ -542,7 +542,7 @@ public:
                 hs.pop_back();
 
                 if (controls.size() > 0) {
-                    auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[control_offset], control_strength);
+                    auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[control_offset], control_strength, true);
                     h_skip  = ggml_add(ctx->ggml_ctx, h_skip, cs);  // control net condition
                     control_offset--;
                 }

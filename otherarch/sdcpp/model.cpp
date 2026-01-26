@@ -392,7 +392,11 @@ bool ModelLoader::init_from_file(const std::string& file_path, const std::string
         LOG_INFO("load %s using checkpoint format", file_path.c_str());
         return init_from_ckpt_file(file_path, prefix);
     } else {
-        LOG_WARN("unknown format %s", file_path.c_str());
+        if (file_exists(file_path)) {
+            LOG_WARN("unknown format %s", file_path.c_str());
+        } else {
+            LOG_WARN("file %s not found", file_path.c_str());
+        }
         return false;
     }
 }

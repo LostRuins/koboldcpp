@@ -515,7 +515,7 @@ public:
         auto wi_1 = std::dynamic_pointer_cast<Linear>(blocks["wi_1"]);
         auto wo   = std::dynamic_pointer_cast<Linear>(blocks["wo"]);
 
-        auto hidden_gelu   = ggml_gelu_inplace(ctx->ggml_ctx, wi_0->forward(ctx, x));
+        auto hidden_gelu   = ggml_ext_gelu(ctx->ggml_ctx, wi_0->forward(ctx, x), true);
         auto hidden_linear = wi_1->forward(ctx, x);
         x                  = ggml_mul_inplace(ctx->ggml_ctx, hidden_gelu, hidden_linear);
         x                  = wo->forward(ctx, x);
@@ -608,7 +608,7 @@ public:
             }
         }
 
-        k = ggml_scale_inplace(ctx->ggml_ctx, k, ::sqrtf(static_cast<float>(d_head)));
+        k = ggml_ext_scale(ctx->ggml_ctx, k, ::sqrtf(static_cast<float>(d_head)), true);
 
         x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
 

@@ -572,8 +572,8 @@ namespace WAN {
             auto v = qkv_vec[2];
             v      = ggml_reshape_3d(ctx->ggml_ctx, v, h * w, c, n);  // [t, c, h * w]
 
-            v = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));                // [t, h * w, c]
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, true, false);  // [t, h * w, c]
+            v = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));         // [t, h * w, c]
+            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, true, false);  // [t, h * w, c]
 
             x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [t, c, h * w]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, c, n);                             // [t, c, h, w]
@@ -1393,7 +1393,7 @@ namespace WAN {
             k      = norm_k->forward(ctx, k);
             auto v = v_proj->forward(ctx, context);  // [N, n_context, dim]
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -1442,11 +1442,8 @@ namespace WAN {
             int64_t dim             = x->ne[0];
             int64_t context_txt_len = context->ne[1] - context_img_len;
 
-            context          = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, context, 0, 2, 1, 3));  // [context_img_len + context_txt_len, N, dim]
-            auto context_img = ggml_view_3d(ctx->ggml_ctx, context, dim, N, context_img_len, context->nb[1], context->nb[2], 0);
-            auto context_txt = ggml_view_3d(ctx->ggml_ctx, context, dim, N, context_txt_len, context->nb[1], context->nb[2], context_img_len * context->nb[2]);
-            context_img      = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, context_img, 0, 2, 1, 3));  // [N, context_img_len, dim]
-            context_txt      = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, context_txt, 0, 2, 1, 3));  // [N, context_txt_len, dim]
+            auto context_img = ggml_view_3d(ctx->ggml_ctx, context, dim, context_img_len, N, context->nb[1], context->nb[2], 0);                                 // [N, context_img_len, dim]
+            auto context_txt = ggml_view_3d(ctx->ggml_ctx, context, dim, context_txt_len, N, context->nb[1], context->nb[2], context_img_len * context->nb[1]);  // [N, context_txt_len, dim]
 
             auto q = q_proj->forward(ctx, x);
             q      = norm_q->forward(ctx, q);
@@ -1458,8 +1455,8 @@ namespace WAN {
             k_img      = norm_k_img->forward(ctx, k_img);
             auto v_img = v_img_proj->forward(ctx, context_img);  // [N, context_img_len, dim]
 
-            auto img_x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k_img, v_img, num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
-            x          = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, false, ctx->flash_attn_enabled);          // [N, n_token, dim]
+            auto img_x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k_img, v_img, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            x          = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);          // [N, n_token, dim]
 
             x = ggml_add(ctx->ggml_ctx, x, img_x);
 
@@ -1576,7 +1573,7 @@ namespace WAN {
             y = modulate_add(ctx->ggml_ctx, y, es[3]);
 
             y = ffn_0->forward(ctx, y);
-            y = ggml_gelu_inplace(ctx->ggml_ctx, y);
+            y = ggml_ext_gelu(ctx->ggml_ctx, y, true);
             y = ffn_2->forward(ctx, y);
 
             x = ggml_add(ctx->ggml_ctx, x, modulate_mul(ctx->ggml_ctx, y, es[5]));
@@ -1723,7 +1720,7 @@ namespace WAN {
 
             auto x = proj_0->forward(ctx, image_embeds);
             x      = proj_1->forward(ctx, x);
-            x      = ggml_gelu_inplace(ctx->ggml_ctx, x);
+            x      = ggml_ext_gelu(ctx->ggml_ctx, x, true);
             x      = proj_3->forward(ctx, x);
             x      = proj_4->forward(ctx, x);
 
@@ -1910,7 +1907,7 @@ namespace WAN {
             e0      = ggml_reshape_4d(ctx->ggml_ctx, e0, e0->ne[0] / 6, 6, e0->ne[1], e0->ne[2]);  //  [N, 6, dim] or [N, T, 6, dim]
 
             context = text_embedding_0->forward(ctx, context);
-            context = ggml_gelu(ctx->ggml_ctx, context);
+            context = ggml_ext_gelu(ctx->ggml_ctx, context);
             context = text_embedding_2->forward(ctx, context);  // [N, context_txt_len, dim]
 
             int64_t context_img_len = 0;
@@ -1949,7 +1946,7 @@ namespace WAN {
                     auto result = vace_block->forward(ctx, c, x_orig, e0, pe, context, context_img_len);
                     auto c_skip = result.first;
                     c           = result.second;
-                    c_skip      = ggml_scale(ctx->ggml_ctx, c_skip, vace_strength);
+                    c_skip      = ggml_ext_scale(ctx->ggml_ctx, c_skip, vace_strength);
                     x           = ggml_add(ctx->ggml_ctx, x, c_skip);
                 }
             }

@@ -638,7 +638,7 @@ namespace LLM {
             x = ln_q->forward(ctx, x);
             x = ggml_reshape_2d(ctx->ggml_ctx, x, hidden_size, ggml_nelements(x) / hidden_size);
             x = mlp_0->forward(ctx, x);
-            x = ggml_gelu(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu(ctx->ggml_ctx, x);
             x = mlp_2->forward(ctx, x);
             return x;
         }
@@ -881,7 +881,7 @@ namespace LLM {
             k = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 0, 2, 1, 3));  // [N, num_kv_heads, n_token, head_dim]
             k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0], k->ne[1], k->ne[2] * k->ne[3]);      // [N*num_kv_heads, n_token, head_dim]
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, false, true, false);  // [N, n_token, hidden_size]
+            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
             return x;

@@ -141,7 +141,7 @@ public:
             v = ggml_reshape_3d(ctx->ggml_ctx, v, c, h * w, n);                        // [N, h * w, in_channels]
         }
 
-        h_ = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, true, false);
+        h_ = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, true, false);
 
         if (use_linear) {
             h_ = proj_out->forward(ctx, h_);  // [N, h * w, in_channels]
@@ -253,8 +253,8 @@ public:
 
         float alpha = get_alpha();
         x           = ggml_add(ctx->ggml_ctx,
-                               ggml_scale(ctx->ggml_ctx, x, alpha),
-                               ggml_scale(ctx->ggml_ctx, x_mix, 1.0f - alpha));
+                               ggml_ext_scale(ctx->ggml_ctx, x, alpha),
+                               ggml_ext_scale(ctx->ggml_ctx, x_mix, 1.0f - alpha));
 
         x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
         x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w

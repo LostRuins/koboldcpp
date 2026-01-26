@@ -161,9 +161,9 @@ public:
         // z: [n, z_channels, h, w]
         // return: [n, out_channels, h*8, w*8]
 
-        auto h = ggml_scale(ctx->ggml_ctx, z, 1.0f / 3.0f);
+        auto h = ggml_ext_scale(ctx->ggml_ctx, z, 1.0f / 3.0f);
         h      = ggml_tanh_inplace(ctx->ggml_ctx, h);
-        h      = ggml_scale(ctx->ggml_ctx, h, 3.0f);
+        h      = ggml_ext_scale(ctx->ggml_ctx, h, 3.0f);
 
         for (int i = 0; i < num_blocks * 3 + 10; i++) {
             if (blocks.find(std::to_string(i)) == blocks.end()) {
@@ -400,10 +400,11 @@ public:
         auto first_conv = std::dynamic_pointer_cast<Conv2d>(blocks["1"]);
 
         // Clamp()
-        auto h = ggml_scale_inplace(ctx->ggml_ctx,
-                                    ggml_tanh_inplace(ctx->ggml_ctx,
-                                                      ggml_scale(ctx->ggml_ctx, z, 1.0f / 3.0f)),
-                                    3.0f);
+        auto h = ggml_ext_scale(ctx->ggml_ctx,
+                                ggml_tanh_inplace(ctx->ggml_ctx,
+                                                  ggml_ext_scale(ctx->ggml_ctx, z, 1.0f / 3.0f)),
+                                3.0f,
+                                true);
 
         h         = first_conv->forward(ctx, h);
         h         = ggml_relu_inplace(ctx->ggml_ctx, h);
