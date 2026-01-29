@@ -498,13 +498,15 @@ class MCPStdioClient:
         finally:
             self.alive = False
 
-    def send(self, message: dict) -> dict: # Send JSON-RPC request and wait for one response.
+    def send(self, message: dict, await_response=True) -> dict: # Send JSON-RPC request and wait for one response.
         line = json.dumps(message)
         with self.lock:
             if self.process.stdin.closed:
                 raise RuntimeError("MCP server stdin is closed")
             self.process.stdin.write(line + "\n")
             self.process.stdin.flush()
+            if not await_response:
+                return None
             response = self.process.stdout.readline()
         if not response:
             errmsg = "\n".join(self.stderr_buffer[-10:])
@@ -7658,16 +7660,24 @@ def load_mcp_async(args):
                             "clientInfo": {"name": "koboldcpp", "version": "1.0.0"}
                         }
                     }
+                    notif_payload = {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/initialized"
+                    }
                     toolget_payload = {
                         "jsonrpc": "2.0",
                         "id": random.randint(100000, 999999),
                         "method": "tools/list",
                         "params": {}
                     }
+
                     resp1 = conn["client"].send(init_payload)
                     if "result" not in resp1:
                         continue
+
+                    conn["client"].send(notif_payload, await_response=False)
                     resp2 = conn["client"].send(toolget_payload)
+
                     if "result" not in resp2 or "tools" not in resp2["result"]:
                         continue
                     with mcp_lock:
