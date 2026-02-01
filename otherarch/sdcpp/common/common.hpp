@@ -450,7 +450,7 @@ struct SDContextParams {
     std::string photo_maker_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
-    std::string lora_model_dir;
+    std::string lora_model_dir = ".";
 
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
@@ -1029,8 +1029,8 @@ struct SDGenerationParams {
     std::string prompt_with_lora;  // for metadata record only
     std::string negative_prompt;
     int clip_skip   = -1;  // <= 0 represents unspecified
-    int width       = 512;
-    int height      = 512;
+    int width       = -1;
+    int height      = -1;
     int batch_count = 1;
     std::string init_image_path;
     std::string end_image_path;
@@ -1599,9 +1599,29 @@ struct SDGenerationParams {
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
 
+        load_if_exists("steps", sample_params.sample_steps);
+        load_if_exists("high_noise_steps", high_noise_sample_params.sample_steps);
         load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
         load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
         load_if_exists("guidance", sample_params.guidance.distilled_guidance);
+
+        auto load_sampler_if_exists = [&](const char* key, enum sample_method_t& out) {
+            if (j.contains(key) && j[key].is_string()) {
+                enum sample_method_t tmp = str_to_sample_method(j[key].get<std::string>().c_str());
+                if (tmp != SAMPLE_METHOD_COUNT) {
+                    out = tmp;
+                }
+            }
+        };
+        load_sampler_if_exists("sample_method", sample_params.sample_method);
+        load_sampler_if_exists("high_noise_sample_method", high_noise_sample_params.sample_method);
+
+        if (j.contains("scheduler") && j["scheduler"].is_string()) {
+            enum scheduler_t tmp = str_to_scheduler(j["scheduler"].get<std::string>().c_str());
+            if (tmp != SCHEDULER_COUNT) {
+                sample_params.scheduler = tmp;
+            }
+        }
 
         return true;
     }
@@ -1690,17 +1710,24 @@ struct SDGenerationParams {
         }
     }
 
+    bool width_and_height_are_set() const {
+        return width > 0 && height > 0;
+    }
+
+    void set_width_and_height_if_unset(int w, int h) {
+        if (!width_and_height_are_set()) {
+            LOG_INFO("set width x height to %d x %d", w, h);
+            width  = w;
+            height = h;
+        }
+    }
+
+    int get_resolved_width() const { return (width > 0) ? width : 512; }
+
+    int get_resolved_height() const { return (height > 0) ? height : 512; }
+
     bool process_and_check(SDMode mode, const std::string& lora_model_dir) {
         prompt_with_lora = prompt;
-        if (width <= 0) {
-            LOG_ERROR("error: the width must be greater than 0\n");
-            return false;
-        }
-
-        if (height <= 0) {
-            LOG_ERROR("error: the height must be greater than 0\n");
-            return false;
-        }
 
         if (sample_params.sample_steps <= 0) {
             LOG_ERROR("error: the sample_steps must be greater than 0\n");
@@ -2066,6 +2093,22 @@ uint8_t* load_image_from_file(const char* image_path,
                               int expected_height  = 0,
                               int expected_channel = 3) {
     return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+}
+
+bool load_sd_image_from_file(sd_image_t* image,
+                             const char* image_path,
+                             int expected_width   = 0,
+                             int expected_height  = 0,
+                             int expected_channel = 3) {
+    int width;
+    int height;
+    image->data = load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+    if (image->data == nullptr) {
+        return false;
+    }
+    image->width  = width;
+    image->height = height;
+    return true;
 }
 
 uint8_t* load_image_from_memory(const char* image_bytes,

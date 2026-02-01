@@ -23,7 +23,7 @@
 extern "C"
 {
 
-    std::string platformenv, deviceenv, vulkandeviceenv;
+    std::string vulkandeviceenv;
 
     //return val: 0=fail, 1=(original ggml, alpaca), 2=(ggmf), 3=(ggjt)
     static FileFormat file_format = FileFormat::BADFORMAT;
@@ -37,20 +37,6 @@ extern "C"
         draftmodel_filename = inputs.draftmodel_filename;
 
         file_format = check_file_format(model.c_str(),&file_format_meta);
-
-        //first digit is whether configured, second is platform, third is devices
-        int cl_parseinfo = inputs.clblast_info;
-
-        std::string usingclblast = "GGML_OPENCL_CONFIGURED="+std::to_string(cl_parseinfo>0?1:0);
-        putenv((char*)usingclblast.c_str());
-
-        cl_parseinfo = cl_parseinfo%100; //keep last 2 digits
-        int platform = cl_parseinfo/10;
-        int devices = cl_parseinfo%10;
-        platformenv = "GGML_OPENCL_PLATFORM="+std::to_string(platform);
-        deviceenv = "GGML_OPENCL_DEVICE="+std::to_string(devices);
-        putenv((char*)platformenv.c_str());
-        putenv((char*)deviceenv.c_str());
 
         std::string vulkan_info_raw = inputs.vulkan_info;
         std::string vulkan_info_str = "";
@@ -220,6 +206,10 @@ extern "C"
     {
         return sdtype_generate(inputs);
     }
+    sd_generation_outputs sd_upscale(const sd_upscale_inputs inputs)
+    {
+        return sdtype_upscale(inputs);
+    }
     sd_info_outputs sd_get_info()
     {
         return sdtype_get_info();
@@ -367,10 +357,12 @@ extern "C"
             itm.option_count = last_logprob_toppicks[i].tokenid.size();
             itm.selected_token = last_logprob_toppicks[i].selected_token.c_str();
             itm.selected_logprob = last_logprob_toppicks[i].selected_logprob;
+            itm.selected_token_id = last_logprob_toppicks[i].selected_tokenid;
             itm.logprobs = last_logprob_toppicks[i].logprobs.data();
             for(int j=0;j<itm.option_count && j<logprobs_max;++j)
             {
                 itm.tokens[j] = last_logprob_toppicks[i].tokens[j].c_str();
+                itm.token_ids[j] = last_logprob_toppicks[i].tokenid[j];
             }
             last_logprob_items.push_back(itm);
         }

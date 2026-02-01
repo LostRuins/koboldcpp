@@ -8,7 +8,6 @@ dependencies:
   - gxx=10
   - pip
   - git
-  - clblast
   - ninja
   - make
   - packaging

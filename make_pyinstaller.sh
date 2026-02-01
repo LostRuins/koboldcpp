@@ -11,9 +11,7 @@ pyinstaller --noconfirm --onefile --clean --console --collect-all customtkinter 
 --add-data "./koboldcpp_default.so:." \
 --add-data "./koboldcpp_failsafe.so:." \
 --add-data "./koboldcpp_noavx2.so:." \
---add-data "./koboldcpp_clblast.so:." \
---add-data "./koboldcpp_clblast_noavx2.so:." \
---add-data "./koboldcpp_clblast_failsafe.so:." \
+--add-data "./koboldcpp_vulkan_failsafe.so:." \
 --add-data "./koboldcpp_vulkan_noavx2.so:." \
 --add-data "./koboldcpp_vulkan.so:." \
 --version-file "./version.txt" \

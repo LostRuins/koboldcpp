@@ -98,15 +98,17 @@ int total_img_gens = 0;
 //global static vars for SD
 static SDParams * sd_params = nullptr;
 static sd_ctx_t * sd_ctx = nullptr;
+static upscaler_ctx_t* upscaler_ctx = nullptr;
 static int sddebugmode = 0;
 static std::string recent_data = "";
 static std::string recent_data2 = ""; //for cases when we have 2 outputs
 static uint8_t * input_image_buffer = NULL;
 static uint8_t * input_mask_buffer = NULL;
+static uint8_t * upscale_src_buffer = NULL;
 static std::vector<uint8_t *> input_extraimage_buffers;
 const int max_extra_images = 4;
 
-static std::string sdplatformenv, sddeviceenv, sdvulkandeviceenv;
+static std::string sdvulkandeviceenv;
 static int cfg_tiled_vae_threshold = 0;
 static int cfg_square_limit = 0;
 static int cfg_side_limit = 0;
@@ -220,6 +222,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     std::string clip1_filename = inputs.clip1_filename;
     std::string clip2_filename = inputs.clip2_filename;
     std::string photomaker_filename = inputs.photomaker_filename;
+    std::string upscaler_filename = inputs.upscaler_filename;
     cfg_tiled_vae_threshold = inputs.tiled_vae_threshold;
     cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold > 8192 ? 8192 : cfg_tiled_vae_threshold);
     cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold <= 0 ? 8192 : cfg_tiled_vae_threshold); //if negative dont tile
@@ -267,6 +270,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("With PhotoMaker Model: %s\n",photomaker_filename.c_str());
         photomaker_enabled = true;
     }
+    if(upscaler_filename!="")
+    {
+        printf("With Upscaler Model: %s\n",upscaler_filename.c_str());
+    }
     if(inputs.flash_attention)
     {
         printf("Flash Attention is enabled\n");
@@ -285,16 +292,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     }
 
     //duplicated from expose.cpp
-    int cl_parseinfo = inputs.clblast_info; //first digit is whether configured, second is platform, third is devices
-    std::string usingclblast = "GGML_OPENCL_CONFIGURED="+std::to_string(cl_parseinfo>0?1:0);
-    putenv((char*)usingclblast.c_str());
-    cl_parseinfo = cl_parseinfo%100; //keep last 2 digits
-    int platform = cl_parseinfo/10;
-    int devices = cl_parseinfo%10;
-    sdplatformenv = "GGML_OPENCL_PLATFORM="+std::to_string(platform);
-    sddeviceenv = "GGML_OPENCL_DEVICE="+std::to_string(devices);
-    putenv((char*)sdplatformenv.c_str());
-    putenv((char*)sddeviceenv.c_str());
     std::string vulkan_info_raw = inputs.vulkan_info;
     std::string vulkan_info_str = "";
     for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {
@@ -426,6 +423,22 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     }
 
     input_extraimage_buffers.reserve(max_extra_images);
+
+    //load upscaler if provided
+    if (upscaler_filename!="") {
+        const int upscale_tile_size = 128;
+        upscaler_ctx = new_upscaler_ctx(upscaler_filename.c_str(),
+                                        params.offload_params_to_cpu,
+                                        params.diffusion_conv_direct,
+                                        params.n_threads,
+                                        upscale_tile_size);
+
+        if (upscaler_ctx == nullptr) {
+             printf("\nError: KCPP failed to load upscaler!\n");
+        } else {
+            printf("\nUpscaler has been loaded.\n");
+        }
+    }
 
     return true;
 }
@@ -804,6 +817,18 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
+    if(loadedsdver == SDVersion::VERSION_SDXS)
+    {
+        if(sd_params->cfg_scale > 1.0f || sd_params->sample_steps > 1)
+        {
+            if (!sd_is_quiet && sddebugmode) {
+                printf("SDXS: clamping steps and cfg to 1\n");
+            }
+            sd_params->cfg_scale = 1.0f;
+            sd_params->sample_steps = 1;
+        }
+    }
+
     if(is_wan && extra_image_data.size()==0 && is_img2img)
     {
         extra_image_data.push_back(img2img_data);
@@ -812,8 +837,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     const int default_res_limit = 8192; // arbitrary, just to simplify the code
     // avoid crashes due to bugs/limitations on certain models
     // although it can be possible for a single side to exceed 1024, the total resolution of the image
-    // cannot exceed (832x832) for sd1/sd2 or (1024x1024) for sdxl/sd3/flux, to prevent crashing the server
-    const int hard_megapixel_res_limit = (loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024;
+    // cannot exceed (832x832) for sd1/sd2 or (1280x1280) for sdxl/sd3/flux, to prevent crashing the server
+    const int hard_megapixel_res_limit = (loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1280;
 
     int img_hard_limit = default_res_limit;
     if (cfg_side_limit > 0) {
@@ -1158,6 +1183,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     bool wasanim = false;
+    sd_image_t upscaled_image;
+    upscaled_image.data = nullptr;
 
     for (int i = 0; i < params.batch_count; i++) {
         if (results[i].data == NULL) {
@@ -1217,7 +1244,16 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         else
         {
             int out_data_len;
-            unsigned char * png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(params).c_str());
+            unsigned char * png = nullptr;
+            if(inputs.upscale && upscaler_ctx != nullptr)
+            {
+                printf("Upscaling output image...\n");
+                upscaled_image = upscale(upscaler_ctx, results[i], 2);
+                png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, get_image_params(params).c_str());
+            } else {
+                png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(params).c_str());
+            }
+
             if (png != NULL)
             {
                 recent_data = kcpp_base64_encode(png,out_data_len);
@@ -1230,12 +1266,73 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         results[i].data = NULL;
     }
 
+    if(upscaled_image.data)
+    {
+        free(upscaled_image.data);
+        upscaled_image.data = nullptr;
+    }
+
     free(results);
     output.data = recent_data.c_str();
     output.data_extra = recent_data2.c_str();
     output.animated = (wasanim?1:0);
     output.status = 1;
     total_img_gens += 1;
+    return output;
+}
+
+sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
+{
+    sd_generation_outputs output;
+    output.data = "";
+    output.data_extra = "";
+    output.animated = 0;
+    output.status = 0;
+    if(sd_ctx == nullptr || upscaler_ctx == nullptr || sd_params == nullptr)
+    {
+        printf("\nWarning: KCPP image upscaling not initialized!\n");
+        output.data = "";
+        output.data_extra = "";
+        output.animated = 0;
+        output.status = 0;
+        return output;
+    }
+
+    std::string rawb64 = inputs.init_images;
+    int nx, ny;
+    if(upscale_src_buffer!=nullptr) //just in time free old buffer
+    {
+        stbi_image_free(upscale_src_buffer);
+        upscale_src_buffer = nullptr;
+    }
+    upscale_src_buffer = load_image_from_b64(rawb64,nx,ny);
+    sd_image_t source_img;
+    sd_image_t upscaled_image;
+    source_img.data = nullptr;
+    upscaled_image.data = nullptr;
+    if(upscale_src_buffer)
+    {
+        source_img.width = nx;
+        source_img.height = ny;
+        source_img.channel = 3;
+        source_img.data = upscale_src_buffer;
+
+        upscaled_image = upscale(upscaler_ctx, source_img, inputs.upscaling_resize);
+        int out_data_len;
+        unsigned char * png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, nullptr);
+        if (png != NULL)
+        {
+            recent_data = kcpp_base64_encode(png,out_data_len);
+            recent_data2 = "";
+            free(png);
+        }
+        free(upscaled_image.data);
+        output.data = recent_data.c_str();
+        output.data_extra = recent_data2.c_str();
+        output.animated = 0;
+        output.status = 1;
+    }
+
     return output;
 }
 

@@ -89,7 +89,7 @@ jobs:
       - name: Build Non-CUDA
         id: make_build
         run: |
-          make LLAMA_CLBLAST=1 LLAMA_VULKAN=1 LLAMA_PORTABLE=1 -j ${env:NUMBER_OF_PROCESSORS} LLAMA_NOAVX1=1
+          make LLAMA_VULKAN=1 LLAMA_PORTABLE=1 -j ${env:NUMBER_OF_PROCESSORS} LLAMA_NOAVX1=1
 
       - name: Package PyInstallers
         id: make_pyinstaller

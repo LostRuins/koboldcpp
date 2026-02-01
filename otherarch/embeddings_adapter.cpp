@@ -22,7 +22,7 @@
 #endif
 
 static llama_context * embeddings_ctx = nullptr; //text to codes ctx
-static std::string ttsplatformenv, ttsdeviceenv, ttsvulkandeviceenv;
+static std::string ttsvulkandeviceenv;
 bool embeddings_debug = false;
 static int max_batchsize = 512;
 static std::string last_output = "";
@@ -83,16 +83,6 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
 bool embeddingstype_load_model(const embeddings_load_model_inputs inputs)
 {
     //duplicated from expose.cpp
-    int cl_parseinfo = inputs.clblast_info; //first digit is whether configured, second is platform, third is devices
-    std::string usingclblast = "GGML_OPENCL_CONFIGURED="+std::to_string(cl_parseinfo>0?1:0);
-    putenv((char*)usingclblast.c_str());
-    cl_parseinfo = cl_parseinfo%100; //keep last 2 digits
-    int platform = cl_parseinfo/10;
-    int devices = cl_parseinfo%10;
-    ttsplatformenv = "GGML_OPENCL_PLATFORM="+std::to_string(platform);
-    ttsdeviceenv = "GGML_OPENCL_DEVICE="+std::to_string(devices);
-    putenv((char*)ttsplatformenv.c_str());
-    putenv((char*)ttsdeviceenv.c_str());
     std::string vulkan_info_raw = inputs.vulkan_info;
     std::string vulkan_info_str = "";
     for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {

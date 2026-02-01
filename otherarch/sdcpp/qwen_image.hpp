@@ -162,26 +162,25 @@ namespace Qwen {
             auto k = ggml_concat(ctx->ggml_ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx->ggml_ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = Rope::attention(ctx, q, k, v, pe, mask, (1.0f / 128.f));                  // [N, n_txt_token + n_img_token, n_head*d_head]
-            attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
+            auto attn         = Rope::attention(ctx, q, k, v, pe, mask, (1.0f / 128.f));  // [N, n_txt_token + n_img_token, n_head*d_head]
             auto txt_attn_out = ggml_view_3d(ctx->ggml_ctx,
                                              attn,
                                              attn->ne[0],
-                                             attn->ne[1],
                                              txt->ne[1],
+                                             attn->ne[2],
                                              attn->nb[1],
                                              attn->nb[2],
-                                             0);                                                                  // [n_txt_token, N, hidden_size]
-            txt_attn_out      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, txt_attn_out, 0, 2, 1, 3));  // [N, n_txt_token, hidden_size]
+                                             0);  // [N, n_txt_token, n_head*d_head]
             auto img_attn_out = ggml_view_3d(ctx->ggml_ctx,
                                              attn,
                                              attn->ne[0],
-                                             attn->ne[1],
                                              img->ne[1],
+                                             attn->ne[2],
                                              attn->nb[1],
                                              attn->nb[2],
-                                             attn->nb[2] * txt->ne[1]);                                           // [n_img_token, N, hidden_size]
-            img_attn_out      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, img_attn_out, 0, 2, 1, 3));  // [N, n_img_token, hidden_size]
+                                             txt->ne[1] * attn->nb[1]);  // [N, n_img_token, n_head*d_head]
+            img_attn_out      = ggml_cont(ctx->ggml_ctx, img_attn_out);
+            txt_attn_out      = ggml_cont(ctx->ggml_ctx, txt_attn_out);
 
             img_attn_out = to_out_0->forward(ctx, img_attn_out);
             txt_attn_out = to_add_out->forward(ctx, txt_attn_out);

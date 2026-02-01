@@ -2557,6 +2557,64 @@
                       ]
                    }
                 },
+                "/sdapi/v1/upscale": {
+                   "post": {
+                      "description": "Upscales an image with ESRGAN, increasing its resolution.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                  "image": "base64_image_data",
+                                  "upscaling_resize": 2
+                               },
+                               "schema": {
+                                  "properties": {
+                                     "image": {
+                                        "type": "string",
+                                        "description": "A base64 string containing the encoded PNG of the image."
+                                     },
+                                     "upscaling_resize": {
+                                        "type": "integer",
+                                        "description": "Integer upscale factor. Defaults to 2."
+                                     },
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": false
+                      },
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example":
+                                  {
+                                     "html_info":"string","image":"base64_image_data"
+                                  },
+                                  "schema": {
+                                     "properties": {
+                                        "html_info": {
+                                           "type": "string",
+                                           "description": "Not important."
+                                        },
+                                        "image": {
+                                           "type": "string",
+                                           "description": "Base64 encoded image data"
+                                        }
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Upscales an image with ESRGAN, increasing its resolution.",
+                      "tags": [
+                         "sdapi/v1"
+                      ]
+                   }
+                },
                 "/v1/completions": {
                    "post": {
                       "summary": "Generates text continuations given a prompt. Please refer to OpenAI documentation",

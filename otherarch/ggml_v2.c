@@ -140,10 +140,6 @@ inline static void* ggml_v2_aligned_malloc(size_t size) {
 #include "ggml_v2-cuda.h"
 #include "ggml_v2-cuda-legacy.h"
 #endif
-#if defined(GGML_USE_CLBLAST)
-#include "ggml_v2-opencl.h"
-#include "ggml_v2-opencl-legacy.h"
-#endif
 
 #undef MIN
 #undef MAX
@@ -3903,15 +3899,6 @@ struct ggml_v2_context * ggml_v2_init(struct ggml_v2_init_params params) {
         else
         {
             ggml_v2_init_cublas_legacy();
-        }
-#elif defined(GGML_USE_CLBLAST)
-        if(quants_unshuffled)
-        {
-            ggml_v2_cl_init();
-        }
-        else
-        {
-            ggml_v2_cl_init_legacy();
         }
 #endif
 

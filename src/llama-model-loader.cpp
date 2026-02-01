@@ -8,10 +8,6 @@
 #include <cstring>
 #include <future>
 
-#if defined(GGML_USE_CLBLAST)
-#  include "ggml_v3b-opencl.h"
-#endif
-
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
 static const size_t GiB = 1024*MiB;
@@ -543,12 +539,18 @@ llama_model_loader::llama_model_loader(
     files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
     contexts.emplace_back(ctx);
 
-    use_direct_io = use_direct_io && files.back()->has_direct_io();
+    if (use_mmap && use_direct_io) {
+        if (files.back()->has_direct_io()) {
+            LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
+            use_mmap = false;
+        } else {
+            LLAMA_LOG_WARN("%s: direct I/O is not available, using mmap\n", __func__);
+            use_direct_io = false;
 
-    // Disable mmap in case Direct I/O is enabled and available
-    if (use_direct_io && use_mmap) {
-        use_mmap = false;
-        LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
+            // reopen file using std::fopen for mmap
+            files.pop_back();
+            files.emplace_back(new llama_file(fname.c_str(), "rb", false));
+        }
     }
 
     // Save tensors data offset of the main file.
@@ -967,7 +969,6 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     }
 }
 
-static int clblast_offload_fallback_layers = 0;
 static int layer_name_to_number(std::string inputString)
 {
     size_t firstDotPosition = inputString.find('.');
@@ -1213,18 +1214,6 @@ bool llama_model_loader::load_all_data(
                 }
             }
         }
-
-        #if defined(GGML_USE_CLBLAST)
-        int layernum = layer_name_to_number(cur->name);
-        bool shouldoffload = (layernum>=0 && clblast_offload_fallback_layers>layernum);
-        if(shouldoffload)
-        {
-            cur->clblast_offload_gpu = true;
-            ggml_cl_transform_tensor(cur->data, cur);
-        }else{
-            cur->clblast_offload_gpu = false;
-        }
-        #endif
 
         size_done += n_size;
     }

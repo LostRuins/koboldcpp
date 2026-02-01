@@ -589,7 +589,7 @@ static llama_context * cts_ctx = nullptr; //codes to speech
 static TTS_VER ttsver = TTS_VER_2;
 static int ttsdebugmode = 0;
 static bool tts_is_quiet = false;
-static std::string ttsplatformenv, ttsdeviceenv, ttsvulkandeviceenv;
+static std::string ttsvulkandeviceenv;
 static std::string last_generated_audio = "";
 static std::string last_generation_settings_prompt = ""; //for caching purposes to fix ST bug
 static int last_generation_settings_speaker_seed;
@@ -618,16 +618,6 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     tts_executable_path = inputs.executable_path;
 
     //duplicated from expose.cpp
-    int cl_parseinfo = inputs.clblast_info; //first digit is whether configured, second is platform, third is devices
-    std::string usingclblast = "GGML_OPENCL_CONFIGURED="+std::to_string(cl_parseinfo>0?1:0);
-    putenv((char*)usingclblast.c_str());
-    cl_parseinfo = cl_parseinfo%100; //keep last 2 digits
-    int platform = cl_parseinfo/10;
-    int devices = cl_parseinfo%10;
-    ttsplatformenv = "GGML_OPENCL_PLATFORM="+std::to_string(platform);
-    ttsdeviceenv = "GGML_OPENCL_DEVICE="+std::to_string(devices);
-    putenv((char*)ttsplatformenv.c_str());
-    putenv((char*)ttsdeviceenv.c_str());
     std::string vulkan_info_raw = inputs.vulkan_info;
     std::string vulkan_info_str = "";
     for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {

@@ -158,7 +158,7 @@ static int savestate_limit = 0;
 static std::vector<savestate_data> savestates;
 
 inline int kcpp_cpu_has_blas(void) {
-#if defined(GGML_USE_BLAS) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_CLBLAST) || defined(GGML_USE_SYCL)
+#if defined(GGML_USE_BLAS) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
     return 1;
 #else
     return 0;
@@ -2389,21 +2389,6 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             }
         }
 
-        #if defined(GGML_USE_CLBLAST)
-        if(file_format==FileFormat::GGUF_GENERIC && model_params.n_gpu_layers>0)
-        {
-            if(file_format_meta.model_architecture == GGUFArch::ARCH_FALCON)
-            {
-                printf("\nOpenCL does not support GPU Layer offloading for this model architecture! GPU Offload has been disabled.\n");
-                model_params.n_gpu_layers = 0;
-            }
-            else if(file_format_meta.n_expert_count>1)
-            {
-                printf("\nOpenCL cannot use regular GPU offloading for this model architecture. A fallback GPU offloader will be used with degraded performance.\n");
-
-            }
-        }
-        #endif
         #if defined(GGML_USE_CUDA)
         if(kcpp_parseinfo_maindevice>0)
         {
@@ -2773,7 +2758,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             printf("\nThis architecture has explicitly disabled the BOS token - if you need it, you must add it manually.\n");
             add_bos_token = false;
         }
-        if (file_format == FileFormat::GGUF_GENERIC && file_format_meta.model_architecture == GGUFArch::ARCH_GLM4) {
+        if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == GGUFArch::ARCH_GLM4 || file_format_meta.model_architecture == GGUFArch::ARCH_DEEPSEEK2)) {
             std::string temp = gpttype_get_chat_template();
             if (temp.find("[gMASK]<sop>") != std::string::npos) {
                 printf("GLM-4 will have no automatic BOS token.\n");
@@ -3278,7 +3263,7 @@ int GetThreadsToUse(bool blasmode)
 {
     if (blasmode)
     {
-        #if defined(GGML_USE_CLBLAST) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
+        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
             return kcpp_data->n_blasthreads;
         #else
             return std::min(kcpp_data->n_blasthreads, 4);
@@ -3743,7 +3728,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
 
     //need to add a cursed hack to improve coherency for GLM4, by ensuring injection for gmask, sop and an extra space
     //any complaints please direct them to henky
-    if (file_format == FileFormat::GGUF_GENERIC && file_format_meta.model_architecture == GGUFArch::ARCH_GLM4) {
+    //deepseek2 is actually used for glm 4.7 flash
+    if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == GGUFArch::ARCH_GLM4 || file_format_meta.model_architecture == GGUFArch::ARCH_DEEPSEEK2)) {
         std::string temp = gpttype_get_chat_template();
         if (temp.find("[gMASK]<sop>") != std::string::npos) {
             if (addedmemory == "") {
@@ -4732,7 +4718,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     std::string topstr = toppick.selected_token;
                     ::utreplace(topstr, "\n", "\\n");
                     printf("(%s <%d> %.2f%%)", RemoveBell(topstr).c_str(), toppick.selected_tokenid, toppick.selected_probability*100);
-                    int maxtoshow = (toppick.tokenid.size()>4?4:toppick.tokenid.size());
+                    int maxtoshow = (toppick.tokenid.size()>4?4:toppick.tokenid.size()); //hardcode limit even if we have more logprobs_max
                     for (int i=0;i<maxtoshow;++i)
                     {
                         if(toppick.tokenid[i]==toppick.selected_tokenid)

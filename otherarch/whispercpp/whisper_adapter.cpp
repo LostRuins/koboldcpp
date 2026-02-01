@@ -71,22 +71,12 @@ static std::string output_txt(struct whisper_context * ctx) {
 
 void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
-static std::string whisperplatformenv, whisperdeviceenv, whispervulkandeviceenv;
+static std::string whispervulkandeviceenv;
 bool whispertype_load_model(const whisper_load_model_inputs inputs)
 {
     whisper_is_quiet = inputs.quiet;
 
     //duplicated from expose.cpp
-    int cl_parseinfo = inputs.clblast_info; //first digit is whether configured, second is platform, third is devices
-    std::string usingclblast = "GGML_OPENCL_CONFIGURED="+std::to_string(cl_parseinfo>0?1:0);
-    putenv((char*)usingclblast.c_str());
-    cl_parseinfo = cl_parseinfo%100; //keep last 2 digits
-    int platform = cl_parseinfo/10;
-    int devices = cl_parseinfo%10;
-    whisperplatformenv = "GGML_OPENCL_PLATFORM="+std::to_string(platform);
-    whisperdeviceenv = "GGML_OPENCL_DEVICE="+std::to_string(devices);
-    putenv((char*)whisperplatformenv.c_str());
-    putenv((char*)whisperdeviceenv.c_str());
     std::string vulkan_info_raw = inputs.vulkan_info;
     std::string vulkan_info_str = "";
     for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {

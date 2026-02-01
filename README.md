@@ -56,9 +56,6 @@ Finally, obtain and load a GGUF model. See [here](#Obtaining-a-GGUF-model)
 ## Run on RunPod
 - KoboldCpp can now be used on RunPod cloud GPUs! This is an easy way to get started without installing anything in a minute or two, and is very scalable, capable of running 70B+ models at afforable cost. [Try our RunPod image here!](https://koboldai.org/runpodcpp).
 
-## Run on Novita AI
-KoboldCpp can now also be run on Novita AI, a newer alternative GPU cloud provider which has a quick launch KoboldCpp template for as well. [Check it out here!](https://koboldai.org/novitacpp)
-
 ## Docker
 - The official docker can be found at https://hub.docker.com/r/koboldai/koboldcpp
 - If you're building your own docker, remember to enable LLAMA_PORTABLE
@@ -94,12 +91,8 @@ when you can't use the precompiled binary directly, we provide an automated buil
 - To compile your binaries from source, clone the repo with `git clone https://github.com/LostRuins/koboldcpp.git`
 - A makefile is provided, simply run `make` (when compiling, you can set the number of parallel jobs with the `-j` flag).
 - Optional Vulkan: Link your own install of Vulkan SDK manually with `make LLAMA_VULKAN=1`
-- Optional CLBlast: Link your own install of CLBlast manually with `make LLAMA_CLBLAST=1`
-- Note: for these you will need to obtain and link OpenCL and CLBlast libraries.
-  - For Arch Linux: Install `cblas` and `clblast`.
-  - For Debian: Install `libclblast-dev`.
 - You can attempt a CuBLAS build with `LLAMA_CUBLAS=1`, (or `LLAMA_HIPBLAS=1` for AMD). You will need CUDA Toolkit installed. Some have also reported success with the CMake file, though that is more for windows.
-- For a full featured build (all backends), do `make LLAMA_CLBLAST=1 LLAMA_CUBLAS=1 LLAMA_VULKAN=1`. (Note that `LLAMA_CUBLAS=1` will not work on windows, you need visual studio)
+- For a full featured build (all backends), do `make LLAMA_CUBLAS=1 LLAMA_VULKAN=1`. (Note that `LLAMA_CUBLAS=1` will not work on windows, you need visual studio)
 - To make your build sharable and capable of working on other devices, you must use `LLAMA_PORTABLE=1`
 - After all binaries are built, you can run the python script with the command `python koboldcpp.py [ggml_model.gguf] [port]`
 
@@ -108,16 +101,14 @@ when you can't use the precompiled binary directly, we provide an automated buil
   - Get the latest release of w64devkit (https://github.com/skeeto/w64devkit). Be sure to use the "vanilla one", not i686 or other different stuff. If you try they will conflit with the precompiled libs!
   - Clone the repo with `git clone https://github.com/LostRuins/koboldcpp.git`
   - Make sure you are using the w64devkit integrated terminal, then run `make` at the KoboldCpp source folder. This will create the .dll files for a pure CPU native build (when compiling, you can set the number of parallel jobs with the `-j` flag).
-  - For a full featured build (all backends), do `make LLAMA_CLBLAST=1 LLAMA_VULKAN=1`. (Note that `LLAMA_CUBLAS=1` will not work on windows, you need visual studio)
+  - For a GPU build (all backends), do `make LLAMA_VULKAN=1`. (Note that `LLAMA_CUBLAS=1` will not work on windows, you need visual studio)
   - To make your build sharable and capable of working on other devices, you must use `LLAMA_PORTABLE=1`
   - If you want to generate the .exe file, make sure you have the python module PyInstaller installed with pip (`pip install PyInstaller`). Then run the script `make_pyinstaller.bat`
   - The koboldcpp.exe file will be at your dist folder.
 - **Building with CUDA**: Visual Studio, CMake and CUDA Toolkit is required. Clone the repo, then open the CMake file and compile it in Visual Studio. Copy the `koboldcpp_cublas.dll` generated into the same directory as the `koboldcpp.py` file. If you are bundling executables, you may need to include CUDA dynamic libraries (such as `cublasLt64_11.dll` and `cublas64_11.dll`) in order for the executable to work correctly on a different PC.
-- **Replacing Libraries (Not Recommended)**: If you wish to use your own version of the additional Windows libraries (OpenCL, CLBlast, Vulkan), you can do it with:
-  - OpenCL - tested with https://github.com/KhronosGroup/OpenCL-SDK . If you wish to compile it, follow the repository instructions. You will need vcpkg.
-  - CLBlast - tested with https://github.com/CNugteren/CLBlast . If you wish to compile it you will need to reference the OpenCL files. It will only generate the ".lib" file if you compile using MSVC.
+- **Replacing Libraries (Not Recommended)**: If you wish to use your own version of the additional Windows libraries (Vulkan), you can do it with:
   - Move the respectives .lib files to the /lib folder of your project, overwriting the older files.
-  - Also, replace the existing versions of the corresponding .dll files located in the project directory root (e.g. clblast.dll).
+  - Also, replace the existing versions of the corresponding .dll files located in the project directory root.
   - Make the KoboldCpp project using the instructions above.
 
 ### Compiling on MacOS
@@ -184,6 +175,7 @@ and it will install everything required. Alternatively, you can download the abo
 - Since v1.60, provides native image generation with StableDiffusion.cpp, you can load any SD1.5 or SDXL .safetensors model and it will provide an A1111 compatible API to use.
 - **I try to keep backwards compatibility with ALL past llama.cpp models**. But you are also encouraged to reconvert/update your models if possible for best results.
 - Since v1.75, openblas has been deprecated and removed in favor of the native CPU implementation.
+- Since v1.107, CLBlast has been deprecated and removed in favor of Vulkan.
 
 ## License
 - The original GGML library, stable-diffusion.cpp and llama.cpp by ggerganov are licensed under the MIT License

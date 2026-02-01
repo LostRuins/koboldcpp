@@ -201,6 +201,9 @@ public:
             num_head_channels     = 64;
             num_heads             = -1;
             use_linear_projection = true;
+            if (version == VERSION_SDXL_VEGA) {
+                transformer_depth = {1, 1, 2};
+            }
         } else if (version == VERSION_SVD) {
             in_channels           = 8;
             out_channels          = 4;
@@ -215,10 +218,13 @@ public:
         } else if (sd_version_is_unet_edit(version)) {
             in_channels = 8;
         }
-        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET) {
+        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET || version == VERSION_SDXS) {
             num_res_blocks = 1;
             channel_mult   = {1, 2, 4};
             tiny_unet      = true;
+            if (version == VERSION_SDXS) {
+                attention_resolutions = {4, 2};  // here just like SDXL
+            }
         }
 
         // dims is always 2
@@ -316,7 +322,7 @@ public:
         }
         if (!tiny_unet) {
             blocks["middle_block.0"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
-            if (version != VERSION_SDXL_SSD1B) {
+            if (version != VERSION_SDXL_SSD1B && version != VERSION_SDXL_VEGA) {
                 blocks["middle_block.1"] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
                                                                                           n_head,
                                                                                           d_head,
@@ -517,13 +523,13 @@ public:
         // middle_block
         if (!tiny_unet) {
             h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
-            if (version != VERSION_SDXL_SSD1B) {
+            if (version != VERSION_SDXL_SSD1B && version != VERSION_SDXL_VEGA) {
                 h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
                 h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
             }
         }
         if (controls.size() > 0) {
-            auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[controls.size() - 1], control_strength);
+            auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, true);
             h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
         }
         int control_offset = static_cast<int>(controls.size() - 2);
@@ -536,7 +542,7 @@ public:
                 hs.pop_back();
 
                 if (controls.size() > 0) {
-                    auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[control_offset], control_strength);
+                    auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[control_offset], control_strength, true);
                     h_skip  = ggml_add(ctx->ggml_ctx, h_skip, cs);  // control net condition
                     control_offset--;
                 }

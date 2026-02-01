@@ -14,6 +14,7 @@
 #include "vec.h"
 #include "ops.h"
 #include "ggml.h"
+#include "common.h"
 #include "gguf.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
@@ -76,9 +77,6 @@
 // precomputed f32 table for f16 (256 KB) (simd-mappings.h)
 float ggml_table_f32_f16[1 << 16];
 
-#if defined(GGML_USE_CLBLAST) // allow usage of CLBlast alongside Accelerate functions
-#include "ggml_v3b-opencl.h"
-#endif
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
     int sve_cnt;
@@ -1263,15 +1261,6 @@ void ggml_compute_forward_mul_mat(
     //   compute by src0 rows
 
     // TODO: extract to "extra_op"
-#if defined(GGML_USE_CLBLAST)
-    if (ggml_cl_can_mul_mat(src0, src1, dst)) {
-        if (params->ith == 0) {
-            ggml_cl_mul_mat(src0, src1, dst, params->wdata, params->wsize);
-        }
-        return;
-    }
-#endif
-
 #if GGML_USE_LLAMAFILE
     // broadcast factors
     const int64_t r2 = ne12 / ne02;
@@ -3628,11 +3617,6 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         const enum ggml_type vec_dot_type = type_traits_cpu[node->src[0]->type].vec_dot_type;
 
-#if defined(GGML_USE_CLBLAST)
-                        if (ggml_cl_can_mul_mat(node->src[0], node->src[1], node)) {
-                            cur = ggml_cl_mul_mat_get_wsize(node->src[0], node->src[1], node);
-                        } else
-#endif
                         if (node->src[1]->type != vec_dot_type) {
                             size_t cur2 = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
                             cur = MAX(cur, cur2);
@@ -3720,10 +3704,12 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_FLASH_ATTN_EXT:
                     {
-                        const int64_t ne10 = node->src[1]->ne[0]; // DK
-                        const int64_t ne20 = node->src[2]->ne[0]; // DV
+                        const int64_t DK = node->src[1]->ne[0];
+                        const int64_t DV = node->src[2]->ne[0];
 
-                        cur = sizeof(float)*(1*ne10 + 2*ne20)*n_tasks; // 1x head size K + 2x head size V (per thread)
+                        // Tiled flash attention scratch (tile sizes defined in common.h)
+                        // Per-thread: Q_q + KQ + mask + VKQ32 + V32 + padding
+                        cur = sizeof(float)*(GGML_FA_TILE_Q*DK + 2*GGML_FA_TILE_Q*GGML_FA_TILE_KV + GGML_FA_TILE_Q*DV + GGML_FA_TILE_KV*DV)*n_tasks;
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {
@@ -3806,6 +3792,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         if (ggml_op_is_empty(node->op)) {
             // skip NOPs
+            continue;
+        }
+
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             continue;
         }
 
@@ -4556,9 +4546,6 @@ void ggml_cpu_init(void) {
 
 #if defined(__ARM_ARCH)
         ggml_init_arm_arch_features();
-#endif
-#if defined(GGML_USE_CLBLAST)
-        ggml_cl_init();
 #endif
 
 #if defined(__riscv)

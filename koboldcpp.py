@@ -48,7 +48,7 @@ images_max = 8
 audio_max = 4
 bias_min_value = -100.0
 bias_max_value = 100.0
-logprobs_max = 5
+logprobs_max = 10
 default_draft_amount = 8
 default_ttsmaxlen = 4096
 default_visionmaxres = 1024
@@ -67,7 +67,7 @@ dry_seq_break_max = 128
 extra_images_max = 4 # for kontext/qwen img
 
 # global vars
-KcppVersion = "1.106.1"
+KcppVersion = "1.107"
 showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_config_target":""}
@@ -149,9 +149,7 @@ saved_stderr_py = None
 stdout_nullfile = None
 stdout_nullfile_py = None
 
-CLDevices = ["1","2","3","4"]
 CUDevices = ["1","2","3","4","All"]
-CLDevicesNames = ["","","",""]
 CUDevicesNames = ["","","","",""]
 VKDevicesNames = ["","","",""]
 VKIsDGPU = [0,0,0,0]
@@ -171,7 +169,9 @@ class logprob_item(ctypes.Structure):
      _fields_ = [("option_count", ctypes.c_int),
                 ("selected_token", ctypes.c_char_p),
                 ("selected_logprob", ctypes.c_float),
+                ("selected_token_id", ctypes.c_int32),
                 ("tokens", ctypes.c_char_p * logprobs_max),
+                ("token_ids", ctypes.c_int32 * logprobs_max),
                 ("logprobs", ctypes.POINTER(ctypes.c_float))]
 class last_logprobs_outputs(ctypes.Structure):
     _fields_ = [("count", ctypes.c_int),
@@ -199,7 +199,6 @@ class load_model_inputs(ctypes.Structure):
                 ("use_smartcontext", ctypes.c_bool),
                 ("use_contextshift", ctypes.c_bool),
                 ("use_fastforward", ctypes.c_bool),
-                ("clblast_info", ctypes.c_int),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
                 ("batchsize", ctypes.c_int),
@@ -295,7 +294,6 @@ class generation_outputs(ctypes.Structure):
 class sd_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
-                ("clblast_info", ctypes.c_int),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
                 ("threads", ctypes.c_int),
@@ -316,6 +314,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("lora_multiplier", ctypes.c_float),
                 ("lora_apply_mode", ctypes.c_int),
                 ("photomaker_filename", ctypes.c_char_p),
+                ("upscaler_filename", ctypes.c_char_p),
                 ("img_hard_limit", ctypes.c_int),
                 ("img_soft_limit", ctypes.c_int),
                 ("devices_override", ctypes.c_char_p),
@@ -345,13 +344,18 @@ class sd_generation_inputs(ctypes.Structure):
                 ("video_output_type", ctypes.c_int),
                 ("remove_limits", ctypes.c_bool),
                 ("circular_x", ctypes.c_bool),
-                ("circular_y", ctypes.c_bool)]
+                ("circular_y", ctypes.c_bool),
+                ("upscale", ctypes.c_bool)]
 
 class sd_generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
                 ("animated", ctypes.c_int),
                 ("data", ctypes.c_char_p),
                 ("data_extra", ctypes.c_char_p)]
+
+class sd_upscale_inputs(ctypes.Structure):
+    _fields_ = [("init_images", ctypes.c_char_p),
+                ("upscaling_resize", ctypes.c_int)]
 
 class sd_info_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -360,7 +364,6 @@ class sd_info_outputs(ctypes.Structure):
 class whisper_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
-                ("clblast_info", ctypes.c_int),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
                 ("devices_override", ctypes.c_char_p),
@@ -382,7 +385,6 @@ class tts_load_model_inputs(ctypes.Structure):
                 ("ttc_model_filename", ctypes.c_char_p),
                 ("cts_model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
-                ("clblast_info", ctypes.c_int),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
                 ("gpulayers", ctypes.c_int),
@@ -408,7 +410,6 @@ class embeddings_load_model_inputs(ctypes.Structure):
     _fields_ = [("threads", ctypes.c_int),
                 ("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
-                ("clblast_info", ctypes.c_int),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
                 ("gpulayers", ctypes.c_int),
@@ -497,13 +498,15 @@ class MCPStdioClient:
         finally:
             self.alive = False
 
-    def send(self, message: dict) -> dict: # Send JSON-RPC request and wait for one response.
+    def send(self, message: dict, await_response=True) -> dict: # Send JSON-RPC request and wait for one response.
         line = json.dumps(message)
         with self.lock:
             if self.process.stdin.closed:
                 raise RuntimeError("MCP server stdin is closed")
             self.process.stdin.write(line + "\n")
             self.process.stdin.flush()
+            if not await_response:
+                return None
             response = self.process.stdout.readline()
         if not response:
             errmsg = "\n".join(self.stderr_buffer[-10:])
@@ -647,9 +650,7 @@ def pick_existant_file(ntoption,nonntoption):
 lib_default = pick_existant_file("koboldcpp_default.dll","koboldcpp_default.so")
 lib_failsafe = pick_existant_file("koboldcpp_failsafe.dll","koboldcpp_failsafe.so")
 lib_noavx2 = pick_existant_file("koboldcpp_noavx2.dll","koboldcpp_noavx2.so")
-lib_clblast = pick_existant_file("koboldcpp_clblast.dll","koboldcpp_clblast.so")
-lib_clblast_noavx2 = pick_existant_file("koboldcpp_clblast_noavx2.dll","koboldcpp_clblast_noavx2.so")
-lib_clblast_failsafe = pick_existant_file("koboldcpp_clblast_failsafe.dll","koboldcpp_clblast_failsafe.so")
+lib_vulkan_failsafe = pick_existant_file("koboldcpp_vulkan_failsafe.dll","koboldcpp_vulkan_failsafe.so")
 lib_cublas = pick_existant_file("koboldcpp_cublas.dll","koboldcpp_cublas.so")
 lib_hipblas = pick_existant_file("koboldcpp_hipblas.dll","koboldcpp_hipblas.so")
 lib_vulkan = pick_existant_file("koboldcpp_vulkan.dll","koboldcpp_vulkan.so")
@@ -660,27 +661,22 @@ lib_option_pairs = [
     (lib_cublas, "Use CUDA"),
     (lib_hipblas, "Use hipBLAS (ROCm)"),
     (lib_vulkan, "Use Vulkan"),
-    (lib_clblast, "Use CLBlast"),
     (lib_noavx2, "Use CPU (Old CPU)"),
     (lib_vulkan_noavx2, "Use Vulkan (Old CPU)"),
-    (lib_clblast_noavx2, "Use CLBlast (Old CPU)"),
-    (lib_clblast_failsafe, "Use CLBlast (Older CPU)"),
+    (lib_vulkan_failsafe, "Use Vulkan (Older CPU)"),
     (lib_failsafe, "Failsafe Mode (Older CPU)")]
-default_option, cublas_option, hipblas_option, vulkan_option, clblast_option, noavx2_option, vulkan_noavx2_option, clblast_noavx2_option, clblast_failsafe_option, failsafe_option = (opt if file_exists(lib) or (os.name == 'nt' and file_exists(opt + ".dll")) else None for lib, opt in lib_option_pairs)
+default_option, cublas_option, hipblas_option, vulkan_option, noavx2_option, vulkan_noavx2_option, vulkan_failsafe_option, failsafe_option = (opt if file_exists(lib) or (os.name == 'nt' and file_exists(opt + ".dll")) else None for lib, opt in lib_option_pairs)
 runopts = [opt for lib, opt in lib_option_pairs if file_exists(lib)]
 
 def init_library():
     global handle, args, libname
-    global lib_default,lib_failsafe,lib_noavx2,lib_clblast,lib_clblast_noavx2,lib_clblast_failsafe,lib_cublas,lib_hipblas,lib_vulkan,lib_vulkan_noavx2
+    global lib_default,lib_failsafe,lib_noavx2,lib_vulkan_failsafe,lib_cublas,lib_hipblas,lib_vulkan,lib_vulkan_noavx2
 
     libname = lib_default
 
     if args.noavx2: #failsafe implies noavx2 always
-        if args.useclblast and (os.name!='nt' or file_exists("clblast.dll")):
-            if file_exists(lib_clblast_noavx2) and not (args.failsafe):
-                libname = lib_clblast_noavx2
-            elif file_exists(lib_clblast_failsafe):
-                libname = lib_clblast_failsafe
+        if args.failsafe and (args.usevulkan is not None) and file_exists(lib_vulkan_failsafe):
+            libname = lib_vulkan_failsafe
         elif (args.usevulkan is not None) and file_exists(lib_vulkan_noavx2):
             libname = lib_vulkan_noavx2
         elif (args.failsafe) and file_exists(lib_failsafe):
@@ -698,13 +694,6 @@ def init_library():
             libname = lib_vulkan
         elif file_exists(lib_vulkan_noavx2):
             libname = lib_vulkan_noavx2
-    elif args.useclblast and (os.name!='nt' or file_exists("clblast.dll")):
-        if file_exists(lib_clblast):
-            libname = lib_clblast
-        elif file_exists(lib_clblast_noavx2):
-            libname = lib_clblast_noavx2
-        elif file_exists(lib_clblast_failsafe):
-            libname = lib_clblast_failsafe
     elif libname == lib_default and not file_exists(lib_default) and file_exists(lib_noavx2):
         libname = lib_noavx2
 
@@ -769,6 +758,8 @@ def init_library():
     handle.sd_load_model.restype = ctypes.c_bool
     handle.sd_generate.argtypes = [sd_generation_inputs]
     handle.sd_generate.restype = sd_generation_outputs
+    handle.sd_upscale.argtypes = [sd_upscale_inputs]
+    handle.sd_upscale.restype = sd_generation_outputs
     handle.sd_get_info.argtypes = []
     handle.sd_get_info.restype = sd_info_outputs
     handle.whisper_load_model.argtypes = [whisper_load_model_inputs]
@@ -788,11 +779,6 @@ def init_library():
     handle.detokenize.restype = ctypes.c_char_p
 
 def set_backend_props(inputs):
-    clblastids = 0
-    if args.useclblast:
-        clblastids = 100 + int(args.useclblast[0])*10 + int(args.useclblast[1])
-    inputs.clblast_info = clblastids
-
     # we must force an explicit tensor split
     # otherwise the default will divide equally and multigpu crap will slow it down badly
     inputs.kcpp_main_gpu = 0
@@ -1507,41 +1493,7 @@ def detect_memory_vk(gpumem_ignore_limit_min, gpumem_ignore_limit_max):
         return 0
 
 
-def detect_memory_cl(gpumem_ignore_limit_min, gpumem_ignore_limit_max):
-
-        try: # Get OpenCL GPU names on windows using a special binary. overwrite at known index if found.
-            basepath = os.path.abspath(os.path.dirname(__file__))
-            output = ""
-            data = None
-            try:
-                output = subprocess.run(["clinfo","--json"], capture_output=True, text=True, check=True, encoding='utf-8', timeout=10).stdout
-                data = json.loads(output)
-            except Exception:
-                output = subprocess.run([((os.path.join(basepath, "simpleclinfo.exe")) if os.name == 'nt' else "clinfo"),"--json"], capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS, encoding='utf-8', timeout=10).stdout
-                data = json.loads(output)
-            plat = 0
-            dev = 0
-            lowestclmem = 0
-            for platform in data["devices"]:
-                dev = 0
-                for device in platform["online"]:
-                    dname = device["CL_DEVICE_NAME"]
-                    dmem = int(device["CL_DEVICE_GLOBAL_MEM_SIZE"])
-                    idx = plat+dev*2
-                    if idx<len(CLDevices):
-                        CLDevicesNames[idx] = dname
-                        if dmem > gpumem_ignore_limit_min and dmem < gpumem_ignore_limit_max:
-                            lowestclmem = dmem if lowestclmem==0 else (dmem if dmem<lowestclmem else lowestclmem)
-                    dev += 1
-                plat += 1
-            return lowestclmem
-        except Exception:
-            pass
-
-        return 0
-
-
-def fetch_gpu_properties(testCL,testCU,testVK,testmemory=False):
+def fetch_gpu_properties(testCU,testVK,testmemory=False):
     gpumem_ignore_limit_min = 1024*1024*600 #600 mb min
     gpumem_ignore_limit_max = 1024*1024*1024*300 #300 gb max
 
@@ -1558,13 +1510,6 @@ def fetch_gpu_properties(testCL,testCU,testVK,testmemory=False):
         if testmemory:
             print(f'detected Vulkan memory: {vkmem/(1024*1024)} MB')
 
-    if testCL:
-        clmem = detect_memory_cl(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
-        MaxMemory[0] = max(clmem,MaxMemory[0])
-        if testmemory:
-            print(f'detected OpenCL memory: {clmem/(1024*1024)} MB')
-
-
     # Check VRAM detection after all backends have been tested
     if MaxMemory[0] < (1024*1024*256):
         print("Unable to detect VRAM, please set layers manually.")
@@ -1572,7 +1517,7 @@ def fetch_gpu_properties(testCL,testCU,testVK,testmemory=False):
     return
 
 def auto_set_backend_cli():
-    fetch_gpu_properties(False,True,True)
+    fetch_gpu_properties(True,True)
     found_new_backend = False
 
     # check for avx2 and avx support
@@ -1633,14 +1578,14 @@ def load_model(model_filename):
     inputs.use_smartcontext = args.smartcontext
     inputs.use_contextshift = (0 if args.noshift else 1)
     inputs.use_fastforward = (0 if args.nofastforward else 1)
-    inputs.flash_attention = args.flashattention
+    inputs.flash_attention =  (False if args.noflashattention else True)
     if args.quantkv>0:
-        if args.flashattention:
-            inputs.quant_k = inputs.quant_v = args.quantkv
-        else:
+        if args.noflashattention:
             inputs.quant_k = args.quantkv
             inputs.quant_v = 0
-            print("\nWarning: quantkv was used without flashattention! This is NOT RECOMMENDED!\nOnly K cache can be quantized, and performance can suffer.\nIn some cases, it might even use more VRAM when doing a full offload.\nYou are strongly encouraged to use flashattention if you want to use quantkv.")
+            print("\nWarning: Quantized KV was used without flash attention! This is NOT RECOMMENDED!\nOnly K cache can be quantized, and performance can suffer.\nIn some cases, it might even use more VRAM when doing a full offload.\nYou are strongly encouraged to use flash attention if you want to use quantkv.")
+        else:
+            inputs.quant_k = inputs.quant_v = args.quantkv
     else:
         inputs.quant_k = inputs.quant_v = 0
     inputs.batchsize = args.batchsize
@@ -1689,7 +1634,7 @@ def load_model(model_filename):
     sclimit = (savestate_limit_default if scint<=1 else scint)
     savestate_limit = sclimit
     inputs.smartcacheslots = sclimit
-    inputs.pipelineparallel = args.pipelineparallel
+    inputs.pipelineparallel = (not args.nopipelineparallel)
     inputs = set_backend_props(inputs)
     ret = handle.load_model(inputs)
     return ret
@@ -1967,7 +1912,7 @@ def sd_quant_option(value):
     except Exception:
         return 0
 
-def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clip1_filename,clip2_filename,photomaker_filename):
+def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename):
     global args
     inputs = sd_load_model_inputs()
     inputs.model_filename = model_filename.encode("UTF-8")
@@ -1996,6 +1941,7 @@ def sd_load_model(model_filename,vae_filename,lora_filename,t5xxl_filename,clip1
     inputs.clip1_filename = clip1_filename.encode("UTF-8")
     inputs.clip2_filename = clip2_filename.encode("UTF-8")
     inputs.photomaker_filename = photomaker_filename.encode("UTF-8")
+    inputs.upscaler_filename = upscaler_filename.encode("UTF-8")
     inputs.img_hard_limit = args.sdclamped
     inputs.img_soft_limit = args.sdclampedsoft
     inputs.lora_apply_mode = 0 #auto for now
@@ -2089,6 +2035,17 @@ def gendefaults_parse_meta_field(input_str):
     result.update(parsed)  # Second pass: explicit keys override aliases
     return result
 
+def sd_upscale(genparams):
+    init_images = genparams.get("image", "")
+    inputs = sd_upscale_inputs()
+    inputs.init_images = init_images.encode("UTF-8")
+    inputs.upscaling_resize = tryparseint(genparams.get("upscaling_resize", 2),2) # how many times to upscale
+    ret = handle.sd_upscale(inputs)
+    data_main = ""
+    if ret.status==1:
+        data_main = ret.data.decode("UTF-8","ignore")
+    return data_main
+
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
 
@@ -2179,6 +2136,7 @@ def sd_generate(genparams):
     inputs.remove_limits = allow_remove_limits
     inputs.circular_x = tryparseint(adapter_obj.get("circular_x", genparams.get("circular_x",0)),0)
     inputs.circular_y = tryparseint(adapter_obj.get("circular_y", genparams.get("circular_y",0)),0)
+    inputs.upscale = (True if tryparseint(genparams.get("enable_hr", 0),0) else False)
     ret = handle.sd_generate(inputs)
     data_main = ""
     data_extra = ""
@@ -2223,7 +2181,7 @@ def tts_load_model(ttc_model_filename,cts_model_filename):
     inputs.ttc_model_filename = ttc_model_filename.encode("UTF-8") if ttc_model_filename else "".encode("UTF-8")
     inputs.cts_model_filename = cts_model_filename.encode("UTF-8") if cts_model_filename else "".encode("UTF-8")
     inputs.gpulayers = (999 if args.ttsgpu else 0)
-    inputs.flash_attention =  args.flashattention
+    inputs.flash_attention = (False if args.noflashattention else True)
     thds = args.threads
     if args.ttsthreads and args.ttsthreads > 0:
         ttst = int(args.ttsthreads)
@@ -2303,7 +2261,7 @@ def embeddings_load_model(model_filename):
     inputs = embeddings_load_model_inputs()
     inputs.model_filename = model_filename.encode("UTF-8")
     inputs.gpulayers = (999 if args.embeddingsgpu else 0)
-    inputs.flash_attention = args.flashattention
+    inputs.flash_attention = (False if args.noflashattention else True)
     inputs.threads = args.threads
     inputs.use_mmap = args.usemmap
     inputs.embeddingsmaxctx = (args.embeddingsmaxctx if args.embeddingsmaxctx else args.contextsize) # for us to clamp to contextsize if embeddingsmaxctx unspecified
@@ -2661,6 +2619,7 @@ def parse_last_logprobs(lastlogprobs):
     logprobsdict = {}
     logprobsdict['content'] = []
     logprobsdict['tokens'] = []
+    logprobsdict['token_ids'] = []
     logprobsdict['token_logprobs'] = []
     logprobsdict['top_logprobs'] = []
     logprobsdict['text_offset'] = []
@@ -2670,7 +2629,9 @@ def parse_last_logprobs(lastlogprobs):
         logprob_item = lastlogprobs.logprob_items[i]
         toptoken = ctypes.string_at(logprob_item.selected_token).decode("UTF-8","ignore")
         logprobsdict['tokens'].append(toptoken)
+        logprobsdict['token_ids'].append(logprob_item.selected_token_id)
         lp_content_item['token'] = toptoken
+        lp_content_item['token_id'] = logprob_item.selected_token_id
         logprobsdict['token_logprobs'].append(logprob_item.selected_logprob)
         lp_content_item['logprob'] = logprob_item.selected_logprob
         lp_content_item['bytes'] = list(toptoken.encode('utf-8'))
@@ -2684,6 +2645,7 @@ def parse_last_logprobs(lastlogprobs):
             tokstr = ctypes.string_at(logprob_item.tokens[j]).decode("UTF-8","ignore")
             tops[tokstr] = logprob_item.logprobs[j]
             tl_item['token'] = tokstr
+            tl_item['token_id'] = logprob_item.token_ids[j]
             tl_item['bytes'] = list(tokstr.encode('utf-8'))
             lp_content_item['top_logprobs'].append(tl_item)
         logprobsdict['top_logprobs'].append(tops)
@@ -3968,6 +3930,12 @@ Change Mode<br>
         elif clean_path.endswith('/v1/models') or clean_path=='/models':
             response_body = (json.dumps({"object":"list","data":[{"id":friendlymodelname,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"}]}).encode())
 
+        elif clean_path.endswith('/sdapi/v1/upscalers'):
+            if args.sdupscaler:
+                response_body = (json.dumps([{"name":"ESRGAN_4x","model_name":"ESRGAN_4x","model_path":"upscaler_model.gguf","model_url":None,"scale":4}]).encode())
+            else:
+                response_body = (json.dumps([]).encode())
+
         elif clean_path.endswith('/sdapi/v1/sd-models'):
             if friendlysdmodelname=="inactive" or fullsdmodelpath=="":
                 response_body = (json.dumps([]).encode())
@@ -4621,6 +4589,7 @@ Change Mode<br>
             is_imggen = False
             is_comfyui_imggen = False
             is_oai_imggen = False
+            is_img_upscale = False
             is_transcribe = False
             is_tts = False
             is_embeddings = False
@@ -4706,6 +4675,8 @@ Change Mode<br>
                 api_format = 6
             elif self.path.endswith('/api/chat'): #ollama
                 api_format = 7
+            elif self.path.endswith('/sdapi/v1/extra-single-image') or self.path.endswith('/sdapi/v1/upscale'):
+                is_img_upscale = True
             elif self.path=="/prompt" or self.path=="/images/generations" or self.path.endswith('/v1/images/generations') or self.path.endswith('/sdapi/v1/txt2img') or self.path.endswith('/sdapi/v1/img2img'):
                 is_imggen = True
                 if self.path=="/prompt":
@@ -4724,11 +4695,11 @@ Change Mode<br>
                 self.send_header('content-length', str(len(response_body)))
                 self.end_headers(content_type='application/json')
                 self.wfile.write(response_body)
-            elif is_imggen or is_transcribe or is_tts or is_embeddings or api_format > 0:
+            elif is_imggen or is_img_upscale or is_transcribe or is_tts or is_embeddings or api_format > 0:
                 global last_req_time
                 last_req_time = time.time()
 
-                if not is_imggen and not self.path.endswith('/tts_to_audio') and api_format!=5:
+                if not is_imggen and not is_img_upscale and not self.path.endswith('/tts_to_audio') and api_format!=5:
                     if not self.secure_endpoint():
                         return
 
@@ -4917,6 +4888,19 @@ Change Mode<br>
                         time.sleep(0.2) #short delay
                     return
 
+                elif is_img_upscale: #esrgan upscale
+                    try:
+                        gen = sd_upscale(genparams)
+                        genresp = (json.dumps({"html_info":"<p>Postprocess upscale by: 2.0, Postprocess upscaler: ESRGAN_4x</p>","image":gen}).encode())
+                        self.send_response(200)
+                        self.send_header('content-length', str(len(genresp)))
+                        self.end_headers(content_type='application/json')
+                        self.wfile.write(genresp)
+                    except Exception as ex:
+                        utfprint(ex,1)
+                        print("Upscale Image: The response could not be sent, maybe connection was terminated?")
+                        time.sleep(0.2) #short delay
+                    return
                 elif is_imggen: #image gen
                     try:
                         if is_comfyui_imggen:
@@ -5269,7 +5253,7 @@ def show_gui():
             return False
         xml_path = Path.home() / ".config" / "monitors.xml"
         if not xml_path.exists(): #monitors.xml not found. if we have fractional scaling on gnome, just trigger the fallback
-            if fractional_enabled and "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP") and os.environ.get("XDG_SESSION_TYPE") == "wayland":
+            if fractional_enabled and ("GNOME" in os.environ.get("XDG_CURRENT_DESKTOP") or "KDE" in os.environ.get("XDG_CURRENT_DESKTOP")) and os.environ.get("XDG_SESSION_TYPE") == "wayland":
                 return True
             return False
         try:
@@ -5452,12 +5436,11 @@ def show_gui():
     batchsize_values = ["-1","16","32","64","128","256","512","1024","2048","4096"]
     batchsize_text = ["Don't Batch","16","32","64","128","256","512","1024","2048","4096"]
     contextsize_text = ["256", "512", "1024", "2048", "3072", "4096", "6144", "8192", "10240", "12288", "14336", "16384", "20480", "24576", "28672", "32768", "40960", "49152", "57344", "65536", "81920", "98304", "114688", "131072"]
-    antirunopts = [opt.replace("Use ", "") for lib, opt in lib_option_pairs if opt not in runopts]
     quantkv_text = ["F16 (Off)","8-Bit","4-Bit"]
 
     if not any(runopts):
         exitcounter = 999
-        exit_with_error(2,"KoboldCPP couldn't locate any backends to use (i.e Default, Vulkan, CLBlast, CUDA).\n\nTo use the program, please run the 'make' command from the directory.","No Backends Available!")
+        exit_with_error(2,"KoboldCPP couldn't locate any backends to use (i.e Default, Vulkan, CUDA).\n\nTo use the program, please run the 'make' command from the directory.","No Backends Available!")
 
     # Vars - should be in scope to be used by multiple widgets
     gpulayers_var = ctk.StringVar(value="-1")
@@ -5472,7 +5455,7 @@ def show_gui():
     debugmode = ctk.IntVar()
     keepforeground = ctk.IntVar()
     terminalonly = ctk.IntVar()
-    pipelineparallel = ctk.IntVar()
+    pipelineparallel = ctk.IntVar(value=1)
     quietmode = ctk.IntVar(value=0)
     nocertifymode = ctk.IntVar(value=0)
 
@@ -5485,6 +5468,7 @@ def show_gui():
     tensor_split_str_vars = ctk.StringVar(value="")
     rowsplit_var = ctk.IntVar()
     maingpu_var = ctk.StringVar(value="-1")
+    deviceoverride_var = ctk.StringVar(value="")
 
     contextshift_var = ctk.IntVar(value=1)
     fastforward_var = ctk.IntVar(value=1)
@@ -5552,6 +5536,7 @@ def show_gui():
     sd_clip1_var = ctk.StringVar()
     sd_clip2_var = ctk.StringVar()
     sd_photomaker_var = ctk.StringVar()
+    sd_upscaler_var = ctk.StringVar()
     sd_flash_attention_var = ctk.IntVar(value=0)
     sd_offload_cpu_var = ctk.IntVar(value=0)
     sd_vae_cpu_var = ctk.IntVar(value=0)
@@ -5831,9 +5816,7 @@ def show_gui():
         if manual_select:
             print("\nA .kcppt template was selected from GUI - automatically selecting your backend...")
             runmode_untouched = True
-            fetch_gpu_properties(False,True,True)
-        else:
-            fetch_gpu_properties(True,True,True)
+        fetch_gpu_properties(True,True)
         found_new_backend = False
 
         # check for avx2 and avx support
@@ -5843,7 +5826,7 @@ def show_gui():
 
         #autopick cublas if suitable, requires at least 3.5GB VRAM to auto pick
         #we do not want to autoselect hip/cublas if the user has already changed their desired backend!
-        if eligible_cuda and exitcounter < 100 and MaxMemory[0]>3500000000 and (("Use CUDA" in runopts and CUDevicesNames[0]!="") or "Use hipBLAS (ROCm)" in runopts) and (any(CUDevicesNames) or any(CLDevicesNames)) and runmode_untouched:
+        if eligible_cuda and exitcounter < 100 and MaxMemory[0]>3500000000 and (("Use CUDA" in runopts and CUDevicesNames[0]!="") or "Use hipBLAS (ROCm)" in runopts) and (any(CUDevicesNames)) and runmode_untouched:
             if "Use CUDA" in runopts:
                 runopts_var.set("Use CUDA")
                 gpu_choice_var.set("1")
@@ -5884,18 +5867,6 @@ def show_gui():
                 dict = json.load(f)
                 import_vars(dict)
 
-    def setup_backend_tooltip(parent, singlerow):
-        # backend count label with the tooltip function
-        nl = '\n'
-        tooltxt = "Number of backends you have built and available." + (f"\n\nMissing Backends: \n\n{nl.join(antirunopts)}" if len(runopts) < 8 else "")
-        num_backends_built = None
-        num_backends_built = makelabel(parent, str(len(runopts)) + "/9", 1, 1,tooltxt)
-        if singlerow:
-            num_backends_built.grid(row=1, column=0, padx=355, pady=0)
-        else:
-            num_backends_built.grid(row=1, column=1, padx=205, pady=0)
-        num_backends_built.configure(text_color="#00ff00")
-
     def gui_changed_modelfile(*args):
         global importvars_in_progress
         if not importvars_in_progress:
@@ -5914,7 +5885,7 @@ def show_gui():
         predicted_gpu_layers = autoset_gpu_layers(int(contextsize_text[context_var.get()]),sd_quant_option(sd_quant_var.get()),int(batchsize_values[int(blas_size_var.get())]),(quantkv_var.get() if flashattention_var.get()==1 else 0))
         max_gpu_layers = (f"/{modelfile_extracted_meta[1][0]+1}" if (modelfile_extracted_meta and modelfile_extracted_meta[1] and modelfile_extracted_meta[1][0]!=0) else "")
         index = runopts_var.get()
-        gpu_be = (index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use CLBlast" or index == "Use CLBlast (Old CPU)" or index == "Use CLBlast (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)")
+        gpu_be = (index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use Vulkan (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)")
         layercounter_label.grid(row=6, column=0, padx=230, sticky="W")
         quick_layercounter_label.grid(row=6, column=1, padx=75, sticky="W")
         if sys.platform=="darwin" and gpulayers_var.get()=="-1":
@@ -5941,12 +5912,9 @@ def show_gui():
             try:
                 s = int(gpu_choice_var.get())-1
                 v = runopts_var.get()
-                if v == "Use Vulkan" or v == "Use Vulkan (Old CPU)":
+                if v == "Use Vulkan" or v == "Use Vulkan (Old CPU)" or v == "Use Vulkan (Older CPU)":
                     quick_gpuname_label.configure(text=VKDevicesNames[s])
                     gpuname_label.configure(text=VKDevicesNames[s])
-                elif v == "Use CLBlast" or v == "Use CLBlast (Old CPU)" or v == "Use CLBlast (Older CPU)":
-                    quick_gpuname_label.configure(text=CLDevicesNames[s])
-                    gpuname_label.configure(text=CLDevicesNames[s])
                 else:
                     quick_gpuname_label.configure(text=CUDevicesNames[s])
                     gpuname_label.configure(text=CUDevicesNames[s])
@@ -6005,37 +5973,22 @@ def show_gui():
         global runmode_untouched
         runmode_untouched = False
         index = runopts_var.get()
-        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use CLBlast"  or index == "Use CLBlast (Old CPU)" or index == "Use CLBlast (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
+        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use Vulkan (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
             quick_gpuname_label.grid(row=3, column=1, padx=75, sticky="W")
             gpuname_label.grid(row=3, column=0, padx=230, sticky="W")
             gpu_selector_label.grid(row=3, column=0, padx = 8, pady=1, stick="nw")
             quick_gpu_selector_label.grid(row=3, column=0, padx = 8, pady=1, stick="nw")
-            if index == "Use CLBlast" or index == "Use CLBlast (Old CPU)" or index == "Use CLBlast (Older CPU)":
-                gpu_selector_box.grid(row=3, column=0, padx=160, pady=1, stick="nw")
-                quick_gpu_selector_box.grid(row=3, column=1, padx=8, pady=1, stick="nw")
-                CUDA_gpu_selector_box.grid_remove()
-                CUDA_quick_gpu_selector_box.grid_remove()
-                maingpu_label.grid_remove()
-                maingpu_entry.grid_remove()
-                if gpu_choice_var.get()=="All":
-                    gpu_choice_var.set("1")
-                lowvram_box.grid_remove()
-            elif index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
-                gpu_selector_box.grid_remove()
-                quick_gpu_selector_box.grid_remove()
-                CUDA_gpu_selector_box.grid(row=3, column=0, padx=160, pady=1, stick="nw")
-                CUDA_quick_gpu_selector_box.grid(row=3, column=1, padx=8, pady=1, stick="nw")
-                maingpu_label.grid(row=8, column=0, padx = 270, pady=1, stick="nw")
-                maingpu_entry.grid(row=8, column=0, padx = 340, pady=1, stick="nw")
-                lowvram_box.grid(row=4, column=0, padx=8, pady=1,  stick="nw")
+            CUDA_gpu_selector_box.grid(row=3, column=0, padx=160, pady=1, stick="nw")
+            CUDA_quick_gpu_selector_box.grid(row=3, column=1, padx=8, pady=1, stick="nw")
+            maingpu_label.grid(row=8, column=0, padx = 270, pady=1, stick="nw")
+            maingpu_entry.grid(row=8, column=0, padx = 340, pady=1, stick="nw")
+            lowvram_box.grid(row=4, column=0, padx=8, pady=1,  stick="nw")
         else:
             quick_gpuname_label.grid_remove()
             gpuname_label.grid_remove()
             gpu_selector_label.grid_remove()
-            gpu_selector_box.grid_remove()
             CUDA_gpu_selector_box.grid_remove()
             quick_gpu_selector_label.grid_remove()
-            quick_gpu_selector_box.grid_remove()
             CUDA_quick_gpu_selector_box.grid_remove()
             maingpu_label.grid_remove()
             maingpu_entry.grid_remove()
@@ -6058,7 +6011,7 @@ def show_gui():
             tensor_split_label.grid(row=8, column=0, padx = 8, pady=1, stick="nw")
             tensor_split_entry.grid(row=8, column=0, padx = 160, pady=1, stick="nw")
 
-        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use CLBlast" or index == "Use CLBlast (Old CPU)" or index == "Use CLBlast (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
+        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use Vulkan (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
             gpu_layers_label.grid(row=6, column=0, padx=8, pady=1, stick="nw")
             gpu_layers_entry.grid(row=6, column=0, padx=160, pady=1, stick="nw")
             quick_gpu_layers_label.grid(row=6, column=0, padx = 8, pady=1, stick="nw")
@@ -6077,18 +6030,14 @@ def show_gui():
         changed_gpu_choice_var()
 
     # presets selector
-    makelabel(quick_tab, "Backend:", 1,0,"Select a backend to use.\nCUDA runs on Nvidia GPUs, and is much faster.\nVulkan and CLBlast works on all GPUs but is somewhat slower.\nOtherwise, runs on CPU only.\nNoAVX2 and Failsafe modes support older PCs.")
+    makelabel(quick_tab, "Backend:", 1,0,"Select a backend to use.\nCUDA runs on Nvidia GPUs, and is much faster.\nVulkan works on all GPUs but is somewhat slower.\nOtherwise, runs on CPU only.\nNoAVX2 and Failsafe modes support older PCs.")
 
     runoptbox = ctk.CTkComboBox(quick_tab, values=runopts, width=190,variable=runopts_var, state="readonly")
     runoptbox.grid(row=1, column=1,padx=8, stick="nw")
     runoptbox.set(runopts[0]) # Set to first available option
 
-    # Tell user how many backends are available
-    setup_backend_tooltip(quick_tab,False)
-
     # gpu options
     quick_gpu_selector_label = makelabel(quick_tab, "GPU ID:", 3,0,"Which GPU ID to load the model with.\nNormally your main GPU is #1, but it can vary for multi GPU setups.",padx=8)
-    quick_gpu_selector_box = ctk.CTkComboBox(quick_tab, values=CLDevices, width=60, variable=gpu_choice_var, state="readonly")
     CUDA_quick_gpu_selector_box = ctk.CTkComboBox(quick_tab, values=CUDevices, width=60, variable=gpu_choice_var, state="readonly")
     CUDA_quick_gpu_selector_box.grid(row=3, column=1, padx=8, pady=1, stick="nw")
     quick_gpuname_label = ctk.CTkLabel(quick_tab, text="")
@@ -6128,18 +6077,13 @@ def show_gui():
     hardware_tab = tabcontent["Hardware"]
 
     # presets selector
-    makelabel(hardware_tab, "Backend:", 1,0,"Select a backend to use.\nCUDA runs on Nvidia GPUs, and is much faster.\nVulkan and CLBlast works on all GPUs but is somewhat slower.\nOtherwise, runs on CPU only.\nNoAVX2 and Failsafe modes support older PCs.")
+    makelabel(hardware_tab, "Backend:", 1,0,"Select a backend to use.\nCUDA runs on Nvidia GPUs, and is much faster.\nVulkan works on all GPUs but is somewhat slower.\nOtherwise, runs on CPU only.\nNoAVX2 and Failsafe modes support older PCs.")
     runoptbox = ctk.CTkComboBox(hardware_tab, values=runopts,  width=180,variable=runopts_var, state="readonly")
     runoptbox.grid(row=1, column=0,padx=160, stick="nw")
     runoptbox.set(runopts[0]) # Set to first available option
 
-    # Tell user how many backends are available
-    setup_backend_tooltip(hardware_tab,True)
-
     # gpu options
     gpu_selector_label = makelabel(hardware_tab, "GPU ID:", 3,0,"Which GPU ID to load the model with.\nNormally your main GPU is #1, but it can vary for multi GPU setups.")
-    gpu_selector_box = ctk.CTkComboBox(hardware_tab, values=CLDevices, width=60, variable=gpu_choice_var, state="readonly")
-    gpu_selector_box.grid(row=3, column=0, padx=160, pady=1, stick="nw")
     CUDA_gpu_selector_box = ctk.CTkComboBox(hardware_tab, values=CUDevices, width=60, variable=gpu_choice_var, state="readonly")
     CUDA_gpu_selector_box.grid(row=3, column=0, padx=160, pady=1, stick="nw")
     gpuname_label = ctk.CTkLabel(hardware_tab, text="")
@@ -6159,6 +6103,7 @@ def show_gui():
     makelabelentry(hardware_tab, "Threads:" , threads_var, 11, 50, padx=160, singleline=True,tooltip="How many threads to use.\nRecommended value is your CPU core count, defaults are usually OK.")
     # blas thread specifier
     makelabelentry(hardware_tab, "Batch Threads:" , blas_threads_var, 11, 50,padx=340, singleline=True,tooltip="How many threads to use during batched processing.\nIf left blank, uses same value as regular thread count.",labelpadx=240)
+    makelabelentry(hardware_tab, "Device Override", deviceoverride_var, 15, 120, padx=(160), singleline=True, tooltip="Set llama.cpp compatible device selection override. Comma separated (e.g. Vulkan0,Vulkan1). Overrides normal device choices.")
 
     # hardware checkboxes
     hardware_boxes = {
@@ -6230,7 +6175,7 @@ def show_gui():
     makecheckbox(context_tab, "Custom RoPE Config", variable=customrope_var, row=22, command=togglerope,tooltiptxt="Override the default RoPE configuration with custom RoPE scaling.")
     noqkvlabel = makelabel(context_tab,"(Note: QuantKV works best with flash attention)",30,0,"Only K cache can be quantized, and performance can suffer.\nIn some cases, it might even use more VRAM when doing a full offload.",padx=160)
     noqkvlabel.configure(text_color="#ff5555")
-    qkvslider,qkvlabel,qkvtitle = makeslider(context_tab, "Quantize KV Cache:", quantkv_text, quantkv_var, 0, 2, 30, set=0,tooltip="Enable quantization of KV cache.\nRequires FlashAttention for full effect, otherwise only K cache is quantized.")
+    qkvslider,qkvlabel,qkvtitle = makeslider(context_tab, "Quantize KV Cache:", quantkv_text, quantkv_var, 0, 2, 30, set=0,tooltip="Enable quantization of KV cache.\nRequires Flash Attention for full effect, otherwise only K cache is quantized.")
     quantkv_var.trace_add("write", toggleflashattn)
     makecheckbox(context_tab, "No BOS Token", nobostoken_var, 43, tooltiptxt="Prevents BOS token from being added at the start of any prompt. Usually NOT recommended for most models.")
     makecheckbox(context_tab, "Enable Guidance", enableguidance_var, 43,padx=(140), tooltiptxt="Enables the use of Classifier-Free-Guidance, which allows the use of negative prompts. Has performance and memory impact.")
@@ -6350,6 +6295,8 @@ def show_gui():
     makefileentry(images_tab, "Clip-1 File:", "Select First Clip model file (Clip-L for SD3 or Flux, or other vision encoder)",sd_clip1_var, 26, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors Clip-1 file to be loaded.\nThis is Clip-L for SD3 and Flux, Clip Vision for WAN, and Qwen2.5VL for QwenImage")
     makefileentry(images_tab, "Clip-2 File:", "Select Second Clip model file (Clip-G for SD3)",sd_clip2_var, 28, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors Clip-2 file to be loaded.\nThis is Clip-G for SD3")
     makefileentry(images_tab, "PhotoMaker:", "Select Optional PhotoMaker model file (SDXL)",sd_photomaker_var, 30, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="PhotoMaker is a model that allows face cloning.\nSelect a .safetensors PhotoMaker file to be loaded (SDXL only).")
+    makefileentry(images_tab, "Upscaler:", "Select Optional Upscaling model file (ESRGAN)",sd_upscaler_var, 32, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf *.pth","*.safetensors *.gguf *.pth")],tooltiptxt="Select an upscaler model file.\nCurrently only ESRGAN is supported.")
+
 
     sdvaeitem1,sdvaeitem2,sdvaeitem3 = makefileentry(images_tab, "Image VAE:", "Select Optional SD VAE file",sd_vae_var, 40, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select a .safetensors or .gguf SD VAE file to be loaded.")
     def toggletaesd(a,b,c):
@@ -6362,7 +6309,7 @@ def show_gui():
                 sdvaeitem1.grid()
                 sdvaeitem2.grid()
                 sdvaeitem3.grid()
-    makecheckbox(images_tab, "TAE SD (AutoFix Broken VAE)", sd_vaeauto_var, 42,command=toggletaesd,tooltiptxt="Replace VAE with TAESD. May fix bad VAE.")
+    makecheckbox(images_tab, "Automatic VAE (TAE SD)", sd_vaeauto_var, 42,command=toggletaesd,tooltiptxt="Replace VAE with TAESD. May fix bad VAE.")
     makelabelcombobox(images_tab, "Conv2D Direct:", sd_convdirect_var, row=42, labelpadx=(220), padx=(310), width=90, tooltiptxt="Use Conv2D Direct operation. May save memory or improve performance.\nMight crash if not supported by the backend.\n", values=sd_convdirect_choices)
     makelabelentry(images_tab, "VAE Tiling Threshold:", sd_tiled_vae_var, 44, 50, padx=(144),singleline=True,tooltip="Enable VAE Tiling for images above this size, to save memory.\nSet to 0 to disable VAE tiling.")
     makecheckbox(images_tab, "SD Flash Attention", sd_flash_attention_var, 44,padx=(230), tooltiptxt="Enable Flash Attention for image diffusion. May save memory or improve performance.")
@@ -6489,7 +6436,7 @@ def show_gui():
         args.highpriority = highpriority.get()==1
         args.usemmap = usemmap.get()==1
         args.smartcontext = smartcontext_var.get()==1
-        args.flashattention = flashattention_var.get()==1
+        args.noflashattention = flashattention_var.get()==0
         args.noshift = contextshift_var.get()==0
         args.nofastforward = fastforward_var.get()==0
         args.useswa = swa_var.get()==1
@@ -6497,7 +6444,7 @@ def show_gui():
         args.remotetunnel = remotetunnel_var.get()==1
         args.foreground = keepforeground.get()==1
         args.cli = terminalonly.get()==1
-        args.pipelineparallel = pipelineparallel.get()==1
+        args.nopipelineparallel = pipelineparallel.get()==0
         args.quiet = quietmode.get()==1
         args.nocertify = nocertifymode.get()==1
         args.nomodel = nomodel.get()==1
@@ -6508,17 +6455,9 @@ def show_gui():
         args.usecpu = False
         args.usevulkan = None
         args.usecuda = None
-        args.useclblast = None
         args.noavx2 = False
         if gpu_choice_var.get()!="All":
             gpuchoiceidx = int(gpu_choice_var.get())-1
-        if runopts_var.get() == "Use CLBlast" or runopts_var.get() == "Use CLBlast (Old CPU)" or runopts_var.get() == "Use CLBlast (Older CPU)":
-            args.useclblast = [[0,0], [1,0], [0,1], [1,1]][gpuchoiceidx]
-            if runopts_var.get() == "Use CLBlast (Old CPU)":
-                args.noavx2 = True
-            elif runopts_var.get() == "Use CLBlast (Older CPU)":
-                args.noavx2 = True
-                args.failsafe = True
         if runopts_var.get() == "Use CUDA" or runopts_var.get() == "Use hipBLAS (ROCm)":
             if gpu_choice_var.get()=="All":
                 args.usecuda = ["normal"]
@@ -6530,13 +6469,16 @@ def show_gui():
                 args.usecuda.append("nommq")
             if rowsplit_var.get()==1:
                 args.usecuda.append("rowsplit")
-        if runopts_var.get() == "Use Vulkan" or runopts_var.get() == "Use Vulkan (Old CPU)":
+        if runopts_var.get() == "Use Vulkan" or runopts_var.get() == "Use Vulkan (Old CPU)" or runopts_var.get() == "Use Vulkan (Older CPU)":
             if gpu_choice_var.get()=="All":
                 args.usevulkan = []
             else:
                 args.usevulkan = [int(gpuchoiceidx)]
             if runopts_var.get() == "Use Vulkan (Old CPU)":
                 args.noavx2 = True
+            elif runopts_var.get() == "Use Vulkan (Older CPU)":
+                args.noavx2 = True
+                args.failsafe = True
         if gpulayers_var.get():
             args.gpulayers = (0 if gpulayers_var.get()=="" else int(gpulayers_var.get()))
         if runopts_var.get()=="Use CPU":
@@ -6563,6 +6505,7 @@ def show_gui():
 
         args.maingpu = -1 if maingpu_var.get()=="" else int(maingpu_var.get())
         args.blasthreads = None if blas_threads_var.get()=="" else int(blas_threads_var.get())
+        args.device = deviceoverride_var.get()
         args.batchsize = int(batchsize_values[int(blas_size_var.get())])
         args.autofit = autofit_var.get() == 1
         args.contextsize = int(contextsize_text[context_var.get()])
@@ -6666,6 +6609,8 @@ def show_gui():
             args.sdclip2 = sd_clip2_var.get()
         if sd_photomaker_var.get() != "":
             args.sdphotomaker = sd_photomaker_var.get()
+        if sd_upscaler_var.get() != "":
+            args.sdupscaler = sd_upscaler_var.get()
         args.sdquant = sd_quant_option(sd_quant_var.get())
         if sd_lora_var.get() != "":
             args.sdlora = sd_lora_var.get()
@@ -6714,7 +6659,7 @@ def show_gui():
         highpriority.set(1 if "highpriority" in dict and dict["highpriority"] else 0)
         usemmap.set(1 if "usemmap" in dict and dict["usemmap"] else 0)
         smartcontext_var.set(1 if "smartcontext" in dict and dict["smartcontext"] else 0)
-        flashattention_var.set(1 if "flashattention" in dict and dict["flashattention"] else 0)
+        flashattention_var.set(0 if "noflashattention" in dict and dict["noflashattention"] else 1)
         contextshift_var.set(0 if "noshift" in dict and dict["noshift"] else 1)
         fastforward_var.set(0 if "nofastforward" in dict and dict["nofastforward"] else 1)
         swa_var.set(1 if "useswa" in dict and dict["useswa"] else 0)
@@ -6723,23 +6668,14 @@ def show_gui():
         remotetunnel_var.set(1 if "remotetunnel" in dict and dict["remotetunnel"] else 0)
         keepforeground.set(1 if "foreground" in dict and dict["foreground"] else 0)
         terminalonly.set(1 if "cli" in dict and dict["cli"] else 0)
-        pipelineparallel.set(1 if "pipelineparallel" in dict and dict["pipelineparallel"] else 0)
+        pipelineparallel.set(0 if "nopipelineparallel" in dict and dict["nopipelineparallel"] else 1)
         quietmode.set(1 if "quiet" in dict and dict["quiet"] else 0)
         nocertifymode.set(1 if "nocertify" in dict and dict["nocertify"] else 0)
         nomodel.set(1 if "nomodel" in dict and dict["nomodel"] else 0)
         lowvram_var.set(1 if "lowvram" in dict and dict["lowvram"] else 0)
         if "quantkv" in dict:
             quantkv_var.set(dict["quantkv"])
-        if "useclblast" in dict and dict["useclblast"]:
-            if "noavx2" in dict and dict["noavx2"]:
-                if clblast_noavx2_option is not None:
-                    runopts_var.set(clblast_noavx2_option)
-                    gpu_choice_var.set(str(["0 0", "1 0", "0 1", "1 1"].index(str(dict["useclblast"][0]) + " " + str(dict["useclblast"][1])) + 1))
-            else:
-                if clblast_option is not None:
-                    runopts_var.set(clblast_option)
-                    gpu_choice_var.set(str(["0 0", "1 0", "0 1", "1 1"].index(str(dict["useclblast"][0]) + " " + str(dict["useclblast"][1])) + 1))
-        elif "usecuda" in dict and dict["usecuda"]:
+        if "usecuda" in dict and dict["usecuda"]:
             if cublas_option is not None or hipblas_option is not None:
                 if cublas_option:
                     runopts_var.set(cublas_option)
@@ -6756,6 +6692,14 @@ def show_gui():
             if "noavx2" in dict and dict["noavx2"]:
                 if vulkan_noavx2_option is not None:
                     runopts_var.set(vulkan_noavx2_option)
+                    gpu_choice_var.set("All")
+                    for opt in range(0,4):
+                        if opt in dict["usevulkan"]:
+                            gpu_choice_var.set(str(opt+1))
+                            break
+            elif "failsafe" in dict and dict["failsafe"]:
+                if vulkan_failsafe_option is not None:
+                    runopts_var.set(vulkan_failsafe_option)
                     gpu_choice_var.set("All")
                     for opt in range(0,4):
                         if opt in dict["usevulkan"]:
@@ -6797,6 +6741,10 @@ def show_gui():
             blas_threads_var.set(str(dict["blasthreads"]))
         else:
             blas_threads_var.set("")
+        if "device" in dict and dict["device"]:
+            deviceoverride_var.set(str(dict["device"]))
+        else:
+            deviceoverride_var.set("")
         if "contextsize" in dict and dict["contextsize"]:
             context_var.set(contextsize_text.index(str(dict["contextsize"])))
         if "overridenativecontext" in dict and dict["overridenativecontext"]>0:
@@ -6904,6 +6852,7 @@ def show_gui():
         sd_clip1_var.set(dict["sdclip1"] if ("sdclip1" in dict and dict["sdclip1"]) else "")
         sd_clip2_var.set(dict["sdclip2"] if ("sdclip2" in dict and dict["sdclip2"]) else "")
         sd_photomaker_var.set(dict["sdphotomaker"] if ("sdphotomaker" in dict and dict["sdphotomaker"]) else "")
+        sd_upscaler_var.set(dict["sdupscaler"] if ("sdupscaler" in dict and dict["sdupscaler"]) else "")
         sd_vaeauto_var.set(1 if ("sdvaeauto" in dict and dict["sdvaeauto"]) else 0)
         sd_tiled_vae_var.set(str(dict["sdtiledvae"]) if ("sdtiledvae" in dict and dict["sdtiledvae"]) else str(default_vae_tile_threshold))
 
@@ -7297,6 +7246,8 @@ def convert_invalid_args(args):
         dict["jinja"] = True
     if "sdgendefaults" in dict and "gendefaults" not in dict:
         dict["gendefaults"] = dict["sdgendefaults"]
+    if "flashattention" in dict and "noflashattention" not in dict:
+        dict["noflashattention"] = not dict["flashattention"]
     return args
 
 def setuptunnel(global_memory, has_sd):
@@ -7431,7 +7382,7 @@ def load_config_cli(filename):
                 setattr(args, key, value)
         if args.istemplate:
             print("\nA .kcppt template was selected from CLI...")
-            if (args.usecuda is None) and (args.usevulkan is None) and (args.useclblast is None):
+            if (args.usecuda is None) and (args.usevulkan is None):
                 print("Automatically selecting your backend...")
                 auto_set_backend_cli()
 
@@ -7448,7 +7399,6 @@ def convert_args_to_template(savdict):
     savdict["usemlock"] = False
     savdict["debugmode"] = 0
     savdict["ssl"] = None
-    savdict["useclblast"] = None
     savdict["usecuda"] = None
     savdict["usevulkan"] = None
     savdict["usecpu"] = None
@@ -7496,8 +7446,7 @@ def delete_old_pyinstaller():
                 kobold_itemcheck3 = os.path.join(absdirpath, 'koboldcpp.py')
                 kobold_itemcheck4 = os.path.join(absdirpath, 'cublasLt64_11.dll')
                 kobold_itemcheck5 = os.path.join(absdirpath, 'cublas64_11.dll')
-                kobold_itemcheck6 = os.path.join(absdirpath, 'clblast.dll')
-                if os.path.exists(kobold_itemcheck1) or os.path.exists(kobold_itemcheck2) or os.path.exists(kobold_itemcheck3) or (os.path.exists(kobold_itemcheck4) and os.path.exists(kobold_itemcheck5) and os.path.exists(kobold_itemcheck6)):
+                if os.path.exists(kobold_itemcheck1) or os.path.exists(kobold_itemcheck2) or os.path.exists(kobold_itemcheck3) or (os.path.exists(kobold_itemcheck4) and os.path.exists(kobold_itemcheck5)):
                     try:
                         shutil.rmtree(absdirpath)
                         print(f"Deleted orphaned pyinstaller dir: {absdirpath}")
@@ -7678,7 +7627,11 @@ def load_mcp_async(args):
                 raise ValueError("MCP config must be a JSON object")
             servers = loaded.get("mcpServers")
             if not isinstance(servers, dict):
-                raise ValueError("MCP config missing 'mcpServers' object")
+                serversVsCode = loaded.get("servers")
+                if isinstance(serversVsCode, dict):
+                    servers = serversVsCode
+                else:
+                    raise ValueError("MCP config missing 'mcpServers' object")
             for name, cfg in servers.items():
                 try:
                     print(f"Connecting to MCP Server {name}...")
@@ -7691,7 +7644,9 @@ def load_mcp_async(args):
                         mcpenv = cfg.get("env", {})
                         client = MCPStdioClient(command=mcpcmd,largs=mcpargs,env=mcpenv)
                     elif mcpurl:
+                        mcp_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36'
                         headers = cfg.get("headers", {})
+                        headers.setdefault('User-Agent', mcp_ua)
                         client = MCPHTTPClient(url=mcpurl, headers=headers)
                     else:
                         raise ValueError(f"MCP server '{name}' missing 'command' and 'url'")
@@ -7711,16 +7666,24 @@ def load_mcp_async(args):
                             "clientInfo": {"name": "koboldcpp", "version": "1.0.0"}
                         }
                     }
+                    notif_payload = {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/initialized"
+                    }
                     toolget_payload = {
                         "jsonrpc": "2.0",
                         "id": random.randint(100000, 999999),
                         "method": "tools/list",
                         "params": {}
                     }
+
                     resp1 = conn["client"].send(init_payload)
                     if "result" not in resp1:
                         continue
+
+                    conn["client"].send(notif_payload, await_response=False)
                     resp2 = conn["client"].send(toolget_payload)
+
                     if "result" not in resp2 or "tools" not in resp2["result"]:
                         continue
                     with mcp_lock:
@@ -7771,7 +7734,7 @@ def main(launch_args, default_args):
         return
 
     if args.testmemory:
-        fetch_gpu_properties(True, True, True, testmemory=True)
+        fetch_gpu_properties(True, True, testmemory=True)
         return
 
     #prevent disallowed combos
@@ -8087,6 +8050,10 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         dlfile = download_model_from_url(args.sdphotomaker,[".gguf",".safetensors"],min_file_size=500000)
         if dlfile:
             args.sdphotomaker = dlfile
+    if args.sdupscaler and args.sdupscaler!="":
+        dlfile = download_model_from_url(args.sdupscaler,[".gguf",".safetensors",".pth"],min_file_size=500000)
+        if dlfile:
+            args.sdupscaler = dlfile
     if args.sdvae and args.sdvae!="":
         dlfile = download_model_from_url(args.sdvae,[".gguf",".safetensors"],min_file_size=500000)
         if dlfile:
@@ -8232,16 +8199,16 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             print("MacOS detected: Auto GPU layers set to maximum")
             args.gpulayers = 200
         elif not shouldavoidgpu and args.model_param and os.path.exists(args.model_param):
-            if (args.usecuda is None) and (args.usevulkan is None) and (args.useclblast is None):
+            if (args.usecuda is None) and (args.usevulkan is None):
                 print("No GPU or CPU backend was selected. Trying to assign one for you automatically...")
                 auto_set_backend_cli()
             if MaxMemory[0] == 0: #try to get gpu vram for cuda if not picked yet
-                fetch_gpu_properties(False,True,True)
+                fetch_gpu_properties(True,True)
                 pass
             if args.gpulayers==-1:
-                if MaxMemory[0] > 0 and (not args.usecpu) and ((args.usecuda is not None) or (args.usevulkan is not None) or (args.useclblast is not None) or sys.platform=="darwin"):
+                if MaxMemory[0] > 0 and (not args.usecpu) and ((args.usecuda is not None) or (args.usevulkan is not None) or sys.platform=="darwin"):
                     extract_modelfile_params(args.model_param,args.sdmodel,args.whispermodel,args.mmproj,args.draftmodel,args.ttsmodel if args.ttsgpu else "",args.embeddingsmodel if args.embeddingsgpu else "")
-                    layeramt = autoset_gpu_layers(args.contextsize,args.sdquant,args.batchsize,(args.quantkv if args.flashattention else 0))
+                    layeramt = autoset_gpu_layers(args.contextsize,args.sdquant,args.batchsize,(0 if args.noflashattention else args.quantkv))
                     print(f"Auto Recommended GPU Layers: {layeramt}")
                     args.gpulayers = layeramt
                 else:
@@ -8371,6 +8338,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             imgclip1 = ""
             imgclip2 = ""
             imgphotomaker = ""
+            imgupscaler = ""
             if args.sdlora:
                 if os.path.exists(args.sdlora):
                     imglora = os.path.abspath(args.sdlora)
@@ -8401,13 +8369,18 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                     imgphotomaker = os.path.abspath(args.sdphotomaker)
                 else:
                     print("Missing SD Photomaker model file...")
+            if args.sdupscaler:
+                if os.path.exists(args.sdupscaler):
+                    imgupscaler = os.path.abspath(args.sdupscaler)
+                else:
+                    print("Missing SD Upscaler model file...")
 
             imgmodel = os.path.abspath(imgmodel)
             fullsdmodelpath = imgmodel
             friendlysdmodelname = os.path.basename(imgmodel)
             friendlysdmodelname = os.path.splitext(friendlysdmodelname)[0]
             friendlysdmodelname = sanitize_string(friendlysdmodelname)
-            loadok = sd_load_model(imgmodel,imgvae,imglora,imgt5xxl,imgclip1,imgclip2,imgphotomaker)
+            loadok = sd_load_model(imgmodel,imgvae,imglora,imgt5xxl,imgclip1,imgclip2,imgphotomaker,imgupscaler)
             print("Load Image Model OK: " + str(loadok))
             if not loadok:
                 exitcounter = 999
@@ -8688,7 +8661,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 s_pp = float(benchmaxctx-benchlen)/t_pp
                 s_gen = float(benchlen)/t_gen
                 datetimestamp = datetime.now(timezone.utc)
-                benchflagstr = f"NoAVX2={args.noavx2} Threads={args.threads} HighPriority={args.highpriority} Cuda_Args={args.usecuda} Tensor_Split={args.tensor_split} BlasThreads={args.blasthreads} BatchSize={args.batchsize} FlashAttention={args.flashattention} KvCache={args.quantkv}"
+                benchflagstr = f"NoAVX2={args.noavx2} Threads={args.threads} HighPriority={args.highpriority} Cuda_Args={args.usecuda} Tensor_Split={args.tensor_split} BlasThreads={args.blasthreads} BatchSize={args.batchsize} FlashAttention={not args.noflashattention} KvCache={args.quantkv}"
                 print(f"\nBenchmark Completed - v{KcppVersion} Results:\n======")
                 print(f"Flags: {benchflagstr}")
                 print(f"Timestamp: {datetimestamp}")
@@ -8757,7 +8730,6 @@ if __name__ == '__main__':
     compatgroup = parser.add_mutually_exclusive_group()
     compatgroup.add_argument("--usecuda", "--usecublas", "--usehipblas", help="Use CUDA for GPU Acceleration. Requires CUDA. Enter a number afterwards to select and use 1 GPU. Leaving no number will use all GPUs.", nargs='*',metavar=('[main GPU ID] [mmq|nommq] [rowsplit]'), choices=['normal', 'lowvram', '0', '1', '2', '3', 'all', 'mmq', 'nommq', 'rowsplit'])
     compatgroup.add_argument("--usevulkan", help="Use Vulkan for GPU Acceleration. Can optionally specify one or more GPU Device ID (e.g. --usevulkan 0), leave blank to autodetect.", metavar=('[Device IDs]'), nargs='*', type=int, default=None)
-    compatgroup.add_argument("--useclblast", help="Use CLBlast for GPU Acceleration. Must specify exactly 2 arguments, platform ID and device ID (e.g. --useclblast 1 0).", type=int, choices=range(0,9), nargs=2)
     compatgroup.add_argument("--usecpu", help="Do not use any GPU acceleration (CPU Only)", action='store_true')
     parser.add_argument("--contextsize","--ctx-size", "-c", help="Controls the memory allocated for maximum context size, only change if you need more RAM for big contexts. (default 8192).",metavar=('[256 to 262144]'), type=check_range(int,256,262144), default=8192)
     parser.add_argument("--gpulayers","--gpu-layers","--n-gpu-layers","-ngl", help="Set number of layers to offload to GPU when using GPU. Requires GPU. Set to -1 to try autodetect, set to 0 to disable GPU offload.",metavar=('[GPU layers]'), nargs='?', const=1, type=int, default=-1)
@@ -8783,7 +8755,7 @@ if __name__ == '__main__':
     compatgroup3.add_argument("--usemmap", help="If set, uses mmap to load model.", action='store_true')
     advparser.add_argument("--usemlock","--mlock", help="Enables mlock, preventing the RAM used to load the model from being paged out. Not usually recommended.", action='store_true')
     advparser.add_argument("--noavx2", help="Do not use AVX2 instructions, a slower compatibility mode for older devices.", action='store_true')
-    advparser.add_argument("--failsafe", help="Use failsafe mode, extremely slow CPU only compatibility mode that should work on all devices. Can be combined with useclblast if your device supports OpenCL.", action='store_true')
+    advparser.add_argument("--failsafe", help="Use failsafe mode, extremely old CPU compatibility mode that should work on all devices.", action='store_true')
     advparser.add_argument("--debugmode", help="Shows additional debug info in the terminal.", nargs='?', const=1, type=int, default=0)
     advparser.add_argument("--onready", help="An optional shell command to execute after the model has been loaded.", metavar=('[shell command]'), type=str, default="",nargs=1)
     advparser.add_argument("--benchmark", help="Do not start server, instead run benchmarks. If filename is provided, appends results to provided file.", metavar=('[filename]'), nargs='?', const="stdout", type=str, default=None)
@@ -8814,7 +8786,7 @@ if __name__ == '__main__':
     advparser.add_argument("--chatcompletionsadapter", metavar=('[filename]'), help="Select an optional ChatCompletions Adapter JSON file to force custom instruct tags.", default="AutoGuess")
     advparser.add_argument("--jinja", help="Enables using jinja chat template formatting for chat completions endpoint. Other endpoints are unaffected. Tool calls are done without jinja.", action='store_true')
     advparser.add_argument("--jinja_tools","--jinja-tools","--jinjatools", help="Enables using jinja chat template formatting for chat completions endpoint. Other endpoints are unaffected. Tool calls are done with jinja.", action='store_true')
-    advparser.add_argument("--flashattention","--flash-attn","-fa", help="Enables flash attention.", action='store_true')
+    advparser.add_argument("--noflashattention","--no-flash-attn","-nofa", help="Disables flash attention.", action='store_true')
     advparser.add_argument("--lowvram","-nkvo","--no-kv-offload", help="If supported by the backend, do not offload KV to GPU (lowvram mode). Not recommended, will be slow.", action='store_true')
     advparser.add_argument("--quantkv", help="Sets the KV cache data type quantization, 0=f16, 1=q8, 2=q4. Requires Flash Attention for full effect, otherwise only K cache is quantized.",metavar=('[quantization level 0/1/2]'), type=int, choices=[0,1,2], default=0)
     advparser.add_argument("--smartcontext", help="Reserving a portion of context to try processing less frequently. Outdated. Not recommended.", action='store_true')
@@ -8834,7 +8806,7 @@ if __name__ == '__main__':
     compatgroup2.add_argument("--showgui", help="Always show the GUI instead of launching the model right away when loading settings from a .kcpps file.", action='store_true')
     compatgroup2.add_argument("--skiplauncher", help="Doesn't display or use the GUI launcher. Overrides showgui.", action='store_true')
     advparser.add_argument("--singleinstance", help="Allows this KoboldCpp instance to be shut down by any new instance requesting the same port, preventing duplicate servers from clashing on a port.", action='store_true')
-    advparser.add_argument("--pipelineparallel", help="Enable Pipeline Parallelism for faster multigpu speeds but using more memory, only active for multigpu.", action='store_true')
+    advparser.add_argument("--nopipelineparallel", help="Disable Pipeline Parallelism. Pipeline Parallelism provides faster multigpu speeds but using more memory, only active for multigpu.", action='store_true')
     advparser.add_argument("--gendefaults", metavar=('{"parameter":"value",...}'), help="Sets extra default parameters for some fields in API requests, as a JSON string.", default="")
     advparser.add_argument("--gendefaultsoverwrite", help="Allow the gendefaults parameters to overwrite the original value in API payloads.", action='store_true')
     advparser.add_argument("--mcpfile", metavar=('[mcp json file]'), help="Specify path to mcp.json which contains the Cladue Desktop compatible MCP server config.", default="")
@@ -8856,6 +8828,7 @@ if __name__ == '__main__':
     sdparsergroup.add_argument("--sdclip1", "--sdclipl", metavar=('[filename]'), help="Specify first safetensors Clip model (SD3 or Flux Clip-L, WAN or QwenImg vision). Leave blank if prebaked or unused.", default="")
     sdparsergroup.add_argument("--sdclip2", "--sdclipg", metavar=('[filename]'), help="Specify second safetensors Clip model (SD3 Clip-G). Leave blank if prebaked or unused.", default="")
     sdparsergroup.add_argument("--sdphotomaker", metavar=('[filename]'), help="PhotoMaker is a model that allows face cloning. Specify a PhotoMaker safetensors model which will be applied replacing img2img. SDXL models only. Leave blank if unused.", default="")
+    sdparsergroup.add_argument("--sdupscaler", metavar=('[filename]'), help="You can use ESRGAN as an upscaling model to resize images. Leave blank if unused.", default="")
     sdparsergroup.add_argument("--sdflashattention", help="Enables Flash Attention for image generation.", action='store_true')
     sdparsergroup.add_argument("--sdoffloadcpu", help="Offload image weights in RAM to save VRAM, swap into VRAM when needed.", action='store_true')
     sdparsergroup.add_argument("--sdvaecpu", help="Force VAE to CPU only for image generation.", action='store_true')
@@ -8863,7 +8836,7 @@ if __name__ == '__main__':
     sdparsergroup.add_argument("--sdconvdirect", help="Enables Conv2D Direct. May improve performance or reduce memory usage. Might crash if not supported by the backend. Can be 'off' (default) to disable, 'full' to turn it on for all operations, or 'vaeonly' to enable only for the VAE.", type=sd_convdirect_option, choices=sd_convdirect_choices, default=sd_convdirect_choices[0])
     sdparsergroupvae = sdparsergroup.add_mutually_exclusive_group()
     sdparsergroupvae.add_argument("--sdvae", metavar=('[filename]'), help="Specify an image generation safetensors VAE which replaces the one in the model.", default="")
-    sdparsergroupvae.add_argument("--sdvaeauto", help="Uses a built-in VAE via TAE SD, which is very fast, and fixed bad VAEs.", action='store_true')
+    sdparsergroupvae.add_argument("--sdvaeauto", help="Uses a built-in tiny VAE via TAE SD, which is very fast, and fixed bad VAEs.", action='store_true')
     sdparsergrouplora = sdparsergroup.add_mutually_exclusive_group()
     sdparsergrouplora.add_argument("--sdquant",  metavar=('[quantization level 0/1/2]'), help="If specified, loads the model quantized to save memory. 0=off, 1=q8, 2=q4", type=int, choices=[0,1,2], nargs="?", const=2, default=0)
     sdparsergrouplora.add_argument("--sdlora", metavar=('[filename]'), help="Specify an image generation LORA safetensors model to be applied.", default="")
@@ -8894,9 +8867,11 @@ if __name__ == '__main__':
     deprecatedgroup.add_argument("--sdconfig", help=argparse.SUPPRESS, nargs='+')
     compatgroup.add_argument("--noblas", help=argparse.SUPPRESS, action='store_true')
     compatgroup3.add_argument("--nommap","--no-mmap", help=argparse.SUPPRESS, action='store_true')
+    deprecatedgroup.add_argument("--pipelineparallel", help=argparse.SUPPRESS, action='store_true') #changed to nopipelineparallel
     deprecatedgroup.add_argument("--sdnotile", help=argparse.SUPPRESS, action='store_true') # legacy option, see sdtiledvae
     deprecatedgroup.add_argument("--forceversion", help=argparse.SUPPRESS, action='store_true') #no longer used
     deprecatedgroup.add_argument("--sdgendefaults", help=argparse.SUPPRESS, action='store_true') # legacy option, see gendefaults
+    deprecatedgroup.add_argument("--flashattention","--flash-attn","-fa", help=argparse.SUPPRESS, action='store_true') #flash attention now default on
 
     debuggroup = parser.add_argument_group('Debug Commands')
     debuggroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')

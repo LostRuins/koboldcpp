@@ -54,15 +54,37 @@ namespace ZImage {
 
             auto qkv = qkv_proj->forward(ctx, x);                                                                            // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
             qkv      = ggml_reshape_4d(ctx->ggml_ctx, qkv, head_dim, num_heads + num_kv_heads * 2, qkv->ne[1], qkv->ne[2]);  // [N, n_token, num_heads + num_kv_heads*2, head_dim]
-            qkv      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, qkv, 0, 2, 3, 1));                     // [num_heads + num_kv_heads*2, N, n_token, head_dim]
 
-            auto q = ggml_view_4d(ctx->ggml_ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], num_heads, qkv->nb[1], qkv->nb[2], qkv->nb[3], 0);                                           // [num_heads, N, n_token, head_dim]
-            auto k = ggml_view_4d(ctx->ggml_ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], num_kv_heads, qkv->nb[1], qkv->nb[2], qkv->nb[3], qkv->nb[3] * num_heads);                   // [num_kv_heads, N, n_token, head_dim]
-            auto v = ggml_view_4d(ctx->ggml_ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], num_kv_heads, qkv->nb[1], qkv->nb[2], qkv->nb[3], qkv->nb[3] * (num_heads + num_kv_heads));  // [num_kv_heads, N, n_token, head_dim]
-
-            q = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, q, 0, 3, 1, 2));  // [N, n_token, num_heads, head_dim]
-            k = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 0, 3, 1, 2));  // [N, n_token, num_kv_heads, head_dim]
-            v = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 0, 3, 1, 2));  // [N, n_token, num_kv_heads, head_dim]
+            auto q = ggml_view_4d(ctx->ggml_ctx,
+                                  qkv,
+                                  qkv->ne[0],
+                                  num_heads,
+                                  qkv->ne[2],
+                                  qkv->ne[3],
+                                  qkv->nb[1],
+                                  qkv->nb[2],
+                                  qkv->nb[3],
+                                  0);  // [N, n_token, num_heads, head_dim]
+            auto k = ggml_view_4d(ctx->ggml_ctx,
+                                  qkv,
+                                  qkv->ne[0],
+                                  num_kv_heads,
+                                  qkv->ne[2],
+                                  qkv->ne[3],
+                                  qkv->nb[1],
+                                  qkv->nb[2],
+                                  qkv->nb[3],
+                                  num_heads * qkv->nb[1]);  // [N, n_token, num_kv_heads, head_dim]
+            auto v = ggml_view_4d(ctx->ggml_ctx,
+                                  qkv,
+                                  qkv->ne[0],
+                                  num_kv_heads,
+                                  qkv->ne[2],
+                                  qkv->ne[3],
+                                  qkv->nb[1],
+                                  qkv->nb[2],
+                                  qkv->nb[3],
+                                  (num_heads + num_kv_heads) * qkv->nb[1]);  // [N, n_token, num_kv_heads, head_dim]
 
             if (qk_norm) {
                 auto q_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
@@ -495,7 +517,7 @@ namespace ZImage {
             out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
             out = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N, C, H, W]
 
-            out = ggml_scale(ctx->ggml_ctx, out, -1.f);
+            out = ggml_ext_scale(ctx->ggml_ctx, out, -1.f);
 
             return out;
         }

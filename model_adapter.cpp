@@ -404,6 +404,10 @@ std::string gguf_get_model_arch(const std::string & gguf_filename)
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_GLM4;
             }
+            else if(modelarch=="deepseek2")
+            {
+                fileformatmeta->model_architecture = GGUFArch::ARCH_DEEPSEEK2;
+            }
             else if(modelarch=="gpt-oss")
             {
                 fileformatmeta->model_architecture = GGUFArch::ARCH_GPTOSS;

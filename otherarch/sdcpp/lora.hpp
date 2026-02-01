@@ -195,7 +195,7 @@ struct LoraModel : public GGMLRunner {
             scale_value *= multiplier;
 
             auto curr_updown = ggml_ext_merge_lora(ctx, lora_down, lora_up, lora_mid);
-            curr_updown      = ggml_scale_inplace(ctx, curr_updown, scale_value);
+            curr_updown      = ggml_ext_scale(ctx, curr_updown, scale_value, true);
 
             if (updown == nullptr) {
                 updown = curr_updown;
@@ -235,7 +235,7 @@ struct LoraModel : public GGMLRunner {
             float scale_value = 1.0f;
             scale_value *= multiplier;
 
-            curr_updown = ggml_scale_inplace(ctx, curr_updown, scale_value);
+            curr_updown = ggml_ext_scale(ctx, curr_updown, scale_value, true);
 
             if (updown == nullptr) {
                 updown = curr_updown;
@@ -340,7 +340,7 @@ struct LoraModel : public GGMLRunner {
             struct ggml_tensor* updown_1 = ggml_ext_merge_lora(ctx, hada_1_down, hada_1_up, hada_1_mid);
             struct ggml_tensor* updown_2 = ggml_ext_merge_lora(ctx, hada_2_down, hada_2_up, hada_2_mid);
             auto curr_updown             = ggml_mul_inplace(ctx, updown_1, updown_2);
-            curr_updown                  = ggml_scale_inplace(ctx, curr_updown, scale_value);
+            curr_updown                  = ggml_ext_scale(ctx, curr_updown, scale_value, true);
             if (updown == nullptr) {
                 updown = curr_updown;
             } else {
@@ -456,7 +456,7 @@ struct LoraModel : public GGMLRunner {
             scale_value *= multiplier;
 
             auto curr_updown = ggml_ext_kronecker(ctx, lokr_w1, lokr_w2);
-            curr_updown      = ggml_scale_inplace(ctx, curr_updown, scale_value);
+            curr_updown      = ggml_ext_scale(ctx, curr_updown, scale_value, true);
 
             if (updown == nullptr) {
                 updown = curr_updown;
@@ -634,7 +634,7 @@ struct LoraModel : public GGMLRunner {
                                       forward_params.conv2d.scale);
             }
 
-            auto curr_out_diff = ggml_scale_inplace(ctx, lx, scale_value);
+            auto curr_out_diff = ggml_ext_scale(ctx, lx, scale_value, true);
 
             if (out_diff == nullptr) {
                 out_diff = curr_out_diff;
