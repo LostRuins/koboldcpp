@@ -842,6 +842,7 @@ std::string convert_sep_to_dot(std::string name) {
         "conv_in",
         "conv_out",
         "lora_down",
+        "lora_mid",
         "lora_up",
         "diff_b",
         "hada_w1_a",
@@ -997,10 +998,13 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
     if (is_lora) {
         std::map<std::string, std::string> lora_suffix_map = {
             {".lora_down.weight", ".weight.lora_down"},
+            {".lora_mid.weight", ".weight.lora_mid"},
             {".lora_up.weight", ".weight.lora_up"},
             {".lora.down.weight", ".weight.lora_down"},
+            {".lora.mid.weight", ".weight.lora_mid"},
             {".lora.up.weight", ".weight.lora_up"},
             {"_lora.down.weight", ".weight.lora_down"},
+            {"_lora.mid.weight", ".weight.lora_mid"},
             {"_lora.up.weight", ".weight.lora_up"},
             {".lora_A.weight", ".weight.lora_down"},
             {".lora_B.weight", ".weight.lora_up"},

@@ -462,6 +462,7 @@ struct SDContextParams {
     bool control_net_cpu        = false;
     bool clip_on_cpu            = false;
     bool vae_on_cpu             = false;
+    bool flash_attn             = false;
     bool diffusion_flash_attn   = false;
     bool diffusion_conv_direct  = false;
     bool vae_conv_direct        = false;
@@ -621,8 +622,12 @@ struct SDContextParams {
              "keep vae in cpu (for low vram)",
              true, &vae_on_cpu},
             {"",
+             "--fa",
+             "use flash attention",
+             true, &flash_attn},
+            {"",
              "--diffusion-fa",
-             "use flash attention in the diffusion model",
+             "use flash attention in the diffusion model only",
              true, &diffusion_flash_attn},
             {"",
              "--diffusion-conv-direct",
@@ -909,6 +914,7 @@ struct SDContextParams {
             << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
             << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
             << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
+            << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
             << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
@@ -973,6 +979,7 @@ struct SDContextParams {
             clip_on_cpu,
             control_net_cpu,
             vae_on_cpu,
+            flash_attn,
             diffusion_flash_attn,
             taesd_preview,
             diffusion_conv_direct,
@@ -1483,17 +1490,17 @@ struct SDGenerationParams {
              on_seed_arg},
             {"",
              "--sampling-method",
-             "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd] "
+             "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s] "
              "(default: euler for Flux/SD3/Wan, euler_a otherwise)",
              on_sample_method_arg},
             {"",
              "--high-noise-sampling-method",
-             "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd]"
+             "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s]"
              " default: euler for Flux/SD3/Wan, euler_a otherwise",
              on_high_noise_sample_method_arg},
             {"",
              "--scheduler",
-             "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm], default: discrete",
+             "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent], default: discrete",
              on_scheduler_arg},
             {"",
              "--sigmas",

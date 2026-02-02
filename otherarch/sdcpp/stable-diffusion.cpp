@@ -69,6 +69,8 @@ const char* sampling_methods_str[] = {
     "LCM",
     "DDIM \"trailing\"",
     "TCD",
+    "Res Multistep",
+    "Res 2s",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -583,7 +585,7 @@ public:
                     }
                 }
                 if (is_chroma) {
-                    if (sd_ctx_params->diffusion_flash_attn && sd_ctx_params->chroma_use_dit_mask) {
+                    if ((sd_ctx_params->flash_attn || sd_ctx_params->diffusion_flash_attn) && sd_ctx_params->chroma_use_dit_mask) {
                         LOG_WARN(
                             "!!!It looks like you are using Chroma with flash attention. "
                             "This is currently unsupported. "
@@ -706,14 +708,6 @@ public:
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the diffusion model");
                     std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
-                }
-            }
-
-            if (sd_ctx_params->diffusion_flash_attn) {
-                LOG_INFO("Using flash attention in the diffusion model");
-                diffusion_model->set_flash_attn_enabled(true);
-                if (high_noise_diffusion_model) {
-                    high_noise_diffusion_model->set_flash_attn_enabled(true);
                 }
             }
 
@@ -865,6 +859,28 @@ public:
                     return false;
                 }
                 pmid_model->get_param_tensors(tensors, "pmid");
+            }
+
+            if (sd_ctx_params->flash_attn) {
+                LOG_INFO("Using flash attention");
+                cond_stage_model->set_flash_attention_enabled(true);
+                if (clip_vision) {
+                    clip_vision->set_flash_attention_enabled(true);
+                }
+                if (first_stage_model) {
+                    first_stage_model->set_flash_attention_enabled(true);
+                }
+                if (tae_first_stage) {
+                    tae_first_stage->set_flash_attention_enabled(true);
+                }
+            }
+
+            if (sd_ctx_params->flash_attn || sd_ctx_params->diffusion_flash_attn) {
+                LOG_INFO("Using flash attention in the diffusion model");
+                diffusion_model->set_flash_attention_enabled(true);
+                if (high_noise_diffusion_model) {
+                    high_noise_diffusion_model->set_flash_attention_enabled(true);
+                }
             }
 
             diffusion_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
@@ -2907,6 +2923,8 @@ const char* sample_method_to_str[] = {
     "lcm",
     "ddim_trailing",
     "tcd",
+    "res_multistep",
+    "res_2s",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -2936,6 +2954,7 @@ const char* scheduler_to_str[] = {
     "smoothstep",
     "kl_optimal",
     "lcm",
+    "bong_tangent",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {
@@ -3101,6 +3120,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "keep_clip_on_cpu: %s\n"
              "keep_control_net_on_cpu: %s\n"
              "keep_vae_on_cpu: %s\n"
+             "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
              "circular_y: %s\n"
@@ -3132,6 +3152,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
              BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
              BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
+             BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),
              BOOL_STR(sd_ctx_params->circular_y),

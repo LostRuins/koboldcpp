@@ -1,6 +1,8 @@
 #ifndef __DENOISER_HPP__
 #define __DENOISER_HPP__
 
+#include <cmath>
+
 #include "ggml_extend.hpp"
 #include "gits_noise.inl"
 
@@ -351,6 +353,95 @@ struct SmoothStepScheduler : SigmaScheduler {
     }
 };
 
+struct BongTangentScheduler : SigmaScheduler {
+    static constexpr float kPi = 3.14159265358979323846f;
+
+    static std::vector<float> get_bong_tangent_sigmas(int steps, float slope, float pivot, float start, float end) {
+        std::vector<float> sigmas;
+        if (steps <= 0) {
+            return sigmas;
+        }
+
+        float smax   = ((2.0f / kPi) * atanf(-slope * (0.0f - pivot)) + 1.0f) * 0.5f;
+        float smin   = ((2.0f / kPi) * atanf(-slope * ((float)(steps - 1) - pivot)) + 1.0f) * 0.5f;
+        float srange = smax - smin;
+        float sscale = start - end;
+
+        sigmas.reserve(steps);
+
+        if (fabsf(srange) < 1e-8f) {
+            if (steps == 1) {
+                sigmas.push_back(start);
+                return sigmas;
+            }
+            for (int i = 0; i < steps; ++i) {
+                float t = (float)i / (float)(steps - 1);
+                sigmas.push_back(start + (end - start) * t);
+            }
+            return sigmas;
+        }
+
+        float inv_srange = 1.0f / srange;
+        for (int x = 0; x < steps; ++x) {
+            float v     = ((2.0f / kPi) * atanf(-slope * ((float)x - pivot)) + 1.0f) * 0.5f;
+            float sigma = ((v - smin) * inv_srange) * sscale + end;
+            sigmas.push_back(sigma);
+        }
+
+        return sigmas;
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t /*t_to_sigma*/) override {
+        std::vector<float> result;
+        if (n == 0) {
+            return result;
+        }
+
+        float start  = sigma_max;
+        float end    = sigma_min;
+        float middle = sigma_min + (sigma_max - sigma_min) * 0.5f;
+
+        float pivot_1 = 0.6f;
+        float pivot_2 = 0.6f;
+        float slope_1 = 0.2f;
+        float slope_2 = 0.2f;
+
+        int steps     = static_cast<int>(n) + 2;
+        int midpoint  = static_cast<int>(((float)steps * pivot_1 + (float)steps * pivot_2) * 0.5f);
+        int pivot_1_i = static_cast<int>((float)steps * pivot_1);
+        int pivot_2_i = static_cast<int>((float)steps * pivot_2);
+
+        float slope_scale = (float)steps / 40.0f;
+        slope_1           = slope_1 / slope_scale;
+        slope_2           = slope_2 / slope_scale;
+
+        int stage_2_len = steps - midpoint;
+        int stage_1_len = steps - stage_2_len;
+
+        std::vector<float> sigmas_1 = get_bong_tangent_sigmas(stage_1_len, slope_1, (float)pivot_1_i, start, middle);
+        std::vector<float> sigmas_2 = get_bong_tangent_sigmas(stage_2_len, slope_2, (float)(pivot_2_i - stage_1_len), middle, end);
+
+        if (!sigmas_1.empty()) {
+            sigmas_1.pop_back();
+        }
+
+        result.reserve(n + 1);
+        result.insert(result.end(), sigmas_1.begin(), sigmas_1.end());
+        result.insert(result.end(), sigmas_2.begin(), sigmas_2.end());
+
+        if (result.size() < n + 1) {
+            while (result.size() < n + 1) {
+                result.push_back(end);
+            }
+        } else if (result.size() > n + 1) {
+            result.resize(n + 1);
+        }
+
+        result[n] = 0.0f;
+        return result;
+    }
+};
+
 struct KLOptimalScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         std::vector<float> sigmas;
@@ -430,6 +521,10 @@ struct Denoiser {
             case SMOOTHSTEP_SCHEDULER:
                 LOG_INFO("get_sigmas with SmoothStep scheduler");
                 scheduler = std::make_shared<SmoothStepScheduler>();
+                break;
+            case BONG_TANGENT_SCHEDULER:
+                LOG_INFO("get_sigmas with bong_tangent scheduler");
+                scheduler = std::make_shared<BongTangentScheduler>();
                 break;
             case KL_OPTIMAL_SCHEDULER:
                 LOG_INFO("get_sigmas with KL Optimal scheduler");
@@ -1630,6 +1725,216 @@ static bool sample_k_diffusion(sample_method_t method,
                             std::sqrt(1 - alpha_prod_t_prev /
                                               alpha_prod_s) *
                                 vec_noise[j];
+                    }
+                }
+            }
+        } break;
+        case RES_MULTISTEP_SAMPLE_METHOD:  // Res Multistep sampler
+        {
+            struct ggml_tensor* noise        = ggml_dup_tensor(work_ctx, x);
+            struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
+
+            bool have_old_sigma  = false;
+            float old_sigma_down = 0.0f;
+
+            auto t_fn     = [](float sigma) -> float { return -logf(sigma); };
+            auto sigma_fn = [](float t) -> float { return expf(-t); };
+            auto phi1_fn  = [](float t) -> float {
+                if (fabsf(t) < 1e-6f) {
+                    return 1.0f + t * 0.5f + (t * t) / 6.0f;
+                }
+                return (expf(t) - 1.0f) / t;
+            };
+            auto phi2_fn = [&](float t) -> float {
+                if (fabsf(t) < 1e-6f) {
+                    return 0.5f + t / 6.0f + (t * t) / 24.0f;
+                }
+                float phi1_val = phi1_fn(t);
+                return (phi1_val - 1.0f) / t;
+            };
+
+            for (int i = 0; i < steps; i++) {
+                ggml_tensor* denoised = model(x, sigmas[i], i + 1);
+                if (denoised == nullptr) {
+                    return false;
+                }
+
+                float sigma_from = sigmas[i];
+                float sigma_to   = sigmas[i + 1];
+                float sigma_up   = 0.0f;
+                float sigma_down = sigma_to;
+
+                if (eta > 0.0f) {
+                    float sigma_from_sq = sigma_from * sigma_from;
+                    float sigma_to_sq   = sigma_to * sigma_to;
+                    if (sigma_from_sq > 0.0f) {
+                        float term = sigma_to_sq * (sigma_from_sq - sigma_to_sq) / sigma_from_sq;
+                        if (term > 0.0f) {
+                            sigma_up = eta * std::sqrt(term);
+                        }
+                    }
+                    sigma_up            = std::min(sigma_up, sigma_to);
+                    float sigma_down_sq = sigma_to_sq - sigma_up * sigma_up;
+                    sigma_down          = sigma_down_sq > 0.0f ? std::sqrt(sigma_down_sq) : 0.0f;
+                }
+
+                if (sigma_down == 0.0f || !have_old_sigma) {
+                    float dt            = sigma_down - sigma_from;
+                    float* vec_x        = (float*)x->data;
+                    float* vec_denoised = (float*)denoised->data;
+
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        float d  = (vec_x[j] - vec_denoised[j]) / sigma_from;
+                        vec_x[j] = vec_x[j] + d * dt;
+                    }
+                } else {
+                    float t      = t_fn(sigma_from);
+                    float t_old  = t_fn(old_sigma_down);
+                    float t_next = t_fn(sigma_down);
+                    float t_prev = t_fn(sigmas[i - 1]);
+                    float h      = t_next - t;
+                    float c2     = (t_prev - t_old) / h;
+
+                    float phi1_val = phi1_fn(-h);
+                    float phi2_val = phi2_fn(-h);
+                    float b1       = phi1_val - phi2_val / c2;
+                    float b2       = phi2_val / c2;
+
+                    if (!std::isfinite(b1)) {
+                        b1 = 0.0f;
+                    }
+                    if (!std::isfinite(b2)) {
+                        b2 = 0.0f;
+                    }
+
+                    float sigma_h           = sigma_fn(h);
+                    float* vec_x            = (float*)x->data;
+                    float* vec_denoised     = (float*)denoised->data;
+                    float* vec_old_denoised = (float*)old_denoised->data;
+
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = sigma_h * vec_x[j] + h * (b1 * vec_denoised[j] + b2 * vec_old_denoised[j]);
+                    }
+                }
+
+                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
+                    ggml_ext_im_set_randn_f32(noise, rng);
+                    float* vec_x     = (float*)x->data;
+                    float* vec_noise = (float*)noise->data;
+
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_x[j] + vec_noise[j] * sigma_up;
+                    }
+                }
+
+                float* vec_old_denoised = (float*)old_denoised->data;
+                float* vec_denoised     = (float*)denoised->data;
+                for (int j = 0; j < ggml_nelements(x); j++) {
+                    vec_old_denoised[j] = vec_denoised[j];
+                }
+
+                old_sigma_down = sigma_down;
+                have_old_sigma = true;
+            }
+        } break;
+        case RES_2S_SAMPLE_METHOD:  // Res 2s sampler
+        {
+            struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+            struct ggml_tensor* x0    = ggml_dup_tensor(work_ctx, x);
+            struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
+
+            const float c2 = 0.5f;
+            auto t_fn      = [](float sigma) -> float { return -logf(sigma); };
+            auto phi1_fn   = [](float t) -> float {
+                if (fabsf(t) < 1e-6f) {
+                    return 1.0f + t * 0.5f + (t * t) / 6.0f;
+                }
+                return (expf(t) - 1.0f) / t;
+            };
+            auto phi2_fn = [&](float t) -> float {
+                if (fabsf(t) < 1e-6f) {
+                    return 0.5f + t / 6.0f + (t * t) / 24.0f;
+                }
+                float phi1_val = phi1_fn(t);
+                return (phi1_val - 1.0f) / t;
+            };
+
+            for (int i = 0; i < steps; i++) {
+                float sigma_from = sigmas[i];
+                float sigma_to   = sigmas[i + 1];
+
+                ggml_tensor* denoised = model(x, sigma_from, -(i + 1));
+                if (denoised == nullptr) {
+                    return false;
+                }
+
+                float sigma_up   = 0.0f;
+                float sigma_down = sigma_to;
+                if (eta > 0.0f) {
+                    float sigma_from_sq = sigma_from * sigma_from;
+                    float sigma_to_sq   = sigma_to * sigma_to;
+                    if (sigma_from_sq > 0.0f) {
+                        float term = sigma_to_sq * (sigma_from_sq - sigma_to_sq) / sigma_from_sq;
+                        if (term > 0.0f) {
+                            sigma_up = eta * std::sqrt(term);
+                        }
+                    }
+                    sigma_up            = std::min(sigma_up, sigma_to);
+                    float sigma_down_sq = sigma_to_sq - sigma_up * sigma_up;
+                    sigma_down          = sigma_down_sq > 0.0f ? std::sqrt(sigma_down_sq) : 0.0f;
+                }
+
+                float* vec_x  = (float*)x->data;
+                float* vec_x0 = (float*)x0->data;
+                for (int j = 0; j < ggml_nelements(x); j++) {
+                    vec_x0[j] = vec_x[j];
+                }
+
+                if (sigma_down == 0.0f || sigma_from == 0.0f) {
+                    float* vec_denoised = (float*)denoised->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_denoised[j];
+                    }
+                } else {
+                    float t      = t_fn(sigma_from);
+                    float t_next = t_fn(sigma_down);
+                    float h      = t_next - t;
+
+                    float a21      = c2 * phi1_fn(-h * c2);
+                    float phi1_val = phi1_fn(-h);
+                    float phi2_val = phi2_fn(-h);
+                    float b2       = phi2_val / c2;
+                    float b1       = phi1_val - b2;
+
+                    float sigma_c2 = expf(-(t + h * c2));
+
+                    float* vec_denoised = (float*)denoised->data;
+                    float* vec_x2       = (float*)x2->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        float eps1 = vec_denoised[j] - vec_x0[j];
+                        vec_x2[j]  = vec_x0[j] + h * a21 * eps1;
+                    }
+
+                    ggml_tensor* denoised2 = model(x2, sigma_c2, i + 1);
+                    if (denoised2 == nullptr) {
+                        return false;
+                    }
+                    float* vec_denoised2 = (float*)denoised2->data;
+
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        float eps1 = vec_denoised[j] - vec_x0[j];
+                        float eps2 = vec_denoised2[j] - vec_x0[j];
+                        vec_x[j]   = vec_x0[j] + h * (b1 * eps1 + b2 * eps2);
+                    }
+                }
+
+                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
+                    ggml_ext_im_set_randn_f32(noise, rng);
+                    float* vec_x     = (float*)x->data;
+                    float* vec_noise = (float*)noise->data;
+
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_x[j] + vec_noise[j] * sigma_up;
                     }
                 }
             }

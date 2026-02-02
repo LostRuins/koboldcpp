@@ -38,7 +38,7 @@ struct DiffusionModel {
     virtual size_t get_params_buffer_size()                                             = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter){};
     virtual int64_t get_adm_in_channels()                            = 0;
-    virtual void set_flash_attn_enabled(bool enabled)                = 0;
+    virtual void set_flash_attention_enabled(bool enabled)           = 0;
     virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
 };
 
@@ -84,7 +84,7 @@ struct UNetModel : public DiffusionModel {
         return unet.unet.adm_in_channels;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         unet.set_flash_attention_enabled(enabled);
     }
 
@@ -149,7 +149,7 @@ struct MMDiTModel : public DiffusionModel {
         return 768 + 1280;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         mmdit.set_flash_attention_enabled(enabled);
     }
 
@@ -215,7 +215,7 @@ struct FluxModel : public DiffusionModel {
         return 768;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         flux.set_flash_attention_enabled(enabled);
     }
 
@@ -286,7 +286,7 @@ struct WanModel : public DiffusionModel {
         return 768;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         wan.set_flash_attention_enabled(enabled);
     }
 
@@ -357,7 +357,7 @@ struct QwenImageModel : public DiffusionModel {
         return 768;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         qwen_image.set_flash_attention_enabled(enabled);
     }
 
@@ -424,7 +424,7 @@ struct ZImageModel : public DiffusionModel {
         return 768;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         z_image.set_flash_attention_enabled(enabled);
     }
 
