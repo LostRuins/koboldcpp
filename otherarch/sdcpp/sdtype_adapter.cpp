@@ -620,6 +620,14 @@ static enum sample_method_t sampler_from_name(const std::string& sampler)
     {
         return sample_method_t::DPMPP2M_SAMPLE_METHOD;
     }
+    else if(sampler=="res multistep" || sampler=="k_res_multistep")
+    {
+        return sample_method_t::RES_MULTISTEP_SAMPLE_METHOD;
+    }
+    else if(sampler=="res 2s" || sampler=="k_res_2s")
+    {
+        return sample_method_t::RES_2S_SAMPLE_METHOD;
+    }
     else
     {
         return sample_method_t::SAMPLE_METHOD_COUNT;
