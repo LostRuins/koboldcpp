@@ -370,6 +370,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
     // params.flow_shift = 5.0f;
 
+    // also switches flash attn for the vae and conditioner
+    params.flash_attn = params.diffusion_flash_attn;
+
     if (params.chroma_use_dit_mask && params.diffusion_flash_attn) {
         // note we don't know yet if it's a Chroma model
         params.chroma_use_dit_mask = false;
