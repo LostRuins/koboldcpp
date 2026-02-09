@@ -2835,7 +2835,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         printf("\nRWKV Vocab: %u\n", vocabsiz);
         logits.resize(vocabsiz);
 
-        n_vocab = vocab.id_to_token.size(); //handled seperately
+        n_vocab = vocab.id_to_token.size(); //handled separately
 
         if (file_format == FileFormat::RWKV_1)
         {
