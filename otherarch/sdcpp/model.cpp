@@ -16,12 +16,6 @@
 #include "model.h"
 #include "stable-diffusion.h"
 #include "util.h"
-#ifndef KCPP_NO_BAKE_SD_VOCAB
-#include "vocab.hpp"
-#include "vocab_mistral.hpp"
-#include "vocab_qwen.hpp"
-#include "vocab_umt5.hpp"
-#endif
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -1366,60 +1360,6 @@ void ModelLoader::set_wtype_override(ggml_type wtype, std::string tensor_type_ru
         }
         tensor_storage.expected_type = dst_type;
     }
-}
-
-std::string ModelLoader::load_merges() {
-#ifndef KCPP_NO_BAKE_SD_VOCAB
-    std::string merges_utf8_str(reinterpret_cast<const char*>(merges_utf8_c_str), sizeof(merges_utf8_c_str));
-    return merges_utf8_str;
-#else
-    return sd_load_merges();
-#endif
-}
-
-std::string ModelLoader::load_qwen2_merges() {
-#ifndef KCPP_NO_BAKE_SD_VOCAB
-    std::string merges_utf8_str(reinterpret_cast<const char*>(qwen2_merges_utf8_c_str), sizeof(qwen2_merges_utf8_c_str));
-    return merges_utf8_str;
-#else
-    return sd_load_qwen2_merges();
-#endif
-}
-
-std::string ModelLoader::load_mistral_merges() {
-#ifndef KCPP_NO_BAKE_SD_VOCAB
-    std::string merges_utf8_str(reinterpret_cast<const char*>(mistral_merges_utf8_c_str), sizeof(mistral_merges_utf8_c_str));
-    return merges_utf8_str;
-#else
-    return sd_load_mistral_merges();
-#endif
-}
-
-std::string ModelLoader::load_mistral_vocab_json() {
-#ifndef KCPP_NO_BAKE_SD_VOCAB
-    std::string json_str(reinterpret_cast<const char*>(mistral_vocab_json_utf8_c_str), sizeof(mistral_vocab_json_utf8_c_str));
-    return json_str;
-#else
-    return sd_load_mistral_vocab_json();
-#endif
-}
-
-std::string ModelLoader::load_t5_tokenizer_json() {
-#ifndef KCPP_NO_BAKE_SD_VOCAB
-    std::string json_str(reinterpret_cast<const char*>(t5_tokenizer_json_str), sizeof(t5_tokenizer_json_str));
-    return json_str;
-#else
-    return sd_load_t5();
-#endif
-}
-
-std::string ModelLoader::load_umt5_tokenizer_json() {
-#ifndef KCPP_NO_BAKE_SD_VOCAB
-    std::string json_str(reinterpret_cast<const char*>(umt5_tokenizer_json_str), sizeof(umt5_tokenizer_json_str));
-    return json_str;
-#else
-    return sd_load_umt5();
-#endif
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {

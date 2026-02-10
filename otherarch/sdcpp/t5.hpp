@@ -14,6 +14,7 @@
 #include "ggml_extend.hpp"
 #include <nlohmann/json.hpp>
 #include "model.h"
+#include "vocab/vocab.h"
 
 // Port from: https://github.com/google/sentencepiece/blob/master/src/unigram_model.h
 // and https://github.com/google/sentencepiece/blob/master/src/unigram_model.h.
@@ -341,9 +342,9 @@ protected:
 public:
     explicit T5UniGramTokenizer(bool is_umt5 = false) {
         if (is_umt5) {
-            InitializePieces(ModelLoader::load_umt5_tokenizer_json());
+            InitializePieces(load_umt5_tokenizer_json());
         } else {
-            InitializePieces(ModelLoader::load_t5_tokenizer_json());
+            InitializePieces(load_t5_tokenizer_json());
         }
 
         min_score_ = FLT_MAX;

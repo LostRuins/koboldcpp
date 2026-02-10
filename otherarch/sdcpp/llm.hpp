@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 #include "rope.hpp"
 #include "tokenize_util.h"
+#include "vocab/vocab.h"
 
 namespace LLM {
     constexpr int LLM_GRAPH_SIZE = 10240;
@@ -365,7 +366,7 @@ namespace LLM {
             if (merges_utf8_str.size() > 0) {
                 load_from_merges(merges_utf8_str);
             } else {
-                load_from_merges(ModelLoader::load_qwen2_merges());
+                load_from_merges(load_qwen2_merges());
             }
         }
     };
@@ -466,7 +467,7 @@ namespace LLM {
             if (merges_utf8_str.size() > 0 && vocab_utf8_str.size() > 0) {
                 load_from_merges(merges_utf8_str, vocab_utf8_str);
             } else {
-                load_from_merges(ModelLoader::load_mistral_merges(), ModelLoader::load_mistral_vocab_json());
+                load_from_merges(load_mistral_merges(), load_mistral_vocab_json());
             }
         }
     };

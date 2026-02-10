@@ -14,17 +14,8 @@
 #include <algorithm>
 #include <filesystem>
 
-#define KCPP_NO_BAKE_SD_VOCAB
-
 #include "model_adapter.h"
-
-std::string sd_load_merges();
-std::string sd_load_t5();
-std::string sd_load_umt5();
-std::string sd_load_qwen2_merges();
-std::string sd_load_mistral_merges();
-std::string sd_load_mistral_vocab_json();
-
+#include "vocab/vocab.h"
 #include "flux.hpp"
 #include "stable-diffusion.cpp"
 #include "util.cpp"
@@ -150,7 +141,7 @@ static std::string read_str_from_disk(std::string filepath)
     return output;
 }
 
-std::string sd_load_merges()
+std::string load_clip_merges()
 {
     static std::string mergesstr;  // cached string
     if (!mergesstr.empty()) {
@@ -160,7 +151,7 @@ std::string sd_load_merges()
     mergesstr = read_str_from_disk(filepath);
     return mergesstr;
 }
-std::string sd_load_qwen2_merges()
+std::string load_qwen2_merges()
 {
     static std::string qwenmergesstr;  // cached string
     if (!qwenmergesstr.empty()) {
@@ -170,7 +161,7 @@ std::string sd_load_qwen2_merges()
     qwenmergesstr = read_str_from_disk(filepath);
     return qwenmergesstr;
 }
-std::string sd_load_mistral_merges()
+std::string load_mistral_merges()
 {
     static std::string mistralmergesstr;  // cached string
     if (!mistralmergesstr.empty()) {
@@ -180,7 +171,7 @@ std::string sd_load_mistral_merges()
     mistralmergesstr = read_str_from_disk(filepath);
     return mistralmergesstr;
 }
-std::string sd_load_mistral_vocab_json()
+std::string load_mistral_vocab_json()
 {
     static std::string mistralvocabstr;  // cached string
     if (!mistralvocabstr.empty()) {
@@ -190,7 +181,7 @@ std::string sd_load_mistral_vocab_json()
     mistralvocabstr = read_str_from_disk(filepath);
     return mistralvocabstr;
 }
-std::string sd_load_t5()
+std::string load_t5_tokenizer_json()
 {
     static std::string t5str = "";
     if (!t5str.empty()) {
@@ -200,7 +191,7 @@ std::string sd_load_t5()
     t5str = read_str_from_disk(filepath);
     return t5str;
 }
-std::string sd_load_umt5()
+std::string load_umt5_tokenizer_json()
 {
     static std::string umt5str = "";
     if (!umt5str.empty()) {

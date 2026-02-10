@@ -394,12 +394,15 @@ bool save_results(const SDCliParams& cli_params,
 
     fs::path base_path = out_path;
     fs::path ext       = out_path.has_extension() ? out_path.extension() : fs::path{};
-    if (!ext.empty())
-        base_path.replace_extension();
 
     std::string ext_lower = ext.string();
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
     bool is_jpg = (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".jpe");
+    if (!ext.empty()) {
+        if (is_jpg || ext_lower == ".png") {
+            base_path.replace_extension();
+        }
+    }
 
     int output_begin_idx = cli_params.output_begin_idx;
     if (output_begin_idx < 0) {
@@ -409,7 +412,7 @@ bool save_results(const SDCliParams& cli_params,
     auto write_image = [&](const fs::path& path, int idx) {
         const sd_image_t& img = results[idx];
         if (!img.data)
-            return;
+            return false;
 
         std::string params = get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + idx);
         int ok             = 0;
@@ -419,7 +422,10 @@ bool save_results(const SDCliParams& cli_params,
             ok = stbi_write_png(path.string().c_str(), img.width, img.height, img.channel, img.data, 0, params.c_str());
         }
         LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
+        return ok != 0;
     };
+
+    int sucessful_reults = 0;
 
     if (std::regex_search(cli_params.output_path, format_specifier_regex)) {
         if (!is_jpg && ext_lower != ".png")
@@ -429,9 +435,12 @@ bool save_results(const SDCliParams& cli_params,
 
         for (int i = 0; i < num_results; ++i) {
             fs::path img_path = format_frame_idx(pattern.string(), output_begin_idx + i);
-            write_image(img_path, i);
+            if (write_image(img_path, i)) {
+                sucessful_reults++;
+            }
         }
-        return true;
+        LOG_INFO("%d/%d images saved", sucessful_reults, num_results);
+        return sucessful_reults != 0;
     }
 
     if (cli_params.mode == VID_GEN && num_results > 1) {
@@ -439,9 +448,13 @@ bool save_results(const SDCliParams& cli_params,
             ext = ".avi";
         fs::path video_path = base_path;
         video_path += ext;
-        create_mjpg_avi_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps);
-        LOG_INFO("save result MJPG AVI video to '%s'", video_path.string().c_str());
-        return true;
+        if (create_mjpg_avi_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps) == 0) {
+            LOG_INFO("save result MJPG AVI video to '%s'", video_path.string().c_str());
+            return true;
+        } else {
+            LOG_ERROR("Failed to save result MPG AVI video to '%s'", video_path.string().c_str());
+            return false;
+        }
     }
 
     if (!is_jpg && ext_lower != ".png")
@@ -453,10 +466,12 @@ bool save_results(const SDCliParams& cli_params,
             img_path += "_" + std::to_string(output_begin_idx + i);
         }
         img_path += ext;
-        write_image(img_path, i);
+        if (write_image(img_path, i)) {
+            sucessful_reults++;
+        }
     }
-
-    return true;
+    LOG_INFO("%d/%d images saved", sucessful_reults, num_results);
+    return sucessful_reults != 0;
 }
 
 int main(int argc, const char* argv[]) {

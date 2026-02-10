@@ -332,13 +332,6 @@ public:
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;
-
-    static std::string load_merges();
-    static std::string load_qwen2_merges();
-    static std::string load_mistral_merges();
-    static std::string load_mistral_vocab_json();
-    static std::string load_t5_tokenizer_json();
-    static std::string load_umt5_tokenizer_json();
 };
 
 #endif  // __MODEL_H__

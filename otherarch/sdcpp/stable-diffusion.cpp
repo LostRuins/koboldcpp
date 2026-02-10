@@ -1702,7 +1702,7 @@ public:
                 if (vae_tiling_params.enabled) {
                     // split latent in 32x32 tiles and compute in several steps
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                        first_stage_model->compute(n_threads, in, true, &out, nullptr);
+                        return first_stage_model->compute(n_threads, in, true, &out, nullptr);
                     };
                     silent_tiling(latents, result, get_vae_scale_factor(), 32, 0.5f, on_tiling);
 
@@ -1721,7 +1721,7 @@ public:
                 if (vae_tiling_params.enabled) {
                     // split latent in 64x64 tiles and compute in several steps
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                        tae_first_stage->compute(n_threads, in, true, &out, nullptr);
+                        return tae_first_stage->compute(n_threads, in, true, &out, nullptr);
                     };
                     silent_tiling(latents, result, get_vae_scale_factor(), 64, 0.5f, on_tiling);
                 } else {
@@ -2690,7 +2690,7 @@ public:
                 LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
 
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    first_stage_model->compute(n_threads, in, false, &out, work_ctx);
+                    return first_stage_model->compute(n_threads, in, false, &out, work_ctx);
                 };
                 sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
             } else {
@@ -2701,7 +2701,7 @@ public:
             if (vae_tiling_params.enabled && !encode_video) {
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    tae_first_stage->compute(n_threads, in, false, &out, nullptr);
+                    return tae_first_stage->compute(n_threads, in, false, &out, nullptr);
                 };
                 sd_tiling(x, result, vae_scale_factor, 64, 0.5f, on_tiling);
             } else {
@@ -2819,11 +2819,15 @@ public:
 
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    first_stage_model->compute(n_threads, in, true, &out, nullptr);
+                    return first_stage_model->compute(n_threads, in, true, &out, nullptr);
                 };
                 sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
             } else {
-                first_stage_model->compute(n_threads, x, true, &result, work_ctx);
+                if (!first_stage_model->compute(n_threads, x, true, &result, work_ctx)) {
+                    LOG_ERROR("Failed to decode latetnts");
+                    first_stage_model->free_compute_buffer();
+                    return nullptr;
+                }
             }
             first_stage_model->free_compute_buffer();
             process_vae_output_tensor(result);
@@ -2831,11 +2835,15 @@ public:
             if (vae_tiling_params.enabled) {
                 // split latent in 64x64 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    tae_first_stage->compute(n_threads, in, true, &out);
+                    return tae_first_stage->compute(n_threads, in, true, &out);
                 };
                 sd_tiling(x, result, vae_scale_factor, 64, 0.5f, on_tiling);
             } else {
-                tae_first_stage->compute(n_threads, x, true, &result);
+                if (!tae_first_stage->compute(n_threads, x, true, &result)) {
+                    LOG_ERROR("Failed to decode latetnts");
+                    tae_first_stage->free_compute_buffer();
+                    return nullptr;
+                }
             }
             tae_first_stage->free_compute_buffer();
         }
@@ -3625,6 +3633,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         ggml_free(work_ctx);
         return nullptr;
     }
+    memset(result_images, 0, batch_count * sizeof(sd_image_t));
 
     for (size_t i = 0; i < decoded_images.size(); i++) {
         result_images[i].width   = width;
