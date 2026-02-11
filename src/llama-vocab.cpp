@@ -2505,11 +2505,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|fim_prefix|>"  // Qwen
                         || t.first == "<fim-prefix>"
                         || t.first == "<fim_prefix>"    // Granite
-                        || t.first == "<｜fim▁begin｜>" // DeepSeek
+                        || t.first == "<｜fim▁begin｜>"  // DeepSeek
                         || t.first == "<PRE>"
                         || t.first == "▁<PRE>"          // CodeLlama
                         || t.first == "<|code_prefix|>" // GLM-4.5
                         || t.first == "<|prefix|>"      // Falcon-H1-Tiny-Coder
+                        || t.first == "[PREFIX]"        // Ministral 3
                         ) {
                     special_fim_pre_id = t.second;
                     if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -2531,6 +2532,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "▁<SUF>"         // CodeLlama
                         || t.first == "<|code_suffix|>" // GLM-4.5
                         || t.first == "<|suffix|>"      // Falcon-H1-Tiny-Coder
+                        || t.first == "[SUFFIX]"        // Ministral 3
                         ) {
                     special_fim_suf_id = t.second;
                     if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -2552,6 +2554,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "▁<MID>"         // CodeLlama
                         || t.first == "<|code_middle|>" // GLM-4.5
                         || t.first == "<|middle|>"      // Falcon-H1-Tiny-Coder
+                        || t.first == "[MIDDLE]"        // Ministral 3
                         ) {
                     special_fim_mid_id = t.second;
                     if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -2695,13 +2698,32 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         }
 
         // @ngxson : quick hack for gpt-oss, always render these tokens
+        // Now for Ministral 3 too
         for (const auto & t : token_to_id) {
             auto & attr = id_to_token[t.second].attr;
 
-            if (t.first == "<|channel|>" || t.first == "<|message|>" || t.first == "<|start|>" || t.first == "<|constrain|>") {
+            if (t.first == "<|channel|>"
+                || t.first == "<|message|>"
+                || t.first == "<|start|>"
+                || t.first == "<|constrain|>"
+            ) {
                 LLAMA_LOG_WARN("%s: setting token '%s' (%d) attribute to USER_DEFINED (%u), old attributes: %u\n",
                         __func__, t.first.c_str(), t.second, LLAMA_TOKEN_ATTR_USER_DEFINED, attr);
 
+                attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
+            }
+
+            if(t.first == "[THINK]" // Mistral tokens
+                || t.first == "[/THINK]"
+                // I've added these because kobold doesn't support custom style tool calls
+                // So I think we should expose them to the caller as well
+                || t.first == "[CALL_ID]"
+                || t.first == "[TOOL_CONTENT]"
+                || t.first == "[TOOL_CALLS]"
+                || t.first == "[ARGS]"
+            ) {
+                 LLAMA_LOG_WARN("%s: setting token '%s' (%d) attribute to USER_DEFINED (%u), old attributes: %u\n",
+                        __func__, t.first.c_str(), t.second, LLAMA_TOKEN_ATTR_USER_DEFINED, attr);
                 attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
             }
         }
