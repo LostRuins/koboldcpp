@@ -837,23 +837,23 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         extra_image_data.push_back(img2img_data);
     }
 
-    const int default_res_limit = 2048; // arbitrary, just to simplify the code
-    // avoid crashes due to bugs/limitations on certain models
-    // although it can be possible for a single side to exceed 1024, the total resolution of the image
-    // cannot exceed (832x832) for sd1/sd2 or (2048x2048) for sdxl/sd3/flux, to prevent crashing the server
-    int hard_megapixel_res_limit = default_res_limit;
-
-    int img_hard_limit = default_res_limit;
+    // limit by image side
+    int img_hard_limit = 8192; // "large enough", just to simplify the code
     if (cfg_side_limit > 0) {
-        img_hard_limit = std::max(std::min(cfg_side_limit, default_res_limit), 64);
+        img_hard_limit = std::max(std::min(cfg_side_limit, img_hard_limit), 64);
     }
 
-    int img_soft_limit = default_res_limit;
+    // limit by image area: avoid crashes due to bugs/limitations on certain models
+    // a single side can be larger, but width*height are limited by img_soft_limit²
+    int img_soft_limit;
+    int hard_megapixel_res_limit = 2048; // hard area limit, no matter the config
     if (cfg_square_limit <= 0) {
-        cfg_square_limit = ((loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024); //defaults to 1 megapixel soft e.g. 1024x1024 if unspecified
+        // default limit is model dependent: ~0.66 megapixel for SD1.5/SD2, 1 megapixel for most models
+        img_soft_limit = ((loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024);
+    } else {
+        // force 64 <= limit <= hard_megapixel_res_limit
+        img_soft_limit = std::max(std::min(cfg_square_limit, hard_megapixel_res_limit), 64);
     }
-    img_soft_limit = std::max(std::min(cfg_square_limit, default_res_limit), 64);
-    img_soft_limit = std::min(hard_megapixel_res_limit, img_soft_limit);
 
     sd_fix_resolution(sd_params->width, sd_params->height, img_hard_limit, img_soft_limit);
     if (inputs.width != sd_params->width || inputs.height != sd_params->height) {
