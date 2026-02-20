@@ -498,26 +498,24 @@ static std::string get_image_params(const sd_img_gen_params_t & params) {
     return ss.str();
 }
 
-static inline int rounddown_64(int n) {
-    return n - n % 64;
+static inline int rounddown_to(int n, int fac) {
+    return n - n % fac;
 }
 
-static inline int roundup_64(int n) {
-    return ((n + 63) / 64) * 64;
+static inline int roundup_to(int n, int fac) {
+    return ((n + fac - 1) / fac) * fac;
 }
 
-static inline int roundnearest(int multiple, int n) {
-    return ((n + (multiple/2)) / multiple) * multiple;
-}
+const int img_side_min = 64;
 
 //scale dimensions to ensure width and height stay within limits
 //img_hard_limit = sdclamped, hard size limit per side, no side can exceed this
 //square limit = total NxN resolution based limit to also apply
-static void sd_fix_resolution(int &width, int &height, int img_hard_limit, int img_soft_limit) {
+static void sd_fix_resolution(int &width, int &height, int img_hard_limit, int img_soft_limit, int spatial_multiple) {
 
     // sanitize the original values
-    width = std::max(std::min(width, 8192), 64);
-    height = std::max(std::min(height, 8192), 64);
+    width = std::max(std::min(width, 8192), img_side_min);
+    height = std::max(std::min(height, 8192), img_side_min);
 
     bool is_landscape = (width > height);
     int long_side = is_landscape ? width : height;
@@ -526,19 +524,19 @@ static void sd_fix_resolution(int &width, int &height, int img_hard_limit, int i
 
     // for the initial rounding, don't bother comparing to the original
     // requested ratio, since the user can choose those values directly
-    long_side = rounddown_64(long_side);
-    short_side = rounddown_64(short_side);
-    img_hard_limit = rounddown_64(img_hard_limit);
+    long_side = rounddown_to(long_side, spatial_multiple);
+    short_side = rounddown_to(short_side, spatial_multiple);
+    img_hard_limit = rounddown_to(img_hard_limit, spatial_multiple);
 
     //enforce sdclamp side limit
     if (long_side > img_hard_limit) {
         short_side = static_cast<int>(short_side * img_hard_limit / static_cast<float>(long_side));
         long_side = img_hard_limit;
-        if (short_side <= 64) {
-            short_side = 64;
+        if (short_side <= img_side_min) {
+            short_side = img_side_min;
         } else {
-            int down = rounddown_64(short_side);
-            int up = roundup_64(short_side);
+            int down = rounddown_to(short_side, spatial_multiple);
+            int up = roundup_to(short_side, spatial_multiple);
             float longf = static_cast<float>(long_side);
             // Choose better ratio match between rounding up or down
             short_side = (longf / down - original_ratio < original_ratio - longf / up) ? down : up;
@@ -552,14 +550,14 @@ static void sd_fix_resolution(int &width, int &height, int img_hard_limit, int i
         int new_short = static_cast<int>(short_side * scale);
         int new_long = static_cast<int>(long_side * scale);
 
-        if (new_short <= 64) {
-            short_side = 64;
-            long_side = rounddown_64(area_limit / short_side);
+        if (new_short <= img_side_min) {
+            short_side = img_side_min;
+            long_side = rounddown_to(area_limit / short_side, spatial_multiple);
         } else {
-            int new_long_down = rounddown_64(new_long);
-            int new_short_down = rounddown_64(new_short);
-            int new_short_up = roundup_64(new_short);
-            int new_long_up = roundup_64(new_long);
+            int new_long_down = rounddown_to(new_long, spatial_multiple);
+            int new_short_down = rounddown_to(new_short, spatial_multiple);
+            int new_short_up = roundup_to(new_short, spatial_multiple);
+            int new_long_up = roundup_to(new_long, spatial_multiple);
             long_side = new_long_down;
             short_side = new_short_down;
 
@@ -857,7 +855,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     // limit by image side
     int img_hard_limit = 8192; // "large enough", just to simplify the code
     if (cfg_side_limit > 0) {
-        img_hard_limit = std::max(std::min(cfg_side_limit, img_hard_limit), 64);
+        img_hard_limit = std::max(std::min(cfg_side_limit, img_hard_limit), img_side_min);
     }
 
     // limit by image area: avoid crashes due to bugs/limitations on certain models
@@ -868,11 +866,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         // default limit is model dependent: ~0.66 megapixel for SD1.5/SD2, 1 megapixel for most models
         img_soft_limit = ((loadedsdver==SDVersion::VERSION_SD1 || loadedsdver==SDVersion::VERSION_SD2)?832:1024);
     } else {
-        // force 64 <= limit <= hard_megapixel_res_limit
-        img_soft_limit = std::max(std::min(cfg_square_limit, hard_megapixel_res_limit), 64);
+        // force img_side_min <= limit <= hard_megapixel_res_limit
+        img_soft_limit = std::max(std::min(cfg_square_limit, hard_megapixel_res_limit), img_side_min);
     }
 
-    sd_fix_resolution(sd_params->width, sd_params->height, img_hard_limit, img_soft_limit);
+    // unet is limited to multiples of 64; dit models vary
+    int spatial_multiple = sd_ctx->sd->get_vae_scale_factor() * sd_ctx->sd->get_diffusion_model_down_factor();
+
+    sd_fix_resolution(sd_params->width, sd_params->height, img_hard_limit, img_soft_limit, spatial_multiple);
     if (inputs.width != sd_params->width || inputs.height != sd_params->height) {
         printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n",
             inputs.width, inputs.height, sd_params->width, sd_params->height);
@@ -1110,15 +1111,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         results = generate_image(sd_ctx, &params);
 
     } else {
-
-        if (params.width <= 0 || params.width % 64 != 0 || params.height <= 0 || params.height % 64 != 0) {
-            printf("\nKCPP SD: bad request image dimensions!\n");
-            output.data = "";
-            output.data_extra = "";
-            output.animated = 0;
-            output.status = 0;
-            return output;
-        }
 
         if(input_image_buffer!=nullptr) //just in time free old buffer
         {
