@@ -8103,13 +8103,6 @@ def main(launch_args, default_args):
         analyze_gguf_model_wrapper(args.analyze)
         return
 
-    if args.exportconfig and args.exportconfig!="":
-        save_config_cli(args.exportconfig,False)
-        return
-    if args.exporttemplate and args.exporttemplate!="":
-        save_config_cli(args.exporttemplate,True)
-        return
-
     if args.config and len(args.config)==1: #handle initial config loading for launch
         cfgname = args.config[0]
         if isinstance(cfgname, str):
@@ -8131,6 +8124,13 @@ def main(launch_args, default_args):
         if dlfile:
             args.model_param = dlfile
         load_config_cli(args.model_param)
+
+    if args.exportconfig:
+        save_config_cli(args.exportconfig,False)
+        return
+    if args.exporttemplate:
+        save_config_cli(args.exporttemplate,True)
+        return
 
     # show the GUI launcher if a model was not provided
     if args.showgui or (not args.model_param and not args.sdmodel and not args.whispermodel and not args.ttsmodel and not args.embeddingsmodel and not args.musicdiffusion and not args.mcpfile and not args.nomodel):
