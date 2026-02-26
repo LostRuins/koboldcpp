@@ -342,6 +342,7 @@ class sd_generation_inputs(ctypes.Structure):
                 ("cfg_scale", ctypes.c_float),
                 ("distilled_guidance", ctypes.c_float),
                 ("shifted_timestep", ctypes.c_int),
+                ("flow_shift", ctypes.c_float),
                 ("sample_steps", ctypes.c_int),
                 ("width", ctypes.c_int),
                 ("height", ctypes.c_int),
@@ -2070,6 +2071,7 @@ def gendefaults_parse_meta_field(input_str):
         'sampler': 'sampler_name',
         'sampling-method': 'sampler_name',
         'timestep-shift': 'shifted_timestep',
+        'flow-shift': 'flow_shift',
     }
     if not isinstance(input_str, str) or not input_str.strip():
         return {}
@@ -2138,6 +2140,7 @@ def sd_generate(genparams):
     cfg_scale = tryparsefloat(genparams.get("cfg_scale", 5),5)
     distilled_guidance = tryparsefloat(genparams.get("distilled_guidance", None), None)
     shifted_timestep = tryparseint(genparams.get("shifted_timestep", None), None)
+    flow_shift = tryparsefloat(genparams.get("flow_shift", None), None)
     sample_steps = tryparseint(genparams.get("steps", 20),20)
     width = tryparseint(genparams.get("width", 512),512)
     height = tryparseint(genparams.get("height", 512),512)
@@ -2161,6 +2164,8 @@ def sd_generate(genparams):
         distilled_guidance = None # fall back to the default
     if shifted_timestep is not None and (shifted_timestep < 0 or shifted_timestep > 1000):
         shifted_timestep = None # fall back to the default
+    if flow_shift is not None and flow_shift < 0:
+        flow_shift = None # fall back to the default
     sample_steps = (1 if sample_steps < 1 else (forced_steplimit if sample_steps > forced_steplimit else sample_steps))
     vid_req_frames = (1 if vid_req_frames < 1 else (100 if vid_req_frames > 100 else vid_req_frames))
 
@@ -2186,6 +2191,8 @@ def sd_generate(genparams):
     inputs.denoising_strength = denoising_strength
     if shifted_timestep is not None:
         inputs.shifted_timestep = shifted_timestep
+    if flow_shift is not None:
+        inputs.flow_shift = flow_shift
     inputs.sample_steps = sample_steps
     inputs.width = width
     inputs.height = height

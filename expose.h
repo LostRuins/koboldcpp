@@ -213,6 +213,7 @@ struct sd_generation_inputs
     const float cfg_scale = 0.0f;
     const float distilled_guidance = -1.0f;
     const int shifted_timestep = 0;
+    const float flow_shift = 0.0f;
     const int sample_steps = 0;
     const int width = 0;
     const int height = 0;
