@@ -586,10 +586,6 @@ struct SDContextParams {
              "--vae-tile-overlap",
              "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
              &vae_tiling_params.target_overlap},
-            {"",
-             "--flow-shift",
-             "shift value for Flow models like SD3.x or WAN (default: auto)",
-             &flow_shift},
         };
 
         options.bool_options = {
@@ -908,7 +904,6 @@ struct SDContextParams {
             << "  photo_maker_path: \"" << photo_maker_path << "\",\n"
             << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
             << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
-            << "  flow_shift: " << (std::isinf(flow_shift) ? "INF" : std::to_string(flow_shift)) << "\n"
             << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
             << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
             << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
@@ -991,7 +986,6 @@ struct SDContextParams {
             chroma_use_t5_mask,
             chroma_t5_mask_pad,
             qwen_image_zero_cond_t,
-            flow_shift,
         };
         return sd_ctx_params;
     }
@@ -1211,6 +1205,10 @@ struct SDGenerationParams {
              "--eta",
              "eta in DDIM, only for DDIM and TCD (default: 0)",
              &sample_params.eta},
+            {"",
+             "--flow-shift",
+             "shift value for Flow models like SD3.x or WAN (default: auto)",
+             &sample_params.flow_shift},
             {"",
              "--high-noise-cfg-scale",
              "(high noise) unconditional guidance scale: (default: 7.0)",
@@ -1611,6 +1609,7 @@ struct SDGenerationParams {
         load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
         load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
         load_if_exists("guidance", sample_params.guidance.distilled_guidance);
+        load_if_exists("flow_shift", sample_params.flow_shift);
 
         auto load_sampler_if_exists = [&](const char* key, enum sample_method_t& out) {
             if (j.contains(key) && j[key].is_string()) {

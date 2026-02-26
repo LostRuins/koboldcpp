@@ -201,7 +201,6 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
-    float flow_shift;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -235,6 +234,7 @@ typedef struct {
     int shifted_timestep;
     float* custom_sigmas;
     int custom_sigmas_count;
+    float flow_shift;
 } sd_sample_params_t;
 
 typedef struct {

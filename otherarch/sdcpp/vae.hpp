@@ -141,7 +141,7 @@ public:
             v = ggml_reshape_3d(ctx->ggml_ctx, v, c, h * w, n);                        // [N, h * w, in_channels]
         }
 
-        h_ = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, true, ctx->flash_attn_enabled);
+        h_ = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
 
         if (use_linear) {
             h_ = proj_out->forward(ctx, h_);  // [N, h * w, in_channels]

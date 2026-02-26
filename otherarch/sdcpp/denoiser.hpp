@@ -657,15 +657,19 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     float sigma_data = 1.0f;
 
-    DiscreteFlowDenoiser(float shift = 3.0f)
-        : shift(shift) {
-        set_parameters();
+    DiscreteFlowDenoiser(float shift = 3.0f) {
+        set_shift(shift);
     }
 
     void set_parameters() {
         for (int i = 1; i < TIMESTEPS + 1; i++) {
             sigmas[i - 1] = t_to_sigma(static_cast<float>(i));
         }
+    }
+
+    void set_shift(float shift) {
+        this->shift = shift;
+        set_parameters();
     }
 
     float sigma_min() override {
@@ -710,34 +714,8 @@ float flux_time_shift(float mu, float sigma, float t) {
     return ::expf(mu) / (::expf(mu) + ::powf((1.0f / t - 1.0f), sigma));
 }
 
-struct FluxFlowDenoiser : public Denoiser {
-    float sigmas[TIMESTEPS];
-    float shift = 1.15f;
-
-    float sigma_data = 1.0f;
-
-    FluxFlowDenoiser(float shift = 1.15f) {
-        set_parameters(shift);
-    }
-
-    void set_shift(float shift) {
-        this->shift = shift;
-    }
-
-    void set_parameters(float shift) {
-        set_shift(shift);
-        for (int i = 0; i < TIMESTEPS; i++) {
-            sigmas[i] = t_to_sigma(static_cast<float>(i));
-        }
-    }
-
-    float sigma_min() override {
-        return sigmas[0];
-    }
-
-    float sigma_max() override {
-        return sigmas[TIMESTEPS - 1];
-    }
+struct FluxFlowDenoiser : public DiscreteFlowDenoiser {
+    FluxFlowDenoiser() = default;
 
     float sigma_to_t(float sigma) override {
         return sigma;
@@ -746,26 +724,6 @@ struct FluxFlowDenoiser : public Denoiser {
     float t_to_sigma(float t) override {
         t = t + 1;
         return flux_time_shift(shift, 1.0f, t / TIMESTEPS);
-    }
-
-    std::vector<float> get_scalings(float sigma) override {
-        float c_skip = 1.0f;
-        float c_out  = -sigma;
-        float c_in   = 1.0f;
-        return {c_skip, c_out, c_in};
-    }
-
-    // this function will modify noise/latent
-    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) override {
-        ggml_ext_tensor_scale_inplace(noise, sigma);
-        ggml_ext_tensor_scale_inplace(latent, 1.0f - sigma);
-        ggml_ext_tensor_add_inplace(latent, noise);
-        return latent;
-    }
-
-    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) override {
-        ggml_ext_tensor_scale_inplace(latent, 1.0f / (1.0f - sigma));
-        return latent;
     }
 };
 

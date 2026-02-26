@@ -117,6 +117,7 @@ public:
     int n_threads                    = -1;
     float scale_factor               = 0.18215f;
     float shift_factor               = 0.f;
+    float default_flow_shift         = INFINITY;
 
     std::shared_ptr<Conditioner> cond_stage_model;
     std::shared_ptr<FrozenCLIPVisionEmbedder> clip_vision;  // for svd or wan2.1 i2v
@@ -1028,7 +1029,6 @@ public:
         // init denoiser
         {
             prediction_t pred_type = sd_ctx_params->prediction;
-            float flow_shift       = sd_ctx_params->flow_shift;
 
             if (pred_type == PREDICTION_COUNT) {
                 if (sd_version_is_sd2(version)) {
@@ -1053,22 +1053,19 @@ public:
                            sd_version_is_qwen_image(version) ||
                            sd_version_is_z_image(version)) {
                     pred_type = FLOW_PRED;
-                    if (flow_shift == INFINITY) {
-                        if (sd_version_is_wan(version)) {
-                            flow_shift = 5.f;
-                        } else {
-                            flow_shift = 3.f;
-                        }
+                    if (sd_version_is_wan(version)) {
+                        default_flow_shift = 5.f;
+                    } else {
+                        default_flow_shift = 3.f;
                     }
                 } else if (sd_version_is_flux(version)) {
                     pred_type = FLUX_FLOW_PRED;
 
-                    if (flow_shift == INFINITY) {
-                        flow_shift = 1.0f;  // TODO: validate
-                        for (const auto& [name, tensor_storage] : tensor_storage_map) {
-                            if (starts_with(name, "model.diffusion_model.guidance_in.in_layer.weight")) {
-                                flow_shift = 1.15f;
-                            }
+                    default_flow_shift = 1.0f;  // TODO: validate
+                    for (const auto& [name, tensor_storage] : tensor_storage_map) {
+                        if (starts_with(name, "model.diffusion_model.guidance_in.in_layer.weight")) {
+                            default_flow_shift = 1.15f;
+                            break;
                         }
                     }
                 } else if (sd_version_is_flux2(version)) {
@@ -1092,12 +1089,12 @@ public:
                     break;
                 case FLOW_PRED: {
                     LOG_INFO("running in FLOW mode");
-                    denoiser = std::make_shared<DiscreteFlowDenoiser>(flow_shift);
+                    denoiser = std::make_shared<DiscreteFlowDenoiser>();
                     break;
                 }
                 case FLUX_FLOW_PRED: {
                     LOG_INFO("running in Flux FLOW mode");
-                    denoiser = std::make_shared<FluxFlowDenoiser>(flow_shift);
+                    denoiser = std::make_shared<FluxFlowDenoiser>();
                     break;
                 }
                 case FLUX2_FLOW_PRED: {
@@ -2859,6 +2856,16 @@ public:
         return result;
     }
 
+    void set_flow_shift(float flow_shift = INFINITY) {
+        auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
+        if (flow_denoiser) {
+            if (flow_shift == INFINITY) {
+                flow_shift = default_flow_shift;
+            }
+            flow_denoiser->set_shift(flow_shift);
+        }
+    }
+
     //added for kcpp
     void SetCircularAxesAll(bool circular_x, bool circular_y)
     {
@@ -3098,7 +3105,6 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
-    sd_ctx_params->flow_shift              = INFINITY;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -3190,6 +3196,7 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->sample_steps                = 20;
     sample_params->custom_sigmas               = nullptr;
     sample_params->custom_sigmas_count         = 0;
+    sample_params->flow_shift                  = INFINITY;
 }
 
 char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
@@ -3210,7 +3217,8 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              "sample_method: %s, "
              "sample_steps: %d, "
              "eta: %.2f, "
-             "shifted_timestep: %d)",
+             "shifted_timestep: %d, "
+             "flow_shift: %.2f)",
              sample_params->guidance.txt_cfg,
              std::isfinite(sample_params->guidance.img_cfg)
                  ? sample_params->guidance.img_cfg
@@ -3224,7 +3232,8 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              sd_sample_method_name(sample_params->sample_method),
              sample_params->sample_steps,
              sample_params->eta,
-             sample_params->shifted_timestep);
+             sample_params->shifted_timestep,
+             sample_params->flow_shift);
 
     return buf;
 }
@@ -3695,6 +3704,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
     size_t t0 = ggml_time_ms();
 
+    sd_ctx->sd->set_flow_shift(sd_img_gen_params->sample_params.flow_shift);
+
     // Apply lora
     sd_ctx->sd->apply_loras(sd_img_gen_params->loras, sd_img_gen_params->lora_count);
 
@@ -3969,6 +3980,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         LOG_WARN("align up %dx%d to %dx%d (multiple=%d)", sd_vid_gen_params->width, sd_vid_gen_params->height, width, height, spatial_multiple);
     }
     LOG_INFO("generate_video %dx%dx%d", width, height, frames);
+
+    sd_ctx->sd->set_flow_shift(sd_vid_gen_params->sample_params.flow_shift);
 
     enum sample_method_t sample_method = sd_vid_gen_params->sample_params.sample_method;
     if (sample_method == SAMPLE_METHOD_COUNT) {
