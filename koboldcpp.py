@@ -2013,11 +2013,10 @@ def sd_load_model(model_filename,vae_filename,lora_filenames,t5xxl_filename,clip
     ret = handle.sd_load_model(inputs)
     return ret
 
-def sd_oai_tranform_params(genparams):
-    size = genparams.get('size', "512x512")
-    if size and size!="":
-        pattern = r'^\D*(\d+)x(\d+)$'
-        match = re.fullmatch(pattern, size)
+def sd_oai_transform_params(genparams):
+    size = genparams.get('size') or ''
+    pattern = r'^\D*(\d+)x(\d+)$'
+    match = re.fullmatch(pattern, size)
     if match:
         width = int(match.group(1))
         height = int(match.group(2))
@@ -5152,7 +5151,7 @@ Change Mode<br>
                             lastgeneratedcomfyimg = b''
                             genparams = sd_comfyui_tranform_params(genparams)
                         elif is_oai_imggen:
-                            genparams = sd_oai_tranform_params(genparams)
+                            genparams = sd_oai_transform_params(genparams)
                         gen = sd_generate(genparams)
                         gendat = gen["data"]
                         genanim = gen["animated"]
