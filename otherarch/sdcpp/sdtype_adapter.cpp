@@ -488,10 +488,10 @@ static std::string get_scheduler_name(scheduler_t scheduler, bool as_sampler_suf
     }
 }
 
-static std::string get_image_params(const sd_img_gen_params_t & params) {
+static std::string get_image_params(const sd_img_gen_params_t & params, const std::string& lora_meta) {
     std::stringstream ss;
     ss << std::setprecision(3)
-        <<    "Prompt: " << params.prompt
+        <<    "Prompt: " << params.prompt << lora_meta
         << " | NegativePrompt: " << params.negative_prompt
         << " | Steps: " << params.sample_params.sample_steps
         << " | CFGScale: " << params.sample_params.guidance.txt_cfg
@@ -1045,6 +1045,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.batch_count = 1;
 
     std::vector<sd_lora_t> lora_specs;
+    std::stringstream lora_meta;
+    lora_meta << std::setprecision(6);
     for(size_t i=0;i<sd_params->lora_paths.size();++i)
     {
         float multiplier = sd_params->lora_multipliers[i];
@@ -1056,6 +1058,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             spec.path = sd_params->lora_paths[i].c_str();
             spec.multiplier = multiplier;
             lora_specs.push_back(spec);
+            std::string lora_name = std::filesystem::path(sd_params->lora_paths[i]).stem();
+            lora_meta << "<lora:" << lora_name << ":" << multiplier << ">";
         }
     }
     if(!sd_is_quiet && sddebugmode==1) {
@@ -1298,9 +1302,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             {
                 printf("Upscaling output image...\n");
                 upscaled_image = upscale(upscaler_ctx, results[i], 2);
-                png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, get_image_params(params).c_str());
+                png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, get_image_params(params, lora_meta.str()).c_str());
             } else {
-                png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(params).c_str());
+                png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(params, lora_meta.str()).c_str());
             }
 
             if (png != NULL)

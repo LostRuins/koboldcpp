@@ -2132,9 +2132,7 @@ def sanitize_lora_multipliers(sdloramult):
     return sdloramult
 
 def prepare_lora_multipliers(request_list):
-
     orig_multipliers = [lora[3] for lora in imglorainfo]
-
     req_by_path = {}
     for r in request_list:
         if not isinstance(r, dict):
@@ -2143,14 +2141,49 @@ def prepare_lora_multipliers(request_list):
         path = r.get('path')
         if path and isinstance(path, str):
             req_by_path[path] = req_by_path.get(path, 0.) + multiplier
-
     result = []
     for i, (fullpath, name, path, origmul) in enumerate(imglorainfo):
         multiplier = orig_multipliers[i]
         if multiplier == 0. and path in req_by_path:
             multiplier = req_by_path[path]
         result.append(multiplier)
+    return result
 
+def extract_loras_from_prompt(prompt):
+    pattern = r'<lora:([^:>]+):([^>]+)>'
+    lora_data = []
+    matches = list(re.finditer(pattern, prompt))
+    for match in matches:
+        raw_path = match.group(1)
+        raw_mul = match.group(2)
+        try:
+            mul = float(raw_mul)
+        except ValueError:
+            continue
+        is_high_noise = False
+        prefix = "|high_noise|"
+        if raw_path.startswith(prefix):
+            raw_path = raw_path[len(prefix):]
+            is_high_noise = True
+        item = {'name': raw_path, 'multiplier': mul}
+        if is_high_noise:
+            item["is_high_noise"] = is_high_noise
+        lora_data.append(item)
+        prompt = prompt.replace(match.group(0), "", 1)
+    return prompt, lora_data
+
+def lora_map_name_to_path(request_list):
+    name2path = {}
+    for _, name, path, _ in imglorainfo:
+        name2path[name] = path
+    result = []
+    for req in request_list:
+        out = dict(req)
+        name = out.pop('name')
+        path = name2path.get(name)
+        if path:
+            out['path'] = path
+            result.append(out)
     return result
 
 def sd_generate(genparams):
@@ -5203,6 +5236,12 @@ Change Mode<br>
                             genparams = sd_comfyui_tranform_params(genparams)
                         elif is_oai_imggen:
                             genparams = sd_oai_transform_params(genparams)
+                        if not genparams.get('lora'):
+                            # process <lora:name:multiplier> syntax
+                            prompt, loras = extract_loras_from_prompt(genparams['prompt'])
+                            if loras:
+                                genparams['prompt'] = prompt
+                                genparams['lora'] = lora_map_name_to_path(loras)
                         gen = sd_generate(genparams)
                         gendat = gen["data"]
                         genanim = gen["animated"]
