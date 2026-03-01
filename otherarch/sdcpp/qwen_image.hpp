@@ -3,9 +3,8 @@
 
 #include <memory>
 
-#include "common.hpp"
+#include "common_block.hpp"
 #include "flux.hpp"
-#include "ggml_extend.hpp"
 
 namespace Qwen {
     constexpr int QWEN_IMAGE_GRAPH_SIZE = 20480;
@@ -390,69 +389,6 @@ namespace Qwen {
             blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, params.patch_size * params.patch_size * params.out_channels));
         }
 
-        struct ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
-                                              struct ggml_tensor* x) {
-            int64_t W = x->ne[0];
-            int64_t H = x->ne[1];
-
-            int pad_h = (params.patch_size - H % params.patch_size) % params.patch_size;
-            int pad_w = (params.patch_size - W % params.patch_size) % params.patch_size;
-            x         = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
-            return x;
-        }
-
-        struct ggml_tensor* patchify(struct ggml_context* ctx,
-                                     struct ggml_tensor* x) {
-            // x: [N, C, H, W]
-            // return: [N, h*w, C * patch_size * patch_size]
-            int64_t N = x->ne[3];
-            int64_t C = x->ne[2];
-            int64_t H = x->ne[1];
-            int64_t W = x->ne[0];
-            int64_t p = params.patch_size;
-            int64_t h = H / params.patch_size;
-            int64_t w = W / params.patch_size;
-
-            GGML_ASSERT(h * p == H && w * p == W);
-
-            x = ggml_reshape_4d(ctx, x, p, w, p, h * C * N);       // [N*C*h, p, w, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*h, w, p, p]
-            x = ggml_reshape_4d(ctx, x, p * p, w * h, C, N);       // [N, C, h*w, p*p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, h*w, C, p*p]
-            x = ggml_reshape_3d(ctx, x, p * p * C, w * h, N);      // [N, h*w, C*p*p]
-            return x;
-        }
-
-        struct ggml_tensor* process_img(GGMLRunnerContext* ctx,
-                                        struct ggml_tensor* x) {
-            x = pad_to_patch_size(ctx, x);
-            x = patchify(ctx->ggml_ctx, x);
-            return x;
-        }
-
-        struct ggml_tensor* unpatchify(struct ggml_context* ctx,
-                                       struct ggml_tensor* x,
-                                       int64_t h,
-                                       int64_t w) {
-            // x: [N, h*w, C*patch_size*patch_size]
-            // return: [N, C, H, W]
-            int64_t N = x->ne[2];
-            int64_t C = x->ne[0] / params.patch_size / params.patch_size;
-            int64_t H = h * params.patch_size;
-            int64_t W = w * params.patch_size;
-            int64_t p = params.patch_size;
-
-            GGML_ASSERT(C * p * p == x->ne[0]);
-
-            x = ggml_reshape_4d(ctx, x, p * p, C, w * h, N);       // [N, h*w, C, p*p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, C, h*w, p*p]
-            x = ggml_reshape_4d(ctx, x, p, p, w, h * C * N);       // [N*C*h, w, p, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*h, p, w, p]
-            x = ggml_reshape_4d(ctx, x, W, H, C, N);               // [N, C, h*p, w*p]
-
-            return x;
-        }
-
         struct ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
                                          struct ggml_tensor* x,
                                          struct ggml_tensor* timestep,
@@ -512,18 +448,15 @@ namespace Qwen {
             int64_t C = x->ne[2];
             int64_t N = x->ne[3];
 
-            auto img           = process_img(ctx, x);
+            auto img           = DiT::pad_and_patchify(ctx, x, params.patch_size, params.patch_size);
             int64_t img_tokens = img->ne[1];
 
             if (ref_latents.size() > 0) {
                 for (ggml_tensor* ref : ref_latents) {
-                    ref = process_img(ctx, ref);
+                    ref = DiT::pad_and_patchify(ctx, ref, params.patch_size, params.patch_size);
                     img = ggml_concat(ctx->ggml_ctx, img, ref, 1);
                 }
             }
-
-            int64_t h_len = ((H + (params.patch_size / 2)) / params.patch_size);
-            int64_t w_len = ((W + (params.patch_size / 2)) / params.patch_size);
 
             auto out = forward_orig(ctx, img, timestep, context, pe, modulate_index);  // [N, h_len*w_len, ph*pw*C]
 
@@ -533,11 +466,7 @@ namespace Qwen {
                 out = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, out, 0, 2, 1, 3));  // [N, h*w, C * patch_size * patch_size]
             }
 
-            out = unpatchify(ctx->ggml_ctx, out, h_len, w_len);  // [N, C, H + pad_h, W + pad_w]
-
-            // slice
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N, C, H, W]
+            out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, params.patch_size, params.patch_size);  // [N, C, H, W]
 
             return out;
         }

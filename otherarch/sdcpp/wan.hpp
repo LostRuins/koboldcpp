@@ -5,9 +5,8 @@
 #include <memory>
 #include <utility>
 
-#include "common.hpp"
+#include "common_block.hpp"
 #include "flux.hpp"
-#include "ggml_extend.hpp"
 #include "rope.hpp"
 #include "vae.hpp"
 

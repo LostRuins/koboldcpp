@@ -653,6 +653,14 @@ std::string convert_diffusers_dit_to_original_lumina2(std::string name) {
     return name;
 }
 
+std::string convert_other_dit_to_original_anima(std::string name) {
+    static const std::string anima_net_prefix = "net.";
+    if (!starts_with(name, anima_net_prefix)) {
+        name = anima_net_prefix + name;
+    }
+    return name;
+}
+
 std::string convert_diffusion_model_name(std::string name, std::string prefix, SDVersion version) {
     if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
         name = convert_diffusers_unet_to_original_sd1(name);
@@ -664,6 +672,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
+    } else if (sd_version_is_anima(version)) {
+        name = convert_other_dit_to_original_anima(name);
     }
     return name;
 }
@@ -1091,14 +1101,6 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
                 name = prefix + name;
                 break;
             }
-        }
-    }
-
-    if (is_lora && sd_version_is_anima(version)) {
-        static const std::string anima_diffusion_prefix = "model.diffusion_model.";
-        static const std::string anima_net_prefix       = "model.diffusion_model.net.";
-        if (starts_with(name, anima_diffusion_prefix) && !starts_with(name, anima_net_prefix)) {
-            name = anima_net_prefix + name.substr(anima_diffusion_prefix.size());
         }
     }
 

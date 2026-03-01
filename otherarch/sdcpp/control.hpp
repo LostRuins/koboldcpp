@@ -1,8 +1,7 @@
 #ifndef __CONTROL_HPP__
 #define __CONTROL_HPP__
 
-#include "common.hpp"
-#include "ggml_extend.hpp"
+#include "common_block.hpp"
 #include "model.h"
 
 #define CONTROL_NET_GRAPH_SIZE 1536
