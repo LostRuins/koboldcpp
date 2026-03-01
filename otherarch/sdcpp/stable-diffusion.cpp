@@ -311,6 +311,19 @@ public:
             }
         }
 
+        if (tempver == VERSION_ANIMA &&
+            strlen(SAFE_STR(sd_ctx_params->model_path)) > 0 &&
+            strlen(SAFE_STR(sd_ctx_params->diffusion_model_path)) == 0 &&
+            !model_loader.has_diffusion_model_tensors()
+            )
+        {
+            LOG_INFO("Anima: SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
+            if (!model_loader.init_from_file(sd_ctx_params->model_path, "model.diffusion_model.")) {
+                LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->model_path);
+            }
+            tempver = model_loader.get_sd_version();
+        }
+
         bool iswan = (tempver==VERSION_WAN2 || tempver==VERSION_WAN2_2_I2V || tempver==VERSION_WAN2_2_TI2V);
         bool isqwenimg = (tempver==VERSION_QWEN_IMAGE);
         bool iszimg = (tempver==VERSION_Z_IMAGE);
