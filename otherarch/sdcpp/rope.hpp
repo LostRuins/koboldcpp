@@ -43,7 +43,7 @@ namespace Rope {
 
     __STATIC_INLINE__ std::vector<std::vector<float>> rope(const std::vector<float>& pos,
                                                            int dim,
-                                                           int theta,
+                                                           float theta,
                                                            const std::vector<int>& axis_wrap_dims = {}) {
         assert(dim % 2 == 0);
         int half_dim = dim / 2;
@@ -167,7 +167,7 @@ namespace Rope {
 
     __STATIC_INLINE__ std::vector<float> embed_nd(const std::vector<std::vector<float>>& ids,
                                                   int bs,
-                                                  int theta,
+                                                  const std::vector<float>& axis_thetas,
                                                   const std::vector<int>& axes_dim,
                                                   const std::vector<std::vector<int>>& wrap_dims = {}) {
         std::vector<std::vector<float>> trans_ids = transpose(ids);
@@ -188,8 +188,12 @@ namespace Rope {
             if (!wrap_dims.empty() && i < (int)wrap_dims.size()) {
                 axis_wrap_dims = wrap_dims[i];
             }
+            float axis_theta = 10000.0f;
+            if (!axis_thetas.empty()) {
+                axis_theta = axis_thetas[std::min(i, axis_thetas.size() - 1)];
+            }
             std::vector<std::vector<float>> rope_emb =
-                rope(trans_ids[i], axes_dim[i], theta, axis_wrap_dims);  // [bs*pos_len, axes_dim[i]/2 * 2 * 2]
+                rope(trans_ids[i], axes_dim[i], axis_theta, axis_wrap_dims);  // [bs*pos_len, axes_dim[i]/2 * 2 * 2]
             for (int b = 0; b < bs; ++b) {
                 for (int j = 0; j < pos_len; ++j) {
                     for (int k = 0; k < rope_emb[0].size(); ++k) {
@@ -201,6 +205,15 @@ namespace Rope {
         }
 
         return flatten(emb);
+    }
+
+    __STATIC_INLINE__ std::vector<float> embed_nd(const std::vector<std::vector<float>>& ids,
+                                                  int bs,
+                                                  float theta,
+                                                  const std::vector<int>& axes_dim,
+                                                  const std::vector<std::vector<int>>& wrap_dims = {}) {
+        std::vector<float> axis_thetas(axes_dim.size(), theta);
+        return embed_nd(ids, bs, axis_thetas, axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_refs_ids(int patch_size,
@@ -332,7 +345,7 @@ namespace Rope {
                 }
             }
         }
-        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int h,
@@ -421,7 +434,7 @@ namespace Rope {
                 }
             }
         }
-        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_vid_ids(int t,
@@ -475,7 +488,7 @@ namespace Rope {
                                                     int theta,
                                                     const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_vid_ids(t, h, w, pt, ph, pw, bs);
-        return embed_nd(ids, bs, theta, axes_dim);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen2vl_ids(int grid_h,
@@ -511,7 +524,7 @@ namespace Rope {
                                                         int theta,
                                                         const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_qwen2vl_ids(grid_h, grid_w, merge_size, window_index);
-        return embed_nd(ids, 1, theta, axes_dim);
+        return embed_nd(ids, 1, static_cast<float>(theta), axes_dim);
     }
 
     __STATIC_INLINE__ int bound_mod(int a, int m) {
@@ -584,7 +597,7 @@ namespace Rope {
             }
         }
 
-        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,

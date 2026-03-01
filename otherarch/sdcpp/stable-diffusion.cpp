@@ -50,6 +50,7 @@ const char* model_version_to_str[] = {
     "Wan 2.2 I2V",
     "Wan 2.2 TI2V",
     "Qwen Image",
+    "Anima",
     "Flux.2",
     "Flux.2 klein",
     "Z-Image",
@@ -545,6 +546,7 @@ public:
             shift_factor = 0.1159f;
         } else if (sd_version_is_wan(version) ||
                    sd_version_is_qwen_image(version) ||
+                   sd_version_is_anima(version) ||
                    sd_version_is_flux2(version)) {
             scale_factor = 1.0f;
             shift_factor = 0.f;
@@ -675,6 +677,14 @@ public:
                                                                    "model.diffusion_model",
                                                                    version,
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
+            } else if (sd_version_is_anima(version)) {
+                cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
+                                                                      offload_params_to_cpu,
+                                                                      tensor_storage_map);
+                diffusion_model  = std::make_shared<AnimaModel>(backend,
+                                                               offload_params_to_cpu,
+                                                               tensor_storage_map,
+                                                               "model.diffusion_model");
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
@@ -737,7 +747,7 @@ public:
             }
 
             if (!(use_tiny_autoencoder || version == VERSION_SDXS) || tae_preview_only) {
-                if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
+                if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
                     first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
                                                                             offload_params_to_cpu,
                                                                             tensor_storage_map,
@@ -775,7 +785,7 @@ public:
                 }
             }
             if (use_tiny_autoencoder || version == VERSION_SDXS) {
-                if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
+                if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
                     tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(vae_backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map,
@@ -1051,6 +1061,7 @@ public:
                 } else if (sd_version_is_sd3(version) ||
                            sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
+                           sd_version_is_anima(version) ||
                            sd_version_is_z_image(version)) {
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
@@ -1650,7 +1661,7 @@ public:
                 } else if (sd_version_is_flux(version) || sd_version_is_z_image(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
-                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
+                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
                     latent_rgb_proj = wan_21_latent_rgb_proj;
                     latent_rgb_bias = wan_21_latent_rgb_bias;
                 } else {
@@ -2131,6 +2142,9 @@ public:
                 shifted_t             = std::max((int64_t)0, std::min((int64_t)(TIMESTEPS - 1), shifted_t));
                 LOG_DEBUG("shifting timestep from %.2f to %" PRId64 " (sigma: %.4f)", t, shifted_t, sigma);
                 timesteps_vec.assign(1, (float)shifted_t);
+            } else if (sd_version_is_anima(version)) {
+                // Anima uses normalized flow timesteps.
+                timesteps_vec.assign(1, t / static_cast<float>(TIMESTEPS));
             } else if (sd_version_is_z_image(version)) {
                 timesteps_vec.assign(1, 1000.f - t);
             } else {
@@ -2542,7 +2556,7 @@ public:
     }
 
     void process_latent_in(ggml_tensor* latent) {
-        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_flux2(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version) || sd_version_is_flux2(version)) {
             int channel_dim = sd_version_is_flux2(version) ? 2 : 3;
             std::vector<float> latents_mean_vec;
             std::vector<float> latents_std_vec;
@@ -2581,7 +2595,7 @@ public:
     }
 
     void process_latent_out(ggml_tensor* latent) {
-        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_flux2(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version) || sd_version_is_flux2(version)) {
             int channel_dim = sd_version_is_flux2(version) ? 2 : 3;
             std::vector<float> latents_mean_vec;
             std::vector<float> latents_std_vec;
@@ -2659,7 +2673,7 @@ public:
             // TODO wan2.2 vae support?
             int64_t ne2;
             int64_t ne3;
-            if (sd_version_is_qwen_image(version)) {
+            if (sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
                 ne2 = 1;
                 ne3 = C * x->ne[3];
             } else {
@@ -2677,7 +2691,7 @@ public:
             result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, ne2, ne3);
         }
 
-        if (sd_version_is_qwen_image(version)) {
+        if (sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
             x = ggml_reshape_4d(work_ctx, x, x->ne[0], x->ne[1], 1, x->ne[2] * x->ne[3]);
         }
 
@@ -2750,6 +2764,7 @@ public:
         ggml_tensor* latent;
         if (use_tiny_autoencoder ||
             sd_version_is_qwen_image(version) ||
+            sd_version_is_anima(version) ||
             sd_version_is_wan(version) ||
             sd_version_is_flux2(version) ||
             version == VERSION_CHROMA_RADIANCE) {
@@ -2769,7 +2784,7 @@ public:
         if (!use_tiny_autoencoder) {
             process_latent_in(latent);
         }
-        if (sd_version_is_qwen_image(version)) {
+        if (sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
             latent = ggml_reshape_4d(work_ctx, latent, latent->ne[0], latent->ne[1], latent->ne[3], 1);
         }
         return latent;
@@ -2807,7 +2822,7 @@ public:
         }
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
-            if (sd_version_is_qwen_image(version)) {
+            if (sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
                 x = ggml_reshape_4d(work_ctx, x, x->ne[0], x->ne[1], 1, x->ne[2] * x->ne[3]);
             }
             process_latent_out(x);

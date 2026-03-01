@@ -1094,6 +1094,14 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         }
     }
 
+    if (is_lora && sd_version_is_anima(version)) {
+        static const std::string anima_diffusion_prefix = "model.diffusion_model.";
+        static const std::string anima_net_prefix       = "model.diffusion_model.net.";
+        if (starts_with(name, anima_diffusion_prefix) && !starts_with(name, anima_net_prefix)) {
+            name = anima_net_prefix + name.substr(anima_diffusion_prefix.size());
+        }
+    }
+
     // cond_stage_model
     {
         for (const auto& prefix : cond_stage_model_prefix_vec) {

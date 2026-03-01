@@ -1641,6 +1641,142 @@ struct T5CLIPEmbedder : public Conditioner {
     }
 };
 
+struct AnimaConditioner : public Conditioner {
+    std::shared_ptr<LLM::BPETokenizer> qwen_tokenizer;
+    T5UniGramTokenizer t5_tokenizer;
+    std::shared_ptr<LLM::LLMRunner> llm;
+
+    AnimaConditioner(ggml_backend_t backend,
+                     bool offload_params_to_cpu,
+                     const String2TensorStorage& tensor_storage_map = {}) {
+        qwen_tokenizer = std::make_shared<LLM::Qwen2Tokenizer>();
+        llm            = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::QWEN3,
+                                               backend,
+                                               offload_params_to_cpu,
+                                               tensor_storage_map,
+                                               "text_encoders.llm",
+                                               false);
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+        llm->get_param_tensors(tensors, "text_encoders.llm");
+    }
+
+    void alloc_params_buffer() override {
+        llm->alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        llm->free_params_buffer();
+    }
+
+    size_t get_params_buffer_size() override {
+        return llm->get_params_buffer_size();
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        llm->set_flash_attention_enabled(enabled);
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        llm->set_weight_adapter(adapter);
+    }
+
+    std::tuple<std::vector<int>, std::vector<float>, std::vector<int>, std::vector<float>> tokenize(std::string text) {
+        auto parsed_attention = parse_prompt_attention(text);
+
+        {
+            std::stringstream ss;
+            ss << "[";
+            for (const auto& item : parsed_attention) {
+                ss << "['" << item.first << "', " << item.second << "], ";
+            }
+            ss << "]";
+            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+        }
+
+        std::vector<int> qwen_tokens;
+        std::vector<float> qwen_weights;
+        std::vector<int> t5_tokens;
+        std::vector<float> t5_weights;
+
+        for (const auto& item : parsed_attention) {
+            const std::string& curr_text = item.first;
+            std::vector<int> curr_tokens = qwen_tokenizer->tokenize(curr_text, nullptr);
+            qwen_tokens.insert(qwen_tokens.end(), curr_tokens.begin(), curr_tokens.end());
+            // Anima uses uniform Qwen token weights.
+            qwen_weights.insert(qwen_weights.end(), curr_tokens.size(), 1.f);
+        }
+        if (qwen_tokens.empty()) {
+            qwen_tokens.push_back(151643);  // qwen3 pad token
+            qwen_weights.push_back(1.f);
+        }
+
+        for (const auto& item : parsed_attention) {
+            const std::string& curr_text = item.first;
+            float curr_weight            = item.second;
+            std::vector<int> curr_tokens = t5_tokenizer.Encode(curr_text, true);
+            t5_tokens.insert(t5_tokens.end(), curr_tokens.begin(), curr_tokens.end());
+            t5_weights.insert(t5_weights.end(), curr_tokens.size(), curr_weight);
+        }
+
+        return {qwen_tokens, qwen_weights, t5_tokens, t5_weights};
+    }
+
+    SDCondition get_learned_condition(ggml_context* work_ctx,
+                                      int n_threads,
+                                      const ConditionerParams& conditioner_params) override {
+        int64_t t0 = ggml_time_ms();
+
+        auto tokenized     = tokenize(conditioner_params.text);
+        auto& qwen_tokens  = std::get<0>(tokenized);
+        auto& qwen_weights = std::get<1>(tokenized);
+        auto& t5_tokens    = std::get<2>(tokenized);
+        auto& t5_weights   = std::get<3>(tokenized);
+
+        auto input_ids = vector_to_ggml_tensor_i32(work_ctx, qwen_tokens);
+
+        struct ggml_tensor* hidden_states = nullptr;  // [N, n_token, 1024]
+        llm->compute(n_threads,
+                     input_ids,
+                     nullptr,
+                     {},
+                     {},
+                     &hidden_states,
+                     work_ctx);
+
+        {
+            auto tensor         = hidden_states;
+            float original_mean = ggml_ext_tensor_mean(tensor);
+            for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
+                for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
+                    for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
+                        float value = ggml_ext_tensor_get_f32(tensor, i0, i1, i2);
+                        value *= qwen_weights[i1];
+                        ggml_ext_tensor_set_f32(tensor, value, i0, i1, i2);
+                    }
+                }
+            }
+            float new_mean = ggml_ext_tensor_mean(tensor);
+            if (new_mean != 0.f) {
+                ggml_ext_tensor_scale_inplace(tensor, (original_mean / new_mean));
+            }
+        }
+
+        struct ggml_tensor* t5_ids_tensor    = nullptr;
+        struct ggml_tensor* t5_weight_tensor = nullptr;
+        if (!t5_tokens.empty()) {
+            t5_ids_tensor    = vector_to_ggml_tensor_i32(work_ctx, t5_tokens);
+            t5_weight_tensor = vector_to_ggml_tensor(work_ctx, t5_weights);
+        }
+
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+
+        return {hidden_states, t5_weight_tensor, t5_ids_tensor};
+    }
+};
+
 struct LLMEmbedder : public Conditioner {
     SDVersion version;
     std::shared_ptr<LLM::BPETokenizer> tokenizer;
