@@ -317,9 +317,11 @@ public:
         bool isflux2 = (tempver==VERSION_FLUX2);
         bool isflux2k = (tempver==VERSION_FLUX2_KLEIN);
         bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
+        bool is_anima = (tempver==VERSION_ANIMA);
+        bool conditioner_is_llm = (isqwenimg||iszimg||isflux2||isflux2k||is_ovis||is_anima);
 
         //kcpp qol fallback: if qwen image, and they loaded the qwen2vl llm as t5 by mistake
-        if((isqwenimg||iszimg||isflux2||isflux2k||is_ovis) && t5_path_fixed!="")
+        if(conditioner_is_llm && t5_path_fixed!="")
         {
             if(clipl_path_fixed=="" && clipg_path_fixed=="")
             {
@@ -351,7 +353,7 @@ public:
                 prefix = "cond_stage_model.transformer.";
                 LOG_INFO("swap clip_vision from '%s'", clipl_path_fixed.c_str());
             }
-            if(isqwenimg||iszimg||isflux2||isflux2k||is_ovis)
+            if(conditioner_is_llm)
             {
                 prefix = "text_encoders.llm.";
                 LOG_INFO("swap llm from '%s'", clipl_path_fixed.c_str());
@@ -453,7 +455,7 @@ public:
             {
                 to_replace = "taesd_f2.embd";
             }
-            else if((sd_version_is_wan(version) && version != VERSION_WAN2_2_TI2V)||sd_version_is_qwen_image(version))
+            else if((sd_version_is_wan(version) && version != VERSION_WAN2_2_TI2V)||sd_version_is_qwen_image(version)||sd_version_is_anima(version))
             {
                 to_replace = "taesd_w21.embd";
             }
