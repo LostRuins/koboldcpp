@@ -697,7 +697,7 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
 
         if(devices_override.size()>0)
         {
-            printf("\nOverriding with %d devices...\n",devices_override.size()-1);
+            printf("\nOverriding with %zu devices...\n",devices_override.size()-1);
             tts_model_params.devices = devices_override.data();
         }
 
@@ -936,7 +936,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             //able to proceed, do nothing
             if(!tts_is_quiet && ttsdebugmode==1)
             {
-                printf("\nReuse speaker ID=%d (%d tokens)...", last_speaker_seed, last_speaker_codes.size());
+                printf("\nReuse speaker ID=%d (%zu tokens)...", last_speaker_seed, last_speaker_codes.size());
             }
         } else if (custom_speaker_data!="" && custom_speaker_text!="") { //custom speaker json
             std::string speaker = format_audiotokens(custom_speaker_data,ttsver);
@@ -944,7 +944,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             last_speaker_seed = speaker_seed;
             if(!tts_is_quiet && ttsdebugmode==1)
             {
-                printf("\nCustom Speaker JSON (%d tokens)...", last_speaker_seed, last_speaker_codes.size());
+                printf("\nCustom Speaker JSON seed=%d (%zu tokens)...", last_speaker_seed, last_speaker_codes.size());
             }
         } else if (speaker_seed>=1 && speaker_seed<=5){ //special seeds
             std::string speaker = "";
@@ -970,7 +970,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             last_speaker_seed = speaker_seed;
             if(!tts_is_quiet && ttsdebugmode==1)
             {
-                printf("\nSpecial ID=%d (%d tokens)...", last_speaker_seed, last_speaker_codes.size());
+                printf("\nSpecial ID=%d (%zu tokens)...", last_speaker_seed, last_speaker_codes.size());
             }
         } else {
             //generate the voice texture of our new speaker
@@ -978,7 +978,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             guide_tokens = prepare_guide_tokens(ttcvocab,sampletext,ttsver);
             if(!tts_is_quiet && ttsdebugmode==1)
             {
-                printf("\nGuide Tokens (%d tokens):\n", guide_tokens.size());
+                printf("\nGuide Tokens (%zu tokens):\n", guide_tokens.size());
                 const std::string inp_txt = common_detokenize(ttc_ctx, guide_tokens, true);
                 printf("%s,", inp_txt.c_str());
                 printf("\n");
@@ -987,7 +987,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             prompt_add(prompt_inp, ttcvocab, "<|text_end|>\n<|audio_start|>\n", false, true);
             if(!tts_is_quiet && ttsdebugmode==1)
             {
-                printf("\nPrepare new speaker (%d input tokens)...\n", prompt_inp.size());
+                printf("\nPrepare new speaker (%zu input tokens)...\n", prompt_inp.size());
                 print_tok_vec(prompt_inp);
             }
             kcpp_embd_batch tts_batch = kcpp_embd_batch(prompt_inp, 0, false, false);
@@ -1059,7 +1059,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             last_speaker_seed = speaker_seed;
             if(!tts_is_quiet && ttsdebugmode==1)
             {
-                printf("\nNew speaker ID=%d created (%d tokens)...", last_speaker_seed, last_speaker_codes.size());
+                printf("\nNew speaker ID=%d created (%zu tokens)...", last_speaker_seed, last_speaker_codes.size());
                 const std::string inp_txt = common_detokenize(ttc_ctx, last_speaker_codes, true);
                 printf("\n%s\n", inp_txt.c_str());
             }
@@ -1075,7 +1075,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
     guide_tokens = prepare_guide_tokens(ttcvocab,prompt_clean,ttsver);
     if(!tts_is_quiet && ttsdebugmode==1)
     {
-        printf("\nGuide Tokens (%d tokens):\n", guide_tokens.size());
+        printf("\nGuide Tokens (%zu tokens):\n", guide_tokens.size());
         const std::string inp_txt = common_detokenize(ttc_ctx, guide_tokens, true);
         printf("%s", inp_txt.c_str());
         printf("\n");
@@ -1088,7 +1088,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
 
     if(!tts_is_quiet)
     {
-        printf("\nTTS Processing (%d input tokens)...\n", prompt_inp.size());
+        printf("\nTTS Processing (%zu input tokens)...\n", prompt_inp.size());
     }
 
     prompt_add(prompt_inp, ttcvocab, "<|text_end|>\n<|audio_start|>\n", false, true);
@@ -1101,7 +1101,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
 
     if(!tts_is_quiet && ttsdebugmode==1)
     {
-        printf("\nDUMP TTS PROMPT (%d tokens):\n", prompt_inp.size());
+        printf("\nDUMP TTS PROMPT (%zu tokens):\n", prompt_inp.size());
         print_tok_vec(prompt_inp);
         const std::string inp_txt = common_detokenize(ttc_ctx, prompt_inp, true);
         printf("\n%s\n", inp_txt.c_str());
@@ -1174,7 +1174,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
     if(!tts_is_quiet && ttsdebugmode==1)
     {
         const std::string inp_txt = common_detokenize(ttc_ctx, codes, true);
-        printf("\nGenerated %d Codes: '%s'\n",codes.size(), inp_txt.c_str());
+        printf("\nGenerated %zu Codes: '%s'\n",codes.size(), inp_txt.c_str());
     }
 
     // remove all non-audio tokens (i.e. < 151672 || > 155772)
@@ -1194,7 +1194,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
         return output;
     }
     kcpp_embd_batch codebatch = kcpp_embd_batch(codes,0,false,true);
-    printf("\nRunning Vocoder (%d AudioTokens)", codes.size());
+    printf("\nRunning Vocoder (%zu AudioTokens)", codes.size());
 
     if (llama_encode(cts_ctx, codebatch.batch) != 0) {
         printf("\nError: TTS vocoder generation failed!\n");

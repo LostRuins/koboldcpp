@@ -428,7 +428,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     if(sd_params->lora_specs.size()>0 && inputs.lora_multiplier>0)
     {
-        printf("\nApply %d LoRAs...\n",sd_params->lora_specs.size());
+        printf("\nApply %zu LoRAs...\n",sd_params->lora_specs.size());
         sd_params->lora_count = sd_params->lora_specs.size();
         sd_ctx->sd->apply_loras(sd_params->lora_specs.data(), sd_params->lora_count);
     }

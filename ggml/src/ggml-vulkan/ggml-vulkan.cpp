@@ -2508,7 +2508,7 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
                                        void *import_ptr = nullptr) {
     VK_LOG_DEBUG("ggml_vk_create_buffer(" << device->name << ", " << size << ", " << to_string(req_flags_list.begin()[0]) << ", " << to_string(req_flags_list.begin()[req_flags_list.size()-1]) << ")");
     if (size > device->max_buffer_size) {
-        printf("\nWARNING: Requested buffer size (%zu) exceeds device max_buffer_size limit (%zu)!\n",size,device->max_buffer_size);
+        printf("\nWARNING: Requested buffer size (%zu) exceeds device max_buffer_size limit (%"PRIu64 ")!\n",size,device->max_buffer_size);
     }
 
     vk_buffer buf = std::make_shared<vk_buffer_struct>();

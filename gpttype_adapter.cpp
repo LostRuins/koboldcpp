@@ -2393,7 +2393,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             devices_override = kcpp_parse_device_list(dev_override_str);
             if(devices_override.size()>0)
             {
-                printf("\nOverriding with %d devices...\n",devices_override.size()-1);
+                printf("\nOverriding with %zu devices...\n",devices_override.size()-1);
                 model_params.devices = devices_override.data();
             }
         }
@@ -2571,7 +2571,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             model_params.tensor_buft_overrides = tenos.data();
             model_params.tensor_split = tensor_split_temp;
             model_params.n_gpu_layers = -1; //must be this value to be considered default
-            printf("Autofit Reserve Space: %d MB\n",taxmb);
+            printf("Autofit Reserve Space: %zu MB\n",taxmb);
             //disable log spam
             bool dospam = (debugmode==1 && !is_quiet);
             ggml_log_callback currlogger;

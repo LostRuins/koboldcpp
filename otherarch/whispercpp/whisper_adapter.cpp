@@ -52,7 +52,7 @@ static bool read_wav(const std::string & b64data, std::vector<float>& pcmf32)
 
     if(whisperdebugmode==1 && !whisper_is_quiet)
     {
-        printf("\nwav_data_size: %d",pcmf32.size());
+        printf("\nwav_data_size: %zu",pcmf32.size());
     }
 
     return true;
