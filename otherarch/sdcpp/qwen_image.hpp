@@ -404,7 +404,7 @@ namespace Qwen {
 
             auto t_emb = time_text_embed->forward(ctx, timestep);
             if (params.zero_cond_t) {
-                auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros(ctx->ggml_ctx, timestep->ne[0], timestep->ne[1], timestep->ne[2], timestep->ne[3]));
+                auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros_like(ctx->ggml_ctx, timestep));
                 t_emb        = ggml_concat(ctx->ggml_ctx, t_emb, t_emb_0, 1);
             }
             auto img = img_in->forward(ctx, x);

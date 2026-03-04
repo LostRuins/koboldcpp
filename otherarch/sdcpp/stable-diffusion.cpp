@@ -1260,6 +1260,18 @@ public:
         cond_stage_lora_models.clear();
         diffusion_lora_models.clear();
         first_stage_lora_models.clear();
+        if (cond_stage_model) {
+            cond_stage_model->set_weight_adapter(nullptr);
+        }
+        if (diffusion_model) {
+            diffusion_model->set_weight_adapter(nullptr);
+        }
+        if (high_noise_diffusion_model) {
+            high_noise_diffusion_model->set_weight_adapter(nullptr);
+        }
+        if (first_stage_model) {
+            first_stage_model->set_weight_adapter(nullptr);
+        }
         if (lora_state.empty()) {
             return;
         }

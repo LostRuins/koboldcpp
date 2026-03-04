@@ -1219,12 +1219,22 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_zeros(struct ggml_context* ctx,
     return ggml_ext_full(ctx, 0.f, ne0, ne1, ne2, ne3);
 }
 
+__STATIC_INLINE__ struct ggml_tensor* ggml_ext_zeros_like(struct ggml_context* ctx,
+                                                          struct ggml_tensor* x) {
+    return ggml_ext_zeros(ctx, x->ne[0], x->ne[1], x->ne[2], x->ne[3]);
+}
+
 __STATIC_INLINE__ struct ggml_tensor* ggml_ext_ones(struct ggml_context* ctx,
                                                     int64_t ne0,
                                                     int64_t ne1,
                                                     int64_t ne2,
                                                     int64_t ne3) {
     return ggml_ext_full(ctx, 1.f, ne0, ne1, ne2, ne3);
+}
+
+__STATIC_INLINE__ struct ggml_tensor* ggml_ext_ones_like(struct ggml_context* ctx,
+                                                         struct ggml_tensor* x) {
+    return ggml_ext_ones(ctx, x->ne[0], x->ne[1], x->ne[2], x->ne[3]);
 }
 
 __STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_tensor* a) {
