@@ -16,6 +16,7 @@
 #include <chrono>
 #include "ggml-cpu.h"
 #endif
+#include <inttypes.h>
 
 // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
@@ -2508,7 +2509,7 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
                                        void *import_ptr = nullptr) {
     VK_LOG_DEBUG("ggml_vk_create_buffer(" << device->name << ", " << size << ", " << to_string(req_flags_list.begin()[0]) << ", " << to_string(req_flags_list.begin()[req_flags_list.size()-1]) << ")");
     if (size > device->max_buffer_size) {
-        printf("\nWARNING: Requested buffer size (%zu) exceeds device max_buffer_size limit (%"PRIu64 ")!\n",size,device->max_buffer_size);
+        printf("\nWARNING: Requested buffer size (%zu) exceeds device max_buffer_size limit (%" PRIu64 ")!\n",size,device->max_buffer_size);
     }
 
     vk_buffer buf = std::make_shared<vk_buffer_struct>();
