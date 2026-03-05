@@ -3502,8 +3502,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             genout = run_blocking()
 
         recvtxt = genout['text']
-        prompttokens = genout['prompt_tokens']
-        comptokens = genout['completion_tokens']
+        prompttokens = genout['prompt_tokens'] if genout['prompt_tokens'] > 0 else handle.get_last_input_count()
+        comptokens = genout['completion_tokens'] if genout['completion_tokens'] > 0 else handle.get_last_token_count()
         currfinishreason = "error" if (genout['stopreason'] == -2) else ("length" if (genout['stopreason'] != 1) else "stop")
 
         # grab logprobs if not streaming
@@ -3668,31 +3668,37 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                 encap_first_loop = False
 
                             if need_split_final_msg: #we need to send one message without the finish reason, then send a finish reason with no msg to follow standards
+                                prompttokens = handle.get_last_input_count()
+                                usage_obj = {"prompt_tokens": prompttokens, "completion_tokens": current_token, "total_tokens": (prompttokens + current_token)}
                                 if api_format == 4:  # if oai chat, set format to expected openai streaming response
-                                    event_str = json.dumps({"id":"koboldcpp","object":"chat.completion.chunk","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":None,"delta":delta}]})
+                                    event_str = json.dumps({"id":"chatcmpl-A1","object":"chat.completion.chunk","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":None,"delta":delta}],"usage":usage_obj})
                                     await self.send_oai_sse_event(event_str)
                                 elif api_format == 3:  # non chat completions
-                                    event_str = json.dumps({"id":"koboldcpp","object":"text_completion","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":None,"text":tokenStr}]})
+                                    event_str = json.dumps({"id":"cmpl-A1","object":"text_completion","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":None,"text":tokenStr}],"usage":usage_obj})
                                     await self.send_oai_sse_event(event_str)
                                 else:
                                     event_str = json.dumps({"token": tokenStr, "finish_reason":None})
                                     await self.send_kai_sse_event(event_str)
                                 tokenStr = "" # now the final finish reason can be sent alone
                             if api_format == 4:  # if oai chat, set format to expected openai streaming response
+                                prompttokens = handle.get_last_input_count()
+                                usage_obj = {"prompt_tokens": prompttokens, "completion_tokens": current_token, "total_tokens": (prompttokens + current_token)}
                                 if streamDone and ("logprobs" in genparams and genparams["logprobs"]): # this is a hack that sends an extra message containing ALL the logprobs
                                     lastlogprobs = handle.last_logprobs()
                                     logprobsdict = parse_last_logprobs(lastlogprobs)
-                                    addonstr = json.dumps({"id":"koboldcpp","object":"chat.completion.chunk","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":None,"delta":{'role':'assistant','content':''},"logprobs":logprobsdict}]})
+                                    addonstr = json.dumps({"id":"chatcmpl-A1","object":"chat.completion.chunk","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":None,"delta":{'role':'assistant','content':''},"logprobs":logprobsdict}],"usage":usage_obj})
                                     await self.send_oai_sse_event(addonstr)
-                                event_str = json.dumps({"id":"koboldcpp","object":"chat.completion.chunk","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":currfinishreason,"delta":delta}]})
+                                event_str = json.dumps({"id":"chatcmpl-A1","object":"chat.completion.chunk","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":currfinishreason,"delta":delta}],"usage":usage_obj})
                                 await self.send_oai_sse_event(event_str)
                             elif api_format == 3:  # non chat completions
+                                prompttokens = handle.get_last_input_count()
+                                usage_obj = {"prompt_tokens": prompttokens, "completion_tokens": current_token, "total_tokens": (prompttokens + current_token)}
                                 if streamDone and ("logprobs" in genparams and genparams["logprobs"]): # this is a hack that sends an extra message containing ALL the logprobs
                                     lastlogprobs = handle.last_logprobs()
                                     logprobsdict = parse_last_logprobs(lastlogprobs)
-                                    addonstr = json.dumps({"id":"koboldcpp","object":"text_completion","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":None,"text":"","logprobs":logprobsdict}]})
+                                    addonstr = json.dumps({"id":"cmpl-A1","object":"text_completion","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":None,"text":"","logprobs":logprobsdict}],"usage":usage_obj})
                                     await self.send_oai_sse_event(addonstr)
-                                event_str = json.dumps({"id":"koboldcpp","object":"text_completion","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":currfinishreason,"text":tokenStr}]})
+                                event_str = json.dumps({"id":"cmpl-A1","object":"text_completion","created":int(time.time()),"model":friendlymodelname,"choices":[{"index":0,"finish_reason":currfinishreason,"text":tokenStr}],"usage":usage_obj})
                                 await self.send_oai_sse_event(event_str)
                             else:
                                 event_str = json.dumps({"token": tokenStr, "finish_reason":currfinishreason})
@@ -3705,6 +3711,14 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 
                 if streamDone:
                     if api_format == 4 or api_format == 3:  # if oai chat, send last [DONE] message consistent with openai format
+                        # Send a final chunk with usage info
+                        prompttokens = handle.get_last_input_count()
+                        usage_obj = {"prompt_tokens": prompttokens, "completion_tokens": current_token, "total_tokens": (prompttokens + current_token)}
+                        if api_format == 4:
+                            usage_str = json.dumps({"id":"chatcmpl-A1","object":"chat.completion.chunk","created":int(time.time()),"model":friendlymodelname,"choices":[],"usage":usage_obj})
+                        else:
+                            usage_str = json.dumps({"id":"cmpl-A1","object":"text_completion","created":int(time.time()),"model":friendlymodelname,"choices":[],"usage":usage_obj})
+                        await self.send_oai_sse_event(usage_str)
                         await self.send_oai_sse_event('[DONE]')
                         await asyncio.sleep(async_sleep_short)
                     break
