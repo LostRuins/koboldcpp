@@ -214,7 +214,7 @@ __STATIC_INLINE__ float sd_image_get_f32(sd_image_f32_t image, int64_t iw, int64
 }
 
 __STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false, const char* mark = "") {
-    printf("%s (%s): shape(%" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 ")\n", mark, ggml_type_name(tensor->type), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+    printf("%s (%s): shape(%zu, %zu, %zu, %zu)\n", mark, ggml_type_name(tensor->type), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     fflush(stdout);
     if (shape_only) {
         return;

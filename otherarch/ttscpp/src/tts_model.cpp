@@ -1,7 +1,6 @@
 #include "tts_model.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
-#include <inttypes.h>
 
 void append_to_response(struct tts_response * response, struct tts_response * to_append) {
     float * new_data = (float *) malloc((response->n_outputs + to_append->n_outputs) * sizeof(float));
@@ -111,10 +110,10 @@ void tts_model::prep_buffers_and_context(bool cpu_only, float size_offset, uint3
     };
     if(dedicated_add_on_size>13000)
     {
-        printf("Clamp TTS addon memory %" PRIu32 " to 13000\n",dedicated_add_on_size);
+        printf("Clamp TTS addon memory %zu to 13000\n",(size_t)dedicated_add_on_size);
         dedicated_add_on_size = 13000;
     }
-    printf("TTS Memory Requested: %zu, with buffer %zu + %" PRIu32 "\n",ctx_size,tensor_meta.n_bytes,dedicated_add_on_size);
+    printf("TTS Memory Requested: %zu, with buffer %zu + %zu\n",ctx_size,tensor_meta.n_bytes,(size_t)dedicated_add_on_size);
     ctx = ggml_init(params);
     buf = ggml_backend_buft_alloc_buffer(buffer, tensor_meta.n_bytes + dedicated_add_on_size);
 }
