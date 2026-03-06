@@ -226,6 +226,8 @@ struct sd_generation_inputs
     const bool remove_limits = false;
     const bool circular_x = false;
     const bool circular_y = false;
+    const char * cache_mode = nullptr;
+    const char * cache_options = nullptr;
     const bool upscale = false;
     const int lora_len = 0;
     const float * lora_multipliers = nullptr;

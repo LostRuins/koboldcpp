@@ -82,6 +82,9 @@ struct SDParams {
     std::vector<std::string> lora_paths;
     std::vector<float> lora_multipliers;
     bool lora_dynamic = false;
+
+    std::string cache_mode;
+    std::string cache_options;
 };
 
 //shared
@@ -765,6 +768,121 @@ static enum scheduler_t scheduler_from_name(const char * scheduler)
     return scheduler_t::SCHEDULER_COUNT;
 }
 
+static void parse_cache_options(sd_cache_params_t & params, const std::string& cache_mode,
+    const std::string& cache_options) {
+
+    sd_cache_params_init(&params);
+    if (cache_mode == "easycache") {
+        params.mode = SD_CACHE_EASYCACHE;
+    } else if (cache_mode == "ucache") {
+        params.mode = SD_CACHE_UCACHE;
+        // this is the only difference from the defaults right now
+        params.reuse_threshold = 1.0f;
+    } else if (cache_mode == "dbcache") {
+        params.mode  = SD_CACHE_DBCACHE;
+    } else if (cache_mode == "taylorseer") {
+        params.mode  = SD_CACHE_TAYLORSEER;
+    } else if (cache_mode == "cache-dit") {
+        params.mode  = SD_CACHE_CACHE_DIT;
+    } else if (cache_mode == "spectrum") {
+        params.mode  = SD_CACHE_SPECTRUM;
+    } else if (cache_mode != "" && cache_mode != "disabled") {
+        printf("warning: unknown cache mode '%s'", cache_mode.c_str());
+    }
+
+    if (params.mode == SD_CACHE_DISABLED)
+        return;
+
+    if (cache_options == "")
+        return;
+
+    sd_cache_params_t cache_params = params;
+
+    // from examples/common/common.hpp
+    auto parse_named_params = [&](const std::string& opt_str) -> bool {
+        std::stringstream ss(opt_str);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            size_t eq_pos = token.find('=');
+            if (eq_pos == std::string::npos) {
+                printf("error: cache option '%s' missing '=' separator", token.c_str());
+                return false;
+            }
+            std::string key = token.substr(0, eq_pos);
+            std::string val = token.substr(eq_pos + 1);
+            try {
+                if (key == "threshold") {
+                    if (cache_mode == "easycache" || cache_mode == "ucache") {
+                        cache_params.reuse_threshold = std::stof(val);
+                    } else {
+                        cache_params.residual_diff_threshold = std::stof(val);
+                    }
+                } else if (key == "start") {
+                    cache_params.start_percent = std::stof(val);
+                } else if (key == "end") {
+                    cache_params.end_percent = std::stof(val);
+                } else if (key == "decay") {
+                    cache_params.error_decay_rate = std::stof(val);
+                } else if (key == "relative") {
+                    cache_params.use_relative_threshold = (std::stof(val) != 0.0f);
+                } else if (key == "reset") {
+                    cache_params.reset_error_on_compute = (std::stof(val) != 0.0f);
+                } else if (key == "Fn" || key == "fn") {
+                    cache_params.Fn_compute_blocks = std::stoi(val);
+                } else if (key == "Bn" || key == "bn") {
+                    cache_params.Bn_compute_blocks = std::stoi(val);
+                } else if (key == "warmup") {
+                    if (cache_mode == "spectrum") {
+                        cache_params.spectrum_warmup_steps = std::stoi(val);
+                    } else {
+                        cache_params.max_warmup_steps = std::stoi(val);
+                    }
+                } else if (key == "w") {
+                    cache_params.spectrum_w = std::stof(val);
+                } else if (key == "m") {
+                    cache_params.spectrum_m = std::stoi(val);
+                } else if (key == "lam") {
+                    cache_params.spectrum_lam = std::stof(val);
+                } else if (key == "window") {
+                    cache_params.spectrum_window_size = std::stoi(val);
+                } else if (key == "flex") {
+                    cache_params.spectrum_flex_window = std::stof(val);
+                } else if (key == "stop") {
+                    cache_params.spectrum_stop_percent = std::stof(val);
+                } else {
+                    printf("error: unknown cache parameter '%s'", key.c_str());
+                    return false;
+                }
+            } catch (const std::exception&) {
+                printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key.c_str());
+                return false;
+            }
+        }
+
+        switch (cache_params.mode) {
+            case SD_CACHE_EASYCACHE:
+            case SD_CACHE_UCACHE:
+                if (cache_params.reuse_threshold < 0.0f) {
+                    printf("error: cache threshold must be non-negative");
+                    return false;
+                }
+                if (cache_params.start_percent < 0.0f || cache_params.start_percent >= 1.0f ||
+                    cache_params.end_percent <= 0.0f || cache_params.end_percent > 1.0f ||
+                    cache_params.start_percent >= cache_params.end_percent) {
+                    printf("error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0");
+                    return false;
+                }
+                break;
+            default: ;
+        }
+        return true;
+    };
+
+    if (parse_named_params(cache_options)) {
+        params = cache_params;
+    }
+}
+
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
     sd_generation_outputs output;
@@ -811,6 +929,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     SetCircularAxesAll(sd_ctx, inputs.circular_x, inputs.circular_y);
+
+    sd_params->cache_mode    = inputs.cache_mode ? inputs.cache_mode : "";
+    sd_params->cache_options = inputs.cache_options ? inputs.cache_options : "";
 
     auto loadedsdver = get_loaded_sd_version(sd_ctx);
     bool is_img2img = img2img_data != "";
@@ -1042,6 +1163,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.seed = sd_params->seed;
     params.strength = sd_params->strength;
     params.vae_tiling_params.enabled = dotile;
+    parse_cache_options(params.cache, sd_params->cache_mode, sd_params->cache_options);
     params.batch_count = 1;
 
     std::vector<sd_lora_t> lora_specs;

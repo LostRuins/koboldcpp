@@ -358,6 +358,8 @@ class sd_generation_inputs(ctypes.Structure):
                 ("remove_limits", ctypes.c_bool),
                 ("circular_x", ctypes.c_bool),
                 ("circular_y", ctypes.c_bool),
+                ("cache_mode", ctypes.c_char_p),
+                ("cache_options", ctypes.c_char_p),
                 ("upscale", ctypes.c_bool),
                 ("lora_len", ctypes.c_int),
                 ("lora_multipliers", ctypes.POINTER(ctypes.c_float))]
@@ -2102,6 +2104,11 @@ def gendefaults_parse_meta_field(input_str):
         'sampling-method': 'sampler_name',
         'timestep-shift': 'shifted_timestep',
         'flow-shift': 'flow_shift',
+        'cache-mode': 'cache_mode',
+        'cache-options': 'cache_options',
+        # match sd.cpp flag
+        'cache-option': 'cache_options',
+        'cache_option': 'cache_options',
     }
     if not isinstance(input_str, str) or not input_str.strip():
         return {}
@@ -2246,6 +2253,8 @@ def sd_generate(genparams):
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
     vid_req_frames = 1 if (not vid_req_frames or vid_req_frames < 1) else vid_req_frames
     video_output_type = genparams.get("video_output_type", 0)
+    cache_mode = str(genparams.get("cache_mode", ""))
+    cache_options = str(genparams.get("cache_options", ""))
     extra_images_arr = genparams.get("extra_images", [])
     extra_images_arr = ([] if not extra_images_arr else extra_images_arr)
     extra_images_arr = [img for img in extra_images_arr if img not in (None, "")]
@@ -2298,6 +2307,8 @@ def sd_generate(genparams):
     inputs.remove_limits = allow_remove_limits
     inputs.circular_x = tryparseint(adapter_obj.get("circular_x", genparams.get("circular_x",0)),0)
     inputs.circular_y = tryparseint(adapter_obj.get("circular_y", genparams.get("circular_y",0)),0)
+    inputs.cache_mode = cache_mode.encode("UTF-8")
+    inputs.cache_options = cache_options.encode("UTF-8")
     inputs.upscale = (True if tryparseint(genparams.get("enable_hr", 0),0) else False)
 
     lora_multipliers = prepare_lora_multipliers(genparams.get("lora", []))
