@@ -127,8 +127,7 @@ when you can't use the precompiled binary directly, we provide an automated buil
   - if your gmake terminates with "fatal error: 'ggml-vulkan-shaders.hpp' file not found" the problem is probably that glslc is not installed. See above.
   - OpenBSD's default datasize limit may prevent compiliation `ulimit -d 8388608` should work
   - compile using `gmake LLAMA_VULKAN=1`
-- After all binaries are built, you can git diff
-run the python script with the command `python3 koboldcpp.py --model [ggml_model.gguf]` (and add `--gpulayers [number of layers]` if you wish to offload layers to GPU).
+- After all binaries are built, you can run the python script with the command `python3 koboldcpp.py --model [ggml_model.gguf]`
  
 ### Compiling on Android (Termux Installation)
 - [First, Install and run Termux from F-Droid](https://f-droid.org/en/packages/com.termux/)
