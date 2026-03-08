@@ -122,7 +122,7 @@ when you can't use the precompiled binary directly, we provide an automated buil
 - Clone the repo with `git clone https://github.com/LostRuins/koboldcpp.git`
 - the project uses Gnu Makefile format, so you will need gmake: `pkg_add gmake`
 - compiling vulkan support
-  - you will require libvulkan, this is included ib the vulkan-loader package: `pkg_add vulkan-loader`
+  - you will require libvulkan, this is included in the vulkan-loader package, which is a dependency of the vulkan-tools package: `pkg_add vulkan-tools` or `pkg_add vulkan-loader`
   - you will require glslc, this is incliuded in the shaderc package: `pkg_add shaderc`
   - if your gmake terminates with "fatal error: 'ggml-vulkan-shaders.hpp' file not found" the problem is probably that glslc is not installed. See above.
   - OpenBSD's default datasize limit may prevent compiliation `ulimit -d 8388608` should work
