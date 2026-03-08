@@ -141,6 +141,9 @@ endif
 ifeq ($(UNAME_S),OpenBSD)
 CFLAGS   += -pthread
 CXXFLAGS += -pthread
+ifdef LLAMA_VULKAN
+LDFLAGS += -L/usr/local/lib
+endif
 endif
 ifeq ($(UNAME_S),Haiku)
 CFLAGS   += -pthread
