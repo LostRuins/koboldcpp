@@ -53,6 +53,26 @@ def extract_loras_from_prompt(*args, **kwargs):
 
     return koboldcpp.extract_loras_from_prompt(*args, **kwargs)
 
+def sanitize_lora_multipliers(*args, **kwargs):
+    """
+    >>> sanitize_lora_multipliers(None)
+    [1.0]
+
+    >>> sanitize_lora_multipliers(0.75)
+    [0.75]
+    >>> sanitize_lora_multipliers("2")
+    [2.0]
+
+    >>> sanitize_lora_multipliers([0.5, "1.2", 3])
+    [0.5, 1.2, 3.0]
+
+    >>> sanitize_lora_multipliers([])
+    []
+
+    >>> sanitize_lora_multipliers(["bad", None, ""])
+    [0.0, 0.0, 0.0]
+    """
+    return koboldcpp.sanitize_lora_multipliers(*args, **kwargs)
 
 if __name__ == '__main__':
     import doctest
