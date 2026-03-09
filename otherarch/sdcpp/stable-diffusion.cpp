@@ -16,6 +16,7 @@
 #include "esrgan.hpp"
 #include "lora.hpp"
 #include "pmid.hpp"
+#include "spectrum.hpp"
 #include "tae.hpp"
 #include "ucache.hpp"
 #include "vae.hpp"
@@ -112,6 +113,9 @@ public:
     bool vae_decode_only         = false;
     bool external_vae_is_invalid = false;
     bool free_params_immediately = false;
+
+    bool circular_x = false;
+    bool circular_y = false;
 
     std::shared_ptr<RNG> rng         = std::make_shared<PhiloxRNG>();
     std::shared_ptr<RNG> sampler_rng = nullptr;
@@ -922,12 +926,8 @@ public:
             if (control_net) {
                 control_net->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             }
-            if (first_stage_model) {
-                first_stage_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
-            }
-            if (tae_first_stage) {
-                tae_first_stage->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
-            }
+            circular_x = sd_ctx_params->circular_x;
+            circular_y = sd_ctx_params->circular_y;
         }
 
         struct ggml_init_params params;
@@ -1664,7 +1664,7 @@ public:
         sd_progress_cb_t cb = sd_get_progress_callback();
         void* cbd           = sd_get_progress_callback_data();
         sd_set_progress_callback((sd_progress_cb_t)suppress_pp, nullptr);
-        sd_tiling(input, output, scale, tile_size, tile_overlap_factor, on_processing);
+        sd_tiling(input, output, scale, tile_size, tile_overlap_factor, circular_x, circular_y, on_processing);
         sd_set_progress_callback(cb, cbd);
     }
 
@@ -1873,9 +1873,11 @@ public:
         EasyCacheState easycache_state;
         UCacheState ucache_state;
         CacheDitConditionState cachedit_state;
+        SpectrumState spectrum_state;
         bool easycache_enabled = false;
         bool ucache_enabled    = false;
         bool cachedit_enabled  = false;
+        bool spectrum_enabled  = false;
 
         if (cache_params != nullptr && cache_params->mode != SD_CACHE_DISABLED) {
             bool percent_valid = true;
@@ -1978,6 +1980,27 @@ public:
                     } else {
                         LOG_WARN("CacheDIT requested but could not be initialized for this run");
                     }
+                }
+            } else if (cache_params->mode == SD_CACHE_SPECTRUM) {
+                bool spectrum_supported = sd_version_is_unet(version);
+                if (!spectrum_supported) {
+                    LOG_WARN("Spectrum requested but not supported for this model type (only UNET models)");
+                } else {
+                    SpectrumConfig spectrum_config;
+                    spectrum_config.w            = cache_params->spectrum_w;
+                    spectrum_config.m            = cache_params->spectrum_m;
+                    spectrum_config.lam          = cache_params->spectrum_lam;
+                    spectrum_config.window_size  = cache_params->spectrum_window_size;
+                    spectrum_config.flex_window  = cache_params->spectrum_flex_window;
+                    spectrum_config.warmup_steps = cache_params->spectrum_warmup_steps;
+                    spectrum_config.stop_percent = cache_params->spectrum_stop_percent;
+                    size_t total_steps           = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
+                    spectrum_state.init(spectrum_config, total_steps);
+                    spectrum_enabled = true;
+                    LOG_INFO("Spectrum enabled - w: %.2f, m: %d, lam: %.2f, window: %d, flex: %.2f, warmup: %d, stop: %.0f%%",
+                             spectrum_config.w, spectrum_config.m, spectrum_config.lam,
+                             spectrum_config.window_size, spectrum_config.flex_window,
+                             spectrum_config.warmup_steps, spectrum_config.stop_percent * 100.0f);
                 }
             }
         }
@@ -2201,7 +2224,29 @@ public:
                 timesteps_vec.assign(1, t);
             }
 
-            timesteps_vec  = process_timesteps(timesteps_vec, init_latent, denoise_mask);
+            timesteps_vec = process_timesteps(timesteps_vec, init_latent, denoise_mask);
+
+            if (spectrum_enabled && spectrum_state.should_predict()) {
+                spectrum_state.predict(denoised);
+
+                if (denoise_mask != nullptr) {
+                    apply_mask(denoised, init_latent, denoise_mask);
+                }
+
+                if (sd_preview_cb != nullptr && sd_should_preview_denoised()) {
+                    if (step % sd_get_preview_interval() == 0) {
+                        preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb, sd_preview_cb_data, false);
+                    }
+                }
+
+                int64_t t1 = ggml_time_us();
+                if (step > 0 || step == -(int)steps) {
+                    int showstep = std::abs(step);
+                    pretty_progress(showstep, (int)steps, (t1 - t0) / 1000000.f / showstep);
+                }
+                return denoised;
+            }
+
             auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
             std::vector<float> guidance_vec(1, guidance.distilled_guidance);
             auto guidance_tensor = vector_to_ggml_tensor(work_ctx, guidance_vec);
@@ -2375,6 +2420,10 @@ public:
                 vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
             }
 
+            if (spectrum_enabled) {
+                spectrum_state.update(denoised);
+            }
+
             if (denoise_mask != nullptr) {
                 apply_mask(denoised, init_latent, denoise_mask);
             }
@@ -2464,6 +2513,14 @@ public:
             } else if (total_steps > 0) {
                 LOG_INFO("CacheDIT completed without skipping steps");
             }
+        }
+
+        if (spectrum_enabled && spectrum_state.total_steps_skipped > 0) {
+            size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
+            double speedup     = static_cast<double>(total_steps) /
+                             static_cast<double>(total_steps - spectrum_state.total_steps_skipped);
+            LOG_INFO("Spectrum skipped %d/%zu steps (%.2fx estimated speedup)",
+                     spectrum_state.total_steps_skipped, total_steps, speedup);
         }
 
         if (inverse_noise_scaling) {
@@ -2712,14 +2769,14 @@ public:
         tile_size_y = get_tile_size(params.tile_size_y, params.rel_size_y, latent_y);
     }
 
-    ggml_tensor* vae_encode(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
+    ggml_tensor* vae_encode(ggml_context* work_ctx, ggml_tensor* x) {
         int64_t t0                 = ggml_time_ms();
         ggml_tensor* result        = nullptr;
         const int vae_scale_factor = get_vae_scale_factor();
         int64_t W                  = x->ne[0] / vae_scale_factor;
         int64_t H                  = x->ne[1] / vae_scale_factor;
         int64_t C                  = get_latent_channel();
-        if (vae_tiling_params.enabled && !encode_video) {
+        if (vae_tiling_params.enabled) {
             // TODO wan2.2 vae support?
             int64_t ne2;
             int64_t ne3;
@@ -2747,7 +2804,7 @@ public:
 
         if (!use_tiny_autoencoder) {
             process_vae_input_tensor(x);
-            if (vae_tiling_params.enabled && !encode_video) {
+            if (vae_tiling_params.enabled) {
                 float tile_overlap;
                 int tile_size_x, tile_size_y;
                 // multiply tile size for encode to keep the compute buffer size consistent
@@ -2758,18 +2815,18 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return first_stage_model->compute(n_threads, in, false, &out, work_ctx);
                 };
-                sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
+                sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, circular_x, circular_y, on_tiling);
             } else {
                 first_stage_model->compute(n_threads, x, false, &result, work_ctx);
             }
             first_stage_model->free_compute_buffer();
         } else {
-            if (vae_tiling_params.enabled && !encode_video) {
+            if (vae_tiling_params.enabled) {
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return tae_first_stage->compute(n_threads, in, false, &out, nullptr);
                 };
-                sd_tiling(x, result, vae_scale_factor, 64, 0.5f, on_tiling);
+                sd_tiling(x, result, vae_scale_factor, 64, 0.5f, circular_x, circular_y, on_tiling);
             } else {
                 tae_first_stage->compute(n_threads, x, false, &result, work_ctx);
             }
@@ -2831,7 +2888,7 @@ public:
         } else {
             latent = gaussian_latent_sample(work_ctx, vae_output);
         }
-        if (!use_tiny_autoencoder) {
+        if (!use_tiny_autoencoder && version != VERSION_SD1_PIX2PIX) {
             process_latent_in(latent);
         }
         if (sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
@@ -2840,8 +2897,8 @@ public:
         return latent;
     }
 
-    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
-        ggml_tensor* vae_output = vae_encode(work_ctx, x, encode_video);
+    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x) {
+        ggml_tensor* vae_output = vae_encode(work_ctx, x);
         return get_first_stage_encoding(work_ctx, vae_output);
     }
 
@@ -2888,7 +2945,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return first_stage_model->compute(n_threads, in, true, &out, nullptr);
                 };
-                sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
+                sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, circular_x, circular_y, on_tiling);
             } else {
                 if (!first_stage_model->compute(n_threads, x, true, &result, work_ctx)) {
                     LOG_ERROR("Failed to decode latetnts");
@@ -2904,7 +2961,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return tae_first_stage->compute(n_threads, in, true, &out);
                 };
-                sd_tiling(x, result, vae_scale_factor, 64, 0.5f, on_tiling);
+                sd_tiling(x, result, vae_scale_factor, 64, 0.5f, circular_x, circular_y, on_tiling);
             } else {
                 if (!tae_first_stage->compute(n_threads, x, true, &result)) {
                     LOG_ERROR("Failed to decode latetnts");
@@ -3147,6 +3204,13 @@ void sd_cache_params_init(sd_cache_params_t* cache_params) {
     cache_params->taylorseer_skip_interval    = 1;
     cache_params->scm_mask                    = nullptr;
     cache_params->scm_policy_dynamic          = true;
+    cache_params->spectrum_w                  = 0.40f;
+    cache_params->spectrum_m                  = 3;
+    cache_params->spectrum_lam                = 1.0f;
+    cache_params->spectrum_window_size        = 2;
+    cache_params->spectrum_flex_window        = 0.50f;
+    cache_params->spectrum_warmup_steps       = 4;
+    cache_params->spectrum_stop_percent       = 0.9f;
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
@@ -3727,8 +3791,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 
 sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
-    int width                     = sd_img_gen_params->width;
-    int height                    = sd_img_gen_params->height;
+
+    int width  = sd_img_gen_params->width;
+    int height = sd_img_gen_params->height;
 
     int vae_scale_factor            = sd_ctx->sd->get_vae_scale_factor();
     int diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
@@ -3740,6 +3805,40 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         width += width_offset;
         height += height_offset;
         LOG_WARN("align up %dx%d to %dx%d (multiple=%d)", sd_img_gen_params->width, sd_img_gen_params->height, width, height, spatial_multiple);
+    }
+
+    bool circular_x = sd_ctx->sd->circular_x;
+    bool circular_y = sd_ctx->sd->circular_y;
+
+    if (!sd_img_gen_params->vae_tiling_params.enabled) {
+        if (sd_ctx->sd->first_stage_model) {
+            sd_ctx->sd->first_stage_model->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+        if (sd_ctx->sd->tae_first_stage) {
+            sd_ctx->sd->tae_first_stage->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+    } else {
+        int tile_size_x, tile_size_y;
+        float _overlap;
+        int latent_size_x = width / sd_ctx->sd->get_vae_scale_factor();
+        int latent_size_y = height / sd_ctx->sd->get_vae_scale_factor();
+        sd_ctx->sd->get_tile_sizes(tile_size_x, tile_size_y, _overlap, sd_img_gen_params->vae_tiling_params, latent_size_x, latent_size_y);
+
+        // force disable circular padding for vae if tiling is enabled unless latent is smaller than tile size
+        // otherwise it will cause artifacts at the edges of the tiles
+        sd_ctx->sd->circular_x = sd_ctx->sd->circular_x && (tile_size_x >= latent_size_x);
+        sd_ctx->sd->circular_y = sd_ctx->sd->circular_y && (tile_size_y >= latent_size_y);
+
+        if (sd_ctx->sd->first_stage_model) {
+            sd_ctx->sd->first_stage_model->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+        if (sd_ctx->sd->tae_first_stage) {
+            sd_ctx->sd->tae_first_stage->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+
+        // disable circular tiling if it's enabled for the VAE
+        sd_ctx->sd->circular_x = circular_x && (tile_size_x < latent_size_x);
+        sd_ctx->sd->circular_y = circular_y && (tile_size_y < latent_size_y);
     }
 
     LOG_DEBUG("generate_image %dx%d", width, height);
@@ -4010,6 +4109,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         concat_latent,
                                                         denoise_mask,
                                                         &sd_img_gen_params->cache);
+
+    // restore circular params
+    sd_ctx->sd->circular_x = circular_x;
+    sd_ctx->sd->circular_y = circular_y;
 
     size_t t2 = ggml_time_ms();
 
