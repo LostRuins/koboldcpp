@@ -85,6 +85,30 @@ def sanitize_lora_multipliers(*args, **kwargs):
     """
     return koboldcpp.sanitize_lora_multipliers(*args, **kwargs)
 
+
+def gendefaults_parse_meta_field(*args, **kwargs):
+    '''
+
+    >>> [gendefaults_parse_meta_field(x) for x in [{}, None, '', "invalid json", '  ', 4]]
+    Warning: couldn't parse gendefaults_parse_meta_field.
+    Warning: gendefaults_parse_meta_field - not a JSON object.
+    [{}, {}, {}, {}, {}, {}]
+
+    >>> gendefaults_parse_meta_field({"key": "value"})
+    {'key': 'value'}
+
+    >>> gendefaults_parse_meta_field(' "scheduler": "default", "steps": 10 ')
+    {'scheduler': 'default', 'steps': 10}
+
+    >>> gendefaults_parse_meta_field('{"cfg-scale": 0.5, "cfg_scale": 0.7}')
+    {'cfg-scale': 0.5, 'cfg_scale': 0.7}
+ 
+    >>> gendefaults_parse_meta_field('{"guidance": 1.2, "sampler": "ddim"}')
+    {'distilled_guidance': 1.2, 'sampler_name': 'ddim', 'guidance': 1.2, 'sampler': 'ddim'}
+    '''
+    return koboldcpp.gendefaults_parse_meta_field(*args, **kwargs)
+
+
 if __name__ == '__main__':
     import doctest
     failures, _ = doctest.testmod()

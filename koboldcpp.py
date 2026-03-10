@@ -2096,7 +2096,7 @@ def sd_comfyui_tranform_params(genparams):
     return genparams
 
 # json with top-level dict
-def gendefaults_parse_meta_field(input_str):
+def gendefaults_parse_meta_field(value):
     alias_map = {
         'cfg-scale': 'cfg_scale',
         'guidance': 'distilled_guidance',
@@ -2110,20 +2110,21 @@ def gendefaults_parse_meta_field(input_str):
         'cache-option': 'cache_options',
         'cache_option': 'cache_options',
     }
-    if not isinstance(input_str, str) or not input_str.strip():
-        return {}
     parsed = None
-    try: # Try parsing as-is
-        parsed = json.loads(input_str)
-    except json.JSONDecodeError:
-        # Try wrapping in braces for loose key/value strings
-        try:
-            parsed = json.loads(f"{{{input_str}}}")
+    if isinstance(value, dict):
+        parsed = value
+    elif isinstance(value, str):
+        try: # Try parsing as-is
+            parsed = json.loads(value)
         except json.JSONDecodeError:
-            print("Warning: couldn't parse gendefaults_parse_meta_field.")
-            return {}
-    if not isinstance(parsed, dict):
-        print("Warning: gendefaults_parse_meta_field - not a JSON object.")
+            # Try wrapping in braces for loose key/value strings
+            try:
+                parsed = json.loads(f"{{{value}}}")
+            except json.JSONDecodeError:
+                print("Warning: couldn't parse gendefaults_parse_meta_field.")
+        if not isinstance(parsed, dict):
+            print("Warning: gendefaults_parse_meta_field - not a JSON object.")
+    if not parsed:
         return {}
     result = {}
     # First pass: apply aliases only if canonical key is not explicitly present
@@ -5746,6 +5747,12 @@ def save_config_dict(filename, savdict, template):
         filenamestr += ".kcppt"
     do_not_save = {'analyze', 'config', 'exportconfig', 'exporttemplate', 'testmemory', 'unpack', 'version'}
     filtered = {k: v for k, v in savdict.items() if k not in do_not_save}
+    if 'gendefaults' in filtered:
+        if isinstance(filtered['gendefaults'], str):
+            try:
+                filtered['gendefaults'] = json.loads(filtered['gendefaults'])
+            except json.JSONDecodeError:
+                pass
     with open(filenamestr, 'w') as file:
         file.write(json.dumps(filtered,indent=2))
     return filenamestr
@@ -7468,7 +7475,10 @@ def show_gui():
         else:
             sd_lora_var.set("")
         sd_loramult_var.set(" ".join(f"{n:.3f}".rstrip('0').rstrip('.') for n in dict.get("sdloramult", [])))
-        gen_defaults_var.set(dict["gendefaults"] if ("gendefaults" in dict and dict["gendefaults"]) else "")
+        gendefaults = (dict["gendefaults"] if ("gendefaults" in dict and dict["gendefaults"]) else "")
+        if isinstance(gendefaults, type({})):
+            gendefaults = json.dumps(gendefaults)
+        gen_defaults_var.set(gendefaults)
         gen_defaults_overwrite_var.set(1 if "gendefaultsoverwrite" in dict and dict["gendefaultsoverwrite"] else 0)
 
         whisper_model_var.set(dict["whispermodel"] if ("whispermodel" in dict and dict["whispermodel"]) else "")
