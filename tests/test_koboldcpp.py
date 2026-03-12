@@ -53,6 +53,17 @@ def extract_loras_from_prompt(*args, **kwargs):
 
     return koboldcpp.extract_loras_from_prompt(*args, **kwargs)
 
+def mk_lora_info(*args, **kwargs):
+    """
+    >>> mk_lora_info(['/x/lora1.safetensors', '/y/lora2.gguf'], [])
+    [('/x/lora1.safetensors', 'lora1', 'lora1.safetensors', 1.0), ('/y/lora2.gguf', 'lora2', 'lora2.gguf', 1.0)]
+    >>> mk_lora_info(['/x/lora1.safetensors', '/y/lora1.safetensors'], [0.3])
+    [('/x/lora1.safetensors', 'lora1', 'lora1.safetensors', 0.3), ('/y/lora1.safetensors', 'lora1_2', 'lora1_2.safetensors', 0.3)]
+    >>> mk_lora_info(['./lora1.gguf', '/y/lora2.gguf', 'lora3.gguf'], [0, 0.3])
+    [('./lora1.gguf', 'lora1', 'lora1.gguf', 0), ('/y/lora2.gguf', 'lora2', 'lora2.gguf', 0.3), ('lora3.gguf', 'lora3', 'lora3.gguf', 0)]
+    """
+    return koboldcpp.mk_lora_info(*args, **kwargs)
+
 def sanitize_lora_multipliers(*args, **kwargs):
     """
     >>> sanitize_lora_multipliers(None)
