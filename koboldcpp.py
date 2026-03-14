@@ -2096,6 +2096,25 @@ def sd_comfyui_tranform_params(genparams):
     return genparams
 
 # json with top-level dict
+def parse_json_object(value, field):
+    broken = False
+    if isinstance(value, str):
+        try: # Try parsing as-is
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            # Try wrapping in braces for loose key/value strings
+            try:
+                value = json.loads(f"{{{value}}}")
+            except json.JSONDecodeError:
+                broken = True
+    if isinstance(value, dict):
+        return value
+    elif broken:
+        print(f"Warning: couldn't parse {field} field.")
+    else:
+        print(f"Warning: {field} field - not a JSON object.")
+    return None
+
 def gendefaults_parse_meta_field(value):
     alias_map = {
         'cfg-scale': 'cfg_scale',
@@ -2110,22 +2129,7 @@ def gendefaults_parse_meta_field(value):
         'cache-option': 'cache_options',
         'cache_option': 'cache_options',
     }
-    parsed = None
-    if isinstance(value, dict):
-        parsed = value
-    elif isinstance(value, str):
-        try: # Try parsing as-is
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            # Try wrapping in braces for loose key/value strings
-            try:
-                parsed = json.loads(f"{{{value}}}")
-            except json.JSONDecodeError:
-                print("Warning: couldn't parse gendefaults_parse_meta_field.")
-        if not isinstance(parsed, dict):
-            print("Warning: gendefaults_parse_meta_field - not a JSON object.")
-    if not parsed:
-        return {}
+    parsed = parse_json_object(value, 'gendefaults') or {}
     result = {}
     # First pass: apply aliases only if canonical key is not explicitly present
     for key, value in parsed.items():
@@ -5748,11 +5752,10 @@ def save_config_dict(filename, savdict, template):
     do_not_save = {'analyze', 'config', 'exportconfig', 'exporttemplate', 'testmemory', 'unpack', 'version'}
     filtered = {k: v for k, v in savdict.items() if k not in do_not_save}
     if 'gendefaults' in filtered:
-        if isinstance(filtered['gendefaults'], str):
-            try:
-                filtered['gendefaults'] = json.loads(filtered['gendefaults'])
-            except json.JSONDecodeError:
-                pass
+        gendefaults = parse_json_object(filtered['gendefaults'], 'gendefaults')
+        if isinstance(gendefaults, dict):
+            filtered['gendefaults'] = gendefaults
+        # keep it as-is if it's a broken string
     with open(filenamestr, 'w') as file:
         file.write(json.dumps(filtered,indent=2))
     return filenamestr

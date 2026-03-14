@@ -90,9 +90,16 @@ def gendefaults_parse_meta_field(*args, **kwargs):
     '''
 
     >>> [gendefaults_parse_meta_field(x) for x in [{}, None, '', "invalid json", '  ', 4]]
-    Warning: couldn't parse gendefaults_parse_meta_field.
-    Warning: gendefaults_parse_meta_field - not a JSON object.
+    Warning: gendefaults field - not a JSON object.
+    Warning: couldn't parse gendefaults field.
+    Warning: gendefaults field - not a JSON object.
     [{}, {}, {}, {}, {}, {}]
+
+    >>> [gendefaults_parse_meta_field(x) for x in ['["valid", "json"]', 'but', '1']]
+    Warning: gendefaults field - not a JSON object.
+    Warning: couldn't parse gendefaults field.
+    Warning: gendefaults field - not a JSON object.
+    [{}, {}, {}]
 
     >>> gendefaults_parse_meta_field({"key": "value"})
     {'key': 'value'}
