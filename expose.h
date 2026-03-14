@@ -230,6 +230,7 @@ struct sd_generation_inputs
     const char * cache_options = nullptr;
     const bool upscale = false;
     const int lora_len = 0;
+    const char ** lora_filenames = nullptr;
     const float * lora_multipliers = nullptr;
 };
 struct sd_generation_outputs

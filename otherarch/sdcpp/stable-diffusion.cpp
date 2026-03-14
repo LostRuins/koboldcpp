@@ -139,6 +139,7 @@ public:
     std::vector<std::shared_ptr<LoraModel>> first_stage_lora_models;
     bool apply_lora_immediately = false;
     std::map<std::string, std::shared_ptr<LoraModel>> kcpp_lora_cache;
+    bool kcpp_lora_cache_populate = false;
 
     std::string taesd_path;
     bool use_tiny_autoencoder            = false;
@@ -1209,7 +1210,6 @@ public:
                 return it->second;
             }
         }
-        // by construction, kcpp will always find the preloaded LoRAs on the cache
 
         std::string lora_path             = lora_id;
         static std::string high_noise_tag = "|high_noise|";
@@ -1224,13 +1224,13 @@ public:
             LOG_WARN("load lora tensors from %s failed", lora_path.c_str());
             // also cache negatives to avoid I/O at runtime
             lora = nullptr;
-            if (kcpp_at_runtime)
+            if (kcpp_at_runtime && kcpp_lora_cache_populate)
                 kcpp_lora_cache[lora_key] = lora;
             return lora;
         }
 
         lora->multiplier = multiplier;
-        if (kcpp_at_runtime)
+        if (kcpp_at_runtime && kcpp_lora_cache_populate)
             kcpp_lora_cache[lora_key] = lora;
         return lora;
     }

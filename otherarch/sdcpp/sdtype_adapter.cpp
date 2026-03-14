@@ -45,6 +45,62 @@
 static_assert((int)SD_TYPE_COUNT == (int)GGML_TYPE_COUNT,
               "inconsistency between SD_TYPE_COUNT and GGML_TYPE_COUNT");
 
+struct LoraMap {
+    std::vector<std::pair<std::string, float>> items;
+    std::unordered_map<std::string, std::size_t> index;
+
+    void add_lora(const std::string& k, float v) {
+        auto it = index.find(k);
+        if (it == index.end()) {
+            index[k] = items.size();
+            items.emplace_back(k, v);
+        } else {
+            items[it->second].second += v;
+        }
+    }
+
+    float check_small_mult(float mult) {
+        if (mult > 1e-6 || mult < -1e-6)
+            return mult;
+        return 0.f;
+    }
+
+    float get_mult(const std::string& k) {
+        auto lora = index.find(k);
+        if (lora == index.end()) return 0.f;
+        return check_small_mult(items[lora->second].second);
+    }
+
+    std::vector<sd_lora_t> get_lora_specs(bool include_zeroes = false) {
+        std::vector<sd_lora_t> lora_specs;
+        for (const auto & lora: items) {
+            float multiplier = check_small_mult(lora.second);
+            if (include_zeroes || multiplier != 0.f) {
+                sd_lora_t spec = {};
+                spec.path = lora.first.c_str();
+                spec.multiplier = multiplier;
+                lora_specs.push_back(spec);
+            }
+        }
+        return lora_specs;
+    }
+
+    std::string get_lora_meta() {
+        std::stringstream lora_meta;
+        lora_meta << std::setprecision(6);
+        for (const auto & lora: items) {
+            float multiplier = check_small_mult(lora.second);
+            if (multiplier != 0.f) {
+                std::string lora_name = std::filesystem::path(lora.first).stem().string();
+                lora_meta << "<lora:" << lora_name << ":" << multiplier << ">";
+            }
+        }
+        return lora_meta.str();
+    }
+
+};
+
+
 struct SDParams {
     int n_threads = -1;
     std::string model_path;
@@ -79,9 +135,9 @@ struct SDParams {
 
     bool chroma_use_dit_mask     = true;
 
-    std::vector<std::string> lora_paths;
-    std::vector<float> lora_multipliers;
+    LoraMap lora_map;
     bool lora_dynamic = false;
+    bool lora_fixed   = false;
 
     std::string cache_mode;
     std::string cache_options;
@@ -211,12 +267,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     set_sd_quiet(sd_is_quiet);
     executable_path = inputs.executable_path;
     std::string taesdpath = "";
-    std::vector<std::string> lora_paths;
-    std::vector<float> lora_multipliers;
+    LoraMap lora_map;
     for(int i=0;i<inputs.lora_len;++i)
     {
-        lora_paths.push_back(inputs.lora_filenames[i]);
-        lora_multipliers.push_back(inputs.lora_multipliers[i]);
+        lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
     }
     std::string vaefilename = inputs.vae_filename;
     std::string t5xxl_filename = inputs.t5xxl_filename;
@@ -233,23 +287,32 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
+    bool lora_cache = false;
+    bool lora_fixed = false;
     if(inputs.lora_apply_mode >= 0 && inputs.lora_apply_mode <= 2) {
         lora_apply_mode = inputs.lora_apply_mode;
     }
-    else if(inputs.lora_apply_mode == 3) {
-        lora_dynamic = true;
+    else {
+        // bit 3: LoRAs can be changed dynamically
+        // bit 4: cache the initial LoRA list in VRAM
+        // bit 5: do not allow multiplier changes for the initial LoRAs
+        lora_dynamic = !!(inputs.lora_apply_mode & (1<<3));
+        lora_cache   = lora_dynamic && !!(inputs.lora_apply_mode & (1<<4));
+        lora_fixed   = lora_dynamic && !!(inputs.lora_apply_mode & (1<<5));
     }
 
-    if(lora_paths.size() > 0)
+    if(lora_map.items.size() > 0)
     {
         const char* lora_apply_mode_name = lora_apply_mode == 1 ? "immediately"
                                          : lora_apply_mode == 2 ? "at runtime"
                                          : "auto";
-        const char * lora_dynamic_name = lora_dynamic ? " (dynamic)" : "";
-        printf("With LoRAs in apply mode %s%s:\n", lora_apply_mode_name, lora_dynamic_name);
-        for(int i=0;i<lora_paths.size();++i)
+        const char * lora_dynamic_name = lora_dynamic ? ", dynamic" : "";
+        const char * lora_cache_name = lora_cache ? ", with caching" : "";
+        printf("With LoRAs in apply mode %s%s%s:\n", lora_apply_mode_name, lora_dynamic_name, lora_cache_name);
+        for(auto lora: lora_map.items)
         {
-            printf("  %s at %f power\n", lora_paths[i].c_str(),lora_multipliers[i]);
+            const char * lora_fixed_name = lora_fixed && lora.second != 0.f ? " (fixed)" : "";
+            printf("  %s at %f power%s\n", lora.first.c_str(), lora.second, lora_fixed_name);
         }
     }
 
@@ -337,9 +400,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->clip_l_path = clip1_filename;
     sd_params->clip_g_path = clip2_filename;
     sd_params->stacked_id_embeddings_path = photomaker_filename;
-    sd_params->lora_paths = lora_paths;
-    sd_params->lora_multipliers = lora_multipliers;
+    sd_params->lora_map = lora_map;
     sd_params->lora_dynamic = lora_dynamic;
+    sd_params->lora_fixed   = lora_fixed;
     //if t5 is set, and model is a gguf, load it as a diffusion model path
     bool endswithgguf = (sd_params->model_path.rfind(".gguf") == sd_params->model_path.size() - 5);
     if((sd_params->t5xxl_path!="" || sd_params->clip_l_path!="" || sd_params->clip_g_path!="") && endswithgguf)
@@ -429,21 +492,13 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sdmodelfilename = mpath.filename().string();
 
     // preload the LoRAs with the initial multipliers
-    std::vector<sd_lora_t> lora_specs;
-    for(int i=0;i<sd_params->lora_paths.size();++i)
-    {
-        if (!lora_dynamic && sd_params->lora_multipliers[i] == 0.)
-            continue;
-        sd_lora_t spec = {};
-        spec.path = sd_params->lora_paths[i].c_str();
-        spec.multiplier = sd_params->lora_multipliers[i];
-        lora_specs.push_back(spec);
-    }
-
+    std::vector<sd_lora_t> lora_specs = sd_params->lora_map.get_lora_specs(lora_dynamic&& lora_cache);
     if(lora_specs.size()>0)
     {
         printf("  applying %zu LoRAs...\n", lora_specs.size());
+        sd_ctx->sd->kcpp_lora_cache_populate = lora_cache;
         sd_ctx->sd->apply_loras(lora_specs.data(), lora_specs.size());
+        sd_ctx->sd->kcpp_lora_cache_populate = false;
     }
 
     input_extraimage_buffers.reserve(max_extra_images);
@@ -1166,24 +1221,21 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     parse_cache_options(params.cache, sd_params->cache_mode, sd_params->cache_options);
     params.batch_count = 1;
 
-    std::vector<sd_lora_t> lora_specs;
-    std::stringstream lora_meta;
-    lora_meta << std::setprecision(6);
-    for(size_t i=0;i<sd_params->lora_paths.size();++i)
-    {
-        float multiplier = sd_params->lora_multipliers[i];
-        if (sd_params->lora_dynamic) {
-            multiplier = i < inputs.lora_len ? inputs.lora_multipliers[i] : 0.;
-        }
-        if (multiplier != 0.f) {
-            sd_lora_t spec = {};
-            spec.path = sd_params->lora_paths[i].c_str();
-            spec.multiplier = multiplier;
-            lora_specs.push_back(spec);
-            std::string lora_name = std::filesystem::path(sd_params->lora_paths[i]).stem().string();
-            lora_meta << "<lora:" << lora_name << ":" << multiplier << ">";
+    LoraMap lora_map = sd_params->lora_map;
+    if (sd_params->lora_dynamic) {
+        for (int i = 0; i < inputs.lora_len; i++) {
+            // check if it was initially fixed
+            std::string path = inputs.lora_filenames[i];
+            float preloaded_mult = sd_params->lora_map.get_mult(path);
+            if (!sd_params->lora_fixed || preloaded_mult == 0.f) {
+                lora_map.add_lora(path, inputs.lora_multipliers[i]);
+            }
         }
     }
+
+    std::vector<sd_lora_t> lora_specs = lora_map.get_lora_specs();
+    std::string lora_meta = lora_map.get_lora_meta();
+
     if(!sd_is_quiet && sddebugmode==1) {
         if (lora_specs.size() > 0) {
             printf("Applying LoRAs:\n");
@@ -1424,9 +1476,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             {
                 printf("Upscaling output image...\n");
                 upscaled_image = upscale(upscaler_ctx, results[i], 2);
-                png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, get_image_params(params, lora_meta.str()).c_str());
+                png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, get_image_params(params, lora_meta).c_str());
             } else {
-                png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(params, lora_meta.str()).c_str());
+                png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, get_image_params(params, lora_meta).c_str());
             }
 
             if (png != NULL)

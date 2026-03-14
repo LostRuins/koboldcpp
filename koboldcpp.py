@@ -362,6 +362,7 @@ class sd_generation_inputs(ctypes.Structure):
                 ("cache_options", ctypes.c_char_p),
                 ("upscale", ctypes.c_bool),
                 ("lora_len", ctypes.c_int),
+                ("lora_filenames", ctypes.POINTER(ctypes.c_char_p)),
                 ("lora_multipliers", ctypes.POINTER(ctypes.c_float))]
 
 class sd_generation_outputs(ctypes.Structure):
@@ -2018,7 +2019,7 @@ def sd_quant_option(value):
     except Exception:
         return 0
 
-def sd_load_model(model_filename,vae_filename,lora_filenames,t5xxl_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename):
+def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename):
     global args
     inputs = sd_load_model_inputs()
     inputs.model_filename = model_filename.encode("UTF-8")
@@ -2047,14 +2048,18 @@ def sd_load_model(model_filename,vae_filename,lora_filenames,t5xxl_filename,clip
     inputs.photomaker_filename = photomaker_filename.encode("UTF-8")
     inputs.upscaler_filename = upscaler_filename.encode("UTF-8")
 
-    lora_filenames = [lf.encode("UTF-8") for lf in lora_filenames[:lora_filenames_max] if lf]
-    lora_len = len(lora_filenames)
-    lora_multipliers = prepare_lora_multipliers([])
-    inputs.lora_len = lora_len
-    inputs.lora_filenames = (ctypes.c_char_p * lora_len)(*lora_filenames)
-    inputs.lora_multipliers = (ctypes.c_float * lora_len)(*lora_multipliers)
+    lora_filenames, lora_multipliers = prepare_lora_multipliers([], preload=True)
+    inputs.lora_len = len(lora_filenames)
+    inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*lora_filenames)
+    inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*lora_multipliers)
     # auto if no zero-weight lora, dynamic otherwise
-    inputs.lora_apply_mode = 3 if 0. in lora_multipliers else 0
+    lora_apply_mode = 0 # auto
+    if 0. in lora_multipliers:
+        lora_dynamic = 1 << 3 # accept changes at runtime
+        lora_cache   = 1 << 4 # cache the preloaded LoRAs
+        lora_fixed   = 1 << 5 # do not allow changes to the non-zero preloaded LoRAs
+        lora_apply_mode = lora_dynamic | lora_cache | lora_fixed
+    inputs.lora_apply_mode = lora_apply_mode
 
     inputs.img_hard_limit = args.sdclamped
     inputs.img_soft_limit = args.sdclampedsoft
@@ -2177,7 +2182,7 @@ def sanitize_lora_multipliers(sdloramult):
     sdloramult = [tryparsefloat(m, 0.) for m in sdloramult]
     return sdloramult
 
-def prepare_lora_multipliers(request_list):
+def prepare_lora_multipliers(request_list, preload=False):
     orig_multipliers = [lora[3] for lora in imglorainfo]
     req_by_path = {}
     for r in request_list:
@@ -2187,13 +2192,17 @@ def prepare_lora_multipliers(request_list):
         path = r.get('path')
         if path and isinstance(path, str):
             req_by_path[path] = req_by_path.get(path, 0.) + multiplier
-    result = []
+    res_paths = []
+    res_multipliers = []
     for i, (fullpath, name, path, origmul) in enumerate(imglorainfo):
         multiplier = orig_multipliers[i]
         if multiplier == 0. and path in req_by_path:
             multiplier = req_by_path[path]
-        result.append(multiplier)
-    return result
+        elif not preload:
+            continue
+        res_paths.append(fullpath.encode("UTF-8"))
+        res_multipliers.append(multiplier)
+    return res_paths, res_multipliers
 
 def extract_loras_from_prompt(prompt):
     pattern = r'<lora:([^:>]+):([^>]+)>'
@@ -2335,8 +2344,9 @@ def sd_generate(genparams):
     inputs.cache_options = cache_options.encode("UTF-8")
     inputs.upscale = (True if tryparseint(genparams.get("enable_hr", 0),0) else False)
 
-    lora_multipliers = prepare_lora_multipliers(genparams.get("lora", []))
-    inputs.lora_len = len(lora_multipliers)
+    lora_filenames, lora_multipliers = prepare_lora_multipliers(genparams.get("lora", []))
+    inputs.lora_len = len(lora_filenames)
+    inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*lora_filenames)
     inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*lora_multipliers)
 
     ret = handle.sd_generate(inputs)
@@ -9247,7 +9257,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             friendlysdmodelname = os.path.basename(imgmodel)
             friendlysdmodelname = os.path.splitext(friendlysdmodelname)[0]
             friendlysdmodelname = sanitize_string(friendlysdmodelname)
-            loadok = sd_load_model(imgmodel,imgvae,imgloras,imgt5xxl,imgclip1,imgclip2,imgphotomaker,imgupscaler)
+            loadok = sd_load_model(imgmodel,imgvae,imgt5xxl,imgclip1,imgclip2,imgphotomaker,imgupscaler)
             print("Load Image Model OK: " + str(loadok))
             if not loadok:
                 exitcounter = 999
