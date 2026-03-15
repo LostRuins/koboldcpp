@@ -89,7 +89,11 @@ ttsmodelpath = "" #if empty, not initialized
 embeddingsmodelpath = "" #if empty, not initialized
 musicllmmodelpath = "" #if empty, not initialized
 musicdiffusionmodelpath = "" #if empty, not initialized
-imglorainfo = []
+imglora_preload = []
+imglora_bypath = {}
+imglora_name2path = {}
+imglora_cached = True
+imglora_initial_fixed = True
 maxctx = 8192
 maxhordectx = 0 #set to whatever maxctx is if 0
 maxhordelen = 1024
@@ -1176,24 +1180,32 @@ def get_capabilities():
     admin_type = (2 if args.admin and args.admindir and args.adminpassword else (1 if args.admin and args.admindir else 0))
     return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":has_vision_support,"audio":has_audio_support,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "music":has_music, "savedata":(savedata_obj is not None), "admin": admin_type, "guidance": has_guidance, "jinja": has_jinja, "mcp":has_mcp}
 
+
+def scan_directory(dirpath, valid_exts, depth):
+    files = []
+    for entry in sorted(os.listdir(dirpath)): # Scan top-level directory
+        full_path = os.path.join(dirpath, entry)
+        if os.path.isfile(full_path) and entry.lower().endswith(valid_exts): # If toplevel file
+            files.append(entry)
+        elif depth > 0 and os.path.isdir(full_path): #if dir, scan up to 1 level deep
+            for subentry in sorted(os.listdir(full_path)):
+                sub_full_path = os.path.join(full_path, subentry)
+                if os.path.isfile(sub_full_path) and subentry.endswith(valid_exts):
+                    rel_path = os.path.join(entry, subentry)
+                    files.append(rel_path)
+    return files
+
+
 def get_current_admindir_list():
     opts = []
     if args.admin and args.admindir:
         dirpath = os.path.abspath(args.admindir)
         valid_exts = (".kcpps", ".kcppt", ".gguf")
-        for entry in sorted(os.listdir(dirpath)): # Scan top-level directory
-            full_path = os.path.join(dirpath, entry)
-            if os.path.isfile(full_path) and entry.endswith(valid_exts): # If toplevel file
-                opts.append(entry)
-            elif os.path.isdir(full_path): #if dir, scan up to 1 level deep
-                for subentry in sorted(os.listdir(full_path)):
-                    sub_full_path = os.path.join(full_path, subentry)
-                    if os.path.isfile(sub_full_path) and subentry.endswith(valid_exts):
-                        rel_path = os.path.join(entry, subentry)
-                        opts.append(rel_path)
+        opts = scan_directory(dirpath, valid_exts, 1)
         opts.append("initial_model")
         opts.append("unload_model")
     return opts
+
 
 def dump_gguf_metadata(file_path): #if you're gonna copy this into your own project at least credit concedo
     chunk_size = 1024*1024*12  # read first 12mb of file
@@ -2048,16 +2060,20 @@ def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip
     inputs.photomaker_filename = photomaker_filename.encode("UTF-8")
     inputs.upscaler_filename = upscaler_filename.encode("UTF-8")
 
-    lora_filenames, lora_multipliers = prepare_lora_multipliers([], preload=True)
+    lora_filenames, lora_multipliers = prepare_initial_lora_multipliers()
     inputs.lora_len = len(lora_filenames)
     inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*lora_filenames)
     inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*lora_multipliers)
+    if 0 and inputs.lora_len:
+        print("Preloading LoRAs:")
+        for i in range(inputs.lora_len):
+            print(f"  {inputs.lora_filenames[i]} @ {inputs.lora_multipliers[i]}")
     # auto if no zero-weight lora, dynamic otherwise
     lora_apply_mode = 0 # auto
-    if 0. in lora_multipliers:
+    if imglora_bypath:
         lora_dynamic = 1 << 3 # accept changes at runtime
-        lora_cache   = 1 << 4 # cache the preloaded LoRAs
-        lora_fixed   = 1 << 5 # do not allow changes to the non-zero preloaded LoRAs
+        lora_cache   = 1 << 4 if imglora_cached else 0 # cache the preloaded LoRAs
+        lora_fixed   = 1 << 5 if imglora_initial_fixed else 0 # do not allow changes to the non-zero preloaded LoRAs
         lora_apply_mode = lora_dynamic | lora_cache | lora_fixed
     inputs.lora_apply_mode = lora_apply_mode
 
@@ -2182,27 +2198,57 @@ def sanitize_lora_multipliers(sdloramult):
     sdloramult = [tryparsefloat(m, 0.) for m in sdloramult]
     return sdloramult
 
-def prepare_lora_multipliers(request_list, preload=False):
-    orig_multipliers = [lora[3] for lora in imglorainfo]
-    req_by_path = {}
+def prepare_initial_lora_multipliers():
+    res_paths = []
+    res_multipliers = []
+    num_loras = len(imglora_preload)
+    if num_loras > lora_filenames_max:
+        print(f'Warning: more than {lora_filenames_max} preloaded LoRAs, extra ones will be ignored')
+        num_loras = lora_filenames_max
+    for info in imglora_preload[:num_loras]:
+        res_paths.append(info['fullpath'].encode("UTF-8"))
+        res_multipliers.append(info['multiplier'])
+    return res_paths, res_multipliers
+
+def prepare_lora_multipliers_backend(request_list, imglora_bypath):
+    req_dedup = {}
     for r in request_list:
         if not isinstance(r, dict):
             continue
-        multiplier = tryparsefloat(r.get('multiplier'), 0.)
         path = r.get('path')
-        if path and isinstance(path, str):
-            req_by_path[path] = req_by_path.get(path, 0.) + multiplier
+        multiplier = tryparsefloat(r.get('multiplier'), 0.)
+        if not path or not isinstance(path, str) or not multiplier:
+            continue
+        info = imglora_bypath.get(path)
+        if info:
+            fullpath = info["fullpath"]
+            req_dedup[fullpath] = req_dedup.get(fullpath, 0.) + multiplier
     res_paths = []
     res_multipliers = []
-    for i, (fullpath, name, path, origmul) in enumerate(imglorainfo):
-        multiplier = orig_multipliers[i]
-        if multiplier == 0. and path in req_by_path:
-            multiplier = req_by_path[path]
-        elif not preload:
-            continue
-        res_paths.append(fullpath.encode("UTF-8"))
-        res_multipliers.append(multiplier)
+    for fullpath, multiplier in req_dedup.items():
+        if multiplier != 0.0:
+            res_paths.append(fullpath.encode("UTF-8"))
+            res_multipliers.append(multiplier)
+    # enforce lora_filenames_max
+    max_requests = lora_filenames_max - len(imglora_preload)
+    if len(res_paths) > max_requests:
+        msg_preloaded = ""
+        if len(imglora_preload) > 0:
+            msg_preloaded = f" (including {len(imglora_preload)} preloaded)"
+        print(f'Warning: more than {lora_filenames_max} requested LoRAs{msg_preloaded}, extra ones will be ignored')
+        res_paths = res_paths[:max_requests]
+        res_multipliers = res_multipliers[:max_requests]
     return res_paths, res_multipliers
+
+def prepare_lora_multipliers(request_list):
+    return prepare_lora_multipliers_backend(request_list, imglora_bypath)
+
+def mk_sdapi_lora_list(imglora_bypath):
+    return [
+        {'name': info['name'], 'path': info['path']}
+            for info in imglora_bypath.values()
+                if info['multiplier'] == 0.0 # both preloaded and scanned
+    ]
 
 def extract_loras_from_prompt(prompt):
     pattern = r'<lora:([^:>]+):([^>]+)>'
@@ -2228,16 +2274,17 @@ def extract_loras_from_prompt(prompt):
     return prompt, lora_data
 
 def lora_map_name_to_path(request_list):
-    name2path = {}
-    for _, name, path, _ in imglorainfo:
-        name2path[name] = path
     result = []
     for req in request_list:
         out = dict(req)
         name = out.pop('name')
-        path = name2path.get(name)
-        if path:
-            out['path'] = path
+        path = imglora_name2path.get(name)
+        if not path:
+            print(f'LoRA {name} not found')
+            continue
+        info = imglora_bypath.get(path)
+        if info:
+            out['path'] = info['path']
             result.append(out)
     return result
 
@@ -2292,6 +2339,7 @@ def sd_generate(genparams):
     extra_images_arr = ([] if not extra_images_arr else extra_images_arr)
     extra_images_arr = [img for img in extra_images_arr if img not in (None, "")]
     extra_images_arr = extra_images_arr[:extra_images_max]
+    lora_filenames, lora_multipliers = prepare_lora_multipliers(genparams.get("lora", []))
 
     #clean vars
     cfg_scale = (1 if cfg_scale < 1 else (forced_maxcfg if cfg_scale > forced_maxcfg else cfg_scale))
@@ -2343,8 +2391,6 @@ def sd_generate(genparams):
     inputs.cache_mode = cache_mode.encode("UTF-8")
     inputs.cache_options = cache_options.encode("UTF-8")
     inputs.upscale = (True if tryparseint(genparams.get("enable_hr", 0),0) else False)
-
-    lora_filenames, lora_multipliers = prepare_lora_multipliers(genparams.get("lora", []))
     inputs.lora_len = len(lora_filenames)
     inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*lora_filenames)
     inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*lora_multipliers)
@@ -4436,7 +4482,7 @@ Change Mode<br>
             response_body = (json.dumps({"object":"list","data":mlist}).encode())
 
         elif clean_path.endswith('/sdapi/v1/loras'):
-            response_body = (json.dumps([{'name': name, 'path': path} for _, name, path, multiplier in imglorainfo if multiplier == 0.])).encode()
+            response_body = (json.dumps(mk_sdapi_lora_list(imglora_bypath))).encode()
 
         elif clean_path.endswith('/sdapi/v1/upscalers'):
             if args.sdupscaler:
@@ -8749,26 +8795,88 @@ def main(launch_args, default_args):
                 input()
 
 
-def mk_lora_info(imgloras, multipliers):
-    # (full path, name, name+extension, can change multiplier)
-    # XXX for each LoRA, sdapi needs a name and a path; we could use
-    # the full filename as a path, but we don't know if we can expose it
-    used_lora_names = set()
-    result = []
+def mk_lora_info(imgloras, multipliers, mock_filesystem=False):
     first_multiplier = multipliers[0] if len(multipliers) > 0 else 1.
+    lora_files = []
+    lora_dirs = []
+    # identify files and dirs
     for i, lora_path in enumerate(imgloras):
         multiplier = multipliers[i] if i < len(multipliers) else first_multiplier
-        lora_file = os.path.basename(lora_path)
+        if mock_filesystem:
+            print('fake filesystem access')
+            if lora_path.endswith('/'):
+                lora_dirs.append(lora_path)
+            else:
+                lora_files.append(('', lora_path, multiplier))
+        elif os.path.isfile(lora_path):
+            lora_files.append(('', lora_path, multiplier))
+        elif os.path.isdir(lora_path):
+            lora_dirs.append(lora_path)
+        elif os.path.exists(lora_path):
+            print(f"Unexpected file type for SD LORA model file {lora_path}")
+        else:
+            print(f"Missing SD LORA model file {lora_path}...")
+    # scan all dirs
+    for lora_dir in lora_dirs:
+        print(f'Scanning {lora_dir} for LoRAs...')
+        if mock_filesystem:
+            print('fake directory scan')
+            files = ['lora1_makebelieve.gguf', 'lora2/makebelieve.gguf']
+        else:
+            files = scan_directory(lora_dir, ('.safetensors', '.gguf'), 1)
+        print(f'  found {len(files)} files under {lora_dir}')
+        for file in files:
+            lora_files.append((lora_dir, file, 0.0))
+    # dedup and map all files
+    unique_lora_names = set()
+    lora_fullmap = {}
+    for i, (lora_dir, lora_path, multiplier) in enumerate(lora_files):
+        if lora_dir:
+            # lora_path is relative: we can show it on the interface and accept it
+            lora_fullpath = os.path.join(lora_dir, lora_path)
+            # NOTE: we are including the relative directory on the short name
+            lora_file = lora_path
+            preloaded = False
+        else:
+            lora_fullpath = lora_path
+            # we don't know which portion of the path we can show, so omit it
+            lora_file = os.path.basename(lora_path)
+            preloaded = True
+        if not mock_filesystem:
+            lora_fullpath = os.path.abspath(lora_fullpath)
+        # dedup paths (e.g. preloaded and on directory)
+        if lora_fullpath in lora_fullmap:
+            lora_fullmap[lora_fullpath]["multiplier"] += multiplier
+            continue
         lora_name, lora_ext = os.path.splitext(lora_file)
         # ensure unique names
         i = 1
-        mapped_name = lora_name
-        while mapped_name in used_lora_names:
+        lora_uname = lora_name
+        while lora_uname in unique_lora_names:
             i += 1
-            mapped_name = lora_name + '_' + str(i)
-        used_lora_names.add(mapped_name)
-        result.append((lora_path, mapped_name, mapped_name + lora_ext, multiplier))
-    return result
+            lora_uname = lora_name + '_' + str(i)
+        unique_lora_names.add(lora_uname)
+        lora_upath = lora_uname + lora_ext
+        lora_entry = {
+            'fullpath': lora_fullpath,
+            'name': lora_uname,
+            'path': lora_upath,
+            'multiplier': multiplier,
+            'preloaded': preloaded,
+        }
+        lora_fullmap[lora_fullpath] = lora_entry
+    # build the runtime tables
+    preloaded_table = []
+    lora_path_map = {}
+    lora_name_map = {}
+    for lora_entry in lora_fullmap.values():
+        # only map LoRAs that can be changed
+        if not imglora_initial_fixed or lora_entry["multiplier"] == 0.0:
+            lora_path_map[lora_entry["path"]] = lora_entry
+            lora_name_map[lora_entry["name"]] = lora_entry["path"]
+        if lora_entry["preloaded"]:
+            preloaded_table.append(lora_entry)
+    return preloaded_table, lora_path_map, lora_name_map
 
 
 def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
@@ -9211,16 +9319,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             imgclip2 = ""
             imgphotomaker = ""
             imgupscaler = ""
-            if args.sdlora and len(args.sdlora)>0:
-                for i in range (0,len(args.sdlora)):
-                    curr = args.sdlora[i]
-                    if os.path.exists(curr):
-                        imgloras.append(os.path.abspath(curr))
-                    else:
-                        print(f"Missing SD LORA model file {curr}...")
-            global imglorainfo
+            global imglora_preload, imglora_bypath, imglora_name2path
             args.sdloramult = sanitize_lora_multipliers(args.sdloramult)
-            imglorainfo = mk_lora_info(imgloras, args.sdloramult)
+            imglora_preload, imglora_bypath, imglora_name2path = mk_lora_info(args.sdlora, args.sdloramult)
             if args.sdvae:
                 if os.path.exists(args.sdvae):
                     imgvae = os.path.abspath(args.sdvae)

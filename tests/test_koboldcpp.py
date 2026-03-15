@@ -53,16 +53,63 @@ def extract_loras_from_prompt(*args, **kwargs):
 
     return koboldcpp.extract_loras_from_prompt(*args, **kwargs)
 
-def mk_lora_info(*args, **kwargs):
+def mk_lora_info(imgloras, multipliers):
     """
-    >>> mk_lora_info(['/x/lora1.safetensors', '/y/lora2.gguf'], [])
-    [('/x/lora1.safetensors', 'lora1', 'lora1.safetensors', 1.0), ('/y/lora2.gguf', 'lora2', 'lora2.gguf', 1.0)]
-    >>> mk_lora_info(['/x/lora1.safetensors', '/y/lora1.safetensors'], [0.3])
-    [('/x/lora1.safetensors', 'lora1', 'lora1.safetensors', 0.3), ('/y/lora1.safetensors', 'lora1_2', 'lora1_2.safetensors', 0.3)]
-    >>> mk_lora_info(['./lora1.gguf', '/y/lora2.gguf', 'lora3.gguf'], [0, 0.3])
-    [('./lora1.gguf', 'lora1', 'lora1.gguf', 0), ('/y/lora2.gguf', 'lora2', 'lora2.gguf', 0.3), ('lora3.gguf', 'lora3', 'lora3.gguf', 0)]
+    >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora2.gguf'], [])
+    fake filesystem access
+    fake filesystem access
+    >>> pre
+    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 1.0, 'preloaded': True}, {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 1.0, 'preloaded': True}]
+    >>> path
+    {}
+    >>> name
+    {}
+
+    >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora2.gguf'], [0.])
+    fake filesystem access
+    fake filesystem access
+    >>> pre
+    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.0, 'preloaded': True}, {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 0.0, 'preloaded': True}]
+    >>> path
+    {'lora1.safetensors': {'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.0, 'preloaded': True}, 'lora2.gguf': {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 0.0, 'preloaded': True}}
+    >>> name
+    {'lora1': 'lora1.safetensors', 'lora2': 'lora2.gguf'}
+
+    >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora1.safetensors'], [0.3])
+    fake filesystem access
+    fake filesystem access
+    >>> pre
+    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.3, 'preloaded': True}, {'fullpath': '/y/lora1.safetensors', 'name': 'lora1_2', 'path': 'lora1_2.safetensors', 'multiplier': 0.3, 'preloaded': True}]
+    >>> path
+    {}
+
+    >>> pre, path, name = mk_lora_info(['/lora/dir/'], [0.3])
+    fake filesystem access
+    Scanning /lora/dir/ for LoRAs...
+    fake directory scan
+      found 2 files under /lora/dir/
+    >>> pre
+    []
+    >>> expected = {
+    ... 'lora1_makebelieve.gguf': {
+    ...     'fullpath': '/lora/dir/lora1_makebelieve.gguf',
+    ...     'name': 'lora1_makebelieve',
+    ...     'path': 'lora1_makebelieve.gguf',
+    ...     'multiplier': 0.0,
+    ...     'preloaded': False},
+    ... 'lora2/makebelieve.gguf': {
+    ...     'fullpath': '/lora/dir/lora2/makebelieve.gguf',
+    ...     'name': 'lora2/makebelieve',
+    ...     'path': 'lora2/makebelieve.gguf',
+    ...     'multiplier': 0.0,
+    ...     'preloaded': False}}
+    >>> path == expected
+    True
+    >>> name
+    {'lora1_makebelieve': 'lora1_makebelieve.gguf', 'lora2/makebelieve': 'lora2/makebelieve.gguf'}
+
     """
-    return koboldcpp.mk_lora_info(*args, **kwargs)
+    return koboldcpp.mk_lora_info(imgloras, multipliers, True)
 
 def sanitize_lora_multipliers(*args, **kwargs):
     """
@@ -84,6 +131,77 @@ def sanitize_lora_multipliers(*args, **kwargs):
     [0.0, 0.0, 0.0]
     """
     return koboldcpp.sanitize_lora_multipliers(*args, **kwargs)
+
+
+def prepare_lora_multipliers(req_list, imglora_bypath):
+    """
+    >>> req = [
+    ...     {"path": "a.gguf", "multiplier": "0.5"},
+    ...     {"path": "a.gguf", "multiplier": 1.0},
+    ... ]
+    >>> imglora = {"a.gguf": {"fullpath": "/abs/a.gguf"}}
+    >>> paths, mults = prepare_lora_multipliers(req, imglora)
+    >>> paths == [b"/abs/a.gguf"], mults == [1.5]
+    (True, True)
+
+    >>> req = [
+    ...     {"path": "b.gguf", "multiplier": "2"},
+    ...     {"path": "c.gguf"},
+    ...     "not a dict",
+    ...     {"path": "", "multiplier": "3"},
+    ...     {"path": "b.gguf", "multiplier": 0},
+    ... ]
+    >>> imglora = {"b.gguf": {"fullpath": "/abs/b.gguf"},
+    ...            "c.gguf": {"fullpath": "/abs/c.gguf"}}
+    >>> paths, mults = prepare_lora_multipliers(req, imglora)
+    >>> paths == [b"/abs/b.gguf"], mults == [2.0]
+    (True, True)
+
+    >>> req = [{"path": "missing.gguf", "multiplier": "5"}]
+    >>> imglora = {}
+    >>> paths, mults = prepare_lora_multipliers(req, imglora)
+    >>> paths == [], mults == []
+    (True, True)
+
+    >>> req = [
+    ...     {"path": "x.gguf", "multiplier": 1},
+    ...     {"path": "y.gguf", "multiplier": 2},
+    ... ]
+    >>> imglora = {
+    ...     "x.gguf": {"fullpath": "/abs/x.gguf", "path": "x.gguf", "multiplier": 0.0},
+    ...     "y.gguf": {"fullpath": "/abs/y.gguf", "path": "y.gguf", "multiplier": 0.0},
+    ... }
+    >>> paths, mults = prepare_lora_multipliers(req, imglora)
+    >>> paths == [b'/abs/x.gguf', b'/abs/y.gguf']
+    True
+    >>> mults == [1.0, 2.0]
+    True
+    """
+    return koboldcpp.prepare_lora_multipliers_backend(req_list, imglora_bypath)
+
+def mk_sdapi_lora_list(imglora_bypath):
+    '''
+    >>> imglora_bypath = {
+    ...     'lora_a.safetensors': {'name': 'lora_a', 'path': 'lora_a.safetensors', 'multiplier': 0.0},
+    ...     'lora_b.gguf'       : {'name': 'lora_b', 'path': 'lora_b.gguf', 'multiplier': 0.0},
+    ...     'lora_c.safetensors': {'name': 'lora_c', 'path': 'lora_c.safetensors', 'multiplier': 1.0},
+    ...     'chars/waifu.gguf'  : {'name': 'chars/waifu', 'path': 'chars/waifu.gguf', 'multiplier': 0.0}
+    ... }
+    >>> mk_sdapi_lora_list(imglora_bypath)
+    [{'name': 'lora_a', 'path': 'lora_a.safetensors'}, {'name': 'lora_b', 'path': 'lora_b.gguf'}, {'name': 'chars/waifu', 'path': 'chars/waifu.gguf'}]
+
+    >>> empty_data = {}
+    >>> mk_sdapi_lora_list(empty_data)
+    []
+
+    >>> mixed_data = {
+    ...     'k1': {'name': 'X', 'path': 'p1', 'multiplier': 0.5},
+    ...     'k2': {'name': 'Y', 'path': 'p2', 'multiplier': 0.0}
+    ... }
+    >>> mk_sdapi_lora_list(mixed_data)
+    [{'name': 'Y', 'path': 'p2'}]
+    '''
+    return koboldcpp.mk_sdapi_lora_list(imglora_bypath)
 
 
 def gendefaults_parse_meta_field(*args, **kwargs):
