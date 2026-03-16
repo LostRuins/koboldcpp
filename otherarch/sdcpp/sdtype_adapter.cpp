@@ -137,7 +137,6 @@ struct SDParams {
 
     LoraMap lora_map;
     bool lora_dynamic = false;
-    bool lora_fixed   = false;
 
     std::string cache_mode;
     std::string cache_options;
@@ -288,17 +287,14 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
     bool lora_cache = false;
-    bool lora_fixed = false;
     if(inputs.lora_apply_mode >= 0 && inputs.lora_apply_mode <= 2) {
         lora_apply_mode = inputs.lora_apply_mode;
     }
     else {
         // bit 3: LoRAs can be changed dynamically
         // bit 4: cache the initial LoRA list in VRAM
-        // bit 5: do not allow multiplier changes for the initial LoRAs
         lora_dynamic = !!(inputs.lora_apply_mode & (1<<3));
         lora_cache   = lora_dynamic && !!(inputs.lora_apply_mode & (1<<4));
-        lora_fixed   = lora_dynamic && !!(inputs.lora_apply_mode & (1<<5));
     }
 
     if(lora_map.items.size() > 0)
@@ -311,8 +307,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("With LoRAs in apply mode %s%s%s:\n", lora_apply_mode_name, lora_dynamic_name, lora_cache_name);
         for(auto lora: lora_map.items)
         {
-            const char * lora_fixed_name = lora_fixed && lora.second != 0.f ? " (fixed)" : "";
-            printf("  %s at %f power%s\n", lora.first.c_str(), lora.second, lora_fixed_name);
+            printf("  %s at %f power\n", lora.first.c_str(), lora.second);
         }
     }
 
@@ -402,7 +397,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->stacked_id_embeddings_path = photomaker_filename;
     sd_params->lora_map = lora_map;
     sd_params->lora_dynamic = lora_dynamic;
-    sd_params->lora_fixed   = lora_fixed;
     //if t5 is set, and model is a gguf, load it as a diffusion model path
     bool endswithgguf = (sd_params->model_path.rfind(".gguf") == sd_params->model_path.size() - 5);
     if((sd_params->t5xxl_path!="" || sd_params->clip_l_path!="" || sd_params->clip_g_path!="") && endswithgguf)
@@ -1222,12 +1216,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     LoraMap lora_map = sd_params->lora_map;
     if (sd_params->lora_dynamic) {
         for (int i = 0; i < inputs.lora_len; i++) {
-            // check if it was initially fixed
             std::string path = inputs.lora_filenames[i];
             float preloaded_mult = sd_params->lora_map.get_mult(path);
-            if (!sd_params->lora_fixed || preloaded_mult == 0.f) {
-                lora_map.add_lora(path, inputs.lora_multipliers[i]);
-            }
+            lora_map.add_lora(path, inputs.lora_multipliers[i]);
         }
     }
 

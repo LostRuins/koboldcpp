@@ -2070,8 +2070,7 @@ def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip
     if imglora_bypath:
         lora_dynamic = 1 << 3 # accept changes at runtime
         lora_cache   = 1 << 4 if imglora_cached else 0 # cache the preloaded LoRAs
-        lora_fixed   = 1 << 5 if imglora_initial_fixed else 0 # do not allow changes to the non-zero preloaded LoRAs
-        lora_apply_mode = lora_dynamic | lora_cache | lora_fixed
+        lora_apply_mode = lora_dynamic | lora_cache
     inputs.lora_apply_mode = lora_apply_mode
 
     inputs.img_hard_limit = args.sdclamped
