@@ -3800,7 +3800,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                     <div class="dialog-content">
                         <p>KoboldCpp is currently loading models.</p>
                         <p>It may take some time before the new instance is ready to use.</p>
-                        <p>Your browser should automatically refresh after a few moments...</p>
+                        <p>Your browser should automatically refresh once complete.</p>
                     </div>
                 </dialog>
             </body>
