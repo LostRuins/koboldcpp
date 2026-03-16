@@ -3718,7 +3718,111 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
             conn.request( self.command, self.path, body=body, headers=headers)
             resp = conn.getresponse()
         except OSError as e:
-            self.send_error(502, f"KoboldCpp proxy connection failed: {e}")
+            reload_page = """
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>KoboldCpp - Loading</title>
+                <style>
+                    * {
+                        margin: 0;
+                        padding: 0;
+                        box-sizing: border-box;
+                    }
+
+                    body {
+                        background-color: #0a0e14;
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                        min-height: 100vh;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                    }
+
+                    dialog {
+                        background-color: #1a222e;
+                        border: 1px solid #3a4a5a;
+                        border-radius: 4px;
+                        padding: 0;
+                        width: 90%;
+                        max-width: 450px;
+                        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+                        position: absolute;
+                        top: 50%;
+                        left: 50%;
+                        transform: translate(-50%, -50%);
+                        margin: 0;
+                    }
+
+                    dialog::backdrop {
+                        background-color: rgba(0, 0, 0, 0.7);
+                    }
+
+                    .dialog-header {
+                        background-color: #3a506b;
+                        padding: 14px 18px;
+                        border-bottom: 1px solid #2a3a4a;
+                    }
+
+                    .dialog-header h2 {
+                        color: #e8e8e8;
+                        font-size: 15px;
+                        font-weight: 600;
+                        margin: 0;
+                    }
+
+                    .dialog-content {
+                        padding: 24px 20px;
+                        text-align: center;
+                    }
+
+                    .dialog-content p {
+                        color: #d0d0d0;
+                        font-size: 15px;
+                        line-height: 1.7;
+                        margin: 0 0 16px 0;
+                    }
+
+                    .dialog-content p:last-child {
+                        margin-bottom: 0;
+                        font-style: italic;
+                        color: #a0a0a0;
+                    }
+                </style>
+            </head>
+            <body>
+                <dialog open>
+                    <div class="dialog-header">
+                        <h2>KoboldCpp is Loading</h2>
+                    </div>
+                    <div class="dialog-content">
+                        <p>KoboldCpp is currently loading models.</p>
+                        <p>It may take some time before the new instance is ready to use.</p>
+                        <p>Your browser should automatically refresh after a few moments...</p>
+                    </div>
+                </dialog>
+            </body>
+            <script>
+                setInterval(async () => {
+                    try {
+                        const response = await fetch(window.location.href, { cache: "no-store" });
+                        if (response.ok) {
+                            window.location.reload();
+                        }
+                    } catch (err) {
+                        // Ignore network errors and try again on next interval
+                    }
+                }, 1000);
+            </script>
+            </html>
+            """
+            self.send_response(502)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(reload_page.encode("utf-8"))))
+            self.end_headers()
+            self.wfile.write(reload_page.encode("utf-8"))
             return
 
         self.send_response(resp.status, resp.reason) # forward response headers
