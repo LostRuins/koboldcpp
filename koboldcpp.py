@@ -89,8 +89,8 @@ ttsmodelpath = "" #if empty, not initialized
 embeddingsmodelpath = "" #if empty, not initialized
 musicllmmodelpath = "" #if empty, not initialized
 musicdiffusionmodelpath = "" #if empty, not initialized
-imglora_preload = []
-imglora_bypath = {}
+imglora_preload = []   # all preloaded LoRAs
+imglora_bypath = {}    # len(imglora_bypath) == 0 <==> static loras
 imglora_name2path = {}
 imglora_cached = True
 imglora_initial_fixed = True
@@ -2243,7 +2243,7 @@ def mk_sdapi_lora_list(imglora_bypath):
     return [
         {'name': info['name'], 'path': info['path']}
             for info in imglora_bypath.values()
-                if info['multiplier'] == 0.0 # both preloaded and scanned
+                if not info.get('fixed')
     ]
 
 def extract_loras_from_prompt(prompt):
@@ -8853,8 +8853,12 @@ def mk_lora_info(imgloras, multipliers, mock_filesystem=False):
         if not mock_filesystem:
             lora_fullpath = os.path.abspath(lora_fullpath)
         # dedup paths (e.g. preloaded and on directory)
-        if lora_fullpath in lora_fullmap:
-            lora_fullmap[lora_fullpath]["multiplier"] += multiplier
+        info = lora_fullmap.get(lora_fullpath)
+        if info:
+            info["multiplier"] += multiplier
+            if multiplier == 0.0 and 'fixed' in info:
+                # allow changes if we see this lora again with weight 0
+                del info['fixed']
             continue
         lora_name, lora_ext = os.path.splitext(lora_file)
         # ensure unique names
@@ -8866,23 +8870,25 @@ def mk_lora_info(imgloras, multipliers, mock_filesystem=False):
         unique_lora_names.add(lora_uname)
         lora_upath = lora_uname + lora_ext
         lora_entry = {
-            'fullpath': lora_fullpath,
-            'name': lora_uname,
-            'path': lora_upath,
-            'multiplier': multiplier,
-            'preloaded': preloaded,
+            'fullpath': lora_fullpath,  # where it is on disk
+            'name': lora_uname,         # 'name' in api field and <lora:name:multiplier>
+            'path': lora_upath,         # 'path' in api field (relative), + extension
+            'multiplier': multiplier,   # preload multiplier
         }
+        if preloaded:
+            lora_entry['preloaded'] = preloaded
+        if multiplier != 0.0 and imglora_initial_fixed:
+            lora_entry['fixed'] = True
         lora_fullmap[lora_fullpath] = lora_entry
     # build the runtime tables
     preloaded_table = []
     lora_path_map = {}
     lora_name_map = {}
     for lora_entry in lora_fullmap.values():
-        # only map LoRAs that can be changed
-        if not imglora_initial_fixed or lora_entry["multiplier"] == 0.0:
+        if not lora_entry.get("fixed"):  # only map LoRAs that can be changed
             lora_path_map[lora_entry["path"]] = lora_entry
             lora_name_map[lora_entry["name"]] = lora_entry["path"]
-        if lora_entry["preloaded"]:
+        if lora_entry.get("preloaded"):
             preloaded_table.append(lora_entry)
     return preloaded_table, lora_path_map, lora_name_map
 

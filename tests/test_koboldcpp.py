@@ -59,7 +59,7 @@ def mk_lora_info(imgloras, multipliers):
     fake filesystem access
     fake filesystem access
     >>> pre
-    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 1.0, 'preloaded': True}, {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 1.0, 'preloaded': True}]
+    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 1.0, 'preloaded': True, 'fixed': True}, {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 1.0, 'preloaded': True, 'fixed': True}]
     >>> path
     {}
     >>> name
@@ -79,7 +79,7 @@ def mk_lora_info(imgloras, multipliers):
     fake filesystem access
     fake filesystem access
     >>> pre
-    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.3, 'preloaded': True}, {'fullpath': '/y/lora1.safetensors', 'name': 'lora1_2', 'path': 'lora1_2.safetensors', 'multiplier': 0.3, 'preloaded': True}]
+    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.3, 'preloaded': True, 'fixed': True}, {'fullpath': '/y/lora1.safetensors', 'name': 'lora1_2', 'path': 'lora1_2.safetensors', 'multiplier': 0.3, 'preloaded': True, 'fixed': True}]
     >>> path
     {}
 
@@ -95,14 +95,12 @@ def mk_lora_info(imgloras, multipliers):
     ...     'fullpath': '/lora/dir/lora1_makebelieve.gguf',
     ...     'name': 'lora1_makebelieve',
     ...     'path': 'lora1_makebelieve.gguf',
-    ...     'multiplier': 0.0,
-    ...     'preloaded': False},
+    ...     'multiplier': 0.0},
     ... 'lora2/makebelieve.gguf': {
     ...     'fullpath': '/lora/dir/lora2/makebelieve.gguf',
     ...     'name': 'lora2/makebelieve',
     ...     'path': 'lora2/makebelieve.gguf',
-    ...     'multiplier': 0.0,
-    ...     'preloaded': False}}
+    ...     'multiplier': 0.0}}
     >>> path == expected
     True
     >>> name
@@ -185,21 +183,21 @@ def mk_sdapi_lora_list(imglora_bypath):
     ...     'lora_a.safetensors': {'name': 'lora_a', 'path': 'lora_a.safetensors', 'multiplier': 0.0},
     ...     'lora_b.gguf'       : {'name': 'lora_b', 'path': 'lora_b.gguf', 'multiplier': 0.0},
     ...     'lora_c.safetensors': {'name': 'lora_c', 'path': 'lora_c.safetensors', 'multiplier': 1.0},
+    ...     'lora_d.safetensors': {'name': 'lora_d', 'path': 'lora_d.safetensors', 'multiplier': 1.0, 'fixed': True},
     ...     'chars/waifu.gguf'  : {'name': 'chars/waifu', 'path': 'chars/waifu.gguf', 'multiplier': 0.0}
     ... }
-    >>> mk_sdapi_lora_list(imglora_bypath)
-    [{'name': 'lora_a', 'path': 'lora_a.safetensors'}, {'name': 'lora_b', 'path': 'lora_b.gguf'}, {'name': 'chars/waifu', 'path': 'chars/waifu.gguf'}]
+    >>> expected = [
+    ...    {'name': 'lora_a', 'path': 'lora_a.safetensors'},
+    ...    {'name': 'lora_b', 'path': 'lora_b.gguf'},
+    ...    {'name': 'lora_c', 'path': 'lora_c.safetensors'},
+    ...    {'name': 'chars/waifu', 'path': 'chars/waifu.gguf'}
+    ... ]
+    >>> mk_sdapi_lora_list(imglora_bypath) == expected
+    True
 
     >>> empty_data = {}
     >>> mk_sdapi_lora_list(empty_data)
     []
-
-    >>> mixed_data = {
-    ...     'k1': {'name': 'X', 'path': 'p1', 'multiplier': 0.5},
-    ...     'k2': {'name': 'Y', 'path': 'p2', 'multiplier': 0.0}
-    ... }
-    >>> mk_sdapi_lora_list(mixed_data)
-    [{'name': 'Y', 'path': 'p2'}]
     '''
     return koboldcpp.mk_sdapi_lora_list(imglora_bypath)
 
