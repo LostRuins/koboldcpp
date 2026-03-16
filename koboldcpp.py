@@ -8905,6 +8905,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     if args.model_param and (args.benchmark or args.prompt or args.cli):
         start_server = False
 
+    args.sdlora = sanitize_lora_list(args.sdlora)
+    args.sdloramult = sanitize_lora_multipliers(args.sdloramult)
+
     #try to read story if provided
     if args.preloadstory:
         global preloaded_story
@@ -9328,8 +9331,6 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             imgphotomaker = ""
             imgupscaler = ""
             global imglora_preload, imglora_bypath, imglora_name2path
-            args.sdlora = sanitize_lora_list(args.sdlora)
-            args.sdloramult = sanitize_lora_multipliers(args.sdloramult)
             imglora_preload, imglora_bypath, imglora_name2path = mk_lora_info(args.sdlora, args.sdloramult)
             if args.sdvae:
                 if os.path.exists(args.sdvae):
