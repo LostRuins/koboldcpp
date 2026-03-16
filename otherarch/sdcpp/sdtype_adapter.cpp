@@ -776,8 +776,6 @@ static void parse_cache_options(sd_cache_params_t & params, const std::string& c
         params.mode = SD_CACHE_EASYCACHE;
     } else if (cache_mode == "ucache") {
         params.mode = SD_CACHE_UCACHE;
-        // this is the only difference from the defaults right now
-        params.reuse_threshold = 1.0f;
     } else if (cache_mode == "dbcache") {
         params.mode  = SD_CACHE_DBCACHE;
     } else if (cache_mode == "taylorseer") {

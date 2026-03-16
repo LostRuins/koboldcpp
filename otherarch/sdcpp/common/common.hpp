@@ -1052,7 +1052,6 @@ struct SDGenerationParams {
 
     std::string cache_mode;
     std::string cache_option;
-    std::string cache_preset;
     std::string scm_mask;
     bool scm_policy_dynamic = true;
     sd_cache_params_t cache_params{};
@@ -1466,21 +1465,6 @@ struct SDGenerationParams {
             return 1;
         };
 
-        auto on_cache_preset_arg = [&](int argc, const char** argv, int index) {
-            if (++index >= argc) {
-                return -1;
-            }
-            cache_preset = argv_to_utf8(index, argv);
-            if (cache_preset != "slow" && cache_preset != "s" && cache_preset != "S" &&
-                cache_preset != "medium" && cache_preset != "m" && cache_preset != "M" &&
-                cache_preset != "fast" && cache_preset != "f" && cache_preset != "F" &&
-                cache_preset != "ultra" && cache_preset != "u" && cache_preset != "U") {
-                fprintf(stderr, "error: invalid cache preset '%s', must be 'slow'/'s', 'medium'/'m', 'fast'/'f', or 'ultra'/'u'\n", cache_preset.c_str());
-                return -1;
-            }
-            return 1;
-        };
-
         options.manual_options = {
             {"-s",
              "--seed",
@@ -1518,16 +1502,12 @@ struct SDGenerationParams {
              on_ref_image_arg},
             {"",
              "--cache-mode",
-             "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)",
+             "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level), 'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)",
              on_cache_mode_arg},
             {"",
              "--cache-option",
-             "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
+             "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=; spectrum: w=,m=,lam=,window=,flex=,warmup=,stop=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
              on_cache_option_arg},
-            {"",
-             "--cache-preset",
-             "cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'",
-             on_cache_preset_arg},
             {"",
              "--scm-mask",
              "SCM steps mask for cache-dit: comma-separated 0/1 (e.g., \"1,1,1,0,0,1,0,0,1,0\") - 1=compute, 0=can cache",
@@ -1580,7 +1560,6 @@ struct SDGenerationParams {
         load_if_exists("negative_prompt", negative_prompt);
         load_if_exists("cache_mode", cache_mode);
         load_if_exists("cache_option", cache_option);
-        load_if_exists("cache_preset", cache_preset);
         load_if_exists("scm_mask", scm_mask);
 
         load_if_exists("clip_skip", clip_skip);
@@ -1815,48 +1794,17 @@ struct SDGenerationParams {
 
         if (!cache_mode.empty()) {
             if (cache_mode == "easycache") {
-                cache_params.mode                   = SD_CACHE_EASYCACHE;
-                cache_params.reuse_threshold        = 0.2f;
-                cache_params.start_percent          = 0.15f;
-                cache_params.end_percent            = 0.95f;
-                cache_params.error_decay_rate       = 1.0f;
-                cache_params.use_relative_threshold = true;
-                cache_params.reset_error_on_compute = true;
+                cache_params.mode = SD_CACHE_EASYCACHE;
             } else if (cache_mode == "ucache") {
-                cache_params.mode                   = SD_CACHE_UCACHE;
-                cache_params.reuse_threshold        = 1.0f;
-                cache_params.start_percent          = 0.15f;
-                cache_params.end_percent            = 0.95f;
-                cache_params.error_decay_rate       = 1.0f;
-                cache_params.use_relative_threshold = true;
-                cache_params.reset_error_on_compute = true;
+                cache_params.mode = SD_CACHE_UCACHE;
             } else if (cache_mode == "dbcache") {
-                cache_params.mode                    = SD_CACHE_DBCACHE;
-                cache_params.Fn_compute_blocks       = 8;
-                cache_params.Bn_compute_blocks       = 0;
-                cache_params.residual_diff_threshold = 0.08f;
-                cache_params.max_warmup_steps        = 8;
+                cache_params.mode = SD_CACHE_DBCACHE;
             } else if (cache_mode == "taylorseer") {
-                cache_params.mode                    = SD_CACHE_TAYLORSEER;
-                cache_params.Fn_compute_blocks       = 8;
-                cache_params.Bn_compute_blocks       = 0;
-                cache_params.residual_diff_threshold = 0.08f;
-                cache_params.max_warmup_steps        = 8;
+                cache_params.mode = SD_CACHE_TAYLORSEER;
             } else if (cache_mode == "cache-dit") {
-                cache_params.mode                    = SD_CACHE_CACHE_DIT;
-                cache_params.Fn_compute_blocks       = 8;
-                cache_params.Bn_compute_blocks       = 0;
-                cache_params.residual_diff_threshold = 0.08f;
-                cache_params.max_warmup_steps        = 8;
+                cache_params.mode = SD_CACHE_CACHE_DIT;
             } else if (cache_mode == "spectrum") {
-                cache_params.mode                  = SD_CACHE_SPECTRUM;
-                cache_params.spectrum_w            = 0.40f;
-                cache_params.spectrum_m            = 3;
-                cache_params.spectrum_lam          = 1.0f;
-                cache_params.spectrum_window_size  = 2;
-                cache_params.spectrum_flex_window  = 0.50f;
-                cache_params.spectrum_warmup_steps = 4;
-                cache_params.spectrum_stop_percent = 0.9f;
+                cache_params.mode = SD_CACHE_SPECTRUM;
             }
 
             if (!cache_option.empty()) {
