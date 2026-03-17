@@ -3718,13 +3718,13 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
             conn.request( self.command, self.path, body=body, headers=headers)
             resp = conn.getresponse()
         except OSError as e:
-            reload_page = """
+            502_page = """
             <!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>KoboldCpp - Loading</title>
+                <title>502 - KoboldCpp</title>
                 <style>
                     * {
                         margin: 0;
@@ -3747,7 +3747,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                         border-radius: 4px;
                         padding: 0;
                         width: 90%;
-                        max-width: 450px;
+                        max-width: 550px;
                         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
                         position: absolute;
                         top: 50%;
@@ -3795,12 +3795,12 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
             <body>
                 <dialog open>
                     <div class="dialog-header">
-                        <h2>KoboldCpp is Loading</h2>
+                        <h2>KoboldCpp is not available.</h2>
                     </div>
                     <div class="dialog-content">
-                        <p>KoboldCpp is currently loading models.</p>
-                        <p>It may take some time before the new instance is ready to use.</p>
-                        <p>Your browser should automatically refresh once complete.</p>
+                        <p>It may take some time during a model (re)load before it is ready to use.</p>
+                        <p>Taking a long time for this message to go away?<br>It may have crashed, check the logs.</p>
+                        <p>Your browser should automatically refresh when KoboldCpp is back online.</p>
                     </div>
                 </dialog>
             </body>
@@ -3820,9 +3820,9 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
             """
             self.send_response(502)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(reload_page.encode("utf-8"))))
+            self.send_header("Content-Length", str(len(502_page.encode("utf-8"))))
             self.end_headers()
-            self.wfile.write(reload_page.encode("utf-8"))
+            self.wfile.write(502_page.encode("utf-8"))
             return
 
         self.send_response(resp.status, resp.reason) # forward response headers
