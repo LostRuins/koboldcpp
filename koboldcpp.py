@@ -5824,7 +5824,7 @@ def RunServerMultiThreaded(addr, port, server_handler):
 
     # Use a larger stack size for threads to avoid stack overflow in grammar parsing
     try:
-        threading.stack_size(4 * 1024 * 1024)
+        threading.stack_size(8 * 1024 * 1024)
     except Exception:
         pass
 
