@@ -5827,8 +5827,8 @@ def RunServerMultiThreaded(addr, port, server_handler):
     # Use a larger stack size for threads to avoid stack overflow in grammar parsing
     try:
         threading.stack_size(8 * 1024 * 1024)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Could not set thread stack size: {e}")
 
     class Thread(threading.Thread):
         def __init__(self, i):
