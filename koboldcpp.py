@@ -4026,6 +4026,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                             tc["function"]["arguments"] = json.dumps(tcarg)
                     recvtxt = None
                     currfinishreason = "tool_calls"
+                    if args.debugmode:
+                        print(f"Debug ToolCall Response: {json.dumps(tool_calls)}")
 
         if api_format == 1:
             res = {"data": {"seqs": [recvtxt]}}
