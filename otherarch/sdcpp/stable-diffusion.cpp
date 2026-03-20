@@ -372,67 +372,70 @@ public:
             tempver = model_loader.get_sd_version();
         }
 
-        bool iswan = (tempver==VERSION_WAN2 || tempver==VERSION_WAN2_2_I2V || tempver==VERSION_WAN2_2_TI2V);
-        bool isqwenimg = (tempver==VERSION_QWEN_IMAGE);
-        bool iszimg = (tempver==VERSION_Z_IMAGE);
-        bool isflux2 = (tempver==VERSION_FLUX2);
-        bool isflux2k = (tempver==VERSION_FLUX2_KLEIN);
+        bool is_wan = sd_version_is_wan(tempver);
+        bool is_wan21 = sd_version_is_wan(tempver) && tempver != VERSION_WAN2_2_TI2V;
+        bool is_qwenimg = sd_version_is_qwen_image(tempver);
         bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
-        bool is_anima = (tempver==VERSION_ANIMA);
-        bool conditioner_is_llm = (isqwenimg||iszimg||isflux2||isflux2k||is_ovis||is_anima);
+        bool has_t5 = sd_version_is_sd3(tempver) || (sd_version_is_flux(tempver) && !is_ovis) || is_wan;
+        bool has_clip_or_t5 = sd_version_is_unet(tempver) || has_t5;
 
-        //kcpp qol fallback: if qwen image, and they loaded the qwen2vl llm as t5 by mistake
-        if(conditioner_is_llm && t5_path_fixed!="")
-        {
-            if(clipl_path_fixed=="" && clipg_path_fixed=="")
-            {
-                clipl_path_fixed = t5_path_fixed;
-                t5_path_fixed = "";
-            }
-            else if(clipl_path_fixed=="" && clipg_path_fixed!="")
-            {
-                clipl_path_fixed = t5_path_fixed;
-                t5_path_fixed = "";
-            }
-            else if(clipl_path_fixed!="" && clipg_path_fixed=="")
-            {
-                //very tricky case. see if we can tell if clipl is an mmproj, if so move to right place
-                if(toLowerCase(clipl_path_fixed).find("mmproj") != std::string::npos)
-                {
-                    clipg_path_fixed = clipl_path_fixed;
-                    clipl_path_fixed = t5_path_fixed;
-                    t5_path_fixed = "";
+        auto swap_to = [](const char* name, std::string& dst, std::string& src) {
+            LOG_INFO("swap %s from '%s'", name, src.c_str());
+            dst.swap(src);
+        };
+
+        if (has_clip_or_t5) {
+
+            if(is_wan) {
+                if (clip_vision_fixed == "" && clipl_path_fixed != "") {
+                    swap_to("clip_vision", clip_vision_fixed, clipl_path_fixed);
+                }
+                if (clipg_path_fixed != "") {
+                    if (t5_path_fixed == "") {
+                        swap_to("umt5_xxl", t5_path_fixed, clipg_path_fixed);
+                    } else if (clip_vision_fixed == "") {
+                        swap_to("clip_vision", clip_vision_fixed, clipg_path_fixed);
+                    } else {
+                        LOG_WARN("unused model '%s'", clipg_path_fixed.c_str());
+                        clipg_path_fixed = "";
+                    }
                 }
             }
-        }
 
-        if (clipl_path_fixed!="") {
-            if(iswan)
-            {
-                LOG_INFO("swap clip_vision from '%s'", clipl_path_fixed.c_str());
-                clip_vision_fixed = clipl_path_fixed;
-                clipl_path_fixed = "";
-            }
-            if(conditioner_is_llm)
-            {
-                LOG_INFO("swap llm from '%s'", clipl_path_fixed.c_str());
-                llm_path_fixed = clipl_path_fixed;
-                clipl_path_fixed = "";
-            }
-        }
+        } else {
 
-        if (clipg_path_fixed!="") {
-            if(iswan)
-            {
-                LOG_INFO("swap clip_vision from '%s'", clipg_path_fixed.c_str());
-                clip_vision_fixed = clipg_path_fixed;
-                clipg_path_fixed = "";
+            std::string * conditioners[3] = {&clipl_path_fixed, &clipg_path_fixed, &t5_path_fixed};
+
+            if(is_qwenimg) {
+                for (auto conditioner: conditioners) {
+                    if (*conditioner != "") {
+                        // assume the llm comes first, unless we see "mmproj" in the filename
+                        if (clip_vision_fixed == "" && toLowerCase(*conditioner).find("mmproj") != std::string::npos) {
+                            swap_to("clip_vision", clip_vision_fixed, *conditioner);
+                        } else if (llm_path_fixed == "") {
+                            swap_to("llm", llm_path_fixed, *conditioner);
+                        } else if (clip_vision_fixed == "") {
+                            swap_to("clip_vision", clip_vision_fixed, *conditioner);
+                        }
+                    }
+                }
             }
-            if(isqwenimg)
-            {
-                LOG_INFO("swap llm mmproj from '%s'", clipg_path_fixed.c_str());
-                llm_path_fixed = clipg_path_fixed;
-                clipg_path_fixed = "";
+
+            else {
+                // assume it's a model with a single llm conditioner (z-image, flux2, ...)
+                for (auto conditioner: conditioners) {
+                    if (llm_path_fixed == "" && *conditioner != "") {
+                        swap_to("llm", llm_path_fixed, *conditioner);
+                        break;
+                    }
+                }
+            }
+
+            for (auto conditioner: conditioners) {
+                if (*conditioner != "") {
+                    LOG_WARN("unused model '%s'", conditioner->c_str());
+                    *conditioner = "";
+                }
             }
         }
 
@@ -460,7 +463,7 @@ public:
             {
                 to_replace = "taesd_f2.embd";
             }
-            else if((sd_version_is_wan(tempver) && tempver != VERSION_WAN2_2_TI2V)||sd_version_is_qwen_image(tempver)||sd_version_is_anima(tempver))
+            else if(is_wan21||is_qwenimg||sd_version_is_anima(tempver))
             {
                 to_replace = "taesd_w21.embd";
             }
