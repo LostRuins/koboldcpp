@@ -1000,6 +1000,12 @@ static std::vector<std::string> generate_phase1_batch(
                     seqs[i].fsm.update(tok);
                 if (tok == TOKEN_THINK_END && !seqs[i].codes_phase) {
                     seqs[i].codes_phase = true;
+                    // In lyrics mode (Phase 1), immediately force IM_END to stop generation
+                    // This prevents the quantized model from continuing indefinitely
+                    if (lyrics_mode && !stop_at_reasoning) {
+                        forced_tokens.clear();
+                        forced_tokens.push_back(TOKEN_IM_END);
+                    }
                     if (stop_at_reasoning) {
                         seqs[i].gen_tokens.push_back(tok);
                         seqs[i].done = true;
