@@ -1001,7 +1001,7 @@ static std::vector<std::string> generate_phase1_batch(
                 if (tok == TOKEN_THINK_END && !seqs[i].codes_phase) {
                     seqs[i].codes_phase = true;
                     // In lyrics mode (Phase 1), immediately force IM_END to stop generation
-                    // This prevents the quantized model from continuing indefinitely
+                    // This prevents models from continuing indefinitely
                     if (lyrics_mode && !stop_at_reasoning) {
                         forced_tokens.clear();
                         forced_tokens.push_back(TOKEN_IM_END);
