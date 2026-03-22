@@ -945,6 +945,9 @@ static void parse_cache_options(sd_cache_params_t & params, const std::string& c
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
+    recent_data = "";
+    recent_data2 = "";
+
     sd_generation_outputs output;
 
     if(sd_ctx == nullptr || sd_params == nullptr)
@@ -1437,7 +1440,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         if (png != NULL)
         {
             recent_data = kcpp_base64_encode(png,out_data_len);
-            recent_data2 = "";
             free(png);
         }
     }
@@ -1483,8 +1485,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                         printf("Save Failed!\n");
                     }
                 }
-                recent_data = "";
-                recent_data2 = "";
                 if(status==0 && out_len>0)
                 {
                     recent_data = kcpp_base64_encode(out_data, out_len);
@@ -1515,7 +1515,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 if (png != NULL)
                 {
                     recent_data = kcpp_base64_encode(png,out_data_len);
-                    recent_data2 = "";
                     free(png);
                 }
             }
@@ -1547,6 +1546,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 {
+    recent_data = "";
+    recent_data2 = "";
+
     sd_generation_outputs output;
     output.data = "";
     output.data_extra = "";
@@ -1587,7 +1589,6 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
         if (png != NULL)
         {
             recent_data = kcpp_base64_encode(png,out_data_len);
-            recent_data2 = "";
             free(png);
         }
         free(upscaled_image.data);
