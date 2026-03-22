@@ -1420,7 +1420,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         return output;
     }
 
-    bool wasanim = false;
+    bool isanim = (vid_req_frames>1 && generated_num_results>1 && is_vid_model);
     sd_image_t upscaled_image;
     upscaled_image.data = nullptr;
 
@@ -1433,9 +1433,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         {
             printf("Upscaling original image (passthrough)...\n");
             upscaled_image = upscale(upscaler_ctx, input_image, 2);
-            png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, get_image_params(params, lora_meta).c_str());
+            png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, nullptr);
         } else {
-            png = stbi_write_png_to_mem(input_image.data, 0, input_image.width, input_image.height, input_image.channel, &out_data_len, get_image_params(params, lora_meta).c_str());
+            png = stbi_write_png_to_mem(input_image.data, 0, input_image.width, input_image.height, input_image.channel, &out_data_len, nullptr);
         }
         if (png != NULL)
         {
@@ -1452,7 +1452,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             }
 
             //if multiframe, make a video
-            if(vid_req_frames>1 && generated_num_results>1 && is_vid_model)
+            if(isanim)
             {
                 if(!sd_is_quiet && sddebugmode==1)
                 {
@@ -1464,7 +1464,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 size_t out_len2 = 0;
                 int status = 0;
                 int status2 = 0;
-                wasanim = true;
 
                 if(video_output_type==0 || video_output_type==2)
                 {
@@ -1503,13 +1502,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             {
                 int out_data_len;
                 unsigned char * png = nullptr;
+                std::string meta_image_info = get_image_params(params, lora_meta).c_str();
                 if(inputs.upscale && upscaler_ctx != nullptr)
                 {
                     printf("Upscaling output image...\n");
                     upscaled_image = upscale(upscaler_ctx, results[i], 2);
-                    png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, nullptr);
+                    png = stbi_write_png_to_mem(upscaled_image.data, 0, upscaled_image.width, upscaled_image.height, upscaled_image.channel, &out_data_len, meta_image_info.c_str());
                 } else {
-                    png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, nullptr);
+                    png = stbi_write_png_to_mem(results[i].data, 0, results[i].width, results[i].height, results[i].channel, &out_data_len, meta_image_info.c_str());
                 }
 
                 if (png != NULL)
@@ -1533,7 +1533,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     free(results);
     output.data = recent_data.c_str();
     output.data_extra = recent_data2.c_str();
-    output.animated = (wasanim?1:0);
+    output.animated = (isanim?1:0);
     output.status = 1;
     total_img_gens += 1;
     if(!sd_is_quiet)
