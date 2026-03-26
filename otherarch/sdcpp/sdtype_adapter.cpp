@@ -150,8 +150,6 @@ static SDParams * sd_params = nullptr;
 static sd_ctx_t * sd_ctx = nullptr;
 static upscaler_ctx_t* upscaler_ctx = nullptr;
 static int sddebugmode = 0;
-static std::string recent_data = "";
-static std::string recent_data2 = ""; //for cases when we have 2 outputs
 static uint8_t * input_image_buffer = NULL;
 static uint8_t * input_mask_buffer = NULL;
 static uint8_t * upscale_src_buffer = NULL;
@@ -169,6 +167,30 @@ static bool photomaker_enabled = false;
 
 static bool is_vid_model = false;
 static bool remove_limits = false;
+
+static struct {
+    std::string data;
+    std::string data_extra;
+    bool animated;
+    void reset() {
+        data = "";
+        data_extra = "";
+        animated = false;
+    }
+    sd_generation_outputs outputs(int status) {
+        sd_generation_outputs output;
+        output.status = status;
+        output.data = data.c_str();
+        output.data_extra = data_extra.c_str();
+        output.animated = animated;
+        return output;
+    }
+    sd_generation_outputs error(const char* message) {
+        reset();
+        printf("\n%s\n", message);
+        return outputs(0);
+    }
+} sd_generation;
 
 static int get_loaded_sd_version(sd_ctx_t* ctx)
 {
@@ -954,22 +976,11 @@ static std::string raw_image_to_png_base64(const sd_image_t& img, std::string pa
     return result;
 }
 
-
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
-    recent_data = "";
-    recent_data2 = "";
-
-    sd_generation_outputs output;
-
     if(sd_ctx == nullptr || sd_params == nullptr)
     {
-        printf("\nWarning: KCPP image generation not initialized!\n");
-        output.data = "";
-        output.data_extra = "";
-        output.animated = 0;
-        output.status = 0;
-        return output;
+        return sd_generation.error("Warning: KCPP image generation not initialized!");
     }
     sd_image_t * results = nullptr;
 
@@ -1360,12 +1371,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         input_image_buffer = load_image_from_b64(img2img_data,nx,ny,img2imgW,img2imgH,3);
 
         if (!input_image_buffer) {
-            printf("\nKCPP SD: load image from memory failed!\n");
-            output.data = "";
-            output.data_extra = "";
-            output.animated = 0;
-            output.status = 0;
-            return output;
+            return sd_generation.error("KCPP SD: load image from memory failed!");
         }
 
         if(img2img_mask!="")
@@ -1424,17 +1430,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     if (!is_passthrough && results == NULL) {
-        printf("\nKCPP SD generate failed!\n");
-        output.data = "";
-        output.data_extra = "";
-        output.animated = 0;
-        output.status = 0;
-        return output;
+        return sd_generation.error("KCPP SD generate failed!");
     }
 
     bool isanim = (vid_req_frames>1 && generated_num_results>1 && is_vid_model);
     sd_image_t upscaled_image;
     upscaled_image.data = nullptr;
+    std::string gen_data;
+    std::string gen_data2;
 
     if (is_passthrough)
     {
@@ -1446,7 +1449,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             upscaled_image = upscale(upscaler_ctx, input_image, 2);
             result_image = &upscaled_image;
         }
-        recent_data = raw_image_to_png_base64(*result_image);
+        gen_data = raw_image_to_png_base64(*result_image);
     }
     else
     {
@@ -1491,14 +1494,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 }
                 if(status==0 && out_len>0)
                 {
-                    recent_data = kcpp_base64_encode(out_data, out_len);
+                    gen_data = kcpp_base64_encode(out_data, out_len);
                     free(out_data);
                 }
                 if (status2 == 0 && out_len2 > 0) {
-                    if (recent_data == "") {
-                        recent_data = kcpp_base64_encode(out_data2, out_len2);
+                    if (gen_data == "") {
+                        gen_data = kcpp_base64_encode(out_data2, out_len2);
                     } else {
-                        recent_data2 = kcpp_base64_encode(out_data2, out_len2);
+                        gen_data2 = kcpp_base64_encode(out_data2, out_len2);
                     }
                     free(out_data2);
                 }
@@ -1513,7 +1516,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                     result_image = &upscaled_image;
                 }
                 std::string meta_image_info = get_image_params(params, lora_meta);
-                recent_data = raw_image_to_png_base64(*result_image, meta_image_info);
+                gen_data = raw_image_to_png_base64(*result_image, meta_image_info);
             }
 
             free(results[i].data);
@@ -1528,37 +1531,27 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     free(results);
-    output.data = recent_data.c_str();
-    output.data_extra = recent_data2.c_str();
-    output.animated = (isanim?1:0);
-    output.status = 1;
+
     total_img_gens += 1;
     if(!sd_is_quiet)
     {
         std::string ts = get_timestamp_str();
         printf("[%s] Generating Media Complete\n",ts.c_str());
     }
-    return output;
+
+    sd_generation.data = gen_data;
+    sd_generation.data_extra = gen_data2;
+    sd_generation.animated = isanim;
+    return sd_generation.outputs(1);
 }
 
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 {
-    recent_data = "";
-    recent_data2 = "";
+    sd_generation.reset();
 
-    sd_generation_outputs output;
-    output.data = "";
-    output.data_extra = "";
-    output.animated = 0;
-    output.status = 0;
     if(sd_ctx == nullptr || upscaler_ctx == nullptr || sd_params == nullptr)
     {
-        printf("\nWarning: KCPP image upscaling not initialized!\n");
-        output.data = "";
-        output.data_extra = "";
-        output.animated = 0;
-        output.status = 0;
-        return output;
+        return sd_generation.error("Warning: KCPP image upscaling not initialized!");
     }
 
     std::string rawb64 = inputs.init_images;
@@ -1573,6 +1566,7 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
     sd_image_t upscaled_image;
     source_img.data = nullptr;
     upscaled_image.data = nullptr;
+    std::string result;
     if(upscale_src_buffer)
     {
         source_img.width = nx;
@@ -1581,15 +1575,17 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
         source_img.data = upscale_src_buffer;
 
         upscaled_image = upscale(upscaler_ctx, source_img, inputs.upscaling_resize);
-        recent_data = raw_image_to_png_base64(upscaled_image);
+        result = raw_image_to_png_base64(upscaled_image);
         free(upscaled_image.data);
-        output.data = recent_data.c_str();
-        output.data_extra = recent_data2.c_str();
-        output.animated = 0;
-        output.status = 1;
+
     }
 
-    return output;
+    if (result == "") {
+        return sd_generation.error("Warning: KCPP failed to upscale image");
+    }
+
+    sd_generation.data = result;
+    return sd_generation.outputs(1);
 }
 
 sd_info_outputs sdtype_get_info()
