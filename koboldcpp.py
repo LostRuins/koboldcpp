@@ -376,7 +376,8 @@ class sd_generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
                 ("animated", ctypes.c_int),
                 ("data", ctypes.c_char_p),
-                ("data_extra", ctypes.c_char_p)]
+                ("data_extra", ctypes.c_char_p),
+                ("info", ctypes.c_char_p)]
 
 class sd_upscale_inputs(ctypes.Structure):
     _fields_ = [("init_images", ctypes.c_char_p),
@@ -2468,12 +2469,14 @@ def sd_generate(genparams):
     ret = handle.sd_generate(inputs)
     data_main = ""
     data_extra = ""
+    info = {}
     animated = False
     if ret.status==1:
         data_main = ret.data.decode("UTF-8","ignore")
         data_extra = ret.data_extra.decode("UTF-8","ignore")
+        info = json.loads(ret.info.decode("UTF-8","ignore"))
         animated = True if ret.animated else False
-    return {"animated": animated, "data":data_main, "data_extra":data_extra}
+    return {"animated": animated, "data":data_main, "data_extra":data_extra, "info": info}
 
 
 def whisper_load_model(model_filename):
@@ -5687,6 +5690,7 @@ Change Mode<br>
                         gendat = gen["data"]
                         genanim = gen["animated"]
                         gendatextra = gen["data_extra"]
+                        geninfo = json.dumps(gen["info"]) # sdapi really expects a stringified JSON
                         genresp = None
                         if is_comfyui_imggen:
                             if gendat:
@@ -5697,7 +5701,7 @@ Change Mode<br>
                         elif is_oai_imggen:
                             genresp = (json.dumps({"created":int(time.time()),"data":[{"b64_json":gendat}],"background":"opaque","output_format":"png","size":"1024x1024","quality":"medium"}).encode())
                         else:
-                            genresp = (json.dumps({"images":[gendat],"parameters":{},"info":"","animated":genanim,"extra_data":gendatextra}).encode())
+                            genresp = (json.dumps({"images":[gendat],"parameters":{},"info":geninfo,"animated":genanim,"extra_data":gendatextra}).encode())
                         self.send_response(200)
                         self.send_header('content-length', str(len(genresp)))
                         self.end_headers(content_type='application/json')

@@ -239,6 +239,7 @@ struct sd_generation_outputs
     int animated = 0;
     const char * data = "";
     const char * data_extra = "";
+    const char * info = "";
 };
 struct sd_upscale_inputs
 {
