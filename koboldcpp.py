@@ -2877,6 +2877,7 @@ def websearch(query):
 def is_port_in_use(portNum):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
             return s.connect_ex(('localhost', portNum)) == 0
     except Exception:
         return True
