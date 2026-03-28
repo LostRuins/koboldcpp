@@ -1023,7 +1023,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         sd_params->sample_method = sd_get_default_sample_method(sd_ctx);
     }
 
-    SetCircularAxesAll(sd_ctx, inputs.circular_x, inputs.circular_y);
+    sd_ctx->sd->SetCircularAxesAll(inputs.circular_x, inputs.circular_y);
 
     sd_params->cache_mode    = inputs.cache_mode ? inputs.cache_mode : "";
     sd_params->cache_options = inputs.cache_options ? inputs.cache_options : "";

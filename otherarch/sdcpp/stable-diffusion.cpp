@@ -4655,9 +4655,4 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     return result_images;
 }
 
-//added for kcpp
-void SetCircularAxesAll(sd_ctx_t* sd_ctx, bool circular_x, bool circular_y)
-{
-    sd_ctx->sd->SetCircularAxesAll(circular_x, circular_y);
-}
-//end added for kcpp
+
