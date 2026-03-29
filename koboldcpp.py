@@ -1248,15 +1248,6 @@ def get_capabilities():
     has_music = (musicdiffusionmodelpath!="" or musicllmmodelpath!="") or (autoswapmode and musicName is not None)
     visionSupport = (has_vision_support) or (autoswapmode and mmprojName is not None)
     audioSupport = (has_audio_support) # or (autoswapmode and mmprojName is not None)
-    if autoswapmode and embedName is not None:
-        embeddingModel = embedName
-    else:
-        embeddingModel = ""
-        try:
-            embeddingModel = os.path.basename(embeddingsmodelpath)
-            embeddingModel = os.path.splitext(embeddingModel)[0]
-        except:
-            embeddingModel = ""
     has_guidance = True if args.enableguidance else False
     has_jinja = True if args.jinja else False
     has_mcp = True if (args.mcpfile and mcp_connections and len(mcp_connections) > 0) else False
@@ -3940,8 +3931,6 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                         self.send_error(504, "KoboldCpp model swap reload timed out")
                         return
                     time.sleep(0.1)
-        # else:
-        #     global_memory["swapReqType"] = None
 
         try:  # connect upstream
             conn = http.client.HTTPConnection('localhost', upstream_port, timeout=600)
