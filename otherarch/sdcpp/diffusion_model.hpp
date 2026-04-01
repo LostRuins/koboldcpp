@@ -1,42 +1,50 @@
 #ifndef __DIFFUSION_MODEL_H__
 #define __DIFFUSION_MODEL_H__
 
+#include <optional>
 #include "anima.hpp"
 #include "flux.hpp"
 #include "mmdit.hpp"
 #include "qwen_image.hpp"
+#include "tensor_ggml.hpp"
 #include "unet.hpp"
 #include "wan.hpp"
 #include "z_image.hpp"
 
 struct DiffusionParams {
-    struct ggml_tensor* x                     = nullptr;
-    struct ggml_tensor* timesteps             = nullptr;
-    struct ggml_tensor* context               = nullptr;
-    struct ggml_tensor* c_concat              = nullptr;
-    struct ggml_tensor* y                     = nullptr;
-    struct ggml_tensor* guidance              = nullptr;
-    std::vector<ggml_tensor*> ref_latents     = {};
-    bool increase_ref_index                   = false;
-    int num_video_frames                      = -1;
-    std::vector<struct ggml_tensor*> controls = {};
-    float control_strength                    = 0.f;
-    struct ggml_tensor* vace_context          = nullptr;
-    float vace_strength                       = 1.f;
-    std::vector<int> skip_layers              = {};
+    const sd::Tensor<float>* x                        = nullptr;
+    const sd::Tensor<float>* timesteps                = nullptr;
+    const sd::Tensor<float>* context                  = nullptr;
+    const sd::Tensor<float>* c_concat                 = nullptr;
+    const sd::Tensor<float>* y                        = nullptr;
+    const sd::Tensor<int32_t>* t5_ids                 = nullptr;
+    const sd::Tensor<float>* t5_weights               = nullptr;
+    const sd::Tensor<float>* guidance                 = nullptr;
+    const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
+    bool increase_ref_index                           = false;
+    int num_video_frames                              = -1;
+    const std::vector<sd::Tensor<float>>* controls    = nullptr;
+    float control_strength                            = 0.f;
+    const sd::Tensor<float>* vace_context             = nullptr;
+    float vace_strength                               = 1.f;
+    const std::vector<int>* skip_layers               = nullptr;
 };
 
+template <typename T>
+static inline const sd::Tensor<T>& tensor_or_empty(const sd::Tensor<T>* tensor) {
+    static const sd::Tensor<T> kEmpty;
+    return tensor != nullptr ? *tensor : kEmpty;
+}
+
 struct DiffusionModel {
-    virtual std::string get_desc()                                                      = 0;
-    virtual bool compute(int n_threads,
-                         DiffusionParams diffusion_params,
-                         struct ggml_tensor** output     = nullptr,
-                         struct ggml_context* output_ctx = nullptr)                     = 0;
-    virtual void alloc_params_buffer()                                                  = 0;
-    virtual void free_params_buffer()                                                   = 0;
-    virtual void free_compute_buffer()                                                  = 0;
-    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) = 0;
-    virtual size_t get_params_buffer_size()                                             = 0;
+    virtual std::string get_desc()                                               = 0;
+    virtual sd::Tensor<float> compute(int n_threads,
+                                      const DiffusionParams& diffusion_params)   = 0;
+    virtual void alloc_params_buffer()                                           = 0;
+    virtual void free_params_buffer()                                            = 0;
+    virtual void free_compute_buffer()                                           = 0;
+    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) = 0;
+    virtual size_t get_params_buffer_size()                                      = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter){};
     virtual int64_t get_adm_in_channels()                            = 0;
     virtual void set_flash_attention_enabled(bool enabled)           = 0;
@@ -69,7 +77,7 @@ struct UNetModel : public DiffusionModel {
         unet.free_compute_buffer();
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         unet.get_param_tensors(tensors, "model.diffusion_model");
     }
 
@@ -93,19 +101,20 @@ struct UNetModel : public DiffusionModel {
         unet.set_circular_axes(circular_x, circular_y);
     }
 
-    bool compute(int n_threads,
-                 DiffusionParams diffusion_params,
-                 struct ggml_tensor** output     = nullptr,
-                 struct ggml_context* output_ctx = nullptr) override {
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        static const std::vector<sd::Tensor<float>> empty_controls;
         return unet.compute(n_threads,
-                            diffusion_params.x,
-                            diffusion_params.timesteps,
-                            diffusion_params.context,
-                            diffusion_params.c_concat,
-                            diffusion_params.y,
+                            *diffusion_params.x,
+                            *diffusion_params.timesteps,
+                            tensor_or_empty(diffusion_params.context),
+                            tensor_or_empty(diffusion_params.c_concat),
+                            tensor_or_empty(diffusion_params.y),
                             diffusion_params.num_video_frames,
-                            diffusion_params.controls,
-                            diffusion_params.control_strength, output, output_ctx);
+                            diffusion_params.controls ? *diffusion_params.controls : empty_controls,
+                            diffusion_params.control_strength);
     }
 };
 
@@ -134,7 +143,7 @@ struct MMDiTModel : public DiffusionModel {
         mmdit.free_compute_buffer();
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         mmdit.get_param_tensors(tensors, "model.diffusion_model");
     }
 
@@ -158,18 +167,17 @@ struct MMDiTModel : public DiffusionModel {
         mmdit.set_circular_axes(circular_x, circular_y);
     }
 
-    bool compute(int n_threads,
-                 DiffusionParams diffusion_params,
-                 struct ggml_tensor** output     = nullptr,
-                 struct ggml_context* output_ctx = nullptr) override {
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        static const std::vector<int> empty_skip_layers;
         return mmdit.compute(n_threads,
-                             diffusion_params.x,
-                             diffusion_params.timesteps,
-                             diffusion_params.context,
-                             diffusion_params.y,
-                             output,
-                             output_ctx,
-                             diffusion_params.skip_layers);
+                             *diffusion_params.x,
+                             *diffusion_params.timesteps,
+                             tensor_or_empty(diffusion_params.context),
+                             tensor_or_empty(diffusion_params.y),
+                             diffusion_params.skip_layers ? *diffusion_params.skip_layers : empty_skip_layers);
     }
 };
 
@@ -200,7 +208,7 @@ struct FluxModel : public DiffusionModel {
         flux.free_compute_buffer();
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         flux.get_param_tensors(tensors, "model.diffusion_model");
     }
 
@@ -224,22 +232,22 @@ struct FluxModel : public DiffusionModel {
         flux.set_circular_axes(circular_x, circular_y);
     }
 
-    bool compute(int n_threads,
-                 DiffusionParams diffusion_params,
-                 struct ggml_tensor** output     = nullptr,
-                 struct ggml_context* output_ctx = nullptr) override {
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        static const std::vector<sd::Tensor<float>> empty_ref_latents;
+        static const std::vector<int> empty_skip_layers;
         return flux.compute(n_threads,
-                            diffusion_params.x,
-                            diffusion_params.timesteps,
-                            diffusion_params.context,
-                            diffusion_params.c_concat,
-                            diffusion_params.y,
-                            diffusion_params.guidance,
-                            diffusion_params.ref_latents,
+                            *diffusion_params.x,
+                            *diffusion_params.timesteps,
+                            tensor_or_empty(diffusion_params.context),
+                            tensor_or_empty(diffusion_params.c_concat),
+                            tensor_or_empty(diffusion_params.y),
+                            tensor_or_empty(diffusion_params.guidance),
+                            diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
                             diffusion_params.increase_ref_index,
-                            output,
-                            output_ctx,
-                            diffusion_params.skip_layers);
+                            diffusion_params.skip_layers ? *diffusion_params.skip_layers : empty_skip_layers);
     }
 };
 
@@ -270,7 +278,7 @@ struct AnimaModel : public DiffusionModel {
         anima.free_compute_buffer();
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         anima.get_param_tensors(tensors, prefix);
     }
 
@@ -294,18 +302,16 @@ struct AnimaModel : public DiffusionModel {
         anima.set_circular_axes(circular_x, circular_y);
     }
 
-    bool compute(int n_threads,
-                 DiffusionParams diffusion_params,
-                 struct ggml_tensor** output     = nullptr,
-                 struct ggml_context* output_ctx = nullptr) override {
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
         return anima.compute(n_threads,
-                             diffusion_params.x,
-                             diffusion_params.timesteps,
-                             diffusion_params.context,
-                             diffusion_params.c_concat,
-                             diffusion_params.y,
-                             output,
-                             output_ctx);
+                             *diffusion_params.x,
+                             *diffusion_params.timesteps,
+                             tensor_or_empty(diffusion_params.context),
+                             tensor_or_empty(diffusion_params.t5_ids),
+                             tensor_or_empty(diffusion_params.t5_weights));
     }
 };
 
@@ -337,7 +343,7 @@ struct WanModel : public DiffusionModel {
         wan.free_compute_buffer();
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         wan.get_param_tensors(tensors, prefix);
     }
 
@@ -361,21 +367,19 @@ struct WanModel : public DiffusionModel {
         wan.set_circular_axes(circular_x, circular_y);
     }
 
-    bool compute(int n_threads,
-                 DiffusionParams diffusion_params,
-                 struct ggml_tensor** output     = nullptr,
-                 struct ggml_context* output_ctx = nullptr) override {
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
         return wan.compute(n_threads,
-                           diffusion_params.x,
-                           diffusion_params.timesteps,
-                           diffusion_params.context,
-                           diffusion_params.y,
-                           diffusion_params.c_concat,
-                           nullptr,
-                           diffusion_params.vace_context,
-                           diffusion_params.vace_strength,
-                           output,
-                           output_ctx);
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           tensor_or_empty(diffusion_params.y),
+                           tensor_or_empty(diffusion_params.c_concat),
+                           sd::Tensor<float>(),
+                           tensor_or_empty(diffusion_params.vace_context),
+                           diffusion_params.vace_strength);
     }
 };
 
@@ -408,7 +412,7 @@ struct QwenImageModel : public DiffusionModel {
         qwen_image.free_compute_buffer();
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         qwen_image.get_param_tensors(tensors, prefix);
     }
 
@@ -432,18 +436,17 @@ struct QwenImageModel : public DiffusionModel {
         qwen_image.set_circular_axes(circular_x, circular_y);
     }
 
-    bool compute(int n_threads,
-                 DiffusionParams diffusion_params,
-                 struct ggml_tensor** output     = nullptr,
-                 struct ggml_context* output_ctx = nullptr) override {
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        static const std::vector<sd::Tensor<float>> empty_ref_latents;
         return qwen_image.compute(n_threads,
-                                  diffusion_params.x,
-                                  diffusion_params.timesteps,
-                                  diffusion_params.context,
-                                  diffusion_params.ref_latents,
-                                  true,  // increase_ref_index
-                                  output,
-                                  output_ctx);
+                                  *diffusion_params.x,
+                                  *diffusion_params.timesteps,
+                                  tensor_or_empty(diffusion_params.context),
+                                  diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                                  true);
     }
 };
 
@@ -475,7 +478,7 @@ struct ZImageModel : public DiffusionModel {
         z_image.free_compute_buffer();
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         z_image.get_param_tensors(tensors, prefix);
     }
 
@@ -499,18 +502,17 @@ struct ZImageModel : public DiffusionModel {
         z_image.set_circular_axes(circular_x, circular_y);
     }
 
-    bool compute(int n_threads,
-                 DiffusionParams diffusion_params,
-                 struct ggml_tensor** output     = nullptr,
-                 struct ggml_context* output_ctx = nullptr) override {
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        static const std::vector<sd::Tensor<float>> empty_ref_latents;
         return z_image.compute(n_threads,
-                               diffusion_params.x,
-                               diffusion_params.timesteps,
-                               diffusion_params.context,
-                               diffusion_params.ref_latents,
-                               true,  // increase_ref_index
-                               output,
-                               output_ctx);
+                               *diffusion_params.x,
+                               *diffusion_params.timesteps,
+                               tensor_or_empty(diffusion_params.context),
+                               diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                               true);
     }
 };
 

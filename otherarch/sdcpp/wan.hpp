@@ -25,7 +25,7 @@ namespace WAN {
         std::tuple<int, int, int> dilation;
         bool bias;
 
-        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             params["weight"] = ggml_new_tensor_4d(ctx,
                                                   GGML_TYPE_F16,
                                                   std::get<2>(kernel_size),
@@ -53,11 +53,11 @@ namespace WAN {
               dilation(std::move(dilation)),
               bias(bias) {}
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x, struct ggml_tensor* cache_x = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* cache_x = nullptr) {
             // x: [N*IC, ID, IH, IW]
             // result: x: [N*OC, ID, IH, IW]
-            struct ggml_tensor* w = params["weight"];
-            struct ggml_tensor* b = nullptr;
+            ggml_tensor* w = params["weight"];
+            ggml_tensor* b = nullptr;
             if (bias) {
                 b = params["bias"];
             }
@@ -86,7 +86,7 @@ namespace WAN {
     protected:
         int64_t dim;
 
-        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             ggml_type wtype = GGML_TYPE_F32;
             auto iter       = tensor_storage_map.find(prefix + "gamma");
             if (iter != tensor_storage_map.end()) {
@@ -100,16 +100,16 @@ namespace WAN {
         RMS_norm(int64_t dim)
             : dim(dim) {}
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             // x: [N*IC, ID, IH, IW], IC == dim
             // assert N == 1
 
-            struct ggml_tensor* w = params["gamma"];
-            w                     = ggml_reshape_1d(ctx->ggml_ctx, w, ggml_nelements(w));
-            auto h                = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 3, 0, 1, 2));  // [ID, IH, IW, N*IC]
-            h                     = ggml_rms_norm(ctx->ggml_ctx, h, 1e-12f);
-            h                     = ggml_mul(ctx->ggml_ctx, h, w);
-            h                     = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, h, 1, 2, 3, 0));
+            ggml_tensor* w = params["gamma"];
+            w              = ggml_reshape_1d(ctx->ggml_ctx, w, ggml_nelements(w));
+            auto h         = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 3, 0, 1, 2));  // [ID, IH, IW, N*IC]
+            h              = ggml_rms_norm(ctx->ggml_ctx, h, 1e-12f);
+            h              = ggml_mul(ctx->ggml_ctx, h, w);
+            h              = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, h, 1, 2, 3, 0));
 
             return h;
         }
@@ -148,12 +148,12 @@ namespace WAN {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    int64_t b,
-                                    std::vector<struct ggml_tensor*>& feat_cache,
-                                    int& feat_idx,
-                                    int chunk_idx) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             int64_t b,
+                             std::vector<ggml_tensor*>& feat_cache,
+                             int& feat_idx,
+                             int chunk_idx) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
             int64_t c = x->ne[3] / b;
@@ -254,9 +254,9 @@ namespace WAN {
             GGML_ASSERT(in_channels * factor % out_channels == 0);
             group_size = in_channels * factor / out_channels;
         }
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    int64_t B = 1) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             int64_t B = 1) {
             // x: [B*IC, T, H, W]
             // return: [B*OC, T/factor_t, H/factor_s, W/factor_s]
             GGML_ASSERT(B == 1);
@@ -301,10 +301,10 @@ namespace WAN {
             GGML_ASSERT(out_channels * factor % in_channels == 0);
             repeats = out_channels * factor / in_channels;
         }
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    bool first_chunk = false,
-                                    int64_t B        = 1) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             bool first_chunk = false,
+                             int64_t B        = 1) {
             // x: [B*IC, T, H, W]
             // return: [B*OC, T/factor_t, H/factor_s, W/factor_s]
             GGML_ASSERT(B == 1);
@@ -356,14 +356,14 @@ namespace WAN {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    int64_t b,
-                                    std::vector<struct ggml_tensor*>& feat_cache,
-                                    int& feat_idx) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             int64_t b,
+                             std::vector<ggml_tensor*>& feat_cache,
+                             int& feat_idx) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
-            struct ggml_tensor* h = x;
+            ggml_tensor* h = x;
             if (in_dim != out_dim) {
                 auto shortcut = std::dynamic_pointer_cast<CausalConv3d>(blocks["shortcut"]);
 
@@ -430,15 +430,15 @@ namespace WAN {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    int64_t b,
-                                    std::vector<struct ggml_tensor*>& feat_cache,
-                                    int& feat_idx,
-                                    int chunk_idx) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             int64_t b,
+                             std::vector<ggml_tensor*>& feat_cache,
+                             int& feat_idx,
+                             int chunk_idx) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
-            struct ggml_tensor* x_copy = x;
+            ggml_tensor* x_copy = x;
 
             auto avg_shortcut = std::dynamic_pointer_cast<AvgDown3D>(blocks["avg_shortcut"]);
 
@@ -492,15 +492,15 @@ namespace WAN {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    int64_t b,
-                                    std::vector<struct ggml_tensor*>& feat_cache,
-                                    int& feat_idx,
-                                    int chunk_idx) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             int64_t b,
+                             std::vector<ggml_tensor*>& feat_cache,
+                             int& feat_idx,
+                             int chunk_idx) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
-            struct ggml_tensor* x_copy = x;
+            ggml_tensor* x_copy = x;
 
             int i = 0;
             for (; i < mult; i++) {
@@ -537,9 +537,9 @@ namespace WAN {
             blocks["proj"]   = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim, {1, 1}));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    int64_t b) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             int64_t b) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
             auto norm   = std::dynamic_pointer_cast<RMS_norm>(blocks["norm"]);
@@ -659,12 +659,12 @@ namespace WAN {
             blocks["head.2"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(out_dim, z_dim, {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    int64_t b,
-                                    std::vector<struct ggml_tensor*>& feat_cache,
-                                    int& feat_idx,
-                                    int chunk_idx) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             int64_t b,
+                             std::vector<ggml_tensor*>& feat_cache,
+                             int& feat_idx,
+                             int chunk_idx) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
             auto conv1    = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
@@ -830,12 +830,12 @@ namespace WAN {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    int64_t b,
-                                    std::vector<struct ggml_tensor*>& feat_cache,
-                                    int& feat_idx,
-                                    int chunk_idx) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             int64_t b,
+                             std::vector<ggml_tensor*>& feat_cache,
+                             int& feat_idx,
+                             int chunk_idx) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
             auto conv1    = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
@@ -934,16 +934,16 @@ namespace WAN {
 
         int _conv_num = 33;
         int _conv_idx = 0;
-        std::vector<struct ggml_tensor*> _feat_map;
+        std::vector<ggml_tensor*> _feat_map;
         int _enc_conv_num = 28;
         int _enc_conv_idx = 0;
-        std::vector<struct ggml_tensor*> _enc_feat_map;
+        std::vector<ggml_tensor*> _enc_feat_map;
 
         void clear_cache() {
             _conv_idx     = 0;
-            _feat_map     = std::vector<struct ggml_tensor*>(_conv_num, nullptr);
+            _feat_map     = std::vector<ggml_tensor*>(_conv_num, nullptr);
             _enc_conv_idx = 0;
-            _enc_feat_map = std::vector<struct ggml_tensor*>(_enc_conv_num, nullptr);
+            _enc_feat_map = std::vector<ggml_tensor*>(_enc_conv_num, nullptr);
         }
 
     public:
@@ -966,10 +966,10 @@ namespace WAN {
             blocks["conv2"]   = std::shared_ptr<GGMLBlock>(new CausalConv3d(z_dim, z_dim, {1, 1, 1}));
         }
 
-        struct ggml_tensor* patchify(struct ggml_context* ctx,
-                                     struct ggml_tensor* x,
-                                     int64_t patch_size,
-                                     int64_t b = 1) {
+        ggml_tensor* patchify(ggml_context* ctx,
+                              ggml_tensor* x,
+                              int64_t patch_size,
+                              int64_t b = 1) {
             // x: [b*c, f, h*q, w*r]
             // return: [b*c*r*q, f, h, w]
             if (patch_size == 1) {
@@ -993,10 +993,10 @@ namespace WAN {
             return x;
         }
 
-        struct ggml_tensor* unpatchify(struct ggml_context* ctx,
-                                       struct ggml_tensor* x,
-                                       int64_t patch_size,
-                                       int64_t b = 1) {
+        ggml_tensor* unpatchify(ggml_context* ctx,
+                                ggml_tensor* x,
+                                int64_t patch_size,
+                                int64_t b = 1) {
             // x: [b*c*r*q, f, h, w]
             // return: [b*c, f, h*q, w*r]
             if (patch_size == 1) {
@@ -1019,9 +1019,9 @@ namespace WAN {
             return x;
         }
 
-        struct ggml_tensor* encode(GGMLRunnerContext* ctx,
-                                   struct ggml_tensor* x,
-                                   int64_t b = 1) {
+        ggml_tensor* encode(GGMLRunnerContext* ctx,
+                            ggml_tensor* x,
+                            int64_t b = 1) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
             GGML_ASSERT(decode_only == false);
@@ -1037,7 +1037,7 @@ namespace WAN {
 
             int64_t t     = x->ne[2];
             int64_t iter_ = 1 + (t - 1) / 4;
-            struct ggml_tensor* out;
+            ggml_tensor* out;
             for (int i = 0; i < iter_; i++) {
                 _enc_conv_idx = 0;
                 if (i == 0) {
@@ -1055,9 +1055,9 @@ namespace WAN {
             return mu;
         }
 
-        struct ggml_tensor* decode(GGMLRunnerContext* ctx,
-                                   struct ggml_tensor* z,
-                                   int64_t b = 1) {
+        ggml_tensor* decode(GGMLRunnerContext* ctx,
+                            ggml_tensor* z,
+                            int64_t b = 1) {
             // z: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
 
@@ -1068,7 +1068,7 @@ namespace WAN {
 
             int64_t iter_ = z->ne[2];
             auto x        = conv2->forward(ctx, z);
-            struct ggml_tensor* out;
+            ggml_tensor* out;
             for (int i = 0; i < iter_; i++) {
                 _conv_idx = 0;
                 if (i == 0) {
@@ -1087,10 +1087,10 @@ namespace WAN {
             return out;
         }
 
-        struct ggml_tensor* decode_partial(GGMLRunnerContext* ctx,
-                                           struct ggml_tensor* z,
-                                           int i,
-                                           int64_t b = 1) {
+        ggml_tensor* decode_partial(GGMLRunnerContext* ctx,
+                                    ggml_tensor* z,
+                                    int i,
+                                    int64_t b = 1) {
             // z: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
 
@@ -1109,7 +1109,8 @@ namespace WAN {
     };
 
     struct WanVAERunner : public VAE {
-        bool decode_only = true;
+        float scale_factor = 1.0f;
+        bool decode_only   = true;
         WanVAE ae;
 
         WanVAERunner(ggml_backend_t backend,
@@ -1118,7 +1119,7 @@ namespace WAN {
                      const std::string prefix                       = "",
                      bool decode_only                               = false,
                      SDVersion version                              = VERSION_WAN2)
-            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(backend, offload_params_to_cpu) {
+            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(version, backend, offload_params_to_cpu) {
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -1126,26 +1127,82 @@ namespace WAN {
             return "wan_vae";
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) override {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
             ae.get_param_tensors(tensors, prefix);
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
-            struct ggml_cgraph* gf = new_graph_custom(10240 * z->ne[2]);
+        sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+            SD_UNUSED(rng);
+            return vae_output;
+        }
 
-            z = to_backend(z);
+        std::pair<sd::Tensor<float>, sd::Tensor<float>> get_latents_mean_std(const sd::Tensor<float>& latents) {
+            int channel_dim = latents.dim() == 5 ? 3 : 2;
+            std::vector<int64_t> stats_shape(static_cast<size_t>(latents.dim()), 1);
+            if (latents.shape()[channel_dim] == 16) {  // Wan2.1 VAE
+                stats_shape[static_cast<size_t>(channel_dim)] = 16;
+
+                auto mean_tensor = sd::Tensor<float>::from_vector({-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
+                                                                   0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f});
+                mean_tensor.reshape_(stats_shape);
+                auto std_tensor = sd::Tensor<float>::from_vector({2.8184f, 1.4541f, 2.3275f, 2.6558f, 1.2196f, 1.7708f, 2.6052f, 2.0743f,
+                                                                  3.2687f, 2.1526f, 2.8652f, 1.5579f, 1.6382f, 1.1253f, 2.8251f, 1.9160f});
+                std_tensor.reshape_(stats_shape);
+                return {std::move(mean_tensor), std::move(std_tensor)};
+            }
+            if (latents.shape()[channel_dim] == 48) {  // Wan2.2 VAE
+                stats_shape[static_cast<size_t>(channel_dim)] = 48;
+
+                auto mean_tensor = sd::Tensor<float>::from_vector({-0.2289f, -0.0052f, -0.1323f, -0.2339f, -0.2799f, 0.0174f, 0.1838f, 0.1557f,
+                                                                   -0.1382f, 0.0542f, 0.2813f, 0.0891f, 0.1570f, -0.0098f, 0.0375f, -0.1825f,
+                                                                   -0.2246f, -0.1207f, -0.0698f, 0.5109f, 0.2665f, -0.2108f, -0.2158f, 0.2502f,
+                                                                   -0.2055f, -0.0322f, 0.1109f, 0.1567f, -0.0729f, 0.0899f, -0.2799f, -0.1230f,
+                                                                   -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
+                                                                   0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f});
+                mean_tensor.reshape_(stats_shape);
+                auto std_tensor = sd::Tensor<float>::from_vector({0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                                                                  0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                                                                  0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                                                                  0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                                                                  0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                                                                  0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f});
+                std_tensor.reshape_(stats_shape);
+                return {std::move(mean_tensor), std::move(std_tensor)};
+            }
+            GGML_ABORT("unexpected latent channel dimension %lld for version %d",
+                       (long long)latents.shape()[channel_dim],
+                       version);
+        }
+
+        sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
+            auto [mean_tensor, std_tensor] = get_latents_mean_std(latents);
+            return (latents * std_tensor) / scale_factor + mean_tensor;
+        }
+
+        sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override {
+            auto [mean_tensor, std_tensor] = get_latents_mean_std(latents);
+            return ((latents - mean_tensor) * scale_factor) / std_tensor;
+        }
+
+        int get_encoder_output_channels(int input_channels) {
+            return static_cast<int>(ae.z_dim);
+        }
+
+        ggml_cgraph* build_graph(const sd::Tensor<float>& z_tensor, bool decode_graph) {
+            ggml_cgraph* gf = new_graph_custom(10240 * z_tensor.shape()[2]);
+            ggml_tensor* z  = make_input(z_tensor);
 
             auto runner_ctx = get_context();
 
-            struct ggml_tensor* out = decode_graph ? ae.decode(&runner_ctx, z) : ae.encode(&runner_ctx, z);
+            ggml_tensor* out = decode_graph ? ae.decode(&runner_ctx, z) : ae.encode(&runner_ctx, z);
 
             ggml_build_forward_expand(gf, out);
 
             return gf;
         }
 
-        struct ggml_cgraph* build_graph_partial(struct ggml_tensor* z, bool decode_graph, int i) {
-            struct ggml_cgraph* gf = new_graph_custom(20480);
+        ggml_cgraph* build_graph_partial(const sd::Tensor<float>& z_tensor, bool decode_graph, int i) {
+            ggml_cgraph* gf = new_graph_custom(20480);
 
             ae.clear_cache();
 
@@ -1154,11 +1211,11 @@ namespace WAN {
                 ae._feat_map[feat_idx] = feat_cache;
             }
 
-            z = to_backend(z);
+            ggml_tensor* z = make_input(z_tensor);
 
             auto runner_ctx = get_context();
 
-            struct ggml_tensor* out = decode_graph ? ae.decode_partial(&runner_ctx, z, i) : ae.encode(&runner_ctx, z);
+            ggml_tensor* out = decode_graph ? ae.decode_partial(&runner_ctx, z, i) : ae.encode(&runner_ctx, z);
 
             for (size_t feat_idx = 0; feat_idx < ae._feat_map.size(); feat_idx++) {
                 ggml_tensor* feat_cache = ae._feat_map[feat_idx];
@@ -1173,86 +1230,85 @@ namespace WAN {
             return gf;
         }
 
-        bool compute(const int n_threads,
-                     struct ggml_tensor* z,
-                     bool decode_graph,
-                     struct ggml_tensor** output,
-                     struct ggml_context* output_ctx = nullptr) override {
+        sd::Tensor<float> _compute(const int n_threads,
+                                   const sd::Tensor<float>& z,
+                                   bool decode_graph) override {
             if (true) {
-                auto get_graph = [&]() -> struct ggml_cgraph* {
-                    return build_graph(z, decode_graph);
-                };
-                return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
-            } else {  // chunk 1 result is weird
-                ae.clear_cache();
-                int64_t t      = z->ne[2];
-                int i          = 0;
-                auto get_graph = [&]() -> struct ggml_cgraph* {
-                    return build_graph_partial(z, decode_graph, i);
-                };
-                struct ggml_tensor* out = nullptr;
-                bool res                = GGMLRunner::compute(get_graph, n_threads, true, &out, output_ctx);
-                ae.clear_cache();
-                if (t == 1) {
-                    *output = out;
-                    return res;
+                sd::Tensor<float> input;
+                if (z.dim() == 4) {
+                    input = z.unsqueeze(2);
                 }
-
-                *output = ggml_new_tensor_4d(output_ctx, GGML_TYPE_F32, out->ne[0], out->ne[1], (t - 1) * 4 + 1, out->ne[3]);
-
-                auto copy_to_output = [&]() {
-                    for (int64_t i3 = 0; i3 < out->ne[3]; i3++) {
-                        for (int64_t i2 = 0; i2 < out->ne[2]; i2++) {
-                            for (int64_t i1 = 0; i1 < out->ne[1]; i1++) {
-                                for (int64_t i0 = 0; i0 < out->ne[0]; i0++) {
-                                    float value    = ggml_ext_tensor_get_f32(out, i0, i1, i2, i3);
-                                    int64_t offset = (i == 0) ? 0 : (1 + (i - 1) * 4);
-                                    ggml_ext_tensor_set_f32(*output, value, i0, i1, offset + i2, i3);
-                                }
-                            }
-                        }
+                auto get_graph = [&]() -> ggml_cgraph* {
+                    if (input.empty()) {
+                        return build_graph(z, decode_graph);
+                    } else {
+                        return build_graph(input, decode_graph);
                     }
                 };
+                auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true),
+                                                              input.empty() ? z.dim() : input.dim());
+                if (!result.empty() && z.dim() == 4) {
+                    result.squeeze_(2);
+                }
+                return result;
+            } else {  // chunk 1 result is weird
+                ae.clear_cache();
+                int64_t t      = z.shape()[2];
+                int i          = 0;
+                auto get_graph = [&]() -> ggml_cgraph* {
+                    return build_graph_partial(z, decode_graph, i);
+                };
+                auto out_opt = GGMLRunner::compute<float>(get_graph, n_threads, true);
+                if (!out_opt.has_value()) {
+                    return {};
+                }
+                sd::Tensor<float> out = std::move(*out_opt);
+                ae.clear_cache();
+                if (t == 1) {
+                    return out;
+                }
 
-                copy_to_output();
-
-                out = ggml_new_tensor_4d(output_ctx, GGML_TYPE_F32, out->ne[0], out->ne[1], 4, out->ne[3]);
+                sd::Tensor<float> output = std::move(out);
 
                 for (i = 1; i < t; i++) {
-                    res = res || GGMLRunner::compute(get_graph, n_threads, true, &out);
+                    auto chunk_opt = GGMLRunner::compute<float>(get_graph, n_threads, true);
+                    if (!chunk_opt.has_value()) {
+                        return {};
+                    }
+                    out = std::move(*chunk_opt);
                     ae.clear_cache();
-                    copy_to_output();
+                    output = sd::ops::concat(output, out, 2);
                 }
                 free_cache_ctx_and_buffer();
-                return res;
+                return output;
             }
         }
 
         void test() {
-            struct ggml_init_params params;
+            ggml_init_params params;
             params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
             params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
-            struct ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != nullptr);
+            ggml_context* ctx = ggml_init(params);
+            GGML_ASSERT(ctx != nullptr);
 
             if (true) {
                 // cpu f32, pass
                 // cpu f16, pass
                 // cuda f16, pass
                 // cuda f32, pass
-                auto z = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 104, 60, 2, 16);
-                ggml_set_f32(z, 0.5f);
-                z = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
-                print_ggml_tensor(z);
-                struct ggml_tensor* out = nullptr;
+                auto z = sd::load_tensor_from_file_as_tensor<float>("wan_vae_z.bin");
+                print_sd_tensor(z);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                compute(8, z, true, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = _compute(8, z, true);
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("decode test done in %ldms", t1 - t0);
             }
         };
@@ -1314,10 +1370,10 @@ namespace WAN {
             }
         }
 
-        virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                            struct ggml_tensor* x,
-                                            struct ggml_tensor* pe,
-                                            struct ggml_tensor* mask = nullptr) {
+        virtual ggml_tensor* forward(GGMLRunnerContext* ctx,
+                                     ggml_tensor* x,
+                                     ggml_tensor* pe,
+                                     ggml_tensor* mask = nullptr) {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
@@ -1355,10 +1411,10 @@ namespace WAN {
                           bool qk_norm = true,
                           float eps    = 1e-6)
             : WanSelfAttention(dim, num_heads, qk_norm, eps) {}
-        virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                            struct ggml_tensor* x,
-                                            struct ggml_tensor* context,
-                                            int64_t context_img_len) = 0;
+        virtual ggml_tensor* forward(GGMLRunnerContext* ctx,
+                                     ggml_tensor* x,
+                                     ggml_tensor* context,
+                                     int64_t context_img_len) = 0;
     };
 
     class WanT2VCrossAttention : public WanCrossAttention {
@@ -1368,10 +1424,10 @@ namespace WAN {
                              bool qk_norm = true,
                              float eps    = 1e-6)
             : WanCrossAttention(dim, num_heads, qk_norm, eps) {}
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* context,
-                                    int64_t context_img_len) override {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* context,
+                             int64_t context_img_len) override {
             // x: [N, n_token, dim]
             // context: [N, n_context, dim]
             // context_img_len: unused
@@ -1416,10 +1472,10 @@ namespace WAN {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* context,
-                                    int64_t context_img_len) override {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* context,
+                             int64_t context_img_len) override {
             // x: [N, n_token, dim]
             // context: [N, context_img_len + context_txt_len, dim]
             // return [N, n_token, dim]
@@ -1464,7 +1520,7 @@ namespace WAN {
         }
     };
 
-    static struct ggml_tensor* modulate_add(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* e) {
+    static ggml_tensor* modulate_add(ggml_context* ctx, ggml_tensor* x, ggml_tensor* e) {
         // x: [N, n_token, dim]
         // e: [N, 1, dim] or [N, T, 1, dim]
         if (ggml_n_dims(e) == 3) {
@@ -1478,7 +1534,7 @@ namespace WAN {
         return x;
     }
 
-    static struct ggml_tensor* modulate_mul(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* e) {
+    static ggml_tensor* modulate_mul(ggml_context* ctx, ggml_tensor* x, ggml_tensor* e) {
         // x: [N, n_token, dim]
         // e: [N, 1, dim] or [N, T, 1, dim]
         if (ggml_n_dims(e) == 3) {
@@ -1496,7 +1552,7 @@ namespace WAN {
     protected:
         int64_t dim;
 
-        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 6, 1);
         }
@@ -1530,12 +1586,12 @@ namespace WAN {
             blocks["ffn.2"] = std::shared_ptr<GGMLBlock>(new Linear(ffn_dim, dim));
         }
 
-        virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                            struct ggml_tensor* x,
-                                            struct ggml_tensor* e,
-                                            struct ggml_tensor* pe,
-                                            struct ggml_tensor* context,
-                                            int64_t context_img_len = 257) {
+        virtual ggml_tensor* forward(GGMLRunnerContext* ctx,
+                                     ggml_tensor* x,
+                                     ggml_tensor* e,
+                                     ggml_tensor* pe,
+                                     ggml_tensor* context,
+                                     int64_t context_img_len = 257) {
             // x: [N, n_token, dim]
             // e: [N, 6, dim] or [N, T, 6, dim]
             // context: [N, context_img_len + context_txt_len, dim]
@@ -1584,7 +1640,7 @@ namespace WAN {
     class VaceWanAttentionBlock : public WanAttentionBlock {
     protected:
         int block_id;
-        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 6, 1);
         }
@@ -1606,11 +1662,11 @@ namespace WAN {
         }
 
         std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                                      struct ggml_tensor* c,
-                                                      struct ggml_tensor* x,
-                                                      struct ggml_tensor* e,
-                                                      struct ggml_tensor* pe,
-                                                      struct ggml_tensor* context,
+                                                      ggml_tensor* c,
+                                                      ggml_tensor* x,
+                                                      ggml_tensor* e,
+                                                      ggml_tensor* pe,
+                                                      ggml_tensor* context,
                                                       int64_t context_img_len = 257) {
             // x: [N, n_token, dim]
             // e: [N, 6, dim] or [N, T, 6, dim]
@@ -1636,7 +1692,7 @@ namespace WAN {
     protected:
         int64_t dim;
 
-        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 2, 1);
         }
@@ -1653,9 +1709,9 @@ namespace WAN {
             blocks["head"] = std::shared_ptr<GGMLBlock>(new Linear(dim, out_dim));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* e) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* e) {
             // x: [N, n_token, dim]
             // e: [N, dim] or [N, T, dim]
             // return [N, n_token, out_dim]
@@ -1683,7 +1739,7 @@ namespace WAN {
         int64_t in_dim;
         int64_t flf_pos_embed_token_number;
 
-        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             if (flf_pos_embed_token_number > 0) {
                 params["emb_pos"] = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, in_dim, flf_pos_embed_token_number, 1);
             }
@@ -1701,8 +1757,8 @@ namespace WAN {
             blocks["proj.4"] = std::shared_ptr<GGMLBlock>(new LayerNorm(out_dim));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* image_embeds) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* image_embeds) {
             if (flf_pos_embed_token_number > 0) {
                 auto emb_pos = params["emb_pos"];
 
@@ -1821,8 +1877,8 @@ namespace WAN {
             }
         }
 
-        struct ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
-                                              struct ggml_tensor* x) {
+        ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
+                                       ggml_tensor* x) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
             int64_t T = x->ne[2];
@@ -1834,11 +1890,11 @@ namespace WAN {
             return x;
         }
 
-        struct ggml_tensor* unpatchify(struct ggml_context* ctx,
-                                       struct ggml_tensor* x,
-                                       int64_t t_len,
-                                       int64_t h_len,
-                                       int64_t w_len) {
+        ggml_tensor* unpatchify(ggml_context* ctx,
+                                ggml_tensor* x,
+                                int64_t t_len,
+                                int64_t h_len,
+                                int64_t w_len) {
             // x: [N, t_len*h_len*w_len, pt*ph*pw*C]
             // return: [N*C, t_len*pt, h_len*ph, w_len*pw]
             int64_t N  = x->ne[3];
@@ -1861,15 +1917,15 @@ namespace WAN {
             return x;
         }
 
-        struct ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
-                                         struct ggml_tensor* x,
-                                         struct ggml_tensor* timestep,
-                                         struct ggml_tensor* context,
-                                         struct ggml_tensor* pe,
-                                         struct ggml_tensor* clip_fea     = nullptr,
-                                         struct ggml_tensor* vace_context = nullptr,
-                                         float vace_strength              = 1.f,
-                                         int64_t N                        = 1) {
+        ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
+                                  ggml_tensor* x,
+                                  ggml_tensor* timestep,
+                                  ggml_tensor* context,
+                                  ggml_tensor* pe,
+                                  ggml_tensor* clip_fea     = nullptr,
+                                  ggml_tensor* vace_context = nullptr,
+                                  float vace_strength       = 1.f,
+                                  int64_t N                 = 1) {
             // x: [N*C, T, H, W], C => in_dim
             // vace_context: [N*vace_in_dim, T, H, W]
             // timestep: [N,] or [T]
@@ -1955,16 +2011,16 @@ namespace WAN {
             return x;
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* timestep,
-                                    struct ggml_tensor* context,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* clip_fea        = nullptr,
-                                    struct ggml_tensor* time_dim_concat = nullptr,
-                                    struct ggml_tensor* vace_context    = nullptr,
-                                    float vace_strength                 = 1.f,
-                                    int64_t N                           = 1) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* timestep,
+                             ggml_tensor* context,
+                             ggml_tensor* pe,
+                             ggml_tensor* clip_fea        = nullptr,
+                             ggml_tensor* time_dim_concat = nullptr,
+                             ggml_tensor* vace_context    = nullptr,
+                             float vace_strength          = 1.f,
+                             int64_t N                    = 1) {
             // Forward pass of DiT.
             // x: [N*C, T, H, W]
             // timestep: [N,]
@@ -2129,27 +2185,27 @@ namespace WAN {
             return desc;
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             wan.get_param_tensors(tensors, prefix);
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* x,
-                                        struct ggml_tensor* timesteps,
-                                        struct ggml_tensor* context,
-                                        struct ggml_tensor* clip_fea        = nullptr,
-                                        struct ggml_tensor* c_concat        = nullptr,
-                                        struct ggml_tensor* time_dim_concat = nullptr,
-                                        struct ggml_tensor* vace_context    = nullptr,
-                                        float vace_strength                 = 1.f) {
-            struct ggml_cgraph* gf = new_graph_custom(WAN_GRAPH_SIZE);
+        ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
+                                 const sd::Tensor<float>& timesteps_tensor,
+                                 const sd::Tensor<float>& context_tensor         = {},
+                                 const sd::Tensor<float>& clip_fea_tensor        = {},
+                                 const sd::Tensor<float>& c_concat_tensor        = {},
+                                 const sd::Tensor<float>& time_dim_concat_tensor = {},
+                                 const sd::Tensor<float>& vace_context_tensor    = {},
+                                 float vace_strength                             = 1.f) {
+            ggml_cgraph* gf = new_graph_custom(WAN_GRAPH_SIZE);
 
-            x               = to_backend(x);
-            timesteps       = to_backend(timesteps);
-            context         = to_backend(context);
-            clip_fea        = to_backend(clip_fea);
-            c_concat        = to_backend(c_concat);
-            time_dim_concat = to_backend(time_dim_concat);
-            vace_context    = to_backend(vace_context);
+            ggml_tensor* x               = make_input(x_tensor);
+            ggml_tensor* timesteps       = make_input(timesteps_tensor);
+            ggml_tensor* context         = make_optional_input(context_tensor);
+            ggml_tensor* clip_fea        = make_optional_input(clip_fea_tensor);
+            ggml_tensor* c_concat        = make_optional_input(c_concat_tensor);
+            ggml_tensor* time_dim_concat = make_optional_input(time_dim_concat_tensor);
+            ggml_tensor* vace_context    = make_optional_input(vace_context_tensor);
 
             pe_vec      = Rope::gen_wan_pe(static_cast<int>(x->ne[2]),
                                            static_cast<int>(x->ne[1]),
@@ -2174,75 +2230,75 @@ namespace WAN {
 
             auto runner_ctx = get_context();
 
-            struct ggml_tensor* out = wan.forward(&runner_ctx,
-                                                  x,
-                                                  timesteps,
-                                                  context,
-                                                  pe,
-                                                  clip_fea,
-                                                  time_dim_concat,
-                                                  vace_context,
-                                                  vace_strength);
+            ggml_tensor* out = wan.forward(&runner_ctx,
+                                           x,
+                                           timesteps,
+                                           context,
+                                           pe,
+                                           clip_fea,
+                                           time_dim_concat,
+                                           vace_context,
+                                           vace_strength);
 
             ggml_build_forward_expand(gf, out);
 
             return gf;
         }
 
-        bool compute(int n_threads,
-                     struct ggml_tensor* x,
-                     struct ggml_tensor* timesteps,
-                     struct ggml_tensor* context,
-                     struct ggml_tensor* clip_fea        = nullptr,
-                     struct ggml_tensor* c_concat        = nullptr,
-                     struct ggml_tensor* time_dim_concat = nullptr,
-                     struct ggml_tensor* vace_context    = nullptr,
-                     float vace_strength                 = 1.f,
-                     struct ggml_tensor** output         = nullptr,
-                     struct ggml_context* output_ctx     = nullptr) {
-            auto get_graph = [&]() -> struct ggml_cgraph* {
+        sd::Tensor<float> compute(int n_threads,
+                                  const sd::Tensor<float>& x,
+                                  const sd::Tensor<float>& timesteps,
+                                  const sd::Tensor<float>& context         = {},
+                                  const sd::Tensor<float>& clip_fea        = {},
+                                  const sd::Tensor<float>& c_concat        = {},
+                                  const sd::Tensor<float>& time_dim_concat = {},
+                                  const sd::Tensor<float>& vace_context    = {},
+                                  float vace_strength                      = 1.f) {
+            auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat, vace_context, vace_strength);
             };
 
-            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         }
 
         void test() {
-            struct ggml_init_params params;
+            ggml_init_params params;
             params.mem_size   = static_cast<size_t>(200 * 1024 * 1024);  // 200 MB
             params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
-            struct ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != nullptr);
+            ggml_context* ctx = ggml_init(params);
+            GGML_ASSERT(ctx != nullptr);
 
             {
                 // cpu f16: pass
                 // cuda f16: pass
                 // cpu q8_0: pass
-                // auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 104, 60, 1, 16);
+                // auto x = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 104, 60, 1, 16);
                 // ggml_set_f32(x, 0.01f);
-                auto x = load_tensor_from_file(work_ctx, "wan_dit_x.bin");
-                print_ggml_tensor(x);
+                auto x = sd::load_tensor_from_file_as_tensor<float>("wan_dit_x.bin");
+                print_sd_tensor(x);
 
                 std::vector<float> timesteps_vec(3, 1000.f);
                 timesteps_vec[0] = 0.f;
-                auto timesteps   = vector_to_ggml_tensor(work_ctx, timesteps_vec);
+                auto timesteps   = sd::Tensor<float>::from_vector(timesteps_vec);
 
-                // auto context = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 4096, 512, 1);
+                // auto context = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 4096, 512, 1);
                 // ggml_set_f32(context, 0.01f);
-                auto context = load_tensor_from_file(work_ctx, "wan_dit_context.bin");
-                print_ggml_tensor(context);
-                // auto clip_fea = load_tensor_from_file(work_ctx, "wan_dit_clip_fea.bin");
+                auto context = sd::load_tensor_from_file_as_tensor<float>("wan_dit_context.bin");
+                print_sd_tensor(context);
+                // auto clip_fea = load_tensor_from_file(ctx, "wan_dit_clip_fea.bin");
                 // print_ggml_tensor(clip_fea);
 
-                struct ggml_tensor* out = nullptr;
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, nullptr, nullptr, nullptr, nullptr, 1.f, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = compute(8, x, timesteps, context, {}, {}, {}, {}, 1.f);
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("wan test done in %lldms", t1 - t0);
             }
         }

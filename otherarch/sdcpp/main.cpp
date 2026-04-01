@@ -601,7 +601,7 @@ int main(int argc, const char* argv[]) {
 
     if (gen_params.end_image_path.size() > 0) {
         vae_decode_only = false;
-        if (!load_image_and_update_size(gen_params.init_image_path, end_image)) {
+        if (!load_image_and_update_size(gen_params.end_image_path, end_image)) {
             return 1;
         }
     }

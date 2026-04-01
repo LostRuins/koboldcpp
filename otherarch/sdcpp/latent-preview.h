@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include "ggml.h"
+#include "tensor.hpp"
 
 const float wan_21_latent_rgb_proj[16][3] = {
     {0.015123f, -0.148418f, 0.479828f},
@@ -163,7 +165,7 @@ const float sd_latent_rgb_proj[4][3] = {
     {-0.178022f, -0.200862f, -0.678514f}};
 float sd_latent_rgb_bias[3] = {-0.017478f, -0.055834f, -0.105825f};
 
-void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size) {
+void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size) {
     size_t buffer_head = 0;
 
     uint32_t latent_width  = static_cast<uint32_t>(latents->ne[0]);
@@ -224,6 +226,70 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
                 r = r >= 0 ? r <= 1 ? r : 1 : 0;
                 g = g >= 0 ? g <= 1 ? g : 1 : 0;
                 b = b >= 0 ? b <= 1 ? b : 1 : 0;
+
+                buffer[pixel_id * 3 + 0] = (uint8_t)(r * 255);
+                buffer[pixel_id * 3 + 1] = (uint8_t)(g * 255);
+                buffer[pixel_id * 3 + 2] = (uint8_t)(b * 255);
+            }
+        }
+    }
+}
+
+static inline bool preview_latent_tensor_is_video(const sd::Tensor<float>& latents) {
+    return latents.dim() == 5;
+}
+
+void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size) {
+    uint32_t latent_width  = static_cast<uint32_t>(latents.shape()[0]);
+    uint32_t latent_height = static_cast<uint32_t>(latents.shape()[1]);
+    bool is_video          = preview_latent_tensor_is_video(latents);
+    uint32_t frames        = is_video ? static_cast<uint32_t>(latents.shape()[2]) : 1;
+    uint32_t dim           = is_video ? static_cast<uint32_t>(latents.shape()[3]) : static_cast<uint32_t>(latents.shape()[2]);
+
+    uint32_t rgb_width     = latent_width * patch_size;
+    uint32_t rgb_height    = latent_height * patch_size;
+    uint32_t unpatched_dim = dim / (patch_size * patch_size);
+
+    for (uint32_t k = 0; k < frames; k++) {
+        for (uint32_t rgb_x = 0; rgb_x < rgb_width; rgb_x++) {
+            for (uint32_t rgb_y = 0; rgb_y < rgb_height; rgb_y++) {
+                uint32_t latent_x = rgb_x / patch_size;
+                uint32_t latent_y = rgb_y / patch_size;
+
+                uint32_t channel_offset = 0;
+                if (patch_size > 1) {
+                    channel_offset = ((rgb_y % patch_size) * patch_size + (rgb_x % patch_size));
+                }
+
+                size_t pixel_id   = k * rgb_width * rgb_height + rgb_y * rgb_width + rgb_x;
+                auto latent_value = [&](uint32_t latent_channel) -> float {
+                    return is_video
+                               ? latents.values()[latent_x + latent_width * (latent_y + latent_height * (k + frames * latent_channel))]
+                               : latents.values()[latent_x + latent_width * (latent_y + latent_height * latent_channel)];
+                };
+
+                float r = 0.f, g = 0.f, b = 0.f;
+                if (latent_rgb_proj != nullptr) {
+                    for (uint32_t d = 0; d < unpatched_dim; d++) {
+                        uint32_t latent_channel = d * patch_size * patch_size + channel_offset;
+                        float value             = latent_value(latent_channel);
+                        r += value * latent_rgb_proj[d][0];
+                        g += value * latent_rgb_proj[d][1];
+                        b += value * latent_rgb_proj[d][2];
+                    }
+                } else {
+                    r = latent_value(0);
+                    g = latent_value(1);
+                    b = latent_value(2);
+                }
+                if (latent_rgb_bias != nullptr) {
+                    r += latent_rgb_bias[0];
+                    g += latent_rgb_bias[1];
+                    b += latent_rgb_bias[2];
+                }
+                r = std::min(1.0f, std::max(0.0f, r * .5f + .5f));
+                g = std::min(1.0f, std::max(0.0f, g * .5f + .5f));
+                b = std::min(1.0f, std::max(0.0f, b * .5f + .5f));
 
                 buffer[pixel_id * 3 + 0] = (uint8_t)(r * 255);
                 buffer[pixel_id * 3 + 1] = (uint8_t)(g * 255);

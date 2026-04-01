@@ -23,7 +23,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         // x: [N, channels, h, w]
         if (vae_downsample) {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
@@ -52,7 +52,7 @@ public:
         blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         // x: [N, channels, h, w]
         auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
@@ -121,7 +121,7 @@ public:
         }
     }
 
-    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x, struct ggml_tensor* emb = nullptr) {
+    virtual ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* emb = nullptr) {
         // For dims==3, we reduce dimension from 5d to 4d by merging h and w, in order not to change ggml
         // [N, c, t, h, w] => [N, c, t, h * w]
         // x: [N, channels, h, w] if dims == 2 else [N, channels, t, h, w]
@@ -188,7 +188,7 @@ public:
         blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim_in, dim_out * 2));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // x: [ne3, ne2, ne1, dim_in]
         // return: [ne3, ne2, ne1, dim_out]
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
@@ -214,7 +214,7 @@ public:
         blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim_in, dim_out, bias));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // x: [ne3, ne2, ne1, dim_in]
         // return: [ne3, ne2, ne1, dim_out]
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
@@ -258,7 +258,7 @@ public:
         blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out, true, false, force_prec_f32, scale));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         // x: [ne3, ne2, ne1, dim]
         // return: [ne3, ne2, ne1, dim_out]
 
@@ -297,9 +297,9 @@ public:
         // to_out_1 is nn.Dropout(), skip for inference
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* x,
-                                struct ggml_tensor* context) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* x,
+                         ggml_tensor* context) {
         // x: [N, n_token, query_dim]
         // context: [N, n_context, context_dim]
         // return: [N, n_token, query_dim]
@@ -355,9 +355,9 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* x,
-                                struct ggml_tensor* context) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* x,
+                         ggml_tensor* context) {
         // x: [N, n_token, query_dim]
         // context: [N, n_context, context_dim]
         // return: [N, n_token, query_dim]
@@ -406,7 +406,7 @@ protected:
     int64_t context_dim = 768;  // hidden_size, 1024 for VERSION_SD2
     bool use_linear     = false;
 
-    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
         auto iter = tensor_storage_map.find(prefix + "proj_out.weight");
         if (iter != tensor_storage_map.end()) {
             int64_t inner_dim = n_head * d_head;
@@ -456,9 +456,9 @@ public:
         }
     }
 
-    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                        struct ggml_tensor* x,
-                                        struct ggml_tensor* context) {
+    virtual ggml_tensor* forward(GGMLRunnerContext* ctx,
+                                 ggml_tensor* x,
+                                 ggml_tensor* context) {
         // x: [N, in_channels, h, w]
         // context: [N, max_position(aka n_token), hidden_size(aka context_dim)]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
@@ -510,7 +510,7 @@ public:
 
 class AlphaBlender : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
         // Get the type of the "mix_factor" tensor from the input tensors map with the specified prefix
         enum ggml_type wtype = GGML_TYPE_F32;
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
@@ -530,9 +530,9 @@ public:
         // since mix_factor.shape is [1,], we don't need rearrange using  rearrange_pattern
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* x_spatial,
-                                struct ggml_tensor* x_temporal) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* x_spatial,
+                         ggml_tensor* x_temporal) {
         // image_only_indicator is always tensor([0.])
         float alpha = get_alpha();
         auto x      = ggml_add(ctx->ggml_ctx,
@@ -555,10 +555,10 @@ public:
         blocks["time_mixer"] = std::shared_ptr<GGMLBlock>(new AlphaBlender());
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* x,
-                                struct ggml_tensor* emb,
-                                int num_video_frames) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* x,
+                         ggml_tensor* emb,
+                         int num_video_frames) {
         // x: [N, channels, h, w] aka [b*t, channels, h, w]
         // emb: [N, emb_channels] aka [b*t, emb_channels]
         // image_only_indicator is always tensor([0.])

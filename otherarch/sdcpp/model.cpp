@@ -176,43 +176,7 @@ uint16_t f8_e4m3_to_f16(uint8_t f8) {
 }
 
 uint16_t f8_e5m2_to_f16(uint8_t fp8) {
-    uint8_t sign     = (fp8 >> 7) & 0x1;
-    uint8_t exponent = (fp8 >> 2) & 0x1F;
-    uint8_t mantissa = fp8 & 0x3;
-
-    uint16_t fp16_sign = sign << 15;
-    uint16_t fp16_exponent;
-    uint16_t fp16_mantissa;
-
-    if (exponent == 0 && mantissa == 0) {  // zero
-        return fp16_sign;
-    }
-
-    if (exponent == 0x1F) {  // NAN and INF
-        fp16_exponent = 0x1F;
-        fp16_mantissa = mantissa ? (mantissa << 8) : 0;
-        return fp16_sign | (fp16_exponent << 10) | fp16_mantissa;
-    }
-
-    if (exponent == 0) {  // subnormal numbers
-        fp16_mantissa = (mantissa << 8);
-        return fp16_sign | fp16_mantissa;
-    }
-
-    // normal numbers
-    int16_t true_exponent = (int16_t)exponent - 15 + 15;
-    if (true_exponent <= 0) {
-        fp16_exponent = 0;
-        fp16_mantissa = (mantissa << 8);
-    } else if (true_exponent >= 0x1F) {
-        fp16_exponent = 0x1F;
-        fp16_mantissa = 0;
-    } else {
-        fp16_exponent = (uint16_t)true_exponent;
-        fp16_mantissa = mantissa << 8;
-    }
-
-    return fp16_sign | (fp16_exponent << 10) | fp16_mantissa;
+    return static_cast<uint16_t>(fp8) << 8;
 }
 
 void f8_e4m3_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
@@ -301,7 +265,7 @@ void ModelLoader::add_tensor_storage(const TensorStorage& tensor_storage) {
 }
 
 bool is_zip_file(const std::string& file_path) {
-    struct zip_t* zip = zip_open(file_path.c_str(), 0, 'r');
+    zip_t* zip = zip_open(file_path.c_str(), 0, 'r');
     if (zip == nullptr) {
         return false;
     }
@@ -467,9 +431,9 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
     size_t total_size  = 0;
     size_t data_offset = gguf_get_data_offset(ctx_gguf_);
     for (int i = 0; i < n_tensors; i++) {
-        std::string name          = gguf_get_tensor_name(ctx_gguf_, i);
-        struct ggml_tensor* dummy = ggml_get_tensor(ctx_meta_, name.c_str());
-        size_t offset             = data_offset + gguf_get_tensor_offset(ctx_gguf_, i);
+        std::string name   = gguf_get_tensor_name(ctx_gguf_, i);
+        ggml_tensor* dummy = ggml_get_tensor(ctx_meta_, name.c_str());
+        size_t offset      = data_offset + gguf_get_tensor_offset(ctx_gguf_, i);
 
         // LOG_DEBUG("%s", name.c_str());
 
@@ -828,7 +792,7 @@ struct PickleTensorReader {
         }
     }
 
-    void read_string(const std::string& str, struct zip_t* zip, std::string dir) {
+    void read_string(const std::string& str, zip_t* zip, std::string dir) {
         if (str == "storage") {
             read_global_type = true;
         } else if (str != "state_dict") {
@@ -1011,7 +975,7 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
     file_paths_.push_back(file_path);
     size_t file_index = file_paths_.size() - 1;
 
-    struct zip_t* zip = zip_open(file_path.c_str(), 0, 'r');
+    zip_t* zip = zip_open(file_path.c_str(), 0, 'r');
     if (zip == nullptr) {
         LOG_ERROR("failed to open '%s'", file_path.c_str());
         return false;
@@ -1130,10 +1094,12 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage.name.find("unet.mid_block.resnets.1.") != std::string::npos) {
             has_middle_block_1 = true;
         }
-        if (tensor_storage.name.find("model.diffusion_model.output_blocks.3.1.transformer_blocks.1") != std::string::npos) {
+        if (tensor_storage.name.find("model.diffusion_model.output_blocks.3.1.transformer_blocks.1") != std::string::npos ||
+            tensor_storage.name.find("unet.up_blocks.1.attentions.0.transformer_blocks.1") != std::string::npos) {
             has_output_block_311 = true;
         }
-        if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos) {
+        if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos ||
+            tensor_storage.name.find("unet.up_blocks.2.attentions.1") != std::string::npos) {
             has_output_block_71 = true;
         }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
@@ -1437,7 +1403,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
         for (int i = 0; i < n_threads; ++i) {
             workers.emplace_back([&, file_path, is_zip]() {
                 std::ifstream file;
-                struct zip_t* zip = nullptr;
+                zip_t* zip = nullptr;
                 if (is_zip) {
                     zip = zip_open(file_path.c_str(), 0, 'r');
                     if (zip == nullptr) {
@@ -1625,7 +1591,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     return success;
 }
 
-bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
+bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                                std::set<std::string> ignore_tensors,
                                int n_threads,
                                bool enable_mmap) {
@@ -1639,7 +1605,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
             tensor_names_in_file.insert(name);
         }
 
-        struct ggml_tensor* real;
+        ggml_tensor* real;
         if (tensors.find(name) != tensors.end()) {
             real = tensors[name];
         } else {
