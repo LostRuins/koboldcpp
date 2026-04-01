@@ -299,7 +299,7 @@ public:
         std::string llm_path_fixed    = SAFE_STR(sd_ctx_params->llm_path);
         std::string llm_vision_path_fixed = SAFE_STR(sd_ctx_params->llm_vision_path);
         std::string t5_path_fixed     = SAFE_STR(sd_ctx_params->t5xxl_path);
-        std::string taesd_path_fixed  = taesd_path;
+        std::string taesd_path_fixed  = SAFE_STR(sd_ctx_params->taesd_path);
 
         ModelLoader model_loader;
 
@@ -491,8 +491,7 @@ public:
         sd_ctx_params->llm_path         = llm_path_fixed.c_str();
         sd_ctx_params->llm_vision_path  = llm_vision_path_fixed.c_str();
         sd_ctx_params->t5xxl_path       = t5_path_fixed.c_str();
-        taesd_path                      = taesd_path_fixed;
-        use_tiny_autoencoder            = (taesd_path != "");
+        sd_ctx_params->taesd_path       = taesd_path_fixed.c_str();
         //debug print
         // printf("\n\nclip_g: %s\nclip_l: %s\nclip_vision: %s\nllm: %s\nllm_vision: %s\nt5xxl: %s\ntaesd: %s\n",
         // sd_ctx_params->clip_g_path, sd_ctx_params->clip_l_path, sd_ctx_params->clip_vision_path,
@@ -2172,9 +2171,6 @@ public:
         }
         if (first_stage_model) {
             first_stage_model->set_circular_axes(circular_x, circular_y);
-        }
-        if (tae_first_stage) {
-            tae_first_stage->set_circular_axes(circular_x, circular_y);
         }
     }
     //end added for kcpp
