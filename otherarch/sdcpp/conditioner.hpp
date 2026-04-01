@@ -1313,14 +1313,14 @@ struct T5CLIPEmbedder : public Conditioner {
     std::shared_ptr<T5Runner> t5;
     size_t chunk_len = 512;
     bool use_mask    = false;
-    int mask_pad     = 1;
+    int mask_pad     = 0;
     bool is_umt5     = false;
 
     T5CLIPEmbedder(ggml_backend_t backend,
                    bool offload_params_to_cpu,
                    const String2TensorStorage& tensor_storage_map = {},
                    bool use_mask                                  = false,
-                   int mask_pad                                   = 1,
+                   int mask_pad                                   = 0,
                    bool is_umt5                                   = false)
         : use_mask(use_mask), mask_pad(mask_pad), t5_tokenizer(is_umt5) {
         bool use_t5 = false;

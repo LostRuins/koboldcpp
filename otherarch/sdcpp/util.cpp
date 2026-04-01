@@ -351,9 +351,40 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
     return result;
 }
 
-
+// { kcpp
 static int sdloglevel = 0; //-1 = hide all, 0 = normal, 1 = showall
 static bool sdquiet = false;
+// } kcpp
+
+static std::string build_progress_bar(int step, int steps) {
+    std::string progress = "  |";
+    int max_progress     = 50;
+    int32_t current      = 0;
+    if (steps > 0) {
+        current = (int32_t)(step * 1.f * max_progress / steps);
+    }
+    for (int i = 0; i < 50; i++) {
+        if (i > current) {
+            progress += " ";
+        } else if (i == current && i != max_progress - 1) {
+            progress += ">";
+        } else {
+            progress += "=";
+        }
+    }
+    progress += "|";
+    return progress;
+}
+
+static void print_progress_line(int step, int steps, const std::string& speed_text) {
+    if (step == 0) {
+        return;
+    }
+    std::string progress = build_progress_bar(step, steps);
+    const char* lf       = (step == steps ? "\n" : "");
+    printf("\r%s %i/%i - %s\033[K%s", progress.c_str(), step, steps, speed_text.c_str(), lf);
+    fflush(stdout);  // for linux
+}
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
@@ -366,29 +397,36 @@ void pretty_progress(int step, int steps, float time) {
     {
         return;
     }
-    std::string progress = "  |";
-    int max_progress     = 50;
-    int32_t current      = (int32_t)(step * 1.f * max_progress / steps);
-    for (int i = 0; i < 50; i++) {
-        if (i > current) {
-            progress += " ";
-        } else if (i == current && i != max_progress - 1) {
-            progress += ">";
-        } else {
-            progress += "=";
-        }
-    }
-    progress += "|";
-
-    const char* lf   = (step == steps ? "\n" : "");
     const char* unit = "s/it";
     float speed      = time;
     if (speed < 1.0f && speed > 0.f) {
         speed = 1.0f / speed;
         unit  = "it/s";
     }
-    printf("\r%s %i/%i - %.2f%s\033[K%s", progress.c_str(), step, steps, speed, unit, lf);
-    fflush(stdout);  // for linux
+    print_progress_line(step, steps, sd_format("%.2f%s", speed, unit));
+}
+
+void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
+    if (sd_progress_cb) {
+        float time = elapsed_seconds / (step + 1e-6f);
+        sd_progress_cb(step, steps, time, sd_progress_cb_data);
+        return;
+    }
+    if (step == 0) {
+        return;
+    }
+
+    double bytes_per_second = 0.0;
+    if (elapsed_seconds > 0.0f) {
+        bytes_per_second = bytes_processed / (double)elapsed_seconds;
+    }
+
+    double speed_mb = bytes_per_second / (1024.0 * 1024.0);
+    if (speed_mb >= 1024.0) {
+        print_progress_line(step, steps, sd_format("%.2fGB/s", speed_mb / 1024.0));
+    } else {
+        print_progress_line(step, steps, sd_format("%.2fMB/s", speed_mb));
+    }
 }
 
 std::string ltrim(const std::string& s) {

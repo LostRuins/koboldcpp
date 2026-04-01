@@ -12,7 +12,7 @@
 
 #include "darts.h"
 #include "ggml_extend.hpp"
-#include <nlohmann/json.hpp>
+#include "json.hpp"
 #include "model.h"
 #include "vocab/vocab.h"
 

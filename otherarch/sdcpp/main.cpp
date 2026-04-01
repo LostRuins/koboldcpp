@@ -18,6 +18,7 @@
 #include "common/common.hpp"
 
 #include "avi_writer.h"
+#include "image_metadata.h"
 
 const char* previews_str[] = {
     "none",
@@ -32,6 +33,8 @@ struct SDCliParams {
     SDMode mode             = IMG_GEN;
     std::string output_path = "output.png";
     int output_begin_idx    = -1;
+    std::string image_path;
+    std::string metadata_format = "text";
 
     bool verbose          = false;
     bool canny_preprocess = false;
@@ -44,6 +47,9 @@ struct SDCliParams {
     bool taesd_preview       = false;
     bool preview_noisy       = false;
     bool color               = false;
+    bool metadata_raw        = false;
+    bool metadata_brief      = false;
+    bool metadata_all        = false;
 
     bool normal_exit = false;
 
@@ -55,6 +61,14 @@ struct SDCliParams {
              "--output",
              "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)",
              &output_path},
+            {"",
+             "--image",
+             "path to the image to inspect (for metadata mode)",
+             &image_path},
+            {"",
+             "--metadata-format",
+             "metadata output format, one of [text, json] (default: text)",
+             &metadata_format},
             {"",
              "--preview-path",
              "path to write preview image to (default: ./preview.png)",
@@ -97,6 +111,18 @@ struct SDCliParams {
              "--preview-noisy",
              "enables previewing noisy inputs of the models rather than the denoised outputs",
              true, &preview_noisy},
+            {"",
+             "--metadata-raw",
+             "include raw hex previews for unparsed metadata payloads",
+             true, &metadata_raw},
+            {"",
+             "--metadata-brief",
+             "truncate long metadata text values in text output",
+             true, &metadata_brief},
+            {"",
+             "--metadata-all",
+             "include structural/container entries such as IHDR, IDAT, and non-metadata JPEG segments",
+             true, &metadata_all},
 
         };
 
@@ -149,7 +175,7 @@ struct SDCliParams {
         options.manual_options = {
             {"-M",
              "--mode",
-             "run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen",
+             "run mode, one of [img_gen, vid_gen, upscale, convert, metadata], default: img_gen",
              on_mode_arg},
             {"",
              "--preview",
@@ -165,7 +191,7 @@ struct SDCliParams {
     };
 
     bool process_and_check() {
-        if (output_path.length() == 0) {
+        if (mode != METADATA && output_path.length() == 0) {
             LOG_ERROR("error: the following arguments are required: output_path");
             return false;
         }
@@ -173,6 +199,16 @@ struct SDCliParams {
         if (mode == CONVERT) {
             if (output_path == "output.png") {
                 output_path = "output.gguf";
+            }
+        } else if (mode == METADATA) {
+            if (image_path.empty()) {
+                LOG_ERROR("error: metadata mode needs an image path (--image)");
+                return false;
+            }
+            if (metadata_format != "text" && metadata_format != "json") {
+                LOG_ERROR("error: invalid metadata format %s, must be one of [text, json]",
+                          metadata_format.c_str());
+                return false;
             }
         }
         return true;
@@ -183,6 +219,8 @@ struct SDCliParams {
         oss << "SDCliParams {\n"
             << "  mode: " << modes_str[mode] << ",\n"
             << "  output_path: \"" << output_path << "\",\n"
+            << "  image_path: \"" << image_path << "\",\n"
+            << "  metadata_format: \"" << metadata_format << "\",\n"
             << "  verbose: " << (verbose ? "true" : "false") << ",\n"
             << "  color: " << (color ? "true" : "false") << ",\n"
             << "  canny_preprocess: " << (canny_preprocess ? "true" : "false") << ",\n"
@@ -192,7 +230,10 @@ struct SDCliParams {
             << "  preview_path: \"" << preview_path << "\",\n"
             << "  preview_fps: " << preview_fps << ",\n"
             << "  taesd_preview: " << (taesd_preview ? "true" : "false") << ",\n"
-            << "  preview_noisy: " << (preview_noisy ? "true" : "false") << "\n"
+            << "  preview_noisy: " << (preview_noisy ? "true" : "false") << ",\n"
+            << "  metadata_raw: " << (metadata_raw ? "true" : "false") << ",\n"
+            << "  metadata_brief: " << (metadata_brief ? "true" : "false") << ",\n"
+            << "  metadata_all: " << (metadata_all ? "true" : "false") << "\n"
             << "}";
         return oss.str();
     }
@@ -217,69 +258,16 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
         exit(cli_params.normal_exit ? 0 : 1);
     }
 
-    if (!cli_params.process_and_check() ||
-        !ctx_params.process_and_check(cli_params.mode) ||
-        !gen_params.process_and_check(cli_params.mode, ctx_params.lora_model_dir)) {
+    bool valid = cli_params.process_and_check();
+    if (valid && cli_params.mode != METADATA) {
+        valid = ctx_params.process_and_check(cli_params.mode) &&
+                gen_params.process_and_check(cli_params.mode, ctx_params.lora_model_dir);
+    }
+
+    if (!valid) {
         print_usage(argc, argv, options_vec);
         exit(1);
     }
-}
-
-std::string get_image_params(const SDCliParams& cli_params, const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {
-    std::string parameter_string = gen_params.prompt_with_lora + "\n";
-    if (gen_params.negative_prompt.size() != 0) {
-        parameter_string += "Negative prompt: " + gen_params.negative_prompt + "\n";
-    }
-    parameter_string += "Steps: " + std::to_string(gen_params.sample_params.sample_steps) + ", ";
-    parameter_string += "CFG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
-    if (gen_params.sample_params.guidance.slg.scale != 0 && gen_params.skip_layers.size() != 0) {
-        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
-        parameter_string += "Skip layers: [";
-        for (const auto& layer : gen_params.skip_layers) {
-            parameter_string += std::to_string(layer) + ", ";
-        }
-        parameter_string += "], ";
-        parameter_string += "Skip layer start: " + std::to_string(gen_params.sample_params.guidance.slg.layer_start) + ", ";
-        parameter_string += "Skip layer end: " + std::to_string(gen_params.sample_params.guidance.slg.layer_end) + ", ";
-    }
-    parameter_string += "Guidance: " + std::to_string(gen_params.sample_params.guidance.distilled_guidance) + ", ";
-    parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
-    parameter_string += "Seed: " + std::to_string(seed) + ", ";
-    parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";
-    parameter_string += "Model: " + sd_basename(ctx_params.model_path) + ", ";
-    parameter_string += "RNG: " + std::string(sd_rng_type_name(ctx_params.rng_type)) + ", ";
-    if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
-        parameter_string += "Sampler RNG: " + std::string(sd_rng_type_name(ctx_params.sampler_rng_type)) + ", ";
-    }
-    parameter_string += "Sampler: " + std::string(sd_sample_method_name(gen_params.sample_params.sample_method));
-    if (!gen_params.custom_sigmas.empty()) {
-        parameter_string += ", Custom Sigmas: [";
-        for (size_t i = 0; i < gen_params.custom_sigmas.size(); ++i) {
-            std::ostringstream oss;
-            oss << std::fixed << std::setprecision(4) << gen_params.custom_sigmas[i];
-            parameter_string += oss.str() + (i == gen_params.custom_sigmas.size() - 1 ? "" : ", ");
-        }
-        parameter_string += "]";
-    } else if (gen_params.sample_params.scheduler != SCHEDULER_COUNT) {  // Only show schedule if not using custom sigmas
-        parameter_string += " " + std::string(sd_scheduler_name(gen_params.sample_params.scheduler));
-    }
-    parameter_string += ", ";
-    for (const auto& te : {ctx_params.clip_l_path, ctx_params.clip_g_path, ctx_params.t5xxl_path, ctx_params.llm_path, ctx_params.llm_vision_path}) {
-        if (!te.empty()) {
-            parameter_string += "TE: " + sd_basename(te) + ", ";
-        }
-    }
-    if (!ctx_params.diffusion_model_path.empty()) {
-        parameter_string += "Unet: " + sd_basename(ctx_params.diffusion_model_path) + ", ";
-    }
-    if (!ctx_params.vae_path.empty()) {
-        parameter_string += "VAE: " + sd_basename(ctx_params.vae_path) + ", ";
-    }
-    if (gen_params.clip_skip != -1) {
-        parameter_string += "Clip skip: " + std::to_string(gen_params.clip_skip) + ", ";
-    }
-    parameter_string += "Version: stable-diffusion.cpp";
-    return parameter_string;
 }
 
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
@@ -414,12 +402,14 @@ bool save_results(const SDCliParams& cli_params,
         if (!img.data)
             return false;
 
-        std::string params = get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + idx);
+        std::string params = gen_params.embed_image_metadata
+                                 ? get_image_params(ctx_params, gen_params, gen_params.seed + idx)
+                                 : "";
         int ok             = 0;
         if (is_jpg) {
-            ok = stbi_write_jpg(path.string().c_str(), img.width, img.height, img.channel, img.data, 90, params.c_str());
+            ok = stbi_write_jpg(path.string().c_str(), img.width, img.height, img.channel, img.data, 90, params.size() > 0 ? params.c_str() : nullptr);
         } else {
-            ok = stbi_write_png(path.string().c_str(), img.width, img.height, img.channel, img.data, 0, params.c_str());
+            ok = stbi_write_png(path.string().c_str(), img.width, img.height, img.channel, img.data, 0, params.size() > 0 ? params.c_str() : nullptr);
         }
         LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
         return ok != 0;
@@ -485,6 +475,27 @@ int main(int argc, const char* argv[]) {
     SDGenerationParams gen_params;
 
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
+    sd_set_log_callback(sd_log_cb, (void*)&cli_params);
+    log_verbose = cli_params.verbose;
+    log_color   = cli_params.color;
+
+    if (cli_params.mode == METADATA) {
+        MetadataReadOptions options;
+        options.output_format      = cli_params.metadata_format == "json"
+                                         ? MetadataOutputFormat::JSON
+                                         : MetadataOutputFormat::TEXT;
+        options.include_raw        = cli_params.metadata_raw;
+        options.brief              = cli_params.metadata_brief;
+        options.include_structural = cli_params.metadata_all;
+
+        std::string error;
+        if (!print_image_metadata(cli_params.image_path, options, std::cout, error)) {
+            LOG_ERROR("%s", error.c_str());
+            return 1;
+        }
+        return 0;
+    }
+
     if (gen_params.video_frames > 4) {
         size_t last_dot_pos   = cli_params.preview_path.find_last_of(".");
         std::string base_path = cli_params.preview_path;
@@ -502,9 +513,6 @@ int main(int argc, const char* argv[]) {
     if (cli_params.preview_method == PREVIEW_PROJ)
         cli_params.preview_fps /= 4;
 
-    sd_set_log_callback(sd_log_cb, (void*)&cli_params);
-    log_verbose = cli_params.verbose;
-    log_color   = cli_params.color;
     sd_set_preview_callback(step_callback,
                             cli_params.preview_method,
                             cli_params.preview_interval,
@@ -750,7 +758,7 @@ int main(int argc, const char* argv[]) {
                     gen_params.pm_id_embed_path.c_str(),
                     gen_params.pm_style_strength,
                 },  // pm_params
-                ctx_params.vae_tiling_params,
+                gen_params.vae_tiling_params,
                 gen_params.cache_params,
             };
 
@@ -776,7 +784,7 @@ int main(int argc, const char* argv[]) {
                 gen_params.seed,
                 gen_params.video_frames,
                 gen_params.vace_strength,
-                ctx_params.vae_tiling_params,
+                gen_params.vae_tiling_params,
                 gen_params.cache_params,
             };
 

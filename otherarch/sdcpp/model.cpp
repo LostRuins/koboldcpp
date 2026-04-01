@@ -1337,6 +1337,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     std::atomic<int64_t> memcpy_time_ms(0);
     std::atomic<int64_t> copy_to_backend_time_ms(0);
     std::atomic<int64_t> convert_time_ms(0);
+    std::atomic<uint64_t> bytes_processed(0);
 
     int num_threads_to_use = n_threads_p > 0 ? n_threads_p : sd_get_num_physical_cores();
     LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
@@ -1548,6 +1549,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         t1 = ggml_time_ms();
                         copy_to_backend_time_ms.fetch_add(t1 - t0);
                     }
+
+                    bytes_processed.fetch_add((uint64_t)nbytes_to_read);
                 }
                 if (zip != nullptr) {
                     zip_close(zip);
@@ -1560,8 +1563,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             if (current_idx >= file_tensors.size() || failed) {
                 break;
             }
-            size_t curr_num = total_tensors_processed + current_idx;
-            pretty_progress(static_cast<int>(curr_num), static_cast<int>(total_tensors_to_process), (ggml_time_ms() - t_start) / 1000.0f / (curr_num + 1e-6f));
+            size_t curr_num       = total_tensors_processed + current_idx;
+            float elapsed_seconds = (ggml_time_ms() - t_start) / 1000.0f;
+            pretty_bytes_progress(static_cast<int>(curr_num),
+                                  static_cast<int>(total_tensors_to_process),
+                                  bytes_processed.load(),
+                                  elapsed_seconds);
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
@@ -1574,7 +1581,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             break;
         }
         total_tensors_processed += file_tensors.size();
-        pretty_progress(static_cast<int>(total_tensors_processed), static_cast<int>(total_tensors_to_process), (ggml_time_ms() - t_start) / 1000.0f / (total_tensors_processed + 1e-6f));
+        pretty_bytes_progress(static_cast<int>(total_tensors_processed),
+                              static_cast<int>(total_tensors_to_process),
+                              bytes_processed.load(),
+                              (ggml_time_ms() - t_start) / 1000.0f);
         if (total_tensors_processed < total_tensors_to_process) {
             printf("\n");
         }
