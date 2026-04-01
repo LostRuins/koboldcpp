@@ -680,7 +680,7 @@ llama-impl.o: src/llama-impl.cpp src/llama-impl.h
 budget.o: common/reasoning-budget.cpp common/reasoning-budget.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-SDCPP_COMMON_BASENAMES := stable-diffusion.h stable-diffusion.cpp sample-cache.cpp util.cpp upscaler.cpp model.cpp name_conversion.cpp tokenize_util.cpp thirdparty/zip.c
+SDCPP_COMMON_BASENAMES := stable-diffusion.h stable-diffusion.cpp sample-cache.h sample-cache.cpp util.cpp upscaler.cpp model.cpp name_conversion.cpp tokenize_util.cpp thirdparty/zip.c
 SDCPP_COMMON_SOURCES := $(foreach f,$(SDCPP_COMMON_BASENAMES),otherarch/sdcpp/$(f))
 
 # sd.cpp objects

@@ -17,7 +17,7 @@
 #include "model_adapter.h"
 #include "vocab/vocab.h"
 #include "flux.hpp"
-#include "stable-diffusion.cpp"
+#include "sample-cache.cpp"
 #include "util.cpp"
 #include "name_conversion.cpp"
 #include "upscaler.cpp"
@@ -29,6 +29,7 @@
 
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
+#include "stable-diffusion.cpp"
 
 //#define STB_IMAGE_IMPLEMENTATION //already defined in llava
 #include "stb_image.h"
