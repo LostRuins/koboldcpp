@@ -1045,13 +1045,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             }
             sd_params->cfg_scale = 1.0f;
         }
-        if (sd_params->sample_method == sample_method_t::EULER_A_SAMPLE_METHOD) {
-            //euler a broken on flux
-            if (!sd_is_quiet && sddebugmode) {
-                printf("%s: switching Euler A to Euler\n", loaded_model_is_chroma(sd_ctx) ? "Chroma" : "Flux");
-            }
-            sd_params->sample_method = sample_method_t::EULER_SAMPLE_METHOD;
-        }
     }
 
     if(!remove_limits && loadedsdver == SDVersion::VERSION_Z_IMAGE)
