@@ -14,7 +14,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "gguf.h"
-#include <nlohmann/json.hpp>
+#include "json.hpp"
 #include "ordered_map.hpp"
 #include "zip.h"
 
