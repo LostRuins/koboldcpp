@@ -3847,6 +3847,26 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         }
     }
 
+    // Round two, gemma4 boogalo
+    // If it breaks your stuff you can blame me again (Or thank me because you can actually use gemma 31B stable now). - Henk
+    // For the record, the GLM4 one didn't break anyone and everyone forgot GLM4 needed this :D
+    if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == llm_arch::LLM_ARCH_GEMMA4)) {
+        std::string temp = gpttype_get_chat_template();
+        if (temp.find("<|channel>thought") != std::string::npos) {
+            const std::string channel_open  = "<|channel>";
+            const std::string channel_close = "<channel|>";
+            const std::string channel_prefix = channel_open + channel_close;
+
+            const bool has_open  = kcpp_data->prompt.find(channel_open)  != std::string::npos;
+            const bool has_close = kcpp_data->prompt.find(channel_close) != std::string::npos;
+
+            // If neither opening nor closing tag is present anywhere, prepend both
+            if (!has_open && !has_close) {
+                kcpp_data->prompt = channel_prefix + kcpp_data->prompt;
+            }
+        }
+    }
+
     bool stream_sse = inputs.stream_sse;
     bool allow_regular_prints = (!is_quiet && debugmode!=-1);
 
