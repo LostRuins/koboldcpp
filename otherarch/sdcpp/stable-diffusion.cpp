@@ -3221,7 +3221,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
     latents.ref_images           = std::move(ref_images);
     latents.ref_latents          = std::move(ref_latents);
 
-    if (sd_version_is_inpaint(sd_ctx->sd->version)) {
+    if (sd_version_is_inpaint(sd_ctx->sd->version) || !latents.init_latent.empty()) {
         latents.denoise_mask = std::move(latent_mask);
     }
 
