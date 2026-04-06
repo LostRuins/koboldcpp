@@ -1,4 +1,4 @@
-﻿#ifndef __T5_HPP__
+#ifndef __T5_HPP__
 #define __T5_HPP__
 
 #include <cfloat>

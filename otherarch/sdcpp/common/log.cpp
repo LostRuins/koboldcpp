@@ -1,5 +1,7 @@
 #include "log.h"
 
+#include <vector>
+
 bool log_verbose = false;
 bool log_color   = false;
 
@@ -34,17 +36,12 @@ void print_utf8(FILE* stream, const char* utf8) {
             return;
         }
 
-        wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
-        if (!wbuf) {
-            return;
-        }
+        std::vector<wchar_t> wbuf(static_cast<size_t>(wlen));
 
-        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf.data(), wlen);
 
         DWORD written;
-        WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
-
-        free(wbuf);
+        WriteConsoleW(h, wbuf.data(), wlen - 1, &written, NULL);
     } else {
         DWORD written;
         WriteFile(h, utf8, (DWORD)strlen(utf8), &written, NULL);

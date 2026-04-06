@@ -1,5 +1,6 @@
-#include "log.h"
 #include "media_io.h"
+#include "log.h"
+#include "resource_owners.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -37,7 +38,63 @@
 
 namespace fs = std::filesystem;
 
-namespace {
+#ifdef SD_USE_WEBP
+struct WebPFreeDeleter {
+    void operator()(void* ptr) const {
+        if (ptr != nullptr) {
+            WebPFree(ptr);
+        }
+    }
+};
+
+struct WebPMuxDeleter {
+    void operator()(WebPMux* mux) const {
+        if (mux != nullptr) {
+            WebPMuxDelete(mux);
+        }
+    }
+};
+
+struct WebPAnimEncoderDeleter {
+    void operator()(WebPAnimEncoder* enc) const {
+        if (enc != nullptr) {
+            WebPAnimEncoderDelete(enc);
+        }
+    }
+};
+
+struct WebPDataGuard {
+    WebPDataGuard() {
+        WebPDataInit(&data);
+    }
+
+    ~WebPDataGuard() {
+        WebPDataClear(&data);
+    }
+
+    WebPData data;
+};
+
+struct WebPPictureGuard {
+    WebPPictureGuard()
+        : initialized(WebPPictureInit(&picture) != 0) {
+    }
+
+    ~WebPPictureGuard() {
+        if (initialized) {
+            WebPPictureFree(&picture);
+        }
+    }
+
+    WebPPicture picture;
+    bool initialized;
+};
+
+using WebPBufferPtr      = std::unique_ptr<uint8_t, WebPFreeDeleter>;
+using WebPMuxPtr         = std::unique_ptr<WebPMux, WebPMuxDeleter>;
+using WebPAnimEncoderPtr = std::unique_ptr<WebPAnimEncoder, WebPAnimEncoderDeleter>;
+#endif
+
 bool read_binary_file_bytes(const char* path, std::vector<uint8_t>& data) {
     std::ifstream fin(fs::path(path), std::ios::binary);
     if (!fin) {
@@ -158,27 +215,25 @@ uint8_t* decode_webp_image_to_buffer(const uint8_t* data,
     if (expected_channel == 1) {
         int decoded_width  = width;
         int decoded_height = height;
-        uint8_t* decoded   = features.has_alpha
-                                 ? WebPDecodeRGBA(data, size, &decoded_width, &decoded_height)
-                                 : WebPDecodeRGB(data, size, &decoded_width, &decoded_height);
+        WebPBufferPtr decoded(features.has_alpha
+                                  ? WebPDecodeRGBA(data, size, &decoded_width, &decoded_height)
+                                  : WebPDecodeRGB(data, size, &decoded_width, &decoded_height));
         if (decoded == nullptr) {
             return nullptr;
         }
 
-        uint8_t* grayscale = (uint8_t*)malloc(pixel_count);
+        FreeUniquePtr<uint8_t> grayscale((uint8_t*)malloc(pixel_count));
         if (grayscale == nullptr) {
-            WebPFree(decoded);
             return nullptr;
         }
 
         const int decoded_channels = features.has_alpha ? 4 : 3;
         for (size_t i = 0; i < pixel_count; ++i) {
-            const uint8_t* src = decoded + i * decoded_channels;
-            grayscale[i]       = static_cast<uint8_t>((77 * src[0] + 150 * src[1] + 29 * src[2] + 128) >> 8);
+            const uint8_t* src = decoded.get() + i * decoded_channels;
+            grayscale.get()[i] = static_cast<uint8_t>((77 * src[0] + 150 * src[1] + 29 * src[2] + 128) >> 8);
         }
 
-        WebPFree(decoded);
-        return grayscale;
+        return grayscale.release();
     }
 
     if (expected_channel != 3 && expected_channel != 4) {
@@ -187,23 +242,21 @@ uint8_t* decode_webp_image_to_buffer(const uint8_t* data,
 
     int decoded_width  = width;
     int decoded_height = height;
-    uint8_t* decoded   = (expected_channel == 4)
-                             ? WebPDecodeRGBA(data, size, &decoded_width, &decoded_height)
-                             : WebPDecodeRGB(data, size, &decoded_width, &decoded_height);
+    WebPBufferPtr decoded((expected_channel == 4)
+                              ? WebPDecodeRGBA(data, size, &decoded_width, &decoded_height)
+                              : WebPDecodeRGB(data, size, &decoded_width, &decoded_height));
     if (decoded == nullptr) {
         return nullptr;
     }
 
     const size_t out_size = pixel_count * static_cast<size_t>(expected_channel);
-    uint8_t* output       = (uint8_t*)malloc(out_size);
+    FreeUniquePtr<uint8_t> output((uint8_t*)malloc(out_size));
     if (output == nullptr) {
-        WebPFree(decoded);
         return nullptr;
     }
 
-    memcpy(output, decoded, out_size);
-    WebPFree(decoded);
-    return output;
+    memcpy(output.get(), decoded.get(), out_size);
+    return output.release();
 }
 
 std::string build_webp_xmp_packet(const std::string& parameters) {
@@ -255,30 +308,29 @@ bool encode_webp_image_to_vector(const uint8_t* image,
         return false;
     }
 
-    uint8_t* encoded    = nullptr;
-    size_t encoded_size = (input_channels == 4)
-                              ? WebPEncodeRGBA(input_image, width, height, width * input_channels, static_cast<float>(quality), &encoded)
-                              : WebPEncodeRGB(input_image, width, height, width * input_channels, static_cast<float>(quality), &encoded);
+    uint8_t* encoded_raw = nullptr;
+    size_t encoded_size  = (input_channels == 4)
+                               ? WebPEncodeRGBA(input_image, width, height, width * input_channels, static_cast<float>(quality), &encoded_raw)
+                               : WebPEncodeRGB(input_image, width, height, width * input_channels, static_cast<float>(quality), &encoded_raw);
+    WebPBufferPtr encoded(encoded_raw);
     if (encoded == nullptr || encoded_size == 0) {
         return false;
     }
 
-    out.assign(encoded, encoded + encoded_size);
-    WebPFree(encoded);
+    out.assign(encoded.get(), encoded.get() + encoded_size);
 
     if (parameters.empty()) {
         return true;
     }
 
     WebPData image_data;
-    WebPData assembled_data;
     WebPDataInit(&image_data);
-    WebPDataInit(&assembled_data);
+    WebPDataGuard assembled_data;
 
     image_data.bytes = out.data();
     image_data.size  = out.size();
 
-    WebPMux* mux = WebPMuxNew();
+    WebPMuxPtr mux(WebPMuxNew());
     if (mux == nullptr) {
         return false;
     }
@@ -289,16 +341,14 @@ bool encode_webp_image_to_vector(const uint8_t* image,
     xmp_data.bytes = reinterpret_cast<const uint8_t*>(xmp_packet.data());
     xmp_data.size  = xmp_packet.size();
 
-    const bool ok = WebPMuxSetImage(mux, &image_data, 1) == WEBP_MUX_OK &&
-                    WebPMuxSetChunk(mux, "XMP ", &xmp_data, 1) == WEBP_MUX_OK &&
-                    WebPMuxAssemble(mux, &assembled_data) == WEBP_MUX_OK;
+    const bool ok = WebPMuxSetImage(mux.get(), &image_data, 1) == WEBP_MUX_OK &&
+                    WebPMuxSetChunk(mux.get(), "XMP ", &xmp_data, 1) == WEBP_MUX_OK &&
+                    WebPMuxAssemble(mux.get(), &assembled_data.data) == WEBP_MUX_OK;
 
     if (ok) {
-        out.assign(assembled_data.bytes, assembled_data.bytes + assembled_data.size);
+        out.assign(assembled_data.data.bytes, assembled_data.data.bytes + assembled_data.data.size);
     }
 
-    WebPDataClear(&assembled_data);
-    WebPMuxDelete(mux);
     return ok;
 }
 
@@ -382,19 +432,19 @@ uint8_t* load_image_common(bool from_memory,
                            int expected_height,
                            int expected_channel) {
     const char* image_path;
-    uint8_t* image_buffer    = nullptr;
+    FreeUniquePtr<uint8_t> image_buffer;
     int source_channel_count = 0;
 
 #ifdef SD_USE_WEBP
     if (from_memory) {
         image_path = "memory";
         if (len > 0 && is_webp_signature(reinterpret_cast<const uint8_t*>(image_path_or_bytes), static_cast<size_t>(len))) {
-            image_buffer = decode_webp_image_to_buffer(reinterpret_cast<const uint8_t*>(image_path_or_bytes),
-                                                       static_cast<size_t>(len),
-                                                       width,
-                                                       height,
-                                                       expected_channel,
-                                                       source_channel_count);
+            image_buffer.reset(decode_webp_image_to_buffer(reinterpret_cast<const uint8_t*>(image_path_or_bytes),
+                                                           static_cast<size_t>(len),
+                                                           width,
+                                                           height,
+                                                           expected_channel,
+                                                           source_channel_count));
         }
     } else {
         image_path = image_path_or_bytes;
@@ -408,12 +458,12 @@ uint8_t* load_image_common(bool from_memory,
                 LOG_ERROR("load image from '%s' failed", image_path_or_bytes);
                 return nullptr;
             }
-            image_buffer = decode_webp_image_to_buffer(file_bytes.data(),
-                                                       file_bytes.size(),
-                                                       width,
-                                                       height,
-                                                       expected_channel,
-                                                       source_channel_count);
+            image_buffer.reset(decode_webp_image_to_buffer(file_bytes.data(),
+                                                           file_bytes.size(),
+                                                           width,
+                                                           height,
+                                                           expected_channel,
+                                                           source_channel_count));
         }
     }
 #endif
@@ -421,15 +471,15 @@ uint8_t* load_image_common(bool from_memory,
     if (from_memory) {
         image_path = "memory";
         if (image_buffer == nullptr) {
-            int c                = 0;
-            image_buffer         = (uint8_t*)stbi_load_from_memory((const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel);
+            int c = 0;
+            image_buffer.reset((uint8_t*)stbi_load_from_memory((const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel));
             source_channel_count = c;
         }
     } else {
         image_path = image_path_or_bytes;
         if (image_buffer == nullptr) {
-            int c                = 0;
-            image_buffer         = (uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel);
+            int c = 0;
+            image_buffer.reset((uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel));
             source_channel_count = c;
         }
     }
@@ -444,17 +494,14 @@ uint8_t* load_image_common(bool from_memory,
                 expected_channel,
                 source_channel_count,
                 image_path);
-        free(image_buffer);
         return nullptr;
     }
     if (width <= 0) {
         LOG_ERROR("error: the width of image must be greater than 0, image_path = %s", image_path);
-        free(image_buffer);
         return nullptr;
     }
     if (height <= 0) {
         LOG_ERROR("error: the height of image must be greater than 0, image_path = %s", image_path);
-        free(image_buffer);
         return nullptr;
     }
 
@@ -475,43 +522,39 @@ uint8_t* load_image_common(bool from_memory,
 
         if (crop_x != 0 || crop_y != 0) {
             LOG_INFO("crop input image from %dx%d to %dx%d, image_path = %s", width, height, crop_w, crop_h, image_path);
-            uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
+            FreeUniquePtr<uint8_t> cropped_image_buffer((uint8_t*)malloc(crop_w * crop_h * expected_channel));
             if (cropped_image_buffer == nullptr) {
                 LOG_ERROR("error: allocate memory for crop\n");
-                free(image_buffer);
                 return nullptr;
             }
             for (int row = 0; row < crop_h; row++) {
-                uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
-                uint8_t* dst = cropped_image_buffer + (row * crop_w) * expected_channel;
+                uint8_t* src = image_buffer.get() + ((crop_y + row) * width + crop_x) * expected_channel;
+                uint8_t* dst = cropped_image_buffer.get() + (row * crop_w) * expected_channel;
                 memcpy(dst, src, crop_w * expected_channel);
             }
 
-            width  = crop_w;
-            height = crop_h;
-            free(image_buffer);
-            image_buffer = cropped_image_buffer;
+            width        = crop_w;
+            height       = crop_h;
+            image_buffer = std::move(cropped_image_buffer);
         }
 
         LOG_INFO("resize input image from %dx%d to %dx%d", width, height, expected_width, expected_height);
-        uint8_t* resized_image_buffer = (uint8_t*)malloc(expected_height * expected_width * expected_channel);
+        FreeUniquePtr<uint8_t> resized_image_buffer((uint8_t*)malloc(expected_height * expected_width * expected_channel));
         if (resized_image_buffer == nullptr) {
             LOG_ERROR("error: allocate memory for resize input image\n");
-            free(image_buffer);
             return nullptr;
         }
-        stbir_resize(image_buffer, width, height, 0,
-                     resized_image_buffer, expected_width, expected_height, 0, STBIR_TYPE_UINT8,
+        stbir_resize(image_buffer.get(), width, height, 0,
+                     resized_image_buffer.get(), expected_width, expected_height, 0, STBIR_TYPE_UINT8,
                      expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
                      STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
                      STBIR_FILTER_BOX, STBIR_FILTER_BOX,
                      STBIR_COLORSPACE_SRGB, nullptr);
-        width  = expected_width;
-        height = expected_height;
-        free(image_buffer);
-        image_buffer = resized_image_buffer;
+        width        = expected_width;
+        height       = expected_height;
+        image_buffer = std::move(resized_image_buffer);
     }
-    return image_buffer;
+    return image_buffer.release();
 }
 
 typedef struct {
@@ -526,8 +569,6 @@ void write_u32_le(FILE* f, uint32_t val) {
 void write_u16_le(FILE* f, uint16_t val) {
     fwrite(&val, 2, 1, f);
 }
-}  // namespace
-
 EncodedImageFormat encoded_image_format_from_path(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -662,18 +703,18 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
         return -1;
     }
 
-    FILE* f = fopen(filename, "wb");
-    if (!f) {
+    FilePtr file(fopen(filename, "wb"));
+    if (!file) {
         perror("Error opening file for writing");
         return -1;
     }
+    FILE* f = file.get();
 
     uint32_t width    = images[0].width;
     uint32_t height   = images[0].height;
     uint32_t channels = images[0].channel;
     if (channels != 3 && channels != 4) {
         fprintf(stderr, "Error: Unsupported channel count: %u\n", channels);
-        fclose(f);
         return -1;
     }
 
@@ -746,41 +787,32 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
     write_u32_le(f, 0);
     fwrite("movi", 4, 1, f);
 
-    avi_index_entry* index = (avi_index_entry*)malloc(sizeof(avi_index_entry) * num_images);
-    if (!index) {
-        fclose(f);
-        return -1;
-    }
-
-    struct {
-        uint8_t* buf;
-        size_t size;
-    } jpeg_data;
+    std::vector<avi_index_entry> index(static_cast<size_t>(num_images));
+    std::vector<uint8_t> jpeg_data;
 
     for (int i = 0; i < num_images; i++) {
-        jpeg_data.buf  = nullptr;
-        jpeg_data.size = 0;
+        jpeg_data.clear();
 
         auto write_to_buf = [](void* context, void* data, int size) {
-            auto jd = (decltype(jpeg_data)*)context;
-            jd->buf = (uint8_t*)realloc(jd->buf, jd->size + size);
-            memcpy(jd->buf + jd->size, data, size);
-            jd->size += size;
+            auto* buffer       = reinterpret_cast<std::vector<uint8_t>*>(context);
+            const uint8_t* src = reinterpret_cast<const uint8_t*>(data);
+            buffer->insert(buffer->end(), src, src + size);
         };
 
-        stbi_write_jpg_to_func(write_to_buf, &jpeg_data, images[i].width, images[i].height, channels, images[i].data, quality);
-
-        fwrite("00dc", 4, 1, f);
-        write_u32_le(f, (uint32_t)jpeg_data.size);
-        index[i].offset = ftell(f) - 8;
-        index[i].size   = (uint32_t)jpeg_data.size;
-        fwrite(jpeg_data.buf, 1, jpeg_data.size, f);
-
-        if (jpeg_data.size % 2) {
-            fputc(0, f);
+        if (!stbi_write_jpg_to_func(write_to_buf, &jpeg_data, images[i].width, images[i].height, channels, images[i].data, quality)) {
+            fprintf(stderr, "Error: Failed to encode JPEG frame.\n");
+            return -1;
         }
 
-        free(jpeg_data.buf);
+        fwrite("00dc", 4, 1, f);
+        write_u32_le(f, (uint32_t)jpeg_data.size());
+        index[i].offset = ftell(f) - 8;
+        index[i].size   = (uint32_t)jpeg_data.size();
+        fwrite(jpeg_data.data(), 1, jpeg_data.size(), f);
+
+        if (jpeg_data.size() % 2) {
+            fputc(0, f);
+        }
     }
 
     long cur_pos   = ftell(f);
@@ -803,9 +835,6 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
     fseek(f, riff_size_pos, SEEK_SET);
     write_u32_le(f, file_size);
     fseek(f, cur_pos, SEEK_SET);
-
-    fclose(f);
-    free(index);
 
     return 0;
 }
@@ -847,7 +876,7 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
         return -1;
     }
 
-    WebPAnimEncoder* enc = WebPAnimEncoderNew(width, height, &anim_options);
+    WebPAnimEncoderPtr enc(WebPAnimEncoderNew(width, height, &anim_options));
     if (enc == nullptr) {
         fprintf(stderr, "Error: Could not create WebPAnimEncoder object.\n");
         return -1;
@@ -855,23 +884,22 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
 
     const int frame_duration_ms = std::max(1, static_cast<int>(std::lround(1000.0 / static_cast<double>(fps))));
     int timestamp_ms            = 0;
-    int ret                     = -1;
 
     for (int i = 0; i < num_images; ++i) {
         const sd_image_t& image = images[i];
         if (static_cast<int>(image.width) != width || static_cast<int>(image.height) != height) {
             fprintf(stderr, "Error: Frame dimensions do not match.\n");
-            goto cleanup;
+            return -1;
         }
 
-        WebPPicture picture;
-        if (!WebPPictureInit(&picture)) {
+        WebPPictureGuard picture;
+        if (!picture.initialized) {
             fprintf(stderr, "Error: Failed to initialize WebPPicture.\n");
-            goto cleanup;
+            return -1;
         }
-        picture.use_argb = 1;
-        picture.width    = width;
-        picture.height   = height;
+        picture.picture.use_argb = 1;
+        picture.picture.width    = width;
+        picture.picture.height   = height;
 
         bool picture_ok = false;
         std::vector<uint8_t> rgb_buffer;
@@ -882,64 +910,48 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
                 rgb_buffer[p * 3 + 1] = image.data[p];
                 rgb_buffer[p * 3 + 2] = image.data[p];
             }
-            picture_ok = WebPPictureImportRGB(&picture, rgb_buffer.data(), width * 3) != 0;
+            picture_ok = WebPPictureImportRGB(&picture.picture, rgb_buffer.data(), width * 3) != 0;
         } else if (image.channel == 4) {
-            picture_ok = WebPPictureImportRGBA(&picture, image.data, width * 4) != 0;
+            picture_ok = WebPPictureImportRGBA(&picture.picture, image.data, width * 4) != 0;
         } else {
-            picture_ok = WebPPictureImportRGB(&picture, image.data, width * 3) != 0;
+            picture_ok = WebPPictureImportRGB(&picture.picture, image.data, width * 3) != 0;
         }
 
         if (!picture_ok) {
             fprintf(stderr, "Error: Failed to import frame into WebPPicture.\n");
-            WebPPictureFree(&picture);
-            goto cleanup;
+            return -1;
         }
 
-        if (!WebPAnimEncoderAdd(enc, &picture, timestamp_ms, &config)) {
-            fprintf(stderr, "Error: Failed to add frame to animated WebP: %s\n", WebPAnimEncoderGetError(enc));
-            WebPPictureFree(&picture);
-            goto cleanup;
+        if (!WebPAnimEncoderAdd(enc.get(), &picture.picture, timestamp_ms, &config)) {
+            fprintf(stderr, "Error: Failed to add frame to animated WebP: %s\n", WebPAnimEncoderGetError(enc.get()));
+            return -1;
         }
 
-        WebPPictureFree(&picture);
         timestamp_ms += frame_duration_ms;
     }
 
-    if (!WebPAnimEncoderAdd(enc, nullptr, timestamp_ms, nullptr)) {
-        fprintf(stderr, "Error: Failed to finalize animated WebP frames: %s\n", WebPAnimEncoderGetError(enc));
-        goto cleanup;
+    if (!WebPAnimEncoderAdd(enc.get(), nullptr, timestamp_ms, nullptr)) {
+        fprintf(stderr, "Error: Failed to finalize animated WebP frames: %s\n", WebPAnimEncoderGetError(enc.get()));
+        return -1;
     }
 
-    {
-        WebPData webp_data;
-        WebPDataInit(&webp_data);
-        if (!WebPAnimEncoderAssemble(enc, &webp_data)) {
-            fprintf(stderr, "Error: Failed to assemble animated WebP: %s\n", WebPAnimEncoderGetError(enc));
-            WebPDataClear(&webp_data);
-            goto cleanup;
-        }
-
-        FILE* f = fopen(filename, "wb");
-        if (!f) {
-            perror("Error opening file for writing");
-            WebPDataClear(&webp_data);
-            goto cleanup;
-        }
-        if (webp_data.size > 0 && fwrite(webp_data.bytes, 1, webp_data.size, f) != webp_data.size) {
-            fprintf(stderr, "Error: Failed to write animated WebP file.\n");
-            fclose(f);
-            WebPDataClear(&webp_data);
-            goto cleanup;
-        }
-        fclose(f);
-        WebPDataClear(&webp_data);
+    WebPDataGuard webp_data;
+    if (!WebPAnimEncoderAssemble(enc.get(), &webp_data.data)) {
+        fprintf(stderr, "Error: Failed to assemble animated WebP: %s\n", WebPAnimEncoderGetError(enc.get()));
+        return -1;
     }
 
-    ret = 0;
+    FilePtr f(fopen(filename, "wb"));
+    if (!f) {
+        perror("Error opening file for writing");
+        return -1;
+    }
+    if (webp_data.data.size > 0 && fwrite(webp_data.data.bytes, 1, webp_data.data.size, f.get()) != webp_data.data.size) {
+        fprintf(stderr, "Error: Failed to write animated WebP file.\n");
+        return -1;
+    }
 
-cleanup:
-    WebPAnimEncoderDelete(enc);
-    return ret;
+    return 0;
 }
 #endif
 
@@ -954,7 +966,7 @@ int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num
         return -1;
     }
 
-    const int width = static_cast<int>(images[0].width);
+    const int width  = static_cast<int>(images[0].width);
     const int height = static_cast<int>(images[0].height);
     if (width <= 0 || height <= 0) {
         fprintf(stderr, "Error: Invalid frame dimensions.\n");
