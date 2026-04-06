@@ -3112,7 +3112,8 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
                                                          {request->width / request->vae_scale_factor,
                                                           request->height / request->vae_scale_factor,
                                                           1,
-                                                          1});
+                                                          1},
+                                                         sd::ops::InterpolateMode::NearestMax);
 
     sd::Tensor<float> init_latent;
     sd::Tensor<float> control_latent;
@@ -3256,9 +3257,13 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
     latents.ref_images           = std::move(ref_images);
     latents.ref_latents          = std::move(ref_latents);
 
-    if (sd_version_is_inpaint(sd_ctx->sd->version) || !latents.init_latent.empty()) {
-        latents.denoise_mask = std::move(latent_mask);
+    if (sd_version_is_inpaint(sd_ctx->sd->version)) {
+        latent_mask = sd::ops::max_pool_2d(latent_mask,
+                                           {3, 3},
+                                           {1, 1},
+                                           {1, 1});
     }
+    latents.denoise_mask = std::move(latent_mask);
 
     return latents;
 }

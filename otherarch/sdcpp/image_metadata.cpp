@@ -40,6 +40,13 @@ namespace {
                static_cast<uint32_t>(data[offset + 3]);
     }
 
+    uint32_t read_u32_le(const std::vector<uint8_t>& data, size_t offset) {
+        return static_cast<uint32_t>(data[offset]) |
+               (static_cast<uint32_t>(data[offset + 1]) << 8) |
+               (static_cast<uint32_t>(data[offset + 2]) << 16) |
+               (static_cast<uint32_t>(data[offset + 3]) << 24);
+    }
+
     uint16_t read_u16_tiff(const std::vector<uint8_t>& data, size_t offset, bool little_endian) {
         if (little_endian) {
             return static_cast<uint16_t>(data[offset]) |
@@ -353,6 +360,11 @@ namespace {
                    std::string& error);
 
     bool parse_jpeg(const std::vector<uint8_t>& data,
+                    bool include_raw,
+                    json& result,
+                    std::string& error);
+
+    bool parse_webp(const std::vector<uint8_t>& data,
                     bool include_raw,
                     json& result,
                     std::string& error);
@@ -1008,6 +1020,83 @@ namespace {
         return true;
     }
 
+    bool parse_webp(const std::vector<uint8_t>& data,
+                    bool include_raw,
+                    json& result,
+                    std::string& error) {
+        if (data.size() < 12 ||
+            memcmp(data.data(), "RIFF", 4) != 0 ||
+            memcmp(data.data() + 8, "WEBP", 4) != 0) {
+            error = "not a WebP file";
+            return false;
+        }
+
+        result["format"]  = "WEBP";
+        result["entries"] = json::array();
+
+        size_t offset = 12;
+        while (offset + 8 <= data.size()) {
+            const std::string raw_type =
+                bytes_to_string(data.data() + offset, data.data() + offset + 4);
+            const uint32_t length = read_u32_le(data, offset + 4);
+            offset += 8;
+
+            if (offset + static_cast<size_t>(length) > data.size()) {
+                error = "WebP chunk exceeds file size";
+                return false;
+            }
+
+            const uint8_t* payload = data.data() + offset;
+            const std::string type =
+                !raw_type.empty() && raw_type.back() == ' '
+                    ? raw_type.substr(0, raw_type.size() - 1)
+                    : raw_type;
+
+            json entry;
+            entry["entry_type"] = "chunk";
+            entry["name"]       = type;
+            entry["length"]     = length;
+            entry["metadata_like"] =
+                (raw_type == "ICCP" || raw_type == "EXIF" || raw_type == "XMP ");
+
+            if (raw_type == "VP8X" && length >= 10) {
+                entry["data"] = json{
+                    {"icc_profile", (payload[0] & 0x20) != 0},
+                    {"alpha", (payload[0] & 0x10) != 0},
+                    {"exif", (payload[0] & 0x08) != 0},
+                    {"xmp", (payload[0] & 0x04) != 0},
+                    {"animation", (payload[0] & 0x02) != 0},
+                    {"canvas_width", 1 + static_cast<uint32_t>(payload[4]) + (static_cast<uint32_t>(payload[5]) << 8) + (static_cast<uint32_t>(payload[6]) << 16)},
+                    {"canvas_height", 1 + static_cast<uint32_t>(payload[7]) + (static_cast<uint32_t>(payload[8]) << 8) + (static_cast<uint32_t>(payload[9]) << 16)},
+                };
+            } else if (raw_type == "EXIF") {
+                std::string exif_error;
+                json meta = parse_exif_tiff(payload, length, include_raw, exif_error);
+                if (!meta.empty()) {
+                    entry["data"] = std::move(meta);
+                }
+                if (!exif_error.empty()) {
+                    entry["error"] = exif_error;
+                }
+            } else if (raw_type == "XMP ") {
+                entry["data"] = json{
+                    {"type", "XMP"},
+                    {"xml", trim_trailing_nuls(bytes_to_string(payload, payload + length))},
+                };
+            } else if (raw_type == "ICCP") {
+                entry["data"] = json{{"profile_size", length}};
+                append_raw_preview(entry["data"], payload, length, include_raw);
+            } else {
+                append_raw_preview(entry, payload, length, include_raw);
+            }
+
+            result["entries"].push_back(entry);
+            offset += static_cast<size_t>(length) + (length & 1u);
+        }
+
+        return true;
+    }
+
     std::string abbreviate(const std::string& value, bool brief) {
         if (!brief || value.size() <= 240) {
             return value;
@@ -1116,8 +1205,12 @@ namespace {
         if (data.size() >= 2 && data[0] == 0xFF && data[1] == 0xD8) {
             return parse_jpeg(data, include_raw, report, error);
         }
+        if (data.size() >= 12 && memcmp(data.data(), "RIFF", 4) == 0 &&
+            memcmp(data.data() + 8, "WEBP", 4) == 0) {
+            return parse_webp(data, include_raw, report, error);
+        }
 
-        error = "unsupported image format; only PNG and JPEG are supported";
+        error = "unsupported image format; only PNG, JPEG, and WebP are supported";
         return false;
     }
 

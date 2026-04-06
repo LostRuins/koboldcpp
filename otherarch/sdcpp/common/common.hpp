@@ -1,4 +1,6 @@
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -17,24 +19,13 @@ namespace fs = std::filesystem;
 #include <windows.h>
 #endif  // _WIN32
 
+#include "log.h"
 #include "stable-diffusion.h"
 
 namespace { // kcpp
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_STATIC
-#include "stb_image.h"
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
-#include "stb_image_write.h"
-
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#define STB_IMAGE_RESIZE_STATIC
-#include "stb_image_resize.h"
 
 }
-
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
@@ -91,125 +82,6 @@ static std::string argv_to_utf8(int index, const char** argv) {
 }
 
 #endif
-
-static void print_utf8(FILE* stream, const char* utf8) {
-    if (!utf8)
-        return;
-
-#ifdef _WIN32
-    HANDLE h = (stream == stderr)
-                   ? GetStdHandle(STD_ERROR_HANDLE)
-                   : GetStdHandle(STD_OUTPUT_HANDLE);
-
-    DWORD mode;
-    BOOL is_console = GetConsoleMode(h, &mode);
-
-    if (is_console) {
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-        if (wlen <= 0)
-            return;
-
-        wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
-        if (!wbuf)
-            return;
-
-        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
-
-        DWORD written;
-        WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
-
-        free(wbuf);
-    } else {
-        DWORD written;
-        WriteFile(h, utf8, (DWORD)strlen(utf8), &written, NULL);
-    }
-#else
-    fputs(utf8, stream);
-#endif
-}
-
-static std::string sd_basename(const std::string& path) {
-    size_t pos = path.find_last_of('/');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    pos = path.find_last_of('\\');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    return path;
-}
-
-static void log_print(enum sd_log_level_t level, const char* log, bool verbose, bool color) {
-    int tag_color;
-    const char* level_str;
-    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
-
-    if (!log || (!verbose && level <= SD_LOG_DEBUG)) {
-        return;
-    }
-
-    switch (level) {
-        case SD_LOG_DEBUG:
-            tag_color = 37;
-            level_str = "DEBUG";
-            break;
-        case SD_LOG_INFO:
-            tag_color = 34;
-            level_str = "INFO";
-            break;
-        case SD_LOG_WARN:
-            tag_color = 35;
-            level_str = "WARN";
-            break;
-        case SD_LOG_ERROR:
-            tag_color = 31;
-            level_str = "ERROR";
-            break;
-        default: /* Potential future-proofing */
-            tag_color = 33;
-            level_str = "?????";
-            break;
-    }
-
-    if (color) {
-        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
-    } else {
-        fprintf(out_stream, "[%-5s] ", level_str);
-    }
-    print_utf8(out_stream, log);
-    fflush(out_stream);
-}
-
-#define LOG_BUFFER_SIZE 4096
-
-static bool log_verbose = false;
-static bool log_color   = false;
-
-static void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-
-    static char log_buffer[LOG_BUFFER_SIZE + 1];
-    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%s:%-4d - ", sd_basename(file).c_str(), line);
-
-    if (written >= 0 && written < LOG_BUFFER_SIZE) {
-        vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
-    }
-    size_t len = strlen(log_buffer);
-    if (log_buffer[len - 1] != '\n') {
-        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
-    }
-
-    log_print(level, log_buffer, log_verbose, log_color);
-
-    va_end(args);
-}
-
-#define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
 
 struct StringOption {
     std::string short_name;
@@ -1969,144 +1841,6 @@ struct SDGenerationParams {
 
 static std::string version_string() {
     return std::string("stable-diffusion.cpp version ") + sd_version() + ", commit " + sd_commit();
-}
-
-uint8_t* load_image_common(bool from_memory,
-                           const char* image_path_or_bytes,
-                           int len,
-                           int& width,
-                           int& height,
-                           int expected_width   = 0,
-                           int expected_height  = 0,
-                           int expected_channel = 3) {
-    int c = 0;
-    const char* image_path;
-    uint8_t* image_buffer = nullptr;
-    if (from_memory) {
-        image_path   = "memory";
-        image_buffer = (uint8_t*)stbi_load_from_memory((const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel);
-    } else {
-        image_path   = image_path_or_bytes;
-        image_buffer = (uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel);
-    }
-    if (image_buffer == nullptr) {
-        LOG_ERROR("load image from '%s' failed", image_path);
-        return nullptr;
-    }
-    if (c < expected_channel) {
-        fprintf(stderr,
-                "the number of channels for the input image must be >= %d,"
-                "but got %d channels, image_path = %s",
-                expected_channel,
-                c,
-                image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-    if (width <= 0) {
-        LOG_ERROR("error: the width of image must be greater than 0, image_path = %s", image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-    if (height <= 0) {
-        LOG_ERROR("error: the height of image must be greater than 0, image_path = %s", image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-
-    // Resize input image ...
-    if ((expected_width > 0 && expected_height > 0) && (height != expected_height || width != expected_width)) {
-        float dst_aspect = (float)expected_width / (float)expected_height;
-        float src_aspect = (float)width / (float)height;
-
-        int crop_x = 0, crop_y = 0;
-        int crop_w = width, crop_h = height;
-
-        if (src_aspect > dst_aspect) {
-            crop_w = (int)(height * dst_aspect);
-            crop_x = (width - crop_w) / 2;
-        } else if (src_aspect < dst_aspect) {
-            crop_h = (int)(width / dst_aspect);
-            crop_y = (height - crop_h) / 2;
-        }
-
-        if (crop_x != 0 || crop_y != 0) {
-            LOG_INFO("crop input image from %dx%d to %dx%d, image_path = %s", width, height, crop_w, crop_h, image_path);
-            uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
-            if (cropped_image_buffer == nullptr) {
-                LOG_ERROR("error: allocate memory for crop\n");
-                free(image_buffer);
-                return nullptr;
-            }
-            for (int row = 0; row < crop_h; row++) {
-                uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
-                uint8_t* dst = cropped_image_buffer + (row * crop_w) * expected_channel;
-                memcpy(dst, src, crop_w * expected_channel);
-            }
-
-            width  = crop_w;
-            height = crop_h;
-            free(image_buffer);
-            image_buffer = cropped_image_buffer;
-        }
-
-        LOG_INFO("resize input image from %dx%d to %dx%d", width, height, expected_width, expected_height);
-        int resized_height = expected_height;
-        int resized_width  = expected_width;
-
-        uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
-        if (resized_image_buffer == nullptr) {
-            LOG_ERROR("error: allocate memory for resize input image\n");
-            free(image_buffer);
-            return nullptr;
-        }
-        stbir_resize(image_buffer, width, height, 0,
-                     resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
-                     expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
-                     STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
-                     STBIR_FILTER_BOX, STBIR_FILTER_BOX,
-                     STBIR_COLORSPACE_SRGB, nullptr);
-        width  = resized_width;
-        height = resized_height;
-        free(image_buffer);
-        image_buffer = resized_image_buffer;
-    }
-    return image_buffer;
-}
-
-uint8_t* load_image_from_file(const char* image_path,
-                              int& width,
-                              int& height,
-                              int expected_width   = 0,
-                              int expected_height  = 0,
-                              int expected_channel = 3) {
-    return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
-}
-
-bool load_sd_image_from_file(sd_image_t* image,
-                             const char* image_path,
-                             int expected_width   = 0,
-                             int expected_height  = 0,
-                             int expected_channel = 3) {
-    int width;
-    int height;
-    image->data = load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
-    if (image->data == nullptr) {
-        return false;
-    }
-    image->width  = width;
-    image->height = height;
-    return true;
-}
-
-uint8_t* load_image_from_memory(const char* image_bytes,
-                                int len,
-                                int& width,
-                                int& height,
-                                int expected_width   = 0,
-                                int expected_height  = 0,
-                                int expected_channel = 3) {
-    return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
 }
 
 std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {

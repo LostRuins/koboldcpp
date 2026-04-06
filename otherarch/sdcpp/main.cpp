@@ -16,8 +16,7 @@
 #include "stable-diffusion.h"
 
 #include "common/common.hpp"
-
-#include "avi_writer.h"
+#include "common/media_io.h"
 #include "image_metadata.h"
 
 const char* previews_str[] = {
@@ -59,7 +58,7 @@ struct SDCliParams {
         options.string_options = {
             {"-o",
              "--output",
-             "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)",
+             "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png). Single-file video outputs support .avi, .webm, and animated .webp",
              &output_path},
             {"",
              "--image",
@@ -71,7 +70,7 @@ struct SDCliParams {
              &metadata_format},
             {"",
              "--preview-path",
-             "path to write preview image to (default: ./preview.png)",
+             "path to write preview image to (default: ./preview.png). Multi-frame previews support .avi, .webm, and animated .webp",
              &preview_path},
         };
 
@@ -303,7 +302,7 @@ bool load_images_from_dir(const std::string dir,
         std::string ext  = entry.path().extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-        if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
+        if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".webp") {
             LOG_DEBUG("load image %zu from '%s'", images.size(), path.c_str());
             int width             = 0;
             int height            = 0;
@@ -333,9 +332,17 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
     // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
     // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
-        stbi_write_png(cli_params->preview_path.c_str(), image->width, image->height, image->channel, image->data, 0);
+        if (!write_image_to_file(cli_params->preview_path,
+                                 image->data,
+                                 image->width,
+                                 image->height,
+                                 image->channel)) {
+            LOG_ERROR("save preview image to '%s' failed", cli_params->preview_path.c_str());
+        }
     } else {
-        create_mjpg_avi_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps);
+        if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps) != 0) {
+            LOG_ERROR("save preview video to '%s' failed", cli_params->preview_path.c_str());
+        }
     }
 }
 
@@ -385,9 +392,13 @@ bool save_results(const SDCliParams& cli_params,
 
     std::string ext_lower = ext.string();
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
-    bool is_jpg = (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".jpe");
+    const EncodedImageFormat output_format = encoded_image_format_from_path(out_path.string());
     if (!ext.empty()) {
-        if (is_jpg || ext_lower == ".png") {
+        if (output_format == EncodedImageFormat::JPEG ||
+            output_format == EncodedImageFormat::PNG ||
+            output_format == EncodedImageFormat::WEBP ||
+            ext_lower == ".avi" ||
+            ext_lower == ".webm") {
             base_path.replace_extension();
         }
     }
@@ -405,20 +416,15 @@ bool save_results(const SDCliParams& cli_params,
         std::string params = gen_params.embed_image_metadata
                                  ? get_image_params(ctx_params, gen_params, gen_params.seed + idx)
                                  : "";
-        int ok             = 0;
-        if (is_jpg) {
-            ok = stbi_write_jpg(path.string().c_str(), img.width, img.height, img.channel, img.data, 90, params.size() > 0 ? params.c_str() : nullptr);
-        } else {
-            ok = stbi_write_png(path.string().c_str(), img.width, img.height, img.channel, img.data, 0, params.size() > 0 ? params.c_str() : nullptr);
-        }
+        const bool ok      = write_image_to_file(path.string(), img.data, img.width, img.height, img.channel, params, 90);
         LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
-        return ok != 0;
+        return ok;
     };
 
     int sucessful_reults = 0;
 
     if (std::regex_search(cli_params.output_path, format_specifier_regex)) {
-        if (!is_jpg && ext_lower != ".png")
+        if (output_format == EncodedImageFormat::UNKNOWN)
             ext = ".png";
         fs::path pattern = base_path;
         pattern += ext;
@@ -434,20 +440,20 @@ bool save_results(const SDCliParams& cli_params,
     }
 
     if (cli_params.mode == VID_GEN && num_results > 1) {
-        if (ext_lower != ".avi")
+        if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
         fs::path video_path = base_path;
         video_path += ext;
-        if (create_mjpg_avi_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps) == 0) {
-            LOG_INFO("save result MJPG AVI video to '%s'", video_path.string().c_str());
+        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps) == 0) {
+            LOG_INFO("save result video to '%s'", video_path.string().c_str());
             return true;
         } else {
-            LOG_ERROR("Failed to save result MPG AVI video to '%s'", video_path.string().c_str());
+            LOG_ERROR("Failed to save result video to '%s'", video_path.string().c_str());
             return false;
         }
     }
 
-    if (!is_jpg && ext_lower != ".png")
+    if (output_format == EncodedImageFormat::UNKNOWN)
         ext = ".png";
 
     for (int i = 0; i < num_results; ++i) {
