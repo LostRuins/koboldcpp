@@ -668,8 +668,8 @@ struct DiscreteFlowDenoiser : public Denoiser {
     }
 
     void set_parameters() {
-        for (int i = 1; i < TIMESTEPS + 1; i++) {
-            sigmas[i - 1] = t_to_sigma(static_cast<float>(i));
+        for (int i = 0; i < TIMESTEPS; i++) {
+            sigmas[i] = t_to_sigma(static_cast<float>(i));
         }
     }
 
