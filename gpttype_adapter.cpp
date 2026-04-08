@@ -15,6 +15,7 @@
 #include "model_adapter.h"
 #include "otherarch.h"
 #include "llama.h"
+#include "ggml-rpc.h"
 #include <vector>
 #include <map>
 #include <cstdint>
@@ -2382,6 +2383,27 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         model_params.use_mlock = inputs.use_mlock;
         model_params.use_direct_io = false; //no direct io for now until stable
         model_params.n_gpu_layers = inputs.gpulayers;
+
+        // Handle RPC endpoints - connect to RPC server(s)
+        std::string rpc_endpoints_str = inputs.rpc_endpoints;
+        if(rpc_endpoints_str != "" && rpc_endpoints_str.length() > 0)
+        {
+            printf("[RPC] Connecting to RPC server(s): %s\n", rpc_endpoints_str.c_str());
+            // Parse comma-separated endpoints and add each one
+            size_t start = 0;
+            size_t end = rpc_endpoints_str.find(',');
+            while (end != std::string::npos) {
+                std::string endpoint = rpc_endpoints_str.substr(start, end - start);
+                printf("[RPC] Adding RPC server: %s\n", endpoint.c_str());
+                ggml_backend_rpc_add_server(endpoint.c_str());
+                start = end + 1;
+                end = rpc_endpoints_str.find(',', start);
+            }
+            // Add last endpoint
+            std::string endpoint = rpc_endpoints_str.substr(start);
+            printf("[RPC] Adding RPC server: %s\n", endpoint.c_str());
+            ggml_backend_rpc_add_server(endpoint.c_str());
+        }
 
         //set device overrides if needed
         std::vector<ggml_backend_dev_t> devices_override;
