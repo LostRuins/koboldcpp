@@ -962,7 +962,7 @@ lib_option_pairs = [
     (lib_vulkan_noavx2, "Use Vulkan (Old CPU)"),
     (lib_vulkan_failsafe, "Use Vulkan (Older CPU)"),
     (lib_failsafe, "Failsafe Mode (Older CPU)"),
-    ]
+]
 (
     default_option,
     cublas_option,
@@ -2389,7 +2389,7 @@ def load_model(model_filename):
     )
     inputs.gpulayers = args.gpulayers
     # Auto-enable full offload for RPC
-    if args.userpc and args.gpulayers == 0:
+    if args.userpc and (args.gpulayers == 0 or args.gpulayers == -1):
         inputs.gpulayers = 999
     if args.overridenativecontext and args.overridenativecontext > 0:
         inputs.overridenativecontext = args.overridenativecontext
