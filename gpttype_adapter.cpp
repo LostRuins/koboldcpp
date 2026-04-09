@@ -2470,22 +2470,39 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             if(dev_override_str == "") {
                 // Enumerate local GPU devices and add them
                 printf("[RPC] Enumerating local GPU devices to use alongside RPC...\n");
+                printf("[RPC] Total backend devices available: %zu\n", ggml_backend_dev_count());
+                
+                int found_count = 0;
                 for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                     auto* dev = ggml_backend_dev_get(i);
                     ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
                     std::string reg_name = reg ? ggml_backend_reg_name(reg) : "";
                     std::string dev_name = ggml_backend_dev_name(dev);
+                    
+                    printf("[RPC] Checking device %zu: %s (registry: %s)\n", i, dev_name.c_str(), reg_name.c_str());
+                    
                     // Add local GPU devices (not RPC, not CPU)
                     if(reg_name.find("RPC") == std::string::npos && 
                        reg_name.find("CPU") == std::string::npos &&
                        (reg_name.find("VULKAN") != std::string::npos || 
                         reg_name.find("CUDA") != std::string::npos ||
                         reg_name.find("HIP") != std::string::npos)) {
-                        printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+                        printf("[RPC] ✓ Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
                         devices_override.push_back(dev);
+                        found_count++;
                     }
                 }
-                printf("[RPC] Total devices for offloading: %zu (RPC + local GPUs)\n", devices_override.size());
+                
+                if(found_count == 0) {
+                    printf("[RPC] ⚠ WARNING: No local GPU devices found!\n");
+                    printf("[RPC] ⚠ Make sure koboldcpp_rpc.so is built with Vulkan support:\n");
+                    printf("[RPC] ⚠   make LLAMA_RPC=1 LLAMA_VULKAN=1 koboldcpp_rpc\n");
+                } else {
+                    printf("[RPC] ✓ Added %d local GPU device(s)\n", found_count);
+                }
+                
+                printf("[RPC] Total devices for offloading: %zu (%zu RPC + %d local)\n", 
+                       devices_override.size(), devices_override.size() - found_count, found_count);
             }
         }
         

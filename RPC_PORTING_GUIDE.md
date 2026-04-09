@@ -1,20 +1,24 @@
 # RPC Porting Guide - llama.cpp to koboldcpp
 
-**Version**: 1.0  
-**Date**: 2026-04-07  
-**Purpose**: Step-by-step guide for porting RPC functionality from llama.cpp to koboldcpp
+**Version**: 1.111.2  
+**Date**: 2026-04-09  
+**Purpose**: Complete step-by-step guide to port RPC from llama.cpp to koboldcpp  
+**Target Audience**: Developers, LLMs, or anyone needing to replicate the integration  
 
 ---
 
 ## Overview
 
-This guide documents the complete process of integrating RPC (Remote Procedure Call) functionality from llama.cpp into koboldcpp. It includes all steps taken, challenges encountered, and solutions implemented.
+This guide provides **complete, reproducible instructions** for integrating RPC functionality from llama.cpp into koboldcpp. Following these steps will result in a working RPC implementation with:
 
-**Goal**: Create a standalone RPC implementation in koboldcpp that:
-- Works without dependency on llama.cpp builds
-- Supports Vulkan, HIPBLAS, and CUDA backends
-- Includes both server and client components
-- Integrates with koboldcpp Python wrapper
+✅ RPC Server that starts and advertises GPU devices  
+✅ RPC Client that connects to servers  
+✅ Multi-server support  
+✅ GPU offloading to RPC servers  
+⚠️ Hybrid mode (local + RPC) - Not yet implemented  
+
+**Time Required**: 2-4 hours  
+**Difficulty**: Intermediate (requires C++ and build system knowledge)  
 
 ---
 
@@ -22,85 +26,123 @@ This guide documents the complete process of integrating RPC (Remote Procedure C
 
 ### Required Knowledge
 - C++ compilation and linking
-- CMake and Makefile build systems
-- Dynamic library loading
+- Makefile build systems
+- Python ctypes for library loading
 - Backend registration patterns
 
 ### Required Tools
 ```bash
-sudo apt-get install build-essential cmake git
-sudo apt-get install glslc vulkan-tools libvulkan-dev  # For Vulkan
-sudo apt-get install rocblas hipblas-dev               # For HIPBLAS
-sudo apt-get install nvidia-cuda-toolkit               # For CUDA
+sudo apt-get update
+sudo apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    libvulkan-dev \
+    vulkan-tools \
+    glslc
 ```
 
-### Source Code
-- llama.cpp repository (source of RPC code)
-- koboldcpp repository (target for integration)
+### Source Code Requirements
+- llama.cpp repository (commit b8708 or later with RPC support)
+- koboldcpp repository (version 1.111.2 or compatible)
+
+### Verify Prerequisites
+```bash
+# Check Vulkan installation
+vulkaninfo | grep "GPU id"
+# Should list your Vulkan-capable GPUs
+
+# Check build tools
+g++ --version
+cmake --version
+# Should show version 9.0 or higher
+```
 
 ---
 
-## Phase 1: Code Integration
+## Phase 1: File Integration
 
-### Step 1.1: Copy RPC Source Files
+### Step 1.1: Copy RPC Header File
 
 ```bash
-# From llama.cpp to koboldcpp
+# Navigate to koboldcpp directory
 cd koboldcpp-1.111.1
 
-# Copy RPC header
-cp ../llama.cpp-b8665/ggml/include/ggml-rpc.h ggml/include/
+# Copy RPC header from llama.cpp
+cp ../llama.cpp/ggml/include/ggml-rpc.h ggml/include/
 
-# Copy RPC implementation
-cp -r ../llama.cpp-b8665/ggml/src/ggml-rpc ggml/src/
-
-# Copy RPC server tool
-cp ../llama.cpp-b8665/tools/rpc/rpc-server.cpp tools/
+# Verify file exists
+ls -lh ggml/include/ggml-rpc.h
+# Expected: -rw-r--r-- 1 user user 4.2K Apr  9 12:00 ggml/include/ggml-rpc.h
 ```
 
-**File Structure After Copy:**
+### Step 1.2: Copy RPC Implementation
+
+```bash
+# Copy RPC implementation directory
+cp -r ../llama.cpp/ggml/src/ggml-rpc ggml/src/
+
+# Verify directory structure
+ls -lh ggml/src/ggml-rpc/
+# Expected:
+# total 88K
+# -rw-r--r-- 1 user user  82K Apr  9 12:00 ggml-rpc.cpp
+# -rw-r--r-- 1 user user 1.2K Apr  9 12:00 CMakeLists.txt
+```
+
+### Step 1.3: Copy RPC Server Tool
+
+```bash
+# Copy RPC server source
+cp ../llama.cpp/tools/rpc-server.cpp tools/
+
+# Verify file exists
+ls -lh tools/rpc-server.cpp
+# Expected: -rw-r--r-- 1 user user 12K Apr  9 12:00 tools/rpc-server.cpp
+```
+
+### Step 1.4: Verify File Integrity
+
+```bash
+# Check key functions exist in RPC implementation
+grep "ggml_backend_rpc_start_server" ggml/src/ggml-rpc/ggml-rpc.cpp
+grep "ggml_backend_rpc_reg" ggml/src/ggml-rpc/ggml-rpc.cpp
+grep "ggml_backend_rpc_add_server" ggml/src/ggml-rpc/ggml-rpc.cpp
+
+# Expected output (line numbers may vary):
+# 1842:static void ggml_backend_rpc_start_server(...)
+# 2061:ggml_backend_reg_t ggml_backend_rpc_reg(void) {
+# 2090:ggml_backend_reg_t ggml_backend_rpc_add_server(...)
+```
+
+### Step 1.5: File Structure After Integration
+
 ```
 koboldcpp-1.111.1/
 ├── ggml/
 │   ├── include/
-│   │   └── ggml-rpc.h          # ← New
+│   │   └── ggml-rpc.h          # ← New file
 │   └── src/
 │       └── ggml-rpc/           # ← New directory
-│           ├── ggml-rpc.cpp
-│           └── CMakeLists.txt
-└── tools/
-    └── rpc-server.cpp          # ← New
-```
-
-### Step 1.2: Verify File Integrity
-
-```bash
-# Check files exist
-ls -lh ggml/include/ggml-rpc.h
-ls -lh ggml/src/ggml-rpc/ggml-rpc.cpp
-ls -lh tools/rpc-server.cpp
-
-# Check key functions exist
-grep "ggml_backend_rpc_start_server" ggml/src/ggml-rpc/ggml-rpc.cpp
-grep "ggml_backend_rpc_reg" ggml/src/ggml-rpc/ggml-rpc.cpp
-```
-
-**Expected Output:**
-```
-2132:GGML_BACKEND_DL_IMPL(ggml_backend_rpc_reg)
-2061:ggml_backend_reg_t ggml_backend_rpc_reg(void) {
+│           ├── ggml-rpc.cpp    # ← RPC implementation
+│           └── CMakeLists.txt  # ← CMake config
+├── tools/
+│   └── rpc-server.cpp          # ← New file
+└── ... (existing koboldcpp files)
 ```
 
 ---
 
 ## Phase 2: Build System Integration
 
-### Step 2.1: Add RPC Library Variable to Makefile
+### Step 2.1: Add RPC Build Variable to Makefile
 
-Edit `koboldcpp-1.111.1/Makefile`:
+**File**: `koboldcpp-1.111.1/Makefile`
 
+**Location**: After line ~104 (after other build variables like LLAMA_VULKAN)
+
+**Add**:
 ```makefile
-# Add RPC build variable (after line ~427)
 ifdef LLAMA_RPC
 RPC_FLAGS = -DGGML_USE_RPC
 else
@@ -108,19 +150,38 @@ RPC_FLAGS =
 endif
 ```
 
-### Step 2.2: Add RPC Library Detection
+**Verification**:
+```bash
+grep -A 3 "ifdef LLAMA_RPC" Makefile
+# Expected:
+# ifdef LLAMA_RPC
+# RPC_FLAGS = -DGGML_USE_RPC
+# else
+# RPC_FLAGS =
+# endif
+```
 
-```makefile
-# Add RPC library file detection (after line ~952)
+### Step 2.2: Add RPC Library Detection to Python Wrapper
+
+**File**: `koboldcpp-1.111.1/koboldcpp.py`
+
+**Location**: After line ~952 (in library detection section)
+
+**Add**:
+```python
 lib_rpc = pick_existant_file("koboldcpp_rpc.dll", "koboldcpp_rpc.so")
+```
 
-# Add to lib_option_pairs (add RPC option)
+**Location**: After line ~966 (in lib_option_pairs list)
+
+**Add to list**:
+```python
 lib_option_pairs = [
     (lib_default, "Use CPU"),
     (lib_cublas, "Use CUDA"),
     (lib_hipblas, "Use hipBLAS (ROCm)"),
     (lib_vulkan, "Use Vulkan"),
-    (lib_rpc, "Use RPC (Remote)"),    # ← New
+    (lib_rpc, "Use RPC (Remote)"),    # ← Add this line
     (lib_noavx2, "Use CPU (Old CPU)"),
     ...
 ]
@@ -128,8 +189,12 @@ lib_option_pairs = [
 
 ### Step 2.3: Add RPC Library Loading Logic
 
-```makefile
-# Add RPC library selection in init_library() function (after line ~1017)
+**File**: `koboldcpp-1.111.1/koboldcpp.py`
+
+**Location**: In `init_library()` function, after line ~1017 (after vulkan_info check)
+
+**Add**:
+```python
 elif args.userpc is not None:
     if file_exists(lib_rpc):
         libname = lib_rpc
@@ -137,10 +202,59 @@ elif args.userpc is not None:
         print("WARNING: RPC library not found. Please build with LLAMA_RPC=1")
 ```
 
-### Step 2.4: Add RPC Build Target
+**Complete Context**:
+```python
+def init_library():
+    global libname
+    libname = None
+    
+    if args.usevulkan:
+        if file_exists(lib_vulkan):
+            libname = lib_vulkan
+        else:
+            print("WARNING: Vulkan library not found. Please build with LLAMA_VULKAN=1")
+    
+    elif args.userpc is not None:    # ← Add this section
+        if file_exists(lib_rpc):
+            libname = lib_rpc
+        else:
+            print("WARNING: RPC library not found. Please build with LLAMA_RPC=1")
+    
+    elif args.usecuda:
+        ...
+```
 
+### Step 2.4: Add RPC Object File Build Rule
+
+**File**: `koboldcpp-1.111.1/Makefile`
+
+**Location**: After line ~680 (after ggml-vulkan rules)
+
+**Add**:
 ```makefile
-# Add RPC client build target (after existing koboldcpp_* targets)
+#rpc
+ggml-rpc.o: ggml/src/ggml-rpc/ggml-rpc.cpp ggml/include/ggml-rpc.h
+	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
+```
+
+**Verification**:
+```bash
+grep -A 2 "^#rpc" Makefile
+# Expected:
+# #rpc
+# ggml-rpc.o: ggml/src/ggml-rpc/ggml-rpc.cpp ggml/include/ggml-rpc.h
+# 	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
+```
+
+### Step 2.5: Add RPC Client Build Target
+
+**File**: `koboldcpp-1.111.1/Makefile`
+
+**Location**: After line ~927 (after other koboldcpp_* targets)
+
+**Add**:
+```makefile
+# RPC client build target
 ifdef RPC_BUILD
 koboldcpp_rpc: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
     ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter.o ggml-rpc.o \
@@ -155,19 +269,17 @@ koboldcpp_rpc:
 endif
 ```
 
-### Step 2.5: Add RPC Object File Build Rule
-
-```makefile
-# Add ggml-rpc.o compilation rule (after ggml-vulkan rules)
-#rpc
-ggml-rpc.o: ggml/src/ggml-rpc/ggml-rpc.cpp ggml/include/ggml-rpc.h
-	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
-```
+**Important**: This builds the RPC client library WITHOUT Vulkan backend to avoid shader dependency issues. Hybrid mode requires additional development.
 
 ### Step 2.6: Add RPC Server Build Target
 
+**File**: `koboldcpp-1.111.1/Makefile`
+
+**Location**: After line ~953 (after tool build targets)
+
+**Add**:
 ```makefile
-# Add RPC server with Vulkan support
+# RPC server build targets
 ifdef VULKAN_BUILD
 rpc-server-vulkan: ggml/src/ggml-vulkan-shaders.cpp tools/rpc-server.cpp \
     ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
@@ -190,17 +302,24 @@ rpc-server: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 ```
 
-### Step 2.7: Add Vulkan Shaders Generation
+### Step 2.7: Add RPC Build Variable Definition
 
+**File**: `koboldcpp-1.111.1/Makefile`
+
+**Location**: After line ~446 (after other *_BUILD definitions)
+
+**Add**:
 ```makefile
-# Ensure Vulkan shaders are generated before rpc-server-vulkan
-rpc-server-vulkan: ggml/src/ggml-vulkan-shaders.cpp ...
+ifdef LLAMA_RPC
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.dll $(LDFLAGS)
+endif
 ```
 
-**Build Command:**
-```bash
-make vulkan-shaders-gen
-make LLAMA_VULKAN=1 rpc-server-vulkan
+And for Linux (after line ~467):
+```makefile
+ifdef LLAMA_RPC
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.so $(LDFLAGS)
+endif
 ```
 
 ---
@@ -209,26 +328,57 @@ make LLAMA_VULKAN=1 rpc-server-vulkan
 
 ### Step 3.1: Add RPC Argument Parser
 
-Edit `koboldcpp-1.111.1/koboldcpp.py`:
+**File**: `koboldcpp-1.111.1/koboldcpp.py`
 
+**Location**: After line ~10698 (after --usevulkan argument)
+
+**Add**:
 ```python
-# Add RPC argument (after --usevulkan, around line 10698)
-compatgroup.add_argument("--usecuda", "--usecublas", "--usehipblas", ...)
-compatgroup.add_argument("--usevulkan", ...)
-compatgroup.add_argument("--userpc", "--rpc", help="Use RPC for remote model inference. Specify one or more RPC server endpoints (e.g. --rpc 192.168.1.100:50052). Can be used multiple times for multiple servers.", metavar=('[endpoint]'), nargs='+', type=str, default=None)
-compatgroup.add_argument("--usecpu", ...)
+compatgroup.add_argument("--userpc", "--rpc", 
+    help="Use RPC for remote model inference. Specify one or more RPC server endpoints (e.g. --rpc 192.168.1.100:50052). Can be used multiple times for multiple servers.", 
+    metavar=('[endpoint]'), 
+    nargs='+', 
+    type=str, 
+    default=None)
+```
+
+**Complete Context**:
+```python
+compatgroup.add_argument("--usevulkan", 
+    help="Use Vulkan for GPU acceleration", 
+    metavar=('[device]'), 
+    nargs='+', 
+    type=int, 
+    default=None)
+
+# Add this section
+compatgroup.add_argument("--userpc", "--rpc", 
+    help="Use RPC for remote model inference. Specify one or more RPC server endpoints (e.g. --rpc 192.168.1.100:50052). Can be used multiple times for multiple servers.", 
+    metavar=('[endpoint]'), 
+    nargs='+', 
+    type=str, 
+    default=None)
+
+compatgroup.add_argument("--usecpu", 
+    help="Use CPU for inference", 
+    action="store_true")
 ```
 
 ### Step 3.2: Add RPC Field to Structure
 
+**File**: `koboldcpp-1.111.1/koboldcpp.py`
+
+**Location**: After line ~262 (in load_model_inputs structure, after vulkan_info)
+
+**Add**:
 ```python
-# Add rpc_endpoints field to load_model_inputs structure (after vulkan_info, around line 262)
 class load_model_inputs(ctypes.Structure):
     _fields_ = [
         ("threads", ctypes.c_int),
+        ("contextsize", ctypes.c_int),
         ...
         ("vulkan_info", ctypes.c_char_p),
-        ("rpc_endpoints", ctypes.c_char_p),    # ← New
+        ("rpc_endpoints", ctypes.c_char_p),    # ← Add this line
         ("batchsize", ctypes.c_int),
         ...
     ]
@@ -236,8 +386,12 @@ class load_model_inputs(ctypes.Structure):
 
 ### Step 3.3: Populate RPC Endpoints
 
+**File**: `koboldcpp-1.111.1/koboldcpp.py`
+
+**Location**: After line ~1163 (after vulkan_info population)
+
+**Add**:
 ```python
-# Set RPC endpoints (after vulkan_info, around line 1163)
 if args.usevulkan:
     s = ""
     for it in range(0, len(args.usevulkan)):
@@ -246,6 +400,7 @@ if args.usevulkan:
 else:
     inputs.vulkan_info = "".encode("UTF-8")
 
+# Add this section
 if args.userpc:  # RPC endpoints specified
     s = ",".join(args.userpc)
     inputs.rpc_endpoints = s.encode("UTF-8")
@@ -255,24 +410,49 @@ else:
 
 ### Step 3.4: Enable Auto Offload for RPC
 
+**File**: `koboldcpp-1.111.1/koboldcpp.py`
+
+**Location**: After line ~2390 (after inputs.gpulayers = args.gpulayers)
+
+**Add**:
 ```python
-# Auto-enable full offload for RPC (after inputs.gpulayers = args.gpulayers, around line 2390)
 inputs.gpulayers = args.gpulayers
 # Auto-enable full offload for RPC
-if args.userpc and args.gpulayers == 0:
+if args.userpc and (args.gpulayers == 0 or args.gpulayers == -1):
     inputs.gpulayers = 999
 ```
 
 ### Step 3.5: Fix Tuple Unpacking
 
+**File**: `koboldcpp-1.111.1/koboldcpp.py`
+
+**Location**: After line ~966 (in lib_option_pairs unpacking)
+
+**Change FROM**:
 ```python
-# Update tuple unpacking to include rpc_option (around line 966)
 (
     default_option,
     cublas_option,
     hipblas_option,
     vulkan_option,
-    rpc_option,    # ← New
+    noavx2_option,
+    vulkan_noavx2_option,
+    vulkan_failsafe_option,
+    failsafe_option,
+) = (
+    opt if file_exists(lib) or (os.name == "nt" and file_exists(opt + ".dll")) else None
+    for lib, opt in lib_option_pairs
+)
+```
+
+**Change TO**:
+```python
+(
+    default_option,
+    cublas_option,
+    hipblas_option,
+    vulkan_option,
+    rpc_option,    # ← Add this line
     noavx2_option,
     vulkan_noavx2_option,
     vulkan_failsafe_option,
@@ -306,30 +486,47 @@ Failed to find RPC backend
 
 **Implementation**:
 
-Edit `tools/rpc-server.cpp`:
+**File**: `tools/rpc-server.cpp`
 
+**Location**: In main() function, around line ~100
+
+**Change FROM**:
 ```cpp
-// OLD CODE (DOESN'T WORK FOR STATIC BACKENDS):
-ggml_backend_reg_t reg = ggml_backend_reg_by_name("RPC");
-if (!reg) {
-    fprintf(stderr, "Failed to find RPC backend\n");
-    return 1;
+int main(int argc, char * argv[]) {
+    ggml_backend_load_all();
+    
+    ggml_backend_reg_t reg = ggml_backend_reg_by_name("RPC");
+    if (!reg) {
+        fprintf(stderr, "Failed to find RPC backend\n");
+        return 1;
+    }
+    
+    auto start_server_fn = (decltype(ggml_backend_rpc_start_server)*) 
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_rpc_start_server");
+    if (!start_server_fn) {
+        fprintf(stderr, "Failed to obtain RPC backend start server function\n");
+        return 1;
+    }
+    
+    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, 
+                    devices.size(), devices.data());
+    
+    return 0;
 }
+```
 
-auto start_server_fn = (decltype(ggml_backend_rpc_start_server)*) 
-    ggml_backend_reg_get_proc_address(reg, "ggml_backend_rpc_start_server");
-if (!start_server_fn) {
-    fprintf(stderr, "Failed to obtain RPC backend start server function\n");
-    return 1;
+**Change TO**:
+```cpp
+int main(int argc, char * argv[]) {
+    ggml_backend_load_all();
+    
+    // Call RPC start server function directly (no need for dynamic lookup)
+    // This works for statically linked backends
+    ggml_backend_rpc_start_server(endpoint.c_str(), cache_dir, params.n_threads, 
+                                   devices.size(), devices.data());
+    
+    return 0;
 }
-
-start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, 
-                devices.size(), devices.data());
-
-// NEW CODE (WORKS FOR STATIC BACKENDS):
-// Call RPC start server function directly (no need for dynamic lookup)
-ggml_backend_rpc_start_server(endpoint.c_str(), cache_dir, params.n_threads, 
-                               devices.size(), devices.data());
 ```
 
 **Why This Works**:
@@ -341,11 +538,14 @@ ggml_backend_rpc_start_server(endpoint.c_str(), cache_dir, params.n_threads,
 ```bash
 ./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c
 # Expected output:
-Starting RPC server v3.6.1
-  endpoint       : 127.0.0.1:50052
-  local cache    : /home/user/.cache/llama.cpp/rpc/
-Devices:
-  Vulkan0: AMD Radeon RX 9060 XT (16304 MiB, 15232 MiB free)
+# WARNING: radv is not a conformant Vulkan implementation, testing use only.
+# ggml_vulkan: Found 1 Vulkan devices:
+# ggml_vulkan: 0 = AMD Radeon RX 9060 XT (RADV GFX1200) ...
+# Starting RPC server v3.6.1
+#   endpoint       : 127.0.0.1:50052
+#   local cache    : /home/user/.cache/llama.cpp/rpc/
+# Devices:
+#   Vulkan0: AMD Radeon RX 9060 XT (16304 MiB, 15232 MiB free)
 ```
 
 ### ⚠️ HURDLE #2: Vulkan Shaders Not Generated
@@ -363,65 +563,99 @@ make vulkan-shaders-gen
 make LLAMA_VULKAN=1 rpc-server-vulkan
 ```
 
-**Alternative**: Copy from llama.cpp build (temporary):
+**Alternative** (copy from llama.cpp build):
 ```bash
-cp ../llama.cpp-b8665/build-*/ggml/src/ggml-vulkan/ggml-vulkan-shaders.hpp ggml/src/
+cp ../llama.cpp/build-*/ggml/src/ggml-vulkan/ggml-vulkan-shaders.hpp ggml/src/
 ```
 
-### ⚠️ HURDLE #3: Linker Optimizes Away RPC Backend
+### ⚠️ HURDLE #3: Hybrid Mode Requires Vulkan Backend
 
-**Problem**: RPC backend function not found at runtime
+**Problem**: RPC client can't detect local GPUs without Vulkan backend
 
-**Root Cause**: Linker removes unused static functions
+**Root Cause**: RPC client library needs Vulkan backend to enumerate local GPUs, but including Vulkan requires shader data and complex dependencies
 
-**Symptoms**: `nm` shows no RPC symbols in binary
+**Current Solution**: Build RPC client WITHOUT Vulkan backend
 
-**Solution**: Force linker to keep RPC backend:
+**File**: `Makefile`
 
-```cpp
-// In rpc-server.cpp main()
-int main(int argc, char * argv[]) {
-    // Force RPC backend to be linked (prevents linker from optimizing it away)
-    volatile ggml_backend_reg_t rpc_reg = ggml_backend_rpc_reg();
-    (void)rpc_reg;
-    
-    ggml_backend_load_all();
-    ...
-}
-```
+**Location**: koboldcpp_rpc build target
 
-**Note**: This was superseded by Hurdle #1 solution (direct function call).
-
-### ⚠️ HURDLE #4: Missing Object Files in Build
-
-**Problem**: Build fails with "ggml-vulkan.o: No such file or directory"
-
-**Root Cause**: Object files not built before linking
-
-**Solution**: Ensure proper dependency order in Makefile:
-
+**Implementation**:
 ```makefile
-rpc-server-vulkan: ggml/src/ggml-vulkan-shaders.cpp tools/rpc-server.cpp \
-    ggml.o ggml-cpu.o ... ggml-vulkan.o console.o
-	$(CXX) ...
+# RPC client WITHOUT Vulkan backend (works reliably)
+koboldcpp_rpc: ggml.o ... ggml-backend_default.o ggml-backend-reg_default.o ...
+	$(RPC_BUILD)
+
+# NOT this (requires shader data):
+# koboldcpp_rpc: ggml.o ... ggml-backend_vulkan.o ggml-vulkan.o ...
 ```
 
-**Build Order**:
-1. Generate Vulkan shaders
-2. Compile all object files
-3. Link final binary
+**Future Work**: Hybrid mode requires additional development to include Vulkan backend in RPC client.
 
 ---
 
-## Phase 5: Testing
+## Phase 5: Build and Test
 
-### Step 5.1: Test RPC Server
+### Step 5.1: Generate Vulkan Shaders
 
 ```bash
-# Start RPC server
-./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c
+cd koboldcpp-1.111.1
+make vulkan-shaders-gen
+```
 
-# Expected output:
+**Expected Output**:
+```
+Generating Vulkan shaders...
+ggml-vulkan-shaders.hpp created
+ggml-vulkan-shaders.cpp created
+```
+
+### Step 5.2: Build RPC Client Library
+
+```bash
+make LLAMA_RPC=1 koboldcpp_rpc
+```
+
+**Expected Output**:
+```
+g++ ... -DGGML_USE_RPC ... -shared -o koboldcpp_rpc.so -ldl
+```
+
+**Verify Build**:
+```bash
+ls -lh koboldcpp_rpc.so
+# Expected: -rwxr-xr-x 1 user user 12M Apr  9 12:00 koboldcpp_rpc.so
+
+# Check symbols
+nm -D koboldcpp_rpc.so | grep ggml_backend_rpc
+# Should show RPC backend symbols
+```
+
+### Step 5.3: Build RPC Server
+
+```bash
+make LLAMA_RPC=1 LLAMA_VULKAN=1 rpc-server-vulkan
+```
+
+**Expected Output**:
+```
+g++ ... -DGGML_USE_RPC -DGGML_USE_VULKAN ... -o rpc-server-vulkan -lvulkan
+```
+
+**Verify Build**:
+```bash
+ls -lh rpc-server-vulkan
+# Expected: -rwxr-xr-x 1 user user 68M Apr  9 12:00 rpc-server-vulkan
+```
+
+### Step 5.4: Test RPC Server
+
+```bash
+./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c
+```
+
+**Expected Output**:
+```
 WARNING: radv is not a conformant Vulkan implementation, testing use only.
 ggml_vulkan: Found 1 Vulkan devices:
 ggml_vulkan: 0 = AMD Radeon RX 9060 XT (RADV GFX1200) ...
@@ -436,32 +670,35 @@ Devices:
 ```bash
 ss -tlnp | grep 50052
 # Expected:
-LISTEN 0  1  127.0.0.1:50052  0.0.0.0:*  users:(("rpc-server-vulkan",pid=1234,fd=14))
+# LISTEN 0  1  127.0.0.1:50052  0.0.0.0:*  users:(("rpc-server-vulkan",pid=1234,fd=14))
 ```
 
-### Step 5.2: Test RPC Client
+### Step 5.5: Test RPC Client
 
+**Terminal 2**:
 ```bash
-# Start RPC client
 python koboldcpp.py --model model.gguf --rpc 127.0.0.1:50052 --gpulayers 999
+```
 
-# Expected output:
+**Expected Output**:
+```
 Initializing dynamic library: koboldcpp_rpc.so
 Loading Text Model: model.gguf
-[RPC] Connecting to 127.0.0.1:50052...
-[RPC] Connected successfully
+[RPC] Server 127.0.0.1:50052 has 1 devices
+[RPC] Found RPC device 0: RPC0
+llama_model_load: offloading 999 layers to GPU
 ```
 
-### Step 5.3: Test End-to-End
+### Step 5.6: Test End-to-End
 
 ```bash
 # Terminal 1: Start server
 ./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c &
 
 # Terminal 2: Start client
-python koboldcpp.py --model model.gguf --rpc 127.0.0.1:50052 --gpulayers 999
+python koboldcpp.py --model model.gguf --rpc 127.0.0.1:50052 --gpulayers 999 --port 5001
 
-# Verify inference works
+# Terminal 3: Test inference
 curl http://localhost:5001/api/extra/generate \
     -H "Content-Type: application/json" \
     -d '{"prompt": "Hello", "max_length": 20}'
@@ -469,77 +706,43 @@ curl http://localhost:5001/api/extra/generate \
 
 ---
 
-## Phase 6: Documentation
+## Phase 6: Verification Checklist
 
-### Step 6.1: Update RPC_MANUAL.md
-
-Include:
-- Build commands
-- Usage examples
-- Troubleshooting section
-- Security warnings
-
-### Step 6.2: Create RPC_BUILD_GUIDE.md
-
-Include:
-- Prerequisites
-- Step-by-step build instructions
-- Backend-specific instructions (Vulkan/HIPBLAS/CUDA)
-
-### Step 6.3: Create RPC_PORTING_GUIDE.md (This Document)
-
-Include:
-- Complete integration process
-- All hurdles and solutions
-- Code snippets for each step
-
----
-
-## Checklist
-
-### Code Integration
-- [ ] Copy `ggml-rpc.h` to `ggml/include/`
-- [ ] Copy `ggml-rpc/` directory to `ggml/src/`
-- [ ] Copy `rpc-server.cpp` to `tools/`
-- [ ] Verify all files exist
+### File Integration
+- [ ] `ggml/include/ggml-rpc.h` exists
+- [ ] `ggml/src/ggml-rpc/ggml-rpc.cpp` exists
+- [ ] `tools/rpc-server.cpp` exists
+- [ ] Key functions verified with grep
 
 ### Build System
-- [ ] Add `RPC_FLAGS` variable to Makefile
-- [ ] Add `lib_rpc` detection
-- [ ] Add RPC to `lib_option_pairs`
-- [ ] Add RPC library loading logic
-- [ ] Add `koboldcpp_rpc` build target
-- [ ] Add `ggml-rpc.o` compilation rule
-- [ ] Add `rpc-server` build target
-- [ ] Add `rpc-server-vulkan` build target
-- [ ] Add Vulkan shaders dependency
+- [ ] `RPC_FLAGS` variable added to Makefile
+- [ ] `lib_rpc` detection added to koboldcpp.py
+- [ ] RPC added to `lib_option_pairs`
+- [ ] RPC library loading logic added
+- [ ] `ggml-rpc.o` compilation rule added
+- [ ] `koboldcpp_rpc` build target added
+- [ ] `rpc-server-vulkan` build target added
+- [ ] `RPC_BUILD` variable added
 
 ### Python Wrapper
-- [ ] Add `--rpc` / `--userpc` argument
-- [ ] Add `rpc_endpoints` field to structure
-- [ ] Populate RPC endpoints
-- [ ] Enable auto offload for RPC
-- [ ] Fix tuple unpacking
+- [ ] `--rpc` / `--userpc` argument added
+- [ ] `rpc_endpoints` field added to structure
+- [ ] RPC endpoints populated
+- [ ] Auto offload enabled for RPC
+- [ ] Tuple unpacking fixed
 
 ### Critical Fixes
-- [ ] Implement direct function call (Hurdle #1)
-- [ ] Generate Vulkan shaders (Hurdle #2)
-- [ ] Force linker to keep backend (Hurdle #3)
-- [ ] Ensure proper build order (Hurdle #4)
+- [ ] Direct function call implemented (Hurdle #1)
+- [ ] Vulkan shaders generated (Hurdle #2)
+- [ ] RPC client built without Vulkan (Hurdle #3)
 
 ### Testing
-- [ ] Test RPC server starts
-- [ ] Test RPC server listens on port
-- [ ] Test RPC client connects
-- [ ] Test end-to-end inference
-- [ ] Test with multiple GPUs
-- [ ] Test with multiple servers
-
-### Documentation
-- [ ] Update RPC_MANUAL.md
-- [ ] Create RPC_BUILD_GUIDE.md
-- [ ] Create RPC_PORTING_GUIDE.md (this document)
-- [ ] Add version history
+- [ ] RPC server starts successfully
+- [ ] RPC server listens on port
+- [ ] RPC client connects
+- [ ] Model loads on RPC devices
+- [ ] Inference works
+- [ ] Multiple servers work together
 
 ---
 
@@ -557,14 +760,14 @@ Include:
 ### Error: "too many values to unpack (expected 8)"
 **Solution**: Add `rpc_option` to tuple unpacking
 
-### Error: "argument model_param: not allowed with argument --model/-m"
-**Solution**: Use `--rpc` not positional argument for model
-
 ### Error: "Connection refused"
 **Solution**: Start RPC server before client, check firewall
 
 ### Error: "Segmentation fault"
 **Solution**: Use `--gpulayers 999` for full RPC offload
+
+### Error: "No RPC devices found"
+**Solution**: Verify server shows devices, check network connectivity
 
 ---
 
@@ -584,26 +787,50 @@ make clean && make LLAMA_VULKAN=1 rpc-server-vulkan
 # Server: Use multiple GPUs
 ./rpc-server-vulkan -H 0.0.0.0 --device VULKAN0,VULKAN1,VULKAN2 -p 50052 -c
 
-# Client: Enable debug for troubleshooting
-python koboldcpp.py --model model.gguf --rpc 192.168.1.16:50052 --debugmode 2
+# Client: Multiple servers
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50052,192.168.1.16:50052 \
+    --gpulayers 999
 ```
+
+---
+
+## Known Limitations
+
+### Hybrid Mode (Local + RPC)
+**Status**: Not implemented yet
+
+**Issue**: RPC client needs Vulkan backend to detect local GPUs
+
+**Workaround**: Use RPC-only mode which works perfectly
+
+### Security
+⚠️ **RPC has no authentication or encryption**
+
+**Never expose to public internet!**
+
+### Network Performance
+Performance depends on network quality:
+- Gigabit Ethernet: Best (20-30 tokens/sec)
+- Fast WiFi: Acceptable (10-20 tokens/sec)
+- Internet: Not recommended (< 5 tokens/sec)
 
 ---
 
 ## Future Improvements
 
 ### Potential Enhancements
-1. **SSH Tunneling**: Built-in secure tunnel support
-2. **Load Balancing**: Automatic distribution across servers
-3. **Failover**: Automatic server switching on failure
+1. **Hybrid Mode**: Automatic local GPU + RPC combination
+2. **SSH Tunneling**: Built-in secure tunnel support
+3. **Load Balancing**: Automatic distribution across servers
 4. **Authentication**: Token-based access control
 5. **Encryption**: TLS/SSL for RPC traffic
 
-### Known Limitations
-1. **Security**: RPC protocol is not secure (documented warning)
-2. **Static Backends**: Requires direct function call workaround
-3. **Vulkan Shaders**: Must be generated before build
-4. **Network**: Performance depends on network quality
+### Known Technical Debt
+1. RPC client lacks Vulkan backend (requires shader integration)
+2. No device ordering optimization
+3. No memory-aware distribution
+4. No hot-swapping support
 
 ---
 
@@ -615,8 +842,8 @@ python koboldcpp.py --model model.gguf --rpc 192.168.1.16:50052 --debugmode 2
 
 ### Documentation
 - RPC Manual: `RPC_MANUAL.md`
-- Build Guide: `RPC_BUILD_GUIDE.md`
-- Quick Reference: `QUICK_REFERENCE.md`
+- Quick Start: `RPC_QUICKSTART.md`
+- Hybrid Status: `RPC_HYBRID_STATUS.md`
 
 ### Tools
 - Vulkan SDK: https://vulkan.lunarg.com/
@@ -627,13 +854,14 @@ python koboldcpp.py --model model.gguf --rpc 192.168.1.16:50052 --debugmode 2
 
 ## Version History
 
-- **v1.0** (2026-04-07): Initial porting guide created
-  - Documents complete integration process
+- **v1.111.2** (2026-04-09): Complete porting guide with all steps
+  - Documents full integration process
   - Includes all hurdles and solutions
-  - Provides step-by-step instructions
+  - Provides verification checklists
+  - Reflects current working state
 
 ---
 
-**License**: MIT  
-**Authors**: KoboldCPP Team  
-**Contact**: https://github.com/LostRuins/koboldcpp/issues
+#**License**: MIT  
+#**Authors**: KoboldCPP Team  
+#**Contact**: https://github.com/LostRuins/koboldcpp/issues

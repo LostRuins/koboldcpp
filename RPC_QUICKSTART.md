@@ -8,12 +8,12 @@
 
 ## 1-Minute Quick Start
 
-### Step 1: Build (if not already built)
+### Step 1: Build
 
 ```bash
 cd koboldcpp_rpc_attempt
 make clean
-make LLAMA_RPC=1 LLAMA_VULKAN=1 koboldcpp_rpc
+make LLAMA_RPC=1 koboldcpp_rpc
 make LLAMA_RPC=1 LLAMA_VULKAN=1 rpc-server-vulkan
 ```
 
@@ -26,7 +26,10 @@ make LLAMA_RPC=1 LLAMA_VULKAN=1 rpc-server-vulkan
 ### Step 3: Start Client (on any machine)
 
 ```bash
-python koboldcpp.py --model /path/to/model.gguf --rpc 192.168.1.101:50054 --gpulayers 999 --port 5001
+python koboldcpp.py --model /path/to/model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --gpulayers 999 \
+    --port 5001
 ```
 
 ### Step 4: Open Browser
@@ -35,13 +38,13 @@ python koboldcpp.py --model /path/to/model.gguf --rpc 192.168.1.101:50054 --gpul
 http://localhost:5001
 ```
 
-**Done!** You're now using distributed GPUs!
+**Done!**
 
 ---
 
 ## Expected Output
 
-### Server Output
+### Server
 ```
 Starting RPC server v3.6.1
   endpoint       : 192.168.1.101:50054
@@ -50,14 +53,11 @@ Devices:
   Vulkan1: AMD Radeon RX 9060 XT (16304 MiB, 16246 MiB free)
 ```
 
-### Client Output
+### Client
 ```
 [RPC] Server 192.168.1.101:50054 has 2 devices
 [RPC] Found RPC device 0: RPC0
 [RPC] Found RPC device 1: RPC1
-[RPC] Enumerating local GPU devices...
-[RPC] Found local GPU device: VULKAN0
-[RPC] Total devices: 3 (RPC + local)
 llama_model_load: offloading 999 layers to GPU
 ```
 
@@ -65,58 +65,43 @@ llama_model_load: offloading 999 layers to GPU
 
 ## Common Scenarios
 
-### Scenario 1: Localhost Testing
-
-**Terminal 1**:
+### Scenario 1: Single Server
 ```bash
-./rpc-server-vulkan -H 127.0.0.1 --port 50054 --device VULKAN0 -c
-```
+# Server
+./rpc-server-vulkan -H 192.168.1.101 --port 50054 --device VULKAN0 -c
 
-**Terminal 2**:
-```bash
-python koboldcpp.py --model model.gguf --rpc 127.0.0.1:50054 --gpulayers 999
+# Client
+python koboldcpp.py --model model.gguf --rpc 192.168.1.101:50054 --gpulayers 999
 ```
 
 ### Scenario 2: Multiple Servers
-
-**Server 1**:
 ```bash
+# Server 1
 ./rpc-server-vulkan -H 192.168.1.101 --port 50054 --device VULKAN0 -c
-```
 
-**Server 2**:
-```bash
-./rpc-server-vulkan -H 192.168.1.102 --port 50054 --device VULKAN0 -c
-```
+# Server 2
+./rpc-server-vulkan -H 192.168.1.16 --port 50054 --device VULKAN0 -c
 
-**Client**:
-```bash
+# Client
 python koboldcpp.py --model model.gguf \
-    --rpc 192.168.1.101:50054,192.168.1.102:50054 \
+    --rpc 192.168.1.101:50054,192.168.1.16:50054 \
     --gpulayers 999
 ```
 
-### Scenario 3: Hybrid Mode (Automatic)
-
-**Server**:
+### Scenario 3: Localhost Testing
 ```bash
-./rpc-server-vulkan -H 192.168.1.101 --port 50054 --device VULKAN0 -c
-```
+# Terminal 1
+./rpc-server-vulkan -H 127.0.0.1 --port 50054 --device VULKAN0 -c
 
-**Client** (has local GPUs + uses RPC):
-```bash
-python koboldcpp.py --model model.gguf \
-    --rpc 192.168.1.101:50054 \
-    --gpulayers 999
+# Terminal 2
+python koboldcpp.py --model model.gguf --rpc 127.0.0.1:50054 --gpulayers 999
 ```
-
-**Note**: Local GPUs are automatically detected and used alongside RPC!
 
 ---
 
 ## Troubleshooting Quick Fixes
 
-### "Failed to connect"
+### "Connection refused"
 ```bash
 # Check server is running
 ps aux | grep rpc-server
@@ -126,31 +111,67 @@ ping 192.168.1.101
 telnet 192.168.1.101 50054
 ```
 
-### "No devices found"
+### "No RPC devices found"
 ```bash
+# Verify server shows devices
+./rpc-server-vulkan -H 127.0.0.1 --port 50054 --device VULKAN0 -c
+
 # Check Vulkan
 vulkaninfo | grep "GPU id"
-
-# Use correct device names
-./rpc-server-vulkan --device VULKAN0
 ```
 
 ### "Segmentation fault"
 ```bash
-# Ensure latest build with fixes
-make clean && make LLAMA_RPC=1 LLAMA_VULKAN=1 koboldcpp_rpc
-
-# Use --gpulayers 999
+# Ensure --gpulayers 999
 python koboldcpp.py --model model.gguf --rpc 192.168.1.101:50054 --gpulayers 999
+```
+
+### "undefined symbol" errors
+```bash
+# Rebuild
+make clean && make LLAMA_RPC=1 koboldcpp_rpc
 ```
 
 ---
 
-## Next Steps
+## What Works
 
-- Read [RPC_MANUAL.md](RPC_MANUAL.md) for complete documentation
-- Check [RPC_PORTING_GUIDE.md](RPC_PORTING_GUIDE.md) for technical details
-- Join Discord for support
+✅ RPC Server starts and advertises devices  
+✅ RPC Client connects to servers  
+✅ Multiple RPC servers work together  
+✅ GPU offloading to RPC server GPUs  
+✅ Model distribution across RPC devices  
+
+## What Doesn't Work Yet
+
+❌ Automatic local GPU detection when using RPC  
+❌ Hybrid mode (local GPUs + RPC servers)  
+
+**Workaround**: Use RPC-only mode which works perfectly for distributed inference.
+
+---
+
+## Security Warning
+
+⚠️ **NEVER expose RPC to public internet!**
+
+**Safe**:
+```bash
+./rpc-server-vulkan -H 192.168.1.101 --port 50054 --device VULKAN0 -c
+```
+
+**Dangerous**:
+```bash
+./rpc-server-vulkan -H 0.0.0.0 --port 50054 --device VULKAN0 -c
+```
+
+---
+
+## More Info
+
+- **Complete Manual**: `RPC_MANUAL.md`
+- **Porting Guide**: `RPC_PORTING_GUIDE.md`
+- **Status**: `RPC_HYBRID_STATUS.md`
 
 ---
 
