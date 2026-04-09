@@ -2374,6 +2374,8 @@ def lora_map_name_to_path(request_list):
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
 
+    job_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
     default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
     adapter_obj = genparams.get('adapter', default_adapter)
     forced_negprompt = adapter_obj.get("add_sd_negative_prompt", "")
@@ -2488,6 +2490,7 @@ def sd_generate(genparams):
         data_extra = ret.data_extra.decode("UTF-8","ignore")
         info = json.loads(ret.info.decode("UTF-8","ignore"))
         animated = True if ret.animated else False
+    info["job_timestamp"] = job_timestamp
     return {"animated": animated, "data":data_main, "data_extra":data_extra, "info": info}
 
 
