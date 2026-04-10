@@ -23,6 +23,7 @@
 #include <cctype>
 #include <locale>
 #include <chrono>
+#include <algorithm>
 
 #include "utils.h"
 
@@ -2417,6 +2418,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                     }
                 } else {
                     printf("[RPC] WARNING: Failed to connect to RPC server %s\n", endpoint.c_str());
+                    // Continue anyway - might have local GPUs
                 }
                 start = end + 1;
                 end = rpc_endpoints_str.find(',', start);
@@ -2470,39 +2472,28 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             if(dev_override_str == "") {
                 // Enumerate local GPU devices and add them
                 printf("[RPC] Enumerating local GPU devices to use alongside RPC...\n");
-                printf("[RPC] Total backend devices available: %zu\n", ggml_backend_dev_count());
-                
-                int found_count = 0;
                 for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                     auto* dev = ggml_backend_dev_get(i);
                     ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
                     std::string reg_name = reg ? ggml_backend_reg_name(reg) : "";
                     std::string dev_name = ggml_backend_dev_name(dev);
-                    
                     printf("[RPC] Checking device %zu: %s (registry: %s)\n", i, dev_name.c_str(), reg_name.c_str());
+                    // Add local GPU devices (not RPC, not CPU) - case insensitive check
+                    std::string reg_name_upper = reg_name;
+                    std::transform(reg_name_upper.begin(), reg_name_upper.end(), reg_name_upper.begin(), ::toupper);
                     
-                    // Add local GPU devices (not RPC, not CPU)
-                    if(reg_name.find("RPC") == std::string::npos && 
-                       reg_name.find("CPU") == std::string::npos &&
-                       (reg_name.find("VULKAN") != std::string::npos || 
-                        reg_name.find("CUDA") != std::string::npos ||
-                        reg_name.find("HIP") != std::string::npos)) {
-                        printf("[RPC] ✓ Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+                    if(reg_name_upper.find("RPC") == std::string::npos && 
+                       reg_name_upper.find("CPU") == std::string::npos &&
+                       (reg_name_upper.find("VULKAN") != std::string::npos || 
+                        reg_name_upper.find("RADV") != std::string::npos ||
+                        reg_name_upper.find("CUDA") != std::string::npos ||
+                        reg_name_upper.find("HIP") != std::string::npos ||
+                        reg_name_upper.find("METAL") != std::string::npos)) {
+                        printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
                         devices_override.push_back(dev);
-                        found_count++;
                     }
                 }
-                
-                if(found_count == 0) {
-                    printf("[RPC] ⚠ WARNING: No local GPU devices found!\n");
-                    printf("[RPC] ⚠ Make sure koboldcpp_rpc.so is built with Vulkan support:\n");
-                    printf("[RPC] ⚠   make LLAMA_RPC=1 LLAMA_VULKAN=1 koboldcpp_rpc\n");
-                } else {
-                    printf("[RPC] ✓ Added %d local GPU device(s)\n", found_count);
-                }
-                
-                printf("[RPC] Total devices for offloading: %zu (%zu RPC + %d local)\n", 
-                       devices_override.size(), devices_override.size() - found_count, found_count);
+                printf("[RPC] Total devices for offloading: %zu (RPC + local GPUs)\n", devices_override.size());
             }
         }
         

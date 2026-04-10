@@ -1,0 +1,287 @@
+I koboldcpp build info: 
+I UNAME_S:  Linux
+I UNAME_P:  unknown
+I UNAME_M:  x86_64
+I UNAME_O:  GNU/Linux
+I CFLAGS:   -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -march=native -mtune=native
+I CXXFLAGS: -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread
+I LDFLAGS:  -ldl
+I CC:       cc (GCC) 15.2.1 20260209
+I CXX:      g++ (GCC) 15.2.1 20260209
+
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread  -DGGML_USE_VULKAN -DSD_USE_VULKAN -c ggml/src/ggml-vulkan/ggml-vulkan.cpp -o ggml-vulkan.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread  -DGGML_USE_VULKAN -DSD_USE_VULKAN -c ggml/src/ggml-vulkan-shaders.cpp -o ggml-vulkan-shaders.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -DGGML_USE_VULKAN -DSD_USE_VULKAN -c otherarch/sdcpp/sdtype_adapter.cpp -o sdcpp_vulkan.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -DGGML_USE_VULKAN -DSD_USE_VULKAN -c otherarch/whispercpp/whisper_adapter.cpp -o whispercpp_vulkan.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c otherarch/tts_adapter.cpp -o tts_default.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c otherarch/acestep/music_adapter.cpp -o music_default.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c otherarch/embeddings_adapter.cpp -o embeddings_default.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -DGGML_USE_VULKAN -DSD_USE_VULKAN -c tools/mtmd/clip.cpp -o llavaclip_vulkan.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c tools/mtmd/llava.cpp -o llava.o
+g++  -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -DGGML_USE_VULKAN -DSD_USE_VULKAN -c ggml/src/ggml-backend.cpp -o ggml-backend_vulkan.o
+g++  -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -DGGML_USE_VULKAN -DSD_USE_VULKAN -c ggml/src/ggml-backend-reg.cpp -o ggml-backend-reg_vulkan.o
+g++  -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c ggml/src/ggml-backend.cpp -o ggml-backend_default.o
+g++  -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c ggml/src/ggml-backend-reg.cpp -o ggml-backend-reg_default.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c ggml/src/ggml-cpu/repack.cpp -o ggml-repack.o
+cc  -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -march=native -mtune=native -c ggml/src/ggml-alloc.c -o ggml-alloc.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c ggml/src/ggml-cpu/traits.cpp -o ggml-cpu-traits.o
+cc  -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -march=native -mtune=native -march=native -mtune=native -c ggml/src/ggml-quants.c -o ggml-quants.o
+cc  -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -march=native -mtune=native -c ggml/src/ggml-cpu/quants.c -o ggml-cpu-quants.o
+cc  -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -march=native -mtune=native -march=native -mtune=native -c ggml/src/ggml-cpu/kcpp-quantmapper.c -o kcpp-quantmapper.o
+ggml/src/ggml-cpu/kcpp-quantmapper.c:5:9: Anmerkung: »#pragma message: KoboldCpp Compiling Quants for x86/x64«
+    5 | #pragma message("KoboldCpp Compiling Quants for x86/x64")
+      |         ^~~~~~~
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -march=native -mtune=native -c ggml/src/ggml-cpu/kcpp-repackmapper.cpp -o kcpp-repackmapper.o
+ggml/src/ggml-cpu/kcpp-repackmapper.cpp:5:57: Anmerkung: »#pragma message: KoboldCpp Compiling Repack for x86/x64«
+    5 | #pragma message("KoboldCpp Compiling Repack for x86/x64")
+      |                                                         ^
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c src/unicode.cpp -o unicode.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c common/unicode.cpp -o unicode-common.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c src/unicode-data.cpp -o unicode-data.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c ggml/src/ggml-threading.cpp -o ggml-threading.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c ggml/src/ggml-cpu/ggml-cpu.cpp -o ggml-cpu-cpp.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c ggml/src/gguf.cpp -o gguf.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -march=native -mtune=native -c ggml/src/ggml-cpu/llamafile/sgemm.cpp -o sgemm.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c common/common.cpp -o common.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c src/llama-impl.cpp -o llama-impl.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c common/sampling.cpp -o sampling.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c common/reasoning-budget.cpp -o budget.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c otherarch/utils.cpp -o kcpputils.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -c tools/mtmd/mtmd-audio.cpp -o mtmdaudio.o
+g++ -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DNDEBUG -s -DGGML_USE_LLAMAFILE -pthread -Wno-multichar -Wno-write-strings -Wno-deprecated -Wno-deprecated-declarations -Wno-unused-variable -pthread -DGGML_USE_RPC ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-rpc.o ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o mtmdaudio.o -shared -o koboldcpp_rpc.so -ldl
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buft_name':
+ggml-backend.cpp:(.text+0x490): multiple definition of `ggml_backend_buft_name'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x490): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buft_get_alignment':
+ggml-backend.cpp:(.text+0x4c0): multiple definition of `ggml_backend_buft_get_alignment'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x4c0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buft_get_max_size':
+ggml-backend.cpp:(.text+0x4f0): multiple definition of `ggml_backend_buft_get_max_size'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x4f0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buft_get_alloc_size':
+ggml-backend.cpp:(.text+0x530): multiple definition of `ggml_backend_buft_get_alloc_size'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x530): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buft_is_host':
+ggml-backend.cpp:(.text+0x570): multiple definition of `ggml_backend_buft_is_host'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x570): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buft_get_device':
+ggml-backend.cpp:(.text+0x5b0): multiple definition of `ggml_backend_buft_get_device'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x5b0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_init':
+ggml-backend.cpp:(.text+0x5e0): multiple definition of `ggml_backend_buffer_init'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x5e0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buft_alloc_buffer':
+ggml-backend.cpp:(.text+0x640): multiple definition of `ggml_backend_buft_alloc_buffer'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x640): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_free':
+ggml-backend.cpp:(.text+0x790): multiple definition of `ggml_backend_buffer_free'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x790): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_get_size':
+ggml-backend.cpp:(.text+0x850): multiple definition of `ggml_backend_buffer_get_size'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x850): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_get_base':
+ggml-backend.cpp:(.text+0x880): multiple definition of `ggml_backend_buffer_get_base'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x880): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_init_tensor':
+ggml-backend.cpp:(.text+0x8f0): multiple definition of `ggml_backend_buffer_init_tensor'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x8f0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_clear':
+ggml-backend.cpp:(.text+0x930): multiple definition of `ggml_backend_buffer_clear'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x930): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_get_usage':
+ggml-backend.cpp:(.text+0x9d0): multiple definition of `ggml_backend_buffer_get_usage'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x9d0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_get_type':
+ggml-backend.cpp:(.text+0xa00): multiple definition of `ggml_backend_buffer_get_type'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xa00): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_name':
+ggml-backend.cpp:(.text+0xa30): multiple definition of `ggml_backend_buffer_name'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xa30): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_get_alignment':
+ggml-backend.cpp:(.text+0xa50): multiple definition of `ggml_backend_buffer_get_alignment'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xa50): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_get_max_size':
+ggml-backend.cpp:(.text+0xa70): multiple definition of `ggml_backend_buffer_get_max_size'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xa70): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_get_alloc_size':
+ggml-backend.cpp:(.text+0xa90): multiple definition of `ggml_backend_buffer_get_alloc_size'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xa90): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_is_host':
+ggml-backend.cpp:(.text+0xab0): multiple definition of `ggml_backend_buffer_is_host'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xab0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_reset':
+ggml-backend.cpp:(.text+0xb60): multiple definition of `ggml_backend_buffer_reset'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xb60): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_copy_tensor':
+ggml-backend.cpp:(.text+0xba0): multiple definition of `ggml_backend_buffer_copy_tensor'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xba0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_guid':
+ggml-backend.cpp:(.text+0xbe0): multiple definition of `ggml_backend_guid'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xbe0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_name':
+ggml-backend.cpp:(.text+0xc00): multiple definition of `ggml_backend_name'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xc00): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_free':
+ggml-backend.cpp:(.text+0xc20): multiple definition of `ggml_backend_free'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xc20): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_tensor_set':
+ggml-backend.cpp:(.text+0xc40): multiple definition of `ggml_backend_tensor_set'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xc40): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_tensor_get':
+ggml-backend.cpp:(.text+0xd60): multiple definition of `ggml_backend_tensor_get'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xd60): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_tensor_memset':
+ggml-backend.cpp:(.text+0xe80): multiple definition of `ggml_backend_tensor_memset'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xe80): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_synchronize':
+ggml-backend.cpp:(.text+0xfd0): multiple definition of `ggml_backend_synchronize'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0xfd0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_tensor_set_async':
+ggml-backend.cpp:(.text+0x1010): multiple definition of `ggml_backend_tensor_set_async'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1010): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_tensor_get_async':
+ggml-backend.cpp:(.text+0x1140): multiple definition of `ggml_backend_tensor_get_async'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1140): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_graph_plan_create':
+ggml-backend.cpp:(.text+0x1270): multiple definition of `ggml_backend_graph_plan_create'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1270): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_graph_plan_free':
+ggml-backend.cpp:(.text+0x12d0): multiple definition of `ggml_backend_graph_plan_free'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x12d0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_graph_plan_compute':
+ggml-backend.cpp:(.text+0x1330): multiple definition of `ggml_backend_graph_plan_compute'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1330): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_graph_compute_async':
+ggml-backend.cpp:(.text+0x1390): multiple definition of `ggml_backend_graph_compute_async'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1390): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_graph_compute':
+ggml-backend.cpp:(.text+0x13c0): multiple definition of `ggml_backend_graph_compute'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x13c0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_get_device':
+ggml-backend.cpp:(.text+0x13f0): multiple definition of `ggml_backend_get_device'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x13f0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_tensor_copy':
+ggml-backend.cpp:(.text+0x1420): multiple definition of `ggml_backend_tensor_copy'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1420): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_tensor_copy_async':
+ggml-backend.cpp:(.text+0x15a0): multiple definition of `ggml_backend_tensor_copy_async'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x15a0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_event_new':
+ggml-backend.cpp:(.text+0x16e0): multiple definition of `ggml_backend_event_new'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x16e0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_event_free':
+ggml-backend.cpp:(.text+0x1700): multiple definition of `ggml_backend_event_free'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1700): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_event_record':
+ggml-backend.cpp:(.text+0x1720): multiple definition of `ggml_backend_event_record'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1720): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_event_synchronize':
+ggml-backend.cpp:(.text+0x1790): multiple definition of `ggml_backend_event_synchronize'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1790): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_event_wait':
+ggml-backend.cpp:(.text+0x1800): multiple definition of `ggml_backend_event_wait'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1800): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_name':
+ggml-backend.cpp:(.text+0x1860): multiple definition of `ggml_backend_dev_name'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1860): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_description':
+ggml-backend.cpp:(.text+0x1890): multiple definition of `ggml_backend_dev_description'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1890): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_memory':
+ggml-backend.cpp:(.text+0x18c0): multiple definition of `ggml_backend_dev_memory'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x18c0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_type':
+ggml-backend.cpp:(.text+0x18f0): multiple definition of `ggml_backend_dev_type'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x18f0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_get_props':
+ggml-backend.cpp:(.text+0x1920): multiple definition of `ggml_backend_dev_get_props'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1920): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_backend_reg':
+ggml-backend.cpp:(.text+0x1940): multiple definition of `ggml_backend_dev_backend_reg'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1940): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_init':
+ggml-backend.cpp:(.text+0x1970): multiple definition of `ggml_backend_dev_init'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1970): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_buffer_type':
+ggml-backend.cpp:(.text+0x19a0): multiple definition of `ggml_backend_dev_buffer_type'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x19a0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_get_default_buffer_type':
+ggml-backend.cpp:(.text+0x19d0): multiple definition of `ggml_backend_get_default_buffer_type'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x19d0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_alloc_buffer':
+ggml-backend.cpp:(.text+0x1a00): multiple definition of `ggml_backend_alloc_buffer'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1a00): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_get_alignment':
+ggml-backend.cpp:(.text+0x1a20): multiple definition of `ggml_backend_get_alignment'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1a20): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_get_max_size':
+ggml-backend.cpp:(.text+0x1a40): multiple definition of `ggml_backend_get_max_size'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1a40): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_host_buffer_type':
+ggml-backend.cpp:(.text+0x1a60): multiple definition of `ggml_backend_dev_host_buffer_type'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1a60): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_buffer_from_host_ptr':
+ggml-backend.cpp:(.text+0x1aa0): multiple definition of `ggml_backend_dev_buffer_from_host_ptr'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1aa0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_supports_op':
+ggml-backend.cpp:(.text+0x1ad0): multiple definition of `ggml_backend_dev_supports_op'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1ad0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_supports_op':
+ggml-backend.cpp:(.text+0x1b00): multiple definition of `ggml_backend_supports_op'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1b00): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_supports_buft':
+ggml-backend.cpp:(.text+0x1b30): multiple definition of `ggml_backend_dev_supports_buft'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1b30): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_supports_buft':
+ggml-backend.cpp:(.text+0x1b60): multiple definition of `ggml_backend_supports_buft'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1b60): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_dev_offload_op':
+ggml-backend.cpp:(.text+0x1d00): multiple definition of `ggml_backend_dev_offload_op'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1d00): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_offload_op':
+ggml-backend.cpp:(.text+0x1d40): multiple definition of `ggml_backend_offload_op'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x1d40): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_reg_name':
+ggml-backend.cpp:(.text+0x20b0): multiple definition of `ggml_backend_reg_name'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x20b0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_reg_dev_count':
+ggml-backend.cpp:(.text+0x20e0): multiple definition of `ggml_backend_reg_dev_count'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x20e0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_reg_dev_get':
+ggml-backend.cpp:(.text+0x2110): multiple definition of `ggml_backend_reg_dev_get'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2110): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_reg_get_proc_address':
+ggml-backend.cpp:(.text+0x2140): multiple definition of `ggml_backend_reg_get_proc_address'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2140): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_multi_buffer_alloc_buffer':
+ggml-backend.cpp:(.text+0x2180): multiple definition of `ggml_backend_multi_buffer_alloc_buffer'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2180): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_is_multi_buffer':
+ggml-backend.cpp:(.text+0x2270): multiple definition of `ggml_backend_buffer_is_multi_buffer'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2270): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_multi_buffer_set_usage':
+ggml-backend.cpp:(.text+0x22b0): multiple definition of `ggml_backend_multi_buffer_set_usage'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x22b0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_buffer_set_usage':
+ggml-backend.cpp:(.text+0x2340): multiple definition of `ggml_backend_buffer_set_usage'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2340): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_free':
+ggml-backend.cpp:(.text+0x23a0): multiple definition of `ggml_backend_sched_free'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x23a0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_reset':
+ggml-backend.cpp:(.text+0x24b0): multiple definition of `ggml_backend_sched_reset'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x24b0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_new':
+ggml-backend.cpp:(.text+0x2550): multiple definition of `ggml_backend_sched_new'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2550): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_synchronize':
+ggml-backend.cpp:(.text+0x28f0): multiple definition of `ggml_backend_sched_synchronize'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x28f0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_set_eval_callback':
+ggml-backend.cpp:(.text+0x2960): multiple definition of `ggml_backend_sched_set_eval_callback'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2960): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_get_n_splits':
+ggml-backend.cpp:(.text+0x29a0): multiple definition of `ggml_backend_sched_get_n_splits'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x29a0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_get_n_copies':
+ggml-backend.cpp:(.text+0x29d0): multiple definition of `ggml_backend_sched_get_n_copies'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x29d0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_get_n_backends':
+ggml-backend.cpp:(.text+0x2a00): multiple definition of `ggml_backend_sched_get_n_backends'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2a00): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_get_backend':
+ggml-backend.cpp:(.text+0x2a30): multiple definition of `ggml_backend_sched_get_backend'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2a30): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_get_buffer_type':
+ggml-backend.cpp:(.text+0x2aa0): multiple definition of `ggml_backend_sched_get_buffer_type'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2aa0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_get_buffer_size':
+ggml-backend.cpp:(.text+0x2c90): multiple definition of `ggml_backend_sched_get_buffer_size'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2c90): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_set_tensor_backend':
+ggml-backend.cpp:(.text+0x2e80): multiple definition of `ggml_backend_sched_set_tensor_backend'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x2e80): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_get_tensor_backend':
+ggml-backend.cpp:(.text+0x3120): multiple definition of `ggml_backend_sched_get_tensor_backend'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x3120): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_split_graph':
+ggml-backend.cpp:(.text+0x31f0): multiple definition of `ggml_backend_sched_split_graph'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x31f0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_reserve_size':
+ggml-backend.cpp:(.text+0x5450): multiple definition of `ggml_backend_sched_reserve_size'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x5450): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_reserve':
+ggml-backend.cpp:(.text+0x5530): multiple definition of `ggml_backend_sched_reserve'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x5530): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_alloc_graph':
+ggml-backend.cpp:(.text+0x55f0): multiple definition of `ggml_backend_sched_alloc_graph'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x55f0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_graph_compute_async':
+ggml-backend.cpp:(.text+0x5870): multiple definition of `ggml_backend_sched_graph_compute_async'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x5870): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_sched_graph_compute':
+ggml-backend.cpp:(.text+0x64e0): multiple definition of `ggml_backend_sched_graph_compute'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x64e0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_view_init':
+ggml-backend.cpp:(.text+0x6510): multiple definition of `ggml_backend_view_init'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x6510): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_tensor_alloc':
+ggml-backend.cpp:(.text+0x6740): multiple definition of `ggml_backend_tensor_alloc'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x6740): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_graph_copy':
+ggml-backend.cpp:(.text+0x68a0): multiple definition of `ggml_backend_graph_copy'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x68a0): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_graph_copy_free':
+ggml-backend.cpp:(.text+0x6c30): multiple definition of `ggml_backend_graph_copy_free'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x6c30): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_compare_graph_backend':
+ggml-backend.cpp:(.text+0x6c60): multiple definition of `ggml_backend_compare_graph_backend'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x6c60): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_cpu_buffer_type':
+ggml-backend.cpp:(.text+0x6f20): multiple definition of `ggml_backend_cpu_buffer_type'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x6f20): first defined here
+/usr/bin/ld: ggml-backend_default.o: in function `ggml_backend_cpu_buffer_from_ptr':
+ggml-backend.cpp:(.text+0x6f30): multiple definition of `ggml_backend_cpu_buffer_from_ptr'; ggml-backend_vulkan.o:ggml-backend.cpp:(.text+0x6f30): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `dl_load_library(std::filesystem::__cxx11::path const&)':
+ggml-backend-reg.cpp:(.text+0x180): multiple definition of `dl_load_library(std::filesystem::__cxx11::path const&)'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x180): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `dl_get_sym(void*, char const*)':
+ggml-backend-reg.cpp:(.text+0x290): multiple definition of `dl_get_sym(void*, char const*)'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x290): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `dl_error()':
+ggml-backend-reg.cpp:(.text+0x2a0): multiple definition of `dl_error()'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x2a0): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_register':
+ggml-backend-reg.cpp:(.text+0x410): multiple definition of `ggml_backend_register'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x4e0): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_load':
+ggml-backend-reg.cpp:(.text+0x4e0): multiple definition of `ggml_backend_load'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x5b0): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_unload':
+ggml-backend-reg.cpp:(.text+0x640): multiple definition of `ggml_backend_unload'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x710): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_reg_count':
+ggml-backend-reg.cpp:(.text+0x8d0): multiple definition of `ggml_backend_reg_count'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x9a0): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_dev_count':
+ggml-backend-reg.cpp:(.text+0xa40): multiple definition of `ggml_backend_dev_count'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0xce0): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_device_register':
+ggml-backend-reg.cpp:(.text+0xbb0): multiple definition of `ggml_backend_device_register'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x1110): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_reg_get':
+ggml-backend-reg.cpp:(.text+0xd40): multiple definition of `ggml_backend_reg_get'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0xbe0): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_reg_by_name':
+ggml-backend-reg.cpp:(.text+0xee0): multiple definition of `ggml_backend_reg_by_name'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0xc20): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_dev_get':
+ggml-backend-reg.cpp:(.text+0xfa0): multiple definition of `ggml_backend_dev_get'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0xf20): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_dev_by_name':
+ggml-backend-reg.cpp:(.text+0x1140): multiple definition of `ggml_backend_dev_by_name'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0xf60): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_init_by_name':
+ggml-backend-reg.cpp:(.text+0x1200): multiple definition of `ggml_backend_init_by_name'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x1020): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_dev_by_type':
+ggml-backend-reg.cpp:(.text+0x1230): multiple definition of `ggml_backend_dev_by_type'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x1050): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_init_by_type':
+ggml-backend-reg.cpp:(.text+0x1270): multiple definition of `ggml_backend_init_by_type'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x1090): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_init_best':
+ggml-backend-reg.cpp:(.text+0x12a0): multiple definition of `ggml_backend_init_best'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x10c0): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_load_all_from_path':
+ggml-backend-reg.cpp:(.text+0x40c0): multiple definition of `ggml_backend_load_all_from_path'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x4140): first defined here
+/usr/bin/ld: ggml-backend-reg_default.o: in function `ggml_backend_load_all':
+ggml-backend-reg.cpp:(.text+0x41d0): multiple definition of `ggml_backend_load_all'; ggml-backend-reg_vulkan.o:ggml-backend-reg.cpp:(.text+0x4250): first defined here
+collect2: Fehler: ld gab 1 als Ende-Status zurück
+make: *** [Makefile:932: koboldcpp_rpc] Fehler 1

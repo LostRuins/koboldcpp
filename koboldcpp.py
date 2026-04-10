@@ -16099,6 +16099,37 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     print(args)
     print("==========")
 
+    # Validate RPC tensor_split if both are provided
+    if args.userpc and args.tensor_split:
+        rpc_count = len(args.userpc)
+        ts_count = len(args.tensor_split)
+        if ts_count > 0 and ts_count < rpc_count:
+            print(
+                f"[RPC] WARNING: tensor_split has {ts_count} values but {rpc_count} RPC servers specified"
+            )
+            print(
+                f"[RPC] Extending tensor_split with equal distribution for remaining servers"
+            )
+            # Extend tensor_split with the last value or equal distribution
+            if ts_count == 1:
+                # If only one value, replicate it
+                args.tensor_split = args.tensor_split * rpc_count
+            else:
+                # Extend with the last value
+                last_val = args.tensor_split[-1]
+                while len(args.tensor_split) < rpc_count:
+                    args.tensor_split.append(last_val)
+        elif ts_count > rpc_count:
+            print(
+                f"[RPC] WARNING: tensor_split has {ts_count} values but only {rpc_count} RPC servers"
+            )
+            print(f"[RPC] Truncating tensor_split to match RPC server count")
+            args.tensor_split = args.tensor_split[:rpc_count]
+        else:
+            print(
+                f"[RPC] Manual layer distribution: {rpc_count} servers with split ratios: {args.tensor_split}"
+            )
+
     # handle loading text model
     if args.model_param:
         if not os.path.exists(args.model_param):
@@ -16635,12 +16666,14 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
         if args.hordekey and args.hordekey != "":
             if args.hordeworkername and args.hordeworkername != "":
-                horde_thread = threading.Thread(
+                print(
+                    f"Starting Horde worker: {args.hordeworkername} (Model: {args.hordemodelname or friendlymodelname})"
+                )
+                threading.Thread(
                     target=run_horde_worker,
                     args=(args, args.hordekey, args.hordeworkername),
-                )
-                horde_thread.daemon = True
-                horde_thread.start()
+                    daemon=True,
+                ).start()
             else:
                 print(
                     "Horde worker could not start. You need to specify a horde worker name with --hordeworkername"
@@ -16955,7 +16988,7 @@ if __name__ == "__main__":
         "--tensorsplit",
         "--tensor-split",
         "-ts",
-        help="For CUDA and Vulkan only, ratio to split tensors across multiple GPUs, space-separated list of proportions, e.g. 7 3",
+        help="For RPC, CUDA and Vulkan: ratio to split tensors across multiple GPUs/servers. Space-separated list of proportions (e.g., 20 40 20 20 for 4 RPC servers). Controls manual layer distribution.",
         metavar=("[Ratios]"),
         type=float,
         nargs="+",
