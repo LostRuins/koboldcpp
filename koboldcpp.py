@@ -10,7 +10,7 @@
 
 import os
 try:
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # try set GPU to PCI order first thing
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID" # try set GPU to PCI order first thing
 except Exception:
     pass
 import copy
@@ -55,7 +55,7 @@ default_ttsmaxlen = 4096
 default_visionmaxres = 1024
 net_save_slots = 12
 savestate_limit_default = 5
-savestate_limit = 0  #savestate slots start at 0, only set when load model
+savestate_limit = 0 #savestate slots start at 0, only set when load model
 default_vae_tile_threshold = 768
 default_native_ctx = 16384
 default_genlen = 1024
@@ -68,7 +68,7 @@ stop_token_max = 256
 ban_token_max = 768
 logit_bias_max = 512
 dry_seq_break_max = 128
-extra_images_max = 4  #for kontext/qwen img
+extra_images_max = 4 #for kontext/qwen img
 
 # global vars
 KcppVersion = "1.111.2"
@@ -92,19 +92,19 @@ mmprojName = None
 lastgeneratedcomfyimg = b''
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
-password = ""  #ifempty, no auth key required
+password = ""  #if empty, no auth key required
 fullwhispermodelpath = ""  #if empty, it's not initialized
 ttsmodelpath = ""  #if empty, not initialized
 embeddingsmodelpath = ""  #if empty, not initialized
 musicllmmodelpath = ""  #if empty, not initialized
-musicdiffusionmodelpath = ""  # if empty, not initialized
-imglora_preload = []   #all preloaded LoRAs
-imglora_bypath = {}    #len(imglora_bypath) == 0 <==> static loras
+musicdiffusionmodelpath = "" #if empty, not initialized
+imglora_preload = []   # all preloaded LoRAs
+imglora_bypath = {}    # len(imglora_bypath) == 0 <==> static loras
 imglora_name2path = {}
 imglora_cached = True
 imglora_initial_fixed = True
 maxctx = 8192
-maxhordectx = 0  # set to whatever maxctx is if 0
+maxhordectx = 0 #set to whatever maxctx is if 0
 maxhordelen = 1024
 modelbusy = threading.Lock()
 requestsinqueue = 0
@@ -118,14 +118,12 @@ session_kudos_earned = 0
 session_jobs = 0
 session_starttime = None
 exitcounter = -1
-punishcounter = 0  # causes a timeout if too many errors
-rewardcounter = 0  # reduces error counts for successful jobs
+punishcounter = 0 #causes a timeout if too many errors
+rewardcounter = 0 #reduces error counts for successful jobs
 totalgens = 0
-currentusergenkey = (
-    ""  # store a special key so polled streaming works even in multiuser
-)
-pendingabortkey = ""  # if an abort is received for the non-active request, remember it (at least 1) to cancel later
-args = None  # global args
+currentusergenkey = "" #store a special key so polled streaming works even in multiuser
+pendingabortkey = ""  #if an abort is received for the non-active request, remember it (at least 1) to cancel later
+args = None #global args
 runmode_untouched = True
 modelfile_extracted_meta = None
 calulated_gpu_overhead = (
