@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#-*- coding: utf-8 -*-
 
 # KoboldCpp is an easy-to-use AI text-generation software for GGML models.
 # It's a single self contained distributable from Concedo, that builds off llama.cpp,
@@ -9,11 +9,8 @@
 # scenarios and everything Kobold and KoboldAI Lite have to offer.
 
 import os
-
 try:
-    os.environ["CUDA_DEVICE_ORDER"] = (
-        "PCI_BUS_ID"  # try set GPU to PCI order first thing
-    )
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # try set GPU to PCI order first thing
 except Exception:
     pass
 import copy
@@ -58,7 +55,7 @@ default_ttsmaxlen = 4096
 default_visionmaxres = 1024
 net_save_slots = 12
 savestate_limit_default = 5
-savestate_limit = 0  # savestate slots start at 0, only set when load model
+savestate_limit = 0  #savestate slots start at 0, only set when load model
 default_vae_tile_threshold = 768
 default_native_ctx = 16384
 default_genlen = 1024
@@ -71,12 +68,12 @@ stop_token_max = 256
 ban_token_max = 768
 logit_bias_max = 512
 dry_seq_break_max = 128
-extra_images_max = 4  # for kontext/qwen img
+extra_images_max = 4  #for kontext/qwen img
 
 # global vars
 KcppVersion = "1.111.2"
 showdebug = True
-kcpp_instance = None # global running instance
+kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_config_target":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "current_override":"", "swapReqType": None, "autoswapmode": False}
 using_gui_launcher = False
 
@@ -92,17 +89,17 @@ embedName = None
 musicName = None
 imageName = None
 mmprojName = None
-lastgeneratedcomfyimg = b""
-lastuploadedcomfyimg = b""
-fullsdmodelpath = ""  # if empty, it's not initialized
-password = ""  # if empty, no auth key required
-fullwhispermodelpath = ""  # if empty, it's not initialized
-ttsmodelpath = ""  # if empty, not initialized
-embeddingsmodelpath = ""  # if empty, not initialized
-musicllmmodelpath = ""  # if empty, not initialized
+lastgeneratedcomfyimg = b''
+lastuploadedcomfyimg = b''
+fullsdmodelpath = ""  #if empty, it's not initialized
+password = ""  #ifempty, no auth key required
+fullwhispermodelpath = ""  #if empty, it's not initialized
+ttsmodelpath = ""  #if empty, not initialized
+embeddingsmodelpath = ""  #if empty, not initialized
+musicllmmodelpath = ""  #if empty, not initialized
 musicdiffusionmodelpath = ""  # if empty, not initialized
-imglora_preload = []  # all preloaded LoRAs
-imglora_bypath = {}  # len(imglora_bypath) == 0 <==> static loras
+imglora_preload = []   #all preloaded LoRAs
+imglora_bypath = {}    #len(imglora_bypath) == 0 <==> static loras
 imglora_name2path = {}
 imglora_cached = True
 imglora_initial_fixed = True
