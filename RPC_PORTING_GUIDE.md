@@ -19,6 +19,8 @@ This guide provides **complete, reproducible instructions** for integrating RPC 
 ✅ **Hybrid mode** (local GPUs + RPC servers)  
 ✅ **Manual tensor_split** for layer distribution control  
 ✅ **Case-insensitive** device matching  
+✅ **Manual device ordering** (--device argument)  
+✅ **Device reordering** (mix RPC and local in any order)  
 
 **Time Required**: 2-4 hours  
 **Difficulty**: Intermediate (requires C++ and build system knowledge)  
@@ -369,6 +371,34 @@ compatgroup.add_argument("--userpc", "--rpc",
     default=None)
 ```
 
+### Step 3.1b: Add Device Ordering Argument (Optional)
+
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
+
+**Location**: In advanced parser section (around line ~17460)
+
+**Note**: The `--device` argument already exists in koboldcpp for llama.cpp compatibility. No changes needed!
+
+**Usage**:
+```python
+# Already exists in advparser section
+advparser.add_argument(
+    "--device",
+    "-dev",
+    metavar=("<dev1,dev2,..>"),
+    help="Set llama.cpp compatible device selection override. Comma separated. Overrides normal device choices.",
+    default="",
+)
+```
+
+**Example**:
+```bash
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,RPC0,VULKAN1,RPC1 \
+    --gpulayers 999
+```
+
 **Complete Context**:
 ```python
 compatgroup.add_argument("--usevulkan", 
@@ -539,16 +569,75 @@ if args.userpc and args.tensor_split:
 
 ## Phase 4: C++ Code Modifications
 
-### Step 4.1: Fix Device Enumeration (Case-Insensitive)
+### Step 4.1: Implement Device Ordering
 
 **File**: `koboldcpp-1.111.2/gpttype_adapter.cpp`
 
-**Location**: After line ~2479 (in device enumeration loop)
+**Location**: After line ~2452 (after RPC device collection)
 
 **Add include** at top of file (after line ~23):
 ```cpp
 #include <algorithm>
 ```
+
+**Implementation**: Replace the device enumeration section with code that:
+1. Collects all RPC devices (RPC0, RPC1, etc.)
+2. Enumerates local GPU devices (VULKAN0, VULKAN1, etc.)
+3. If `--device` is specified, reorders all devices according to the argument
+4. Otherwise, uses default ordering (RPC first, then local)
+
+**Key Code**:
+```cpp
+std::string dev_override_str = inputs.devices_override ? inputs.devices_override : "";
+
+// If device override is specified, use it to reorder ALL devices
+if(dev_override_str != "" && dev_override_str.length() > 0)
+{
+    printf("[RPC] Manual device ordering specified: %s\n", dev_override_str.c_str());
+    
+    // Get all available devices (RPC + local)
+    std::vector<std::pair<std::string, ggml_backend_dev_t>> all_devices;
+    
+    // Add RPC devices
+    if(use_rpc) {
+        for(size_t i = 0; i < rpc_devices.size(); ++i) {
+            std::string name = "RPC" + std::to_string(i);
+            all_devices.push_back(std::make_pair(name, rpc_devices[i]));
+        }
+    }
+    
+    // Add local GPU devices
+    printf("[RPC] Enumerating local GPU devices...\n");
+    int vulkan_count = 0, cuda_count = 0, hip_count = 0, metal_count = 0;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto* dev = ggml_backend_dev_get(i);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        std::string reg_name = reg ? ggml_backend_reg_name(reg) : "";
+        
+        // Skip RPC and CPU, add local GPUs with proper naming
+        std::string reg_name_upper = reg_name;
+        std::transform(reg_name_upper.begin(), reg_name_upper.end(), reg_name_upper.begin(), ::toupper);
+        
+        if(reg_name_upper.find("VULKAN") != std::string::npos || 
+           reg_name_upper.find("RADV") != std::string::npos) {
+            std::string local_name = "VULKAN" + std::to_string(vulkan_count++);
+            all_devices.push_back(std::make_pair(local_name, dev));
+        }
+        // ... (similar for CUDA, HIP, METAL)
+    }
+    
+    // Parse device order from override string and build ordered list
+    // ... (parsing code)
+}
+```
+
+**See**: Full implementation in `gpttype_adapter.cpp:2452-2580`
+
+### Step 4.2: Fix Device Enumeration (Case-Insensitive)
+
+**File**: `koboldcpp-1.111.2/gpttype_adapter.cpp`
+
+**Location**: After line ~2479 (in device enumeration loop)
 
 **Change FROM**:
 ```cpp
@@ -894,6 +983,9 @@ load_tensors: Vulkan1 model buffer size = XXX MiB
 - [ ] Case-insensitive device matching added
 - [ ] Direct RPC server call implemented
 - [ ] Debug output added (optional)
+- [ ] Device ordering implemented (--device argument)
+- [ ] Local GPU enumeration with proper naming
+- [ ] Device reordering logic working
 
 ### Critical Fixes
 - [ ] Direct function call implemented (Hurdle #1)
@@ -908,6 +1000,8 @@ load_tensors: Vulkan1 model buffer size = XXX MiB
 - [ ] Local GPUs detected (hybrid mode)
 - [ ] Model loads across all devices
 - [ ] Tensor split works correctly
+- [ ] **Device ordering works** (--device argument)
+- [ ] **Device reordering works** (custom order)
 - [ ] Inference works
 - [ ] Multiple servers work together
 
@@ -942,6 +1036,20 @@ load_tensors: Vulkan1 model buffer size = XXX MiB
 ### Error: "Local GPUs not detected"
 **Solution**: Ensure RPC client built WITH Vulkan backend (hybrid mode)
 
+### Error: "invalid device: RPC0"
+**Cause**: Device parsing function doesn't recognize RPC device names yet
+
+**Solution**: Use new device ordering implementation that handles RPC devices properly (see Step 4.1)
+
+### Error: "Device ordering not working"
+**Cause**: Device names don't match enumeration
+
+**Solution**: 
+- Use correct naming: `VULKAN0`, `VULKAN1`, `RPC0`, `RPC1`, etc.
+- Device names are case-insensitive
+- Local GPUs numbered in enumeration order (0, 1, 2, ...)
+- RPC devices numbered in connection order (0, 1, 2, ...)
+
 ---
 
 ## Performance Optimization
@@ -965,6 +1073,20 @@ python koboldcpp.py --model model.gguf \
     --rpc 192.168.1.101:50054,192.168.1.16:50054 \
     --tensor_split 10 10 10 10 30 30 \
     --gpulayers 999
+
+# Client: With device ordering (local first)
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,VULKAN1,RPC0,RPC1,RPC2,RPC3 \
+    --tensor_split 20 20 15 15 15 15 \
+    --gpulayers 999
+
+# Client: Interleaved devices for balanced load
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,RPC0,VULKAN1,RPC1 \
+    --tensor_split 25 25 25 25 \
+    --gpulayers 999
 ```
 
 ---
@@ -985,7 +1107,11 @@ Performance depends on network quality:
 ### Tensor Split
 - Manual configuration required
 - No automatic optimization based on device capabilities
-- Device order: RPC devices first, then local GPUs
+
+### Device Ordering
+- Requires manual `--device` argument
+- Device names must match enumeration (VULKAN0, VULKAN1, etc.)
+- RPC devices must be connected before use
 
 ---
 
@@ -997,7 +1123,8 @@ Performance depends on network quality:
 3. **Load Balancing**: Automatic distribution across servers
 4. **Authentication**: Token-based access control
 5. **Encryption**: TLS/SSL for RPC traffic
-6. **Device Ordering**: Optimize based on bandwidth/latency
+6. **Automatic Device Ordering**: Optimize based on bandwidth/latency
+7. **Device Profiling**: Performance benchmarks for each device
 
 ### Known Technical Debt
 1. No memory-aware distribution
@@ -1032,6 +1159,8 @@ Performance depends on network quality:
   - Reflects current working state with hybrid mode
   - Includes tensor_split fixes
   - Case-insensitive device matching
+  - **Manual device ordering** (--device argument)
+  - **Device reordering** (mix RPC and local in any order)
 
 ---
 

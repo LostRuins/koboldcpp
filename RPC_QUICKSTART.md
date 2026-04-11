@@ -135,6 +135,20 @@ python koboldcpp.py --model model.gguf \
 - Vulkan0 (local): 40%
 - Vulkan1 (local): 40%
 
+### Scenario 5: Manual Device Ordering
+```bash
+# Server (192.168.1.101 with 2 GPUs)
+./rpc-server-vulkan -H 192.168.1.101 --port 50054 --device VULKAN0,VULKAN1 -c
+
+# Client: Reorder devices (local first, then RPC)
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,VULKAN1,RPC0,RPC1 \
+    --gpulayers 999
+```
+
+**Result**: Local GPUs handle first layers, RPC handles later layers.
+
 ### Scenario 5: Localhost Testing
 ```bash
 # Terminal 1
@@ -199,6 +213,16 @@ python koboldcpp.py --model model.gguf \
     --gpulayers 999
 ```
 
+### "Device ordering not working"
+```bash
+# Use correct device names: VULKAN0, VULKAN1, RPC0, RPC1, etc.
+# Device names are case-insensitive
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,RPC0,VULKAN1,RPC1 \
+    --gpulayers 999
+```
+
 ---
 
 ## What Works
@@ -211,6 +235,8 @@ python koboldcpp.py --model model.gguf \
 ✅ **Hybrid mode** (local GPUs + RPC servers)  
 ✅ **Manual tensor_split** for layer distribution  
 ✅ **Case-insensitive** device matching (Vulkan/RADV/CUDA/HIP)  
+✅ **Manual device ordering** (--device argument)  
+✅ **Device reordering** (mix RPC and local in any order)  
 
 ---
 

@@ -114,7 +114,41 @@ python koboldcpp.py --model model.gguf \
 - Vulkan0 (local GPU 0): 40%
 - Vulkan1 (local GPU 1): 40%
 
-**Device Order**: RPC devices first, then local GPUs in enumeration order.
+**Device Order**: By default, RPC devices first, then local GPUs in enumeration order.
+
+### Manual Device Ordering
+
+Override automatic device ordering with `--device`:
+
+```bash
+# Local GPUs first, then RPC
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,VULKAN1,RPC0,RPC1 \
+    --gpulayers 999
+
+# Interleaved for optimal performance
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,RPC0,VULKAN1,RPC1 \
+    --tensor_split 25 25 25 25 \
+    --gpulayers 999
+```
+
+**Device Names**:
+- `VULKAN0`, `VULKAN1`, etc. - Local Vulkan GPUs (in enumeration order)
+- `RPC0`, `RPC1`, etc. - RPC server GPUs (in connection order)
+- `CUDA0`, `CUDA1`, etc. - Local CUDA GPUs (future support)
+- `HIP0`, `HIP1`, etc. - Local HIP GPUs (future support)
+- `METAL0`, `METAL1`, etc. - Local Metal GPUs (future support)
+
+**Case-Insensitive**: Device names are case-insensitive (`vulkan0`, `VULKAN0`, `Vulkan0` all work).
+
+**Why Use Device Ordering**:
+- Put faster local GPUs first for initial layers
+- Balance network latency by interleaving devices
+- Optimize for specific workload patterns
+- Match tensor_split ratios to device capabilities
 
 ---
 
@@ -208,6 +242,44 @@ python koboldcpp.py --model Qwen3.5-397B-A17B-K_G_2.93.gguf \
 python koboldcpp.py --model model.gguf \
     --rpc 127.0.0.1:50054 --gpulayers 999
 ```
+
+### Example 6: Manual Device Ordering
+
+**Server** (192.168.1.101 with 2 GPUs):
+```bash
+./rpc-server-vulkan -H 192.168.1.101 --port 50054 \
+    --device VULKAN0,VULKAN1 -c
+```
+
+**Client** (2 local GPUs, reorder to put local first):
+```bash
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,VULKAN1,RPC0,RPC1 \
+    --tensor_split 30 30 20 20 \
+    --gpulayers 999
+```
+
+**Result**: Local GPUs handle 60% of layers (first layers), RPC handles 40% (later layers).
+
+### Example 7: Interleaved Device Ordering
+
+**Server** (192.168.1.101 with 2 GPUs):
+```bash
+./rpc-server-vulkan -H 192.168.1.101 --port 50054 \
+    --device VULKAN0,VULKAN1 -c
+```
+
+**Client** (interleave for balanced distribution):
+```bash
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device VULKAN0,RPC0,VULKAN1,RPC1 \
+    --tensor_split 25 25 25 25 \
+    --gpulayers 999
+```
+
+**Result**: Alternating layers between local and remote GPUs for balanced load.
 
 ---
 
@@ -407,7 +479,16 @@ A: Yes, RPC works with different GPU models and vendors.
 A: Use `--tensor_split` with values for each device (RPC + local).
 
 **Q: What's the device order for tensor_split?**  
-A: RPC devices first (in server order), then local GPUs (in enumeration order).
+A: By default: RPC devices first (in server order), then local GPUs (in enumeration order). Override with `--device`.
+
+**Q: Can I reorder devices?**  
+A: Yes! Use `--device VULKAN0,RPC0,VULKAN1,RPC1` to specify custom device order.
+
+**Q: What device names can I use?**  
+A: `VULKAN0`, `VULKAN1`, etc. (local), `RPC0`, `RPC1`, etc. (remote), `CUDA0`, `HIP0`, `METAL0` (future).
+
+**Q: Are device names case-sensitive?**  
+A: No, device names are case-insensitive (`vulkan0`, `VULKAN0`, `Vulkan0` all work).
 
 **Q: Why is tensor_split truncated?**  
 A: It shouldn't be anymore. Ensure you have the latest version with the fix.
@@ -416,16 +497,42 @@ A: It shouldn't be anymore. Ensure you have the latest version with the fix.
 
 ## Advanced Features
 
-### Device Enumeration Order
+### Default Device Enumeration Order
 
-Devices are ordered as:
-1. RPC Server 1, GPU 0
-2. RPC Server 1, GPU 1
-3. RPC Server 2, GPU 0
-4. RPC Server 2, GPU 1
-5. Local GPU 0 (Vulkan0)
-6. Local GPU 1 (Vulkan1)
+By default, devices are ordered as:
+1. RPC Server 1, GPU 0 (RPC0)
+2. RPC Server 1, GPU 1 (RPC1)
+3. RPC Server 2, GPU 0 (RPC2)
+4. RPC Server 2, GPU 1 (RPC3)
+5. Local GPU 0 (VULKAN0)
+6. Local GPU 1 (VULKAN1)
 ...
+
+### Manual Device Ordering
+
+Override default ordering with `--device` argument:
+
+```bash
+# Custom order: local first, then RPC
+--device VULKAN0,VULKAN1,RPC0,RPC1
+
+# Interleaved order
+--device VULKAN0,RPC0,VULKAN1,RPC1
+
+# RPC first, then local (default behavior)
+--device RPC0,RPC1,VULKAN0,VULKAN1
+```
+
+**Benefits**:
+- Optimize for network latency (put local GPUs first)
+- Balance layer distribution across device types
+- Match tensor_split ratios to device capabilities
+- Prioritize faster devices for critical layers
+
+**Device Naming Convention**:
+- Local devices: `VULKAN0`, `VULKAN1`, `CUDA0`, `HIP0`, `METAL0` (enumeration order)
+- RPC devices: `RPC0`, `RPC1`, `RPC2`, ... (connection order)
+- Case-insensitive: `vulkan0`, `VULKAN0`, `Vulkan0` all work
 
 ### Tensor Split Calculation
 
