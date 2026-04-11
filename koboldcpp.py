@@ -16100,34 +16100,18 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     print("==========")
 
     # Validate RPC tensor_split if both are provided
+    # Note: tensor_split should match total devices (RPC devices + local GPUs), not just RPC servers
     if args.userpc and args.tensor_split:
         rpc_count = len(args.userpc)
         ts_count = len(args.tensor_split)
-        if ts_count > 0 and ts_count < rpc_count:
-            print(
-                f"[RPC] WARNING: tensor_split has {ts_count} values but {rpc_count} RPC servers specified"
-            )
-            print(
-                f"[RPC] Extending tensor_split with equal distribution for remaining servers"
-            )
-            # Extend tensor_split with the last value or equal distribution
-            if ts_count == 1:
-                # If only one value, replicate it
-                args.tensor_split = args.tensor_split * rpc_count
-            else:
-                # Extend with the last value
-                last_val = args.tensor_split[-1]
-                while len(args.tensor_split) < rpc_count:
-                    args.tensor_split.append(last_val)
-        elif ts_count > rpc_count:
-            print(
-                f"[RPC] WARNING: tensor_split has {ts_count} values but only {rpc_count} RPC servers"
-            )
-            print(f"[RPC] Truncating tensor_split to match RPC server count")
-            args.tensor_split = args.tensor_split[:rpc_count]
+        # We can't know exact device count yet (RPC servers report devices at runtime)
+        # So we just validate that tensor_split has reasonable values
+        # tensor_split should have at least 1 value and ideally match total GPU count
+        if ts_count == 0:
+            print(f"[RPC] WARNING: tensor_split is empty")
         else:
             print(
-                f"[RPC] Manual layer distribution: {rpc_count} servers with split ratios: {args.tensor_split}"
+                f"[RPC] Tensor split configured across {ts_count} devices with ratios: {args.tensor_split}"
             )
 
     # handle loading text model

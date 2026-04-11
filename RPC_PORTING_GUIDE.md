@@ -1,9 +1,10 @@
 # RPC Porting Guide - llama.cpp to koboldcpp
 
 **Version**: 1.111.2  
-**Date**: 2026-04-09  
+**Date**: 2026-04-11  
 **Purpose**: Complete step-by-step guide to port RPC from llama.cpp to koboldcpp  
 **Target Audience**: Developers, LLMs, or anyone needing to replicate the integration  
+**Status**: ✅ Complete - All Features Working
 
 ---
 
@@ -15,7 +16,9 @@ This guide provides **complete, reproducible instructions** for integrating RPC 
 ✅ RPC Client that connects to servers  
 ✅ Multi-server support  
 ✅ GPU offloading to RPC servers  
-⚠️ Hybrid mode (local + RPC) - Not yet implemented  
+✅ **Hybrid mode** (local GPUs + RPC servers)  
+✅ **Manual tensor_split** for layer distribution control  
+✅ **Case-insensitive** device matching  
 
 **Time Required**: 2-4 hours  
 **Difficulty**: Intermediate (requires C++ and build system knowledge)  
@@ -66,7 +69,7 @@ cmake --version
 
 ```bash
 # Navigate to koboldcpp directory
-cd koboldcpp-1.111.1
+cd koboldcpp-1.111.2
 
 # Copy RPC header from llama.cpp
 cp ../llama.cpp/ggml/include/ggml-rpc.h ggml/include/
@@ -118,7 +121,7 @@ grep "ggml_backend_rpc_add_server" ggml/src/ggml-rpc/ggml-rpc.cpp
 ### Step 1.5: File Structure After Integration
 
 ```
-koboldcpp-1.111.1/
+koboldcpp-1.111.2/
 ├── ggml/
 │   ├── include/
 │   │   └── ggml-rpc.h          # ← New file
@@ -137,7 +140,7 @@ koboldcpp-1.111.1/
 
 ### Step 2.1: Add RPC Build Variable to Makefile
 
-**File**: `koboldcpp-1.111.1/Makefile`
+**File**: `koboldcpp-1.111.2/Makefile`
 
 **Location**: After line ~104 (after other build variables like LLAMA_VULKAN)
 
@@ -163,7 +166,7 @@ grep -A 3 "ifdef LLAMA_RPC" Makefile
 
 ### Step 2.2: Add RPC Library Detection to Python Wrapper
 
-**File**: `koboldcpp-1.111.1/koboldcpp.py`
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
 
 **Location**: After line ~952 (in library detection section)
 
@@ -189,7 +192,7 @@ lib_option_pairs = [
 
 ### Step 2.3: Add RPC Library Loading Logic
 
-**File**: `koboldcpp-1.111.1/koboldcpp.py`
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
 
 **Location**: In `init_library()` function, after line ~1017 (after vulkan_info check)
 
@@ -226,7 +229,7 @@ def init_library():
 
 ### Step 2.4: Add RPC Object File Build Rule
 
-**File**: `koboldcpp-1.111.1/Makefile`
+**File**: `koboldcpp-1.111.2/Makefile`
 
 **Location**: After line ~680 (after ggml-vulkan rules)
 
@@ -246,16 +249,27 @@ grep -A 2 "^#rpc" Makefile
 # 	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
 ```
 
-### Step 2.5: Add RPC Client Build Target
+### Step 2.5: Add RPC Client Build Target (Hybrid Mode)
 
-**File**: `koboldcpp-1.111.1/Makefile`
+**File**: `koboldcpp-1.111.2/Makefile`
 
 **Location**: After line ~927 (after other koboldcpp_* targets)
 
 **Add**:
 ```makefile
-# RPC client build target
+# RPC client build target (Hybrid: RPC + Vulkan)
 ifdef RPC_BUILD
+ifdef VULKAN_BUILD
+# Hybrid build with both RPC and Vulkan
+koboldcpp_rpc: ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
+    ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-rpc.o \
+    ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_vulkan.o \
+    tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o \
+    ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o \
+    $(OBJS_FULL) $(OBJS)
+	$(RPC_BUILD)
+else
+# RPC only build (fallback)
 koboldcpp_rpc: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
     ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter.o ggml-rpc.o \
     sdcpp_default.o whispercpp_default.o tts_default.o music_default.o \
@@ -263,17 +277,19 @@ koboldcpp_rpc: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.
     ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o \
     $(OBJS_FULL) $(OBJS)
 	$(RPC_BUILD)
+endif
 else
+# RPC_BUILD not defined
 koboldcpp_rpc:
 	$(DONOTHING)
 endif
 ```
 
-**Important**: This builds the RPC client library WITHOUT Vulkan backend to avoid shader dependency issues. Hybrid mode requires additional development.
+**Important**: This builds the RPC client WITH Vulkan backend for hybrid mode support.
 
 ### Step 2.6: Add RPC Server Build Target
 
-**File**: `koboldcpp-1.111.1/Makefile`
+**File**: `koboldcpp-1.111.2/Makefile`
 
 **Location**: After line ~953 (after tool build targets)
 
@@ -304,21 +320,32 @@ rpc-server: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
 
 ### Step 2.7: Add RPC Build Variable Definition
 
-**File**: `koboldcpp-1.111.1/Makefile`
+**File**: `koboldcpp-1.111.2/Makefile`
 
 **Location**: After line ~446 (after other *_BUILD definitions)
 
 **Add**:
 ```makefile
+ifdef LLAMA_VULKAN
 ifdef LLAMA_RPC
-RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.dll $(LDFLAGS)
+# Hybrid RPC + Vulkan build - needs both libraries
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
+else
+VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
+endif
+endif
+ifdef LLAMA_RPC
+ifndef LLAMA_VULKAN
+# RPC only build
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.so $(LDFLAGS)
+endif
 endif
 ```
 
-And for Linux (after line ~467):
+And for Windows (after line ~436):
 ```makefile
 ifdef LLAMA_RPC
-RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.so $(LDFLAGS)
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.dll $(LDFLAGS)
 endif
 ```
 
@@ -328,14 +355,14 @@ endif
 
 ### Step 3.1: Add RPC Argument Parser
 
-**File**: `koboldcpp-1.111.1/koboldcpp.py`
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
 
 **Location**: After line ~10698 (after --usevulkan argument)
 
 **Add**:
 ```python
 compatgroup.add_argument("--userpc", "--rpc", 
-    help="Use RPC for remote model inference. Specify one or more RPC server endpoints (e.g. --rpc 192.168.1.100:50052). Can be used multiple times for multiple servers.", 
+    help="Use RPC for remote model inference. Specify one or more RPC server endpoints (e.g. --rpc 192.168.1.100:50054). Can be used multiple times for multiple servers.", 
     metavar=('[endpoint]'), 
     nargs='+', 
     type=str, 
@@ -353,7 +380,7 @@ compatgroup.add_argument("--usevulkan",
 
 # Add this section
 compatgroup.add_argument("--userpc", "--rpc", 
-    help="Use RPC for remote model inference. Specify one or more RPC server endpoints (e.g. --rpc 192.168.1.100:50052). Can be used multiple times for multiple servers.", 
+    help="Use RPC for remote model inference. Specify one or more RPC server endpoints (e.g. --rpc 192.168.1.100:50054). Can be used multiple times for multiple servers.", 
     metavar=('[endpoint]'), 
     nargs='+', 
     type=str, 
@@ -366,7 +393,7 @@ compatgroup.add_argument("--usecpu",
 
 ### Step 3.2: Add RPC Field to Structure
 
-**File**: `koboldcpp-1.111.1/koboldcpp.py`
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
 
 **Location**: After line ~262 (in load_model_inputs structure, after vulkan_info)
 
@@ -386,7 +413,7 @@ class load_model_inputs(ctypes.Structure):
 
 ### Step 3.3: Populate RPC Endpoints
 
-**File**: `koboldcpp-1.111.1/koboldcpp.py`
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
 
 **Location**: After line ~1163 (after vulkan_info population)
 
@@ -410,7 +437,7 @@ else:
 
 ### Step 3.4: Enable Auto Offload for RPC
 
-**File**: `koboldcpp-1.111.1/koboldcpp.py`
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
 
 **Location**: After line ~2390 (after inputs.gpulayers = args.gpulayers)
 
@@ -424,7 +451,7 @@ if args.userpc and (args.gpulayers == 0 or args.gpulayers == -1):
 
 ### Step 3.5: Fix Tuple Unpacking
 
-**File**: `koboldcpp-1.111.1/koboldcpp.py`
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
 
 **Location**: After line ~966 (in lib_option_pairs unpacking)
 
@@ -463,28 +490,112 @@ if args.userpc and (args.gpulayers == 0 or args.gpulayers == -1):
 )
 ```
 
----
+### Step 3.6: Fix Tensor Split Validation
 
-## Phase 4: Critical Fixes
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
 
-### ⚠️ HURDLE #1: Static Backend Registration Failure
+**Location**: After line ~16102 (in RPC tensor_split validation)
 
-**Problem**: RPC server fails with "Failed to find RPC backend"
-
-**Root Cause**: `ggml_backend_load_all()` only loads dynamic backends (.so files), not statically linked ones.
-
-**Symptoms**:
-```bash
-./rpc-server-vulkan -H 0.0.0.0 --device VULKAN0 -p 50052 -c
-# Output:
-Starting RPC server v3.6.1
-  endpoint       : 0.0.0.0:50052
-Failed to find RPC backend
+**Change FROM**:
+```python
+# Validate RPC tensor_split if both are provided
+if args.userpc and args.tensor_split:
+    rpc_count = len(args.userpc)
+    ts_count = len(args.tensor_split)
+    if ts_count > 0 and ts_count < rpc_count:
+        print(
+            f"[RPC] WARNING: tensor_split has {ts_count} values but {rpc_count} RPC servers specified"
+        )
+        # Extend tensor_split...
+    elif ts_count > rpc_count:
+        print(
+            f"[RPC] WARNING: tensor_split has {ts_count} values but only {rpc_count} RPC servers"
+        )
+        print(f"[RPC] Truncating tensor_split to match RPC server count")
+        args.tensor_split = args.tensor_split[:rpc_count]
 ```
 
-**Solution**: Call `ggml_backend_rpc_start_server()` directly instead of looking it up dynamically.
+**Change TO**:
+```python
+# Validate RPC tensor_split if both are provided
+# Note: tensor_split should match total devices (RPC devices + local GPUs), not just RPC servers
+if args.userpc and args.tensor_split:
+    rpc_count = len(args.userpc)
+    ts_count = len(args.tensor_split)
+    # We can't know exact device count yet (RPC servers report devices at runtime)
+    # So we just validate that tensor_split has reasonable values
+    # tensor_split should have at least 1 value and ideally match total GPU count
+    if ts_count == 0:
+        print(
+            f"[RPC] WARNING: tensor_split is empty"
+        )
+    else:
+        print(
+            f"[RPC] Tensor split configured across {ts_count} devices with ratios: {args.tensor_split}"
+        )
+```
 
-**Implementation**:
+---
+
+## Phase 4: C++ Code Modifications
+
+### Step 4.1: Fix Device Enumeration (Case-Insensitive)
+
+**File**: `koboldcpp-1.111.2/gpttype_adapter.cpp`
+
+**Location**: After line ~2479 (in device enumeration loop)
+
+**Add include** at top of file (after line ~23):
+```cpp
+#include <algorithm>
+```
+
+**Change FROM**:
+```cpp
+// Add local GPU devices (not RPC, not CPU)
+if(reg_name.find("RPC") == std::string::npos && 
+   reg_name.find("CPU") == std::string::npos &&
+   (reg_name.find("VULKAN") != std::string::npos || 
+    reg_name.find("RADV") != std::string::npos ||
+    reg_name.find("CUDA") != std::string::npos ||
+    reg_name.find("HIP") != std::string::npos)) {
+    printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+    devices_override.push_back(dev);
+}
+```
+
+**Change TO**:
+```cpp
+// Add local GPU devices (not RPC, not CPU) - case insensitive check
+std::string reg_name_upper = reg_name;
+std::transform(reg_name_upper.begin(), reg_name_upper.end(), reg_name_upper.begin(), ::toupper);
+
+if(reg_name_upper.find("RPC") == std::string::npos && 
+   reg_name_upper.find("CPU") == std::string::npos &&
+   (reg_name_upper.find("VULKAN") != std::string::npos || 
+    reg_name_upper.find("RADV") != std::string::npos ||
+    reg_name_upper.find("CUDA") != std::string::npos ||
+    reg_name_upper.find("HIP") != std::string::npos ||
+    reg_name_upper.find("METAL") != std::string::npos)) {
+    printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+    devices_override.push_back(dev);
+}
+```
+
+### Step 4.2: Add Debug Output (Optional)
+
+**File**: `koboldcpp-1.111.2/gpttype_adapter.cpp`
+
+**Location**: After line ~2472 (in device enumeration loop)
+
+**Add**:
+```cpp
+printf("[RPC] Checking device %zu: %s (registry: %s)\n", i, dev_name.c_str(), reg_name.c_str());
+```
+
+This helps debug device detection issues.
+
+### Step 4.3: Fix RPC Server Direct Call
 
 **File**: `tools/rpc-server.cpp`
 
@@ -534,6 +645,27 @@ int main(int argc, char * argv[]) {
 - Statically linked function is available at compile time
 - No dependency on dynamic backend loading mechanism
 
+---
+
+## Phase 5: Critical Fixes
+
+### ⚠️ HURDLE #1: Static Backend Registration Failure
+
+**Problem**: RPC server fails with "Failed to find RPC backend"
+
+**Root Cause**: `ggml_backend_load_all()` only loads dynamic backends (.so files), not statically linked ones.
+
+**Symptoms**:
+```bash
+./rpc-server-vulkan -H 0.0.0.0 --device VULKAN0 -p 50052 -c
+# Output:
+Starting RPC server v3.6.1
+  endpoint       : 0.0.0.0:50052
+Failed to find RPC backend
+```
+
+**Solution**: Call `ggml_backend_rpc_start_server()` directly instead of looking it up dynamically (see Step 4.3).
+
 **Verification**:
 ```bash
 ./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c
@@ -572,34 +704,41 @@ cp ../llama.cpp/build-*/ggml/src/ggml-vulkan/ggml-vulkan-shaders.hpp ggml/src/
 
 **Problem**: RPC client can't detect local GPUs without Vulkan backend
 
-**Root Cause**: RPC client library needs Vulkan backend to enumerate local GPUs, but including Vulkan requires shader data and complex dependencies
+**Root Cause**: RPC client library needs Vulkan backend to enumerate local GPUs
 
-**Current Solution**: Build RPC client WITHOUT Vulkan backend
-
-**File**: `Makefile`
-
-**Location**: koboldcpp_rpc build target
+**Solution**: Build RPC client WITH Vulkan backend (see Step 2.5)
 
 **Implementation**:
 ```makefile
-# RPC client WITHOUT Vulkan backend (works reliably)
-koboldcpp_rpc: ggml.o ... ggml-backend_default.o ggml-backend-reg_default.o ...
+# RPC client WITH Vulkan backend (for hybrid mode)
+koboldcpp_rpc: ggml_v4_vulkan.o ... ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ...
 	$(RPC_BUILD)
-
-# NOT this (requires shader data):
-# koboldcpp_rpc: ggml.o ... ggml-backend_vulkan.o ggml-vulkan.o ...
 ```
 
-**Future Work**: Hybrid mode requires additional development to include Vulkan backend in RPC client.
+**Note**: This requires Vulkan shaders to be generated first.
+
+### ⚠️ HURDLE #4: Tensor Split Truncation
+
+**Problem**: tensor_split values truncated to match RPC server count instead of total devices
+
+**Root Cause**: Validation code checked RPC servers instead of total devices
+
+**Solution**: Remove truncation logic (see Step 3.6)
+
+**Implementation**:
+```python
+# Accept tensor_split values for all devices (RPC + local GPUs)
+print(f"[RPC] Tensor split configured across {ts_count} devices with ratios: {args.tensor_split}")
+```
 
 ---
 
-## Phase 5: Build and Test
+## Phase 6: Build and Test
 
-### Step 5.1: Generate Vulkan Shaders
+### Step 6.1: Generate Vulkan Shaders
 
 ```bash
-cd koboldcpp-1.111.1
+cd koboldcpp-1.111.2
 make vulkan-shaders-gen
 ```
 
@@ -610,28 +749,29 @@ ggml-vulkan-shaders.hpp created
 ggml-vulkan-shaders.cpp created
 ```
 
-### Step 5.2: Build RPC Client Library
+### Step 6.2: Build RPC Client Library (Hybrid Mode)
 
 ```bash
-make LLAMA_RPC=1 koboldcpp_rpc
+make clean
+make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc
 ```
 
 **Expected Output**:
 ```
-g++ ... -DGGML_USE_RPC ... -shared -o koboldcpp_rpc.so -ldl
+g++ ... -DGGML_USE_RPC -DGGML_USE_VULKAN ... -lvulkan -shared -o koboldcpp_rpc.so -ldl
 ```
 
 **Verify Build**:
 ```bash
 ls -lh koboldcpp_rpc.so
-# Expected: -rwxr-xr-x 1 user user 12M Apr  9 12:00 koboldcpp_rpc.so
+# Expected: -rwxr-xr-x 1 user user 67M Apr  11 12:00 koboldcpp_rpc.so
 
 # Check symbols
 nm -D koboldcpp_rpc.so | grep ggml_backend_rpc
 # Should show RPC backend symbols
 ```
 
-### Step 5.3: Build RPC Server
+### Step 6.3: Build RPC Server
 
 ```bash
 make LLAMA_RPC=1 LLAMA_VULKAN=1 rpc-server-vulkan
@@ -645,10 +785,10 @@ g++ ... -DGGML_USE_RPC -DGGML_USE_VULKAN ... -o rpc-server-vulkan -lvulkan
 **Verify Build**:
 ```bash
 ls -lh rpc-server-vulkan
-# Expected: -rwxr-xr-x 1 user user 68M Apr  9 12:00 rpc-server-vulkan
+# Expected: -rwxr-xr-x 1 user user 68M Apr  11 12:00 rpc-server-vulkan
 ```
 
-### Step 5.4: Test RPC Server
+### Step 6.4: Test RPC Server
 
 ```bash
 ./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c
@@ -673,7 +813,7 @@ ss -tlnp | grep 50052
 # LISTEN 0  1  127.0.0.1:50052  0.0.0.0:*  users:(("rpc-server-vulkan",pid=1234,fd=14))
 ```
 
-### Step 5.5: Test RPC Client
+### Step 6.5: Test RPC Client (Hybrid Mode)
 
 **Terminal 2**:
 ```bash
@@ -684,19 +824,28 @@ python koboldcpp.py --model model.gguf --rpc 127.0.0.1:50052 --gpulayers 999
 ```
 Initializing dynamic library: koboldcpp_rpc.so
 Loading Text Model: model.gguf
+ggml_vulkan: Found X Vulkan devices:
+[RPC] Connecting to RPC server(s): 127.0.0.1:50052
 [RPC] Server 127.0.0.1:50052 has 1 devices
 [RPC] Found RPC device 0: RPC0
+[RPC] Enumerating local GPU devices to use alongside RPC...
+[RPC] Found local GPU device: Vulkan0 (registry: Vulkan)
+[RPC] Total devices for offloading: 2 (RPC + local GPUs)
 llama_model_load: offloading 999 layers to GPU
 ```
 
-### Step 5.6: Test End-to-End
+### Step 6.6: Test End-to-End with Tensor Split
 
 ```bash
 # Terminal 1: Start server
-./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c &
+./rpc-server-vulkan -H 192.168.1.101 --device VULKAN0,VULKAN1 -p 50054 -c &
 
-# Terminal 2: Start client
-python koboldcpp.py --model model.gguf --rpc 127.0.0.1:50052 --gpulayers 999 --port 5001
+# Terminal 2: Start client with tensor split
+python koboldcpp.py --model model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --tensor_split 10 10 40 40 \
+    --gpulayers 999 \
+    --port 5001
 
 # Terminal 3: Test inference
 curl http://localhost:5001/api/extra/generate \
@@ -704,9 +853,18 @@ curl http://localhost:5001/api/extra/generate \
     -d '{"prompt": "Hello", "max_length": 20}'
 ```
 
+**Expected Output**:
+```
+[RPC] Tensor split configured across 4 devices with ratios: [10.0, 10.0, 40.0, 40.0]
+load_tensors: RPC0[...] model buffer size = XXX MiB
+load_tensors: RPC1[...] model buffer size = XXX MiB
+load_tensors: Vulkan0 model buffer size = XXX MiB
+load_tensors: Vulkan1 model buffer size = XXX MiB
+```
+
 ---
 
-## Phase 6: Verification Checklist
+## Phase 7: Verification Checklist
 
 ### File Integration
 - [ ] `ggml/include/ggml-rpc.h` exists
@@ -720,7 +878,7 @@ curl http://localhost:5001/api/extra/generate \
 - [ ] RPC added to `lib_option_pairs`
 - [ ] RPC library loading logic added
 - [ ] `ggml-rpc.o` compilation rule added
-- [ ] `koboldcpp_rpc` build target added
+- [ ] `koboldcpp_rpc` build target added (with hybrid mode)
 - [ ] `rpc-server-vulkan` build target added
 - [ ] `RPC_BUILD` variable added
 
@@ -730,17 +888,26 @@ curl http://localhost:5001/api/extra/generate \
 - [ ] RPC endpoints populated
 - [ ] Auto offload enabled for RPC
 - [ ] Tuple unpacking fixed
+- [ ] Tensor split validation fixed
+
+### C++ Code
+- [ ] Case-insensitive device matching added
+- [ ] Direct RPC server call implemented
+- [ ] Debug output added (optional)
 
 ### Critical Fixes
 - [ ] Direct function call implemented (Hurdle #1)
 - [ ] Vulkan shaders generated (Hurdle #2)
-- [ ] RPC client built without Vulkan (Hurdle #3)
+- [ ] Hybrid mode enabled (Hurdle #3)
+- [ ] Tensor split truncation removed (Hurdle #4)
 
 ### Testing
 - [ ] RPC server starts successfully
 - [ ] RPC server listens on port
 - [ ] RPC client connects
-- [ ] Model loads on RPC devices
+- [ ] Local GPUs detected (hybrid mode)
+- [ ] Model loads across all devices
+- [ ] Tensor split works correctly
 - [ ] Inference works
 - [ ] Multiple servers work together
 
@@ -769,6 +936,12 @@ curl http://localhost:5001/api/extra/generate \
 ### Error: "No RPC devices found"
 **Solution**: Verify server shows devices, check network connectivity
 
+### Error: "tensor_split truncated"
+**Solution**: Update tensor_split validation code (see Hurdle #4)
+
+### Error: "Local GPUs not detected"
+**Solution**: Ensure RPC client built WITH Vulkan backend (hybrid mode)
+
 ---
 
 ## Performance Optimization
@@ -776,33 +949,27 @@ curl http://localhost:5001/api/extra/generate \
 ### Build Optimization
 ```bash
 # Use all CPU cores for faster build
-make -j$(nproc) LLAMA_VULKAN=1 rpc-server-vulkan
+make -j$(nproc) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan
 
 # Clean build (recommended after changes)
-make clean && make LLAMA_VULKAN=1 rpc-server-vulkan
+make clean && make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan
 ```
 
 ### Runtime Optimization
 ```bash
 # Server: Use multiple GPUs
-./rpc-server-vulkan -H 0.0.0.0 --device VULKAN0,VULKAN1,VULKAN2 -p 50052 -c
+./rpc-server-vulkan -H 0.0.0.0 --device VULKAN0,VULKAN1,VULKAN2 -p 50054 -c
 
-# Client: Multiple servers
+# Client: Multiple servers with tensor split
 python koboldcpp.py --model model.gguf \
-    --rpc 192.168.1.101:50052,192.168.1.16:50052 \
+    --rpc 192.168.1.101:50054,192.168.1.16:50054 \
+    --tensor_split 10 10 10 10 30 30 \
     --gpulayers 999
 ```
 
 ---
 
 ## Known Limitations
-
-### Hybrid Mode (Local + RPC)
-**Status**: Not implemented yet
-
-**Issue**: RPC client needs Vulkan backend to detect local GPUs
-
-**Workaround**: Use RPC-only mode which works perfectly
 
 ### Security
 ⚠️ **RPC has no authentication or encryption**
@@ -815,22 +982,27 @@ Performance depends on network quality:
 - Fast WiFi: Acceptable (10-20 tokens/sec)
 - Internet: Not recommended (< 5 tokens/sec)
 
+### Tensor Split
+- Manual configuration required
+- No automatic optimization based on device capabilities
+- Device order: RPC devices first, then local GPUs
+
 ---
 
 ## Future Improvements
 
 ### Potential Enhancements
-1. **Hybrid Mode**: Automatic local GPU + RPC combination
+1. **Automatic Tensor Split**: Based on device VRAM and performance
 2. **SSH Tunneling**: Built-in secure tunnel support
 3. **Load Balancing**: Automatic distribution across servers
 4. **Authentication**: Token-based access control
 5. **Encryption**: TLS/SSL for RPC traffic
+6. **Device Ordering**: Optimize based on bandwidth/latency
 
 ### Known Technical Debt
-1. RPC client lacks Vulkan backend (requires shader integration)
-2. No device ordering optimization
-3. No memory-aware distribution
-4. No hot-swapping support
+1. No memory-aware distribution
+2. No hot-swapping support
+3. No device performance profiling
 
 ---
 
@@ -843,7 +1015,6 @@ Performance depends on network quality:
 ### Documentation
 - RPC Manual: `RPC_MANUAL.md`
 - Quick Start: `RPC_QUICKSTART.md`
-- Hybrid Status: `RPC_HYBRID_STATUS.md`
 
 ### Tools
 - Vulkan SDK: https://vulkan.lunarg.com/
@@ -854,14 +1025,16 @@ Performance depends on network quality:
 
 ## Version History
 
-- **v1.111.2** (2026-04-09): Complete porting guide with all steps
+- **v1.111.2** (2026-04-11): Complete porting guide with all features
   - Documents full integration process
   - Includes all hurdles and solutions
   - Provides verification checklists
-  - Reflects current working state
+  - Reflects current working state with hybrid mode
+  - Includes tensor_split fixes
+  - Case-insensitive device matching
 
 ---
 
-#**License**: MIT  
-#**Authors**: KoboldCPP Team  
-#**Contact**: https://github.com/LostRuins/koboldcpp/issues
+**License**: MIT  
+**Authors**: KoboldCPP Team  
+**Contact**: https://github.com/LostRuins/koboldcpp/issues
