@@ -76,8 +76,20 @@ extra_images_max = 4  # for kontext/qwen img
 # global vars
 KcppVersion = "1.111.2"
 showdebug = True
-kcpp_instance = None # global running instance
-global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_config_target":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "current_override":"", "swapReqType": None, "autoswapmode": False}
+kcpp_instance = None  # global running instance
+global_memory = {
+    "tunnel_url": "",
+    "restart_target": "",
+    "input_to_exit": False,
+    "load_complete": False,
+    "restart_override_config_target": "",
+    "last_active_timestamp": datetime.now(),
+    "triggered_sleeping": False,
+    "current_model": "initial_model",
+    "current_override": "",
+    "swapReqType": None,
+    "autoswapmode": False,
+}
 using_gui_launcher = False
 
 handle = None
@@ -242,12 +254,12 @@ class load_model_inputs(ctypes.Structure):
         ("visionmaxres", ctypes.c_int),
         ("use_mmap", ctypes.c_bool),
         ("use_mlock", ctypes.c_bool),
-        ("rpc_endpoints", ctypes.c_char_p),
         ("use_smartcontext", ctypes.c_bool),
         ("use_contextshift", ctypes.c_bool),
         ("use_fastforward", ctypes.c_bool),
         ("kcpp_main_gpu", ctypes.c_int),
         ("vulkan_info", ctypes.c_char_p),
+        ("rpc_endpoints", ctypes.c_char_p),
         ("batchsize", ctypes.c_int),
         ("autofit", ctypes.c_bool),
         ("autofit_tax_mb", ctypes.c_int),
@@ -271,7 +283,6 @@ class load_model_inputs(ctypes.Structure):
         ("smartcache", ctypes.c_bool),
         ("smartcacheslots", ctypes.c_int),
         ("pipelineparallel", ctypes.c_bool),
-        ("devices_override", ctypes.c_char_p),
         ("lora_multiplier", ctypes.c_float),
         ("devices_override", ctypes.c_char_p),
         ("quiet", ctypes.c_bool),
@@ -932,6 +943,12 @@ lib_failsafe = pick_existant_file("koboldcpp_failsafe.dll", "koboldcpp_failsafe.
 lib_noavx2 = pick_existant_file("koboldcpp_noavx2.dll", "koboldcpp_noavx2.so")
 lib_vulkan_failsafe = pick_existant_file(
     "koboldcpp_vulkan_failsafe.dll", "koboldcpp_vulkan_failsafe.so"
+)
+lib_cublas = pick_existant_file("koboldcpp_cublas.dll", "koboldcpp_cublas.so")
+lib_hipblas = pick_existant_file("koboldcpp_hipblas.dll", "koboldcpp_hipblas.so")
+lib_vulkan = pick_existant_file("koboldcpp_vulkan.dll", "koboldcpp_vulkan.so")
+lib_vulkan_noavx2 = pick_existant_file(
+    "koboldcpp_vulkan_noavx2.dll", "koboldcpp_vulkan_noavx2.so"
 )
 lib_rpc = pick_existant_file("koboldcpp_rpc.dll", "koboldcpp_rpc.so")
 libname = ""
@@ -16633,12 +16650,14 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
         if args.hordekey and args.hordekey != "":
             if args.hordeworkername and args.hordeworkername != "":
-                horde_thread = threading.Thread(
+                print(
+                    f"Starting Horde worker: {args.hordeworkername} (Model: {args.hordemodelname or friendlymodelname})"
+                )
+                threading.Thread(
                     target=run_horde_worker,
                     args=(args, args.hordekey, args.hordeworkername),
-                )
-                horde_thread.daemon = True
-                horde_thread.start()
+                    daemon=True,
+                ).start()
             else:
                 print(
                     "Horde worker could not start. You need to specify a horde worker name with --hordeworkername"
@@ -16953,7 +16972,7 @@ if __name__ == "__main__":
         "--tensorsplit",
         "--tensor-split",
         "-ts",
-        help="For CUDA and Vulkan only, ratio to split tensors across multiple GPUs, space-separated list of proportions, e.g. 7 3",
+        help="For RPC, CUDA and Vulkan: ratio to split tensors across multiple GPUs/servers. Space-separated list of proportions (e.g., 20 40 20 20 for 4 RPC servers). Controls manual layer distribution.",
         metavar=("[Ratios]"),
         type=float,
         nargs="+",
