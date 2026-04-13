@@ -9770,7 +9770,7 @@ def main(launch_args, default_args):
         basecfg_path = os.path.abspath(args.baseconfig)
         if os.path.exists(basecfg_path):
             print(f"Using base config {basecfg_path}")
-            global_memory["override_config"] = str(args.config)
+            global_memory["current_override"] = str(args.config)
             load_config_cli(basecfg_path)
         else:
             print(f"Invalid base config path {basecfg_path}. File doesn't exist!")
