@@ -9992,8 +9992,14 @@ def main(launch_args, default_args):
                                     reload_new_config(targetfilepath2,defaultargs)
                                     args.model_param = targetfilepath
                                 elif targetfilepath and targetfilepath2 and restart_override_config_target!="":
-                                    reload_new_config(targetfilepath2,defaultargs)
-                                    reload_new_config(targetfilepath,vars(args),True)
+                                    # it makes more sense to have a base config,
+                                    # then apply the override config on top of that base config
+                                    # where the override config's values OVERRIDE the base config's values
+                                    # in other words: base = primary, override = secondary (in koboldlite)
+                                    # so i swapped the order around because otherwise it doesnt make any sense!
+                                    # ~ Rose22
+                                    reload_new_config(targetfilepath,defaultargs,True)
+                                    reload_new_config(targetfilepath2,vars(args),True)
                                 else:
                                     reload_new_config(targetfilepath,defaultargs)
                                 global_memory["autoswapmode"] = args.autoswapmode
