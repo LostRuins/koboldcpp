@@ -4282,14 +4282,17 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                     pass
 
             was_auto_unloaded = (global_memory["triggered_sleeping"] and global_memory["current_model"]=="unload_model")
+
             if (model_name and model_name != global_memory["current_model"]) or was_auto_unloaded:
                 with proxy_reload_lock:
                     whitelist = get_current_admindir_list() # see if its an allowed swap
                     if was_auto_unloaded and not model_name:
                         model_name = "initial_model"
+
                     if model_name != global_memory["current_model"] and (model_name in whitelist):
                         global_memory["last_active_timestamp"] = datetime.now()
                         global_memory["triggered_sleeping"] = False
+
                         reqbody = json.dumps({"filename":model_name})
                         reqheaders = {
                             'Content-Type': 'application/json',
@@ -9342,7 +9345,7 @@ def reload_new_config(filename,defaultargs,overwrite_blank=False): #for changing
             print(f"Reload New Config Failed: {e}")
 
 def load_config_cli(filename):
-    print("Loading .kcpps configuration file...")
+    print(f"Loading configuration file {filename}...")
     with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
         config = json.load(f)
         config = convert_invalid_args(config)
@@ -9754,6 +9757,15 @@ def main(launch_args, default_args):
         analyze_gguf_model_wrapper(args.analyze)
         return
 
+    # initial base config loading ~Rose22
+    if args.baseconfig:
+        basecfg_path = os.path.abspath(args.baseconfig)
+        if os.path.exists(basecfg_path):
+            print(f"Using base config {basecfg_path}")
+            load_config_cli(basecfg_path)
+        else:
+            print(f"Invalid base config path {basecfg_path}. File doesn't exist!")
+
     if args.config and len(args.config)==1: #handle initial config loading for launch
         cfgname = args.config[0]
         if isinstance(cfgname, str):
@@ -9909,15 +9921,32 @@ def main(launch_args, default_args):
                                 restart_target = "unload_model"
                                 global_memory["triggered_sleeping"] = True
                     if restart_target!="":
+                        # new logic: if --baseconfig is set, load the admin/routermode config as an override config
+                        # otherwise, replace the config as before
+                        # ~ Rose22
+                        if not restart_override_config_target and args.baseconfig:
+                            # set the override config to the requested config
+                            restart_override_config_target = str(restart_target) # copy
+
+                            # and the main config to the specified base config
+                            basecfg_relative_path = list(os.path.split(args.baseconfig)[1:])
+                            basecfg_path = os.path.join(*basecfg_relative_path)
+                            restart_target = basecfg_path
+
+                            print(f"Using base config {basecfg_path}")
+
                         overridetxt = ("" if not restart_override_config_target else f" with override config {restart_override_config_target}")
                         print(f"Reloading new model/config: {restart_target}{overridetxt}")
+
                         global_memory["restart_target"] = ""
                         global_memory["restart_override_config_target"] = ""
                         time.sleep(0.5) #sleep for 0.5s then restart
                         if args.admin and args.admindir:
                             dirpath = os.path.abspath(args.admindir)
                             targetfilepath = os.path.abspath(os.path.join(dirpath, restart_target))
+
                             targetfilepath2 = os.path.abspath(os.path.join(dirpath, restart_override_config_target)) if restart_override_config_target else ""
+
                             if os.path.commonpath([dirpath, targetfilepath]) != dirpath: # Enforce admindir jail
                                 print("Security: Invalid restart target path.")
                                 continue
@@ -9925,7 +9954,14 @@ def main(launch_args, default_args):
                                 print("Security: Invalid override config path.")
                                 continue
                             defaultargs = vars(default_args)
-                            if (os.path.exists(targetfilepath) or restart_target=="unload_model" or restart_target=="initial_model") and (restart_override_config_target=="" or os.path.exists(targetfilepath2)):
+
+                            if args.baseconfig:
+                                # copy the baseconfig argument into the default args
+                                # necessary, otherwise it won't know about the base config anymore when
+                                # doing model reloading checks!
+                                defaultargs["baseconfig"] = args.baseconfig
+
+                            if (os.path.exists(targetfilepath) or restart_target=="unload_model" or restart_target=="initial_model") and (restart_override_config_target=="" or os.path.exists(targetfilepath2) or args.baseconfig):
                                 print("Terminating old process...")
                                 global_memory["load_complete"] = False
                                 kcpp_instance.terminate()
@@ -11221,6 +11257,7 @@ if __name__ == '__main__':
     admingroup.add_argument("--adminunloadtimeout", help="Set an idle timeout in seconds after which KoboldCpp will automatically unload the current model.", type=int, default=0)
     admingroup.add_argument("--routermode", help="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.", action='store_true')
     admingroup.add_argument("--autoswapmode", help="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.", action='store_true')
+    admingroup.add_argument("--baseconfig", help="Specify a base config to use. This allows you to have a config with defaults, and then load another config on top that overrides only the values defined in that second config. Will also automatically apply to router mode so that when swapping between configs, the base config is always applied first.", default=""  )
 
     deprecatedgroup = parser.add_argument_group('Deprecated Commands, DO NOT USE!')
     deprecatedgroup.add_argument("--hordeconfig", help=argparse.SUPPRESS, nargs='+')
