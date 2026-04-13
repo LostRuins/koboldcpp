@@ -4283,13 +4283,21 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
 
             was_auto_unloaded = (global_memory["triggered_sleeping"] and global_memory["current_model"]=="unload_model")
 
-            if (model_name and model_name != global_memory["current_model"]) or was_auto_unloaded:
+            is_different_model = False
+            # when base config is active, we check if the requested model is the current override config
+            if args.baseconfig and model_name != global_memory["current_override"]:
+                is_different_model = True
+            # without a base config, we just check if the requested model is the current loaded config
+            elif not args.baseconfig and model_name != global_memory["current_model"]:
+                is_different_model = True
+
+            if is_different_model or was_auto_unloaded:
                 with proxy_reload_lock:
                     whitelist = get_current_admindir_list() # see if its an allowed swap
                     if was_auto_unloaded and not model_name:
                         model_name = "initial_model"
 
-                    if model_name != global_memory["current_model"] and (model_name in whitelist):
+                    if is_different_model and (model_name in whitelist):
                         global_memory["last_active_timestamp"] = datetime.now()
                         global_memory["triggered_sleeping"] = False
 
@@ -9762,6 +9770,7 @@ def main(launch_args, default_args):
         basecfg_path = os.path.abspath(args.baseconfig)
         if os.path.exists(basecfg_path):
             print(f"Using base config {basecfg_path}")
+            global_memory["override_config"] = str(args.config)
             load_config_cli(basecfg_path)
         else:
             print(f"Invalid base config path {basecfg_path}. File doesn't exist!")
