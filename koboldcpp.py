@@ -225,6 +225,7 @@ class load_model_inputs(ctypes.Structure):
                 ("use_fastforward", ctypes.c_bool),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
+                ("sycl_info", ctypes.c_char_p),
                 ("batchsize", ctypes.c_int),
                 ("autofit", ctypes.c_bool),
                 ("autofit_tax_mb", ctypes.c_int),
@@ -322,6 +323,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
+                ("sycl_info", ctypes.c_char_p),
                 ("threads", ctypes.c_int),
                 ("quant", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
@@ -400,6 +402,7 @@ class whisper_load_model_inputs(ctypes.Structure):
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
+                ("sycl_info", ctypes.c_char_p),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]
@@ -421,6 +424,7 @@ class tts_load_model_inputs(ctypes.Structure):
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
+                ("sycl_info", ctypes.c_char_p),
                 ("gpulayers", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
                 ("ttsmaxlen", ctypes.c_int),
@@ -448,6 +452,7 @@ class embeddings_load_model_inputs(ctypes.Structure):
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
+                ("sycl_info", ctypes.c_char_p),
                 ("gpulayers", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
                 ("use_mmap", ctypes.c_bool),
@@ -474,6 +479,7 @@ class music_load_model_inputs(ctypes.Structure):
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("vulkan_info", ctypes.c_char_p),
+                ("sycl_info", ctypes.c_char_p),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]
@@ -791,22 +797,26 @@ lib_cublas = pick_existant_file("koboldcpp_cublas.dll","koboldcpp_cublas.so")
 lib_hipblas = pick_existant_file("koboldcpp_hipblas.dll","koboldcpp_hipblas.so")
 lib_vulkan = pick_existant_file("koboldcpp_vulkan.dll","koboldcpp_vulkan.so")
 lib_vulkan_noavx2 = pick_existant_file("koboldcpp_vulkan_noavx2.dll","koboldcpp_vulkan_noavx2.so")
+lib_sycl = pick_existant_file("koboldcpp_sycl.dll","koboldcpp_sycl.so")
+lib_openvino = pick_existant_file("koboldcpp_openvino.dll","koboldcpp_openvino.so")
 libname = ""
 lib_option_pairs = [
     (lib_default, "Use CPU"),
     (lib_cublas, "Use CUDA"),
     (lib_hipblas, "Use hipBLAS (ROCm)"),
     (lib_vulkan, "Use Vulkan"),
+    (lib_sycl, "Use SYCL (oneAPI)"),
+    (lib_openvino, "Use OpenVINO"),
     (lib_noavx2, "Use CPU (Old CPU)"),
     (lib_vulkan_noavx2, "Use Vulkan (Old CPU)"),
     (lib_vulkan_failsafe, "Use Vulkan (Older CPU)"),
     (lib_failsafe, "Failsafe Mode (Older CPU)")]
-default_option, cublas_option, hipblas_option, vulkan_option, noavx2_option, vulkan_noavx2_option, vulkan_failsafe_option, failsafe_option = (opt if file_exists(lib) or (os.name == 'nt' and file_exists(opt + ".dll")) else None for lib, opt in lib_option_pairs)
+default_option, cublas_option, hipblas_option, vulkan_option, sycl_option, openvino_option, noavx2_option, vulkan_noavx2_option, vulkan_failsafe_option, failsafe_option = (opt if file_exists(lib) or (os.name == 'nt' and file_exists(opt + ".dll")) else None for lib, opt in lib_option_pairs)
 runopts = [opt for lib, opt in lib_option_pairs if file_exists(lib)]
 
 def init_library():
     global handle, args, libname
-    global lib_default,lib_failsafe,lib_noavx2,lib_vulkan_failsafe,lib_cublas,lib_hipblas,lib_vulkan,lib_vulkan_noavx2
+    global lib_default,lib_failsafe,lib_noavx2,lib_vulkan_failsafe,lib_cublas,lib_hipblas,lib_vulkan,lib_vulkan_noavx2,lib_sycl,lib_openvino
 
     libname = lib_default
 
@@ -830,6 +840,12 @@ def init_library():
             libname = lib_vulkan
         elif file_exists(lib_vulkan_noavx2):
             libname = lib_vulkan_noavx2
+    elif (args.usesycl is not None):
+        if file_exists(lib_sycl):
+            libname = lib_sycl
+    elif (args.useopenvino is not None):
+        if file_exists(lib_openvino):
+            libname = lib_openvino
     elif libname == lib_default and not file_exists(lib_default) and file_exists(lib_noavx2):
         libname = lib_noavx2
 
@@ -848,6 +864,14 @@ def init_library():
                 os.add_dll_directory(newpath)
         if libname == lib_hipblas and "HIP_PATH" in os.environ:
             newpath = os.path.join(os.environ["HIP_PATH"], "bin")
+            if os.path.exists(newpath):
+                os.add_dll_directory(newpath)
+        if libname == lib_sycl and "ONEAPI_ROOT" in os.environ:
+            newpath = os.path.join(os.environ["ONEAPI_ROOT"], "compiler", "latest", "bin")
+            if os.path.exists(newpath):
+                os.add_dll_directory(newpath)
+        if libname == lib_openvino and "INTEL_OPENVINO_DIR" in os.environ:
+            newpath = os.path.join(os.environ["INTEL_OPENVINO_DIR"], "runtime", "bin")
             if os.path.exists(newpath):
                 os.add_dll_directory(newpath)
 
@@ -962,6 +986,11 @@ def set_backend_props(inputs):
         inputs.vulkan_info = s.encode("UTF-8")
     else:
         inputs.vulkan_info = "".encode("UTF-8")
+
+    if args.usesycl is not None and args.usesycl != '':
+        inputs.sycl_info = args.usesycl.encode("UTF-8")
+    else:
+        inputs.sycl_info = "".encode("UTF-8")
 
     # set universal flags
     inputs.devices_override = (args.device if args.device else "").encode("UTF-8")
@@ -1737,6 +1766,14 @@ def auto_set_backend_cli():
                 print(f"Auto Selected Vulkan Backend (flag={cpusupport})\n")
                 found_new_backend = True
                 break
+    elif exitcounter < 100 and "Use SYCL (oneAPI)" in runopts:
+        args.usesycl = ""
+        print(f"Auto Selected SYCL Backend (flag={cpusupport})\n")
+        found_new_backend = True
+    elif exitcounter < 100 and "Use OpenVINO" in runopts:
+        args.useopenvino = ""
+        print(f"Auto Selected OpenVINO Backend (flag={cpusupport})\n")
+        found_new_backend = True
     if not found_new_backend:
         print(f"Auto Selected Default Backend (flag={cpusupport})\n")
 
@@ -1750,6 +1787,7 @@ def load_model(model_filename):
     inputs.use_mmq = (True if (args.usecuda and "nommq" not in args.usecuda) else False)
     inputs.use_rowsplit = (True if (args.usecuda and "rowsplit" in args.usecuda) else False)
     inputs.vulkan_info = "0".encode("UTF-8")
+    inputs.sycl_info = "".encode("UTF-8")
     inputs.blasthreads = args.blasthreads
     inputs.use_mmap = args.usemmap
     inputs.use_mlock = args.usemlock
@@ -7391,7 +7429,7 @@ def show_gui():
         global runmode_untouched
         runmode_untouched = False
         index = runopts_var.get()
-        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use Vulkan (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
+        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use Vulkan (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)" or index == "Use SYCL (oneAPI)" or index == "Use OpenVINO":
             quick_gpuname_label.grid(row=3, column=1, padx=75, sticky="W")
             gpuname_label.grid(row=3, column=0, padx=230, sticky="W")
             gpu_selector_label.grid(row=3, column=0, padx = 8, pady=1, stick="nw")
@@ -7429,7 +7467,7 @@ def show_gui():
             tensor_split_label.grid(row=8, column=0, padx = 8, pady=1, stick="nw")
             tensor_split_entry.grid(row=8, column=0, padx = 160, pady=1, stick="nw")
 
-        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use Vulkan (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
+        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or index == "Use Vulkan (Older CPU)" or index == "Use CUDA" or index == "Use hipBLAS (ROCm)" or index == "Use SYCL (oneAPI)" or index == "Use OpenVINO":
             gpu_layers_label.grid(row=6, column=0, padx=8, pady=1, stick="nw")
             gpu_layers_entry.grid(row=6, column=0, padx=160, pady=1, stick="nw")
             quick_gpu_layers_label.grid(row=6, column=0, padx = 8, pady=1, stick="nw")
@@ -7928,6 +7966,8 @@ def show_gui():
         args.usecpu = False
         args.usevulkan = None
         args.usecuda = None
+        args.usesycl = None
+        args.useopenvino = None
         args.noavx2 = False
         if gpu_choice_var.get()!="All":
             gpuchoiceidx = int(gpu_choice_var.get())-1
@@ -7952,6 +7992,16 @@ def show_gui():
             elif runopts_var.get() == "Use Vulkan (Older CPU)":
                 args.noavx2 = True
                 args.failsafe = True
+        if runopts_var.get() == "Use SYCL (oneAPI)":
+            if gpu_choice_var.get()=="All":
+                args.usesycl = ""
+            else:
+                args.usesycl = str(gpuchoiceidx)
+        if runopts_var.get() == "Use OpenVINO":
+            if gpu_choice_var.get()=="All":
+                args.useopenvino = ""
+            else:
+                args.useopenvino = str(gpuchoiceidx)
         if gpulayers_var.get():
             args.gpulayers = (0 if gpulayers_var.get()=="" else int(gpulayers_var.get()))
         if autofit_padding_var.get():
@@ -8979,7 +9029,7 @@ def load_config_cli(filename):
                 setattr(args, key, value)
         if args.istemplate:
             print("\nA .kcppt template was selected from CLI...")
-            if (args.usecuda is None) and (args.usevulkan is None):
+            if (args.usecuda is None) and (args.usevulkan is None) and (args.usesycl is None) and (args.useopenvino is None):
                 print("Automatically selecting your backend...")
                 auto_set_backend_cli()
 
@@ -10049,7 +10099,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             print("MacOS detected: Auto GPU layers set to maximum")
             args.gpulayers = 200
         elif not shouldavoidgpu and args.model_param and os.path.exists(args.model_param):
-            if (args.usecuda is None) and (args.usevulkan is None):
+            if (args.usecuda is None) and (args.usevulkan is None) and (args.usesycl is None) and (args.useopenvino is None):
                 print("No GPU or CPU backend was selected. Trying to assign one for you automatically...")
                 auto_set_backend_cli()
             if MaxMemory[0] == 0: #try to get gpu vram for cuda if not picked yet
@@ -10060,7 +10110,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 args.overridetensors = ""
                 args.moecpu = 0
             if args.gpulayers==-1:
-                if (not args.usecpu) and ((args.usecuda is not None) or (args.usevulkan is not None) or sys.platform=="darwin"):
+                if (not args.usecpu) and ((args.usecuda is not None) or (args.usevulkan is not None) or (args.usesycl is not None) or (args.useopenvino is not None) or sys.platform=="darwin"):
                     if MaxMemory[0] > 0:
                         extract_modelfile_params(args.model_param,args.sdmodel,args.whispermodel,args.mmproj,args.draftmodel,args.ttsmodel if args.ttsgpu else "",args.embeddingsmodel if args.embeddingsgpu else "", args.musicllm, args.musicdiffusion)
                         layeramt = autoset_gpu_layers(args.contextsize,args.sdquant,args.batchsize,(0 if args.noflashattention else args.quantkv),args.musiclowvram)
@@ -10695,6 +10745,8 @@ if __name__ == '__main__':
     compatgroup = parser.add_mutually_exclusive_group()
     compatgroup.add_argument("--usecuda", "--usecublas", "--usehipblas", help="Use CUDA for GPU Acceleration. Requires CUDA. Enter a number afterwards to select and use 1 GPU. Leaving no number will use all GPUs.", nargs='*',metavar=('[main GPU ID] [mmq|nommq] [rowsplit]'), choices=['normal', 'lowvram', '0', '1', '2', '3', 'all', 'mmq', 'nommq', 'rowsplit'])
     compatgroup.add_argument("--usevulkan", help="Use Vulkan for GPU Acceleration. Can optionally specify one or more GPU Device ID (e.g. --usevulkan 0), leave blank to autodetect.", metavar=('[Device IDs]'), nargs='*', type=int, default=None)
+    compatgroup.add_argument("--usesycl", help="Use SYCL (Intel oneAPI) for GPU Acceleration. Can optionally specify a GPU Device ID (e.g. --usesycl 0).", metavar=('[Device ID]'), nargs='?', const='', default=None)
+    compatgroup.add_argument("--useopenvino", help="Use OpenVINO for inference acceleration on Intel hardware.", metavar=('[Device ID]'), nargs='?', const='', default=None)
     compatgroup.add_argument("--usecpu", help="Do not use any GPU acceleration (CPU Only)", action='store_true')
     parser.add_argument("--contextsize","--ctx-size", "-c", help="Controls the memory allocated for maximum context size, only change if you need more RAM for big contexts. (default 8192).",metavar=('[256 to 262144]'), type=check_range(int,256,262144), default=8192)
     parser.add_argument("--gpulayers","--gpu-layers","--n-gpu-layers","-ngl", help="Set number of layers to offload to GPU when using GPU. Requires GPU. Set to -1 to try autodetect, set to 0 to disable GPU offload.",metavar=('[GPU layers]'), nargs='?', const=1, type=int, default=-1)

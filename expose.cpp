@@ -53,6 +53,17 @@ extern "C"
             putenv((char*)vulkandeviceenv.c_str());
         }
 
+        std::string sycl_info_raw = inputs.sycl_info;
+        if(!sycl_info_raw.empty())
+        {
+            static std::string sycldeviceenv = "ONEAPI_DEVICE_SELECTOR=level_zero:"+sycl_info_raw;
+            const char* existingsyclenv = getenv("ONEAPI_DEVICE_SELECTOR");
+            if(!existingsyclenv)
+            {
+                putenv((char*)sycldeviceenv.c_str());
+            }
+        }
+
         executable_path = inputs.executable_path;
 
         if(file_format==FileFormat::GPTJ_1 || file_format==FileFormat::GPTJ_2 || file_format==FileFormat::GPTJ_3 || file_format==FileFormat::GPTJ_4  || file_format==FileFormat::GPTJ_5)

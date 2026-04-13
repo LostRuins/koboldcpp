@@ -3,7 +3,7 @@
 
 .PHONY: finishedmsg
 
-default: koboldcpp_default koboldcpp_failsafe koboldcpp_noavx2 koboldcpp_vulkan_failsafe koboldcpp_cublas koboldcpp_hipblas koboldcpp_vulkan koboldcpp_vulkan_noavx2 finishedmsg
+default: koboldcpp_default koboldcpp_failsafe koboldcpp_noavx2 koboldcpp_vulkan_failsafe koboldcpp_cublas koboldcpp_hipblas koboldcpp_vulkan koboldcpp_vulkan_noavx2 koboldcpp_sycl koboldcpp_openvino finishedmsg
 tools: quantize_gpt2 quantize_gptj quantize_gguf quantize_neox quantize_mpt quantize_clip ttsmain whispermain sdmain gguf-split
 
 ifndef UNAME_S
@@ -102,6 +102,8 @@ LLAMA_USE_BUNDLED_GLSLC := 1
 
 FAILSAFE_FLAGS = -DUSE_FAILSAFE
 VULKAN_FLAGS = -DGGML_USE_VULKAN -DSD_USE_VULKAN
+SYCL_FLAGS = -DGGML_USE_SYCL -DGGML_SYCL_WARP_SIZE=16
+OPENVINO_FLAGS = -DGGML_USE_OPENVINO
 ifdef LLAMA_CUBLAS
 CUBLAS_FLAGS = -DGGML_USE_CUDA -DSD_USE_CUDA
 else
@@ -330,6 +332,36 @@ ggml_v3-cuda.o: otherarch/ggml_v3-cuda.cu otherarch/ggml_v3-cuda.h
 	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(HIPFLAGS2) -x hip -c -o $@ $<
 endif # LLAMA_HIPBLAS
 
+# SYCL backend (Intel oneAPI)
+ifdef LLAMA_SYCL
+SYCLCXX ?= icpx
+SYCL_COMPILE_FLAGS = -fsycl -Wno-narrowing
+SYCLLD_FLAGS = -fsycl -lmkl_sycl_blas -lmkl_intel_ilp64 -lmkl_tbb_thread -lmkl_core -lOpenCL -lpthread -ldl -lrt
+SYCL_SRCS = $(wildcard ggml/src/ggml-sycl/*.cpp)
+SYCL_SRCS += $(wildcard ggml/src/ggml-sycl/template-instances/*.cpp)
+SYCL_OBJS = $(patsubst %.cpp,%.o,$(SYCL_SRCS))
+
+ggml/src/ggml-sycl/%.o: ggml/src/ggml-sycl/%.cpp
+	$(SYCLCXX) $(CXXFLAGS) $(SYCL_FLAGS) $(SYCL_COMPILE_FLAGS) -c $< -o $@
+ggml/src/ggml-sycl/template-instances/%.o: ggml/src/ggml-sycl/template-instances/%.cpp
+	$(SYCLCXX) $(CXXFLAGS) $(SYCL_FLAGS) $(SYCL_COMPILE_FLAGS) -Iggml/src/ggml-sycl -c $< -o $@
+endif # LLAMA_SYCL
+
+# OpenVINO backend
+ifdef LLAMA_OPENVINO
+OVINOLD_FLAGS = -lopenvino -ltbb -lOpenCL -lpthread -ldl -lrt
+OPENVINO_SRCS = $(shell find ggml/src/ggml-openvino -name '*.cpp')
+OPENVINO_OBJS = $(patsubst %.cpp,%.o,$(OPENVINO_SRCS))
+
+ggml/src/ggml-openvino/%.o: ggml/src/ggml-openvino/%.cpp
+	$(CXX) $(CXXFLAGS) $(OPENVINO_FLAGS) -Iggml/src/ggml-openvino -c $< -o $@
+ggml/src/ggml-openvino/openvino/%.o: ggml/src/ggml-openvino/openvino/%.cpp
+	$(CXX) $(CXXFLAGS) $(OPENVINO_FLAGS) -Iggml/src/ggml-openvino -c $< -o $@
+ggml/src/ggml-openvino/openvino/op/%.o: ggml/src/ggml-openvino/openvino/op/%.cpp
+	$(CXX) $(CXXFLAGS) $(OPENVINO_FLAGS) -Iggml/src/ggml-openvino -c $< -o $@
+ggml/src/ggml-openvino/openvino/pass/%.o: ggml/src/ggml-openvino/openvino/pass/%.cpp
+	$(CXX) $(CXXFLAGS) $(OPENVINO_FLAGS) -Iggml/src/ggml-openvino -c $< -o $@
+endif # LLAMA_OPENVINO
 
 ifdef LLAMA_METAL
 CFLAGS   += -DGGML_USE_METAL -DGGML_METAL_NDEBUG -DSD_USE_METAL
@@ -418,6 +450,8 @@ NOAVX2_BUILD =
 CUBLAS_BUILD =
 HIPBLAS_BUILD =
 VULKAN_BUILD =
+SYCL_BUILD =
+OPENVINO_BUILD =
 NOTIFY_MSG =
 
 ifeq ($(OS),Windows_NT)
@@ -437,6 +471,12 @@ endif
 ifdef LLAMA_HIPBLAS
 HIPBLAS_BUILD = $(HCXX) $(CXXFLAGS) $(HIPFLAGS) $^ -shared -o $@.dll $(HIPLDFLAGS) $(LDFLAGS)
 endif
+ifdef LLAMA_SYCL
+SYCL_BUILD = $(SYCLCXX) $(CXXFLAGS) $(SYCL_FLAGS) $(SYCL_COMPILE_FLAGS) $^ -shared -o $@.dll $(SYCLLD_FLAGS) $(LDFLAGS)
+endif
+ifdef LLAMA_OPENVINO
+OPENVINO_BUILD = $(CXX) $(CXXFLAGS) $(OPENVINO_FLAGS) $^ -shared -o $@.dll $(OVINOLD_FLAGS) $(LDFLAGS)
+endif
 else
 DEFAULT_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
 ifdef LLAMA_PORTABLE
@@ -455,13 +495,23 @@ endif
 ifdef LLAMA_VULKAN
 VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
 endif
+ifdef LLAMA_SYCL
+SYCL_BUILD = $(SYCLCXX) $(CXXFLAGS) $(SYCL_FLAGS) $(SYCL_COMPILE_FLAGS) $^ -shared -o $@.so $(SYCLLD_FLAGS) $(LDFLAGS)
+endif
+ifdef LLAMA_OPENVINO
+OPENVINO_BUILD = $(CXX) $(CXXFLAGS) $(OPENVINO_FLAGS) $^ -shared -o $@.so $(OVINOLD_FLAGS) $(LDFLAGS)
+endif
 endif
 
 ifndef LLAMA_CUBLAS
 ifndef LLAMA_HIPBLAS
 ifndef LLAMA_VULKAN
 ifndef LLAMA_METAL
-NOTIFY_MSG = @echo -e '\n***\nYou did a basic CPU build. For faster speeds, consider installing and linking a GPU library. For example, set LLAMA_VULKAN=1 to compile with Vulkan support. Add LLAMA_PORTABLE=1 to make a sharable build that other devices can use. Read the KoboldCpp Wiki for more information. This is just a reminder, not an error.\n***\n'
+ifndef LLAMA_SYCL
+ifndef LLAMA_OPENVINO
+NOTIFY_MSG = @echo -e '\n***\nYou did a basic CPU build. For faster speeds, consider installing and linking a GPU library. For example, set LLAMA_VULKAN=1 to compile with Vulkan support, LLAMA_SYCL=1 for Intel oneAPI, or LLAMA_OPENVINO=1 for OpenVINO. Add LLAMA_PORTABLE=1 to make a sharable build that other devices can use. Read the KoboldCpp Wiki for more information. This is just a reminder, not an error.\n***\n'
+endif
+endif
 endif
 endif
 endif
@@ -611,18 +661,30 @@ ggml-backend_vulkan.o: ggml/src/ggml-backend.cpp ggml/src/ggml-backend-impl.h gg
 	$(CXX)  $(CXXFLAGS) $(VULKAN_FLAGS) -c $< -o $@
 ggml-backend_cublas.o: ggml/src/ggml-backend.cpp ggml/src/ggml-backend-impl.h ggml/include/ggml.h ggml/include/ggml-backend.h
 	$(CXX)  $(CXXFLAGS) $(CUBLAS_FLAGS) $(HIPFLAGS) -c $< -o $@
+ggml-backend_sycl.o: ggml/src/ggml-backend.cpp ggml/src/ggml-backend-impl.h ggml/include/ggml.h ggml/include/ggml-backend.h
+	$(CXX)  $(CXXFLAGS) $(SYCL_FLAGS) -c $< -o $@
+ggml-backend_openvino.o: ggml/src/ggml-backend.cpp ggml/src/ggml-backend-impl.h ggml/include/ggml.h ggml/include/ggml-backend.h
+	$(CXX)  $(CXXFLAGS) $(OPENVINO_FLAGS) -c $< -o $@
 ggml-backend-reg_default.o: ggml/src/ggml-backend-reg.cpp ggml/src/ggml-backend-impl.h ggml/include/ggml.h ggml/include/ggml-backend.h ggml/include/ggml-cpu.h
 	$(CXX)  $(CXXFLAGS) -c $< -o $@
 ggml-backend-reg_vulkan.o: ggml/src/ggml-backend-reg.cpp ggml/src/ggml-backend-impl.h ggml/include/ggml.h ggml/include/ggml-backend.h ggml/include/ggml-cpu.h
 	$(CXX)  $(CXXFLAGS) $(VULKAN_FLAGS) -c $< -o $@
 ggml-backend-reg_cublas.o: ggml/src/ggml-backend-reg.cpp ggml/src/ggml-backend-impl.h ggml/include/ggml.h ggml/include/ggml-backend.h ggml/include/ggml-cpu.h
 	$(CXX)  $(CXXFLAGS) $(CUBLAS_FLAGS) $(HIPFLAGS) -c $< -o $@
+ggml-backend-reg_sycl.o: ggml/src/ggml-backend-reg.cpp ggml/src/ggml-backend-impl.h ggml/include/ggml.h ggml/include/ggml-backend.h ggml/include/ggml-cpu.h
+	$(CXX)  $(CXXFLAGS) $(SYCL_FLAGS) -c $< -o $@
+ggml-backend-reg_openvino.o: ggml/src/ggml-backend-reg.cpp ggml/src/ggml-backend-impl.h ggml/include/ggml.h ggml/include/ggml-backend.h ggml/include/ggml-cpu.h
+	$(CXX)  $(CXXFLAGS) $(OPENVINO_FLAGS) -c $< -o $@
 llavaclip_default.o: tools/mtmd/clip.cpp tools/mtmd/clip.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 llavaclip_cublas.o: tools/mtmd/clip.cpp tools/mtmd/clip.h
 	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(HIPFLAGS) -c $< -o $@
 llavaclip_vulkan.o: tools/mtmd/clip.cpp tools/mtmd/clip.h
 	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) -c $< -o $@
+llavaclip_sycl.o: tools/mtmd/clip.cpp tools/mtmd/clip.h
+	$(CXX) $(CXXFLAGS) $(SYCL_FLAGS) -c $< -o $@
+llavaclip_openvino.o: tools/mtmd/clip.cpp tools/mtmd/clip.h
+	$(CXX) $(CXXFLAGS) $(OPENVINO_FLAGS) -c $< -o $@
 
 #this is only used for accelerate
 ggml-blas.o: ggml/src/ggml-blas/ggml-blas.cpp ggml/include/ggml-blas.h
@@ -719,11 +781,21 @@ gpttype_adapter_vulkan.o: $(GPTTYPE_ADAPTER)
 	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) -c $< -o $@
 gpttype_adapter_vulkan_noavx2.o: $(GPTTYPE_ADAPTER)
 	$(CXX) $(CXXFLAGS) $(FAILSAFE_FLAGS) $(VULKAN_FLAGS) -c $< -o $@
+gpttype_adapter_sycl.o: $(GPTTYPE_ADAPTER)
+	$(CXX) $(CXXFLAGS) $(SYCL_FLAGS) -c $< -o $@
+gpttype_adapter_openvino.o: $(GPTTYPE_ADAPTER)
+	$(CXX) $(CXXFLAGS) $(OPENVINO_FLAGS) -c $< -o $@
 
 clean:
-	rm -vf *.o main ttsmain sdmain whispermain quantize_gguf quantize_clip quantize_gpt2 quantize_gptj quantize_neox quantize_mpt vulkan-shaders-gen vulkan-shaders-gen-noext gguf-split mtmd-cli mainvk fitparams embedding embeddingvk qwen3tts acestep-a acestep-b acestep-b.exe acestep-a.exe qwen3tts.exe embeddingvk.exe embedding.exe fitparams.exe mainvk.exe mtmd-cli.exe gguf-split.exe vulkan-shaders-gen.exe vulkan-shaders-gen-noext.exe main.exe ttsmain.exe sdmain.exe whispermain.exe quantize_clip.exe quantize_gguf.exe quantize_gptj.exe quantize_gpt2.exe quantize_neox.exe quantize_mpt.exe koboldcpp_default.dll koboldcpp_failsafe.dll koboldcpp_noavx2.dll koboldcpp_vulkan_failsafe.dll koboldcpp_cublas.dll koboldcpp_hipblas.dll koboldcpp_vulkan.dll koboldcpp_vulkan_noavx2.dll koboldcpp_default.so koboldcpp_failsafe.so koboldcpp_noavx2.so koboldcpp_vulkan_failsafe.so koboldcpp_cublas.so koboldcpp_hipblas.so koboldcpp_vulkan.so koboldcpp_vulkan_noavx2.so ggml/src/ggml-vulkan-shaders.cpp ggml/src/ggml-vulkan-shaders.hpp ggml/src/ggml-vulkan-shaders-noext.cpp ggml/src/ggml-vulkan-shaders-noext.hpp
+	rm -vf *.o main ttsmain sdmain whispermain quantize_gguf quantize_clip quantize_gpt2 quantize_gptj quantize_neox quantize_mpt vulkan-shaders-gen vulkan-shaders-gen-noext gguf-split mtmd-cli mainvk fitparams embedding embeddingvk qwen3tts acestep-a acestep-b acestep-b.exe acestep-a.exe qwen3tts.exe embeddingvk.exe embedding.exe fitparams.exe mainvk.exe mtmd-cli.exe gguf-split.exe vulkan-shaders-gen.exe vulkan-shaders-gen-noext.exe main.exe ttsmain.exe sdmain.exe whispermain.exe quantize_clip.exe quantize_gguf.exe quantize_gptj.exe quantize_gpt2.exe quantize_neox.exe quantize_mpt.exe koboldcpp_default.dll koboldcpp_failsafe.dll koboldcpp_noavx2.dll koboldcpp_vulkan_failsafe.dll koboldcpp_cublas.dll koboldcpp_hipblas.dll koboldcpp_vulkan.dll koboldcpp_vulkan_noavx2.dll koboldcpp_sycl.dll koboldcpp_openvino.dll koboldcpp_default.so koboldcpp_failsafe.so koboldcpp_noavx2.so koboldcpp_vulkan_failsafe.so koboldcpp_cublas.so koboldcpp_hipblas.so koboldcpp_vulkan.so koboldcpp_vulkan_noavx2.so koboldcpp_sycl.so koboldcpp_openvino.so ggml/src/ggml-vulkan-shaders.cpp ggml/src/ggml-vulkan-shaders.hpp ggml/src/ggml-vulkan-shaders-noext.cpp ggml/src/ggml-vulkan-shaders-noext.hpp
 	rm -vrf ggml/src/ggml-cuda/*.o
 	rm -vrf ggml/src/ggml-cuda/template-instances/*.o
+	rm -vrf ggml/src/ggml-sycl/*.o
+	rm -vrf ggml/src/ggml-sycl/template-instances/*.o
+	rm -vrf ggml/src/ggml-openvino/*.o
+	rm -vrf ggml/src/ggml-openvino/openvino/*.o
+	rm -vrf ggml/src/ggml-openvino/openvino/op/*.o
+	rm -vrf ggml/src/ggml-openvino/openvino/pass/*.o
 	rm -vrf llguidance
 
 # useful tools
@@ -905,6 +977,22 @@ koboldcpp_vulkan:
 koboldcpp_vulkan_noavx2:
 	$(DONOTHING)
 koboldcpp_vulkan_failsafe:
+	$(DONOTHING)
+endif
+
+ifdef SYCL_BUILD
+koboldcpp_sycl: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_sycl.o sdcpp_default.o whispercpp_default.o tts_default.o music_default.o embeddings_default.o llavaclip_sycl.o llava.o ggml-backend_sycl.o ggml-backend-reg_sycl.o ggml-repack.o $(SYCL_OBJS) $(OBJS_FULL) $(OBJS)
+	$(SYCL_BUILD)
+else
+koboldcpp_sycl:
+	$(DONOTHING)
+endif
+
+ifdef OPENVINO_BUILD
+koboldcpp_openvino: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_openvino.o sdcpp_default.o whispercpp_default.o tts_default.o music_default.o embeddings_default.o llavaclip_openvino.o llava.o ggml-backend_openvino.o ggml-backend-reg_openvino.o ggml-repack.o $(OPENVINO_OBJS) $(OBJS_FULL) $(OBJS)
+	$(OPENVINO_BUILD)
+else
+koboldcpp_openvino:
 	$(DONOTHING)
 endif
 

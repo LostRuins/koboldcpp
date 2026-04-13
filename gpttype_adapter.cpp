@@ -165,7 +165,7 @@ static int savestate_limit = 0;
 static std::vector<savestate_data> savestates;
 
 inline int kcpp_cpu_has_blas(void) {
-#if defined(GGML_USE_BLAS) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
+#if defined(GGML_USE_BLAS) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL) || defined(GGML_USE_OPENVINO)
     return 1;
 #else
     return 0;
@@ -661,7 +661,7 @@ static void speculative_decoding_setup(std::string spec_model_filename, const ll
     draft_model_params.main_gpu = base_model_params.main_gpu;
     draft_model_params.split_mode = llama_split_mode::LLAMA_SPLIT_MODE_LAYER;
     draft_ctx_params.kv_unified = base_ctx_params.kv_unified;
-    #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
+    #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
     bool ts_all_zero = true;
     for (int i = 0; i < tensor_split_max; ++i) {
         if (draft_gpusplit[i] != 0.0f) {
@@ -2319,7 +2319,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         llama_ctx_params.rope_freq_scale = rope_freq_scale;
         llama_ctx_params.n_batch = kcpp_data->n_batch;
 
-        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
+        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
         bool ts_all_zero = true;
         for (int i = 0; i < tensor_split_max; ++i) {
             if (inputs.tensor_split[i] != 0.0f) {
@@ -2420,7 +2420,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         llama_ctx_params.n_threads = kcpp_data->n_threads;
         llama_ctx_params.n_threads_batch = kcpp_data->n_blasthreads;
 
-        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
+        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
         bool ts_all_zero = true;
         for (int i = 0; i < tensor_split_max; ++i) {
             if (inputs.tensor_split[i] != 0.0f) {
@@ -3322,7 +3322,7 @@ int GetThreadsToUse(bool blasmode)
 {
     if (blasmode)
     {
-        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
+        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL) || defined(GGML_USE_OPENVINO)
             return kcpp_data->n_blasthreads;
         #else
             return std::min(kcpp_data->n_blasthreads, 4);
