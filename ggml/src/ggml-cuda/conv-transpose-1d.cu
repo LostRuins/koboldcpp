@@ -21,10 +21,11 @@ static  __global__ void conv_transpose_1d_kernel(
         int kernel_offset = (src0_ne0 * src0_ne1 * c) + (out_index * src0_ne0);
         int input_offset = src1_ne0 * c;
 
-        for (int i = 0; i < src1_ne0; i++) {
-            if (!(idx >= i*s0 && idx < i*s0 + src0_ne0)) {
-                continue;
-            }
+        int i_min = (idx >= src0_ne0) ? ((idx - src0_ne0 + s0) / s0) : 0;
+        int i_max_val = idx / s0;
+        int i_max = (i_max_val < src1_ne0) ? i_max_val : (src1_ne0 - 1);
+
+        for (int i = i_min; i <= i_max; i++) {
             int weight_idx = idx - i*s0;
 
             float kernel_weight = src0[kernel_offset + weight_idx];

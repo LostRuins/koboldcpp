@@ -1,8 +1,7 @@
 #ifndef __LTXV_HPP__
 #define __LTXV_HPP__
 
-#include "common.hpp"
-#include "ggml_extend.hpp"
+#include "common_block.hpp"
 
 namespace LTXV {
 

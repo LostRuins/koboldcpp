@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include "src/llama-arch.h"
 
 static auto bench_timer = std::chrono::high_resolution_clock().now();
 
@@ -361,57 +362,9 @@ std::string gguf_get_model_arch(const std::string & gguf_filename)
             int filever = gguf_get_version(ctx);
 
             fileformatmeta->fileversion = filever;
-            fileformatmeta->model_architecture = GGUFArch::ARCH_DEFAULT;
+            fileformatmeta->model_architecture = llm_arch_from_string(modelarch);
             fileformatmeta->model_architecture_str = modelarch;
-            if(modelarch=="phi2")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_PHI;
-            }
-            else if(modelarch=="falcon")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_FALCON;
-            }
-            else if(modelarch=="mamba" || modelarch=="mamba2" || modelarch=="nemotron_h" || modelarch=="jamba" || modelarch=="granitehybrid" || modelarch=="lfm2"
-            || modelarch=="plamo2" || modelarch=="falcon-h1") //lazy approach, put all non rwkv RNN models
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_MAMBALIKE;
-            }
-            else if(modelarch=="llama" && freq_base_train==10000.0f && (n_tensors==435 || n_tensors==611))
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_SOLAR;
-            }
-            else if(modelarch=="qwen2")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_QWEN2;
-            }
-            else if(modelarch=="qwen2vl")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_QWEN2VL;
-            }
-            else if(modelarch=="gemma3")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_GEMMA3;
-            }
-            else if(modelarch=="gemma3n")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_GEMMA3N;
-            }
-            else if(modelarch=="rwkv6" || modelarch=="rwkv7" || modelarch=="rwkv6qwen2" || modelarch=="arwkv7")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_RWKV;
-            }
-            else if(modelarch=="glm4" || modelarch=="glm4moe")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_GLM4;
-            }
-            else if(modelarch=="deepseek2")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_DEEPSEEK2;
-            }
-            else if(modelarch=="gpt-oss")
-            {
-                fileformatmeta->model_architecture = GGUFArch::ARCH_GPTOSS;
-            }
+
             printf("Arch Category: %d\n",fileformatmeta->model_architecture);
 
         }

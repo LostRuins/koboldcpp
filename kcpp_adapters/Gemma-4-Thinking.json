@@ -1,0 +1,9 @@
+{
+  "system_start": "<|turn>system\n",
+  "system_end": "<turn|>\n",
+  "user_start": "<|turn>user\n",
+  "user_end": "<turn|>\n",
+  "assistant_start": "<|turn>model\n",
+  "assistant_gen":  "<|turn>model\n<|think|><|channel>thought",
+  "assistant_end": "<turn|>\n"
+}

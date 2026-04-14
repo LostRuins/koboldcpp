@@ -1,9 +1,17 @@
 <script lang="ts">
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { ChatMessage } from '$lib/components/app';
+	import { setChatActionsContext } from '$lib/contexts';
+	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { getMessageSiblings } from '$lib/utils';
+	import {
+		copyToClipboard,
+		formatMessageForClipboard,
+		getMessageSiblings,
+		hasAgenticContent
+	} from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -15,6 +23,76 @@
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	const currentConfig = config();
+
+	setChatActionsContext({
+		copy: async (message: DatabaseMessage) => {
+			const asPlainText = Boolean(currentConfig.copyTextAttachmentsAsPlainText);
+			const clipboardContent = formatMessageForClipboard(
+				message.content,
+				message.extra,
+				asPlainText
+			);
+			await copyToClipboard(clipboardContent, 'Message copied to clipboard');
+		},
+
+		delete: async (message: DatabaseMessage) => {
+			await chatStore.deleteMessage(message.id);
+			refreshAllMessages();
+		},
+
+		navigateToSibling: async (siblingId: string) => {
+			await conversationsStore.navigateToSibling(siblingId);
+		},
+
+		editWithBranching: async (
+			message: DatabaseMessage,
+			newContent: string,
+			newExtras?: DatabaseMessageExtra[]
+		) => {
+			onUserAction?.();
+			await chatStore.editMessageWithBranching(message.id, newContent, newExtras);
+			refreshAllMessages();
+		},
+
+		editWithReplacement: async (
+			message: DatabaseMessage,
+			newContent: string,
+			shouldBranch: boolean
+		) => {
+			onUserAction?.();
+			await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
+			refreshAllMessages();
+		},
+
+		editUserMessagePreserveResponses: async (
+			message: DatabaseMessage,
+			newContent: string,
+			newExtras?: DatabaseMessageExtra[]
+		) => {
+			onUserAction?.();
+			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
+			refreshAllMessages();
+		},
+
+		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
+			onUserAction?.();
+			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
+			refreshAllMessages();
+		},
+
+		continueAssistantMessage: async (message: DatabaseMessage) => {
+			onUserAction?.();
+			await chatStore.continueAssistantMessage(message.id);
+			refreshAllMessages();
+		},
+
+		forkConversation: async (
+			message: DatabaseMessage,
+			options: { name: string; includeAttachments: boolean }
+		) => {
+			await conversationsStore.forkConversation(message.id, options);
+		}
+	});
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
@@ -42,102 +120,95 @@
 			return [];
 		}
 
-		// Filter out system messages if showSystemMessage is false
 		const filteredMessages = currentConfig.showSystemMessage
 			? messages
-			: messages.filter((msg) => msg.type !== 'system');
+			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
 
-		return filteredMessages.map((message) => {
-			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
+		// Build display entries, grouping agentic sessions into single entries.
+		// An agentic session = assistant(with tool_calls) → tool → assistant → tool → ... → assistant(final)
+		const result: Array<{
+			message: DatabaseMessage;
+			toolMessages: DatabaseMessage[];
+			isLastAssistantMessage: boolean;
+			siblingInfo: ChatMessageSiblingInfo;
+		}> = [];
 
-			return {
-				message,
+		for (let i = 0; i < filteredMessages.length; i++) {
+			const msg = filteredMessages[i];
+
+			// Skip tool messages - they're grouped with preceding assistant
+			if (msg.role === MessageRole.TOOL) continue;
+
+			const toolMessages: DatabaseMessage[] = [];
+			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
+				let j = i + 1;
+
+				while (j < filteredMessages.length) {
+					const next = filteredMessages[j];
+
+					if (next.role === MessageRole.TOOL) {
+						toolMessages.push(next);
+
+						j++;
+					} else if (next.role === MessageRole.ASSISTANT) {
+						toolMessages.push(next);
+
+						j++;
+					} else {
+						break;
+					}
+				}
+
+				i = j - 1;
+			} else if (msg.role === MessageRole.ASSISTANT) {
+				let j = i + 1;
+
+				while (j < filteredMessages.length && filteredMessages[j].role === MessageRole.TOOL) {
+					toolMessages.push(filteredMessages[j]);
+					j++;
+				}
+			}
+
+			const siblingInfo = getMessageSiblings(allConversationMessages, msg.id);
+
+			result.push({
+				message: msg,
+				toolMessages,
+				isLastAssistantMessage: false,
 				siblingInfo: siblingInfo || {
-					message,
-					siblingIds: [message.id],
+					message: msg,
+					siblingIds: [msg.id],
 					currentIndex: 0,
 					totalSiblings: 1
 				}
-			};
-		});
+			});
+		}
+
+		// Mark the last assistant message
+		for (let i = result.length - 1; i >= 0; i--) {
+			if (result[i].message.role === MessageRole.ASSISTANT) {
+				result[i].isLastAssistantMessage = true;
+				break;
+			}
+		}
+
+		return result;
 	});
-
-	async function handleNavigateToSibling(siblingId: string) {
-		await conversationsStore.navigateToSibling(siblingId);
-	}
-
-	async function handleEditWithBranching(
-		message: DatabaseMessage,
-		newContent: string,
-		newExtras?: DatabaseMessageExtra[]
-	) {
-		onUserAction?.();
-
-		await chatStore.editMessageWithBranching(message.id, newContent, newExtras);
-
-		refreshAllMessages();
-	}
-
-	async function handleEditWithReplacement(
-		message: DatabaseMessage,
-		newContent: string,
-		shouldBranch: boolean
-	) {
-		onUserAction?.();
-
-		await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
-
-		refreshAllMessages();
-	}
-
-	async function handleRegenerateWithBranching(message: DatabaseMessage, modelOverride?: string) {
-		onUserAction?.();
-
-		await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
-
-		refreshAllMessages();
-	}
-
-	async function handleContinueAssistantMessage(message: DatabaseMessage) {
-		onUserAction?.();
-
-		await chatStore.continueAssistantMessage(message.id);
-
-		refreshAllMessages();
-	}
-
-	async function handleEditUserMessagePreserveResponses(
-		message: DatabaseMessage,
-		newContent: string,
-		newExtras?: DatabaseMessageExtra[]
-	) {
-		onUserAction?.();
-
-		await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
-
-		refreshAllMessages();
-	}
-
-	async function handleDeleteMessage(message: DatabaseMessage) {
-		await chatStore.deleteMessage(message.id);
-
-		refreshAllMessages();
-	}
 </script>
 
-<div class="flex h-full flex-col space-y-10 pt-16 md:pt-24 {className}" style="height: auto; ">
-	{#each displayMessages as { message, siblingInfo } (message.id)}
-		<ChatMessage
-			class="mx-auto w-full max-w-[48rem]"
-			{message}
-			{siblingInfo}
-			onDelete={handleDeleteMessage}
-			onNavigateToSibling={handleNavigateToSibling}
-			onEditWithBranching={handleEditWithBranching}
-			onEditWithReplacement={handleEditWithReplacement}
-			onEditUserMessagePreserveResponses={handleEditUserMessagePreserveResponses}
-			onRegenerateWithBranching={handleRegenerateWithBranching}
-			onContinueAssistantMessage={handleContinueAssistantMessage}
-		/>
+<div
+	class="flex h-full flex-col space-y-10 pt-24 {className}"
+	style="height: auto; min-height: calc(100dvh - 14rem);"
+>
+	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
+		<div use:fadeInView>
+			<ChatMessage
+				class="mx-auto w-full max-w-[48rem]"
+				{message}
+				{toolMessages}
+				{isLastAssistantMessage}
+				{siblingInfo}
+			/>
+		</div>
 	{/each}
 </div>

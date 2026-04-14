@@ -48,6 +48,8 @@ enum sample_method_t {
     LCM_SAMPLE_METHOD,
     DDIM_TRAILING_SAMPLE_METHOD,
     TCD_SAMPLE_METHOD,
+    RES_MULTISTEP_SAMPLE_METHOD,
+    RES_2S_SAMPLE_METHOD,
     SAMPLE_METHOD_COUNT
 };
 
@@ -62,6 +64,7 @@ enum scheduler_t {
     SMOOTHSTEP_SCHEDULER,
     KL_OPTIMAL_SCHEDULER,
     LCM_SCHEDULER,
+    BONG_TANGENT_SCHEDULER,
     SCHEDULER_COUNT
 };
 
@@ -117,7 +120,8 @@ enum sd_type_t {
     // SD_TYPE_IQ4_NL_4_8 = 37,
     // SD_TYPE_IQ4_NL_8_8 = 38,
     SD_TYPE_MXFP4 = 39,  // MXFP4 (1 block)
-    SD_TYPE_COUNT = 40,
+    SD_TYPE_NVFP4 = 40, // NVFP4 (4 blocks, E4M3 scale)
+    SD_TYPE_COUNT = 41,
 };
 
 enum sd_log_level_t {
@@ -186,6 +190,7 @@ typedef struct {
     bool keep_clip_on_cpu;
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
+    bool flash_attn;
     bool diffusion_flash_attn;
     bool tae_preview_only;
     bool diffusion_conv_direct;
@@ -197,7 +202,6 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
-    float flow_shift;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -231,6 +235,7 @@ typedef struct {
     int shifted_timestep;
     float* custom_sigmas;
     int custom_sigmas_count;
+    float flow_shift;
 } sd_sample_params_t;
 
 typedef struct {
@@ -247,6 +252,7 @@ enum sd_cache_mode_t {
     SD_CACHE_DBCACHE,
     SD_CACHE_TAYLORSEER,
     SD_CACHE_CACHE_DIT,
+    SD_CACHE_SPECTRUM,
 };
 
 typedef struct {
@@ -267,6 +273,13 @@ typedef struct {
     int taylorseer_skip_interval;
     const char* scm_mask;
     bool scm_policy_dynamic;
+    float spectrum_w;
+    int spectrum_m;
+    float spectrum_lam;
+    int spectrum_window_size;
+    float spectrum_flex_window;
+    int spectrum_warmup_steps;
+    float spectrum_stop_percent;
 } sd_cache_params_t;
 
 typedef struct {
@@ -370,8 +383,6 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
 SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out);
-
-void SetCircularAxesAll(sd_ctx_t* sd_ctx, bool circular_x, bool circular_y);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 
-#include "ggml_extend.hpp"
+#include "common_dit.hpp"
 #include "model.h"
 #include "rope.hpp"
 
@@ -103,11 +103,13 @@ namespace Flux {
             auto norm     = std::dynamic_pointer_cast<QKNorm>(blocks["norm"]);
 
             auto qkv         = qkv_proj->forward(ctx, x);
-            auto qkv_vec     = ggml_ext_chunk(ctx->ggml_ctx, qkv, 3, 0, true);
-            int64_t head_dim = qkv_vec[0]->ne[0] / num_heads;
-            auto q           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);
-            auto k           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);
-            auto v           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);
+            int64_t head_dim = qkv->ne[0] / 3 / num_heads;
+            auto q           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
+                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], 0);
+            auto k           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
+                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * qkv->ne[0] / 3);
+            auto v           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
+                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * 2 * qkv->ne[0] / 3);
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
             return {q, k, v};
@@ -491,15 +493,14 @@ namespace Flux {
             auto x_mod   = Flux::modulate(ctx->ggml_ctx, pre_norm->forward(ctx, x), mod.shift, mod.scale);
             auto qkv_mlp = linear1->forward(ctx, x_mod);  // [N, n_token, hidden_size * 3 + mlp_hidden_dim*mlp_mult_factor]
 
-            auto q = ggml_view_3d(ctx->ggml_ctx, qkv_mlp, hidden_size, qkv_mlp->ne[1], qkv_mlp->ne[2], qkv_mlp->nb[1], qkv_mlp->nb[2], 0);
-            auto k = ggml_view_3d(ctx->ggml_ctx, qkv_mlp, hidden_size, qkv_mlp->ne[1], qkv_mlp->ne[2], qkv_mlp->nb[1], qkv_mlp->nb[2], hidden_size * qkv_mlp->nb[0]);
-            auto v = ggml_view_3d(ctx->ggml_ctx, qkv_mlp, hidden_size, qkv_mlp->ne[1], qkv_mlp->ne[2], qkv_mlp->nb[1], qkv_mlp->nb[2], hidden_size * 2 * qkv_mlp->nb[0]);
-
             int64_t head_dim = hidden_size / num_heads;
 
-            q = ggml_reshape_4d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, q), head_dim, num_heads, q->ne[1], q->ne[2]);  // [N, n_token, n_head, d_head]
-            k = ggml_reshape_4d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, k), head_dim, num_heads, k->ne[1], k->ne[2]);  // [N, n_token, n_head, d_head]
-            v = ggml_reshape_4d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, v), head_dim, num_heads, v->ne[1], v->ne[2]);  // [N, n_token, n_head, d_head]
+            auto q = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
+                                  qkv_mlp->nb[0] * head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], 0);
+            auto k = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
+                                  qkv_mlp->nb[0] * head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], (qkv_mlp->nb[0]) * hidden_size);
+            auto v = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
+                                  qkv_mlp->nb[0] * head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], (qkv_mlp->nb[0]) * 2 * hidden_size);
 
             q         = norm->query_norm(ctx, q);
             k         = norm->key_norm(ctx, k);
@@ -846,70 +847,6 @@ namespace Flux {
             }
         }
 
-        struct ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
-                                              struct ggml_tensor* x) {
-            int64_t W = x->ne[0];
-            int64_t H = x->ne[1];
-
-            int pad_h = (params.patch_size - H % params.patch_size) % params.patch_size;
-            int pad_w = (params.patch_size - W % params.patch_size) % params.patch_size;
-            x         = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
-            return x;
-        }
-
-        struct ggml_tensor* patchify(struct ggml_context* ctx,
-                                     struct ggml_tensor* x) {
-            // x: [N, C, H, W]
-            // return: [N, h*w, C * patch_size * patch_size]
-            int64_t N = x->ne[3];
-            int64_t C = x->ne[2];
-            int64_t H = x->ne[1];
-            int64_t W = x->ne[0];
-            int64_t p = params.patch_size;
-            int64_t h = H / params.patch_size;
-            int64_t w = W / params.patch_size;
-
-            GGML_ASSERT(h * p == H && w * p == W);
-
-            x = ggml_reshape_4d(ctx, x, p, w, p, h * C * N);       // [N*C*h, p, w, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*h, w, p, p]
-            x = ggml_reshape_4d(ctx, x, p * p, w * h, C, N);       // [N, C, h*w, p*p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, h*w, C, p*p]
-            x = ggml_reshape_3d(ctx, x, p * p * C, w * h, N);      // [N, h*w, C*p*p]
-            return x;
-        }
-
-        struct ggml_tensor* process_img(GGMLRunnerContext* ctx,
-                                        struct ggml_tensor* x) {
-            // img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch_size, pw=patch_size)
-            x = pad_to_patch_size(ctx, x);
-            x = patchify(ctx->ggml_ctx, x);
-            return x;
-        }
-
-        struct ggml_tensor* unpatchify(struct ggml_context* ctx,
-                                       struct ggml_tensor* x,
-                                       int64_t h,
-                                       int64_t w) {
-            // x: [N, h*w, C*patch_size*patch_size]
-            // return: [N, C, H, W]
-            int64_t N = x->ne[2];
-            int64_t C = x->ne[0] / params.patch_size / params.patch_size;
-            int64_t H = h * params.patch_size;
-            int64_t W = w * params.patch_size;
-            int64_t p = params.patch_size;
-
-            GGML_ASSERT(C * p * p == x->ne[0]);
-
-            x = ggml_reshape_4d(ctx, x, p * p, C, w * h, N);       // [N, h*w, C, p*p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, C, h*w, p*p]
-            x = ggml_reshape_4d(ctx, x, p, p, w, h * C * N);       // [N*C*h, w, p, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*h, p, w, p]
-            x = ggml_reshape_4d(ctx, x, W, H, C, N);               // [N, C, h*p, w*p]
-
-            return x;
-        }
-
         struct ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
                                          struct ggml_tensor* img,
                                          struct ggml_tensor* txt,
@@ -1060,7 +997,7 @@ namespace Flux {
             int pad_h      = (patch_size - H % patch_size) % patch_size;
             int pad_w      = (patch_size - W % patch_size) % patch_size;
 
-            auto img      = pad_to_patch_size(ctx, x);
+            auto img      = DiT::pad_to_patch_size(ctx, x, params.patch_size, params.patch_size);
             auto orig_img = img;
 
             if (params.chroma_radiance_params.fake_patch_size_x2) {
@@ -1082,7 +1019,7 @@ namespace Flux {
             auto nerf_image_embedder   = std::dynamic_pointer_cast<NerfEmbedder>(blocks["nerf_image_embedder"]);
             auto nerf_final_layer_conv = std::dynamic_pointer_cast<NerfFinalLayerConv>(blocks["nerf_final_layer_conv"]);
 
-            auto nerf_pixels    = patchify(ctx->ggml_ctx, orig_img);  // [N, num_patches, C * patch_size * patch_size]
+            auto nerf_pixels    = DiT::patchify(ctx->ggml_ctx, orig_img, patch_size, patch_size);  // [N, num_patches, C * patch_size * patch_size]
             int64_t num_patches = nerf_pixels->ne[1];
             nerf_pixels         = ggml_reshape_3d(ctx->ggml_ctx,
                                                   nerf_pixels,
@@ -1102,7 +1039,7 @@ namespace Flux {
 
             img_dct = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, img_dct, 1, 0, 2, 3));                                 // [N*num_patches, nerf_hidden_size, patch_size*patch_size]
             img_dct = ggml_reshape_3d(ctx->ggml_ctx, img_dct, img_dct->ne[0] * img_dct->ne[1], num_patches, img_dct->ne[2] / num_patches);  // [N, num_patches, nerf_hidden_size*patch_size*patch_size]
-            img_dct = unpatchify(ctx->ggml_ctx, img_dct, (H + pad_h) / patch_size, (W + pad_w) / patch_size);                               // [N, nerf_hidden_size, H, W]
+            img_dct = DiT::unpatchify(ctx->ggml_ctx, img_dct, (H + pad_h) / patch_size, (W + pad_w) / patch_size, patch_size, patch_size);  // [N, nerf_hidden_size, H, W]
 
             out = nerf_final_layer_conv->forward(ctx, img_dct);  // [N, C, H, W]
 
@@ -1134,7 +1071,7 @@ namespace Flux {
             int pad_h      = (patch_size - H % patch_size) % patch_size;
             int pad_w      = (patch_size - W % patch_size) % patch_size;
 
-            auto img           = process_img(ctx, x);
+            auto img           = DiT::pad_and_patchify(ctx, x, patch_size, patch_size);
             int64_t img_tokens = img->ne[1];
 
             if (params.version == VERSION_FLUX_FILL) {
@@ -1142,8 +1079,8 @@ namespace Flux {
                 ggml_tensor* masked = ggml_view_4d(ctx->ggml_ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], 0);
                 ggml_tensor* mask   = ggml_view_4d(ctx->ggml_ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 8 * 8, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
 
-                masked = process_img(ctx, masked);
-                mask   = process_img(ctx, mask);
+                masked = DiT::pad_and_patchify(ctx, masked, patch_size, patch_size);
+                mask   = DiT::pad_and_patchify(ctx, mask, patch_size, patch_size);
 
                 img = ggml_concat(ctx->ggml_ctx, img, ggml_concat(ctx->ggml_ctx, masked, mask, 0), 0);
             } else if (params.version == VERSION_FLEX_2) {
@@ -1152,21 +1089,21 @@ namespace Flux {
                 ggml_tensor* mask    = ggml_view_4d(ctx->ggml_ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 1, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
                 ggml_tensor* control = ggml_view_4d(ctx->ggml_ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * (C + 1));
 
-                masked  = process_img(ctx, masked);
-                mask    = process_img(ctx, mask);
-                control = process_img(ctx, control);
+                masked  = DiT::pad_and_patchify(ctx, masked, patch_size, patch_size);
+                mask    = DiT::pad_and_patchify(ctx, mask, patch_size, patch_size);
+                control = DiT::pad_and_patchify(ctx, control, patch_size, patch_size);
 
                 img = ggml_concat(ctx->ggml_ctx, img, ggml_concat(ctx->ggml_ctx, ggml_concat(ctx->ggml_ctx, masked, mask, 0), control, 0), 0);
             } else if (params.version == VERSION_FLUX_CONTROLS) {
                 GGML_ASSERT(c_concat != nullptr);
 
-                auto control = process_img(ctx, c_concat);
+                auto control = DiT::pad_and_patchify(ctx, c_concat, patch_size, patch_size);
                 img          = ggml_concat(ctx->ggml_ctx, img, control, 0);
             }
 
             if (ref_latents.size() > 0) {
                 for (ggml_tensor* ref : ref_latents) {
-                    ref = process_img(ctx, ref);
+                    ref = DiT::pad_and_patchify(ctx, ref, patch_size, patch_size);
                     img = ggml_concat(ctx->ggml_ctx, img, ref, 1);
                 }
             }
@@ -1178,8 +1115,7 @@ namespace Flux {
                 out = ggml_cont(ctx->ggml_ctx, out);
             }
 
-            // rearrange(out, "b (h w) (c ph pw) -> b c (h ph) (w pw)", h=h_len, w=w_len, ph=2, pw=2)
-            out = unpatchify(ctx->ggml_ctx, out, (H + pad_h) / patch_size, (W + pad_w) / patch_size);  // [N, C, H + pad_h, W + pad_w]
+            out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, patch_size, patch_size);  // [N, C, H, W]
             return out;
         }
 

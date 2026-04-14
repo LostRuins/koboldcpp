@@ -45,6 +45,7 @@ enum SDVersion {
     VERSION_WAN2_2_I2V,
     VERSION_WAN2_2_TI2V,
     VERSION_QWEN_IMAGE,
+    VERSION_ANIMA,
     VERSION_FLUX2,
     VERSION_FLUX2_KLEIN,
     VERSION_Z_IMAGE,
@@ -122,6 +123,13 @@ static inline bool sd_version_is_qwen_image(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_anima(SDVersion version) {
+    if (version == VERSION_ANIMA) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_z_image(SDVersion version) {
     if (version == VERSION_Z_IMAGE) {
         return true;
@@ -146,6 +154,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_sd3(version) ||
         sd_version_is_wan(version) ||
         sd_version_is_qwen_image(version) ||
+        sd_version_is_anima(version) ||
         sd_version_is_z_image(version)) {
         return true;
     }
@@ -332,13 +341,6 @@ public:
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;
-
-    static std::string load_merges();
-    static std::string load_qwen2_merges();
-    static std::string load_mistral_merges();
-    static std::string load_mistral_vocab_json();
-    static std::string load_t5_tokenizer_json();
-    static std::string load_umt5_tokenizer_json();
 };
 
 #endif  // __MODEL_H__

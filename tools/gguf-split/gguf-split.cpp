@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
+#include <clocale>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -568,6 +569,8 @@ static void gguf_merge(const split_params & split_params) {
 }
 
 int main(int argc, const char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     split_params params;
     split_params_parse(argc, argv, params);
 

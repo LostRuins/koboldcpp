@@ -78,7 +78,17 @@ bool llava_image_embed_make_with_clip_img(clip_ctx * ctx_clip, int n_threads, co
             max_ny = std::max(max_ny,b);
         }
         image_embd = (float *)malloc(clip_embd_nbytes_by_img(ctx_clip, max_nx, max_ny));
-    } else {
+    }
+    else if(clip_is_gemma4(ctx_clip)) //gemma4 vision
+    {
+        const size_t n_imgs = clip_image_f32_batch_n_images(preprocessed_img.get());
+        clip_image_f32 * img_res = clip_image_f32_get_img(preprocessed_img.get(), 0);
+        int n_img_pos = clip_n_output_tokens(ctx_clip, img_res);
+        int nbytes = n_img_pos * clip_n_mmproj_embd(ctx_clip) * sizeof(float);
+        image_embd = (float *)malloc(nbytes);
+    }
+    else
+    {
         image_embd = (float *)malloc(clip_embd_nbytes(ctx_clip)*num_max_patches); // TODO: base on gridsize/llava model
     }
     if (!image_embd) {

@@ -346,69 +346,6 @@ namespace ZImage {
             blocks["final_layer"] = std::make_shared<FinalLayer>(z_image_params.hidden_size, z_image_params.patch_size, z_image_params.out_channels);
         }
 
-        struct ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
-                                              struct ggml_tensor* x) {
-            int64_t W = x->ne[0];
-            int64_t H = x->ne[1];
-
-            int pad_h = (z_image_params.patch_size - H % z_image_params.patch_size) % z_image_params.patch_size;
-            int pad_w = (z_image_params.patch_size - W % z_image_params.patch_size) % z_image_params.patch_size;
-            x         = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
-            return x;
-        }
-
-        struct ggml_tensor* patchify(struct ggml_context* ctx,
-                                     struct ggml_tensor* x) {
-            // x: [N, C, H, W]
-            // return: [N, h*w, patch_size*patch_size*C]
-            int64_t N = x->ne[3];
-            int64_t C = x->ne[2];
-            int64_t H = x->ne[1];
-            int64_t W = x->ne[0];
-            int64_t p = z_image_params.patch_size;
-            int64_t h = H / z_image_params.patch_size;
-            int64_t w = W / z_image_params.patch_size;
-
-            GGML_ASSERT(h * p == H && w * p == W);
-
-            x = ggml_reshape_4d(ctx, x, p, w, p, h * C * N);                 // [N*C*h, p, w, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));            // [N*C*h, w, p, p]
-            x = ggml_reshape_4d(ctx, x, p * p, w * h, C, N);                 // [N, C, h*w, p*p]
-            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));  // [N, h*w, C, p*p]
-            x = ggml_reshape_3d(ctx, x, C * p * p, w * h, N);                // [N, h*w, p*p*C]
-            return x;
-        }
-
-        struct ggml_tensor* process_img(GGMLRunnerContext* ctx,
-                                        struct ggml_tensor* x) {
-            x = pad_to_patch_size(ctx, x);
-            x = patchify(ctx->ggml_ctx, x);
-            return x;
-        }
-
-        struct ggml_tensor* unpatchify(struct ggml_context* ctx,
-                                       struct ggml_tensor* x,
-                                       int64_t h,
-                                       int64_t w) {
-            // x: [N, h*w, patch_size*patch_size*C]
-            // return: [N, C, H, W]
-            int64_t N = x->ne[2];
-            int64_t C = x->ne[0] / z_image_params.patch_size / z_image_params.patch_size;
-            int64_t H = h * z_image_params.patch_size;
-            int64_t W = w * z_image_params.patch_size;
-            int64_t p = z_image_params.patch_size;
-
-            GGML_ASSERT(C * p * p == x->ne[0]);
-
-            x = ggml_reshape_4d(ctx, x, C, p * p, w * h, N);                 // [N, h*w, p*p, C]
-            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));  // [N, C, h*w, p*p]
-            x = ggml_reshape_4d(ctx, x, p, p, w, h * C * N);                 // [N*C*h, w, p, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));            // [N*C*h, p, w, p]
-            x = ggml_reshape_4d(ctx, x, W, H, C, N);                         // [N, C, h*p, w*p]
-
-            return x;
-        }
-
         struct ggml_tensor* forward_core(GGMLRunnerContext* ctx,
                                          struct ggml_tensor* x,
                                          struct ggml_tensor* timestep,
@@ -495,27 +432,22 @@ namespace ZImage {
             int64_t C = x->ne[2];
             int64_t N = x->ne[3];
 
-            auto img             = process_img(ctx, x);
+            int patch_size = z_image_params.patch_size;
+
+            auto img             = DiT::pad_and_patchify(ctx, x, patch_size, patch_size, false);
             uint64_t n_img_token = img->ne[1];
 
             if (ref_latents.size() > 0) {
                 for (ggml_tensor* ref : ref_latents) {
-                    ref = process_img(ctx, ref);
+                    ref = DiT::pad_and_patchify(ctx, ref, patch_size, patch_size, false);
                     img = ggml_concat(ctx->ggml_ctx, img, ref, 1);
                 }
             }
 
-            int64_t h_len = ((H + (z_image_params.patch_size / 2)) / z_image_params.patch_size);
-            int64_t w_len = ((W + (z_image_params.patch_size / 2)) / z_image_params.patch_size);
-
             auto out = forward_core(ctx, img, timestep, context, pe);
 
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, n_img_token);  // [N, n_img_token, ph*pw*C]
-            out = unpatchify(ctx->ggml_ctx, out, h_len, w_len);           // [N, C, H + pad_h, W + pad_w]
-
-            // slice
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N, C, H, W]
+            out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, n_img_token);                              // [N, n_img_token, ph*pw*C]
+            out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, patch_size, patch_size, false);  // [N, C, H, W]
 
             out = ggml_ext_scale(ctx->ggml_ctx, out, -1.f);
 

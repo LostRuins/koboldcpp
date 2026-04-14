@@ -1644,6 +1644,145 @@
                       },
                    }
                 },
+                "/api/extra/music/prepare": {
+                   "post": {
+                      "summary": "Creates song generation parameters such as caption, lyrics, BPM and duration",
+                      "description": "Creates song generation parameters such as caption, lyrics, BPM and duration. This should be called to produce the generation input for /api/extra/music/generate",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                 "caption": "An emotional rap song about the kobold war.",
+                              },
+                               "schema": {
+                                  "properties": {
+                                     "caption": {
+                                        "type": "string",
+                                        "description": "A short description of the song to create"
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "api/extra"
+                      ],
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example":
+                                  {
+                                    "caption": "A melancholic and narrative-driven rap track built around a heavy beat",
+                                    "lyrics": "\n[Verse 1]\nKobold is love, yeah, kobold is life\nKobold is the only way we survive\nShe said okay, yo, keep it that way\nIn kobold we trust, just kobold today\n\n[Chorus]\nKobold, kobold, we carry on now\nKobold, kobold, each way and how\nKobold, kobold, right here we go\nKobold, kobold, all that I know.\n\n[Outro]",
+                                    "bpm": 120,
+                                    "duration": 64.0,
+                                    "keyscale": "G minor",
+                                    "timesignature": "2",
+                                    "vocal_language": "en",
+                                    "task_type": "text2music",
+                                    "seed": 622315,
+                                    "lm_temperature": 0.85,
+                                    "lm_cfg_scale": 3.0,
+                                    "lm_top_p": 0.9,
+                                    "lm_top_k": 50,
+                                    "lm_rep_pen": 1.03,
+                                    "inference_steps": 8,
+                                    "guidance_scale": 1.0,
+                                    "shift": 3.0,
+                                    "rewrite_caption": true,
+                                    "audio_codes": ""
+                                 },
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                   }
+                },
+                "/api/extra/music/generate": {
+                   "post": {
+                      "summary": "Generates music based on provided captions, lyrics and configurations",
+                      "description": "Generates music based on provided captions, lyrics and configurations. The config can be generated using /api/extra/music/prepare or crafted manually",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                    "caption": "A melancholic and narrative-driven rap track built around a heavy beat",
+                                    "lyrics": "\n[Verse 1]\nKobold is love, yeah, kobold is life\nKobold is the only way we survive\nShe said okay, yo, keep it that way\nIn kobold we trust, just kobold today\n\n[Chorus]\nKobold, kobold, we carry on now\nKobold, kobold, each way and how\nKobold, kobold, right here we go\nKobold, kobold, all that I know.\n\n[Outro]",
+                                    "bpm": 120,
+                                    "duration": 64.0,
+                                    "keyscale": "G minor",
+                                    "timesignature": "2",
+                                    "vocal_language": "en",
+                                    "inference_steps": 8
+                                 },
+                               "schema": {
+                                  "properties": {
+                                     "caption": {
+                                        "type": "string",
+                                        "description": "A short description of the song to create"
+                                     },
+                                     "lyrics": {
+                                        "type": "string",
+                                        "description": "The full lyrics of the song to generate"
+                                     },
+                                     "bpm": {
+                                        "type": "number",
+                                        "description": "The song Beats Per Minute"
+                                     },
+                                     "duration": {
+                                        "type": "number",
+                                        "description": "The length of the song, in seconds."
+                                     },
+                                     "keyscale": {
+                                        "type": "string",
+                                        "description": "The musical key of the song."
+                                     },
+                                     "timesignature": {
+                                        "type": "string",
+                                        "description": "The musical time signature of the song."
+                                     },
+                                     "vocal_language": {
+                                        "type": "string",
+                                        "description": "The language of the song lyrics."
+                                     },
+                                     "inference_steps": {
+                                        "type": "number",
+                                        "description": "How many diffusion steps to use."
+                                     }
+                                  },
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "api/extra"
+                      ],
+                      "responses": {
+                        "200": {
+                            "content": {
+                                 "audio/wav": {
+                                    "schema": {
+                                       "type": "string",
+                                       "format": "binary"
+                                    }
+                                 }
+                           },
+                            "description": "Successful request"
+                         }
+                      },
+                   }
+                },
                 "/api/extra/json_to_grammar": {
                    "post": {
                       "summary": "Converts a provided JSON schema into GBNF grammar.",
@@ -2659,6 +2798,28 @@
                       "responses": {"default": {"description": ""}}
                    }
                 },
+                "/v1/responses": {
+                   "post": {
+                      "summary": "Emulates OpenAI Responses API. Very experimental, not recommended (use chat completions instead). Please refer to OpenAI documentation",
+                      "description": "Emulates OpenAI Responses API.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/api/reference/resources/responses](https://developers.openai.com/api/reference/resources/responses). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {"model":"kcpp","input": "Tell me a joke about Kobolds."},
+                               "schema": {
+                                  "properties": {},
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
                 "/v1/models": {
                    "get": {
                       "summary": "List and describe the various models available in the API. Please refer to OpenAI documentation",
@@ -2751,7 +2912,7 @@
                    "name": "sdapi/v1"
                 },
                 {
-                   "description": "OpenAI compatible textgen API (not recommended)",
+                   "description": "OpenAI Compatible APIs",
                    "name": "v1"
                 }
              ]

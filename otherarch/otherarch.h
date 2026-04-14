@@ -537,6 +537,7 @@ struct savestate_data
     size_t current_draft_savestate_size = 0;
     std::vector<uint8_t> current_draft_savestate_buffer;
     std::vector<gpt_vocab::id> savestate_context_tokens; //for context clones
+    std::vector<float> latest_logits;
     int64_t last_used = 0; //unix timestamp, updated on save or load
     std::string media_signature = "";
 };

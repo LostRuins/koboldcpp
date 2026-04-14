@@ -123,7 +123,7 @@ bool embeddingstype_load_model(const embeddings_load_model_inputs inputs)
 
     if(devices_override.size()>0)
     {
-        printf("\nOverriding with %d devices...\n",devices_override.size()-1);
+        printf("\nOverriding with %zu devices...\n",devices_override.size()-1);
         model_params.devices = devices_override.data();
     }
 
@@ -215,7 +215,7 @@ embeddings_generation_outputs embeddingstype_generate(const embeddings_generatio
             }
             if(embeddings_debug)
             {
-                printf("\n%s: Input too long, truncated from %d to last %d tokens.\n", __func__,oldsize,inp.size());
+                printf("\n%s: Input too long, truncated from %d to last %zu tokens.\n", __func__,oldsize,inp.size());
             }
         } else {
             printf("\n%s: number of tokens in an input (%lld) exceeds embedding size limit for this model (%lld), lower token amount!\n",
@@ -232,7 +232,7 @@ embeddings_generation_outputs embeddingstype_generate(const embeddings_generatio
     {
         print_tok_vec(inp);
     }
-    printf("\nGenerating Embeddings for %d tokens...",inp.size());
+    printf("\nGenerating Embeddings for %zu tokens...",inp.size());
 
     // initialize batch
     const int n_prompts = 1;

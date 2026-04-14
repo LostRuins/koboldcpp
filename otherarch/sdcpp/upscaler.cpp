@@ -89,10 +89,11 @@ struct UpscalerGGML {
 
         ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, 3, 1);
         auto on_tiling        = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-            esrgan_upscaler->compute(n_threads, in, &out);
+            return esrgan_upscaler->compute(n_threads, in, &out);
         };
         int64_t t0 = ggml_time_ms();
-        sd_tiling(input_image_tensor, upscaled, esrgan_upscaler->scale, esrgan_upscaler->tile_size, 0.25f, on_tiling);
+        // TODO: circular upscaling?
+        sd_tiling(input_image_tensor, upscaled, esrgan_upscaler->scale, esrgan_upscaler->tile_size, 0.25f, false, false, on_tiling);
         esrgan_upscaler->free_compute_buffer();
         ggml_ext_tensor_clamp_inplace(upscaled, 0.f, 1.f);
         uint8_t* upscaled_data = ggml_tensor_to_sd_image(upscaled);

@@ -294,8 +294,8 @@ ModelLoadResult gptj_v2_model_load(const std::string & fname, gptj_v2_model & mo
                 }
                 else
                 {
-                    fprintf(stderr, "%s: tensor '%s' has wrong shape in model file: got [%ld, %ld], expected [%d, %d]\n",
-                            __func__, name.data(), tensor->ne[0], tensor->ne[1], ne[0], ne[1]);
+                    fprintf(stderr, "%s: tensor '%s' has wrong shape in model file: got [%zu, %zu], expected [%zu, %zu]\n",
+                            __func__, name.data(), (size_t)tensor->ne[0], (size_t)tensor->ne[1], (size_t)ne[0], (size_t)ne[1]);
                     return ModelLoadResult::FAIL;
                 }
 

@@ -1,6 +1,7 @@
 #ifndef __DIFFUSION_MODEL_H__
 #define __DIFFUSION_MODEL_H__
 
+#include "anima.hpp"
 #include "flux.hpp"
 #include "mmdit.hpp"
 #include "qwen_image.hpp"
@@ -38,7 +39,7 @@ struct DiffusionModel {
     virtual size_t get_params_buffer_size()                                             = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter){};
     virtual int64_t get_adm_in_channels()                            = 0;
-    virtual void set_flash_attn_enabled(bool enabled)                = 0;
+    virtual void set_flash_attention_enabled(bool enabled)           = 0;
     virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
 };
 
@@ -84,7 +85,7 @@ struct UNetModel : public DiffusionModel {
         return unet.unet.adm_in_channels;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         unet.set_flash_attention_enabled(enabled);
     }
 
@@ -149,7 +150,7 @@ struct MMDiTModel : public DiffusionModel {
         return 768 + 1280;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         mmdit.set_flash_attention_enabled(enabled);
     }
 
@@ -215,7 +216,7 @@ struct FluxModel : public DiffusionModel {
         return 768;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         flux.set_flash_attention_enabled(enabled);
     }
 
@@ -239,6 +240,72 @@ struct FluxModel : public DiffusionModel {
                             output,
                             output_ctx,
                             diffusion_params.skip_layers);
+    }
+};
+
+struct AnimaModel : public DiffusionModel {
+    std::string prefix;
+    Anima::AnimaRunner anima;
+
+    AnimaModel(ggml_backend_t backend,
+               bool offload_params_to_cpu,
+               const String2TensorStorage& tensor_storage_map = {},
+               const std::string prefix                       = "model.diffusion_model")
+        : prefix(prefix), anima(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+    }
+
+    std::string get_desc() override {
+        return anima.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        anima.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        anima.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        anima.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+        anima.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return anima.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        anima.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 768;
+    }
+
+    void set_flash_attention_enabled(bool enabled) {
+        anima.set_flash_attention_enabled(enabled);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        anima.set_circular_axes(circular_x, circular_y);
+    }
+
+    bool compute(int n_threads,
+                 DiffusionParams diffusion_params,
+                 struct ggml_tensor** output     = nullptr,
+                 struct ggml_context* output_ctx = nullptr) override {
+        return anima.compute(n_threads,
+                             diffusion_params.x,
+                             diffusion_params.timesteps,
+                             diffusion_params.context,
+                             diffusion_params.c_concat,
+                             diffusion_params.y,
+                             output,
+                             output_ctx);
     }
 };
 
@@ -286,7 +353,7 @@ struct WanModel : public DiffusionModel {
         return 768;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         wan.set_flash_attention_enabled(enabled);
     }
 
@@ -357,7 +424,7 @@ struct QwenImageModel : public DiffusionModel {
         return 768;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         qwen_image.set_flash_attention_enabled(enabled);
     }
 
@@ -424,7 +491,7 @@ struct ZImageModel : public DiffusionModel {
         return 768;
     }
 
-    void set_flash_attn_enabled(bool enabled) {
+    void set_flash_attention_enabled(bool enabled) {
         z_image.set_flash_attention_enabled(enabled);
     }
 

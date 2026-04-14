@@ -42,15 +42,21 @@ struct llama_hparams {
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
-    uint32_t n_embd_features = 0;
     uint32_t n_layer;
     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
-    uint32_t n_rot;
-    uint32_t n_embd_head_k; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
-    uint32_t n_embd_head_v; // dimension of values (d_v) aka n_embd_head
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
+
+    // different head size for full_attention and SWA layers
+    uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
+    uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head
+    uint32_t n_embd_head_k_swa;
+    uint32_t n_embd_head_v_swa;
+
+    // different RoPE dimensions for full_attention and SWA layers
+    uint32_t n_rot_full;
+    uint32_t n_rot_swa;
 
     // note: deepseek2 using MLA converts into MQA with larger heads, then decompresses to MHA
     uint32_t n_embd_head_k_mla_impl = 0;
@@ -83,6 +89,7 @@ struct llama_hparams {
     bool     expert_weights_norm  = false;
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
     uint32_t moe_every_n_layers   = 0;
+    uint32_t moe_latent_size      = 0;
     uint32_t nextn_predict_layers = 0;
 
     float f_norm_eps;
@@ -136,6 +143,9 @@ struct llama_hparams {
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
+
+    // for Kimi Linear KDA
+    uint32_t n_embd_head_kda = 0;
 
     // for hybrid state space models
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
@@ -191,17 +201,30 @@ struct llama_hparams {
     std::array<float, LLAMA_MAX_LAYERS> xielu_beta;
     std::array<float, LLAMA_MAX_LAYERS> xielu_eps;
 
+    // DSA (deepseek sparse attention)
+    uint32_t indexer_n_head    = 0;
+    uint32_t indexer_head_size = 0;
+    uint32_t indexer_top_k     = 0;
+
     // qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 
+    // gemma4 per-layer embedding
+    uint32_t n_embd_per_layer = 0;
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
-    // ref: https://github.com/ggerganov/llama.cpp/pull/8141
+    // ref: https://github.com/ggml-org/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;
     uint32_t    dec_n_layer        = 0;
 
     enum llama_pooling_type      pooling_type            = LLAMA_POOLING_TYPE_NONE;
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
+
+
+    // Step35: optional per-layer clamps for (Swi)GLU
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // dense_first means whether the pattern is start with a dense layer
@@ -235,11 +258,17 @@ struct llama_hparams {
 
     uint32_t n_gqa(uint32_t il = 0) const;
 
+    uint32_t n_rot(uint32_t il = 0) const;
+
     // dimension of main + auxiliary input embeddings
     uint32_t n_embd_inp() const;
 
     // dimension of output embeddings
     uint32_t n_embd_out() const;
+
+    // dimension of key/value embeddings for each head (per layer)
+    uint32_t n_embd_head_k(uint32_t il = 0) const;
+    uint32_t n_embd_head_v(uint32_t il = 0) const;
 
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;

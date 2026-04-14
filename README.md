@@ -13,9 +13,13 @@ KoboldCpp is an easy-to-use AI text-generation software for GGML and GGUF models
 - Single file executable, with no installation required and no external dependencies
 - Runs on CPU or GPU, supports full or partial offloaded
 - LLM text generation (Supports all GGML and GGUF models, backwards compatibility with ALL past models)
-- Image Generation (Stable Diffusion 1.5, SDXL, SD3, Flux)
+- Image Generation and Image Editing (Stable Diffusion 1.5, SDXL, SD3, Flux, Qwen Image, Z-Image, Klein)
+- Video Generation (WAN 2.2)
 - Speech-To-Text (Voice Recognition) via Whisper
-- Text-To-Speech (Voice Generation) via OuteTTS, Kokoro, Parler and Dia
+- Text-To-Speech (Voice Generation) via Qwen3TTS, Kokoro, OuteTTS, Parler and Dia
+- Music Generation (Ace Step 1.5)
+- Image Recognition (Multimodal Vision)
+- MCP Server support and tool calling
 - Provides many compatible APIs endpoints for many popular webservices (KoboldCppApi OpenAiApi OllamaApi A1111ForgeApi ComfyUiApi WhisperTranscribeApi XttsApi OpenAiSpeechApi)
 - Bundled KoboldAI Lite UI with editing tools, save formats, memory, world info, author's note, characters, scenarios.
 - Includes multiple modes (chat, adventure, instruct, storywriter) and UI Themes (aesthetic roleplay, classic writer, corporate assistant, messsenger)
@@ -62,7 +66,8 @@ Finally, obtain and load a GGUF model. See [here](#Obtaining-a-GGUF-model)
 
 ## Obtaining a GGUF model
 - KoboldCpp uses GGUF models. They are not included with KoboldCpp, but you can download GGUF files from other places such as [Bartowski's Huggingface](https://huggingface.co/bartowski). Search for "GGUF" on huggingface.co for plenty of compatible models in the `.gguf` format.
-- For beginners, we recommend the models [L3-8B-Stheno-v3.2](https://huggingface.co/bartowski/L3-8B-Stheno-v3.2-GGUF/resolve/main/L3-8B-Stheno-v3.2-Q4_K_S.gguf) (smaller and weaker) or [Tiefighter 13B](https://huggingface.co/KoboldAI/LLaMA2-13B-Tiefighter-GGUF/resolve/main/LLaMA2-13B-Tiefighter.Q4_K_S.gguf) (old but very versatile model) or [Gemma-3-27B Abliterated](https://huggingface.co/mlabonne/gemma-3-27b-it-abliterated-GGUF/resolve/main/gemma-3-27b-it-abliterated.q4_k_m.gguf) (largest and most powerful)
+- For beginners, we recommend [Qwen3-VL-8B](https://huggingface.co/unsloth/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3-VL-8B-Instruct-Q4_K_S.gguf) **(Most Recommended, best all rounder model)**
+- For creative writing and roleplay, you can try [L3-8B-Stheno-v3.2](https://huggingface.co/bartowski/L3-8B-Stheno-v3.2-GGUF/resolve/main/L3-8B-Stheno-v3.2-Q4_K_S.gguf) (old, smaller and weaker) or [Tiefighter 13B](https://huggingface.co/KoboldAI/LLaMA2-13B-Tiefighter-GGUF/resolve/main/LLaMA2-13B-Tiefighter.Q4_K_S.gguf) (old but very versatile model).
 - [Alternatively, you can download the tools to convert models to the GGUF format yourself here](https://kcpptools.concedo.workers.dev). Run `convert-hf-to-gguf.py` to convert them, then `quantize_gguf.exe` to quantize the result.
 - Other models for Whisper (speech recognition), Image Generation, Text to Speech or Image Recognition [can be found on the Wiki](https://github.com/LostRuins/koboldcpp/wiki#what-models-does-koboldcpp-support-what-architectures-are-supported)
 
@@ -117,6 +122,17 @@ when you can't use the precompiled binary directly, we provide an automated buil
 - If you want Metal GPU support, instead run `make LLAMA_METAL=1`, note that MacOS metal libraries need to be installed.
 - To make your build sharable and capable of working on other devices, you must use `LLAMA_PORTABLE=1`
 - After all binaries are built, you can run the python script with the command `python koboldcpp.py --model [ggml_model.gguf]` (and add `--gpulayers (number of layer)` if you wish to offload layers to GPU).
+
+### Compiling on OpenBSD
+- Clone the repo with `git clone https://github.com/LostRuins/koboldcpp.git`
+- the project uses Gnu Makefile format, so you will need gmake: `pkg_add gmake`
+- compiling vulkan support
+  - you will require libvulkan, this is included in the vulkan-loader package, which is a dependency of the vulkan-tools package: `pkg_add vulkan-tools` or `pkg_add vulkan-loader`
+  - you will require glslc, this is incliuded in the shaderc package: `pkg_add shaderc`
+  - if your gmake terminates with "fatal error: 'ggml-vulkan-shaders.hpp' file not found" the problem is probably that glslc is not installed. See above.
+  - OpenBSD's default datasize limit may prevent compiliation `ulimit -d 8388608` should work
+  - compile using `gmake LLAMA_VULKAN=1`
+- After all binaries are built, you can run the python script with the command `python3 koboldcpp.py --model [ggml_model.gguf]`
 
 ### Compiling on Android (Termux Installation)
 - [First, Install and run Termux from F-Droid](https://f-droid.org/en/packages/com.termux/)
@@ -184,6 +200,8 @@ and it will install everything required. Alternatively, you can download the abo
 - Llama.cpp source repo is at https://github.com/ggml-org/llama.cpp (MIT)
 - Stable-diffusion.cpp source repo is at https://github.com/leejet/stable-diffusion.cpp (MIT)
 - TTS.cpp source repo is at https://github.com/mmwillet/TTS.cpp (MIT)
+- Qwen3TTS source repo is at https://github.com/predict-woo/qwen3-tts.cpp (MIT)
+- AceStep.cpp source repo is at https://github.com/ServeurpersoCom/acestep.cpp (MIT)
 - KoboldCpp source repo is at https://github.com/LostRuins/koboldcpp (AGPL)
 - KoboldAI Lite source repo is at https://github.com/LostRuins/lite.koboldai.net (AGPL)
 - For any further enquiries, contact @concedo on discord, or LostRuins on github.

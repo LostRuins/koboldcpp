@@ -21,7 +21,7 @@ enum tts_arch {
 	ORPHEUS_ARCH = 3,
 };
 
-const std::map<std::string, tts_arch> SUPPORTED_ARCHITECTURES = {
+const std::map<std::string, tts_arch> TTSCPP_SUPPORTED_ARCHITECTURES = {
 	{ "parler-tts", PARLER_TTS_ARCH },
 	{ "kokoro", KOKORO_ARCH },
 	{ "dia", DIA_ARCH },
@@ -38,7 +38,7 @@ static std::map<V, K> reverse_map(const std::map<K, V>& m) {
     return r;
 }
 
-const std::map<tts_arch, std::string> ARCHITECTURE_NAMES = reverse_map(SUPPORTED_ARCHITECTURES);
+const std::map<tts_arch, std::string> ARCHITECTURE_NAMES = reverse_map(TTSCPP_SUPPORTED_ARCHITECTURES);
 
 struct generation_configuration {
     generation_configuration(

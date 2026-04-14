@@ -76,7 +76,30 @@
         "assistant_start": "<start_of_turn>model\n",
         "assistant_end": "<end_of_turn>\n"
     }
-},{
+}, {
+    "search": ["<|turn>model","<|think|>","<|channel>thought"],
+    "name": "Google Gemma 4 (26B and 31B)",
+    "adapter": {
+        "system_start": "<|turn>system\n",
+        "system_end": "<turn|>\n",
+        "user_start": "<|turn>user\n",
+        "user_end": "<turn|>\n",
+        "assistant_start": "<|turn>model\n",
+        "assistant_gen":  "<|turn>model\n<|channel>thought\n<channel|>",
+        "assistant_end": "<turn|>\n"
+    }
+}, {
+    "search": ["<|turn>model","<|think|>"],
+    "name": "Google Gemma 4 (E2B and E4B)",
+    "adapter": {
+        "system_start": "<|turn>system\n",
+        "system_end": "<turn|>\n",
+        "user_start": "<|turn>user\n",
+        "user_end": "<turn|>\n",
+        "assistant_start": "<|turn>model\n",
+        "assistant_end": "<turn|>\n"
+    }
+}, {
     "search": ["<|start_header_id|>assistant<|end_header_id|>"],
     "name": "Llama 3.x",
     "adapter": {
@@ -131,6 +154,17 @@
         "assistant_start": "[/INST] ",
         "assistant_gen": "[/INST]",
         "assistant_end": "</s>"
+    }
+}, {
+    "search": ["[gMASK]<sop>","content.split('</think>')"],
+    "name": "GLM-4.7",
+    "adapter": {
+        "system_start": "<|system|>\n",
+        "system_end": "",
+        "user_start": "<|user|>\n",
+        "user_end": "",
+        "assistant_start": "<|assistant|>\n<think>",
+        "assistant_end": ""
     }
 }, {
     "search": ["[gMASK]<sop>"],

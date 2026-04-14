@@ -14,10 +14,11 @@ env:
 jobs:
   windows:
     runs-on: windows-2022
+    permissions: write-all
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
 
@@ -26,7 +27,7 @@ jobs:
           echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
 
       - name: Get Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v6
         with:
           python-version: 3.8.10
 
@@ -58,7 +59,7 @@ jobs:
           echo VS2019 Setup completed
           exit /b 0
 
-      - uses: Jimver/cuda-toolkit@v0.2.24
+      - uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
           cuda: '12.1.0'
@@ -125,7 +126,7 @@ jobs:
           ./make_pyinstaller_cuda.bat
 
       - name: Save artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: kcpp_windows_pyinstallers
           path: dist/
@@ -135,8 +136,15 @@ jobs:
         run: |
           echo "If you cannot compile vulkan shaders yourself with glslc, you can manually patch in precompiled vulkan shader source files. Copy ggml-vulkan-shaders.cpp and ggml-vulkan-shaders.hpp to the ggml/src subdirectory in KoboldCpp source files before building." > vulkan-readme.txt
 
+      - name: Upload to GitHub Rolling Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload rolling dist/koboldcpp.exe --clobber
+          gh release upload rolling dist/koboldcpp-nocuda.exe --clobber
+
       - name: Save Standalone Vulkan Shaders
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vulkan_precompiled_shaders
           path: |
@@ -162,7 +170,7 @@ jobs:
         shell: pwsh
 
       - name: Upload Tools
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: koboldcpp_tools
           path: |

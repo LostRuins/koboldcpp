@@ -195,7 +195,18 @@ extern "C"
 
     generation_outputs generate(const generation_inputs inputs)
     {
-        return gpttype_generate(inputs);
+        try {
+            return gpttype_generate(inputs);
+        } catch (const std::exception & e) {
+            generation_outputs output;
+            printf("\nGeneration encountered an exception: %s\n", e.what());
+            output.text = nullptr;
+            output.status = 0;
+            output.prompt_tokens = output.completion_tokens = 0;
+            output.stopreason = stop_reason::ERROR_ENCOUNTERED;
+            generation_finished = true;
+            return output;
+        }
     }
 
     bool sd_load_model(const sd_load_model_inputs inputs)
@@ -240,6 +251,15 @@ extern "C"
     embeddings_generation_outputs embeddings_generate(const embeddings_generation_inputs inputs)
     {
         return embeddingstype_generate(inputs);
+    }
+
+    bool music_load_model(const music_load_model_inputs inputs)
+    {
+        return musictype_load_model(inputs);
+    }
+    music_generation_outputs music_generate(const music_generation_inputs inputs)
+    {
+        return musictype_generate(inputs);
     }
 
     const char * new_token(int idx) {

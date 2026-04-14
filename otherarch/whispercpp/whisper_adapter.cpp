@@ -27,20 +27,8 @@ static std::string whisper_output_text = "";
 
 int total_transcribe_gens = 0;
 
-static bool is_wav_buffer(const std::string buf) {
-    // RIFF ref: https://en.wikipedia.org/wiki/Resource_Interchange_File_Format
-    // WAV ref: https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html
-    if (buf.size() < 12 || buf.substr(0, 4) != "RIFF" || buf.substr(8, 4) != "WAVE") {
-        return false;
-    }
-    uint32_t chunk_size = *reinterpret_cast<const uint32_t*>(buf.data() + 4);
-    if (chunk_size + 8 != buf.size()) {
-        return false;
-    }
-    return true;
-}
 
-static bool read_wav(const std::string & b64data, std::vector<float>& pcmf32)
+static bool read_audio(const std::string & b64data, std::vector<float>& pcmf32)
 {
     std::vector<uint8_t> media_data_buffer = kcpp_base64_decode(b64data);
 
@@ -52,7 +40,7 @@ static bool read_wav(const std::string & b64data, std::vector<float>& pcmf32)
 
     if(whisperdebugmode==1 && !whisper_is_quiet)
     {
-        printf("\nwav_data_size: %d",pcmf32.size());
+        printf("\nwav_data_size: %zu",pcmf32.size());
     }
 
     return true;
@@ -141,7 +129,7 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
 
     std::vector<float> pcmf32;               // mono-channel F32 PCM
 
-    if (!::read_wav(b64data, pcmf32)) {
+    if (!::read_audio(b64data, pcmf32)) {
         printf("\nWhisper: Failed to read input wav data!\n");
         output.text = "";
         output.status = 0;

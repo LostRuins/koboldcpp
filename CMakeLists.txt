@@ -104,12 +104,12 @@ if (LLAMA_CUBLAS)
         add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${LLAMA_CUDA_PEER_MAX_BATCH_SIZE})
 
         # only build minimal quants required for fattn quant kv
-        file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-vec*q4_0-q4_0.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
-        file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-vec*q8_0-q8_0.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
-        file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-vec*f16-f16.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
+        list(APPEND GGML_SOURCES_CUDA
+            ggml/src/ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
+            ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
+            ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
+            ggml/src/ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu
+        )
 
         if (LLAMA_STATIC)
             if (WIN32)
@@ -192,12 +192,12 @@ if (LLAMA_HIPBLAS)
         add_compile_definitions(GGML_USE_HIP GGML_USE_CUDA SD_USE_CUDA GGML_HIP_NO_VMM)
         add_library(ggml-rocm ${GGML_SOURCES_CUDA})
 
-        file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-vec*q4_0-q4_0.cu")
-        list(APPEND GGML_SOURCES_ROCM ${SRCS})
-        file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-vec*q8_0-q8_0.cu")
-        list(APPEND GGML_SOURCES_ROCM ${SRCS})
-        file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/fattn-vec*f16-f16.cu")
-        list(APPEND GGML_SOURCES_ROCM ${SRCS})
+        list(APPEND GGML_SOURCES_ROCM
+            ggml/src/ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu
+            ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu
+            ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu
+            ggml/src/ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu
+        )
 
         # only build minimal quants required for fattn quant kv
         set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
@@ -453,11 +453,15 @@ add_library(common2
             tools/mtmd/clip.h
             src/unicode.h
             src/unicode.cpp
+            common/unicode.h
+            common/unicode.cpp
             src/llama-impl.h
             src/llama-impl.cpp
             src/unicode-data.cpp
             otherarch/utils.cpp
             otherarch/utils.h
+            common/reasoning-budget.cpp
+            common/reasoning-budget.h
             tools/mtmd/mtmd-audio.cpp
             tools/mtmd/mtmd-audio.h)
 target_include_directories(common2 PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
@@ -479,9 +483,16 @@ target_compile_features(whisper_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(whisper_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(whisper_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_library(music_adapter
+            otherarch/acestep/music_adapter.cpp)
+target_include_directories(music_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor ./otherarch/acestep ./tools ./common)
+target_compile_features(music_adapter PUBLIC cxx_std_17) # don't bump
+target_link_libraries(music_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
+set_target_properties(music_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(tts_adapter
             otherarch/tts_adapter.cpp)
-target_include_directories(tts_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor ./otherarch/ttscpp/include ./otherarch/ttscpp/src ./tools ./common)
+target_include_directories(tts_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor ./otherarch/ttscpp/include ./otherarch/ttscpp/src ./otherarch/qwen3tts ./tools ./common)
 target_compile_features(tts_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(tts_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(tts_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -508,7 +519,7 @@ if (LLAMA_CUBLAS)
     set_target_properties(${TARGET} PROPERTIES PREFIX "")
     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME "koboldcpp_cublas")
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_link_libraries(${TARGET} PUBLIC Threads::Threads ggml ggml_v1 ggml_v2 ggml_v3 common2 gpttype_adapter whisper_adapter tts_adapter embeddings_adapter sdtype_adapter ${LLAMA_EXTRA_LIBS})
+    target_link_libraries(${TARGET} PUBLIC Threads::Threads ggml ggml_v1 ggml_v2 ggml_v3 common2 gpttype_adapter whisper_adapter music_adapter tts_adapter embeddings_adapter sdtype_adapter ${LLAMA_EXTRA_LIBS})
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
     add_custom_command(
@@ -528,7 +539,7 @@ if (LLAMA_HIPBLAS)
     set_target_properties(${TARGET} PROPERTIES PREFIX "")
     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME "koboldcpp_hipblas")
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_link_libraries(${TARGET} PUBLIC Threads::Threads ggml ggml_v1 ggml_v2 ggml_v3 common2 gpttype_adapter whisper_adapter tts_adapter embeddings_adapter sdtype_adapter ${LLAMA_EXTRA_LIBS})
+    target_link_libraries(${TARGET} PUBLIC Threads::Threads ggml ggml_v1 ggml_v2 ggml_v3 common2 gpttype_adapter whisper_adapter music_adapter tts_adapter embeddings_adapter sdtype_adapter ${LLAMA_EXTRA_LIBS})
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
     add_custom_command(

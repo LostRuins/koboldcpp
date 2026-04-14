@@ -1,8 +1,7 @@
 #ifndef __UNET_HPP__
 #define __UNET_HPP__
 
-#include "common.hpp"
-#include "ggml_extend.hpp"
+#include "common_block.hpp"
 #include "model.h"
 
 /*==================================================== UnetModel =====================================================*/

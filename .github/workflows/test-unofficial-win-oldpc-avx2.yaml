@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
 
@@ -26,7 +26,7 @@ jobs:
           echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
 
       - name: Get Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v6
         with:
           python-version: 3.8.10
 
@@ -91,7 +91,7 @@ jobs:
         run: |
           make LLAMA_VULKAN=1 LLAMA_PORTABLE=1 -j ${env:NUMBER_OF_PROCESSORS}
 
-      - uses: Jimver/cuda-toolkit@v0.2.15
+      - uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
           cuda: '11.4.4'
@@ -124,7 +124,7 @@ jobs:
           ./make_pyinstaller_cuda_oldpc.bat
 
       - name: Save artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: kcpp_windows_pyinstallers
           path: dist/

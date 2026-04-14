@@ -18,7 +18,7 @@ static  __global__ void im2col_kernel(
     const int64_t ikh = rem / KW;
     const int64_t ikw = rem - ikh * KW;
 
-    const int64_t  iow = blockIdx.y;
+    for (int64_t iow = blockIdx.y; iow < OW; iow += gridDim.y) {
     for (int64_t iz = blockIdx.z; iz < N_OH; iz+=MAX_GRIDDIM_Z) {
         const int64_t  in = iz / OH;
         const int64_t  ioh = iz - in * OH;
@@ -36,6 +36,7 @@ static  __global__ void im2col_kernel(
             dst[offset_dst] = x[offset_src + iih * IW + iiw];
         }
     }
+    }
 
     GGML_UNUSED(IC);
     GGML_UNUSED(KH);
@@ -51,7 +52,7 @@ static void im2col_cuda(const float * x, T* dst,
     const int64_t num_blocks = (IC_KH_KW + CUDA_IM2COL_BLOCK_SIZE - 1) / CUDA_IM2COL_BLOCK_SIZE;
     const int64_t N_OH = N * OH;
     const int64_t KH_KW = KW*KH;
-    dim3 block_nums(num_blocks, OW, MIN(N_OH, MAX_GRIDDIM_Z));
+    dim3 block_nums(num_blocks, MIN(OW, MAX_GRIDDIM_Z), MIN(N_OH, MAX_GRIDDIM_Z));
     im2col_kernel<<<block_nums, MIN(IC_KH_KW, CUDA_IM2COL_BLOCK_SIZE) , 0, stream>>>(x, dst, IC, IW, IH, OH, OW, KW, KH,
                                                                                      IC_IH_IW, IH_IW, N_OH, KH_KW, IC_KH_KW,
                                                                                      s0, s1, p0, p1, d0, d1);

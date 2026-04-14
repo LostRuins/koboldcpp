@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KoboldCpp Music and Audio Generation</title>
+
+<style>
+:root{
+  --bg:#0f172a;
+  --panel:#1e293b;
+  --accent:#6366f1;
+  --accent2:#22d3ee;
+  --text:#f1f5f9;
+  --muted:#94a3b8;
+  --danger:#ef4444;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,system-ui,sans-serif;
+  background:linear-gradient(135deg,#0f172a,#1e1b4b);
+  color:var(--text);
+}
+header{
+  padding:16px 12px;
+  font-size:20px;
+  font-weight:600;
+  background:rgba(0,0,0,0.3);
+  backdrop-filter:blur(10px);
+}
+.wrapper{
+  display:grid;
+  grid-template-columns:minmax(340px,500px) 1fr;
+  gap:14px;
+  padding:10px;
+}
+@media(max-width:1100px){
+  .wrapper{grid-template-columns:1fr;}
+}
+.panel{
+  background:var(--panel);
+  padding:18px;
+  border-radius:16px;
+  box-shadow:0 10px 40px rgba(0,0,0,.4);
+}
+h2{
+  margin:0 0 10px 0;
+  font-size:16px;
+  color:var(--accent2);
+}
+input,textarea{
+  width:100%;
+  padding:8px 10px;
+  border-radius:8px;
+  border:none;
+  background:#0f172a;
+  color:var(--text);
+  font-size:14px;
+}
+textarea{resize:vertical;min-height:90px;}
+label{font-size:12px;color:var(--muted);}
+.form-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+  gap:10px;
+}
+.compact-row{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(80px,1fr));
+  gap:8px;
+}
+button{
+  padding:8px 12px;
+  border-radius:8px;
+  border:none;
+  cursor:pointer;
+  font-weight:600;
+  font-size:14px;
+}
+.primary{background:var(--accent);color:white;}
+.secondary{background:#334155;color:white;}
+.danger{background:var(--danger);color:white;}
+.actions{
+  display:flex;
+  gap:10px;
+  margin-top:12px;
+  flex-wrap:wrap;
+  align-items:center;
+}
+.library-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+  gap:14px;
+}
+.library-item{
+  background:#0f172a;
+  padding:12px;
+  border-radius:12px;
+  display:flex;
+  flex-direction:column;
+}
+.library-item h4{
+  margin:0 0 6px 0;
+  font-size:14px;
+}
+.meta{
+  font-size:11px;
+  color:var(--muted);
+  margin-bottom:6px;
+}
+audio{width:100%;margin-top:6px;}
+.advanced-toggle{
+  margin-top:8px;
+  font-size:14px;
+  cursor:pointer;
+  color:var(--accent2);
+}
+.hidden{display:none}
+.pagination{
+  margin-top:12px;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  gap:10px;
+}
+
+/* Small inline spinner */
+.inline-spinner{
+  width:18px;
+  height:18px;
+  border:3px solid rgba(255,255,255,.2);
+  border-top:3px solid var(--accent2);
+  border-radius:50%;
+  animation:spin 1s linear infinite;
+}
+@keyframes spin{
+  to{transform:rotate(360deg);}
+}
+
+/* Message Box */
+#messageBox{
+  position:fixed;
+  bottom:26px;
+  right:26px;
+  background:#31486f;
+  padding:16px 20px;
+  border-radius:12px;
+  box-shadow:0 10px 30px rgba(0,0,0,.5);
+  display:none;
+  max-width:340px;
+  font-size:14px;
+}
+
+input[type="checkbox"] {
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+select{
+  width:100%;
+  padding:8px 10px;
+  border-radius:8px;
+  border:none;
+  background:#0f172a;
+  color:var(--text);
+  font-size:14px;
+  appearance:none;
+  -webkit-appearance:none;
+  -moz-appearance:none;
+  cursor:pointer;
+}
+select{
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) calc(50% - 3px),
+    calc(100% - 10px) calc(50% - 3px);
+  background-size:5px 5px;
+  background-repeat:no-repeat;
+}
+</style>
+
+</head>
+<body>
+
+<header>
+<img style="width: 36px; height: 36px; vertical-align: middle; margin-right:4px" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAAXNSR0IB2cksfwAAAAlwSFlzAAALEwAACxMBAJqcGAAAADxQTFRFS2Si+X5+pmBfHyApLjZSS2SjP057Vzw5EA4Sf1ZT+9Sv1WpqnYx/7qaYw7vUAAAAS2Sj9PPzgnrLS2SjAzrF9gAAABR0Uk5T///////w////////////AKj//yMlHqVpAAAD3klEQVR4nKWXi7KjIAyGFSgxEjhV3/9d90+8onZPd810prWSDwi50fyoTNP7/X79g2D4NJlqo+rvV/Mf8npPM2B6/4+6ihKaB/pGaH4e6IPw00y3+48xhBC3J32Id+NeUzN9UPfer4RoD/eIqbnuwLS7zncLAfqdPvvDmvY9XAE6vuuImEAw8fNT1/kr4Qqw+YhdIocfJl0glxyTvyG8m7MNY1B9diAkmgGUODnH7Km7AF53AGEjUJtWYdUPzn0LyC6AQO0qCUCi1PKXAM5tCwXeAC0ROf36AqA2VACmbQ8yP9DVimeA6lPKkLaW3EPylXAARBXV701OhOVPI6hcAXH1mTyP7e8AMyEc4mQDzP7XrfOfl5D7ndAdfXID6NwMyXACEpEbgPTCLJn1hEGoAep/OKheQiCEEhj1HgBQX1ZxQMPLlyVsABwejkp8EGEQAkxRA4RgIRYhTxme1fkKoBZwAHjLA+b/cgLQ8gZ4gZ+tVtgAnboaa+Lg0IwRhBqAmX0cI0WFqHN3FUAXAOPpzIWhPzZYQgUAu4ljiaKTaKwtZtwAIdv8XkocR9+UYM5/BMTRxzJKsWEu+RPAAsBxKSWWgTHS18cofiwhlCJD4cApUb0CNWKA/5dhwAqKD2UIXAEoFgUMkIJTCCcjzkGE890BQhXA685WQNqD6ujKWDRhhI7EdKUCtKSGxd8ASEr+6sqNApKPeD/iFEpT6nAUcAMgMmBzqwVPgJCd80X3AIlDDcjSzH8PJbD7AGiT020WjfcCN0jI5WwJGk5axP4eikeyvQd4HE5i7I4xEpWANKg0m2p0OUIcQKJnd7uCaABMRebOSOoB1WUVYACzaGSs012NaI5gAC0GcPWD9iLI6/qVdGeXY7R6xu1M0FAhG7s865ctw97Zoz85kuXi5T2EbaZatLileQA+VifrYGrT7ruL+lbZ0orYcXQJpry/tl+26l1s8sOy+BxMqKjr23nf7mhFnktbOgJOGQmnVG0ZVve06VvDUFmEztGIhHAy2YHA+qsCuFNS1T0Edf41AOZ1b7uwH1tYYFA4p3U1owiOOu+AsyxrQ3AIXwrLXtryL4BPpW0rrvMaPgHSx+K6l3cj3Oin1lH6S3nfd+KDa51lAjJhE6ddz7XRu29xUH51O95SgNOahDTB3PPvLc7cZPWYEVlVlp5AkGtJK/63XZoq0jBsvUrPeNDvr/tE1SnD3qxIEVuNfAsY0J9w4Ux2ZKizHPLHFdw127r7HIS2ZpvFTHHbbN+3+2Qm29p9NvXv2v3twkHHCwd9vnA8vvI8vnQ9vvY9v3g+vvo+v3w/u/7/AZoAPJwrbZ1IAAAAAElFTkSuQmCC"/>
+<span>KoboldCpp Music and Audio Generation</span></header>
+
+<div class="wrapper">
+
+<div class="panel">
+<div style="display:flex; gap:8px; margin-bottom:10px;">
+  <button class="secondary" onclick="switchTab('music')" id="tab_music">🎵 Music</button>
+  <button class="secondary" onclick="switchTab('tts')" id="tab_tts">🗣 TTS</button>
+</div>
+<div id="musicTab">
+  <h2>Song Setup</h2>
+
+  <label>Caption</label> <div style="float:right"><input id="rewrite_caption" type="checkbox" style="width: auto;vertical-align: middle;" checked><label>Rewrite Caption</label></div>
+
+  <input id="caption" placeholder="Describe the song">
+
+  <div style="margin-top:10px">
+    <label>Lyrics</label>
+    <textarea id="lyrics" placeholder="Enter song lyrics, or press 'Plan' to generate them."></textarea>
+  </div>
+
+  <div class="form-grid" style="margin-top:12px">
+    <div><label>BPM</label><input id="bpm" type="number"></div>
+    <div><label>Duration</label><input id="duration" type="number"></div>
+    <div><label>Key</label><input id="keyscale"></div>
+    <div><label>Time Sig</label><input id="timesignature"></div>
+    <div><label>Language</label><input id="vocal_language"></div>
+    <div>
+      <label>Seed</label>
+      <div style="display:flex; gap:6px;">
+        <input id="seed" type="number" style="flex:1;">
+        <button type="button" class="secondary" onclick="randomizeSeed()">🎲</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="advanced-toggle" onclick="toggleAdvanced()">⚙ Advanced Settings</div>
+
+  <div id="advanced" class="hidden">
+    <div class="compact-row" style="margin-top:10px">
+      <div><label>Temp</label><input id="lm_temperature" type="number" step="0.01" value="0.9"></div>
+      <div><label>CFG</label><input id="lm_cfg_scale" type="number" step="0.1" value="3.0"></div>
+      <div><label>Top-P</label><input id="lm_top_p" type="number" step="0.01" value="0.9"></div>
+      <div><label>Top-K</label><input id="lm_top_k" type="number" value="50"></div>
+      <div><label>RepPen</label><input id="lm_rep_pen" type="number" value="1.03"></div>
+      <div><label>Codes Top-P</label><input id="codes_top_p" type="number" value="0.99"></div>
+      <div><label>Codes Top-K</label><input id="codes_top_k" type="number" value="1000"></div>
+      <div><label>Codes Temp</label><input id="codes_temperature" type="number" value="1.0"></div>
+      <div><label>Steps</label><input id="inference_steps" type="number" value="8"></div>
+      <div><label>Guidance</label><input id="guidance_scale" type="number" value="1"></div>
+      <div><label>Shift</label><input id="shift" type="number" value="3"></div>
+      <div><label>Save as MP3</label><input id="use_mp3" type="checkbox"></div>
+      <div><label>Stereo</label><input id="stereo" type="checkbox" checked></div>
+      <div><label>Gen Codes</label><input id="gen_codes" type="checkbox"></div>
+      <div><label>Plan with LLM</label><input id="plan_with_main_llm" type="checkbox"></div>
+    </div>
+    <div>
+      <div><label>AudioCodes</label><textarea id="audio_codes"></textarea></div>
+    </div>
+    <div style="margin-top:8px">
+      <label>Music Reference Audio (.wav / .mp3)</label>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input id="music_reference_audio" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg">
+        <button type="button" class="secondary" onclick="clearReferenceAudio()">Clear</button>
+      </div>
+      <div><label>Reference Audio Strength (0.0 to 1.0)</label><input id="audio_cover_strength" type="number" step="0.1" value="0.5"></div>
+    </div>
+  </div>
+
+  <div style="margin-top:14px">
+    <label>API Base URL (optional)</label>
+    <div style="display:flex; gap:6px;">
+      <input id="baseUrl" placeholder="http://localhost:5001">
+    </div>
+    <label>API Key (optional)</label>
+    <div style="display:flex; gap:6px;">
+      <input type="password" id="baseUrlKey" placeholder="(Input Key)">
+    </div>
+  </div>
+
+  <div class="actions" id="actionContainer">
+    <div id="normalActions" style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="primary" onclick="planSong()">Plan</button>
+      <button class="primary" onclick="generateSong()">Generate</button>
+      <button class="danger" onclick="clearFields()">Clear</button>
+      <button onclick="exportPlan()">Export JSON</button>
+      <button onclick="document.getElementById('importFile').click()">Import JSON</button>
+    </div>
+
+    <button id="abortBtn" class="danger hidden" onclick="abortRequest()">Abort</button>
+    <div id="inlineSpinner" class="inline-spinner hidden"></div>
+
+    <input type="file" id="importFile" hidden accept="application/json" onchange="importPlan(event)">
+  </div>
+  <div>
+  <p style="font-size:14px">Click 'Plan' first to generate lyrics, BPM and duration. Edit as needed.
+  <br>When satisfied, click 'Generate' to make the music</p>
+  </div>
+</div>
+<div id="ttsTab" class="hidden">
+
+  <h2>TTS Generation</h2>
+
+  <label>Text</label>
+  <textarea id="tts_input" placeholder="Enter text to speak..."></textarea>
+
+  <div style="margin-top:10px">
+    <label>Voice</label>
+    <div style="display:flex; gap:6px;">
+      <select id="tts_voice" style="flex:1;"></select>
+      <button class="secondary" onclick="fetchVoices()">↻</button>
+    </div>
+  </div>
+
+  <div style="margin-top:10px">
+    <label>Instruction (optional)</label>
+    <input id="tts_instruction" placeholder="e.g. angry shouting loud male">
+  </div>
+
+  <div style="margin-top:14px">
+    <label>API Base URL (optional)</label>
+    <input id="tts_baseUrl" placeholder="http://localhost:5001">
+    <label>API Key (optional)</label>
+    <div style="display:flex; gap:6px;">
+      <input type="password" id="tts_baseUrlKey" placeholder="(Input Key)">
+    </div>
+  </div>
+
+  <div id="ttsActions" class="actions">
+    <button class="primary" onclick="generateTTS()">Generate Speech</button>
+    <button class="danger" onclick="clearTTS()">Clear</button>
+  </div>
+  <div id="inlineSpinner2" class="inline-spinner hidden"></div>
+
+  <p style="font-size:14px;margin-top:10px">
+    Generate speech clips and store them in your library.
+  </p>
+
+</div>
+
+</div>
+
+<div class="panel">
+  <h2>Your Library</h2>
+  <div id="library" class="library-grid"></div>
+  <div class="pagination">
+    <button onclick="prevPage()">Prev</button>
+    <span id="pageInfo"></span>
+    <button onclick="nextPage()">Next</button>
+  </div>
+</div>
+
+</div>
+
+<div id="messageBox"><span id="messageText"></span></div>
+
+<script>
+const DB_NAME="kobo_music_db";
+const STORE="kobo_music_tracks";
+const PAGE_SIZE=20;
+
+let db;
+let currentPage=1;
+let totalItems=0;
+let currentController=null;
+
+let currentTab = "music";
+
+function switchTab(tab){
+  currentTab = tab;
+
+  document.getElementById("musicTab").classList.toggle("hidden", tab !== "music");
+  document.getElementById("ttsTab").classList.toggle("hidden", tab !== "tts");
+
+  document.getElementById("tab_music").classList.toggle("primary", tab==="music");
+  document.getElementById("tab_tts").classList.toggle("primary", tab==="tts");
+
+  loadLibrary(); // refresh view if needed later
+}
+
+async function fetchVoices(){
+  try{
+    const base = document.getElementById("tts_baseUrl").value.trim();
+    const url = (base ? base.replace(/\/$/,"") : "") + "/speakers_list";
+
+    let headers =  {"Content-Type": "application/json"};
+    if(document.getElementById("tts_baseUrlKey").value!="")
+    {
+      headers["Authorization"] = `Bearer ${document.getElementById("tts_baseUrlKey").value}`;
+    }
+
+    const res = await fetch(url,{
+      method: "GET",
+      headers: headers
+    });
+    if(!res.ok) throw new Error();
+
+    const voices = await res.json();
+    populateVoiceList(voices);
+
+    showMessage("Voices loaded.");
+  }catch(e){
+    populateVoiceList(["kobo"]);
+    showMessage("⚠ Failed to fetch voices. Using fallback.");
+  }
+}
+
+function populateVoiceList(list){
+  const select = document.getElementById("tts_voice");
+  select.innerHTML = "";
+  list.forEach(v=>{
+    const opt=document.createElement("option");
+    opt.value=v;
+    opt.textContent=v;
+    select.appendChild(opt);
+  });
+}
+
+async function generateTTS(){
+  try{
+    currentController=new AbortController();
+    setLoading(true);
+
+    const base = document.getElementById("tts_baseUrl").value.trim();
+    const url = (base ? base.replace(/\/$/,"") : "") + "/v1/audio/speech";
+
+    const payload = {
+      input: document.getElementById("tts_input").value,
+      voice: document.getElementById("tts_voice").value
+    };
+
+    const instruction = document.getElementById("tts_instruction").value;
+    if(instruction) payload.instruction = instruction;
+
+    let headers =  {"Content-Type": "application/json"};
+    if(document.getElementById("tts_baseUrlKey").value!="")
+    {
+      headers["Authorization"] = `Bearer ${document.getElementById("tts_baseUrlKey").value}`;
+    }
+
+    const res = await fetch(url,{
+      method:"POST",
+      headers:headers,
+      body:JSON.stringify(payload),
+      signal:currentController.signal
+    });
+
+    if(!res.ok) throw new Error();
+
+    const audioBlob = await res.blob();
+
+    const tx=db.transaction(STORE,"readwrite");
+    tx.objectStore(STORE).add({
+      title: payload.input.slice(0,30),
+      date:new Date().toISOString(),
+      params:payload,
+      audio:audioBlob,
+      type:"tts"
+    });
+
+    tx.oncomplete=()=>{
+      currentPage=1;
+      loadLibrary();
+      showMessage("TTS generated!");
+    };
+
+  }catch(e){
+    if(e.name!=="AbortError")
+      showMessage("⚠ Failed to generate TTS.");
+  }finally{
+    currentController=null;
+    setLoading(false);
+  }
+}
+
+function clearTTS(){
+  document.getElementById("tts_input").value="";
+  document.getElementById("tts_instruction").value="";
+}
+
+//end of tts part
+
+function setLoading(isLoading){
+  document.getElementById("normalActions").style.display = isLoading ? "none" : "flex";
+  document.getElementById("ttsActions").style.display = isLoading ? "none" : "flex";
+
+  // shared controls
+  document.getElementById("abortBtn").classList.toggle("hidden", !isLoading);
+  document.getElementById("inlineSpinner").classList.toggle("hidden", !isLoading);
+  document.getElementById("inlineSpinner2").classList.toggle("hidden", !isLoading);
+}
+
+function abortRequest(){
+  if(currentController){
+    currentController.abort();
+    currentController=null;
+    setLoading(false);
+    showMessage("Request aborted.");
+  }
+}
+
+function showMessage(msg, timeout=3000){
+  const box=document.getElementById("messageBox");
+  document.getElementById("messageText").innerText=msg;
+  box.style.display="block";
+  setTimeout(()=>box.style.display="none",timeout);
+}
+
+function buildUrl(path){
+  let BASE_URL=document.getElementById("baseUrl").value.trim();
+  if(!BASE_URL) return path;
+  return BASE_URL.replace(/\/$/,"")+path;
+}
+
+function initDB(){
+  return new Promise((res,rej)=>{
+    const req=indexedDB.open(DB_NAME,2);
+    req.onupgradeneeded=e=>{
+      db=e.target.result;
+      db.createObjectStore(STORE,{keyPath:"id",autoIncrement:true});
+    };
+    req.onsuccess=e=>{db=e.target.result;res()};
+    req.onerror=rej;
+  });
+}
+
+function randomizeSeed(){
+  const seedInput = document.getElementById("seed");
+  const randomSeed = Math.floor(Math.random() * 899999 + 100000);
+  seedInput.value = randomSeed;
+}
+
+function toggleAdvanced(){
+  document.getElementById("advanced").classList.toggle("hidden");
+}
+
+function getFormData(){
+  const ids=["caption","lyrics","bpm","duration","keyscale","timesignature",
+  "vocal_language","seed","lm_temperature","lm_cfg_scale","lm_top_p","lm_top_k","lm_rep_pen","inference_steps",
+  "codes_top_p","codes_top_k","codes_temperature","audio_cover_strength",
+  "guidance_scale","shift","audio_codes"];
+  const data={};
+  ids.forEach(id=>{
+    const el=document.getElementById(id);
+    if(!el) return;
+    const v=el.value;
+    if(v!=="") {data[id]=isNaN(v)?v:Number(v);}
+  });
+  data["stereo"] = (document.getElementById("stereo").checked ? true : false);
+  data["use_mp3"] = (document.getElementById("use_mp3").checked ? true : false);
+  data["gen_codes"] = (document.getElementById("gen_codes").checked ? true : false);
+  data["rewrite_caption"] = (document.getElementById("rewrite_caption").checked ? true : false);
+  return data;
+}
+
+function updateForm(data){
+  //let origseed = document.getElementById("seed").value;
+  Object.keys(data).forEach(k=>{
+    if(document.getElementById(k))
+      document.getElementById(k).value=data[k]??"";
+  });
+  //if(origseed=="-1" || origseed=="")
+  //{
+  //  document.getElementById("seed").value = "-1";
+  //}
+}
+
+function deriveTitle(caption){
+  let rnd_id = Math.floor(Math.random() * 8999) + 1000;
+  if(!caption)
+  {
+    caption = "Untitled";
+  }
+  let output = caption.trim().split("\n")[0].slice(0,30);
+  output += ` ${rnd_id}`;
+  return output;
+}
+
+async function planSong()
+{
+  const useLLM = document.getElementById("plan_with_main_llm").checked;
+  if(useLLM)
+  {
+    planSongWithLLM();
+  }else{
+    planSongNative();
+  }
+}
+
+async function planSongNative(){
+  try{
+    currentController=new AbortController();
+    setLoading(true);
+
+    const seedInput = document.getElementById("seed");
+    if(seedInput.value === "-1" || seedInput.value === ""){
+      randomizeSeed();
+    }
+
+    let headers =  {"Content-Type":"application/json"};
+    if(document.getElementById("baseUrlKey").value!="")
+    {
+      headers["Authorization"] = `Bearer ${document.getElementById("baseUrlKey").value}`;
+    }
+
+    const res=await fetch(buildUrl("/api/extra/music/prepare"),{
+      method:"POST",
+      headers:headers,
+      body:JSON.stringify(getFormData()),
+      signal:currentController.signal
+    });
+
+    if(!res.ok) throw new Error();
+    const data=await res.json();
+    if(data && data.error && data.error != "")
+    {
+      showMessage(`Plan failed! Error: ${data.error}`);
+    }else{
+      updateForm(data);
+      showMessage("Plan generated.");
+    }
+
+  }catch(e){
+    if(e.name!=="AbortError")
+      showMessage("⚠ Unable to connect to server.");
+  }finally{
+    currentController=null;
+    setLoading(false);
+  }
+}
+
+async function planSongWithLLM(){
+  try{
+    currentController=new AbortController();
+    setLoading(true);
+
+    const seedInput = document.getElementById("seed");
+    if(seedInput.value === "-1" || seedInput.value === ""){
+      randomizeSeed();
+    }
+
+    let origPayload = getFormData();
+    let origCaption = (origPayload["caption"] ? origPayload["caption"] : "an interesting song");
+    let payload = {"temperature":1.0, "rep_pen":1.04, "top_p":0.97, "messages":[{"role":"system","content":"Please use the music generation tool to generate the caption and full song lyrics based on the request information provided by the user, with outputs wrapped in a JSON format. Ensure BPM, duration and keyscale values are appropriate to the song length and genre, generation may fail if parameters are unrealistic."},{"role":"user","content":origCaption}],"tool_choice":{"type":"function","function":{"name":"generate_music"}},"tools":[{"type":"function","function":{"name":"generate_music","description":"Generates a new song based on provided request. All output fields are mandatory.","parameters":{"type":"object","properties":{"caption":{"type":"string","description":"Acoustically relevant and detailed description of the song such as the genre and iconic elements."},"lyrics":{"type":"string","description":"The complete full song lyrics, suitably long for its genre. Each line should be on a newline, with double newlines between verses, and stanza headings in square brackets e.g. [Verse 1]"},"bpm":{"type":"integer","description":"The appropriate BPM (beats per minute) for the genre of the song."},"duration":{"type":"integer","description":"Total song duration in seconds, based on BPM and amount of lyrics."},"keyscale":{"type":"string","description":"Keyscale to use for the song. A/B/C/D/E/F/G Major/Minor/Dorian/Pentatonic etc."},"timesignature":{"type":"integer","description":"Time signature to use for the song, as a single integer. Valid values 2,3,4,6"},"vocal_language":{"type":"string","description":"Language code for this song lyrics, e.g. en"}},"required":["caption","lyrics","bpm","duration","keyscale","timesignature","vocal_language"]}}}]};
+
+    let headers =  {"Content-Type":"application/json"};
+    if(document.getElementById("baseUrlKey").value!="")
+    {
+      headers["Authorization"] = `Bearer ${document.getElementById("baseUrlKey").value}`;
+    }
+
+    const res=await fetch(buildUrl("/v1/chat/completions"),{
+      method:"POST",
+      headers:headers,
+      body:JSON.stringify(payload),
+      signal:currentController.signal
+    });
+
+    if(!res.ok) throw new Error();
+    const data=await res.json();
+
+    try
+    {
+      let toolres = data.choices[0].message.tool_calls[0].function.arguments;
+      toolres = JSON.parse(toolres);
+      updateForm(toolres);
+      showMessage("Plan generated.");
+    }catch(e){
+      console.error(e);
+      showMessage(`LLM Plan failed! Ensure it is loaded.`);
+    }
+
+  }catch(e){
+    if(e.name!=="AbortError")
+      showMessage("⚠ Unable to connect to server.");
+  }finally{
+    currentController=null;
+    setLoading(false);
+  }
+}
+
+function fileToBase64(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const base64=reader.result.split(",")[1];
+      resolve(base64);
+    };
+    reader.onerror=reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function generateSong(){
+  try{
+    currentController=new AbortController();
+    setLoading(true);
+
+    const seedInput = document.getElementById("seed");
+    if(seedInput.value === "-1" || seedInput.value === ""){
+      randomizeSeed();
+    }
+
+    const payload=getFormData();
+
+    const refFile=document.getElementById("music_reference_audio");
+    if(refFile && refFile.files && refFile.files.length > 0){
+      payload.music_reference_audio_data=await fileToBase64(refFile.files[0]);
+    }
+
+    let headers =  {"Content-Type":"application/json"};
+    if(document.getElementById("baseUrlKey").value!="")
+    {
+      headers["Authorization"] = `Bearer ${document.getElementById("baseUrlKey").value}`;
+    }
+
+    const res=await fetch(buildUrl("/api/extra/music/generate"),{
+      method:"POST",
+      headers:headers,
+      body:JSON.stringify(payload),
+      signal:currentController.signal
+    });
+
+    if(!res.ok) throw new Error();
+    const wavBlob=await res.blob();
+    const tx=db.transaction(STORE,"readwrite");
+    tx.objectStore(STORE).add({
+      title:deriveTitle(payload.caption),
+      date:new Date().toISOString(),
+      params:JSON.parse(JSON.stringify(payload)),
+      audio:wavBlob
+    });
+
+    tx.oncomplete=()=>{
+      currentPage=1;
+      loadLibrary();
+      showMessage("Song generated successfully!");
+    };
+
+  }catch(e){
+    if(e.name!=="AbortError")
+      showMessage("⚠ Failed to generate song.");
+  }finally{
+    currentController=null;
+    setLoading(false);
+  }
+}
+
+function loadTrackJSON(id){
+  const tx = db.transaction(STORE, "readonly");
+  const store = tx.objectStore(STORE);
+  const req = store.get(id);
+
+  req.onsuccess = function(){
+    const item = req.result;
+    if(!item || !item.params){
+      showMessage("No JSON data found.");
+      return;
+    }
+
+    const data=(item.params);
+    updateForm(data);
+
+  };
+
+  req.onerror = function(){
+    showMessage("Failed to load JSON.");
+  };
+}
+
+/* Library functions unchanged */
+
+function loadLibrary(){
+  const container=document.getElementById("library");
+  container.innerHTML="";
+  const tx=db.transaction(STORE,"readonly");
+  const store=tx.objectStore(STORE);
+  let items=[];
+  store.openCursor(null,"prev").onsuccess=e=>{
+    const cursor=e.target.result;
+    if(cursor){
+      items.push(cursor.value);
+      cursor.continue();
+    } else {
+      totalItems=items.length;
+      const start=(currentPage-1)*PAGE_SIZE;
+      const pageItems=items.slice(start,start+PAGE_SIZE);
+      pageItems.forEach(item=>{
+        const div=document.createElement("div");
+        div.className="library-item";
+        const url=URL.createObjectURL(item.audio);
+        let ismp3 = (item.params?(item.params.use_mp3?true:false):false);
+        let savfmt = (ismp3?".mp3":".wav");
+        div.innerHTML=`
+          <h4>${item.type==="tts" ? "🗣 " : "🎵 "}${item.title}</h4>
+          <div class="meta">${new Date(item.date).toLocaleString()}</div>
+          <audio controls src="${url}"></audio>
+          <div style="margin-top:6px;display:flex;gap:6px;">
+            <a href="${url}" download="${item.title}${savfmt}">
+                <button class="secondary">Download</button>
+            </a>
+            <button class="secondary" onclick="loadTrackJSON(${item.id})">
+                Load Params
+            </button>
+
+            <button class="danger" onclick="deleteTrack(${item.id})">Delete</button>
+          </div>
+        `;
+        container.appendChild(div);
+      });
+      const totalPages=Math.ceil(totalItems/PAGE_SIZE)||1;
+      document.getElementById("pageInfo").innerText=
+        `Page ${currentPage} / ${totalPages}`;
+    }
+  };
+}
+
+function nextPage(){ if(currentPage<Math.ceil(totalItems/PAGE_SIZE)){currentPage++;loadLibrary();}}
+function prevPage(){ if(currentPage>1){currentPage--;loadLibrary();}}
+function deleteTrack(id){
+  const tx=db.transaction(STORE,"readwrite");
+  tx.objectStore(STORE).delete(id);
+  tx.oncomplete=loadLibrary;
+}
+function clearReferenceAudio(){
+  const input = document.getElementById("music_reference_audio");
+  input.value = "";
+}
+function clearFields()
+{
+    const fields = document.querySelectorAll('.form-grid input, #advanced input');
+    fields.forEach(field => {
+    field.value = '';
+    });
+    document.getElementById("caption").value = "";
+    document.getElementById("lyrics").value = "";
+    document.getElementById("audio_codes").value = "";
+
+    const container = document.getElementById('advanced');
+    const inputs = container.querySelectorAll('input');
+
+    inputs.forEach(input => {
+      if (input.type === 'checkbox') {
+        // For checkboxes, do nothing
+        //input.checked = input.defaultChecked;
+      } else {
+        // For text/number inputs, restore the original 'value'
+        input.value = input.defaultValue;
+      }
+    });
+
+    clearReferenceAudio();
+}
+function exportPlan(){
+  const data=getFormData();
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="music_plan.json";
+  a.click();
+}
+function importPlan(event){
+  const file=event.target.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const data=JSON.parse(e.target.result);
+    updateForm(data);
+  };
+  reader.readAsText(file);
+}
+
+initDB().then(loadLibrary);
+fetchVoices();
+</script>
+
+</body>
+</html>

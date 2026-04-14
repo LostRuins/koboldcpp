@@ -4,6 +4,7 @@
 #include "ggml_extend.hpp"
 #include "model.h"
 #include "tokenize_util.h"
+#include "vocab/vocab.h"
 
 /*================================================== CLIPTokenizer ===================================================*/
 
@@ -110,7 +111,7 @@ public:
         if (merges_utf8_str.size() > 0) {
             load_from_merges(merges_utf8_str);
         } else {
-            load_from_merges(ModelLoader::load_merges());
+            load_from_merges(load_clip_merges());
         }
         add_special_token("<|startoftext|>");
         add_special_token("<|endoftext|>");
