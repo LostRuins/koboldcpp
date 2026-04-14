@@ -8687,10 +8687,10 @@ def show_gui():
         mmprojcpu_var.set(1 if ("mmprojcpu" in mydict and mydict["mmprojcpu"]) else 0)
         if "visionmaxres" in mydict and mydict["visionmaxres"]:
             visionmaxres_var.set(mydict["visionmaxres"])
-        if "image_min_tokens" in dict and dict["image_min_tokens"]:
-            image_min_tokens_var.set(dict["image_min_tokens"])
-        if "image_max_tokens" in dict and dict["image_max_tokens"]:
-            image_max_tokens_var.set(dict["image_max_tokens"])
+        if "image_min_tokens" in mydict and mydict["image_min_tokens"]:
+            image_min_tokens_var.set(mydict["image_min_tokens"])
+        if "image_max_tokens" in mydict and mydict["image_max_tokens"]:
+            image_max_tokens_var.set(mydict["image_max_tokens"])
         draftmodel_var.set(mydict["draftmodel"] if ("draftmodel" in mydict and mydict["draftmodel"]) else "")
         if "draftamount" in mydict:
             draftamount_var.set(mydict["draftamount"])
