@@ -218,6 +218,8 @@ class load_model_inputs(ctypes.Structure):
                 ("mmproj_filename", ctypes.c_char_p),
                 ("mmproj_cpu", ctypes.c_bool),
                 ("visionmaxres", ctypes.c_int),
+                ("image_min_tokens", ctypes.c_int),
+                ("image_max_tokens", ctypes.c_int),
                 ("use_mmap", ctypes.c_bool),
                 ("use_mlock", ctypes.c_bool),
                 ("use_smartcontext", ctypes.c_bool),
@@ -1769,6 +1771,8 @@ def load_model(model_filename):
     inputs.mmproj_filename = args.mmproj.encode("UTF-8") if args.mmproj else "".encode("UTF-8")
     inputs.mmproj_cpu = (True if args.mmprojcpu else False)
     inputs.visionmaxres = (512 if args.visionmaxres < 512 else (2048 if args.visionmaxres > 2048 else args.visionmaxres))
+    inputs.image_min_tokens = args.image_min_tokens
+    inputs.image_max_tokens = args.image_max_tokens
     inputs.use_smartcontext = args.smartcontext
     inputs.use_contextshift = (0 if args.noshift else 1)
     inputs.use_fastforward = (0 if args.nofastforward else 1)
@@ -6897,6 +6901,8 @@ def show_gui():
     mmproj_var = ctk.StringVar()
     mmprojcpu_var = ctk.IntVar(value=0)
     visionmaxres_var = ctk.StringVar(value=str(default_visionmaxres))
+    image_min_tokens_var = ctk.StringVar(value="-1")
+    image_max_tokens_var = ctk.StringVar(value="-1")
     draftmodel_var = ctk.StringVar()
     draftamount_var = ctk.StringVar(value=str(default_draft_amount))
     draftgpulayers_var = ctk.StringVar(value=str(999))
@@ -8033,6 +8039,8 @@ def show_gui():
         args.mmproj = None if mmproj_var.get() == "" else mmproj_var.get()
         args.mmprojcpu = (mmprojcpu_var.get()==1)
         args.visionmaxres = int(visionmaxres_var.get()) if visionmaxres_var.get()!="" else default_visionmaxres
+        args.image_min_tokens = int(image_min_tokens_var.get()) if image_min_tokens.get()!="" else -1
+        args.image_max_tokens = int(image_max_tokens_var.get()) if image_max_tokens.get()!="" else -1
         args.draftmodel = None if draftmodel_var.get() == "" else draftmodel_var.get()
         args.draftamount = int(draftamount_var.get()) if draftamount_var.get()!="" else default_draft_amount
         args.draftgpulayers = int(draftgpulayers_var.get()) if draftgpulayers_var.get()!="" else 999
@@ -8301,6 +8309,10 @@ def show_gui():
         mmprojcpu_var.set(1 if ("mmprojcpu" in dict and dict["mmprojcpu"]) else 0)
         if "visionmaxres" in dict and dict["visionmaxres"]:
             visionmaxres_var.set(dict["visionmaxres"])
+        if "image_min_tokens" in dict and dict["image_min_tokens"]:
+            image_min_tokens_var.set(dict["image_min_tokens"])
+        if "image_max_tokens" in dict and dict["image_max_tokens"]:
+            image_max_tokens_var.set(dict["image_max_tokens"])
         draftmodel_var.set(dict["draftmodel"] if ("draftmodel" in dict and dict["draftmodel"]) else "")
         if "draftamount" in dict:
             draftamount_var.set(dict["draftamount"])
@@ -10741,6 +10753,8 @@ if __name__ == '__main__':
     advparser.add_argument("--mmproj", metavar=('[filename]'), help="Select a multimodal projector file for vision models like LLaVA.", default="")
     advparser.add_argument("--mmprojcpu","--no-mmproj-offload", help="Force CLIP for Vision mmproj always on CPU.", action='store_true')
     advparser.add_argument("--visionmaxres", metavar=('[max px]'), help="Clamp MMProj vision maximum allowed resolution. Allowed values are between 512 to 2048 px (default 1024).", type=int, default=default_visionmaxres)
+    advparser.add_argument("--image-min-tokens", metavar=('[tokens]'), help="Override the minimum tokens for the MMProj embedding (default -1).", type=int, default=-1)
+    advparser.add_argument("--image-max-tokens", metavar=('[tokens]'), help="Override the maximum tokens for the MMProj embedding (default -1).", type=int, default=-1)
     advparser.add_argument("--draftmodel","--model-draft","-md", metavar=('[filename]'), help="Load a small draft model for speculative decoding. It will be fully offloaded. Vocab must match the main model.", default="")
     advparser.add_argument("--draftamount","--draft-max","--draft-n", metavar=('[tokens]'), help="How many tokens to draft per chunk before verifying results", type=int, default=default_draft_amount)
     advparser.add_argument("--draftgpulayers","--gpu-layers-draft","--n-gpu-layers-draft","-ngld", metavar=('[layers]'), help="How many layers to offload to GPU for the draft model (default=full offload)", type=int, default=999)

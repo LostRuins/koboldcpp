@@ -47,6 +47,8 @@ struct load_model_inputs
     const char * mmproj_filename = nullptr;
     const bool mmproj_cpu = false;
     const int visionmaxres = 2048;
+    const int image_min_tokens = -1;
+    const int image_max_tokens = -1;
     const bool use_mmap = false;
     const bool use_mlock = false;
     const bool use_smartcontext = false;

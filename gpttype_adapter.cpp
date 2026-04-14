@@ -2154,6 +2154,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_pipeline_parallelism = inputs.pipelineparallel;
     kcpp_data->n_batch = GetBatchSize(inputs.batchsize, in_file_format);
     kcpp_data->n_ubatch = kcpp_data->n_batch;
+    kcpp_data->image_min_tokens = inputs.image_min_tokens;
+    kcpp_data->image_max_tokens = inputs.image_max_tokens;
     if(isGguf && kcpp_pipeline_parallelism)
     {
         //double the logical batch, while keeping the physical batch the same, pipeline parallel set GGML_SCHED_MAX_COPIES to 2
@@ -2743,8 +2745,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             clip_context_params ctx_clip_params {
                 /* use_gpu           */ true,
                 /* flash_attn_type   */ clip_fa,
-                /* image_min_tokens  */ -1,
-                /* image_max_tokens  */ -1,
+                /* image_min_tokens  */ kcpp_data->image_min_tokens,
+                /* image_max_tokens  */ kcpp_data->image_max_tokens,
             };
             clip_init_result cres = clip_init(mmproj_filename.c_str(), ctx_clip_params);
             clp_ctx_v = cres.ctx_v;
