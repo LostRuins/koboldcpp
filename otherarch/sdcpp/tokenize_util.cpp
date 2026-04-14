@@ -982,7 +982,7 @@ std::vector<std::string> split_with_special_tokens(
 }
 
 // int main() {
-//     std::string text = "I'm testing C++ token_split function. 你好，世界! 123";
+//     std::string text = "I'm testing C++ token_split function. Hello world 123";
 //     auto tokens = token_split(text);
 
 //     for (const auto& t : tokens) {

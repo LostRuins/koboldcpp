@@ -75,6 +75,9 @@ bool kcpp_decode_audio_to_f32_stereo_48k(const uint8_t * data, size_t data_size,
 
 std::vector<ggml_backend_dev_t> kcpp_parse_device_list(const std::string & value);
 
+bool kcpp_string_ends_with(const std::string& str, const std::string& suffix);
+std::string kcpp_rstrip(const std::string& s);
+
 //duplcated and modified from llava_embd_batch
 struct kcpp_embd_batch {
     std::vector<llama_pos>    pos;

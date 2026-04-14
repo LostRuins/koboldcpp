@@ -600,10 +600,10 @@ namespace Rope {
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
-    __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,
-                                                     struct ggml_tensor* x,
-                                                     struct ggml_tensor* pe,
-                                                     bool rope_interleaved = true) {
+    __STATIC_INLINE__ ggml_tensor* apply_rope(ggml_context* ctx,
+                                              ggml_tensor* x,
+                                              ggml_tensor* pe,
+                                              bool rope_interleaved = true) {
         // x: [N, L, n_head, d_head]
         // pe: [L, d_head/2, 2, 2], [[cos, -sin], [sin, cos]]
         int64_t d_head = x->ne[0];
@@ -641,14 +641,14 @@ namespace Rope {
         return x_out;
     }
 
-    __STATIC_INLINE__ struct ggml_tensor* attention(GGMLRunnerContext* ctx,
-                                                    struct ggml_tensor* q,
-                                                    struct ggml_tensor* k,
-                                                    struct ggml_tensor* v,
-                                                    struct ggml_tensor* pe,
-                                                    struct ggml_tensor* mask,
-                                                    float kv_scale        = 1.0f,
-                                                    bool rope_interleaved = true) {
+    __STATIC_INLINE__ ggml_tensor* attention(GGMLRunnerContext* ctx,
+                                             ggml_tensor* q,
+                                             ggml_tensor* k,
+                                             ggml_tensor* v,
+                                             ggml_tensor* pe,
+                                             ggml_tensor* mask,
+                                             float kv_scale        = 1.0f,
+                                             bool rope_interleaved = true) {
         // q,k,v: [N, L, n_head, d_head]
         // pe: [L, d_head/2, 2, 2]
         // return: [N, L, n_head*d_head]

@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 <head>
 	<script id="init-config">
-	const LITEVER = 327;
+	const LITEVER = 328;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -5741,7 +5741,7 @@ Current version indicated by LITEVER below.
 		let instag = localsettings.instruct_starttag;
 		if(instag=="{{[INPUT]}}" && !(custom_kobold_endpoint != "" && is_using_kcpp_with_autotags()))
 		{
-			if(!localsettings.autoguess_third_party)
+			if(!localsettings.autoguess_third_party && is_using_custom_ep()) //allow horde to use placeholder
 			{
 				instag = "\n### Instruction:\n"; //backend not compatible with auto
 			}
@@ -5757,7 +5757,7 @@ Current version indicated by LITEVER below.
 		let instag = localsettings.instruct_endtag;
 		if(instag=="{{[OUTPUT]}}" && !(custom_kobold_endpoint != "" && is_using_kcpp_with_autotags()))
 		{
-			if(!localsettings.autoguess_third_party)
+			if(!localsettings.autoguess_third_party && is_using_custom_ep()) //allow horde to use placeholder
 			{
 				instag = "\n### Response:\n"; //backend not compatible with auto
 			}
@@ -7464,6 +7464,11 @@ Current version indicated by LITEVER below.
 					}
 				},
 				close() { //end of stream
+					if(streaming_was_thinking && synchro_pending_stream && (last_stop_reason=="stop" || last_stop_reason=="tool_calls")) //wrap up if we stopped properly
+					{
+						synchro_pending_stream = `${localsettings.start_thinking_tag}${synchro_pending_stream}${localsettings.stop_thinking_tag}`;
+					}
+					streaming_was_thinking = false;
 					synchro_polled_response = synchro_pending_stream;
 					let need_clean_output = (synchro_polled_response!="" && localsettings.opmode==1 && gametext_arr.length>0 && document.getElementById("useoaichatcompl").checked);
 					if(need_clean_output)
@@ -7497,7 +7502,6 @@ Current version indicated by LITEVER below.
 						}
 					}
 					synchro_pending_stream = "";
-					streaming_was_thinking = false;
 					if (logprobs_content_arr.length>0 && last_response_obj==null) {
 						//fake a last response obj
 						let fakedresponse = {
@@ -8444,7 +8448,13 @@ Current version indicated by LITEVER below.
 		}
 		else
 		{
-			gametext_arr.push(get_instructendplaceholder() + callresp);
+			let callresptxt = "";
+			if(!(gametext_arr.length>0 && gametext_arr[gametext_arr.length-1].trim().endsWith("{{[OUTPUT]}}")))
+			{
+				callresptxt = get_instructendplaceholder(); //add instruct tag if needed
+			}
+			callresptxt += JSON.stringify(callresp) + get_instructendplaceholder();
+			gametext_arr.push(callresptxt);
 		}
 	}
 	function parseMcpUrls() {
@@ -10564,10 +10574,6 @@ Current version indicated by LITEVER below.
 						if(completed_imgs_meta[key] && !completed_imgs_meta[key].data && oldb64)
 						{
 							completed_imgs_meta[key].data = oldb64;
-						}
-						if(completed_imgs_meta[key] && completed_imgs_meta[key].visionmode==4)
-						{
-							completed_imgs_meta[key].visionmode = 3; //todo: temporary backwards compat, to be removed.
 						}
 					}
 				}
@@ -18026,7 +18032,7 @@ Current version indicated by LITEVER below.
 
 	function end_trim_to_sentence(input, include_newline = false) {
 		let last = -1;
-		let enders = ['.', '!', '?', '*', '"', ')', '}', '`', ']', ';', '…', '~'];
+		let enders = ['.', '!', '?', '*', '"', ')', '}', '`', ']', ';', '…', '~','>'];
 		for (let i = 0; i < enders.length; ++i) {
 			last = Math.max(last, input.lastIndexOf(enders[i]));
 		}
@@ -20801,10 +20807,47 @@ Current version indicated by LITEVER below.
 					oaiimgs = oai_append_media(oaiimgs);
 					if(mhistory.length>0 && oaiimgs.length>0)
 					{
-						mhistory[0].msg = [{type: 'text', text: mhistory[0].msg}];
-						for(let i=0;i<oaiimgs.length;++i)
+						//do we have the same number of images as placeholders? if so, assign each image to the right turns
+						let placeholder_count = 0;
+						const regex = /\n\(Attached (Image|Audio) \d+\)\n/g;
+						for(let i=0;i<mhistory.length;++i)
 						{
-							mhistory[0].msg.push(oaiimgs[i]);
+							const matches = mhistory[i].msg.match(regex);
+							const count = matches ? matches.length : 0;
+							placeholder_count += count;
+						}
+						if(placeholder_count==oaiimgs.length)
+						{
+							//exactly same number, so we can put images into matching turns
+							let mediaidx = 0;//for each occurance of the regex in this turn, insert mediaidx from oaiimgs and increment it
+							for (let i = 0; i < mhistory.length; ++i)
+							{
+								let msg = mhistory[i].msg;
+								const matches = msg.match(regex);
+								const count = matches ? matches.length : 0;
+								if(count>0)
+								{
+									msg = msg.replace(regex, '');
+									let newMsg = [{ type: 'text', text: msg }];
+									for (let j = 0; j < count; ++j)
+									{
+										if (mediaidx < oaiimgs.length)
+										{
+											newMsg.push(oaiimgs[mediaidx]);
+											mediaidx++;
+										}
+									}
+									mhistory[i].msg = newMsg;
+								}
+							}
+						}
+						else
+						{
+							mhistory[0].msg = [{type: 'text', text: mhistory[0].msg}];
+							for(let i=0;i<oaiimgs.length;++i)
+							{
+								mhistory[0].msg.push(oaiimgs[i]);
+							}
 						}
 					}
 					for(let i=0;i<mhistory.length;++i)
@@ -22504,7 +22547,7 @@ Current version indicated by LITEVER below.
 
 		//allow trim incomplete sentences
 		//do not trim if instruct mode AND stop token reached
-		let donottrim = (last_stop_reason=="stop");
+		let donottrim = (last_stop_reason=="stop"||last_stop_reason=="tool_calls");
 		if (!donottrim && localsettings.trimsentences == true) {
 			//also, to prevent a trim from bisecting a chat name, if a response contains a chatname, do not trim
 			donottrim = false;
@@ -24359,6 +24402,8 @@ Current version indicated by LITEVER below.
 			{
 				insertAIVisionImages = []; //a bit hacky
 				insertAIAudioSounds = [];
+				//perform a little surgery on images: shift them from an assistant's turn into a user's turn
+				fulltxt = fulltxt.replace(/(\[<\|h\|.+?\|h\|>\](?:\s*\[<\|h\|.+?\|h\|>\])*)(\s{0,3})(\{\{\[INPUT\]\}\})/g,"$3$2$1");
 				fulltxt = fulltxt.replace(/\[<\|h\|(.+?)\|h\|>\]/g, function (_match, inner) {
 					let imghash = inner;
 					let foundmeta = completed_imgs_meta[imghash];

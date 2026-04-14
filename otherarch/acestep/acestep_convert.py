@@ -35,7 +35,8 @@ def find_sf_files(model_dir):
         return [single]
     index = os.path.join(model_dir, "model.safetensors.index.json")
     if os.path.exists(index):
-        idx = json.load(open(index, "r", encoding="utf-8"))
+        with open(index, "r", encoding="utf-8") as f:
+            idx = json.load(f)
         shards = sorted(set(idx["weight_map"].values()))
         return [os.path.join(model_dir, s) for s in shards]
     diffusers = os.path.join(model_dir, "diffusion_pytorch_model.safetensors")
@@ -99,6 +100,13 @@ def add_metadata(w, cfg, model_type):
         ]:
             if key in cfg:
                 w.add_uint32("acestep.%s" % key, cfg[key])
+        # XL models have separate encoder dimensions (2B models omit these)
+        for key in [
+            "encoder_hidden_size", "encoder_intermediate_size",
+            "encoder_num_attention_heads", "encoder_num_key_value_heads",
+        ]:
+            if key in cfg:
+                w.add_uint32("acestep.%s" % key, cfg[key])
         if cfg.get("is_turbo"):
             w.add_bool("acestep.is_turbo", True)
         levels = cfg.get("fsq_input_levels")
@@ -108,40 +116,47 @@ def add_metadata(w, cfg, model_type):
     w.add_string("acestep.config_json", json.dumps(cfg, separators=(",", ":")))
 
 # Tensor packing from safetensors
-def add_tensors_from_sf(w, sf_path, tag):
+def add_tensors_from_sf(w, sf_path, tag, model_type):
     meta, hdr_size = read_sf_header(sf_path)
     names = sorted(meta.keys())
-    f = open(sf_path, "rb")
-    count = 0
-    total = 0
+    with open(sf_path, "rb") as f:
+        count = 0
+        total = 0
 
-    for name in names:
-        info = meta[name]
-        dtype_str = info["dtype"]
-        shape = info["shape"]
-        off0, off1 = info["data_offsets"]
-        nbytes = off1 - off0
+        for name in names:
+            info = meta[name]
 
-        f.seek(hdr_size + off0)
-        raw = f.read(nbytes)
+            # normalize: some upstream checkpoints omit the "model." prefix
+            if model_type == "lm" and not name.startswith("model."):
+                name = "model." + name
 
-        if dtype_str == "BF16":
-            arr = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
-            w.add_tensor(name if name.startswith("model.") else f"model.{name}", arr, raw_dtype=BF16)
-        elif dtype_str == "F16":
-            arr = np.frombuffer(raw, dtype=np.float16).reshape(shape)
-            w.add_tensor(name if name.startswith("model.") else f"model.{name}", arr)
-        elif dtype_str == "F32":
-            arr = np.frombuffer(raw, dtype=np.float32).reshape(shape)
-            w.add_tensor(name if name.startswith("model.") else f"model.{name}", arr)
-        else:
-            log(tag, "  skip %s: dtype %s" % (name, dtype_str))
-            continue
+            dtype_str = info["dtype"]
+            shape = info["shape"]
+            off0, off1 = info["data_offsets"]
+            nbytes = off1 - off0
 
-        count += 1
-        total += nbytes
+            f.seek(hdr_size + off0)
+            raw = f.read(nbytes)
 
-    f.close()
+            if dtype_str == "BF16":
+                arr = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
+                w.add_tensor(name, arr, raw_dtype=BF16)
+            elif dtype_str == "F16":
+                arr = np.frombuffer(raw, dtype=np.float16).reshape(shape)
+                w.add_tensor(name, arr)
+            elif dtype_str == "F32":
+                # convert F32 to BF16: truncate lower 16 mantissa bits
+                arr = np.frombuffer(raw, dtype=np.uint32).reshape(shape)
+                arr = (arr >> 16).astype(np.uint16)
+                w.add_tensor(name, arr, raw_dtype=BF16)
+                nbytes = nbytes // 2  # actual stored size
+            else:
+                log(tag, "  skip %s: dtype %s" % (name, dtype_str))
+                continue
+
+            count += 1
+            total += nbytes
+
     return count, total
 
 # silence_latent.pt reader (replaces pt2bin C++ tool)
@@ -166,7 +181,8 @@ def add_bpe_tokenizer(w, model_dir, tag):
     if not os.path.exists(vocab_path) or not os.path.exists(merges_path):
         return False
 
-    vocab = json.load(open(vocab_path, "r", encoding="utf-8"))
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        vocab = json.load(f)
     tokens = [""] * len(vocab)
     for tok_str, tok_id in vocab.items():
         if 0 <= tok_id < len(tokens):
@@ -197,7 +213,8 @@ def convert_model(name, model_dir, output_path, model_type):
         log(tag, "skip %s: no config.json" % name)
         return False
 
-    cfg = json.load(open(cfg_path, "r", encoding="utf-8"))
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
     sf_files = find_sf_files(model_dir)
     if not sf_files:
         log(tag, "skip %s: no safetensors" % name)
@@ -220,7 +237,7 @@ def convert_model(name, model_dir, output_path, model_type):
     n_tensors = 0
     n_bytes = 0
     for sf in sf_files:
-        c, b = add_tensors_from_sf(w, sf, tag)
+        c, b = add_tensors_from_sf(w, sf, tag, model_type)
         n_tensors += c
         n_bytes += b
         if len(sf_files) > 1:

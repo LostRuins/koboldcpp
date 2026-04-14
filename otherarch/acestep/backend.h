@@ -32,6 +32,7 @@ static BackendPair backend_init(const char * label) {
         bp.cpu_backend = bp.backend;
         ggml_backend_cpu_set_n_threads(bp.backend, n_threads);
     } else {
+        // n_threads = (n_threads>4?4:n_threads);
         bp.cpu_backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
         ggml_backend_cpu_set_n_threads(bp.cpu_backend, n_threads);
     }

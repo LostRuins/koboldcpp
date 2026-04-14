@@ -2123,14 +2123,19 @@ void kcpp_init_audio_proj(clip_ctx * ctx_a)
     switch (proj) {
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_QWEN25O:
+        case PROJECTOR_TYPE_QWEN3A:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
+        case PROJECTOR_TYPE_MERALION:
             audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
             break;
         case PROJECTOR_TYPE_LFM2A:
             audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
+            break;
+        case PROJECTOR_TYPE_GEMMA4A:
+            audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4a>(ctx_a);
             break;
         default:
             GGML_ABORT("unsupported audio projector type");
@@ -3334,13 +3339,14 @@ int GetThreadsToUse(bool blasmode)
 }
 
 //this function prepares the clip embds for llava. it's only needed when images change
-static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_intro)
+static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_intro, const std::vector<int> & media_outro)
 {
     bool vision_on = (clp_ctx_v != nullptr && clp_img_data != nullptr);
     bool audio_on = (clp_ctx_a != nullptr);
     if (vision_on || audio_on)
     {
         int introsize = media_intro.size();
+        int outrosize = media_outro.size();
         last_media_mem.clear();
 
         for(int i=0;i<media_objects.size();++i)
@@ -3375,7 +3381,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         int tokcnt = (chunk.clp_image_tokens + media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size());
                         if(i==0)
                         {
-                            tokcnt += introsize;
+                            tokcnt += introsize + outrosize;
                         }
                         for(int n=0;n<tokcnt;++n)
                         {
@@ -3427,7 +3433,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     int tokcnt = (cliptokensneeded + media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size());
                     if(i==0)
                     {
-                        tokcnt += introsize;
+                        tokcnt += introsize + outrosize;
                     }
                     for(int n=0;n<tokcnt;++n)
                     {
@@ -3629,6 +3635,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     std::string addedmemory = inputs.memory;
     std::string negative_prompt = inputs.negative_prompt;
 
+    std::vector<int> media_intro; //added before media list
+    std::vector<int> media_outro; //added before media list
+    TokenizeString("\nAttached Media:\n", media_intro, file_format, true);
+
     //clear previous run llava embd memory, just-in-time free
     for(int i=0;i<media_objects.size();++i)
     {
@@ -3696,7 +3706,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             if(clp_ctx_a)
             {
                 int ptype = clip_get_projector_type_ext(clp_ctx_a);
-                if(ptype==PROJECTOR_TYPE_QWEN2A) //qwen omni
+                if(ptype==PROJECTOR_TYPE_QWEN2A || ptype==PROJECTOR_TYPE_QWEN3A || ptype==PROJECTOR_TYPE_QWEN25O) //qwen omni
                 {
                     aud_start = "<|audio_bos|>";
                     aud_end = "<|audio_eos|>\n";
@@ -3705,6 +3715,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 {
                     aud_start = "[INST][BEGIN_AUDIO]";
                     aud_end = "[/INST]\n";
+                }
+                else if(ptype==PROJECTOR_TYPE_GEMMA4A)
+                {
+                    aud_start = "<|audio>";
+                    aud_end = "<audio|>\n";
                 }
             }
 
@@ -3856,18 +3871,22 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     // For the record, the GLM4 one didn't break anyone and everyone forgot GLM4 needed this :D
     if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == llm_arch::LLM_ARCH_GEMMA4)) {
         std::string temp = gpttype_get_chat_template();
-        if (temp.find("<|channel>thought") != std::string::npos) {
+        if (temp.find("<|channel>thought\\n<channel|>") != std::string::npos) {
             const std::string channel_open  = "<|channel>";
             const std::string channel_close = "<channel|>";
             const std::string channel_prefix = channel_open + channel_close;
+            const std::string systhink = "<|think|>";
 
             const std::string fullbody = addedmemory + kcpp_data->prompt;
 
             const bool has_open  = fullbody.find(channel_open)  != std::string::npos;
             const bool has_close = fullbody.find(channel_close) != std::string::npos;
+            const bool has_systhink = fullbody.find(systhink) != std::string::npos;
+            const bool ends_with_turn = kcpp_string_ends_with(kcpp_rstrip(fullbody),"<|turn>model");
+            const bool acceptable_jinja_exception = (ends_with_turn && has_systhink);
 
             // If neither opening nor closing tag is present anywhere, prepend both
-            if (!has_open && !has_close) {
+            if (!has_open && !has_close && !acceptable_jinja_exception) {
                 addedmemory = channel_prefix + addedmemory;
             }
         }
@@ -3916,14 +3935,12 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     // tokenize the prompt
     std::vector<int> embd_inp;
     std::vector<int> embd_inp_mem; //for storing added memory
-    std::vector<int> media_intro; //added before media list
     std::vector<int> guidance_embd; //holds the guidance prompt
     bool media_embds_built = false;
 
     int32_t nctx = kcpp_data->n_ctx;
 
     TokenizeString(kcpp_data->prompt, embd_inp, file_format, add_bos_token);
-    TokenizeString("\nAttached Media:\n", media_intro, file_format, true);
 
     if(media_composite_image_signature=="")
     {
@@ -3931,7 +3948,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     }
     if(media_data_changed)
     {
-        PrepareMediaEmbds(nctx, media_intro);
+        PrepareMediaEmbds(nctx, media_intro, media_outro);
         media_embds_built = true;
     }
 
@@ -5055,7 +5072,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 {
                     if(!media_embds_built) //this should never happen! however, handle it anyway
                     {
-                        PrepareMediaEmbds(nctx, media_intro);
+                        PrepareMediaEmbds(nctx, media_intro, media_outro);
                         media_embds_built = true;
                         printf("\nSomehow media embeds was not prepared (maybe no fast forward), rebuilding it...\n");
                     }
@@ -5071,6 +5088,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         int llavatokenscounted = 0;
                         int llavatokensevaled = 0;
                         int introsize = media_intro.size();
+                        int outrosize = media_outro.size();
                         while(input_consumed < embd_inp.size() && (embd_inp[input_consumed]==MEDIA_TOKEN_IDENTIFIER_A || embd_inp[input_consumed]==MEDIA_TOKEN_IDENTIFIER_B))
                         {
                             if (!last_n_tokens.empty())
@@ -5159,6 +5177,22 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                 n_past += end_size;
                                 llavatokensevaled += end_size;
                             }
+                        }
+                        if(media_objects.size()>0 && outrosize>0)
+                        {
+                            //added after all media but before prompt
+                            kcpp_embd_batch batch = kcpp_embd_batch(media_outro, n_past, use_mrope, false);
+                            auto evr = llama_decode(llama_ctx_v4, batch.batch);
+                            if(evr!=0)
+                            {
+                                printf("\nError when appending media outro: %d\n",evr);
+                            }
+                            else
+                            {
+                                printf("\rProcessing Media Outro (%d tokens)",outrosize);
+                            }
+                            n_past += outrosize;
+                            llavatokensevaled += outrosize;
                         }
                         if(llavatokenscounted!=llavatokensevaled)
                         {

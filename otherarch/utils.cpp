@@ -1077,3 +1077,13 @@ std::vector<ggml_backend_dev_t> kcpp_parse_device_list(const std::string & value
     }
     return devices;
 }
+
+bool kcpp_string_ends_with(const std::string& str, const std::string& suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string kcpp_rstrip(const std::string& s) {
+    size_t end = s.find_last_not_of(" \t\n\r\f\v");
+    return (end == std::string::npos) ? "" : s.substr(0, end + 1);
+}

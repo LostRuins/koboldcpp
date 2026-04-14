@@ -164,26 +164,26 @@ public:
         blocks["middle_block_out.0"] = std::shared_ptr<GGMLBlock>(make_zero_conv(ch));
     }
 
-    struct ggml_tensor* resblock_forward(std::string name,
-                                         GGMLRunnerContext* ctx,
-                                         struct ggml_tensor* x,
-                                         struct ggml_tensor* emb) {
+    ggml_tensor* resblock_forward(std::string name,
+                                  GGMLRunnerContext* ctx,
+                                  ggml_tensor* x,
+                                  ggml_tensor* emb) {
         auto block = std::dynamic_pointer_cast<ResBlock>(blocks[name]);
         return block->forward(ctx, x, emb);
     }
 
-    struct ggml_tensor* attention_layer_forward(std::string name,
-                                                GGMLRunnerContext* ctx,
-                                                struct ggml_tensor* x,
-                                                struct ggml_tensor* context) {
+    ggml_tensor* attention_layer_forward(std::string name,
+                                         GGMLRunnerContext* ctx,
+                                         ggml_tensor* x,
+                                         ggml_tensor* context) {
         auto block = std::dynamic_pointer_cast<SpatialTransformer>(blocks[name]);
         return block->forward(ctx, x, context);
     }
 
-    struct ggml_tensor* input_hint_block_forward(GGMLRunnerContext* ctx,
-                                                 struct ggml_tensor* hint,
-                                                 struct ggml_tensor* emb,
-                                                 struct ggml_tensor* context) {
+    ggml_tensor* input_hint_block_forward(GGMLRunnerContext* ctx,
+                                          ggml_tensor* hint,
+                                          ggml_tensor* emb,
+                                          ggml_tensor* context) {
         int num_input_blocks = 15;
         auto h               = hint;
         for (int i = 0; i < num_input_blocks; i++) {
@@ -198,13 +198,13 @@ public:
         return h;
     }
 
-    std::vector<struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                             struct ggml_tensor* x,
-                                             struct ggml_tensor* hint,
-                                             struct ggml_tensor* guided_hint,
-                                             struct ggml_tensor* timesteps,
-                                             struct ggml_tensor* context,
-                                             struct ggml_tensor* y = nullptr) {
+    std::vector<ggml_tensor*> forward(GGMLRunnerContext* ctx,
+                                      ggml_tensor* x,
+                                      ggml_tensor* hint,
+                                      ggml_tensor* guided_hint,
+                                      ggml_tensor* timesteps,
+                                      ggml_tensor* context,
+                                      ggml_tensor* y = nullptr) {
         // x: [N, in_channels, h, w] or [N, in_channels/2, h, w]
         // timesteps: [N,]
         // context: [N, max_position, hidden_size] or [1, max_position, hidden_size]. for example, [N, 77, 768]
@@ -246,7 +246,7 @@ public:
             emb = ggml_add(ctx->ggml_ctx, emb, label_emb);  // [N, time_embed_dim]
         }
 
-        std::vector<struct ggml_tensor*> outs;
+        std::vector<ggml_tensor*> outs;
 
         if (guided_hint == nullptr) {
             guided_hint = input_hint_block_forward(ctx, hint, emb, context);
@@ -310,11 +310,13 @@ struct ControlNet : public GGMLRunner {
     SDVersion version = VERSION_SD1;
     ControlNetBlock control_net;
 
-    ggml_backend_buffer_t control_buffer = nullptr;  // keep control output tensors in backend memory
+    ggml_backend_buffer_t control_buffer = nullptr;
     ggml_context* control_ctx            = nullptr;
-    std::vector<struct ggml_tensor*> controls;  // (12 input block outputs, 1 middle block output) SD 1.5
-    struct ggml_tensor* guided_hint = nullptr;  // guided_hint cache, for faster inference
-    bool guided_hint_cached         = false;
+    std::vector<ggml_tensor*> control_outputs_ggml;
+    ggml_tensor* guided_hint_output_ggml = nullptr;
+    std::vector<sd::Tensor<float>> controls;
+    sd::Tensor<float> guided_hint;
+    bool guided_hint_cached = false;
 
     ControlNet(ggml_backend_t backend,
                bool offload_params_to_cpu,
@@ -328,23 +330,23 @@ struct ControlNet : public GGMLRunner {
         free_control_ctx();
     }
 
-    void alloc_control_ctx(std::vector<struct ggml_tensor*> outs) {
-        struct ggml_init_params params;
+    void alloc_control_ctx(std::vector<ggml_tensor*> outs) {
+        ggml_init_params params;
         params.mem_size   = static_cast<size_t>(outs.size() * ggml_tensor_overhead()) + 1024 * 1024;
         params.mem_buffer = nullptr;
         params.no_alloc   = true;
         control_ctx       = ggml_init(params);
 
-        controls.resize(outs.size() - 1);
+        control_outputs_ggml.resize(outs.size() - 1);
 
         size_t control_buffer_size = 0;
 
-        guided_hint = ggml_dup_tensor(control_ctx, outs[0]);
-        control_buffer_size += ggml_nbytes(guided_hint);
+        guided_hint_output_ggml = ggml_dup_tensor(control_ctx, outs[0]);
+        control_buffer_size += ggml_nbytes(guided_hint_output_ggml);
 
         for (int i = 0; i < outs.size() - 1; i++) {
-            controls[i] = ggml_dup_tensor(control_ctx, outs[i + 1]);
-            control_buffer_size += ggml_nbytes(controls[i]);
+            control_outputs_ggml[i] = ggml_dup_tensor(control_ctx, outs[i + 1]);
+            control_buffer_size += ggml_nbytes(control_outputs_ggml[i]);
         }
 
         control_buffer = ggml_backend_alloc_ctx_tensors(control_ctx, runtime_backend);
@@ -361,8 +363,10 @@ struct ControlNet : public GGMLRunner {
             ggml_free(control_ctx);
             control_ctx = nullptr;
         }
-        guided_hint        = nullptr;
-        guided_hint_cached = false;
+        guided_hint_output_ggml = nullptr;
+        guided_hint_cached      = false;
+        guided_hint             = {};
+        control_outputs_ggml.clear();
         controls.clear();
     }
 
@@ -370,33 +374,37 @@ struct ControlNet : public GGMLRunner {
         return "control_net";
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
         control_net.get_param_tensors(tensors, prefix);
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* x,
-                                    struct ggml_tensor* hint,
-                                    struct ggml_tensor* timesteps,
-                                    struct ggml_tensor* context,
-                                    struct ggml_tensor* y = nullptr) {
-        struct ggml_cgraph* gf = new_graph_custom(CONTROL_NET_GRAPH_SIZE);
+    ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
+                             const sd::Tensor<float>& hint_tensor,
+                             const sd::Tensor<float>& timesteps_tensor,
+                             const sd::Tensor<float>& context_tensor = {},
+                             const sd::Tensor<float>& y_tensor       = {}) {
+        ggml_cgraph* gf = new_graph_custom(CONTROL_NET_GRAPH_SIZE);
 
-        x = to_backend(x);
-        if (guided_hint_cached) {
-            hint = nullptr;
+        ggml_tensor* x         = make_input(x_tensor);
+        ggml_tensor* hint      = nullptr;
+        ggml_tensor* timesteps = make_input(timesteps_tensor);
+        ggml_tensor* context   = make_optional_input(context_tensor);
+        ggml_tensor* y         = make_optional_input(y_tensor);
+
+        ggml_tensor* guided_hint_input = nullptr;
+        if (guided_hint_cached && !guided_hint.empty()) {
+            guided_hint_input = make_input(guided_hint);
+            hint              = nullptr;
         } else {
-            hint = to_backend(hint);
+            hint = make_input(hint_tensor);
         }
-        context   = to_backend(context);
-        y         = to_backend(y);
-        timesteps = to_backend(timesteps);
 
         auto runner_ctx = get_context();
 
         auto outs = control_net.forward(&runner_ctx,
                                         x,
                                         hint,
-                                        guided_hint_cached ? guided_hint : nullptr,
+                                        guided_hint_input,
                                         timesteps,
                                         context,
                                         y);
@@ -405,36 +413,46 @@ struct ControlNet : public GGMLRunner {
             alloc_control_ctx(outs);
         }
 
-        ggml_build_forward_expand(gf, ggml_cpy(compute_ctx, outs[0], guided_hint));
+        ggml_build_forward_expand(gf, ggml_cpy(compute_ctx, outs[0], guided_hint_output_ggml));
         for (int i = 0; i < outs.size() - 1; i++) {
-            ggml_build_forward_expand(gf, ggml_cpy(compute_ctx, outs[i + 1], controls[i]));
+            ggml_build_forward_expand(gf, ggml_cpy(compute_ctx, outs[i + 1], control_outputs_ggml[i]));
         }
 
         return gf;
     }
 
-    bool compute(int n_threads,
-                 struct ggml_tensor* x,
-                 struct ggml_tensor* hint,
-                 struct ggml_tensor* timesteps,
-                 struct ggml_tensor* context,
-                 struct ggml_tensor* y,
-                 struct ggml_tensor** output     = nullptr,
-                 struct ggml_context* output_ctx = nullptr) {
+    std::optional<std::vector<sd::Tensor<float>>> compute(int n_threads,
+                                                          const sd::Tensor<float>& x,
+                                                          const sd::Tensor<float>& hint,
+                                                          const sd::Tensor<float>& timesteps,
+                                                          const sd::Tensor<float>& context = {},
+                                                          const sd::Tensor<float>& y       = {}) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 77, 768]) or [1, max_position, hidden_size]
         // y: [N, adm_in_channels] or [1, adm_in_channels]
-        auto get_graph = [&]() -> struct ggml_cgraph* {
+        auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(x, hint, timesteps, context, y);
         };
 
-        bool res = GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
-        if (res) {
-            // cache guided_hint
-            guided_hint_cached = true;
+        auto compute_result = GGMLRunner::compute<float>(get_graph, n_threads, false);
+        if (!compute_result.has_value()) {
+            return std::nullopt;
         }
-        return res;
+
+        if (guided_hint_output_ggml != nullptr) {
+            guided_hint = restore_trailing_singleton_dims(sd::make_sd_tensor_from_ggml<float>(guided_hint_output_ggml),
+                                                          4);
+        }
+        controls.clear();
+        controls.reserve(control_outputs_ggml.size());
+        for (ggml_tensor* control : control_outputs_ggml) {
+            auto control_host = restore_trailing_singleton_dims(sd::make_sd_tensor_from_ggml<float>(control), 4);
+            GGML_ASSERT(!control_host.empty());
+            controls.push_back(std::move(control_host));
+        }
+        guided_hint_cached = true;
+        return controls;
     }
 
     bool load_from_file(const std::string& file_path, int n_threads) {

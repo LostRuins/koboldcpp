@@ -77,7 +77,7 @@
         "assistant_end": "<end_of_turn>\n"
     }
 }, {
-    "search": ["<|turn>model","<|think|>","<|channel>thought"],
+    "search": ["<|turn>model","<|think|>","<|channel>thought\\n<channel|>"],
     "name": "Google Gemma 4 (26B and 31B)",
     "adapter": {
         "system_start": "<|turn>system\n",

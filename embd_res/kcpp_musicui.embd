@@ -547,7 +547,27 @@ function updateForm(data){
   //let origseed = document.getElementById("seed").value;
   Object.keys(data).forEach(k=>{
     if(document.getElementById(k))
+    {
       document.getElementById(k).value=data[k]??"";
+    }else{
+      if(k=="input") //for tts input
+      {
+        document.getElementById("tts_input").value=data[k]??"";
+      }
+      else if (k == "voice") {
+        const ttsVoice = document.getElementById("tts_voice");
+        const newValue = data[k] ?? "";
+        const optionExists = ttsVoice.querySelector(`option[value="${CSS.escape(newValue)}"]`);
+        if (newValue && optionExists) {
+          ttsVoice.value = newValue;
+        }
+      }
+      else if(k=="instruction")
+      {
+        document.getElementById("tts_instruction").value=data[k]??"";
+      }
+    }
+
   });
   //if(origseed=="-1" || origseed=="")
   //{

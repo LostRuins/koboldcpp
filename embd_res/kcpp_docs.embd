@@ -1529,7 +1529,7 @@
                                "example": {
                                   "input": "hello world, how are you today?",
                                   "voice": "kobo",
-                                  "speaker_json":"",
+                                  "instruction":"",
                                },
                                "schema": {
                                   "properties": {
@@ -1539,11 +1539,15 @@
                                      },
                                      "voice": {
                                         "type": "string",
-                                        "description": "The voice to use when generating the audio. You can enter anything you like, a unique speaker will be generated. There are a few preset voices you can use: kobo,cheery,sleepy,shouty,chatty"
+                                        "description": "The voice to use when generating the audio. You can enter anything you like, a unique speaker will be generated. If using Qwen3TTS, voice cloning is supported, load the wav samples directory with --ttsdir. There are a few preset voices you can use: kobo,cheery,sleepy,shouty,chatty"
                                      },
                                      "speaker_json": {
                                         "type": "string",
                                         "description": "Custom speaker JSON. More info at https://github.com/LostRuins/koboldcpp/tree/concedo/examples/outetts"
+                                     },
+                                     "instruction": {
+                                        "type": "string",
+                                        "description": "Qwen3TTS VoiceDesign and CustomVoice only. Provide an instruction on how the narration should sound e.g. Angry man shouting with posh british accent"
                                      }
                                   },
                                   "type": "object"

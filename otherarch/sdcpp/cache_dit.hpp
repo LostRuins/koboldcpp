@@ -8,7 +8,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include "condition_cache_utils.hpp"
 #include "ggml_extend.hpp"
+#include "tensor.hpp"
 
 struct DBCacheConfig {
     bool enabled                        = false;
@@ -771,35 +773,37 @@ struct CacheDitConditionState {
         return it != cache_diffs.end() && !it->second.diff.empty();
     }
 
-    void update_cache(const void* cond, const float* input, const float* output, size_t size) {
+    void update_cache(const void* cond, const sd::Tensor<float>& input, const sd::Tensor<float>& output) {
         CacheEntry& entry = cache_diffs[cond];
-        entry.diff.resize(size);
-        for (size_t i = 0; i < size; i++) {
-            entry.diff[i] = output[i] - input[i];
+        if (!sd::store_condition_cache_diff(&entry.diff, input, output)) {
+            entry.prev_input.clear();
+            entry.prev_output.clear();
+            entry.has_prev = false;
+            return;
         }
 
+        size_t size              = static_cast<size_t>(output.numel());
+        const float* input_data  = input.data();
+        const float* output_data = output.data();
         entry.prev_input.resize(size);
         entry.prev_output.resize(size);
         for (size_t i = 0; i < size; i++) {
-            entry.prev_input[i]  = input[i];
-            entry.prev_output[i] = output[i];
+            entry.prev_input[i]  = input_data[i];
+            entry.prev_output[i] = output_data[i];
         }
         entry.has_prev = true;
     }
 
-    void apply_cache(const void* cond, const float* input, float* output, size_t size) {
+    void apply_cache(const void* cond,
+                     const sd::Tensor<float>& input,
+                     sd::Tensor<float>* output) {
         auto it = cache_diffs.find(cond);
         if (it == cache_diffs.end() || it->second.diff.empty())
             return;
-        if (it->second.diff.size() != size)
-            return;
-
-        for (size_t i = 0; i < size; i++) {
-            output[i] = input[i] + it->second.diff[i];
-        }
+        sd::apply_condition_cache_diff(it->second.diff, input, output);
     }
 
-    bool before_condition(const void* cond, struct ggml_tensor* input, struct ggml_tensor* output, float sigma, int step_index) {
+    bool before_condition(const void* cond, const sd::Tensor<float>& input, sd::Tensor<float>* output, float sigma, int step_index) {
         if (!enabled() || step_index < 0)
             return false;
 
@@ -819,8 +823,7 @@ struct CacheDitConditionState {
 
         if (skip_current_step) {
             if (has_cache(cond)) {
-                apply_cache(cond, (float*)input->data, (float*)output->data,
-                            static_cast<size_t>(ggml_nelements(output)));
+                apply_cache(cond, input, output);
                 return true;
             }
             return false;
@@ -833,13 +836,13 @@ struct CacheDitConditionState {
         if (it == cache_diffs.end() || !it->second.has_prev)
             return false;
 
-        size_t ne = static_cast<size_t>(ggml_nelements(input));
+        size_t ne = static_cast<size_t>(input.numel());
         if (it->second.prev_input.size() != ne)
             return false;
 
-        float* input_data = (float*)input->data;
-        float diff        = CacheDitState::calculate_residual_diff(
-                   it->second.prev_input.data(), input_data, ne);
+        const float* input_data = input.data();
+        float diff              = CacheDitState::calculate_residual_diff(
+                         it->second.prev_input.data(), input_data, ne);
 
         float effective_threshold = config.residual_diff_threshold;
         if (config.Fn_compute_blocks > 0) {
@@ -859,7 +862,7 @@ struct CacheDitConditionState {
             cached_steps.push_back(current_step_index);
             continuous_cached_steps++;
             accumulated_residual_diff += diff;
-            apply_cache(cond, input_data, (float*)output->data, ne);
+            apply_cache(cond, input, output);
             return true;
         }
 
@@ -867,15 +870,14 @@ struct CacheDitConditionState {
         return false;
     }
 
-    void after_condition(const void* cond, struct ggml_tensor* input, struct ggml_tensor* output) {
+    void after_condition(const void* cond, const sd::Tensor<float>& input, const sd::Tensor<float>& output) {
         if (!step_is_active())
             return;
 
-        size_t ne = static_cast<size_t>(ggml_nelements(output));
-        update_cache(cond, (float*)input->data, (float*)output->data, ne);
+        update_cache(cond, input, output);
 
         if (cond == anchor_condition && taylor_config.enabled) {
-            taylor_state.update_derivatives((float*)output->data, ne, current_step_index);
+            taylor_state.update_derivatives(output.data(), static_cast<size_t>(output.numel()), current_step_index);
         }
     }
 
