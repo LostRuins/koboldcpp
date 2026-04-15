@@ -4293,7 +4293,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                 is_different_model = True
 
             if is_different_model or was_auto_unloaded:
-		model_switch_pass = True
+                model_switch_pass = True
                 with proxy_reload_lock:
                     whitelist = get_current_admindir_list() # see if its an allowed swap
                     if was_auto_unloaded and not model_name:
