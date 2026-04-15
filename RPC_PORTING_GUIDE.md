@@ -289,7 +289,7 @@ endif
 
 **Important**: This builds the RPC client WITH Vulkan backend for hybrid mode support.
 
-### Step 2.6: Add RPC Server Build Target
+### Step 2.6: Add RPC Server Build Targets
 
 **File**: `koboldcpp-1.111.2/Makefile`
 
@@ -310,6 +310,28 @@ rpc-server-vulkan: ggml/src/ggml-vulkan-shaders.cpp tools/rpc-server.cpp \
 	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) -lvulkan
 endif
 
+# RPC server for CUDA backend (NVIDIA GPUs)
+ifdef CUBLAS_BUILD
+rpc-server-cuda: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
+    ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_cublas.o \
+    ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o \
+    ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
+    unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o \
+    gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o console.o
+	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(CUBLASLD_FLAGS)
+endif
+
+# RPC server for HIPBLAS backend (AMD ROCm GPUs)
+ifdef HIPBLAS_BUILD
+rpc-server-hip: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
+    ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_cublas.o \
+    ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o \
+    ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
+    unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o \
+    gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o console.o
+	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HIPLDFLAGS)
+endif
+
 # RPC server CPU-only (fallback)
 rpc-server: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
     ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_default.o \
@@ -319,6 +341,11 @@ rpc-server: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
     gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 ```
+
+**Important**: Each RPC server backend uses its respective GPU backend:
+- `rpc-server-vulkan` - Uses Vulkan backend (works with AMD/Intel/NVIDIA via Vulkan)
+- `rpc-server-cuda` - Uses CUDA backend (NVIDIA GPUs only)
+- `rpc-server-hip` - Uses HIPBLAS backend (AMD ROCm GPUs only)
 
 ### Step 2.7: Add RPC Build Variable Definition
 
@@ -860,7 +887,7 @@ nm -D koboldcpp_rpc.so | grep ggml_backend_rpc
 # Should show RPC backend symbols
 ```
 
-### Step 6.3: Build RPC Server
+### Step 6.3: Build RPC Server (Vulkan)
 
 ```bash
 make LLAMA_RPC=1 LLAMA_VULKAN=1 rpc-server-vulkan
@@ -877,8 +904,57 @@ ls -lh rpc-server-vulkan
 # Expected: -rwxr-xr-x 1 user user 68M Apr  11 12:00 rpc-server-vulkan
 ```
 
+### Step 6.3b: Build RPC Server (CUDA - Optional)
+
+For NVIDIA GPU systems:
+
+```bash
+make LLAMA_RPC=1 LLAMA_CUBLAS=1 rpc-server-cuda
+```
+
+**Expected Output**:
+```
+g++ ... -DGGML_USE_RPC -DGGML_USE_CUDA ... -o rpc-server-cuda -lcuda -lcublas -lcudart
+```
+
+**Verify Build**:
+```bash
+ls -lh rpc-server-cuda
+# Expected: -rwxr-xr-x 1 user user 85M Apr  11 12:00 rpc-server-cuda
+```
+
+**Requirements**:
+- NVIDIA GPU with compute capability 6.0+
+- CUDA toolkit 11.0+ installed
+- NVIDIA driver installed
+
+### Step 6.3c: Build RPC Server (HIPBLAS/ROCm - Optional)
+
+For AMD ROCm systems:
+
+```bash
+make LLAMA_RPC=1 LLAMA_HIPBLAS=1 rpc-server-hip
+```
+
+**Expected Output**:
+```
+hipcc ... -DGGML_USE_RPC -DGGML_USE_HIP ... -o rpc-server-hip -lhipblas -lamdhip64 -lrocblas
+```
+
+**Verify Build**:
+```bash
+ls -lh rpc-server-hip
+# Expected: -rwxr-xr-x 1 user user 85M Apr  11 12:00 rpc-server-hip
+```
+
+**Requirements**:
+- AMD GPU with GCN 8.0+ (RX 400 series or newer)
+- ROCm 5.0+ installed
+- AMD driver installed
+
 ### Step 6.4: Test RPC Server
 
+**Test Vulkan RPC Server**:
 ```bash
 ./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c
 ```
@@ -895,11 +971,39 @@ Devices:
   Vulkan0: AMD Radeon RX 9060 XT (16304 MiB, 15232 MiB free)
 ```
 
+**Test CUDA RPC Server** (if built):
+```bash
+./rpc-server-cuda -H 127.0.0.1 --device CUDA0 -p 50052 -c
+```
+
+**Expected Output**:
+```
+Starting RPC server v3.6.1
+  endpoint       : 127.0.0.1:50052
+  local cache    : /home/user/.cache/llama.cpp/rpc/
+Devices:
+  CUDA0: NVIDIA GeForce RTX 4090 (24576 MiB, 23456 MiB free)
+```
+
+**Test HIPBLAS RPC Server** (if built):
+```bash
+./rpc-server-hip -H 127.0.0.1 --device HIP0 -p 50052 -c
+```
+
+**Expected Output**:
+```
+Starting RPC server v3.6.1
+  endpoint       : 127.0.0.1:50052
+  local cache    : /home/user/.cache/llama.cpp/rpc/
+Devices:
+  HIP0: AMD Radeon RX 7900 XTX (24576 MiB, 23456 MiB free)
+```
+
 **Verify Listening**:
 ```bash
 ss -tlnp | grep 50052
 # Expected:
-# LISTEN 0  1  127.0.0.1:50052  0.0.0.0:*  users:(("rpc-server-vulkan",pid=1234,fd=14))
+# LISTEN 0  1  127.0.0.1:50052  0.0.0.0:*  users:(("rpc-server-*",pid=1234,fd=14))
 ```
 
 ### Step 6.5: Test RPC Client (Hybrid Mode)
@@ -1112,6 +1216,12 @@ Performance depends on network quality:
 - Requires manual `--device` argument
 - Device names must match enumeration (VULKAN0, VULKAN1, etc.)
 - RPC devices must be connected before use
+
+### Backend Support
+- **Vulkan RPC Server**: Works on all platforms with Vulkan drivers
+- **CUDA RPC Server**: Requires NVIDIA GPU + CUDA toolkit (Linux/Windows)
+- **HIPBLAS RPC Server**: Requires AMD GPU + ROCm (Linux only)
+- All backends use the same RPC protocol and are interoperable
 
 ---
 

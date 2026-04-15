@@ -8,14 +8,86 @@
 
 ## 1-Minute Quick Start
 
-### Step 1: Build
+### Step 1: Build All Backends (Recommended)
+
+This builds **everything** for maximum flexibility: CPU, Vulkan, CUDA, ROCm, and RPC support.
 
 ```bash
 cd koboldcpp_rpc_attempt
 make clean
-make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc
-make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan
+
+# ============ CLIENT BUILDS (koboldcpp.py) ============
+
+# Build CPU backend (fallback, works everywhere)
+make koboldcpp_default -j8
+
+# Build Vulkan backend (AMD/Intel/NVIDIA GPUs)
+make LLAMA_VULKAN=1 koboldcpp -j8
+
+# Build CUDA backend (NVIDIA GPUs only, requires CUDA toolkit)
+make LLAMA_CUBLAS=1 koboldcpp_cublas -j8
+
+# Build ROCm/HIPBLAS backend (AMD GPUs only, requires ROCm)
+make LLAMA_HIPBLAS=1 koboldcpp_hipblas -j8
+
+# Build RPC backend (for remote GPU acceleration)
+make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc -j8
+
+# ============ SERVER BUILDS (rpc-server-*) ============
+
+# Build RPC server (Vulkan backend - works with all GPU types)
+make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan -j8
+
+# Build RPC server for CUDA systems (also uses Vulkan internally)
+make LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda -j8
+
+# Build RPC server for ROCm systems (also uses Vulkan internally)
+make LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip -j8
 ```
+
+**What This Creates**:
+| File | Purpose | Size |
+|------|---------|------|
+| `koboldcpp_default.so` | CPU backend | ~12 MB |
+| `koboldcpp.so` | Vulkan GPU backend | ~67 MB |
+| `koboldcpp_cublas.so` | CUDA GPU backend (NVIDIA) | ~80 MB |
+| `koboldcpp_hipblas.so` | ROCm GPU backend (AMD) | ~80 MB |
+| `koboldcpp_rpc.so` | RPC client with Vulkan | ~67 MB |
+| `rpc-server-vulkan` | RPC server (Vulkan build) | ~68 MB |
+| `rpc-server-cuda` | RPC server (CUDA build) | ~68 MB |
+| `rpc-server-hip` | RPC server (HIPBLAS build) | ~68 MB |
+
+**Important Note**: Each RPC server uses its respective GPU backend for actual GPU computation:
+- `rpc-server-vulkan` - Uses Vulkan backend, requires Vulkan drivers, works with AMD/Intel/NVIDIA GPUs via Vulkan
+- `rpc-server-cuda` - Uses CUDA backend, requires NVIDIA GPU + CUDA toolkit, works with NVIDIA GPUs only
+- `rpc-server-hip` - Uses HIPBLAS backend, requires AMD GPU + ROCm, works with AMD GPUs only
+
+**Which RPC Server Should You Build?**
+- Build `rpc-server-vulkan` if you have AMD, Intel, or NVIDIA GPUs with Vulkan support
+- Build `rpc-server-cuda` if you have NVIDIA GPUs and want CUDA acceleration
+- Build `rpc-server-hip` if you have AMD GPUs with ROCm installed
+
+**Note**: The RPC protocol is the same across all backends, so RPC clients can connect to any RPC server regardless of backend type. You can mix Vulkan, CUDA, and HIPBLAS RPC servers and connect to them from a single client.
+
+**Prerequisites**:
+- **Vulkan**: `sudo apt-get install libvulkan-dev vulkan-tools glslc`
+- **CUDA**: NVIDIA GPU + CUDA toolkit installed
+- **ROCm**: AMD GPU + ROCm installed
+
+**Note**: If you don't have CUDA or ROCm, skip those build commands. The builds that fail will simply not create their respective files.
+
+### Step 1b: Minimal RPC-Only Build (Faster, Limited)
+
+If you only need RPC and want a faster build:
+
+```bash
+cd koboldcpp_rpc_attempt
+make clean
+make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc -j8
+make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan -j8
+```
+
+**Warning**: This only provides RPC backend. You won't have CPU, Vulkan, CUDA, or ROCm options available in the UI.
 
 ### Step 2: Start Server (on GPU machine)
 
@@ -198,6 +270,10 @@ make clean && make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc
 # Verify hybrid build
 ls -lh koboldcpp_rpc.so
 # Should be ~67 MB (not ~12 MB RPC-only)
+
+# Ensure full build was performed (not RPC-only)
+ls -lh koboldcpp_default.so koboldcpp_vulkan.so
+# Both should exist for full backend support
 
 # Check Vulkan devices
 vulkaninfo | grep -A 3 "deviceName"
