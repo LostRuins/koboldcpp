@@ -469,8 +469,18 @@ ifdef LLAMA_VULKAN
 # Hybrid RPC + Vulkan build - needs Vulkan library
 RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
 else
+ifdef LLAMA_CUBLAS
+# Hybrid RPC + CUDA build
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $(CUBLAS_FLAGS) $^ -shared -o $@.so $(LDFLAGS) $(CUBLASLD_FLAGS)
+else
+ifdef LLAMA_HIPBLAS
+# Hybrid RPC + HIPBLAS build
+RPC_BUILD = $(HCXX) $(CXXFLAGS) $(RPC_FLAGS) $(HIPFLAGS) $^ -shared -o $@.so $(LDFLAGS) $(HIPLDFLAGS)
+else
 # RPC only build
 RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.so $(LDFLAGS)
+endif
+endif
 endif
 endif
 endif
@@ -947,6 +957,21 @@ koboldcpp_rpc:
 	$(DONOTHING)
 endif
 
+# RPC client build target with HIPBLAS backend (Hybrid: RPC + HIPBLAS/ROCm)
+ifdef RPC_BUILD
+ifdef HIPBLAS_BUILD
+# Hybrid build with both RPC and HIPBLAS
+koboldcpp_hipblas_rpc: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o ggml-rpc.o sdcpp_cublas.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o $(HIP_OBJS) $(OBJS_FULL) $(OBJS)
+	$(RPC_BUILD)
+endif
+
+ifdef CUBLAS_BUILD
+# Hybrid build with both RPC and CUDA
+koboldcpp_cublas_rpc: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o ggml-rpc.o sdcpp_cublas.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o $(CUBLAS_OBJS) $(OBJS_FULL) $(OBJS)
+	$(RPC_BUILD)
+endif
+endif
+
 # tools
 quantize_gguf: tools/quantize/quantize.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
@@ -970,8 +995,119 @@ rpc-server-vulkan: ggml/src/ggml-vulkan-shaders.cpp tools/rpc-server.cpp ggml.o 
 	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) -lvulkan
 endif
 
+ifdef CUBLAS_BUILD
+rpc-server-cuda: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o console.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o $(CUBLAS_OBJS)
+	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(CUBLASLD_FLAGS)
+endif
+
+ifdef HIPBLAS_BUILD
+rpc-server-hip: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o console.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o $(HIP_OBJS)
+	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HIPLDFLAGS)
+endif
+
 rpc-server: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
+
+# ============ COMBINED BUILD TARGETS ============
+
+# Build all available RPC clients
+rpc-clients-all:
+	@echo "Building RPC clients..."
+ifdef LLAMA_VULKAN
+	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc
+endif
+ifdef LLAMA_CUBLAS
+	$(MAKE) LLAMA_CUBLAS=1 LLAMA_RPC=1 koboldcpp_cublas_rpc
+endif
+ifdef LLAMA_HIPBLAS
+	$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 koboldcpp_hipblas_rpc
+endif
+	@echo "RPC clients built successfully!"
+
+# Build all available RPC servers
+rpc-servers-all:
+	@echo "Building RPC servers..."
+ifdef LLAMA_VULKAN
+	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan
+endif
+ifdef LLAMA_CUBLAS
+	$(MAKE) LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda
+endif
+ifdef LLAMA_HIPBLAS
+	$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip
+endif
+	@echo "RPC servers built successfully!"
+
+# Build all RPC clients and servers at once
+rpc-all: rpc-clients-all rpc-servers-all
+	@echo "All RPC components built successfully!"
+
+# Build all RPC clients and servers with ALL available backends
+# This target automatically detects and builds Vulkan, CUDA, and HIPBLAS
+# Note: CUDA and HIPBLAS are mutually exclusive - only one will be built
+rpc-full-all:
+	@echo "Building all RPC components with all available backends..."
+	@echo ""
+	@echo "=== Detecting available backends ==="
+	@echo "Checking for NVIDIA CUDA (nvcc)..."
+	@if which nvcc > /dev/null 2>&1; then \
+		echo "✓ CUDA: Available (nvcc found)"; \
+		echo "1" > /tmp/kobold_has_cuda; \
+	else \
+		echo "✗ CUDA: Not available"; \
+		echo "0" > /tmp/kobold_has_cuda; \
+	fi
+	@echo "Checking for AMD HIPBLAS (hipcc)..."
+	@if which hipcc > /dev/null 2>&1; then \
+		echo "✓ HIPBLAS: Available (hipcc found)"; \
+		echo "1" > /tmp/kobold_has_hipblas; \
+	else \
+		echo "✗ HIPBLAS: Not available"; \
+		echo "0" > /tmp/kobold_has_hipblas; \
+	fi
+	@echo "Checking for Vulkan..."
+	@which vulkaninfo > /dev/null 2>&1 && echo "✓ Vulkan: Available" || echo "✗ Vulkan: Not available (will try anyway)"
+	@echo ""
+	@echo "=== Building Vulkan + RPC (universal fallback) ==="
+	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-clients-all
+	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-servers-all
+	@echo ""
+	@echo "=== Building HIPBLAS + RPC (AMD GPUs) ==="
+	@if [ "$$(cat /tmp/kobold_has_hipblas)" = "1" ]; then \
+		echo "HIPBLAS detected, building..."; \
+		$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 koboldcpp_hipblas_rpc; \
+		$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip; \
+		echo "✓ HIPBLAS build complete"; \
+	else \
+		echo "HIPBLAS not available (hipcc not found), skipping..."; \
+	fi
+	@echo ""
+	@echo "=== Building CUDA + RPC (NVIDIA GPUs) ==="
+	@if [ "$$(cat /tmp/kobold_has_cuda)" = "1" ] && [ "$$(cat /tmp/kobold_has_hipblas)" != "1" ]; then \
+		echo "CUDA detected (without HIPBLAS), building..."; \
+		$(MAKE) LLAMA_CUBLAS=1 LLAMA_RPC=1 koboldcpp_cublas_rpc; \
+		$(MAKE) LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda; \
+		echo "✓ CUDA build complete"; \
+	elif [ "$$(cat /tmp/kobold_has_cuda)" = "1" ] && [ "$$(cat /tmp/kobold_has_hipblas)" = "1" ]; then \
+		echo "⚠ Both CUDA and HIPBLAS detected - skipping CUDA to avoid conflicts"; \
+		echo "   (HIPBLAS takes precedence for AMD systems)"; \
+	else \
+		echo "CUDA not available (nvcc not found), skipping..."; \
+	fi
+	@rm -f /tmp/kobold_has_cuda /tmp/kobold_has_hipblas
+	@echo ""
+	@echo "=== All RPC components built successfully! ==="
+	@echo ""
+	@echo "Built RPC Clients:"
+	@ls -lh koboldcpp_rpc.so 2>/dev/null && echo "  ✓ koboldcpp_rpc.so (Vulkan + RPC)" || echo "  ✗ koboldcpp_rpc.so (Vulkan + RPC) - BUILD FAILED"
+	@ls -lh koboldcpp_hipblas_rpc.so 2>/dev/null && echo "  ✓ koboldcpp_hipblas_rpc.so (HIPBLAS + RPC)" || echo "  - koboldcpp_hipblas_rpc.so (HIPBLAS + RPC) - not built"
+	@ls -lh koboldcpp_cublas_rpc.so 2>/dev/null && echo "  ✓ koboldcpp_cublas_rpc.so (CUDA + RPC)" || echo "  - koboldcpp_cublas_rpc.so (CUDA + RPC) - not built"
+	@echo ""
+	@echo "Built RPC Servers:"
+	@ls -lh rpc-server-vulkan 2>/dev/null && echo "  ✓ rpc-server-vulkan (Vulkan backend)" || echo "  ✗ rpc-server-vulkan (Vulkan backend) - BUILD FAILED"
+	@ls -lh rpc-server-hip 2>/dev/null && echo "  ✓ rpc-server-hip (HIPBLAS backend)" || echo "  - rpc-server-hip (HIPBLAS backend) - not built"
+	@ls -lh rpc-server-cuda 2>/dev/null && echo "  ✓ rpc-server-cuda (CUDA backend)" || echo "  - rpc-server-cuda (CUDA backend) - not built"
+	@echo ""
 
 #window simple clinfo
 simplecpuinfo: simplecpuinfo.cpp

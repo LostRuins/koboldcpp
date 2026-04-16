@@ -289,7 +289,7 @@ endif
 
 **Important**: This builds the RPC client WITH Vulkan backend for hybrid mode support.
 
-### Step 2.6: Add RPC Server Build Target
+### Step 2.6: Add RPC Server Build Targets
 
 **File**: `koboldcpp-1.111.2/Makefile`
 
@@ -310,6 +310,28 @@ rpc-server-vulkan: ggml/src/ggml-vulkan-shaders.cpp tools/rpc-server.cpp \
 	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) -lvulkan
 endif
 
+# RPC server for CUDA backend (NVIDIA GPUs)
+ifdef CUBLAS_BUILD
+rpc-server-cuda: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
+    ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_cublas.o \
+    ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o \
+    ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
+    unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o \
+    gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o console.o
+	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(CUBLASLD_FLAGS)
+endif
+
+# RPC server for HIPBLAS backend (AMD ROCm GPUs)
+ifdef HIPBLAS_BUILD
+rpc-server-hip: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
+    ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_cublas.o \
+    ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o \
+    ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
+    unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o \
+    gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o console.o
+	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HIPLDFLAGS)
+endif
+
 # RPC server CPU-only (fallback)
 rpc-server: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
     ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_default.o \
@@ -319,6 +341,11 @@ rpc-server: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
     gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 ```
+
+**Important**: Each RPC server backend uses its respective GPU backend:
+- `rpc-server-vulkan` - Uses Vulkan backend (works with AMD/Intel/NVIDIA via Vulkan)
+- `rpc-server-cuda` - Uses CUDA backend (NVIDIA GPUs only)
+- `rpc-server-hip` - Uses HIPBLAS backend (AMD ROCm GPUs only)
 
 ### Step 2.7: Add RPC Build Variable Definition
 
@@ -573,7 +600,7 @@ if args.userpc and args.tensor_split:
 
 **File**: `koboldcpp-1.111.2/gpttype_adapter.cpp`
 
-**Location**: After line ~2452 (after RPC device collection)
+**Location**: Lines 2460-2580 (device enumeration and ordering)
 
 **Add include** at top of file (after line ~23):
 ```cpp
@@ -582,11 +609,12 @@ if args.userpc and args.tensor_split:
 
 **Implementation**: Replace the device enumeration section with code that:
 1. Collects all RPC devices (RPC0, RPC1, etc.)
-2. Enumerates local GPU devices (VULKAN0, VULKAN1, etc.)
-3. If `--device` is specified, reorders all devices according to the argument
-4. Otherwise, uses default ordering (RPC first, then local)
+2. Enumerates local GPU devices (VULKAN0, HIP0, CUDA0, ROCm0, etc.)
+3. **Registers devices with dual names** (HIP=CUDA, HIP=ROCm for compatibility)
+4. If `--device` is specified, reorders all devices according to the argument
+5. Otherwise, uses default ordering (RPC first, then local)
 
-**Key Code**:
+**Key Code** (with dual naming support):
 ```cpp
 std::string dev_override_str = inputs.devices_override ? inputs.devices_override : "";
 
@@ -606,7 +634,7 @@ if(dev_override_str != "" && dev_override_str.length() > 0)
         }
     }
     
-    // Add local GPU devices
+    // Add local GPU devices with DUAL NAMING support
     printf("[RPC] Enumerating local GPU devices...\n");
     int vulkan_count = 0, cuda_count = 0, hip_count = 0, metal_count = 0;
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
@@ -614,16 +642,38 @@ if(dev_override_str != "" && dev_override_str.length() > 0)
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
         std::string reg_name = reg ? ggml_backend_reg_name(reg) : "";
         
-        // Skip RPC and CPU, add local GPUs with proper naming
         std::string reg_name_upper = reg_name;
         std::transform(reg_name_upper.begin(), reg_name_upper.end(), reg_name_upper.begin(), ::toupper);
         
+        // Skip RPC and CPU
+        if(reg_name_upper.find("RPC") != std::string::npos || 
+           reg_name_upper.find("CPU") != std::string::npos) {
+            continue;
+        }
+        
+        // Vulkan devices
         if(reg_name_upper.find("VULKAN") != std::string::npos || 
            reg_name_upper.find("RADV") != std::string::npos) {
             std::string local_name = "VULKAN" + std::to_string(vulkan_count++);
             all_devices.push_back(std::make_pair(local_name, dev));
         }
-        // ... (similar for CUDA, HIP, METAL)
+        // CUDA devices - register with BOTH CUDA and HIP names for compatibility
+        else if(reg_name_upper.find("CUDA") != std::string::npos) {
+            std::string cuda_name = "CUDA" + std::to_string(cuda_count++);
+            std::string hip_name = "HIP" + std::to_string(hip_count++);
+            all_devices.push_back(std::make_pair(cuda_name, dev));
+            all_devices.push_back(std::make_pair(hip_name, dev));
+            printf("[RPC] CUDA device registered as both %s and %s\n", cuda_name.c_str(), hip_name.c_str());
+        }
+        // HIP/ROCM devices - register with BOTH HIP and ROCm names for compatibility
+        else if(reg_name_upper.find("HIP") != std::string::npos || 
+                reg_name_upper.find("ROCM") != std::string::npos) {
+            std::string hip_name = "HIP" + std::to_string(hip_count);
+            std::string rocm_name = "ROCm" + std::to_string(hip_count++);
+            all_devices.push_back(std::make_pair(hip_name, dev));
+            all_devices.push_back(std::make_pair(rocm_name, dev));
+            printf("[RPC] HIP device registered as both %s and %s\n", hip_name.c_str(), rocm_name.c_str());
+        }
     }
     
     // Parse device order from override string and build ordered list
@@ -631,7 +681,13 @@ if(dev_override_str != "" && dev_override_str.length() > 0)
 }
 ```
 
-**See**: Full implementation in `gpttype_adapter.cpp:2452-2580`
+**See**: Full implementation in `gpttype_adapter.cpp:2488-2511`
+
+**Key Changes** (2026-04-16):
+- CUDA devices now registered with dual names (`CUDA0` + `HIP0`)
+- HIP devices now registered with dual names (`HIP0` + `ROCm0`)
+- Allows using `HIP0`, `CUDA0`, or `ROCm0` interchangeably
+- Improves compatibility across different backend configurations
 
 ### Step 4.2: Fix Device Enumeration (Case-Insensitive)
 
@@ -860,7 +916,7 @@ nm -D koboldcpp_rpc.so | grep ggml_backend_rpc
 # Should show RPC backend symbols
 ```
 
-### Step 6.3: Build RPC Server
+### Step 6.3: Build RPC Server (Vulkan)
 
 ```bash
 make LLAMA_RPC=1 LLAMA_VULKAN=1 rpc-server-vulkan
@@ -877,8 +933,57 @@ ls -lh rpc-server-vulkan
 # Expected: -rwxr-xr-x 1 user user 68M Apr  11 12:00 rpc-server-vulkan
 ```
 
+### Step 6.3b: Build RPC Server (CUDA - Optional)
+
+For NVIDIA GPU systems:
+
+```bash
+make LLAMA_RPC=1 LLAMA_CUBLAS=1 rpc-server-cuda
+```
+
+**Expected Output**:
+```
+g++ ... -DGGML_USE_RPC -DGGML_USE_CUDA ... -o rpc-server-cuda -lcuda -lcublas -lcudart
+```
+
+**Verify Build**:
+```bash
+ls -lh rpc-server-cuda
+# Expected: -rwxr-xr-x 1 user user 85M Apr  11 12:00 rpc-server-cuda
+```
+
+**Requirements**:
+- NVIDIA GPU with compute capability 6.0+
+- CUDA toolkit 11.0+ installed
+- NVIDIA driver installed
+
+### Step 6.3c: Build RPC Server (HIPBLAS/ROCm - Optional)
+
+For AMD ROCm systems:
+
+```bash
+make LLAMA_RPC=1 LLAMA_HIPBLAS=1 rpc-server-hip
+```
+
+**Expected Output**:
+```
+hipcc ... -DGGML_USE_RPC -DGGML_USE_HIP ... -o rpc-server-hip -lhipblas -lamdhip64 -lrocblas
+```
+
+**Verify Build**:
+```bash
+ls -lh rpc-server-hip
+# Expected: -rwxr-xr-x 1 user user 85M Apr  11 12:00 rpc-server-hip
+```
+
+**Requirements**:
+- AMD GPU with GCN 8.0+ (RX 400 series or newer)
+- ROCm 5.0+ installed
+- AMD driver installed
+
 ### Step 6.4: Test RPC Server
 
+**Test Vulkan RPC Server**:
 ```bash
 ./rpc-server-vulkan -H 127.0.0.1 --device VULKAN0 -p 50052 -c
 ```
@@ -895,11 +1000,39 @@ Devices:
   Vulkan0: AMD Radeon RX 9060 XT (16304 MiB, 15232 MiB free)
 ```
 
+**Test CUDA RPC Server** (if built):
+```bash
+./rpc-server-cuda -H 127.0.0.1 --device CUDA0 -p 50052 -c
+```
+
+**Expected Output**:
+```
+Starting RPC server v3.6.1
+  endpoint       : 127.0.0.1:50052
+  local cache    : /home/user/.cache/llama.cpp/rpc/
+Devices:
+  CUDA0: NVIDIA GeForce RTX 4090 (24576 MiB, 23456 MiB free)
+```
+
+**Test HIPBLAS RPC Server** (if built):
+```bash
+./rpc-server-hip -H 127.0.0.1 --device HIP0 -p 50052 -c
+```
+
+**Expected Output**:
+```
+Starting RPC server v3.6.1
+  endpoint       : 127.0.0.1:50052
+  local cache    : /home/user/.cache/llama.cpp/rpc/
+Devices:
+  HIP0: AMD Radeon RX 7900 XTX (24576 MiB, 23456 MiB free)
+```
+
 **Verify Listening**:
 ```bash
 ss -tlnp | grep 50052
 # Expected:
-# LISTEN 0  1  127.0.0.1:50052  0.0.0.0:*  users:(("rpc-server-vulkan",pid=1234,fd=14))
+# LISTEN 0  1  127.0.0.1:50052  0.0.0.0:*  users:(("rpc-server-*",pid=1234,fd=14))
 ```
 
 ### Step 6.5: Test RPC Client (Hybrid Mode)
@@ -1112,6 +1245,12 @@ Performance depends on network quality:
 - Requires manual `--device` argument
 - Device names must match enumeration (VULKAN0, VULKAN1, etc.)
 - RPC devices must be connected before use
+
+### Backend Support
+- **Vulkan RPC Server**: Works on all platforms with Vulkan drivers
+- **CUDA RPC Server**: Requires NVIDIA GPU + CUDA toolkit (Linux/Windows)
+- **HIPBLAS RPC Server**: Requires AMD GPU + ROCm (Linux only)
+- All backends use the same RPC protocol and are interoperable
 
 ---
 
