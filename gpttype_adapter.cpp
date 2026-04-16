@@ -2491,16 +2491,29 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                     printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
                     std::string local_name = "VULKAN" + std::to_string(vulkan_count++);
                     all_devices.push_back(std::make_pair(local_name, dev));
+                    // Also add HIP alias for Vulkan devices (for compatibility)
+                    if(vulkan_count == 1) {
+                        printf("[RPC] DEBUG: Vulkan device 0 registered as VULKAN0\n");
+                    }
                 }
                 else if(reg_name_upper.find("CUDA") != std::string::npos) {
                     printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
-                    std::string local_name = "CUDA" + std::to_string(cuda_count++);
-                    all_devices.push_back(std::make_pair(local_name, dev));
+                    // Register with both CUDA and HIP names for compatibility
+                    // This allows using either naming convention regardless of backend
+                    std::string cuda_name = "CUDA" + std::to_string(cuda_count++);
+                    std::string hip_name = "HIP" + std::to_string(hip_count++);
+                    all_devices.push_back(std::make_pair(cuda_name, dev));
+                    all_devices.push_back(std::make_pair(hip_name, dev));
+                    printf("[RPC] DEBUG: CUDA device %d registered as both %s and %s\n", cuda_count-1, cuda_name.c_str(), hip_name.c_str());
                 }
-                else if(reg_name_upper.find("HIP") != std::string::npos) {
+                else if(reg_name_upper.find("HIP") != std::string::npos || reg_name_upper.find("ROCM") != std::string::npos) {
                     printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
-                    std::string local_name = "HIP" + std::to_string(hip_count++);
-                    all_devices.push_back(std::make_pair(local_name, dev));
+                    // Register with both HIP and ROCm names for compatibility
+                    std::string hip_name = "HIP" + std::to_string(hip_count);
+                    std::string rocm_name = "ROCm" + std::to_string(hip_count++);
+                    all_devices.push_back(std::make_pair(hip_name, dev));
+                    all_devices.push_back(std::make_pair(rocm_name, dev));
+                    printf("[RPC] DEBUG: HIP/ROCM device %d registered as both %s and %s\n", hip_count-1, hip_name.c_str(), rocm_name.c_str());
                 }
                 else if(reg_name_upper.find("METAL") != std::string::npos) {
                     printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());

@@ -1,9 +1,69 @@
 # RPC Implementation Changes in koboldcpp.py
 
 **Version**: 1.111.2  
-**Date**: 2026-04-15  
-**Purpose**: Complete documentation of all code changes made to koboldcpp.py for RPC support  
+**Date**: 2026-04-16  
+**Purpose**: Complete documentation of all koboldcpp.py changes for RPC support  
 **Status**: ✅ Complete - All Features Working
+
+---
+
+## Recent Updates (2026-04-16)
+
+### ROCm Detection and HIPBLAS RPC Library Selection
+
+**Location**: Lines 1000-1055 (init_library function)
+
+**Changes**:
+1. Added `has_rocm_in_device` detection
+2. Updated library selection to use `lib_hipblas_rpc` when ROCm detected
+3. Added fallback logic for ROCm-only device strings
+
+**Code Added**:
+```python
+def init_library():
+    global handle, args, libname
+    # ... (other globals)
+    
+    libname = lib_default
+    
+    # Detect ROCm/HIP in device string
+    has_rocm_in_device = False
+    if args.device and ("ROCm" in args.device or "HIP" in args.device):
+        has_rocm_in_device = True
+    
+    # ... (other logic)
+    
+    # Updated RPC library selection
+    elif args.userpc is not None:
+        if has_rocm_in_device and file_exists(lib_hipblas_rpc):
+            libname = lib_hipblas_rpc  # Use HIPBLAS RPC for ROCm
+        elif file_exists(lib_rpc):
+            libname = lib_rpc
+        else:
+            print("WARNING: RPC library not found. Please build with LLAMA_RPC=1")
+    
+    # Handle ROCm device string without --rpc flag
+    elif has_rocm_in_device:
+        if file_exists(lib_hipblas_rpc):
+            libname = lib_hipblas_rpc
+        elif file_exists(lib_hipblas):
+            libname = lib_hipblas
+```
+
+**Why**: Ensures correct library is selected when using `--device ROCm0,RPC0,ROCm1` or `--device HIP0,RPC0,HIP1`
+
+### HIPBLAS RPC Library Variable
+
+**Location**: Line 949-951
+
+**Code Added**:
+```python
+lib_hipblas_rpc = pick_existant_file(
+    "koboldcpp_hipblas_rpc.dll", "koboldcpp_hipblas_rpc.so"
+)
+```
+
+**Purpose**: Detect HIPBLAS RPC-enabled library for ROCm + RPC setups
 
 ---
 

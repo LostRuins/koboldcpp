@@ -600,7 +600,7 @@ if args.userpc and args.tensor_split:
 
 **File**: `koboldcpp-1.111.2/gpttype_adapter.cpp`
 
-**Location**: After line ~2452 (after RPC device collection)
+**Location**: Lines 2460-2580 (device enumeration and ordering)
 
 **Add include** at top of file (after line ~23):
 ```cpp
@@ -609,11 +609,12 @@ if args.userpc and args.tensor_split:
 
 **Implementation**: Replace the device enumeration section with code that:
 1. Collects all RPC devices (RPC0, RPC1, etc.)
-2. Enumerates local GPU devices (VULKAN0, VULKAN1, etc.)
-3. If `--device` is specified, reorders all devices according to the argument
-4. Otherwise, uses default ordering (RPC first, then local)
+2. Enumerates local GPU devices (VULKAN0, HIP0, CUDA0, ROCm0, etc.)
+3. **Registers devices with dual names** (HIP=CUDA, HIP=ROCm for compatibility)
+4. If `--device` is specified, reorders all devices according to the argument
+5. Otherwise, uses default ordering (RPC first, then local)
 
-**Key Code**:
+**Key Code** (with dual naming support):
 ```cpp
 std::string dev_override_str = inputs.devices_override ? inputs.devices_override : "";
 
@@ -633,7 +634,7 @@ if(dev_override_str != "" && dev_override_str.length() > 0)
         }
     }
     
-    // Add local GPU devices
+    // Add local GPU devices with DUAL NAMING support
     printf("[RPC] Enumerating local GPU devices...\n");
     int vulkan_count = 0, cuda_count = 0, hip_count = 0, metal_count = 0;
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
@@ -641,16 +642,38 @@ if(dev_override_str != "" && dev_override_str.length() > 0)
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
         std::string reg_name = reg ? ggml_backend_reg_name(reg) : "";
         
-        // Skip RPC and CPU, add local GPUs with proper naming
         std::string reg_name_upper = reg_name;
         std::transform(reg_name_upper.begin(), reg_name_upper.end(), reg_name_upper.begin(), ::toupper);
         
+        // Skip RPC and CPU
+        if(reg_name_upper.find("RPC") != std::string::npos || 
+           reg_name_upper.find("CPU") != std::string::npos) {
+            continue;
+        }
+        
+        // Vulkan devices
         if(reg_name_upper.find("VULKAN") != std::string::npos || 
            reg_name_upper.find("RADV") != std::string::npos) {
             std::string local_name = "VULKAN" + std::to_string(vulkan_count++);
             all_devices.push_back(std::make_pair(local_name, dev));
         }
-        // ... (similar for CUDA, HIP, METAL)
+        // CUDA devices - register with BOTH CUDA and HIP names for compatibility
+        else if(reg_name_upper.find("CUDA") != std::string::npos) {
+            std::string cuda_name = "CUDA" + std::to_string(cuda_count++);
+            std::string hip_name = "HIP" + std::to_string(hip_count++);
+            all_devices.push_back(std::make_pair(cuda_name, dev));
+            all_devices.push_back(std::make_pair(hip_name, dev));
+            printf("[RPC] CUDA device registered as both %s and %s\n", cuda_name.c_str(), hip_name.c_str());
+        }
+        // HIP/ROCM devices - register with BOTH HIP and ROCm names for compatibility
+        else if(reg_name_upper.find("HIP") != std::string::npos || 
+                reg_name_upper.find("ROCM") != std::string::npos) {
+            std::string hip_name = "HIP" + std::to_string(hip_count);
+            std::string rocm_name = "ROCm" + std::to_string(hip_count++);
+            all_devices.push_back(std::make_pair(hip_name, dev));
+            all_devices.push_back(std::make_pair(rocm_name, dev));
+            printf("[RPC] HIP device registered as both %s and %s\n", hip_name.c_str(), rocm_name.c_str());
+        }
     }
     
     // Parse device order from override string and build ordered list
@@ -658,7 +681,13 @@ if(dev_override_str != "" && dev_override_str.length() > 0)
 }
 ```
 
-**See**: Full implementation in `gpttype_adapter.cpp:2452-2580`
+**See**: Full implementation in `gpttype_adapter.cpp:2488-2511`
+
+**Key Changes** (2026-04-16):
+- CUDA devices now registered with dual names (`CUDA0` + `HIP0`)
+- HIP devices now registered with dual names (`HIP0` + `ROCm0`)
+- Allows using `HIP0`, `CUDA0`, or `ROCm0` interchangeably
+- Improves compatibility across different backend configurations
 
 ### Step 4.2: Fix Device Enumeration (Case-Insensitive)
 

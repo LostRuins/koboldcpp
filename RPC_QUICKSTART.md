@@ -1,105 +1,117 @@
 # KoboldCPP RPC - Quick Start Guide
 
 **Version**: 1.111.2  
-**Last Updated**: 2026-04-11  
+**Last Updated**: 2026-04-16  
 **Status**: ✅ Complete - All Features Working
 
 ---
 
 ## 1-Minute Quick Start
 
-### Step 1: Build All Backends (Recommended)
+### Step 1: Build All Backends Automatically (Recommended)
 
-This builds **everything** for maximum flexibility: CPU, Vulkan, CUDA, ROCm, and RPC support.
+This single command detects available backends and builds everything:
+
+```bash
+cd koboldcpp_rpc_attempt
+make clean
+make rpc-full-all -j8
+```
+
+**What This Does**:
+- ✅ Detects if CUDA (`nvcc`) is available
+- ✅ Detects if HIPBLAS (`hipcc`) is available
+- ✅ Always builds Vulkan (universal fallback)
+- ✅ Builds only compatible backends (CUDA and HIPBLAS are mutually exclusive)
+
+**What Gets Built**:
+| File | Purpose | Backend |
+|------|---------|---------|
+| `koboldcpp_rpc.so` | RPC client | Vulkan + RPC |
+| `koboldcpp_hipblas_rpc.so` | RPC client | HIPBLAS + RPC (if hipcc found) |
+| `koboldcpp_cublas_rpc.so` | RPC client | CUDA + RPC (if nvcc found, no hipcc) |
+| `rpc-server-vulkan` | RPC server | Vulkan backend |
+| `rpc-server-hip` | RPC server | HIPBLAS backend (if hipcc found) |
+| `rpc-server-cuda` | RPC server | CUDA backend (if nvcc found, no hipcc) |
+
+**Expected Output**:
+```
+=== Detecting available backends ===
+Checking for NVIDIA CUDA (nvcc)...
+✗ CUDA: Not available
+Checking for AMD HIPBLAS (hipcc)...
+✓ HIPBLAS: Available (hipcc found)
+Checking for Vulkan...
+✓ Vulkan: Available
+
+=== Building Vulkan + RPC (universal fallback) ===
+[builds Vulkan...]
+
+=== Building HIPBLAS + RPC (AMD GPUs) ===
+HIPBLAS detected, building...
+[builds HIPBLAS...]
+✓ HIPBLAS build complete
+
+=== Building CUDA + RPC (NVIDIA GPUs) ===
+CUDA not available (nvcc not found), skipping...
+```
+
+### Step 1a: Manual Backend Selection
+
+If you want specific backends only:
 
 ```bash
 cd koboldcpp_rpc_attempt
 make clean
 
-# ============ CLIENT BUILDS (koboldcpp.py) ============
+# Vulkan + RPC (works on all systems)
+make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-all -j8
 
-# Build CPU backend (fallback, works everywhere)
-make koboldcpp_default -j8
-
-# Build Vulkan backend (AMD/Intel/NVIDIA GPUs)
-make LLAMA_VULKAN=1 koboldcpp -j8
-
-# Build CUDA backend (NVIDIA GPUs only, requires CUDA toolkit)
-make LLAMA_CUBLAS=1 koboldcpp_cublas -j8
-
-# Build ROCm/HIPBLAS backend (AMD GPUs only, requires ROCm)
-make LLAMA_HIPBLAS=1 koboldcpp_hipblas -j8
-
-# Build RPC backend (for remote GPU acceleration)
-make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc -j8
-
-# ============ SERVER BUILDS (rpc-server-*) ============
-
-# Build RPC server (Vulkan backend - works with all GPU types)
-make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan -j8
-
-# Build RPC server for CUDA systems (also uses Vulkan internally)
-make LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda -j8
-
-# Build RPC server for ROCm systems (also uses Vulkan internally)
+# HIPBLAS + RPC (AMD GPUs only, requires ROCm)
+make LLAMA_HIPBLAS=1 LLAMA_RPC=1 koboldcpp_hipblas_rpc -j8
 make LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip -j8
+
+# CUDA + RPC (NVIDIA GPUs only, requires CUDA toolkit)
+make LLAMA_CUBLAS=1 LLAMA_RPC=1 koboldcpp_cublas_rpc -j8
+make LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda -j8
 ```
 
-**What This Creates**:
-| File | Purpose | Size |
-|------|---------|------|
-| `koboldcpp_default.so` | CPU backend | ~12 MB |
-| `koboldcpp.so` | Vulkan GPU backend | ~67 MB |
-| `koboldcpp_cublas.so` | CUDA GPU backend (NVIDIA) | ~80 MB |
-| `koboldcpp_hipblas.so` | ROCm GPU backend (AMD) | ~80 MB |
-| `koboldcpp_rpc.so` | RPC client with Vulkan | ~67 MB |
-| `rpc-server-vulkan` | RPC server (Vulkan build) | ~68 MB |
-| `rpc-server-cuda` | RPC server (CUDA build) | ~68 MB |
-| `rpc-server-hip` | RPC server (HIPBLAS build) | ~68 MB |
-
-**Important Note**: Each RPC server uses its respective GPU backend for actual GPU computation:
-- `rpc-server-vulkan` - Uses Vulkan backend, requires Vulkan drivers, works with AMD/Intel/NVIDIA GPUs via Vulkan
-- `rpc-server-cuda` - Uses CUDA backend, requires NVIDIA GPU + CUDA toolkit, works with NVIDIA GPUs only
-- `rpc-server-hip` - Uses HIPBLAS backend, requires AMD GPU + ROCm, works with AMD GPUs only
-
-**Which RPC Server Should You Build?**
-- Build `rpc-server-vulkan` if you have AMD, Intel, or NVIDIA GPUs with Vulkan support
-- Build `rpc-server-cuda` if you have NVIDIA GPUs and want CUDA acceleration
-- Build `rpc-server-hip` if you have AMD GPUs with ROCm installed
-
-**Note**: The RPC protocol is the same across all backends, so RPC clients can connect to any RPC server regardless of backend type. You can mix Vulkan, CUDA, and HIPBLAS RPC servers and connect to them from a single client.
-
-**Prerequisites**:
-- **Vulkan**: `sudo apt-get install libvulkan-dev vulkan-tools glslc`
-- **CUDA**: NVIDIA GPU + CUDA toolkit installed
-- **ROCm**: AMD GPU + ROCm installed
-
-**Note**: If you don't have CUDA or ROCm, skip those build commands. The builds that fail will simply not create their respective files.
-
-### Step 1b: Minimal RPC-Only Build (Faster, Limited)
-
-If you only need RPC and want a faster build:
-
-```bash
-cd koboldcpp_rpc_attempt
-make clean
-make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc -j8
-make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan -j8
-```
-
-**Warning**: This only provides RPC backend. You won't have CPU, Vulkan, CUDA, or ROCm options available in the UI.
+**Important**: CUDA and HIPBLAS cannot be built together. If both `nvcc` and `hipcc` are detected, HIPBLAS takes precedence.
 
 ### Step 2: Start Server (on GPU machine)
 
 ```bash
+# Vulkan backend (universal)
 ./rpc-server-vulkan -H 192.168.1.101 --port 50054 --device VULKAN0,VULKAN1 -c
+
+# HIPBLAS backend (AMD)
+./rpc-server-hip -H 192.168.1.101 --port 50054 --device HIP0,HIP1 -c
+
+# CUDA backend (NVIDIA)
+./rpc-server-cuda -H 192.168.1.101 --port 50054 --device CUDA0,CUDA1 -c
 ```
 
 ### Step 3: Start Client (on any machine)
 
 ```bash
+# Vulkan RPC client
 python koboldcpp.py --model /path/to/model.gguf \
     --rpc 192.168.1.101:50054 \
+    --device VULKAN0,RPC0,RPC1,VULKAN1 \
+    --gpulayers 999 \
+    --port 5001
+
+# HIPBLAS RPC client (AMD)
+python koboldcpp.py --model /path/to/model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device HIP0,RPC0,RPC1,HIP1 \
+    --gpulayers 999 \
+    --port 5001
+
+# CUDA RPC client (NVIDIA)
+python koboldcpp.py --model /path/to/model.gguf \
+    --rpc 192.168.1.101:50054 \
+    --device CUDA0,RPC0,RPC1,CUDA1 \
     --gpulayers 999 \
     --port 5001
 ```
@@ -111,6 +123,42 @@ http://localhost:5001
 ```
 
 **Done!**
+
+---
+
+## Device Naming Conventions
+
+### HIPBLAS Backend (AMD)
+When using `koboldcpp_hipblas_rpc.so`, you can use **any** of these names:
+
+| Physical Device | Valid Names |
+|----------------|-------------|
+| HIP Device 0 | `HIP0`, `CUDA0` |
+| HIP Device 1 | `HIP1`, `CUDA1` |
+| ROCm Device 0 | `ROCm0`, `HIP0` |
+
+**All equivalent**:
+```bash
+python koboldcpp.py --device HIP0,RPC0,HIP1 --rpc 192.168.1.101:50053
+python koboldcpp.py --device CUDA0,RPC0,CUDA1 --rpc 192.168.1.101:50053
+python koboldcpp.py --device ROCm0,RPC0,ROCm1 --rpc 192.168.1.101:50053
+```
+
+### Vulkan Backend
+When using `koboldcpp_rpc.so`:
+
+| Physical Device | Valid Names |
+|----------------|-------------|
+| Vulkan Device 0 | `VULKAN0` |
+| Vulkan Device 1 | `VULKAN1` |
+
+### CUDA Backend (NVIDIA)
+When using `koboldcpp_cublas_rpc.so`:
+
+| Physical Device | Valid Names |
+|----------------|-------------|
+| CUDA Device 0 | `CUDA0`, `HIP0` |
+| CUDA Device 1 | `CUDA1`, `HIP1` |
 
 ---
 
@@ -138,15 +186,16 @@ ggml_vulkan: Found 2 Vulkan devices:
 [RPC] Server 192.168.1.101:50054 has 2 devices
 [RPC] Found RPC device 0: RPC0
 [RPC] Found RPC device 1: RPC1
-[RPC] Enumerating local GPU devices to use alongside RPC...
-[RPC] Found local GPU device: Vulkan0 (registry: Vulkan)
-[RPC] Found local GPU device: Vulkan1 (registry: Vulkan)
-[RPC] Total devices for offloading: 4 (RPC + local GPUs)
+[RPC] Enumerating local GPU devices...
+[RPC] Found local GPU device: VULKAN0 (registry: Vulkan)
+[RPC] Found local GPU device: VULKAN1 (registry: Vulkan)
+[RPC] Ordering devices: VULKAN0 RPC0 RPC1 VULKAN1
+[RPC] Total devices for offloading: 4 (manually ordered)
 llama_model_load: offloading 999 layers to GPU
 load_tensors: RPC0[...] model buffer size = XXX MiB
 load_tensors: RPC1[...] model buffer size = XXX MiB
-load_tensors: Vulkan0 model buffer size = XXX MiB
-load_tensors: Vulkan1 model buffer size = XXX MiB
+load_tensors: VULKAN0 model buffer size = XXX MiB
+load_tensors: VULKAN1 model buffer size = XXX MiB
 ```
 
 ---
@@ -184,44 +233,37 @@ python koboldcpp.py --model model.gguf \
 # Client (with local GPUs)
 python koboldcpp.py --model model.gguf \
     --rpc 192.168.1.101:50054 \
+    --device VULKAN0,RPC0,RPC1,VULKAN1 \
     --gpulayers 999
 ```
 
 **Result**: Uses both RPC server GPUs AND local client GPUs automatically!
 
-### Scenario 4: With Tensor Split
+### Scenario 4: AMD HIPBLAS Setup
 ```bash
-# Server (192.168.1.101 with 2 GPUs)
-./rpc-server-vulkan -H 192.168.1.101 --port 50054 --device VULKAN0,VULKAN1 -c
+# Server (AMD GPU with ROCm)
+./rpc-server-hip -H 192.168.1.101 --port 50054 --device HIP0,HIP1 -c
 
-# Client (2 local GPUs + 2 remote = 4 total)
+# Client
 python koboldcpp.py --model model.gguf \
     --rpc 192.168.1.101:50054 \
-    --tensor_split 10 10 40 40 \
+    --device HIP0,RPC0,RPC1,HIP1 \
     --gpulayers 999
 ```
 
-**Distribution**:
-- RPC0 (remote): 10%
-- RPC1 (remote): 10%
-- Vulkan0 (local): 40%
-- Vulkan1 (local): 40%
-
-### Scenario 5: Manual Device Ordering
+### Scenario 5: NVIDIA CUDA Setup
 ```bash
-# Server (192.168.1.101 with 2 GPUs)
-./rpc-server-vulkan -H 192.168.1.101 --port 50054 --device VULKAN0,VULKAN1 -c
+# Server (NVIDIA GPU with CUDA)
+./rpc-server-cuda -H 192.168.1.101 --port 50054 --device CUDA0,CUDA1 -c
 
-# Client: Reorder devices (local first, then RPC)
+# Client
 python koboldcpp.py --model model.gguf \
     --rpc 192.168.1.101:50054 \
-    --device VULKAN0,VULKAN1,RPC0,RPC1 \
+    --device CUDA0,RPC0,RPC1,CUDA1 \
     --gpulayers 999
 ```
 
-**Result**: Local GPUs handle first layers, RPC handles later layers.
-
-### Scenario 5: Localhost Testing
+### Scenario 6: Localhost Testing
 ```bash
 # Terminal 1
 ./rpc-server-vulkan -H 127.0.0.1 --port 50054 --device VULKAN0 -c
@@ -253,50 +295,50 @@ python3 -c "import socket; s=socket.socket(); s.settimeout(5); print('OK' if s.c
 vulkaninfo | grep "GPU id"
 ```
 
-### "Segmentation fault"
+### "undefined symbol: ggml_backend_rpc_add_server"
 ```bash
-# Ensure --gpulayers 999
-python koboldcpp.py --model model.gguf --rpc 192.168.1.101:50054 --gpulayers 999
+# Using wrong library - need RPC-enabled version
+ls -lh koboldcpp_*.so
+
+# Rebuild with RPC
+make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc
+# or
+make LLAMA_HIPBLAS=1 LLAMA_RPC=1 koboldcpp_hipblas_rpc
 ```
 
-### "undefined symbol" errors
+### "Device HIP0 not found"
 ```bash
-# Rebuild with Vulkan
-make clean && make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc
+# Check which library you're using
+python koboldcpp.py ... 2>&1 | grep "Initializing dynamic"
+
+# If using koboldcpp_rpc.so (Vulkan), use VULKAN names
+python koboldcpp.py --device VULKAN0,RPC0 --rpc 192.168.1.101:50054
+
+# If using koboldcpp_hipblas_rpc.so, HIP names work
+python koboldcpp.py --device HIP0,RPC0 --rpc 192.168.1.101:50054
+```
+
+### "HIP assertion failed" (ROCm 7.2+ bug)
+```bash
+# Known HIP runtime bug when mixing RPC + local HIP
+# Workaround 1: Use RPC only
+python koboldcpp.py --device RPC0,RPC1,RPC2 --rpc 192.168.1.101:50054
+
+# Workaround 2: Use Vulkan backend instead
+make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-all
+python koboldcpp.py --device VULKAN0,RPC0,RPC1,VULKAN1 --rpc 192.168.1.101:50054
 ```
 
 ### "Local GPUs not detected"
 ```bash
-# Verify hybrid build
-ls -lh koboldcpp_rpc.so
-# Should be ~67 MB (not ~12 MB RPC-only)
-
-# Ensure full build was performed (not RPC-only)
-ls -lh koboldcpp_default.so koboldcpp_vulkan.so
-# Both should exist for full backend support
+# Verify you're using the right library
+ls -lh koboldcpp_rpc.so koboldcpp_hipblas_rpc.so
 
 # Check Vulkan devices
 vulkaninfo | grep -A 3 "deviceName"
-```
 
-### "tensor_split not working"
-```bash
-# Ensure correct number of values
-# Count: RPC devices + local GPUs
-python koboldcpp.py --model model.gguf \
-    --rpc 192.168.1.101:50054 \
-    --tensor_split 10 10 40 40 \
-    --gpulayers 999
-```
-
-### "Device ordering not working"
-```bash
-# Use correct device names: VULKAN0, VULKAN1, RPC0, RPC1, etc.
-# Device names are case-insensitive
-python koboldcpp.py --model model.gguf \
-    --rpc 192.168.1.101:50054 \
-    --device VULKAN0,RPC0,VULKAN1,RPC1 \
-    --gpulayers 999
+# Check HIP devices
+rocminfo
 ```
 
 ---
@@ -309,10 +351,22 @@ python koboldcpp.py --model model.gguf \
 ✅ GPU offloading to RPC server GPUs  
 ✅ Model distribution across RPC devices  
 ✅ **Hybrid mode** (local GPUs + RPC servers)  
-✅ **Manual tensor_split** for layer distribution  
-✅ **Case-insensitive** device matching (Vulkan/RADV/CUDA/HIP)  
 ✅ **Manual device ordering** (--device argument)  
 ✅ **Device reordering** (mix RPC and local in any order)  
+✅ **Multiple naming conventions** (HIP/CUDA/ROCm all work)  
+✅ **Automatic backend detection** (make rpc-full-all)  
+
+---
+
+## Backend Compatibility
+
+| Library | Can Use These Devices | Cannot Use |
+|---------|----------------------|------------|
+| **Vulkan + RPC** (`koboldcpp_rpc.so`) | `VULKAN0`, `RPC0`, `RPC1` | `HIP0`, `CUDA0`, `ROCm0` |
+| **HIPBLAS + RPC** (`koboldcpp_hipblas_rpc.so`) | `HIP0`, `CUDA0`, `ROCm0`, `RPC0`, `RPC1` | `VULKAN0` |
+| **CUDA + RPC** (`koboldcpp_cublas_rpc.so`) | `CUDA0`, `HIP0`, `RPC0`, `RPC1` | `VULKAN0`, `ROCm0` |
+
+**Important**: You cannot mix Vulkan devices with HIPBLAS/CUDA devices in the same session. Each library only supports its own backend type.
 
 ---
 
@@ -351,21 +405,23 @@ python koboldcpp.py --model model.gguf --rpc 127.0.0.1:50054
 - Ensure low latency (< 5ms ping)
 - Same subnet is best
 
+### Backend Choice
+- **Vulkan**: Most stable with RPC, universal compatibility
+- **HIPBLAS**: Best performance for AMD GPUs, but may hit assertion bugs with RPC
+- **CUDA**: Best performance for NVIDIA GPUs
+
 ### Layer Distribution
 - More powerful GPUs get higher tensor_split ratios
 - Local GPUs typically faster (no network overhead)
 - Example: Local 40%, Remote 60%
-
-### Memory
-- Model split across all devices
-- Each device needs enough VRAM for its portion
-- KV cache also distributed
 
 ---
 
 ## More Info
 
 - **Complete Manual**: `RPC_MANUAL.md`
+- **Build Guide**: `RPC_BUILD_GUIDE.md`
+- **Backend Compatibility**: `RPC_BACKEND_COMPATIBILITY.md`
 - **Porting Guide**: `RPC_PORTING_GUIDE.md`
 
 ---

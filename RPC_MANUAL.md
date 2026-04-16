@@ -1,7 +1,7 @@
 # KoboldCPP RPC - Complete Manual
 
 **Version**: 1.111.2  
-**Last Updated**: 2026-04-11  
+**Last Updated**: 2026-04-16  
 **Status**: ✅ Complete - All Features Working
 
 ---
@@ -49,39 +49,77 @@ sudo apt-get install libvulkan-dev vulkan-tools glslc
 
 ### Full Build - All Backends (Recommended)
 
-This builds **everything** for maximum flexibility. Run all commands in sequence - if any fail (e.g., you don't have CUDA), just continue with the next.
+#### Option A: Automatic Build (Easiest!)
+
+Build all RPC clients and servers with automatic backend detection:
+
+```bash
+cd koboldcpp_rpc_attempt
+make clean
+make rpc-full-all -j8
+```
+
+**What This Does**:
+- ✅ Detects if CUDA (`nvcc`) is available
+- ✅ Detects if HIPBLAS (`hipcc`) is available
+- ✅ Always builds Vulkan (universal fallback)
+- ✅ Builds only compatible backends (CUDA and HIPBLAS are mutually exclusive)
+
+**Expected Output**:
+```
+=== Detecting available backends ===
+Checking for NVIDIA CUDA (nvcc)...
+✗ CUDA: Not available
+Checking for AMD HIPBLAS (hipcc)...
+✓ HIPBLAS: Available (hipcc found)
+
+=== Building Vulkan + RPC (universal fallback) ===
+[builds Vulkan...]
+
+=== Building HIPBLAS + RPC (AMD GPUs) ===
+HIPBLAS detected, building...
+[builds HIPBLAS...]
+✓ HIPBLAS build complete
+
+=== Building CUDA + RPC (NVIDIA GPUs) ===
+CUDA not available (nvcc not found), skipping...
+```
+
+**What Gets Built**:
+| File | Purpose | Backend |
+|------|---------|---------|
+| `koboldcpp_rpc.so` | RPC client | Vulkan + RPC (always) |
+| `koboldcpp_hipblas_rpc.so` | RPC client | HIPBLAS + RPC (if hipcc found) |
+| `koboldcpp_cublas_rpc.so` | RPC client | CUDA + RPC (if nvcc found, no hipcc) |
+| `rpc-server-vulkan` | RPC server | Vulkan (always) |
+| `rpc-server-hip` | RPC server | HIPBLAS (if hipcc found) |
+| `rpc-server-cuda` | RPC server | CUDA (if nvcc found, no hipcc) |
+
+#### Option B: Manual Backend Selection
+
+If you want specific backends only:
 
 ```bash
 cd koboldcpp_rpc_attempt
 make clean
 
-# ============ CLIENT BUILDS (for koboldcpp.py) ============
+# Vulkan + RPC (works on all systems)
+make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-all -j8
 
-# CPU backend (fallback, works everywhere)
-make koboldcpp_default -j8
-
-# Vulkan backend (AMD/Intel/NVIDIA GPUs)
-make LLAMA_VULKAN=1 koboldcpp -j8
-
-# CUDA backend (NVIDIA GPUs only)
-make LLAMA_CUBLAS=1 koboldcpp_cublas -j8
-
-# ROCm/HIPBLAS backend (AMD GPUs only)
-make LLAMA_HIPBLAS=1 koboldcpp_hipblas -j8
-
-# RPC backend (for remote GPU acceleration)
-make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc -j8
-
-# ============ SERVER BUILDS (rpc-server-*) ============
-
-# RPC server (Vulkan backend - works with all GPU types)
-make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan -j8
-
-# RPC server for CUDA systems (also uses Vulkan internally)
-make LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda -j8
-
-# RPC server for ROCm systems (also uses Vulkan internally)
+# HIPBLAS + RPC (AMD GPUs only, requires ROCm)
+make LLAMA_HIPBLAS=1 LLAMA_RPC=1 koboldcpp_hipblas_rpc -j8
 make LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip -j8
+
+# CUDA + RPC (NVIDIA GPUs only, requires CUDA toolkit)
+make LLAMA_CUBLAS=1 LLAMA_RPC=1 koboldcpp_cublas_rpc -j8
+make LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda -j8
+```
+
+**Important**: CUDA and HIPBLAS cannot be built together. If both `nvcc` and `hipcc` are detected, HIPBLAS takes precedence.
+
+**Alternative**: Build just RPC components (clients + servers):
+```bash
+make rpc-all -j8
 ```
 
 **What This Creates**:
@@ -93,9 +131,11 @@ make LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip -j8
 | `koboldcpp_cublas.so` | CUDA GPU backend | CUDA | ~80 MB |
 | `koboldcpp_hipblas.so` | ROCm GPU backend | HIPBLAS | ~80 MB |
 | `koboldcpp_rpc.so` | RPC client | Vulkan+RPC | ~67 MB |
-| `rpc-server-vulkan` | RPC server (Vulkan build) | Vulkan | ~68 MB |
-| `rpc-server-cuda` | RPC server (CUDA build) | Vulkan | ~68 MB |
-| `rpc-server-hip` | RPC server (HIPBLAS build) | Vulkan | ~68 MB |
+| `koboldcpp_cublas_rpc.so` | RPC client | CUDA+RPC | ~80 MB |
+| `koboldcpp_hipblas_rpc.so` | RPC client | HIPBLAS+RPC | ~80 MB |
+| `rpc-server-vulkan` | RPC server | Vulkan | ~68 MB |
+| `rpc-server-cuda` | RPC server | CUDA | ~85 MB |
+| `rpc-server-hip` | RPC server | HIPBLAS | ~85 MB |
 
 **Important Note**: Each RPC server uses its respective GPU backend for actual GPU computation:
 - `rpc-server-vulkan` - Uses Vulkan backend, requires Vulkan drivers, works with AMD/Intel/NVIDIA GPUs via Vulkan
@@ -339,13 +379,32 @@ python koboldcpp.py --model model.gguf \
 ```
 
 **Device Names**:
-- `VULKAN0`, `VULKAN1`, etc. - Local Vulkan GPUs (in enumeration order)
+- `VULKAN0`, `VULKAN1`, etc. - Local Vulkan GPUs (use with `koboldcpp_rpc.so`)
+- `HIP0`, `HIP1`, etc. - Local HIP/HIPBLAS GPUs (use with `koboldcpp_hipblas_rpc.so`)
+- `CUDA0`, `CUDA1`, etc. - Local CUDA GPUs (use with `koboldcpp_cublas_rpc.so`)
+- `ROCm0`, `ROCm1`, etc. - Local ROCm GPUs (alias for HIP, use with `koboldcpp_hipblas_rpc.so`)
 - `RPC0`, `RPC1`, etc. - RPC server GPUs (in connection order)
-- `CUDA0`, `CUDA1`, etc. - Local CUDA GPUs (future support)
-- `HIP0`, `HIP1`, etc. - Local HIP GPUs (future support)
 - `METAL0`, `METAL1`, etc. - Local Metal GPUs (future support)
 
+**Dual Naming Support**:
+When using HIPBLAS backend (`koboldcpp_hipblas_rpc.so`), you can use **any** of these names for the same physical device:
+- `HIP0` = `CUDA0` = `ROCm0` (all refer to the same HIP device 0)
+- `HIP1` = `CUDA1` = `ROCm1` (all refer to the same HIP device 1)
+
+**Example** (all equivalent with HIPBLAS):
+```bash
+python koboldcpp.py --device HIP0,RPC0,HIP1 --rpc 192.168.1.101:50054
+python koboldcpp.py --device CUDA0,RPC0,CUDA1 --rpc 192.168.1.101:50054
+python koboldcpp.py --device ROCm0,RPC0,ROCm1 --rpc 192.168.1.101:50054
+```
+
 **Case-Insensitive**: Device names are case-insensitive (`vulkan0`, `VULKAN0`, `Vulkan0` all work).
+
+**Backend Compatibility**:
+- **Vulkan library** (`koboldcpp_rpc.so`): Use `VULKAN*`, `RPC*` only
+- **HIPBLAS library** (`koboldcpp_hipblas_rpc.so`): Use `HIP*`, `CUDA*`, `ROCm*`, `RPC*`
+- **CUDA library** (`koboldcpp_cublas_rpc.so`): Use `CUDA*`, `HIP*`, `RPC*`
+- **Cannot mix Vulkan devices with HIPBLAS/CUDA devices** in same session
 
 **Why Use Device Ordering**:
 - Put faster local GPUs first for initial layers
