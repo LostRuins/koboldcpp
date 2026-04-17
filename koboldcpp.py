@@ -945,6 +945,9 @@ lib_vulkan_failsafe = pick_existant_file(
     "koboldcpp_vulkan_failsafe.dll", "koboldcpp_vulkan_failsafe.so"
 )
 lib_cublas = pick_existant_file("koboldcpp_cublas.dll", "koboldcpp_cublas.so")
+lib_cublas_rpc = pick_existant_file(
+    "koboldcpp_cublas_rpc.dll", "koboldcpp_cublas_rpc.so"
+)
 lib_hipblas = pick_existant_file("koboldcpp_hipblas.dll", "koboldcpp_hipblas.so")
 lib_hipblas_rpc = pick_existant_file(
     "koboldcpp_hipblas_rpc.dll", "koboldcpp_hipblas_rpc.so"
@@ -958,9 +961,11 @@ libname = ""
 lib_option_pairs = [
     (lib_default, "Use CPU"),
     (lib_cublas, "Use CUDA"),
+    (lib_cublas_rpc, "Use CUDA + RPC"),
     (lib_hipblas, "Use hipBLAS (ROCm)"),
+    (lib_hipblas_rpc, "Use hipBLAS + RPC"),
     (lib_vulkan, "Use Vulkan"),
-    (lib_rpc, "Use RPC (Remote)"),
+    (lib_rpc, "Use Vulkan + RPC"),
     (lib_noavx2, "Use CPU (Old CPU)"),
     (lib_vulkan_noavx2, "Use Vulkan (Old CPU)"),
     (lib_vulkan_failsafe, "Use Vulkan (Older CPU)"),
@@ -969,7 +974,9 @@ lib_option_pairs = [
 (
     default_option,
     cublas_option,
+    cublas_rpc_option,
     hipblas_option,
+    hipblas_rpc_option,
     vulkan_option,
     rpc_option,
     noavx2_option,
@@ -991,6 +998,7 @@ def init_library():
         lib_noavx2, \
         lib_vulkan_failsafe, \
         lib_cublas, \
+        lib_cublas_rpc, \
         lib_hipblas, \
         lib_hipblas_rpc, \
         lib_vulkan, \
@@ -1021,7 +1029,11 @@ def init_library():
         elif file_exists(lib_noavx2):
             libname = lib_noavx2
     elif args.usecuda is not None:
-        if file_exists(lib_cublas):
+        if file_exists(lib_cublas_rpc) and (
+            args.userpc is not None or has_rpc_in_device
+        ):
+            libname = lib_cublas_rpc
+        elif file_exists(lib_cublas):
             libname = lib_cublas
         elif (args.userpc is not None or has_rpc_in_device) and file_exists(
             lib_hipblas_rpc
@@ -10854,6 +10866,11 @@ def show_gui():
         fetch_gpu_properties(True, True)
         found_new_backend = False
 
+        # Detect RPC in device string (local copy, same logic as init_library)
+        has_rpc_in_device = False
+        if args.device and "RPC" in args.device:
+            has_rpc_in_device = True
+
         # check for avx2 and avx support
         is_oldpc_ver = (
             "Use CPU" not in runopts
@@ -10876,16 +10893,30 @@ def show_gui():
             and (any(CUDevicesNames))
             and runmode_untouched
         ):
-            if "Use CUDA" in runopts:
-                runopts_var.set("Use CUDA")
-                gpu_choice_var.set("1")
-                print(f"Auto Selected CUDA Backend (flag={cpusupport})\n")
-                found_new_backend = True
-            elif "Use hipBLAS (ROCm)" in runopts:
-                runopts_var.set("Use hipBLAS (ROCm)")
-                gpu_choice_var.set("1")
-                print(f"Auto Selected HIP Backend (flag={cpusupport})\n")
-                found_new_backend = True
+            # Prefer RPC variants if RPC is being used
+            if args.userpc is not None or has_rpc_in_device:
+                if "Use CUDA + RPC" in runopts:
+                    runopts_var.set("Use CUDA + RPC")
+                    gpu_choice_var.set("1")
+                    print(f"Auto Selected CUDA + RPC Backend (flag={cpusupport})\n")
+                    found_new_backend = True
+                elif "Use hipBLAS + RPC" in runopts:
+                    runopts_var.set("Use hipBLAS + RPC")
+                    gpu_choice_var.set("1")
+                    print(f"Auto Selected HIPBLAS + RPC Backend (flag={cpusupport})\n")
+                    found_new_backend = True
+            # Otherwise use standard backends
+            if not found_new_backend:
+                if "Use CUDA" in runopts:
+                    runopts_var.set("Use CUDA")
+                    gpu_choice_var.set("1")
+                    print(f"Auto Selected CUDA Backend (flag={cpusupport})\n")
+                    found_new_backend = True
+                elif "Use hipBLAS (ROCm)" in runopts:
+                    runopts_var.set("Use hipBLAS (ROCm)")
+                    gpu_choice_var.set("1")
+                    print(f"Auto Selected HIP Backend (flag={cpusupport})\n")
+                    found_new_backend = True
         elif (
             exitcounter < 100
             and (1 in VKIsDGPU)
@@ -11095,7 +11126,9 @@ def show_gui():
             or index == "Use Vulkan (Old CPU)"
             or index == "Use Vulkan (Older CPU)"
             or index == "Use CUDA"
+            or index == "Use CUDA + RPC"
             or index == "Use hipBLAS (ROCm)"
+            or index == "Use hipBLAS + RPC"
         ):
             quick_gpuname_label.grid(row=3, column=1, padx=75, sticky="W")
             gpuname_label.grid(row=3, column=0, padx=230, sticky="W")
@@ -11119,7 +11152,12 @@ def show_gui():
             maingpu_entry.grid_remove()
             lowvram_box.grid_remove()
 
-        if index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
+        if (
+            index == "Use CUDA"
+            or index == "Use CUDA + RPC"
+            or index == "Use hipBLAS (ROCm)"
+            or index == "Use hipBLAS + RPC"
+        ):
             mmq_box.grid(row=4, column=0, padx=160, pady=1, stick="nw")
             quick_mmq_box.grid(row=4, column=1, padx=8, pady=1, stick="nw")
             splitmode_box.grid(row=4, column=0, padx=300, pady=1, stick="nw")
@@ -12903,7 +12941,12 @@ def show_gui():
         args.noavx2 = False
         if gpu_choice_var.get() != "All":
             gpuchoiceidx = int(gpu_choice_var.get()) - 1
-        if runopts_var.get() == "Use CUDA" or runopts_var.get() == "Use hipBLAS (ROCm)":
+        if (
+            runopts_var.get() == "Use CUDA"
+            or runopts_var.get() == "Use CUDA + RPC"
+            or runopts_var.get() == "Use hipBLAS (ROCm)"
+            or runopts_var.get() == "Use hipBLAS + RPC"
+        ):
             if gpu_choice_var.get() == "All":
                 args.usecuda = ["normal"]
             else:
@@ -13248,18 +13291,24 @@ def show_gui():
         if "quantkv" in dict:
             quantkv_var.set(dict["quantkv"])
         if "usecuda" in dict and dict["usecuda"]:
-            if cublas_option is not None or hipblas_option is not None:
+            # Check for RPC variants first if RPC is being used
+            if args.userpc is not None or has_rpc_in_device:
+                if cublas_rpc_option is not None:
+                    runopts_var.set(cublas_rpc_option)
+                elif hipblas_rpc_option is not None:
+                    runopts_var.set(hipblas_rpc_option)
+            elif cublas_option is not None or hipblas_option is not None:
                 if cublas_option:
                     runopts_var.set(cublas_option)
                 elif hipblas_option:
                     runopts_var.set(hipblas_option)
-                mmq_var.set(1 if "mmq" in dict["usecuda"] else 0)
-                rowsplit_var.set(1 if "rowsplit" in dict["usecuda"] else 0)
-                gpu_choice_var.set("All")
-                for g in range(4):
-                    if str(g) in dict["usecuda"]:
-                        gpu_choice_var.set(str(g + 1))
-                        break
+            mmq_var.set(1 if "mmq" in dict["usecuda"] else 0)
+            rowsplit_var.set(1 if "rowsplit" in dict["usecuda"] else 0)
+            gpu_choice_var.set("All")
+            for g in range(4):
+                if str(g) in dict["usecuda"]:
+                    gpu_choice_var.set(str(g + 1))
+                    break
         elif "usevulkan" in dict and dict["usevulkan"] is not None:
             if "noavx2" in dict and dict["noavx2"]:
                 if vulkan_noavx2_option is not None:
