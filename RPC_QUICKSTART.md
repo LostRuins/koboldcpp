@@ -1,7 +1,7 @@
 # KoboldCPP RPC - Quick Start Guide
 
 **Version**: 1.111.2  
-**Last Updated**: 2026-04-16  
+**Last Updated**: 2026-04-17  
 **Status**: ✅ Complete - All Features Working
 
 ---
@@ -22,17 +22,33 @@ make rpc-full-all -j8
 - ✅ Detects if CUDA (`nvcc`) is available
 - ✅ Detects if HIPBLAS (`hipcc`) is available
 - ✅ Always builds Vulkan (universal fallback)
+- ✅ Builds **regular backends** (non-RPC)
+- ✅ Builds **RPC clients** (all variants)
+- ✅ Builds **RPC servers** (all variants)
 - ✅ Builds only compatible backends (CUDA and HIPBLAS are mutually exclusive)
 
 **What Gets Built**:
+
+#### Regular Backends (Non-RPC)
 | File | Purpose | Backend |
 |------|---------|---------|
-| `koboldcpp_rpc.so` | RPC client | Vulkan + RPC |
+| `koboldcpp_vulkan.so` | Vulkan backend | Vulkan (always) |
+| `koboldcpp_hipblas.so` | HIPBLAS backend | HIPBLAS (if hipcc found) |
+| `koboldcpp_cublas.so` | CUDA backend | CUDA (if nvcc found, no hipcc) |
+
+#### RPC Clients
+| File | Purpose | Backend |
+|------|---------|---------|
+| `koboldcpp_rpc.so` | RPC client | Vulkan + RPC (always) |
 | `koboldcpp_hipblas_rpc.so` | RPC client | HIPBLAS + RPC (if hipcc found) |
 | `koboldcpp_cublas_rpc.so` | RPC client | CUDA + RPC (if nvcc found, no hipcc) |
-| `rpc-server-vulkan` | RPC server | Vulkan backend |
-| `rpc-server-hip` | RPC server | HIPBLAS backend (if hipcc found) |
-| `rpc-server-cuda` | RPC server | CUDA backend (if nvcc found, no hipcc) |
+
+#### RPC Servers
+| File | Purpose | Backend |
+|------|---------|---------|
+| `rpc-server-vulkan` | RPC server | Vulkan (always) |
+| `rpc-server-hip` | RPC server | HIPBLAS (if hipcc found) |
+| `rpc-server-cuda` | RPC server | CUDA (if nvcc found, no hipcc) |
 
 **Expected Output**:
 ```
@@ -41,19 +57,33 @@ Checking for NVIDIA CUDA (nvcc)...
 ✗ CUDA: Not available
 Checking for AMD HIPBLAS (hipcc)...
 ✓ HIPBLAS: Available (hipcc found)
-Checking for Vulkan...
-✓ Vulkan: Available
+
+=== Building Regular Backends (Non-RPC) ===
+Building Vulkan backend...
+[builds koboldcpp_vulkan.so]
+Building HIPBLAS backend...
+[builds koboldcpp_hipblas.so]
 
 === Building Vulkan + RPC (universal fallback) ===
-[builds Vulkan...]
+[builds koboldcpp_rpc.so, rpc-server-vulkan]
 
 === Building HIPBLAS + RPC (AMD GPUs) ===
 HIPBLAS detected, building...
-[builds HIPBLAS...]
-✓ HIPBLAS build complete
+[builds koboldcpp_hipblas_rpc.so, rpc-server-hip]
 
-=== Building CUDA + RPC (NVIDIA GPUs) ===
-CUDA not available (nvcc not found), skipping...
+=== All RPC components built successfully! ===
+
+Built Regular Backends (Non-RPC):
+  ✓ koboldcpp_vulkan.so (Vulkan)
+  ✓ koboldcpp_hipblas.so (HIPBLAS)
+
+Built RPC Clients:
+  ✓ koboldcpp_rpc.so (Vulkan + RPC)
+  ✓ koboldcpp_hipblas_rpc.so (HIPBLAS + RPC)
+
+Built RPC Servers:
+  ✓ rpc-server-vulkan (Vulkan backend)
+  ✓ rpc-server-hip (HIPBLAS backend)
 ```
 
 ### Step 1a: Manual Backend Selection
@@ -128,14 +158,16 @@ http://localhost:5001
 
 ## Device Naming Conventions
 
-### HIPBLAS Backend (AMD)
-When using `koboldcpp_hipblas_rpc.so`, you can use **any** of these names:
+### HIPBLAS Backend (Triple Naming Support)
+
+When using HIPBLAS libraries (`koboldcpp_hipblas.so`, `koboldcpp_hipblas_rpc.so`), you can use **any** of these names for the same physical device:
 
 | Physical Device | Valid Names |
 |----------------|-------------|
-| HIP Device 0 | `HIP0`, `CUDA0` |
-| HIP Device 1 | `HIP1`, `CUDA1` |
-| ROCm Device 0 | `ROCm0`, `HIP0` |
+| HIP Device 0 | `HIP0`, `CUDA0`, `ROCm0` |
+| HIP Device 1 | `HIP1`, `CUDA1`, `ROCm1` |
+
+**Triple naming**: `HIP0` = `CUDA0` = `ROCm0` (all refer to the same HIP device 0)
 
 **All equivalent**:
 ```bash
@@ -360,13 +392,38 @@ rocminfo
 
 ## Backend Compatibility
 
+### Critical Rule: Cannot Mix Backends
+
+You **cannot** mix Vulkan devices with HIPBLAS/CUDA devices in the same session.
+
 | Library | Can Use These Devices | Cannot Use |
 |---------|----------------------|------------|
-| **Vulkan + RPC** (`koboldcpp_rpc.so`) | `VULKAN0`, `RPC0`, `RPC1` | `HIP0`, `CUDA0`, `ROCm0` |
-| **HIPBLAS + RPC** (`koboldcpp_hipblas_rpc.so`) | `HIP0`, `CUDA0`, `ROCm0`, `RPC0`, `RPC1` | `VULKAN0` |
-| **CUDA + RPC** (`koboldcpp_cublas_rpc.so`) | `CUDA0`, `HIP0`, `RPC0`, `RPC1` | `VULKAN0`, `ROCm0` |
+| **Vulkan** (`koboldcpp_vulkan.so`) | `VULKAN0`, `VULKAN1` | `HIP*`, `CUDA*`, `ROCm*` |
+| **Vulkan + RPC** (`koboldcpp_rpc.so`) | `VULKAN*`, `RPC*` | `HIP*`, `CUDA*`, `ROCm*` |
+| **HIPBLAS** (`koboldcpp_hipblas.so`) | `HIP*`, `CUDA*`, `ROCm*` | `VULKAN*` |
+| **HIPBLAS + RPC** (`koboldcpp_hipblas_rpc.so`) | `HIP*`, `CUDA*`, `ROCm*`, `RPC*` | `VULKAN*` |
+| **CUDA** (`koboldcpp_cublas.so`) | `CUDA*`, `HIP*` | `VULKAN*`, `ROCm*` |
+| **CUDA + RPC** (`koboldcpp_cublas_rpc.so`) | `CUDA*`, `HIP*`, `RPC*` | `VULKAN*`, `ROCm*` |
 
-**Important**: You cannot mix Vulkan devices with HIPBLAS/CUDA devices in the same session. Each library only supports its own backend type.
+**Important**: Each library only supports its own backend type. Use consistent device names matching the selected backend.
+
+### GUI Dropdown Options
+
+After building with `make rpc-full-all`, the koboldcpp.py GUI dropdown will show:
+
+```
+Use CPU
+Use CUDA
+Use CUDA + RPC
+Use hipBLAS (ROCm)
+Use hipBLAS + RPC
+Use Vulkan
+Use Vulkan + RPC          ← Previously "Use RPC (Remote)"
+Use CPU (Old CPU)
+Use Vulkan (Old CPU)
+Use Vulkan (Older CPU)
+Failsafe Mode (Older CPU)
+```
 
 ---
 
