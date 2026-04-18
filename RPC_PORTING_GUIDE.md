@@ -1,10 +1,10 @@
 # RPC Porting Guide - llama.cpp to koboldcpp
 
 **Version**: 1.111.2  
-**Date**: 2026-04-17  
+**Date**: 2026-04-18  
 **Purpose**: Complete step-by-step guide to port RPC from llama.cpp to koboldcpp  
 **Target Audience**: Developers, LLMs, or anyone needing to replicate the integration  
-**Status**: ✅ Complete - All Features Working
+**Status**: ✅ Complete - All Features Working (v1.111.2 with RPC endpoint fields, config save/load, and independent CUDA+HIPBLAS builds)
 
 ---
 
@@ -23,6 +23,16 @@ This guide provides **complete, reproducible instructions** for integrating RPC 
 ✅ **Triple naming support** (HIP0 = CUDA0 = ROCm0 for HIPBLAS)  
 ✅ **Automatic backend detection** (make rpc-full-all)  
 ✅ **Full GUI dropdown** with all backend options  
+✅ **RPC Server mode** (launch RPC server from GUI or CLI)  
+✅ **RPC Server Backend dropdown** (Auto-detect, Vulkan, hipBLAS, CUDA)  
+✅ **Device name conversion** (VULKAN0 -> ROCm0, etc.)  
+✅ **Allow Launch Without Models** for RPC Server mode  
+✅ **RPC endpoint field** in Quick Launch and Hardware tabs (shared input, auto-sync)  
+✅ **Config save/load** for all RPC settings (.kcpps files) including backend selection (runopts)  
+✅ **ROCm device registry fix** (added "ROCM" to device enum)  
+✅ **has_rpc_in_device initialization** in import_vars() - now also checks saved RPC endpoint  
+✅ **Independent CUDA+HIPBLAS builds** - both built when both toolchains present (no mutual exclusion)  
+✅ **runopts saved to config** - backend selection persists across reloads  
 
 **Time Required**: 2-4 hours  
 **Difficulty**: Intermediate (requires C++ and build system knowledge)  
@@ -168,70 +178,7 @@ grep -A 3 "ifdef LLAMA_RPC" Makefile
 # endif
 ```
 
-### Step 2.2: Add RPC Library Detection to Python Wrapper
-
-**File**: `koboldcpp-1.111.2/koboldcpp.py`
-
-**Location**: After line ~952 (in library detection section)
-
-**Add**:
-```python
-lib_rpc = pick_existant_file("koboldcpp_rpc.dll", "koboldcpp_rpc.so")
-```
-
-**Location**: After line ~966 (in lib_option_pairs list)
-
-**Add to list**:
-```python
-lib_option_pairs = [
-    (lib_default, "Use CPU"),
-    (lib_cublas, "Use CUDA"),
-    (lib_hipblas, "Use hipBLAS (ROCm)"),
-    (lib_vulkan, "Use Vulkan"),
-    (lib_rpc, "Use RPC (Remote)"),    # ← Add this line
-    (lib_noavx2, "Use CPU (Old CPU)"),
-    ...
-]
-```
-
-### Step 2.3: Add RPC Library Loading Logic
-
-**File**: `koboldcpp-1.111.2/koboldcpp.py`
-
-**Location**: In `init_library()` function, after line ~1017 (after vulkan_info check)
-
-**Add**:
-```python
-elif args.userpc is not None:
-    if file_exists(lib_rpc):
-        libname = lib_rpc
-    else:
-        print("WARNING: RPC library not found. Please build with LLAMA_RPC=1")
-```
-
-**Complete Context**:
-```python
-def init_library():
-    global libname
-    libname = None
-    
-    if args.usevulkan:
-        if file_exists(lib_vulkan):
-            libname = lib_vulkan
-        else:
-            print("WARNING: Vulkan library not found. Please build with LLAMA_VULKAN=1")
-    
-    elif args.userpc is not None:    # ← Add this section
-        if file_exists(lib_rpc):
-            libname = lib_rpc
-        else:
-            print("WARNING: RPC library not found. Please build with LLAMA_RPC=1")
-    
-    elif args.usecuda:
-        ...
-```
-
-### Step 2.4: Add RPC Object File Build Rule
+### Step 2.2: Add RPC Object File Build Rule
 
 **File**: `koboldcpp-1.111.2/Makefile`
 
@@ -253,103 +200,7 @@ grep -A 2 "^#rpc" Makefile
 # 	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
 ```
 
-### Step 2.5: Add RPC Client Build Target (Hybrid Mode)
-
-**File**: `koboldcpp-1.111.2/Makefile`
-
-**Location**: After line ~927 (after other koboldcpp_* targets)
-
-**Add**:
-```makefile
-# RPC client build target (Hybrid: RPC + Vulkan)
-ifdef RPC_BUILD
-ifdef VULKAN_BUILD
-# Hybrid build with both RPC and Vulkan
-koboldcpp_rpc: ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
-    ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-rpc.o \
-    ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_vulkan.o \
-    tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o \
-    ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o \
-    $(OBJS_FULL) $(OBJS)
-	$(RPC_BUILD)
-else
-# RPC only build (fallback)
-koboldcpp_rpc: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
-    ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter.o ggml-rpc.o \
-    sdcpp_default.o whispercpp_default.o tts_default.o music_default.o \
-    embeddings_default.o llavaclip_default.o llava.o \
-    ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o \
-    $(OBJS_FULL) $(OBJS)
-	$(RPC_BUILD)
-endif
-else
-# RPC_BUILD not defined
-koboldcpp_rpc:
-	$(DONOTHING)
-endif
-```
-
-**Important**: This builds the RPC client WITH Vulkan backend for hybrid mode support.
-
-### Step 2.6: Add RPC Server Build Targets
-
-**File**: `koboldcpp-1.111.2/Makefile`
-
-**Location**: After line ~953 (after tool build targets)
-
-**Add**:
-```makefile
-# RPC server build targets
-ifdef VULKAN_BUILD
-rpc-server-vulkan: ggml/src/ggml-vulkan-shaders.cpp tools/rpc-server.cpp \
-    ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
-    llama.o ggml-rpc.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o \
-    ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o \
-    ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
-    unicode.o unicode-common.o unicode-data.o ggml-threading.o \
-    ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o \
-    budget.o kcpputils.o ggml-vulkan.o console.o
-	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) -lvulkan
-endif
-
-# RPC server for CUDA backend (NVIDIA GPUs)
-ifdef CUBLAS_BUILD
-rpc-server-cuda: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
-    ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_cublas.o \
-    ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o \
-    ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
-    unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o \
-    gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o console.o
-	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(CUBLASLD_FLAGS)
-endif
-
-# RPC server for HIPBLAS backend (AMD ROCm GPUs)
-ifdef HIPBLAS_BUILD
-rpc-server-hip: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
-    ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_cublas.o \
-    ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o \
-    ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
-    unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o \
-    gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o console.o
-	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HIPLDFLAGS)
-endif
-
-# RPC server CPU-only (fallback)
-rpc-server: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o \
-    ggml-binops.o ggml-unops.o llama.o ggml-rpc.o ggml-backend_default.o \
-    ggml-backend-reg_default.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o \
-    ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
-    unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o \
-    gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o
-	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
-```
-
-**Important**: Each RPC server backend uses its respective GPU backend:
-- `rpc-server-vulkan` - Uses Vulkan backend (works with AMD/Intel/NVIDIA via Vulkan)
-- `rpc-server-cuda` - Uses CUDA backend (NVIDIA GPUs only)
-- `rpc-server-hip` - Uses HIPBLAS backend (AMD ROCm GPUs only)
-
-### Step 2.7: Add RPC Build Variable Definition
+### Step 2.3: Add RPC Build Variable Definitions
 
 **File**: `koboldcpp-1.111.2/Makefile`
 
@@ -380,59 +231,637 @@ RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.dll $(LDFLAGS)
 endif
 ```
 
+### Step 2.4: Add RPC Client Build Targets
+
+**File**: `koboldcpp-1.111.2/Makefile`
+
+**Location**: After line ~947 (after other koboldcpp_* targets)
+
+**Add**:
+```makefile
+# RPC client build target (Hybrid: RPC + Vulkan)
+ifdef RPC_BUILD
+ifdef VULKAN_BUILD
+# Hybrid build with both RPC and Vulkan
+koboldcpp_rpc: ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
+    ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-rpc.o \
+    ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_vulkan.o \
+    tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o \
+    ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o \
+    $(OBJS_FULL) $(OBJS)
+	$(RPC_BUILD)
+else
+# RPC only build (fallback)
+koboldcpp_rpc: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
+    ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter.o ggml-rpc.o \
+    sdcpp_default.o whispercpp_default.o tts_default.o music_default.o \
+    embeddings_default.o llavaclip_default.o llava.o \
+    ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o \
+    $(OBJS_FULL) $(OBJS)
+	$(RPC_BUILD)
+endif
+else
+# RPC_BUILD not defined
+koboldcpp_rpc:
+	$(DONOTHING)
+endif
+
+# RPC client for HIPBLAS backend (AMD)
+ifdef HIPBLAS_BUILD
+koboldcpp_hipblas_rpc: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o \
+    ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o \
+    gpttype_adapter_cublas.o ggml-rpc.o sdcpp_cublas.o whispercpp_cublas.o \
+    tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o \
+    ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o $(HIP_OBJS) \
+    $(OBJS_FULL) $(OBJS)
+	$(HIPBLAS_BUILD)
+else
+koboldcpp_hipblas_rpc:
+	$(DONOTHING)
+endif
+
+# RPC client for CUDA backend (NVIDIA)
+ifdef CUBLAS_BUILD
+koboldcpp_cublas_rpc: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o \
+    ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o \
+    gpttype_adapter_cublas.o ggml-rpc.o sdcpp_cublas.o whispercpp_cublas.o \
+    tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o \
+    ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o $(CUBLAS_OBJS) \
+    $(OBJS_FULL) $(OBJS)
+	$(CUBLAS_BUILD)
+else
+koboldcpp_cublas_rpc:
+	$(DONOTHING)
+endif
+```
+
+### Step 2.5: Add RPC Server Build Targets
+
+**File**: `koboldcpp-1.111.2/Makefile`
+
+**Location**: After line ~994 (after tool build targets)
+
+**Add**:
+```makefile
+# RPC server build targets
+ifdef VULKAN_BUILD
+rpc-server-vulkan: tools/rpc-server.cpp ggml/src/ggml-vulkan-shaders.cpp \
+    ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
+    llama.o ggml-rpc.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o \
+    ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o \
+    ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
+    unicode.o unicode-common.o unicode-data.o ggml-threading.o \
+    ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o \
+    budget.o kcpputils.o ggml-vulkan.o console.o
+	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) -lvulkan
+endif
+
+# RPC server for CUDA backend (NVIDIA GPUs)
+ifdef CUBLAS_BUILD
+rpc-server-cuda: tools/rpc-server.cpp \
+    ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
+    llama.o ggml-rpc.o ggml-backend_cublas.o ggml-backend-reg_cublas.o \
+    ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o \
+    ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
+    unicode.o unicode-common.o unicode-data.o ggml-threading.o \
+    ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o \
+    budget.o kcpputils.o console.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o $(CUBLAS_OBJS)
+	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(CUBLASLD_FLAGS)
+endif
+
+# RPC server for HIPBLAS backend (AMD ROCm GPUs)
+ifdef HIPBLAS_BUILD
+rpc-server-hip: tools/rpc-server.cpp \
+    ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
+    llama.o ggml-rpc.o ggml-backend_cublas.o ggml-backend-reg_cublas.o \
+    ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o \
+    ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o \
+    unicode.o unicode-common.o unicode-data.o ggml-threading.o \
+    ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o \
+    budget.o kcpputils.o console.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o $(HIP_OBJS)
+	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HIPLDFLAGS)
+endif
+```
+
+**Important**: Each RPC server backend uses its respective GPU backend:
+- `rpc-server-vulkan` - Uses Vulkan backend (works with AMD/Intel/NVIDIA via Vulkan)
+- `rpc-server-cuda` - Uses CUDA backend (NVIDIA GPUs only)
+- `rpc-server-hip` - Uses HIPBLAS backend (AMD ROCm GPUs only)
+
+### Step 2.6: Add Automatic Backend Detection (rpc-full-all)
+
+**File**: `koboldcpp-1.111.2/Makefile`
+
+**Location**: At end of Makefile
+
+**Add**:
+```makefile
+# Automatic backend detection and full RPC build
+.PHONY: rpc-full-all
+rpc-full-all:
+	@echo "=== Detecting available backends ==="
+	@echo "Checking for NVIDIA CUDA (nvcc)..."
+	@if command -v nvcc &> /dev/null; then \
+		echo "✓ CUDA: Available (nvcc found)"; \
+		HAS_CUDA=1; \
+	else \
+		echo "✗ CUDA: Not available"; \
+		HAS_CUDA=0; \
+	fi
+	@echo "Checking for AMD HIPBLAS (hipcc)..."
+	@if command -v hipcc &> /dev/null; then \
+		echo "✓ HIPBLAS: Available (hipcc found)"; \
+		HAS_HIPBLAS=1; \
+	else \
+		echo "✗ HIPBLAS: Not available"; \
+		HAS_HIPBLAS=0; \
+	fi
+	@echo ""
+	@echo "=== Building Regular Backends (Non-RPC) ==="
+	@echo "Building Vulkan backend..."
+	$(MAKE) LLAMA_VULKAN=1 koboldcpp_vulkan -j8
+ifeq ($(HAS_HIPBLAS),1)
+	@echo "Building HIPBLAS backend..."
+	$(MAKE) LLAMA_HIPBLAS=1 koboldcpp_hipblas -j8
+else
+	@if [ $(HAS_CUDA) -eq 1 ]; then \
+		echo "Building CUDA backend..."; \
+		$(MAKE) LLAMA_CUBLAS=1 koboldcpp_cublas -j8; \
+	fi
+endif
+	@echo ""
+	@echo "=== Building Vulkan + RPC (universal fallback) ==="
+	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-all -j8
+ifeq ($(HAS_HIPBLAS),1)
+	@echo ""
+	@echo "=== Building HIPBLAS + RPC (AMD GPUs) ==="
+	@echo "HIPBLAS detected, building..."
+	$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 koboldcpp_hipblas_rpc -j8
+	$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip -j8
+endif
+ifeq ($(HAS_CUDA),1)
+ifeq ($(HAS_HIPBLAS),0)
+	@echo ""
+	@echo "=== Building CUDA + RPC (NVIDIA GPUs) ==="
+	@echo "CUDA detected, building..."
+	$(MAKE) LLAMA_CUBLAS=1 LLAMA_RPC=1 koboldcpp_cublas_rpc -j8
+	$(MAKE) LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda -j8
+endif
+endif
+	@echo ""
+	@echo "=== All RPC components built successfully! ==="
+```
+
 ---
 
 ## Phase 3: Python Wrapper Integration
 
-### Step 3.1: Add RPC Argument Parser
+### Step 3.1: Add RPC Server Mode to GUI Variables
 
 **File**: `koboldcpp-1.111.2/koboldcpp.py`
 
-**Location**: After line ~10698 (after --usevulkan argument)
+**Location**: After line ~10420 (in GUI variable section)
 
-**Add**:
+**Add RPC Server variables**:
 ```python
-compatgroup.add_argument("--userpc", "--rpc", 
-    help="Use RPC for remote model inference. Specify one or more RPC server endpoints (e.g. --rpc 192.168.1.100:50054). Can be used multiple times for multiple servers.", 
-    metavar=('[endpoint]'), 
-    nargs='+', 
-    type=str, 
-    default=None)
+# RPC Server variables
+rpc_server_mode_var = ctk.IntVar(value=0)
+rpc_server_backend_var = ctk.StringVar(value="Auto-detect")
+rpc_host_var = ctk.StringVar(value="0.0.0.0")
+rpc_port_var = ctk.StringVar(value="50053")
+rpc_devices_var = ctk.StringVar(value="")
 ```
 
-### Step 3.1b: Add Device Ordering Argument (Optional)
+### Step 3.2: Add RPC Server Tab to GUI
 
 **File**: `koboldcpp-1.111.2/koboldcpp.py`
 
-**Location**: In advanced parser section (around line ~17460)
+**Location**: After line ~12670 (in GUI tab creation section)
 
-**Note**: The `--device` argument already exists in koboldcpp for llama.cpp compatibility. No changes needed!
-
-**Usage**:
+**Add RPC Server tab**:
 ```python
-# Already exists in advparser section
-advparser.add_argument(
-    "--device",
-    "-dev",
-    metavar=("<dev1,dev2,..>"),
-    help="Set llama.cpp compatible device selection override. Comma separated. Overrides normal device choices.",
+# RPC Server Tab Section
+ctk.CTkLabel(
+    rpc_tab,
+    text="RPC Server Configuration",
+    fg_color="transparent",
+    text_color="#5DA5E5",
+    font=("Helvetica", 14, "bold"),
+).grid(row=0, column=0, columnspan=2, sticky="w", padx=0, pady=10)
+
+makecheckbox(
+    rpc_tab,
+    "Start RPC Server Mode",
+    rpc_server_mode_var,
+    1,
+    0,
+    tooltiptxt="Start KoboldCPP in RPC server mode. Exposes local GPUs for remote clients to use.",
+)
+
+# RPC Server Backend dropdown
+makelabel(rpc_tab, "RPC Server Backend:", 2, 0, padx=0)
+makelabel(rpc_tab, "GPU backend for RPC server. Must match device names below.", 3, 0, padx=0)
+rpc_backend_options = ["Auto-detect", "Vulkan", "hipBLAS (ROCm)", "CUDA"]
+rpc_server_backend_dropdown = ctk.CTkComboBox(
+    rpc_tab,
+    values=rpc_backend_options,
+    variable=rpc_server_backend_var,
+    width=200,
+    state="readonly",
+)
+rpc_server_backend_dropdown.grid(row=4, column=0, columnspan=2, sticky="w", padx=0, pady=5)
+makelabel(
+    rpc_tab,
+    "Vulkan: Use VULKAN0,VULKAN1...  |  hipBLAS: Use ROCm0,ROCm1...  |  CUDA: Use CUDA0,CUDA1...",
+    5, 0, padx=0
+)
+
+# Listening IP Address
+makelabel(rpc_tab, "Listening IP Address:", 6, 0, padx=0)
+makelabel(
+    rpc_tab,
+    "IP address for RPC server to listen on. Use 0.0.0.0 for all interfaces, 127.0.0.1 for localhost only.",
+    7, 0, padx=0
+)
+makelabelentry(rpc_tab, "", rpc_host_var, 8, 150, singleline=True)
+
+# Listening Port
+makelabel(rpc_tab, "Listening Port:", 9, 0, padx=0)
+makelabel(
+    rpc_tab,
+    "Port number for RPC server connections (default: 50053).",
+    10, 0, padx=0
+)
+makelabelentry(rpc_tab, "", rpc_port_var, 11, 100, singleline=True)
+
+# RPC Devices
+makelabel(rpc_tab, "RPC Devices:", 12, 0, padx=0)
+makelabel(
+    rpc_tab,
+    "Comma-separated list of GPUs to expose via RPC. Leave empty to auto-detect all devices.",
+    13, 0, padx=0
+)
+makelabelentry(rpc_tab, "", rpc_devices_var, 14, 200, singleline=True)
+
+makecheckbox(
+    rpc_tab,
+    "Allow Launch Without Models",
+    nomodel,
+    16, 0,
+    tooltiptxt="Allows starting RPC server without loading a model file.",
+)
+
+# Warning message (14pt red bold)
+ctk.CTkLabel(
+    rpc_tab,
+    text="WARNING: RPC Server mode replaces the WebUI API. Clients must connect via --rpc.",
+    text_color="red",
+    font=("Helvetica", 14, "bold"),
+).grid(row=18, column=0, columnspan=2, sticky="w", padx=0, pady=10)
+```
+
+### Step 3.3: Add RPC Server Arguments to Argument Parser
+
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
+
+**Location**: After line ~17225 (after --userpc argument)
+
+**Add RPC Server arguments**:
+```python
+parser.add_argument(
+    "--start-rpc-server",
+    action="store_true",
+    help="Start as RPC server mode instead of client/server. Exposes local GPUs via RPC.",
+)
+parser.add_argument(
+    "--rpc-host",
+    default="0.0.0.0",
+    help="Host address for RPC server (default: 0.0.0.0). Use 127.0.0.1 for localhost only.",
+)
+parser.add_argument(
+    "--rpc-port",
+    type=int,
+    default=50053,
+    help="Port for RPC server (default: 50053).",
+)
+parser.add_argument(
+    "--rpc-devices",
     default="",
+    metavar=("[dev1,dev2,...]"),
+    help="Comma-separated list of devices to expose via RPC server (e.g. VULKAN0,VULKAN1 or ROCm0,ROCm1). Leave empty to expose all available devices.",
+)
+parser.add_argument(
+    "--rpc-server-backend",
+    default="Auto-detect",
+    choices=["Auto-detect", "Vulkan", "hipBLAS (ROCm)", "CUDA"],
+    help="GPU backend for RPC server. Vulkan uses VULKAN* devices, hipBLAS uses ROCm* devices, CUDA uses CUDA* devices. Default: Auto-detect.",
 )
 ```
 
-**Example**:
-```bash
-python koboldcpp.py --model model.gguf \
-    --rpc 192.168.1.101:50054 \
-    --device VULKAN0,RPC0,VULKAN1,RPC1 \
-    --gpulayers 999
-```
-
-### Step 3.2: Add RPC Library Variable Declarations
+### Step 3.4: Add RPC Server Args Population
 
 **File**: `koboldcpp-1.111.2/koboldcpp.py`
 
-**Location**: In global library detection section (around line ~940)
+**Location**: In export_vars function (around line ~13385)
+
+**Add**:
+```python
+# RPC Server arguments
+args.start_rpc_server = rpc_server_mode_var.get() == 1
+args.rpc_host = rpc_host_var.get()
+args.rpc_port = int(rpc_port_var.get()) if rpc_port_var.get() else 50053
+args.rpc_devices = rpc_devices_var.get()
+args.rpc_server_backend = rpc_server_backend_var.get()
+```
+
+### Step 3.5: Add RPC Server Mode Launcher
+
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
+
+**Location**: After line ~16965 (before main server logic)
+
+**Add RPC Server mode implementation**:
+```python
+# RPC Server Mode
+if getattr(args, "start_rpc_server", False):
+    print("=" * 60)
+    print("Starting KoboldCPP in RPC Server Mode")
+    print("=" * 60)
+    print(f"RPC Server Host: {args.rpc_host}")
+    print(f"RPC Server Port: {args.rpc_port}")
+
+    # Determine backend from dropdown or auto-detect
+    backend = getattr(args, "rpc_server_backend", "Auto-detect")
+    if not backend:
+        backend = "Auto-detect"
+    
+    rpc_server_path = None
+    device_prefix = None
+    
+    if backend == "Vulkan":
+        device_prefix = "VULKAN"
+        rpc_server_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rpc-server-vulkan")
+    elif backend == "CUDA":
+        device_prefix = "CUDA"
+        rpc_server_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rpc-server-cuda")
+    elif backend == "hipBLAS (ROCm)":
+        device_prefix = "ROCm"
+        rpc_server_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rpc-server-hip")
+    else:
+        # Auto-detect: try in order of preference
+        print("Auto-detecting RPC server backend...")
+        for candidate in ["rpc-server-hip", "rpc-server-vulkan", "rpc-server-cuda"]:
+            candidate_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), candidate)
+            if os.path.exists(candidate_path):
+                if "hip" in candidate:
+                    device_prefix = "ROCm"
+                elif "cuda" in candidate:
+                    device_prefix = "CUDA"
+                else:
+                    device_prefix = "VULKAN"
+                rpc_server_path = candidate_path
+                print(f"Auto-detected: {candidate} (device prefix: {device_prefix})")
+                break
+
+    # Build and validate device list
+    devices = []
+    if args.rpc_devices and args.rpc_devices.strip():
+        devices = [d.strip() for d in args.rpc_devices.split(",") if d.strip()]
+    
+    # Convert device names if prefix is specified and devices are provided
+    if device_prefix and devices:
+        converted_devices = []
+        for dev in devices:
+            dev_upper = dev.upper()
+            if dev_upper.startswith("VULKAN"):
+                if device_prefix != "VULKAN":
+                    dev_num = dev_upper.replace("VULKAN", "")
+                    converted_devices.append(f"{device_prefix}{dev_num}")
+                    print(f"  Converting {dev} -> {converted_devices[-1]}")
+                else:
+                    converted_devices.append(dev)
+            elif dev_upper.startswith("ROCm") or dev_upper.startswith("HIP"):
+                if device_prefix != "VULKAN":
+                    dev_num = dev_upper.replace("ROCm", "").replace("HIP", "")
+                    if device_prefix == "CUDA":
+                        converted_devices.append(f"CUDA{dev_num}")
+                    else:
+                        converted_devices.append(f"{device_prefix}{dev_num}")
+                    print(f"  Converting {dev} -> {converted_devices[-1]}")
+                else:
+                    converted_devices.append(dev)
+            elif dev_upper.startswith("CUDA"):
+                if device_prefix != "VULKAN":
+                    dev_num = dev_upper.replace("CUDA", "")
+                    converted_devices.append(f"{device_prefix}{dev_num}")
+                    print(f"  Converting {dev} -> {converted_devices[-1]}")
+                else:
+                    converted_devices.append(dev)
+            else:
+                converted_devices.append(dev)
+        devices = converted_devices
+
+    if devices:
+        print(f"Devices to expose: {', '.join(devices)}")
+
+    print("")
+    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    if args.rpc_host != "127.0.0.1" and args.rpc_host != "0.0.0.0":
+        print("WARNING: RPC server bound to specific non-loopback address!")
+    if args.rpc_host == "0.0.0.0":
+        print("WARNING: Host is '0.0.0.0' - RPC server accepts connections on all interfaces!")
+    print("         NEVER expose the RPC server to an open network!")
+    print("         This is an experimental feature and is not secure!")
+    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    print("")
+
+    if rpc_server_path is None:
+        print("ERROR: RPC server binary not found!")
+        print("       Please build with: make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-full-all")
+        sys.exit(1)
+
+    print(f"Launching RPC server: {rpc_server_path}")
+    cmd = [rpc_server_path, "-H", args.rpc_host, "--port", str(args.rpc_port)]
+    if devices:
+        cmd.extend(["--device", ",".join(devices)])
+    cmd.append("-c")
+
+    print(" ".join(cmd))
+    print("")
+    print("RPC server running. Clients can connect via --rpc")
+
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: RPC server failed with exit code {e.returncode}")
+        sys.exit(e.returncode)
+    except KeyboardInterrupt:
+        print("\nRPC server stopped.")
+    sys.exit(0)
+```
+
+### Step 3.6: Skip Library Loading for RPC Server Mode
+
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
+
+**Location**: In kcpp_main_process function (around line ~16278)
+
+**Change**:
+```python
+# OLD CODE:
+init_library()  # Note: if blas does not exist and is enabled, program will crash.
+print("==========")
+time.sleep(1)
+
+# NEW CODE:
+# Skip library loading when RPC Server mode is enabled (subprocess-based)
+if getattr(args, "start_rpc_server", False):
+    print("RPC Server mode enabled, skipping KoboldCpp API library loading")
+else:
+    init_library()  # Note: if blas does not exist and is enabled, program will crash.
+    print("==========")
+    time.sleep(1)
+```
+
+---
+
+### Step 3.7: Add RPC Endpoint Field (Shared Between Tabs)
+
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
+
+**Location**: After line ~10478 (global variable declarations)
+
+**Add RPC endpoint variable**:
+```python
+# Shared RPC endpoint variable for both Quick Launch and Hardware tabs
+rpc_endpoint_var = ctk.StringVar(value="")
+```
+
+**Location**: In Quick Launch tab creation section (around row=2)
+
+**Add RPC endpoint field to Quick Launch**:
+```python
+rpc_endpoint_label = ctk.CTkLabel(
+    quick_tab,
+    text="RPC Server Endpoint:",
+    font=("Helvetica", 10, "bold"),
+)
+rpc_endpoint_entry = ctk.CTkEntry(
+    quick_tab,
+    width=300,
+    textvariable=rpc_endpoint_var,
+    placeholder_text="e.g. 192.168.1.101:50053",
+)
+rpc_endpoint_label.grid(row=2, column=0, padx=8, pady=1, stick="nw")
+rpc_endpoint_entry.grid(row=2, column=1, padx=8, pady=1, stick="nw")
+```
+
+**Location**: In Hardware tab creation section (around row=2)
+
+**Add RPC endpoint field to Hardware (shared)**:
+```python
+rpc_endpoint_label_hw = ctk.CTkLabel(
+    hardware_tab,
+    text="RPC Server Endpoint:",
+    font=("Helvetica", 10, "bold"),
+)
+rpc_endpoint_entry_hw = ctk.CTkEntry(
+    hardware_tab,
+    width=300,
+    textvariable=rpc_endpoint_var,  # ← Same variable - auto-syncs
+)
+rpc_endpoint_label_hw.grid(row=2, column=0, padx=160, pady=1, stick="nw")
+rpc_endpoint_entry_hw.grid(row=2, column=0, padx=250, pady=1, stick="nw")
+```
+
+**Location**: In `changerunmode()` function
+
+**Add show/hide logic**:
+```python
+# Show RPC endpoint field for RPC variants only
+rpc_selected = index in ["Use Vulkan + RPC", "Use hipBLAS + RPC", "Use CUDA + RPC"]
+if rpc_selected:
+    rpc_endpoint_label.grid(row=2, column=0, padx=8, pady=1, stick="nw")
+    rpc_endpoint_entry.grid(row=2, column=1, padx=8, pady=1, stick="nw")
+    rpc_endpoint_label_hw.grid(row=2, column=0, padx=160, pady=1, stick="nw")
+    rpc_endpoint_entry_hw.grid(row=2, column=0, padx=250, pady=1, stick="nw")
+else:
+    rpc_endpoint_label.grid_remove()
+    rpc_endpoint_entry.grid_remove()
+    rpc_endpoint_label_hw.grid_remove()
+    rpc_endpoint_entry_hw.grid_remove()
+```
+
+**Purpose**: Creates shared RPC endpoint input field in both Quick Launch and Hardware tabs. Both fields use the same `rpc_endpoint_var` StringVar so they auto-sync.
+
+---
+
+### Step 3.8: Add Config Save/Load for RPC Settings
+
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
+
+**Location**: In `export_vars()` function (around line ~13283)
+
+**Add RPC endpoint to args population**:
+```python
+# Use RPC endpoint from GUI field if RPC variant is selected
+if rpc_selected and rpc_endpoint_var.get() != "":
+    args.userpc = [rpc_endpoint_var.get()]
+```
+
+**Location**: In `import_vars()` function (around line ~13526)
+
+**Initialize RPC variables to prevent NameError**:
+```python
+def import_vars():
+    global args, ...
+    global has_rpc_in_device, has_rocm_in_device  # ← NEW
+    
+    has_rpc_in_device = False
+    if args.device and "RPC" in args.device:
+        has_rpc_in_device = True
+    
+    has_rocm_in_device = False
+    if args.device and ("ROCm" in args.device or "HIP" in args.device):
+        has_rocm_in_device = True
+    
+    # ... (existing function continues)
+```
+
+**Location**: When loading config (around line ~13669)
+
+**Add RPC endpoint loading**:
+```python
+# Load RPC endpoint from userpc (legacy) or rpc_endpoint
+if "userpc" in dict:
+    if isinstance(dict["userpc"], list):
+        rpc_endpoint_var.set(dict["userpc"][0])
+    else:
+        rpc_endpoint_var.set(str(dict["userpc"]))
+
+# Load from rpc_endpoint (new format)
+if "rpc_endpoint" in dict:
+    rpc_endpoint_var.set(str(dict["rpc_endpoint"]))
+```
+
+**Location**: In `convert_args_to_template()` function (around line ~14907)
+
+**Add RPC endpoint saving**:
+```python
+savdict["rpc_endpoint"] = rpc_endpoint_var.get()
+```
+
+**Purpose**: Enables saving and loading RPC settings (including endpoint) in `.kcpps` config files. Also initializes `has_rpc_in_device` and `has_rocm_in_device` to prevent NameError when loading configs.
+
+---
+
+## Phase 4: Library Detection and Selection
+
+### Step 4.1: Add RPC-Enabled Library Variables
+
+**File**: `koboldcpp-1.111.2/koboldcpp.py`
+
+**Location**: Lines ~940-960 (library detection section)
 
 **Add all RPC-enabled libraries**:
 ```python
@@ -464,27 +893,15 @@ lib_option_pairs = [
     (lib_vulkan_failsafe, "Use Vulkan (Older CPU)"),
     (lib_failsafe, "Failsafe Mode (Older CPU)"),
 ]
-
-# Unpack options for use in library selection
-(
-    default_option, cublas_option, cublas_rpc_option, hipblas_option, hipblas_rpc_option,
-    vulkan_option, rpc_option, noavx2_option, vulkan_noavx2_option, vulkan_failsafe_option,
-    failsafe_option
-) = (
-    opt if file_exists(lib) or (os.name == "nt" and file_exists(opt + ".dll")) else None
-    for lib, opt in lib_option_pairs
-)
-
-runopts = [opt for lib, opt in lib_option_pairs if file_exists(lib)]
 ```
 
-### Step 3.3: Update Library Selection Logic
+### Step 4.2: Update Library Selection Logic
 
 **File**: `koboldcpp-1.111.2/koboldcpp.py`
 
-**Location**: In `init_library()` function (around line ~1000)
+**Location**: In `init_library()` function (around line ~1031)
 
-**Add ROCm detection and prefer RPC variants**:
+**Add RPC library preference and ROCm/HIP detection**:
 ```python
 def init_library():
     global handle, args, libname
@@ -508,18 +925,29 @@ def init_library():
     # ... (existing logic)
     
     elif args.usecuda is not None:
-        # Prefer RPC variant if RPC is being used
-        if file_exists(lib_cublas_rpc) and (args.userpc is not None or has_rpc_in_device):
+        need_rpc = args.userpc is not None or has_rpc_in_device
+        if file_exists(lib_cublas_rpc) and need_rpc:
             libname = lib_cublas_rpc
+        elif file_exists(lib_hipblas_rpc) and need_rpc:
+            libname = lib_hipblas_rpc
         elif file_exists(lib_cublas):
             libname = lib_cublas
-        elif (args.userpc is not None or has_rpc_in_device) and file_exists(lib_hipblas_rpc):
-            libname = lib_hipblas_rpc
         elif file_exists(lib_hipblas):
             libname = lib_hipblas
+        elif file_exists(lib_rpc) and need_rpc:
+            libname = lib_rpc
+        else:
+            print("WARNING: No suitable GPU library found")
+    
+    elif args.usevulkan is not None:
+        if file_exists(lib_rpc) and (args.userpc is not None or has_rpc_in_device):
+            libname = lib_rpc
+        elif file_exists(lib_vulkan):
+            libname = lib_vulkan
+        elif file_exists(lib_vulkan_noavx2):
+            libname = lib_vulkan_noavx2
     
     elif args.userpc is not None:
-        # Select appropriate RPC library based on backend
         if has_rocm_in_device and file_exists(lib_hipblas_rpc):
             libname = lib_hipblas_rpc
         elif file_exists(lib_cublas_rpc):
@@ -538,80 +966,66 @@ def init_library():
             libname = lib_rpc
         else:
             print("WARNING: RPC library not found. Please build with LLAMA_RPC=1")
+    
+    elif has_rocm_in_device:
+        if file_exists(lib_hipblas_rpc):
+            libname = lib_hipblas_rpc
+        elif file_exists(lib_hipblas):
+            libname = lib_hipblas
 ```
 
-### Step 3.4: Update GUI Auto-Selection
+### Step 4.3: Update GUI Auto-Selection for RPC Server Mode
 
 **File**: `koboldcpp-1.111.2/koboldcpp.py`
 
-**Location**: In `auto_set_backend_gui()` function (around line ~10860)
+**Location**: In `auto_set_backend_gui()` function (around line ~10867)
 
-**Add RPC variant preference**:
+**Add RPC Server mode detection at start of function**:
 ```python
 def auto_set_backend_gui(manual_select=False):
     global exitcounter, runmode_untouched
+    
+    # check for avx2 and avx support
+    cpusupport = old_cpu_check()
+    eligible_cuda = (cpusupport < 1 and not is_oldpc_ver) or (cpusupport < 2 and is_oldpc_ver)
+    
+    # Force RPC backend if RPC Server mode is enabled from GUI
+    if rpc_server_mode_var.get() == 1:
+        runmode_untouched = True
+        if "Use hipBLAS + RPC" in runopts and eligible_cuda:
+            runopts_var.set("Use hipBLAS + RPC")
+            print("Auto Selected HIPBLAS + RPC Backend (RPC Server Mode)\n")
+            found_new_backend = True
+        elif "Use CUDA + RPC" in runopts and eligible_cuda:
+            runopts_var.set("Use CUDA + RPC")
+            print("Auto Selected CUDA + RPC Backend (RPC Server Mode)\n")
+            found_new_backend = True
+        elif "Use Vulkan + RPC" in runopts:
+            runopts_var.set("Use Vulkan + RPC")
+            print("Auto Selected Vulkan + RPC Backend (RPC Server Mode)\n")
+            found_new_backend = True
+        else:
+            if "Use hipBLAS + RPC" in runopts:
+                runopts_var.set("Use hipBLAS + RPC")
+            elif "Use CUDA + RPC" in runopts:
+                runopts_var.set("Use CUDA + RPC")
+            elif "Use Vulkan + RPC" in runopts:
+                runopts_var.set("Use Vulkan + RPC")
+            found_new_backend = True
+    
     # Detect RPC in device string
     has_rpc_in_device = False
     if args.device and "RPC" in args.device:
         has_rpc_in_device = True
     
-    # ... (existing logic)
-    
-    if eligible_cuda and exitcounter < 100 and MaxMemory[0] > 3500000000 and runmode_untouched:
-        # Prefer RPC variants if RPC is being used
-        if args.userpc is not None or has_rpc_in_device:
-            if "Use CUDA + RPC" in runopts:
-                runopts_var.set("Use CUDA + RPC")
-                gpu_choice_var.set("1")
-                print(f"Auto Selected CUDA + RPC Backend\n")
-            elif "Use hipBLAS + RPC" in runopts:
-                runopts_var.set("Use hipBLAS + RPC")
-                gpu_choice_var.set("1")
-                print(f"Auto Selected HIPBLAS + RPC Backend\n")
-        # Otherwise use standard backends
-        if not found_new_backend:
-            if "Use CUDA" in runopts:
-                runopts_var.set("Use CUDA")
-                gpu_choice_var.set("1")
-            elif "Use hipBLAS (ROCm)" in runopts:
-                runopts_var.set("Use hipBLAS (ROCm)")
-                gpu_choice_var.set("1")
-```
-
-### Step 3.5: Update GUI changerunmode Function
-
-**File**: `koboldcpp-1.111.2/koboldcpp.py`
-
-**Location**: In `changerunmode()` function (around line ~11101)
-
-**Add RPC variants to UI visibility checks**:
-```python
-def changerunmode(a, b, c):
-    global runmode_untouched
-    runmode_untouched = False
-    index = runopts_var.get()
-    
-    # Show GPU controls for GPU backends (including RPC variants)
-    if (index == "Use Vulkan" or index == "Use Vulkan (Old CPU)" or 
-        index == "Use Vulkan (Older CPU)" or index == "Use CUDA" or 
-        index == "Use CUDA + RPC" or index == "Use hipBLAS (ROCm)" or 
-        index == "Use hipBLAS + RPC"):
-        # Show GPU selector controls
-        ...
-    
-    # Show tensor_split controls for backends that support it
-    if (index == "Use CUDA" or index == "Use CUDA + RPC" or 
-        index == "Use hipBLAS (ROCm)" or index == "Use hipBLAS + RPC" or
-        index == "Use Vulkan" or index == "Use Vulkan (Old CPU)"):
-        # Show tensor_split controls
-        ...
+    # ... (existing logic continues)
 ```
 
 ---
 
-## Phase 4: C++ Code Modifications
+## Phase 5: C++ Code Modifications
 
-### Step 4.1: Implement Device Ordering with Triple Naming
+### Step 5.1: Implement Device Ordering with Triple Naming
 
 **File**: `koboldcpp-1.111.2/gpttype_adapter.cpp`
 
@@ -696,13 +1110,13 @@ if(dev_override_str != "" && dev_override_str.length() > 0)
 }
 ```
 
-**Key Changes** (2026-04-16):
+**Key Changes**:
 - CUDA devices now registered with dual names (`CUDA0` + `HIP0`)
 - HIP devices now registered with dual names (`HIP0` + `ROCm0`)
 - Allows using `HIP0`, `CUDA0`, or `ROCm0` interchangeably
 - Improves compatibility across different backend configurations
 
-### Step 4.2: Fix Device Enumeration (Case-Insensitive)
+### Step 5.2: Fix Device Enumeration (Case-Insensitive)
 
 **File**: `koboldcpp-1.111.2/gpttype_adapter.cpp`
 
@@ -741,7 +1155,7 @@ if(reg_name_upper.find("RPC") == std::string::npos &&
 }
 ```
 
-### Step 4.3: Fix RPC Server Direct Call
+### Step 5.3: Fix RPC Server Direct Call
 
 **File**: `tools/rpc-server.cpp`
 
@@ -793,9 +1207,9 @@ int main(int argc, char * argv[]) {
 
 ---
 
-## Phase 5: Testing and Verification
+## Phase 6: Testing and Verification
 
-### Step 5.1: Verify Build
+### Step 6.1: Verify Build
 
 ```bash
 cd koboldcpp_rpc_attempt
@@ -805,10 +1219,10 @@ make rpc-full-all -j8
 # Verify all components were built
 ls -lh koboldcpp_vulkan.so koboldcpp_hipblas.so
 ls -lh koboldcpp_rpc.so koboldcpp_hipblas_rpc.so
-ls -lh rpc-server-vulkan rpc-server-hip
+ls -lh rpc-server-vulkan rpc-server-hip rpc-server-cuda
 ```
 
-### Step 5.2: Test Server
+### Step 6.2: Test Server
 
 ```bash
 # Test Vulkan RPC server
@@ -821,7 +1235,7 @@ ls -lh rpc-server-vulkan rpc-server-hip
 ./rpc-server-cuda -H 127.0.0.1 --port 50054 --device CUDA0 -c
 ```
 
-### Step 5.3: Test Client
+### Step 6.3: Test Client
 
 ```bash
 # Test with RPC only
@@ -834,7 +1248,7 @@ python koboldcpp.py --model model.gguf \
     --gpulayers 999
 ```
 
-### Step 5.4: Verify Dropdown Menu
+### Step 6.4: Verify Dropdown Menu
 
 Run `python koboldcpp.py` and check the dropdown shows all options:
 - Use CPU
@@ -849,9 +1263,45 @@ Run `python koboldcpp.py` and check the dropdown shows all options:
 - Use Vulkan (Older CPU)
 - Failsafe Mode (Older CPU)
 
+### Step 6.5: Verify RPC Server Tab
+
+1. Open `python koboldcpp.py`
+2. Check for **RPC Server** tab between "Loaded Files" and "Network"
+3. Verify fields:
+   - Start RPC Server Mode (checkbox)
+   - RPC Server Backend (dropdown)
+   - Listening IP Address (text input)
+   - Listening Port (text input)
+   - RPC Devices (text input)
+   - Allow Launch Without Models (checkbox)
+   - Red warning message
+
+### Step 6.6: Test RPC Server Mode from GUI
+
+1. Go to **RPC Server** tab
+2. Check "Start RPC Server Mode"
+3. Set **RPC Server Backend**: `Auto-detect`
+4. Set Listening IP Address: `127.0.0.1`
+5. Set Listening Port: `50053`
+6. Leave RPC Devices empty for auto-detect
+7. Check "Allow Launch Without Models"
+8. Launch
+9. Verify output shows RPC server starting
+
+### Step 6.7: Test RPC Server Mode from CLI
+
+```bash
+python koboldcpp.py \
+    --start-rpc-server \
+    --rpc-host 127.0.0.1 \
+    --rpc-port 50053 \
+    --rpc-devices VULKAN0 \
+    --rpc-server-backend Vulkan
+```
+
 ---
 
-## Phase 6: Backend Compatibility
+## Phase 7: Backend Compatibility
 
 ### Critical Rule: Cannot Mix Backends
 
@@ -919,7 +1369,7 @@ Assertion `err == hipSuccess' failed in hip_code_object.cpp
 sudo apt-get install libvulkan-dev vulkan-tools glslc
 
 # Use correct target
-make LLAMA_VULKAN=1 koboldcpp_vulkan -j8
+make LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc -j8
 ```
 
 ### 3. CUDA/HIPBLAS Build Conflicts
@@ -932,6 +1382,25 @@ undefined symbol: __hipRegisterFunction
 **Cause**: Trying to build both CUDA and HIPBLAS together
 
 **Solution**: `make rpc-full-all` now skips CUDA if HIPBLAS detected
+
+### 4. Loading Non-RPC Library When RPC Needed
+
+**Error**:
+```
+OSError: koboldcpp_hipblas.so: undefined symbol: ggml_backend_rpc_add_server
+```
+
+**Cause**: Non-RPC library loaded when RPC is required
+
+**Solution**:
+```bash
+# Ensure RPC variant is built
+make clean
+make rpc-full-all -j8
+
+# RPC Server mode skips library loading automatically
+# For RPC client mode, ensure --rpc is used
+```
 
 ### Security Warning
 
@@ -998,6 +1467,7 @@ ssh -L 50054:localhost:50054 user@192.168.1.101
 - Quick Start: `RPC_QUICKSTART.md`
 - Build Guide: `RPC_makefile.md`
 - Backend Compatibility: `RPC_BACKEND_COMPATIBILITY.md`
+- Code Changes: `RPC_koboldcpp.py_changes.md`
 
 ### Tools
 - Vulkan SDK: https://vulkan.lunarg.com/
@@ -1008,7 +1478,7 @@ ssh -L 50054:localhost:50054 user@192.168.1.101
 
 ## Version History
 
-- **v1.111.2** (2026-04-17): Complete porting guide with all features
+- **v1.111.2** (2026-04-18): Complete porting guide with all latest features
   - Documents full integration process
   - Includes all hurdles and solutions
   - Provides verification checklists
@@ -1019,8 +1489,20 @@ ssh -L 50054:localhost:50054 user@192.168.1.101
   - **Device reordering** (mix RPC and local in any order)
   - **Automatic backend detection** (make rpc-full-all)
   - **Full GUI dropdown** with all backend options
+  - **RPC Server mode** (launch RPC server from GUI or CLI)
+  - **RPC Server Backend dropdown** (Auto-detect, Vulkan, hipBLAS, CUDA)
+  - **Device name conversion** (VULKAN0 -> ROCm0, etc.)
   - **RPC variant libraries** (koboldcpp_hipblas_rpc.so, etc.)
   - **Backend compatibility matrix**
+  - **Skip library loading** for RPC Server mode
+  - **RPC endpoint field** shared between Quick Launch and Hardware tabs (auto-sync)
+  - **Config save/load** for all RPC settings (.kcpps files) including backend selection (runopts)
+  - **ROCm device registry fix** (added "ROCM" to device enum check)
+  - **has_rpc_in_device initialization** in import_vars() - now also checks saved RPC endpoint
+  - **Independent CUDA+HIPBLAS builds** - both built when both toolchains present
+  - **runopts saved to config** - backend selection persists across reloads
+
+- **v1.111.2** (2026-04-17): Added GUI dropdown updates and library selection logic
 
 - **v1.111.2** (2026-04-16): Added dual naming and library selection fixes
 
