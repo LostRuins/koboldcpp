@@ -1029,20 +1029,61 @@ def init_library():
         elif file_exists(lib_noavx2):
             libname = lib_noavx2
     elif args.usecuda is not None:
-        if file_exists(lib_cublas_rpc) and (
-            args.userpc is not None or has_rpc_in_device
-        ):
-            libname = lib_cublas_rpc
-        elif file_exists(lib_cublas):
-            libname = lib_cublas
-        elif (args.userpc is not None or has_rpc_in_device) and file_exists(
-            lib_hipblas_rpc
-        ):
-            libname = lib_hipblas_rpc
-        elif file_exists(lib_hipblas):
-            libname = lib_hipblas
+        need_rpc = args.userpc is not None or has_rpc_in_device
+        # Check which RPC variant was selected from dropdown
+        selected_backend = runopts_var.get() if "runopts_var" in dir() else ""
+
+        # Prefer selected RPC variant when RPC is needed
+        if need_rpc:
+            if "hipBLAS + RPC" in selected_backend or (
+                has_rocm_in_device and file_exists(lib_hipblas_rpc)
+            ):
+                if file_exists(lib_hipblas_rpc):
+                    libname = lib_hipblas_rpc
+                elif file_exists(lib_cublas_rpc):
+                    libname = lib_cublas_rpc
+                elif file_exists(lib_rpc):
+                    libname = lib_rpc
+            elif "CUDA + RPC" in selected_backend:
+                if file_exists(lib_cublas_rpc):
+                    libname = lib_cublas_rpc
+                elif file_exists(lib_hipblas_rpc):
+                    libname = lib_hipblas_rpc
+                elif file_exists(lib_rpc):
+                    libname = lib_rpc
+            elif "Vulkan + RPC" in selected_backend:
+                if file_exists(lib_rpc):
+                    libname = lib_rpc
+                elif file_exists(lib_cublas_rpc):
+                    libname = lib_cublas_rpc
+                elif file_exists(lib_hipblas_rpc):
+                    libname = lib_hipblas_rpc
+            else:
+                # Default: try RPC variants in order, then non-RPC
+                if file_exists(lib_hipblas_rpc):
+                    libname = lib_hipblas_rpc
+                elif file_exists(lib_cublas_rpc):
+                    libname = lib_cublas_rpc
+                elif file_exists(lib_cublas):
+                    libname = lib_cublas
+                elif file_exists(lib_hipblas):
+                    libname = lib_hipblas
+                elif file_exists(lib_rpc):
+                    libname = lib_rpc
+                else:
+                    print("WARNING: No suitable GPU library found")
+        else:
+            # No RPC needed - use standard library selection
+            if file_exists(lib_cublas):
+                libname = lib_cublas
+            elif file_exists(lib_hipblas):
+                libname = lib_hipblas
+            else:
+                print("WARNING: No suitable GPU library found")
     elif args.usevulkan is not None:
-        if file_exists(lib_vulkan):
+        if file_exists(lib_rpc) and (args.userpc is not None or has_rpc_in_device):
+            libname = lib_rpc
+        elif file_exists(lib_vulkan):
             libname = lib_vulkan
         elif file_exists(lib_vulkan_noavx2):
             libname = lib_vulkan_noavx2
@@ -10198,6 +10239,7 @@ def show_gui():
         "Hardware",
         "Context",
         "Loaded Files",
+        "RPC Server",
         "Network",
         "Horde Worker",
         "Image Gen",
@@ -10424,6 +10466,16 @@ def show_gui():
     router_mode_var = ctk.IntVar(value=0)
     autoswap_mode_var = ctk.IntVar(value=0)
     admin_unload_timeout_var = ctk.StringVar(value=str(0))
+
+    # RPC Server variables
+    rpc_server_mode_var = ctk.IntVar(value=0)
+    rpc_server_backend_var = ctk.StringVar(value="Auto-detect")
+    rpc_host_var = ctk.StringVar(value="0.0.0.0")
+    rpc_port_var = ctk.StringVar(value="50053")
+    rpc_devices_var = ctk.StringVar(value="")
+
+    # RPC endpoint for client mode
+    rpc_endpoint_var = ctk.StringVar(value="")
 
     nozenity_var = ctk.IntVar(value=0)
 
@@ -10866,12 +10918,7 @@ def show_gui():
         fetch_gpu_properties(True, True)
         found_new_backend = False
 
-        # Detect RPC in device string (local copy, same logic as init_library)
-        has_rpc_in_device = False
-        if args.device and "RPC" in args.device:
-            has_rpc_in_device = True
-
-        # check for avx2 and avx support
+        # check for avx2 and avx support (moved before RPC Server mode check)
         is_oldpc_ver = (
             "Use CPU" not in runopts
         )  # on oldcpu ver, default lib does not exist
@@ -10879,6 +10926,35 @@ def show_gui():
         eligible_cuda = (cpusupport < 1 and not is_oldpc_ver) or (
             cpusupport < 2 and is_oldpc_ver
         )
+
+        # Force RPC backend if RPC Server mode is enabled from GUI
+        if rpc_server_mode_var.get() == 1:
+            runmode_untouched = True
+            if "Use hipBLAS + RPC" in runopts and eligible_cuda:
+                runopts_var.set("Use hipBLAS + RPC")
+                print("Auto Selected HIPBLAS + RPC Backend (RPC Server Mode)\n")
+                found_new_backend = True
+            elif "Use CUDA + RPC" in runopts and eligible_cuda:
+                runopts_var.set("Use CUDA + RPC")
+                print("Auto Selected CUDA + RPC Backend (RPC Server Mode)\n")
+                found_new_backend = True
+            elif "Use Vulkan + RPC" in runopts:
+                runopts_var.set("Use Vulkan + RPC")
+                print("Auto Selected Vulkan + RPC Backend (RPC Server Mode)\n")
+                found_new_backend = True
+            else:
+                if "Use hipBLAS + RPC" in runopts:
+                    runopts_var.set("Use hipBLAS + RPC")
+                elif "Use CUDA + RPC" in runopts:
+                    runopts_var.set("Use CUDA + RPC")
+                elif "Use Vulkan + RPC" in runopts:
+                    runopts_var.set("Use Vulkan + RPC")
+                found_new_backend = True
+
+        # Detect RPC in device string (local copy, same logic as init_library)
+        has_rpc_in_device = False
+        if args.device and "RPC" in args.device:
+            has_rpc_in_device = True
 
         # autopick cublas if suitable, requires at least 3.5GB VRAM to auto pick
         # we do not want to autoselect hip/cublas if the user has already changed their desired backend!
@@ -11196,6 +11272,22 @@ def show_gui():
             quick_gpu_layers_label.grid_remove()
             quick_gpu_layers_entry.grid_remove()
 
+        # Show RPC endpoint field for RPC variant backends
+        if (
+            index == "Use CUDA + RPC"
+            or index == "Use hipBLAS + RPC"
+            or index == "Use Vulkan + RPC"
+        ):
+            rpc_endpoint_label.grid(row=2, column=0, padx=8, pady=1, stick="nw")
+            rpc_endpoint_entry.grid(row=2, column=1, padx=8, pady=1, stick="nw")
+            rpc_endpoint_label_hw.grid(row=2, column=0, padx=160, pady=1, stick="nw")
+            rpc_endpoint_entry_hw.grid(row=2, column=0, padx=250, pady=1, stick="nw")
+        else:
+            rpc_endpoint_label.grid_remove()
+            rpc_endpoint_entry.grid_remove()
+            rpc_endpoint_label_hw.grid_remove()
+            rpc_endpoint_entry_hw.grid_remove()
+
         if autofit_var.get() == 1:
             gpu_layers_label.grid_remove()
             gpu_layers_entry.grid_remove()
@@ -11232,6 +11324,22 @@ def show_gui():
     )
     runoptbox.grid(row=1, column=1, padx=8, stick="nw")
     runoptbox.set(runopts[0])  # Set to first available option
+
+    # RPC endpoint field for RPC variant backends
+    rpc_endpoint_label = ctk.CTkLabel(
+        quick_tab,
+        text="RPC Server Endpoint:",
+        text_color="#5DA5E5",
+        font=("Helvetica", 10, "bold"),
+    )
+    rpc_endpoint_entry = ctk.CTkEntry(
+        quick_tab,
+        width=190,
+        textvariable=rpc_endpoint_var,
+        placeholder_text="e.g. 192.168.1.101:50053",
+    )
+    rpc_endpoint_label.grid(row=2, column=0, padx=8, pady=1, stick="nw")
+    rpc_endpoint_entry.grid(row=2, column=1, padx=8, pady=1, stick="nw")
 
     # gpu options
     quick_gpu_selector_label = makelabel(
@@ -11359,6 +11467,22 @@ def show_gui():
     )
     runoptbox.grid(row=1, column=0, padx=160, stick="nw")
     runoptbox.set(runopts[0])  # Set to first available option
+
+    # RPC endpoint field for RPC variant backends (shared with Quick Launch)
+    rpc_endpoint_label_hw = ctk.CTkLabel(
+        hardware_tab,
+        text="RPC Server Endpoint:",
+        text_color="#5DA5E5",
+        font=("Helvetica", 10, "bold"),
+    )
+    rpc_endpoint_entry_hw = ctk.CTkEntry(
+        hardware_tab,
+        width=180,
+        textvariable=rpc_endpoint_var,
+        placeholder_text="e.g. 192.168.1.101:50053",
+    )
+    rpc_endpoint_label_hw.grid(row=2, column=0, padx=160, pady=1, stick="nw")
+    rpc_endpoint_entry_hw.grid(row=2, column=0, padx=250, pady=1, stick="nw")
 
     # gpu options
     gpu_selector_label = makelabel(
@@ -12664,6 +12788,8 @@ def show_gui():
         tooltiptxt="Unload music models when not in use.",
     )
 
+    rpc_tab = tabcontent["RPC Server"]
+
     admin_tab = tabcontent["Admin"]
 
     def toggleadmin(a, b, c):
@@ -12749,6 +12875,143 @@ def show_gui():
         0,
         tooltiptxt="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.",
     )
+
+    # RPC Server Tab Section
+    ctk.CTkLabel(
+        rpc_tab,
+        text="RPC Server Configuration",
+        fg_color="transparent",
+        text_color="#5DA5E5",
+        font=("Helvetica", 14, "bold"),
+    ).grid(row=0, column=0, columnspan=2, sticky="w", padx=0, pady=10)
+
+    makecheckbox(
+        rpc_tab,
+        "Start RPC Server Mode",
+        rpc_server_mode_var,
+        1,
+        0,
+        tooltiptxt="Start KoboldCPP in RPC server mode. Exposes local GPUs for remote clients to use.",
+    )
+
+    makelabel(
+        rpc_tab,
+        "RPC Server Backend:",
+        2,
+        0,
+        padx=0,
+    )
+    makelabel(
+        rpc_tab,
+        "GPU backend for RPC server. Must match device names below.",
+        3,
+        0,
+        padx=0,
+    )
+    rpc_backend_options = ["Auto-detect", "Vulkan", "hipBLAS (ROCm)", "CUDA"]
+    rpc_server_backend_dropdown = ctk.CTkComboBox(
+        rpc_tab,
+        values=rpc_backend_options,
+        variable=rpc_server_backend_var,
+        width=200,
+        state="readonly",
+    )
+    rpc_server_backend_dropdown.grid(
+        row=4, column=0, columnspan=2, sticky="w", padx=0, pady=5
+    )
+    makelabel(
+        rpc_tab,
+        "Vulkan: Use VULKAN0,VULKAN1...  |  hipBLAS: Use ROCm0,ROCm1...  |  CUDA: Use CUDA0,CUDA1...",
+        5,
+        0,
+        padx=0,
+    )
+
+    makelabel(
+        rpc_tab,
+        "Listening IP Address:",
+        6,
+        0,
+        padx=0,
+    )
+    makelabel(
+        rpc_tab,
+        "IP address for RPC server to listen on. Use 0.0.0.0 for all interfaces, 127.0.0.1 for localhost only.",
+        7,
+        0,
+        padx=0,
+    )
+    makelabelentry(
+        rpc_tab,
+        "",
+        rpc_host_var,
+        8,
+        150,
+        singleline=True,
+    )
+
+    makelabel(
+        rpc_tab,
+        "Listening Port:",
+        9,
+        0,
+        padx=0,
+    )
+    makelabel(
+        rpc_tab,
+        "Port number for RPC server connections (default: 50053).",
+        10,
+        0,
+        padx=0,
+    )
+    makelabelentry(
+        rpc_tab,
+        "",
+        rpc_port_var,
+        11,
+        100,
+        singleline=True,
+    )
+
+    makelabel(
+        rpc_tab,
+        "RPC Devices:",
+        12,
+        0,
+        padx=0,
+    )
+    makelabel(
+        rpc_tab,
+        "Comma-separated list of GPUs to expose via RPC. Leave empty to auto-detect all devices.",
+        13,
+        0,
+        padx=0,
+    )
+    makelabelentry(
+        rpc_tab,
+        "",
+        rpc_devices_var,
+        14,
+        200,
+        singleline=True,
+    )
+
+    makecheckbox(
+        rpc_tab,
+        "Allow Launch Without Models",
+        nomodel,
+        16,
+        0,
+        tooltiptxt="Allows starting RPC server without loading a model file.",
+    )
+
+    ctk.CTkLabel(
+        rpc_tab,
+        text="WARNING: RPC Server mode replaces the WebUI API. Clients must connect via --rpc.",
+        fg_color="transparent",
+        text_color="red",
+        font=("Helvetica", 14, "bold"),
+    ).grid(row=18, column=0, columnspan=2, sticky="w", padx=0, pady=10)
 
     def kcpp_export_template():
         nonlocal kcpp_exporting_template
@@ -13010,6 +13273,17 @@ def show_gui():
         )
         args.device = deviceoverride_var.get()
         args.batchsize = int(batchsize_values[int(blas_size_var.get())])
+
+        # Add RPC endpoint if RPC variant backend is selected and endpoint is provided
+        rpc_selected = (
+            runopts_var.get() == "Use CUDA + RPC"
+            or runopts_var.get() == "Use hipBLAS + RPC"
+            or runopts_var.get() == "Use Vulkan + RPC"
+        )
+        if rpc_selected and rpc_endpoint_var.get() != "":
+            args.userpc = [rpc_endpoint_var.get()]
+        else:
+            args.userpc = None
         args.autofit = autofit_var.get() == 1
         args.contextsize = int(contextsize_text[context_var.get()])
         if customrope_var.get() == 1:
@@ -13242,10 +13516,38 @@ def show_gui():
         )
         args.showgui = False  # prevent showgui from leaking into configs, its cli only
 
+        # RPC Server arguments
+        args.start_rpc_server = rpc_server_mode_var.get() == 1
+        args.rpc_host = rpc_host_var.get()
+        args.rpc_port = int(rpc_port_var.get()) if rpc_port_var.get() else 50053
+        args.rpc_devices = rpc_devices_var.get()
+        args.rpc_server_backend = rpc_server_backend_var.get()
+
     def import_vars(dict):
-        global importvars_in_progress
+        global importvars_in_progress, has_rpc_in_device, has_rocm_in_device
         importvars_in_progress = True
         dict = convert_invalid_args(dict)
+
+        # Detect RPC in device string and RPC endpoint (same as init_library)
+        has_rpc_in_device = False
+        device_override_str = str(dict.get("device", ""))
+        if device_override_str and "RPC" in device_override_str:
+            has_rpc_in_device = True
+        # Also check if RPC endpoint is specified in config
+        rpc_ep = dict.get("rpc_endpoint", "") or dict.get("userpc", "")
+        if rpc_ep:
+            has_rpc_in_device = True
+
+        # Detect ROCm/HIP in device string
+        has_rocm_in_device = False
+        if device_override_str and (
+            "ROCm" in device_override_str or "HIP" in device_override_str
+        ):
+            has_rocm_in_device = True
+
+        # Load saved backend selection (runopts) FIRST, before any backend logic
+        if "runopts" in dict and dict["runopts"]:
+            runopts_var.set(dict["runopts"])
 
         if "threads" in dict:
             threads_var.set(dict["threads"])
@@ -13368,6 +13670,29 @@ def show_gui():
             deviceoverride_var.set(str(dict["device"]))
         else:
             deviceoverride_var.set("")
+
+        # Import RPC endpoint if present
+        if "userpc" in dict and dict["userpc"]:
+            if isinstance(dict["userpc"], list):
+                rpc_endpoint_var.set(dict["userpc"][0])
+            else:
+                rpc_endpoint_var.set(str(dict["userpc"]))
+        else:
+            rpc_endpoint_var.set("")
+
+        # Import RPC Server arguments if present
+        if "rpc_server_mode" in dict:
+            rpc_server_mode_var.set(dict["rpc_server_mode"])
+        if "rpc_server_backend" in dict:
+            rpc_server_backend_var.set(dict["rpc_server_backend"])
+        if "rpc_host" in dict:
+            rpc_host_var.set(dict["rpc_host"])
+        if "rpc_port" in dict:
+            rpc_port_var.set(str(dict["rpc_port"]))
+        if "rpc_devices" in dict:
+            rpc_devices_var.set(dict["rpc_devices"])
+        if "rpc_endpoint" in dict:
+            rpc_endpoint_var.set(str(dict["rpc_endpoint"]))
         if "contextsize" in dict and dict["contextsize"]:
             context_var.set(contextsize_text.index(str(dict["contextsize"])))
         if "overridenativecontext" in dict and dict["overridenativecontext"] > 0:
@@ -14568,6 +14893,14 @@ def convert_args_to_template(savdict):
     savdict["draftgpusplit"] = None
     savdict["config"] = None
     savdict["ttsthreads"] = 0
+    # RPC Server arguments
+    savdict["rpc_server_mode"] = rpc_server_mode_var.get() == 1
+    savdict["rpc_server_backend"] = rpc_server_backend_var.get()
+    savdict["rpc_host"] = rpc_host_var.get()
+    savdict["rpc_port"] = int(rpc_port_var.get()) if rpc_port_var.get() else 50053
+    savdict["rpc_devices"] = rpc_devices_var.get()
+    savdict["rpc_endpoint"] = rpc_endpoint_var.get()
+    savdict["runopts"] = runopts_var.get()
     return savdict
 
 
@@ -16153,25 +16486,31 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     except Exception:
         print("Unable to determine available RAM")
 
-    init_library()  # Note: if blas does not exist and is enabled, program will crash.
-    print("==========")
-    time.sleep(1)
+    # Skip library loading when RPC Server mode is enabled (subprocess-based)
+    if getattr(args, "start_rpc_server", False):
+        print("RPC Server mode enabled, skipping KoboldCpp API library loading")
+    else:
+        init_library()  # Note: if blas does not exist and is enabled, program will crash.
+        print("==========")
+        time.sleep(1)
 
-    if args.password and args.password != "":
-        password = args.password.strip()
+        if args.password and args.password != "":
+            password = args.password.strip()
 
-    print(args)
-    print("==========")
+        print(args)
+        print("==========")
 
-    # handle loading text model
-    if args.model_param:
-        if not os.path.exists(args.model_param):
-            if args.ignoremissing:
-                print(f"Ignoring missing model file: {args.model_param}")
-                args.model_param = None
-            else:
-                exitcounter = 999
-                exit_with_error(2, f"Cannot find text model file: {args.model_param}")
+        # handle loading text model
+        if args.model_param:
+            if not os.path.exists(args.model_param):
+                if args.ignoremissing:
+                    print(f"Ignoring missing model file: {args.model_param}")
+                    args.model_param = None
+                else:
+                    exitcounter = 999
+                    exit_with_error(
+                        2, f"Cannot find text model file: {args.model_param}"
+                    )
 
         if args.lora and args.lora[0] != "":
             if not os.path.exists(args.lora[0]):
@@ -16847,6 +17186,156 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                     global_memory["input_to_exit"] = True
                     time.sleep(1)
 
+    # RPC Server Mode
+    if getattr(args, "start_rpc_server", False):
+        print("=" * 60)
+        print("Starting KoboldCPP in RPC Server Mode")
+        print("=" * 60)
+        print(f"RPC Server Host: {args.rpc_host}")
+        print(f"RPC Server Port: {args.rpc_port}")
+
+        # Determine backend from dropdown or auto-detect
+        backend = getattr(args, "rpc_server_backend", "Auto-detect")
+        if not backend:
+            backend = "Auto-detect"
+
+        rpc_server_path = None
+        device_prefix = None
+
+        if backend == "Vulkan":
+            device_prefix = "VULKAN"
+            rpc_server_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "rpc-server-vulkan"
+            )
+        elif backend == "CUDA":
+            device_prefix = "CUDA"
+            rpc_server_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "rpc-server-cuda"
+            )
+        elif backend == "hipBLAS (ROCm)":
+            device_prefix = "ROCm"
+            rpc_server_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "rpc-server-hip"
+            )
+        else:
+            # Auto-detect: try in order of preference
+            print("Auto-detecting RPC server backend...")
+            for candidate in ["rpc-server-hip", "rpc-server-vulkan", "rpc-server-cuda"]:
+                candidate_path = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), candidate
+                )
+                if os.path.exists(candidate_path):
+                    if "hip" in candidate:
+                        device_prefix = "ROCm"
+                    elif "cuda" in candidate:
+                        device_prefix = "CUDA"
+                    else:
+                        device_prefix = "VULKAN"
+                    rpc_server_path = candidate_path
+                    print(
+                        f"Auto-detected: {candidate} (device prefix: {device_prefix})"
+                    )
+                    break
+
+        # Build and validate device list
+        devices = []
+        if args.rpc_devices and args.rpc_devices.strip():
+            devices = [d.strip() for d in args.rpc_devices.split(",") if d.strip()]
+
+        # Convert device names if prefix is specified and devices are provided
+        if device_prefix and devices:
+            converted_devices = []
+            for dev in devices:
+                dev_upper = dev.upper()
+                if dev_upper.startswith("VULKAN"):
+                    if device_prefix != "VULKAN":
+                        dev_num = dev_upper.replace("VULKAN", "")
+                        converted_devices.append(f"{device_prefix}{dev_num}")
+                        print(f"  Converting {dev} -> {converted_devices[-1]}")
+                    else:
+                        converted_devices.append(dev)
+                elif dev_upper.startswith("ROCm") or dev_upper.startswith("HIP"):
+                    if device_prefix != "VULKAN":
+                        dev_num = dev_upper.replace("ROCm", "").replace("HIP", "")
+                        if device_prefix == "CUDA":
+                            converted_devices.append(f"CUDA{dev_num}")
+                        else:
+                            converted_devices.append(f"{device_prefix}{dev_num}")
+                        print(f"  Converting {dev} -> {converted_devices[-1]}")
+                    else:
+                        converted_devices.append(dev)
+                elif dev_upper.startswith("CUDA"):
+                    if device_prefix != "VULKAN":
+                        dev_num = dev_upper.replace("CUDA", "")
+                        converted_devices.append(f"{device_prefix}{dev_num}")
+                        print(f"  Converting {dev} -> {converted_devices[-1]}")
+                    else:
+                        converted_devices.append(dev)
+                else:
+                    converted_devices.append(dev)
+            devices = converted_devices
+        elif not devices and device_prefix:
+            print(
+                "WARNING: No devices specified. RPC server will use default device enumeration."
+            )
+            print(
+                f"         Device prefix is set to: {device_prefix} (e.g., {device_prefix}0, {device_prefix}1)"
+            )
+        else:
+            print(
+                "WARNING: No devices specified. RPC server will use default device enumeration."
+            )
+            print(
+                "         Specify --rpc-devices or use the dropdown to set device names."
+            )
+
+        if devices:
+            print(f"Devices to expose: {', '.join(devices)}")
+
+        print("")
+        print(
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        )
+        if args.rpc_host != "127.0.0.1" and args.rpc_host != "0.0.0.0":
+            print("WARNING: RPC server bound to specific non-loopback address!")
+        if args.rpc_host == "0.0.0.0":
+            print(
+                "WARNING: Host is '0.0.0.0' - RPC server accepts connections on all interfaces!"
+            )
+        print("         NEVER expose the RPC server to an open network!")
+        print("         This is an experimental feature and is not secure!")
+        print(
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        )
+        print("")
+
+        if rpc_server_path is None:
+            print("ERROR: RPC server binary not found!")
+            print(
+                "       Please build with: make LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-full-all"
+            )
+            sys.exit(1)
+
+        print(f"Launching RPC server: {rpc_server_path}")
+
+        cmd = [rpc_server_path, "-H", args.rpc_host, "--port", str(args.rpc_port)]
+        if devices:
+            cmd.extend(["--device", ",".join(devices)])
+        cmd.append("-c")
+
+        print(" ".join(cmd))
+        print("")
+        print("RPC server running. Clients can connect via --rpc")
+
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"ERROR: RPC server failed with exit code {e.returncode}")
+            sys.exit(e.returncode)
+        except KeyboardInterrupt:
+            print("\nRPC server stopped.")
+        sys.exit(0)
+
     if start_server:
         if args.remotetunnel:
             if remote_url:
@@ -17020,6 +17509,34 @@ if __name__ == "__main__":
         help="Use RPC for remote GPU acceleration. Specify one or more RPC endpoints (e.g. --rpc 192.168.1.101:50054).",
         metavar=("[RPC endpoints]"),
         nargs="+",
+    )
+    parser.add_argument(
+        "--start-rpc-server",
+        action="store_true",
+        help="Start as RPC server mode instead of client/server. Exposes local GPUs via RPC.",
+    )
+    parser.add_argument(
+        "--rpc-host",
+        default="0.0.0.0",
+        help="Host address for RPC server (default: 0.0.0.0). Use 127.0.0.1 for localhost only.",
+    )
+    parser.add_argument(
+        "--rpc-port",
+        type=int,
+        default=50053,
+        help="Port for RPC server (default: 50053).",
+    )
+    parser.add_argument(
+        "--rpc-devices",
+        default="",
+        metavar=("[dev1,dev2,...]"),
+        help="Comma-separated list of devices to expose via RPC server (e.g. VULKAN0,VULKAN1 or ROCm0,ROCm1). Leave empty to expose all available devices.",
+    )
+    parser.add_argument(
+        "--rpc-server-backend",
+        default="Auto-detect",
+        choices=["Auto-detect", "Vulkan", "hipBLAS (ROCm)", "CUDA"],
+        help="GPU backend for RPC server. Vulkan uses VULKAN* devices, hipBLAS uses ROCm* devices, CUDA uses CUDA* devices. Default: Auto-detect.",
     )
     parser.add_argument(
         "--autofit",

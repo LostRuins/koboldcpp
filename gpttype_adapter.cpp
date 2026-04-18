@@ -2585,6 +2585,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                     reg_name_upper.find("RADV") != std::string::npos ||
                     reg_name_upper.find("CUDA") != std::string::npos ||
                     reg_name_upper.find("HIP") != std::string::npos ||
+                    reg_name_upper.find("ROCM") != std::string::npos ||
                     reg_name_upper.find("METAL") != std::string::npos)) {
                     printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
                     devices_override.push_back(dev);
