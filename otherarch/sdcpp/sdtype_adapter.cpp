@@ -706,48 +706,9 @@ static enum sample_method_t sampler_from_name(const std::string& sampler)
 {
     // all lowercase
     enum sample_method_t result = str_to_sample_method(sampler.c_str());
-    if (result != sample_method_t::SAMPLE_METHOD_COUNT)
-    {
+    if (result != sample_method_t::SAMPLE_METHOD_COUNT) {
         return result;
-    }
-    else if(sampler=="euler a"||sampler=="k_euler_a")
-    {
-        return sample_method_t::EULER_A_SAMPLE_METHOD;
-    }
-    else if(sampler=="k_euler")
-    {
-        return sample_method_t::EULER_SAMPLE_METHOD;
-    }
-    else if(sampler=="k_heun")
-    {
-        return sample_method_t::HEUN_SAMPLE_METHOD;
-    }
-    else if(sampler=="k_dpm_2")
-    {
-        return sample_method_t::DPM2_SAMPLE_METHOD;
-    }
-    else if(sampler=="k_lcm")
-    {
-        return sample_method_t::LCM_SAMPLE_METHOD;
-    }
-    else if(sampler=="ddim")
-    {
-        return sample_method_t::DDIM_TRAILING_SAMPLE_METHOD;
-    }
-    else if(sampler=="dpm++ 2m karras" || sampler=="dpm++ 2m" || sampler=="k_dpmpp_2m")
-    {
-        return sample_method_t::DPMPP2M_SAMPLE_METHOD;
-    }
-    else if(sampler=="res multistep" || sampler=="k_res_multistep")
-    {
-        return sample_method_t::RES_MULTISTEP_SAMPLE_METHOD;
-    }
-    else if(sampler=="res 2s" || sampler=="k_res_2s")
-    {
-        return sample_method_t::RES_2S_SAMPLE_METHOD;
-    }
-    else
-    {
+    } else {
         return sample_method_t::SAMPLE_METHOD_COUNT;
     }
 }
