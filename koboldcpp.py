@@ -827,7 +827,9 @@ def init_library():
 
     libname = lib_default
 
-    if args.noavx2: #failsafe implies noavx2 always
+    if not args: # debug helper: koboldcpp.py loaded by external script
+        pass
+    elif args.noavx2: #failsafe implies noavx2 always
         if args.failsafe and (args.usevulkan is not None) and file_exists(lib_vulkan_failsafe):
             libname = lib_vulkan_failsafe
         elif (args.usevulkan is not None) and file_exists(lib_vulkan_noavx2):
