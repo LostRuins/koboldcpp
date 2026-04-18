@@ -14,469 +14,21 @@
 #include <utility>
 #include <vector>
 
-#include "clip.hpp"
 #include "ggml_extend.hpp"
 #include "json.hpp"
 #include "rope.hpp"
-#include "tokenize_util.h"
-#include "vocab/vocab.h"
+#include "tokenizers/bpe_tokenizer.h"
+#include "tokenizers/mistral_tokenizer.h"
+#include "tokenizers/qwen2_tokenizer.h"
 
 namespace LLM {
     constexpr int LLM_GRAPH_SIZE = 10240;
-
-    class BPETokenizer {
-    protected:
-        std::map<int, std::u32string> byte_encoder;
-        std::map<std::u32string, int> byte_decoder;
-        std::map<std::u32string, int> encoder;
-        std::map<int, std::u32string> decoder;
-        std::map<std::pair<std::u32string, std::u32string>, int> bpe_ranks;
-        std::regex pat;
-        int encoder_len;
-        int bpe_len;
-
-        std::string UNK_TOKEN;
-        std::string BOS_TOKEN;
-        std::string EOS_TOKEN;
-        std::string PAD_TOKEN;
-
-        int UNK_TOKEN_ID;
-        int BOS_TOKEN_ID;
-        int EOS_TOKEN_ID;
-        int PAD_TOKEN_ID;
-
-        std::vector<std::string> special_tokens;
-
-        bool add_bos_token = false;
-
-    protected:
-        static std::string strip(const std::string& str) {
-            std::string::size_type start = str.find_first_not_of(" \t\n\r\v\f");
-            std::string::size_type end   = str.find_last_not_of(" \t\n\r\v\f");
-
-            if (start == std::string::npos) {
-                // String contains only whitespace characters
-                return "";
-            }
-
-            return str.substr(start, end - start + 1);
-        }
-
-        static std::string whitespace_clean(std::string text) {
-            text = std::regex_replace(text, std::regex(R"(\s+)"), " ");
-            text = strip(text);
-            return text;
-        }
-
-        static std::set<std::pair<std::u32string, std::u32string>> get_pairs(const std::vector<std::u32string>& subwords) {
-            std::set<std::pair<std::u32string, std::u32string>> pairs;
-            if (subwords.size() == 0) {
-                return pairs;
-            }
-            std::u32string prev_subword = subwords[0];
-            for (int i = 1; i < subwords.size(); i++) {
-                std::u32string subword = subwords[i];
-                std::pair<std::u32string, std::u32string> pair(prev_subword, subword);
-                pairs.insert(pair);
-                prev_subword = subword;
-            }
-            return pairs;
-        }
-
-        bool is_special_token(const std::string& token) {
-            for (auto& special_token : special_tokens) {
-                if (special_token == token) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-    public:
-        BPETokenizer() = default;
-
-        std::u32string bpe(const std::u32string& token) {
-            std::vector<std::u32string> word;
-
-            for (int i = 0; i < token.size(); i++) {
-                word.emplace_back(1, token[i]);
-            }
-
-            std::set<std::pair<std::u32string, std::u32string>> pairs = get_pairs(word);
-
-            if (pairs.empty()) {
-                return token;
-            }
-
-            while (true) {
-                auto min_pair_iter = std::min_element(pairs.begin(),
-                                                      pairs.end(),
-                                                      [&](const std::pair<std::u32string, std::u32string>& a,
-                                                          const std::pair<std::u32string, std::u32string>& b) {
-                                                          if (bpe_ranks.find(a) == bpe_ranks.end()) {
-                                                              return false;
-                                                          } else if (bpe_ranks.find(b) == bpe_ranks.end()) {
-                                                              return true;
-                                                          }
-                                                          return bpe_ranks.at(a) < bpe_ranks.at(b);
-                                                      });
-
-                const std::pair<std::u32string, std::u32string>& bigram = *min_pair_iter;
-
-                if (bpe_ranks.find(bigram) == bpe_ranks.end()) {
-                    break;
-                }
-
-                std::u32string first  = bigram.first;
-                std::u32string second = bigram.second;
-                std::vector<std::u32string> new_word;
-                int32_t i = 0;
-
-                while (i < word.size()) {
-                    auto it = std::find(word.begin() + i, word.end(), first);
-                    if (it == word.end()) {
-                        new_word.insert(new_word.end(), word.begin() + i, word.end());
-                        break;
-                    }
-                    new_word.insert(new_word.end(), word.begin() + i, it);
-                    i = static_cast<int32_t>(std::distance(word.begin(), it));
-
-                    if (word[i] == first && i < static_cast<int32_t>(word.size()) - 1 && word[i + 1] == second) {
-                        new_word.push_back(first + second);
-                        i += 2;
-                    } else {
-                        new_word.push_back(word[i]);
-                        i += 1;
-                    }
-                }
-
-                word = new_word;
-
-                if (word.size() == 1) {
-                    break;
-                }
-                pairs = get_pairs(word);
-            }
-
-            std::u32string result;
-            for (int i = 0; i < word.size(); i++) {
-                result += word[i];
-                if (i != word.size() - 1) {
-                    result += utf8_to_utf32(" ");
-                }
-            }
-
-            return result;
-        }
-
-        std::vector<int> tokenize(std::string text,
-                                  on_new_token_cb_t on_new_token_cb = nullptr,
-                                  size_t max_length                 = 0,
-                                  bool padding                      = false) {
-            std::vector<int32_t> tokens = encode(text, on_new_token_cb);
-
-            if (max_length > 0) {
-                if (tokens.size() < max_length) {
-                    tokens.resize(max_length);
-                } else {
-                    if (padding) {
-                        tokens.insert(tokens.end(), max_length - tokens.size(), PAD_TOKEN_ID);
-                    }
-                }
-            }
-
-            return tokens;
-        }
-
-        void pad_tokens(std::vector<int>& tokens,
-                        std::vector<float>& weights,
-                        size_t max_length = 0,
-                        bool padding      = false) {
-            if (add_bos_token) {
-                tokens.insert(tokens.begin(), BOS_TOKEN_ID);
-                weights.insert(weights.begin(), 1.f);
-            }
-            if (max_length > 0 && padding) {
-                size_t n = static_cast<size_t>(std::ceil(tokens.size() * 1.f / max_length));
-                if (n == 0) {
-                    n = 1;
-                }
-                size_t length = max_length * n;
-                LOG_DEBUG("token length: %llu", length);
-                tokens.insert(tokens.end(), length - tokens.size(), PAD_TOKEN_ID);
-                weights.insert(weights.end(), length - weights.size(), 1.f);
-            }
-        }
-
-        std::vector<int> encode(std::string text, on_new_token_cb_t on_new_token_cb = nullptr) {
-            std::string original_text = text;
-            std::vector<int32_t> bpe_tokens;
-            std::vector<std::string> token_strs;
-
-            auto splited_texts = split_with_special_tokens(text, special_tokens);
-
-            for (auto& splited_text : splited_texts) {
-                if (is_special_token(splited_text)) {
-                    bpe_tokens.push_back(encoder[utf8_to_utf32(splited_text)]);
-                    token_strs.push_back(splited_text);
-                    continue;
-                }
-                auto tokens = token_split(splited_text);
-                for (auto& token : tokens) {
-                    if (on_new_token_cb != nullptr) {
-                        bool skip = on_new_token_cb(token, bpe_tokens);
-                        if (skip) {
-                            continue;
-                        }
-                    }
-
-                    std::string token_str = token;
-                    std::u32string utf32_token;
-                    for (int i = 0; i < token_str.length(); i++) {
-                        unsigned char b = token_str[i];
-                        utf32_token += byte_encoder[b];
-                    }
-                    auto bpe_strs = bpe(utf32_token);
-                    size_t start  = 0;
-                    size_t pos;
-                    while ((pos = bpe_strs.find(' ', start)) != std::u32string::npos) {
-                        auto bpe_str = bpe_strs.substr(start, pos - start);
-                        bpe_tokens.push_back(encoder[bpe_str]);
-                        token_strs.push_back(utf32_to_utf8(bpe_str));
-
-                        start = pos + 1;
-                    }
-                    auto bpe_str = bpe_strs.substr(start, bpe_strs.size() - start);
-                    bpe_tokens.push_back(encoder[bpe_str]);
-                    token_strs.push_back(utf32_to_utf8(bpe_str));
-                }
-            }
-
-            std::stringstream ss;
-            ss << "[";
-            for (auto token : token_strs) {
-                ss << "\"" << token << "\", ";
-            }
-            ss << "]";
-            LOG_DEBUG("split prompt \"%s\" to tokens %s", original_text.c_str(), ss.str().c_str());
-            // printf("split prompt \"%s\" to tokens %s \n", original_text.c_str(), ss.str().c_str());
-            return bpe_tokens;
-        }
-    };
-
-    class Qwen2Tokenizer : public BPETokenizer {
-    protected:
-        void load_from_merges(const std::string& merges_utf8_str) {
-            auto byte_unicode_pairs = bytes_to_unicode();
-            // printf("byte_unicode_pairs have %lu pairs \n", byte_unicode_pairs.size());
-            byte_encoder = std::map<int, std::u32string>(byte_unicode_pairs.begin(), byte_unicode_pairs.end());
-            for (auto& pair : byte_unicode_pairs) {
-                byte_decoder[pair.second] = pair.first;
-            }
-            // for (auto & pair: byte_unicode_pairs) {
-            //     std::cout << pair.first << ": " << pair.second << std::endl;
-            // }
-            std::vector<std::u32string> merges;
-            size_t start = 0;
-            size_t pos;
-            std::u32string merges_utf32_str = utf8_to_utf32(merges_utf8_str);
-            while ((pos = merges_utf32_str.find('\n', start)) != std::string::npos) {
-                merges.push_back(merges_utf32_str.substr(start, pos - start));
-                start = pos + 1;
-            }
-            LOG_DEBUG("merges size %llu", merges.size());
-            merges = std::vector<std::u32string>(merges.begin(), merges.end());
-            std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
-            // int print_num = 10;
-            for (const auto& merge : merges) {
-                size_t space_pos = merge.find(' ');
-                merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
-                // if (print_num > 0) {
-                //     print_num--;
-                //     printf("%s :: %s | %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(),
-                //                     utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
-                // }
-            }
-
-            std::vector<std::u32string> tokens;
-            for (const auto& pair : byte_unicode_pairs) {
-                tokens.push_back(pair.second);
-            }
-            for (const auto& merge : merge_pairs) {
-                tokens.push_back(merge.first + merge.second);
-            }
-            for (auto& special_token : special_tokens) {
-                tokens.push_back(utf8_to_utf32(special_token));
-            }
-
-            int i = 0;
-            for (const auto& token : tokens) {
-                encoder[token] = i;
-                decoder[i]     = token;
-                i++;
-            }
-            encoder_len = i;
-            LOG_DEBUG("vocab size: %d", encoder_len);
-
-            int rank = 0;
-            for (const auto& merge : merge_pairs) {
-                bpe_ranks[merge] = rank++;
-            }
-            bpe_len = rank;
-        };
-
-    public:
-        explicit Qwen2Tokenizer(const std::string& merges_utf8_str = "") {
-            UNK_TOKEN = "<|endoftext|>";
-            EOS_TOKEN = "<|endoftext|>";
-            PAD_TOKEN = "<|endoftext|>";
-
-            UNK_TOKEN_ID = 151643;
-            EOS_TOKEN_ID = 151643;
-            PAD_TOKEN_ID = 151643;
-
-            special_tokens = {
-                "<|endoftext|>",
-                "<|im_start|>",
-                "<|im_end|>",
-                "<|object_ref_start|>",
-                "<|object_ref_end|>",
-                "<|box_start|>",
-                "<|box_end|>",
-                "<|quad_start|>",
-                "<|quad_end|>",
-                "<|vision_start|>",
-                "<|vision_end|>",
-                "<|vision_pad|>",
-                "<|image_pad|>",
-                "<|video_pad|>",
-                "<tool_call>",
-                "</tool_call>",
-                "<|fim_prefix|>",
-                "<|fim_middle|>",
-                "<|fim_suffix|>",
-                "<|fim_pad|>",
-                "<|repo_name|>",
-                "<|file_sep|>",
-                "<tool_response>",
-                "</tool_response>",
-                "<think>",
-                "</think>",
-            };
-
-            if (merges_utf8_str.size() > 0) {
-                load_from_merges(merges_utf8_str);
-            } else {
-                load_from_merges(load_qwen2_merges());
-            }
-        }
-    };
-
-    class MistralTokenizer : public BPETokenizer {
-    protected:
-        void load_from_merges(const std::string& merges_utf8_str, const std::string& vocab_utf8_str) {
-            nlohmann::json vocab;
-
-            try {
-                vocab = nlohmann::json::parse(vocab_utf8_str);
-            } catch (const nlohmann::json::parse_error&) {
-                GGML_ABORT("invalid vocab json str");
-            }
-            for (const auto& [key, value] : vocab.items()) {
-                std::u32string token = utf8_to_utf32(key);
-                int i                = value;
-                encoder[token]       = i;
-                decoder[i]           = token;
-            }
-            encoder_len = static_cast<int>(vocab.size());
-            LOG_DEBUG("vocab size: %d", encoder_len);
-
-            auto byte_unicode_pairs = bytes_to_unicode();
-            byte_encoder            = std::map<int, std::u32string>(byte_unicode_pairs.begin(), byte_unicode_pairs.end());
-            for (auto& pair : byte_unicode_pairs) {
-                byte_decoder[pair.second] = pair.first;
-            }
-            std::vector<std::u32string> merges;
-            size_t start = 0;
-            size_t pos;
-            std::u32string merges_utf32_str = utf8_to_utf32(merges_utf8_str);
-            while ((pos = merges_utf32_str.find('\n', start)) != std::string::npos) {
-                merges.push_back(merges_utf32_str.substr(start, pos - start));
-                start = pos + 1;
-            }
-            LOG_DEBUG("merges size %llu", merges.size());
-            merges = std::vector<std::u32string>(merges.begin(), merges.end());
-            std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
-            // int print_num = 10;
-            for (const auto& merge : merges) {
-                size_t space_pos = merge.find(' ');
-                merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
-                // if (print_num > 0) {
-                //     print_num--;
-                //     printf("%s :: %s | %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(),
-                //                     utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
-                // }
-            }
-
-            int rank = 0;
-            for (const auto& merge : merge_pairs) {
-                bpe_ranks[merge] = rank++;
-            }
-            bpe_len = rank;
-        };
-
-    public:
-        explicit MistralTokenizer(const std::string& merges_utf8_str = "", const std::string& vocab_utf8_str = "") {
-            add_bos_token = true;
-
-            UNK_TOKEN = "<unk>";
-            BOS_TOKEN = "<s>";
-            EOS_TOKEN = "</s>";
-            PAD_TOKEN = "<pad>";
-
-            UNK_TOKEN_ID = 0;
-            BOS_TOKEN_ID = 1;
-            EOS_TOKEN_ID = 2;
-            PAD_TOKEN_ID = 11;
-
-            special_tokens = {
-                "<unk>",
-                "<s>",
-                "</s>",
-                "[INST]",
-                "[/INST]",
-                "[AVAILABLE_TOOLS]",
-                "[/AVAILABLE_TOOLS]",
-                "[TOOL_RESULTS]",
-                "[/TOOL_RESULTS]",
-                "[TOOL_CALLS]",
-                "[IMG]",
-                "<pad>",
-                "[IMG_BREAK]",
-                "[IMG_END]",
-                "[PREFIX]",
-                "[MIDDLE]",
-                "[SUFFIX]",
-                "[SYSTEM_PROMPT]",
-                "[/SYSTEM_PROMPT]",
-                "[TOOL_CONTENT]",
-            };
-            for (int i = 20; i < 1000; i++) {
-                special_tokens.push_back("<SPECIAL_" + std::to_string(i) + ">");
-            }
-
-            if (merges_utf8_str.size() > 0 && vocab_utf8_str.size() > 0) {
-                load_from_merges(merges_utf8_str, vocab_utf8_str);
-            } else {
-                load_from_merges(load_mistral_merges(), load_mistral_vocab_json());
-            }
-        }
-    };
 
     enum class LLMArch {
         QWEN2_5_VL,
         QWEN3,
         MISTRAL_SMALL_3_2,
+        MINISTRAL_3_3B,
         ARCH_COUNT,
     };
 
@@ -484,6 +36,7 @@ namespace LLM {
         "qwen2.5vl",
         "qwen3",
         "mistral_small3.2",
+        "ministral3.3b",
     };
 
     struct LLMVisionParams {
@@ -868,6 +421,9 @@ namespace LLM {
             if (arch == LLMArch::MISTRAL_SMALL_3_2) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            } else if (arch == LLMArch::MINISTRAL_3_3B) {
+                q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 262144, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 262144, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else if (arch == LLMArch::QWEN3) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -1083,7 +639,7 @@ namespace LLM {
                   bool enable_vision_ = false)
             : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
             params.arch = arch;
-            if (arch == LLMArch::MISTRAL_SMALL_3_2) {
+            if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 params.head_dim     = 128;
                 params.num_heads    = 32;
                 params.num_kv_heads = 8;
@@ -1195,7 +751,7 @@ namespace LLM {
             }
 
             int64_t n_tokens = input_ids->ne[0];
-            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 || params.arch == LLMArch::QWEN3) {
+            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 || params.arch == LLMArch::MINISTRAL_3_3B || params.arch == LLMArch::QWEN3) {
                 input_pos_vec.resize(n_tokens);
                 for (int i = 0; i < n_tokens; ++i) {
                     input_pos_vec[i] = i;
@@ -1431,7 +987,7 @@ namespace LLM {
                     const std::string prefix                       = "",
                     bool enable_vision                             = false)
             : model(arch, backend, offload_params_to_cpu, tensor_storage_map, prefix, enable_vision) {
-            if (arch == LLMArch::MISTRAL_SMALL_3_2) {
+            if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 tokenizer = std::make_shared<MistralTokenizer>();
             } else {
                 tokenizer = std::make_shared<Qwen2Tokenizer>();
@@ -1479,7 +1035,7 @@ namespace LLM {
                 weights.insert(weights.end(), curr_tokens.size(), curr_weight);
             }
 
-            tokenizer->pad_tokens(tokens, weights, max_length, padding);
+            tokenizer->pad_tokens(tokens, &weights, nullptr, padding ? max_length : 0, padding ? max_length : 100000000, padding);
 
             // for (int i = 0; i < tokens.size(); i++) {
             //     std::cout << tokens[i] << ":" << weights[i] << ", ";

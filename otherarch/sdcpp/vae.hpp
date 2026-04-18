@@ -69,7 +69,7 @@ public:
         int scale_factor = 8;
         if (version == VERSION_WAN2_2_TI2V) {
             scale_factor = 16;
-        } else if (sd_version_is_flux2(version)) {
+        } else if (sd_version_uses_flux2_vae(version)) {
             scale_factor = 16;
         } else if (version == VERSION_CHROMA_RADIANCE) {
             scale_factor = 1;

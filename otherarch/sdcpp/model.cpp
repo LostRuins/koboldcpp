@@ -329,8 +329,9 @@ bool is_safetensors_file(const std::string& file_path) {
     if (!file) {
         return false;
     }
-    nlohmann::json header_ = nlohmann::json::parse(header_buf.data());
-    if (header_.is_discarded()) {
+    try {
+        nlohmann::json header_ = nlohmann::json::parse(header_buf.data());
+    } catch (const std::exception&) {
         return false;
     }
     return true;
@@ -525,7 +526,14 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         return false;
     }
 
-    nlohmann::json header_ = nlohmann::json::parse(header_buf.data());
+    nlohmann::json header_;
+    try {
+        header_ = nlohmann::json::parse(header_buf.data());
+    } catch (const std::exception&) {
+        LOG_ERROR("parsing safetensors header failed", file_path.c_str());
+        file_paths_.pop_back();
+        return false;
+    }
 
     for (auto& item : header_.items()) {
         std::string name           = item.key();
@@ -591,24 +599,29 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
         size_t tensor_data_size = end - begin;
 
+        bool tensor_size_ok;
         if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
             // f8 -> f16
-            GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
         } else if (dtype == "F8_E5M2") {
             tensor_storage.is_f8_e5m2 = true;
             // f8 -> f16
-            GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
         } else if (dtype == "F64") {
             tensor_storage.is_f64 = true;
             // f64 -> f32
-            GGML_ASSERT(tensor_storage.nbytes() * 2 == tensor_data_size);
+            tensor_size_ok = (tensor_storage.nbytes() * 2 == tensor_data_size);
         } else if (dtype == "I64") {
             tensor_storage.is_i64 = true;
             // i64 -> i32
-            GGML_ASSERT(tensor_storage.nbytes() * 2 == tensor_data_size);
+            tensor_size_ok = (tensor_storage.nbytes() * 2 == tensor_data_size);
         } else {
-            GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size);
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
+        }
+        if (!tensor_size_ok) {
+            LOG_ERROR("size mismatch for tensor '%s' (%s)\n", name.c_str(), dtype.c_str());
+            return false;
         }
 
         add_tensor_storage(tensor_storage);
@@ -1032,63 +1045,65 @@ SDVersion ModelLoader::get_sd_version() {
     bool has_middle_block_1          = false;
     bool has_output_block_311        = false;
     bool has_output_block_71         = false;
+    bool has_attn_1024               = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
-        if (!(is_xl)) {
-            if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
-                is_flux = true;
+        if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
+            is_flux = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.nerf_final_layer_conv.") != std::string::npos) {
+            return VERSION_CHROMA_RADIANCE;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
+            return VERSION_SD3;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
+            return VERSION_QWEN_IMAGE;
+        }
+        if (tensor_storage.name.find("llm_adapter.blocks.0.cross_attn.q_proj.weight") != std::string::npos) {
+            return VERSION_ANIMA;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
+            is_flux2 = true;
+        }
+        if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {
+            has_single_block_47 = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.double_blocks.0.img_mlp.gate_proj.weight") != std::string::npos) {
+            return VERSION_OVIS_IMAGE;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
+            return VERSION_Z_IMAGE;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.layers.0.adaLN_sa_ln.weight") != std::string::npos) {
+            return VERSION_ERNIE_IMAGE;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
+            is_wan = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.patch_embedding.weight") != std::string::npos) {
+            patch_embedding_channels = tensor_storage.ne[3];
+        }
+        if (tensor_storage.name.find("model.diffusion_model.img_emb") != std::string::npos) {
+            has_img_emb = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos ||
+            tensor_storage.name.find("unet.down_blocks.") != std::string::npos) {
+            is_unet = true;
+            if (has_multiple_encoders) {
+                is_xl = true;
             }
-            if (tensor_storage.name.find("model.diffusion_model.nerf_final_layer_conv.") != std::string::npos) {
-                return VERSION_CHROMA_RADIANCE;
+        }
+        if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos ||
+            tensor_storage.name.find("cond_stage_model.1") != std::string::npos ||
+            tensor_storage.name.find("te.1") != std::string::npos) {
+            has_multiple_encoders = true;
+            if (is_unet) {
+                is_xl = true;
             }
-            if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
-                return VERSION_SD3;
-            }
-            if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
-                return VERSION_QWEN_IMAGE;
-            }
-            if (tensor_storage.name.find("llm_adapter.blocks.0.cross_attn.q_proj.weight") != std::string::npos) {
-                return VERSION_ANIMA;
-            }
-            if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
-                is_flux2 = true;
-            }
-            if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {
-                has_single_block_47 = true;
-            }
-            if (tensor_storage.name.find("model.diffusion_model.double_blocks.0.img_mlp.gate_proj.weight") != std::string::npos) {
-                return VERSION_OVIS_IMAGE;
-            }
-            if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
-                return VERSION_Z_IMAGE;
-            }
-            if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
-                is_wan = true;
-            }
-            if (tensor_storage.name.find("model.diffusion_model.patch_embedding.weight") != std::string::npos) {
-                patch_embedding_channels = tensor_storage.ne[3];
-            }
-            if (tensor_storage.name.find("model.diffusion_model.img_emb") != std::string::npos) {
-                has_img_emb = true;
-            }
-            if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos ||
-                tensor_storage.name.find("unet.down_blocks.") != std::string::npos) {
-                is_unet = true;
-                if (has_multiple_encoders) {
-                    is_xl = true;
-                }
-            }
-            if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos ||
-                tensor_storage.name.find("cond_stage_model.1") != std::string::npos ||
-                tensor_storage.name.find("te.1") != std::string::npos) {
-                has_multiple_encoders = true;
-                if (is_unet) {
-                    is_xl = true;
-                }
-            }
-            if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
-                return VERSION_SVD;
-            }
+        }
+        if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
+            return VERSION_SVD;
         }
         if (tensor_storage.name.find("model.diffusion_model.middle_block.1.") != std::string::npos ||
             tensor_storage.name.find("unet.mid_block.resnets.1.") != std::string::npos) {
@@ -1101,6 +1116,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos ||
             tensor_storage.name.find("unet.up_blocks.2.attentions.1") != std::string::npos) {
             has_output_block_71 = true;
+            if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1.transformer_blocks.0.attn1.to_k.weight") != std::string::npos) {
+                if (tensor_storage.ne[0] == 1024)
+                    has_attn_1024 = true;
+            }
         }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
@@ -1174,7 +1193,7 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (!has_middle_block_1) {
             if (!has_output_block_71) {
-                return VERSION_SDXS;
+                return VERSION_SDXS_512_DS;
             }
             return VERSION_SD1_TINY_UNET;
         }
@@ -1184,7 +1203,7 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_SD2_INPAINT;
         }
         if (!has_middle_block_1) {
-            return VERSION_SD2_TINY_UNET;
+            return has_attn_1024 ? VERSION_SDXS_09 : VERSION_SD2_TINY_UNET;
         }
         return VERSION_SD2;
     }

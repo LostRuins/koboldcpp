@@ -1,5 +1,5 @@
-#ifndef __VOCAB_H__
-#define __VOCAB_H__
+#ifndef __SD_TOKENIZERS_VOCAB_VOCAB_H__
+#define __SD_TOKENIZERS_VOCAB_VOCAB_H__
 
 #include <string>
 
@@ -10,4 +10,4 @@ std::string load_mistral_vocab_json();
 std::string load_t5_tokenizer_json();
 std::string load_umt5_tokenizer_json();
 
-#endif  // __VOCAB_H__
+#endif  // __SD_TOKENIZERS_VOCAB_VOCAB_H__

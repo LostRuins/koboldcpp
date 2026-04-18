@@ -15,14 +15,20 @@
 #include <filesystem>
 
 #include "model_adapter.h"
-#include "vocab/vocab.h"
+#include "tokenizers/vocab/vocab.h"
 #include "flux.hpp"
 #include "sample-cache.cpp"
 #include "util.cpp"
 #include "name_conversion.cpp"
 #include "upscaler.cpp"
 #include "model.cpp"
-#include "tokenize_util.cpp"
+#include "tokenizers/bpe_tokenizer.cpp"
+#include "tokenizers/clip_tokenizer.cpp"
+#include "tokenizers/mistral_tokenizer.cpp"
+#include "tokenizers/qwen2_tokenizer.cpp"
+#include "tokenizers/t5_unigram_tokenizer.cpp"
+#include "tokenizers/tokenizer.cpp"
+#include "tokenizers/tokenize_util.cpp"
 #include "zip.c"
 
 #include "otherarch/utils.h"
@@ -1019,7 +1025,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    if(loadedsdver == SDVersion::VERSION_SDXS)
+    if(loadedsdver == SDVersion::VERSION_SDXS_512_DS || loadedsdver == SDVersion::VERSION_SDXS_09)
     {
         if(sd_params->cfg_scale > 1.0f || sd_params->sample_steps > 1)
         {

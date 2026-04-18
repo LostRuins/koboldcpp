@@ -50,6 +50,7 @@ enum sample_method_t {
     TCD_SAMPLE_METHOD,
     RES_MULTISTEP_SAMPLE_METHOD,
     RES_2S_SAMPLE_METHOD,
+    ER_SDE_SAMPLE_METHOD,
     SAMPLE_METHOD_COUNT
 };
 
@@ -348,6 +349,8 @@ SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
 SD_API void sd_set_preview_callback(sd_preview_cb_t cb, enum preview_t mode, int interval, bool denoised, bool noisy, void* data);
 SD_API int32_t sd_get_num_physical_cores();
 SD_API const char* sd_get_system_info();
+SD_API bool sd_ctx_supports_image_generation(const sd_ctx_t* sd_ctx);
+SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx);
 
 SD_API const char* sd_type_name(enum sd_type_t type);
 SD_API enum sd_type_t str_to_sd_type(const char* str);

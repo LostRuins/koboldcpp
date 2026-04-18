@@ -32,7 +32,8 @@ const char* model_version_to_str[] = {
     "SD 2.x",
     "SD 2.x Inpaint",
     "SD 2.x Tiny UNet",
-    "SDXS",
+    "SDXS (512-DS)",
+    "SDXS (09)",
     "SDXL",
     "SDXL Inpaint",
     "SDXL Instruct-Pix2Pix",
@@ -54,6 +55,7 @@ const char* model_version_to_str[] = {
     "Flux.2 klein",
     "Z-Image",
     "Ovis Image",
+    "Ernie Image",
 };
 
 const char* sampling_methods_str[] = {
@@ -71,6 +73,7 @@ const char* sampling_methods_str[] = {
     "TCD",
     "Res Multistep",
     "Res 2s",
+    "ER-SDE",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -366,7 +369,8 @@ public:
         bool isflux2 = sd_version_is_flux2(tempver);
         bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
         bool is_anima = sd_version_is_anima(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima);
+        bool is_ernie = sd_version_is_ernie_image(tempver);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
         if(conditioner_is_llm && t5_path_fixed!="")
@@ -457,7 +461,7 @@ public:
             {
                 to_replace = "taesd_3.embd";
             }
-            else if(sd_version_is_flux2(tempver))
+            else if(sd_version_uses_flux2_vae(tempver))
             {
                 to_replace = "taesd_f2.embd";
             }
@@ -634,7 +638,7 @@ public:
         }
 
         bool tae_preview_only = sd_ctx_params->tae_preview_only;
-        if (version == VERSION_SDXS) {
+        if (version == VERSION_SDXS_512_DS || version == VERSION_SDXS_09) {
             tae_preview_only = false;
             use_tae          = true;
         }
@@ -772,6 +776,15 @@ public:
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
+            } else if (sd_version_is_ernie_image(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 version);
+                diffusion_model  = std::make_shared<ErnieImageModel>(backend,
+                                                                    offload_params_to_cpu,
+                                                                    tensor_storage_map,
+                                                                    "model.diffusion_model");
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -1047,6 +1060,10 @@ public:
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
         }
+        if (sd_version_is_ernie_image(version)) {
+            ignore_tensors.insert("text_encoders.llm.vision_tower.");
+            ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
+        }
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
@@ -1150,10 +1167,13 @@ public:
                            sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
                            sd_version_is_anima(version) ||
+                           sd_version_is_ernie_image(version) ||
                            sd_version_is_z_image(version)) {
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
                         default_flow_shift = 5.f;
+                    } else if (sd_version_is_ernie_image(version)) {
+                        default_flow_shift = 4.f;
                     } else {
                         default_flow_shift = 3.f;
                     }
@@ -1644,7 +1664,7 @@ public:
             uint32_t dim                     = is_video ? static_cast<uint32_t>(latents.shape()[3]) : static_cast<uint32_t>(latents.shape()[2]);
 
             if (dim == 128) {
-                if (sd_version_is_flux2(version)) {
+                if (sd_version_uses_flux2_vae(version)) {
                     latent_rgb_proj = flux2_latent_rgb_proj;
                     latent_rgb_bias = flux2_latent_rgb_bias;
                     patch_sz        = 2;
@@ -2093,7 +2113,7 @@ public:
                 latent_channel = 48;
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 latent_channel = 3;
-            } else if (sd_version_is_flux2(version)) {
+            } else if (sd_version_uses_flux2_vae(version)) {
                 latent_channel = 128;
             } else {
                 latent_channel = 16;
@@ -2241,6 +2261,7 @@ const char* sample_method_to_str[] = {
     "tcd",
     "res_multistep",
     "res_2s",
+    "er_sde",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -2636,6 +2657,14 @@ struct sd_ctx_t {
     StableDiffusionGGML* sd = nullptr;
 };
 
+static bool sd_version_supports_video_generation(SDVersion version) {
+    return version == VERSION_SVD || sd_version_is_wan(version);
+}
+
+static bool sd_version_supports_image_generation(SDVersion version) {
+    return !sd_version_supports_video_generation(version);
+}
+
 sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == nullptr) {
@@ -2663,6 +2692,20 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
         sd_ctx->sd = nullptr;
     }
     free(sd_ctx);
+}
+
+SD_API bool sd_ctx_supports_image_generation(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return false;
+    }
+    return sd_version_supports_image_generation(sd_ctx->sd->version);
+}
+
+SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return false;
+    }
+    return sd_version_supports_video_generation(sd_ctx->sd->version);
 }
 
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
@@ -2723,6 +2766,7 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
                 return 0.0f;
             case EULER_A_SAMPLE_METHOD:
             case DPMPP2S_A_SAMPLE_METHOD:
+            case ER_SDE_SAMPLE_METHOD:
                 return 1.0f;
             default:;
         }

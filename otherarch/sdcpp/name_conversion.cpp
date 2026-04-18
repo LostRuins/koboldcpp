@@ -1120,7 +1120,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         for (const auto& prefix : first_stage_model_prefix_vec) {
             if (starts_with(name, prefix)) {
                 name = convert_first_stage_model_name(name.substr(prefix.size()), prefix);
-                if (version == VERSION_SDXS) {
+                if (version == VERSION_SDXS_512_DS || version == VERSION_SDXS_09) {
                     name = "tae." + name;
                 } else {
                     name = prefix + name;

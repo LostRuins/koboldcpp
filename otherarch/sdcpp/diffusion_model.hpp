@@ -3,6 +3,7 @@
 
 #include <optional>
 #include "anima.hpp"
+#include "ernie_image.hpp"
 #include "flux.hpp"
 #include "mmdit.hpp"
 #include "qwen_image.hpp"
@@ -513,6 +514,68 @@ struct ZImageModel : public DiffusionModel {
                                tensor_or_empty(diffusion_params.context),
                                diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
                                true);
+    }
+};
+
+struct ErnieImageModel : public DiffusionModel {
+    std::string prefix;
+    ErnieImage::ErnieImageRunner ernie_image;
+
+    ErnieImageModel(ggml_backend_t backend,
+                    bool offload_params_to_cpu,
+                    const String2TensorStorage& tensor_storage_map = {},
+                    const std::string prefix                       = "model.diffusion_model")
+        : prefix(prefix), ernie_image(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+    }
+
+    std::string get_desc() override {
+        return ernie_image.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        ernie_image.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        ernie_image.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        ernie_image.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        ernie_image.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return ernie_image.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        ernie_image.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 768;
+    }
+
+    void set_flash_attention_enabled(bool enabled) {
+        ernie_image.set_flash_attention_enabled(enabled);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        ernie_image.set_circular_axes(circular_x, circular_y);
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        return ernie_image.compute(n_threads,
+                                   *diffusion_params.x,
+                                   *diffusion_params.timesteps,
+                                   tensor_or_empty(diffusion_params.context));
     }
 };
 

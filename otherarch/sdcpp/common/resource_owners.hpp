@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -47,14 +48,40 @@ using SDCtxPtr       = std::unique_ptr<sd_ctx_t, SDCtxDeleter>;
 using UpscalerCtxPtr = std::unique_ptr<upscaler_ctx_t, UpscalerCtxDeleter>;
 
 class SDImageOwner {
+private:
+    static sd_image_t copy_image(const sd_image_t& image) {
+        if (image.data == nullptr) {
+            return {image.width, image.height, image.channel, nullptr};
+        }
+
+        const size_t byte_count = static_cast<size_t>(image.width) * image.height * image.channel;
+        uint8_t* raw_copy       = static_cast<uint8_t*>(malloc(byte_count));
+        if (raw_copy == nullptr) {
+            return {0, 0, 0, nullptr};
+        }
+
+        std::memcpy(raw_copy, image.data, byte_count);
+        return {image.width, image.height, image.channel, raw_copy};
+    }
+
+    sd_image_t image_ = {0, 0, 0, nullptr};
+
 public:
     SDImageOwner() = default;
     explicit SDImageOwner(sd_image_t image)
         : image_(image) {
     }
 
-    SDImageOwner(const SDImageOwner&)            = delete;
-    SDImageOwner& operator=(const SDImageOwner&) = delete;
+    SDImageOwner(const SDImageOwner& other)
+        : image_(copy_image(other.image_)) {
+    }
+
+    SDImageOwner& operator=(const SDImageOwner& other) {
+        if (this != &other) {
+            reset(copy_image(other.image_));
+        }
+        return *this;
+    }
 
     SDImageOwner(SDImageOwner&& other) noexcept
         : image_(other.release()) {
@@ -77,8 +104,9 @@ public:
             free(image_.data);
             image_.data = nullptr;
         }
-        image_.width  = 0;
-        image_.height = 0;
+        image_.width   = 0;
+        image_.height  = 0;
+        image_.channel = 0;
         return &image_;
     }
 
@@ -102,12 +130,12 @@ public:
         }
         image_ = image;
     }
-
-private:
-    sd_image_t image_ = {0, 0, 0, nullptr};
 };
 
 class SDImageVec {
+private:
+    std::vector<sd_image_t> images_;
+
 public:
     SDImageVec() = default;
 
@@ -164,6 +192,10 @@ public:
         return images_.empty();
     }
 
+    int count() const {
+        return static_cast<int>(images_.size());
+    }
+
     explicit operator bool() const {
         return !images_.empty();
     }
@@ -199,9 +231,6 @@ public:
         }
         images_.clear();
     }
-
-private:
-    std::vector<sd_image_t> images_;
 };
 
 #endif  // __EXAMPLE_RESOURCE_OWNERS_H__

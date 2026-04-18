@@ -277,6 +277,7 @@ protected:
     int64_t context_dim;
     int64_t n_head;
     int64_t d_head;
+    bool xtra_dim = false;
 
 public:
     CrossAttention(int64_t query_dim,
@@ -288,7 +289,11 @@ public:
           query_dim(query_dim),
           context_dim(context_dim) {
         int64_t inner_dim = d_head * n_head;
-
+        if (context_dim == 320 && d_head == 320) {
+            // LOG_DEBUG("CrossAttention: temp set dim to 1024 for sdxs_09");
+            xtra_dim    = true;
+            context_dim = 1024;
+        }
         blocks["to_q"] = std::shared_ptr<GGMLBlock>(new Linear(query_dim, inner_dim, false));
         blocks["to_k"] = std::shared_ptr<GGMLBlock>(new Linear(context_dim, inner_dim, false));
         blocks["to_v"] = std::shared_ptr<GGMLBlock>(new Linear(context_dim, inner_dim, false));
@@ -313,10 +318,16 @@ public:
         int64_t n_context = context->ne[1];
         int64_t inner_dim = d_head * n_head;
 
-        auto q = to_q->forward(ctx, x);        // [N, n_token, inner_dim]
+        auto q = to_q->forward(ctx, x);  // [N, n_token, inner_dim]
+        if (xtra_dim) {
+            // LOG_DEBUG("CrossAttention: temp set dim to 1024 for sdxs_09");
+            context->ne[0] = 1024;  // patch dim
+        }
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
-
+        if (xtra_dim) {
+            context->ne[0] = 320;  // reset dim to orig
+        }
         x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]

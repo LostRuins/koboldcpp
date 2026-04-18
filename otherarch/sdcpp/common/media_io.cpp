@@ -95,6 +95,57 @@ using WebPMuxPtr         = std::unique_ptr<WebPMux, WebPMuxDeleter>;
 using WebPAnimEncoderPtr = std::unique_ptr<WebPAnimEncoder, WebPAnimEncoderDeleter>;
 #endif
 
+#ifdef SD_USE_WEBM
+class MemoryMkvWriter : public mkvmuxer::IMkvWriter {
+public:
+    mkvmuxer::int32 Write(const void* buf, mkvmuxer::uint32 len) override {
+        if (buf == nullptr && len > 0) {
+            return -1;
+        }
+        const size_t end_pos = position_ + static_cast<size_t>(len);
+        if (end_pos > data_.size()) {
+            data_.resize(end_pos);
+        }
+        if (len > 0) {
+            memcpy(data_.data() + position_, buf, len);
+        }
+        position_ = end_pos;
+        return 0;
+    }
+
+    mkvmuxer::int64 Position() const override {
+        return static_cast<mkvmuxer::int64>(position_);
+    }
+
+    mkvmuxer::int32 Position(mkvmuxer::int64 position) override {
+        if (position < 0) {
+            return -1;
+        }
+        const size_t target = static_cast<size_t>(position);
+        if (target > data_.size()) {
+            data_.resize(target);
+        }
+        position_ = target;
+        return 0;
+    }
+
+    bool Seekable() const override {
+        return true;
+    }
+
+    void ElementStartNotify(mkvmuxer::uint64, mkvmuxer::int64) override {
+    }
+
+    const std::vector<uint8_t>& data() const {
+        return data_;
+    }
+
+private:
+    std::vector<uint8_t> data_;
+    size_t position_ = 0;
+};
+#endif
+
 bool read_binary_file_bytes(const char* path, std::vector<uint8_t>& data) {
     std::ifstream fin(fs::path(path), std::ios::binary);
     if (!fin) {
@@ -569,6 +620,33 @@ void write_u32_le(FILE* f, uint32_t val) {
 void write_u16_le(FILE* f, uint16_t val) {
     fwrite(&val, 2, 1, f);
 }
+
+void write_u32_le(std::vector<uint8_t>& data, uint32_t val) {
+    data.push_back(static_cast<uint8_t>(val & 0xFF));
+    data.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
+    data.push_back(static_cast<uint8_t>((val >> 16) & 0xFF));
+    data.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
+}
+
+void write_u16_le(std::vector<uint8_t>& data, uint16_t val) {
+    data.push_back(static_cast<uint8_t>(val & 0xFF));
+    data.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
+}
+
+void patch_u32_le(std::vector<uint8_t>& data, size_t offset, uint32_t val) {
+    if (offset + 4 > data.size()) {
+        return;
+    }
+    data[offset + 0] = static_cast<uint8_t>(val & 0xFF);
+    data[offset + 1] = static_cast<uint8_t>((val >> 8) & 0xFF);
+    data[offset + 2] = static_cast<uint8_t>((val >> 16) & 0xFF);
+    data[offset + 3] = static_cast<uint8_t>((val >> 24) & 0xFF);
+}
+
+void write_fourcc(std::vector<uint8_t>& data, const char* fourcc) {
+    data.insert(data.end(), fourcc, fourcc + 4);
+}
+
 EncodedImageFormat encoded_image_format_from_path(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -682,8 +760,9 @@ bool load_sd_image_from_file(sd_image_t* image,
     if (image->data == nullptr) {
         return false;
     }
-    image->width  = width;
-    image->height = height;
+    image->width   = width;
+    image->height  = height;
+    image->channel = expected_channel;
     return true;
 }
 
@@ -697,95 +776,96 @@ uint8_t* load_image_from_memory(const char* image_bytes,
     return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
 }
 
-int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality) {
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
-        return -1;
+        return {};
     }
-
-    FilePtr file(fopen(filename, "wb"));
-    if (!file) {
-        perror("Error opening file for writing");
-        return -1;
-    }
-    FILE* f = file.get();
 
     uint32_t width    = images[0].width;
     uint32_t height   = images[0].height;
     uint32_t channels = images[0].channel;
     if (channels != 3 && channels != 4) {
         fprintf(stderr, "Error: Unsupported channel count: %u\n", channels);
-        return -1;
+        return {};
     }
 
-    fwrite("RIFF", 4, 1, f);
-    long riff_size_pos = ftell(f);
-    write_u32_le(f, 0);
-    fwrite("AVI ", 4, 1, f);
+    // stb_image_write changes JPEG sampling behavior above quality 90.
+    // MJPG AVI playback is more compatible when we keep the encoder on the
+    // <= 90 path.
+    const int mjpg_quality = std::clamp(quality, 1, 90);
 
-    fwrite("LIST", 4, 1, f);
-    write_u32_le(f, 4 + 8 + 56 + 8 + 4 + 8 + 56 + 8 + 40);
-    fwrite("hdrl", 4, 1, f);
+    std::vector<uint8_t> avi_data;
+    avi_data.reserve(static_cast<size_t>(num_images) * 1024);
 
-    fwrite("avih", 4, 1, f);
-    write_u32_le(f, 56);
-    write_u32_le(f, 1000000 / fps);
-    write_u32_le(f, 0);
-    write_u32_le(f, 0);
-    write_u32_le(f, 0x110);
-    write_u32_le(f, num_images);
-    write_u32_le(f, 0);
-    write_u32_le(f, 1);
-    write_u32_le(f, width * height * 3);
-    write_u32_le(f, width);
-    write_u32_le(f, height);
-    write_u32_le(f, 0);
-    write_u32_le(f, 0);
-    write_u32_le(f, 0);
-    write_u32_le(f, 0);
+    write_fourcc(avi_data, "RIFF");
+    const size_t riff_size_pos = avi_data.size();
+    write_u32_le(avi_data, 0);
+    write_fourcc(avi_data, "AVI ");
 
-    fwrite("LIST", 4, 1, f);
-    write_u32_le(f, 4 + 8 + 56 + 8 + 40);
-    fwrite("strl", 4, 1, f);
+    write_fourcc(avi_data, "LIST");
+    write_u32_le(avi_data, 4 + 8 + 56 + 8 + 4 + 8 + 56 + 8 + 40);
+    write_fourcc(avi_data, "hdrl");
 
-    fwrite("strh", 4, 1, f);
-    write_u32_le(f, 56);
-    fwrite("vids", 4, 1, f);
-    fwrite("MJPG", 4, 1, f);
-    write_u32_le(f, 0);
-    write_u16_le(f, 0);
-    write_u16_le(f, 0);
-    write_u32_le(f, 0);
-    write_u32_le(f, 1);
-    write_u32_le(f, fps);
-    write_u32_le(f, 0);
-    write_u32_le(f, num_images);
-    write_u32_le(f, width * height * 3);
-    write_u32_le(f, (uint32_t)-1);
-    write_u32_le(f, 0);
-    write_u16_le(f, 0);
-    write_u16_le(f, 0);
-    write_u16_le(f, 0);
-    write_u16_le(f, 0);
+    write_fourcc(avi_data, "avih");
+    write_u32_le(avi_data, 56);
+    write_u32_le(avi_data, 1000000 / fps);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 0x110);
+    write_u32_le(avi_data, num_images);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 1);
+    write_u32_le(avi_data, width * height * 3);
+    write_u32_le(avi_data, width);
+    write_u32_le(avi_data, height);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 0);
 
-    fwrite("strf", 4, 1, f);
-    write_u32_le(f, 40);
-    write_u32_le(f, 40);
-    write_u32_le(f, width);
-    write_u32_le(f, height);
-    write_u16_le(f, 1);
-    write_u16_le(f, 24);
-    fwrite("MJPG", 4, 1, f);
-    write_u32_le(f, width * height * 3);
-    write_u32_le(f, 0);
-    write_u32_le(f, 0);
-    write_u32_le(f, 0);
-    write_u32_le(f, 0);
+    write_fourcc(avi_data, "LIST");
+    write_u32_le(avi_data, 4 + 8 + 56 + 8 + 40);
+    write_fourcc(avi_data, "strl");
 
-    fwrite("LIST", 4, 1, f);
-    long movi_size_pos = ftell(f);
-    write_u32_le(f, 0);
-    fwrite("movi", 4, 1, f);
+    write_fourcc(avi_data, "strh");
+    write_u32_le(avi_data, 56);
+    write_fourcc(avi_data, "vids");
+    write_fourcc(avi_data, "MJPG");
+    write_u32_le(avi_data, 0);
+    write_u16_le(avi_data, 0);
+    write_u16_le(avi_data, 0);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 1);
+    write_u32_le(avi_data, fps);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, num_images);
+    write_u32_le(avi_data, width * height * 3);
+    write_u32_le(avi_data, static_cast<uint32_t>(-1));
+    write_u32_le(avi_data, 0);
+    write_u16_le(avi_data, 0);
+    write_u16_le(avi_data, 0);
+    write_u16_le(avi_data, 0);
+    write_u16_le(avi_data, 0);
+
+    write_fourcc(avi_data, "strf");
+    write_u32_le(avi_data, 40);
+    write_u32_le(avi_data, 40);
+    write_u32_le(avi_data, width);
+    write_u32_le(avi_data, height);
+    write_u16_le(avi_data, 1);
+    write_u16_le(avi_data, 24);
+    write_fourcc(avi_data, "MJPG");
+    write_u32_le(avi_data, width * height * 3);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 0);
+    write_u32_le(avi_data, 0);
+
+    write_fourcc(avi_data, "LIST");
+    const size_t movi_size_pos = avi_data.size();
+    write_u32_le(avi_data, 0);
+    write_fourcc(avi_data, "movi");
 
     std::vector<avi_index_entry> index(static_cast<size_t>(num_images));
     std::vector<uint8_t> jpeg_data;
@@ -799,55 +879,61 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
             buffer->insert(buffer->end(), src, src + size);
         };
 
-        if (!stbi_write_jpg_to_func(write_to_buf, &jpeg_data, images[i].width, images[i].height, channels, images[i].data, quality)) {
+        if (!stbi_write_jpg_to_func(write_to_buf, &jpeg_data, images[i].width, images[i].height, channels, images[i].data, mjpg_quality)) {
             fprintf(stderr, "Error: Failed to encode JPEG frame.\n");
-            return -1;
+            return {};
         }
 
-        fwrite("00dc", 4, 1, f);
-        write_u32_le(f, (uint32_t)jpeg_data.size());
-        index[i].offset = ftell(f) - 8;
-        index[i].size   = (uint32_t)jpeg_data.size();
-        fwrite(jpeg_data.data(), 1, jpeg_data.size(), f);
+        index[i].offset = static_cast<uint32_t>(avi_data.size());
+        write_fourcc(avi_data, "00dc");
+        write_u32_le(avi_data, static_cast<uint32_t>(jpeg_data.size()));
+        index[i].size = (uint32_t)jpeg_data.size();
+        avi_data.insert(avi_data.end(), jpeg_data.begin(), jpeg_data.end());
 
         if (jpeg_data.size() % 2) {
-            fputc(0, f);
+            avi_data.push_back(0);
         }
     }
 
-    long cur_pos   = ftell(f);
-    long movi_size = cur_pos - movi_size_pos - 4;
-    fseek(f, movi_size_pos, SEEK_SET);
-    write_u32_le(f, movi_size);
-    fseek(f, cur_pos, SEEK_SET);
+    const size_t movi_size = avi_data.size() - movi_size_pos - 4;
+    patch_u32_le(avi_data, movi_size_pos, static_cast<uint32_t>(movi_size));
 
-    fwrite("idx1", 4, 1, f);
-    write_u32_le(f, num_images * 16);
+    write_fourcc(avi_data, "idx1");
+    write_u32_le(avi_data, num_images * 16);
     for (int i = 0; i < num_images; i++) {
-        fwrite("00dc", 4, 1, f);
-        write_u32_le(f, 0x10);
-        write_u32_le(f, index[i].offset);
-        write_u32_le(f, index[i].size);
+        write_fourcc(avi_data, "00dc");
+        write_u32_le(avi_data, 0x10);
+        write_u32_le(avi_data, index[i].offset);
+        write_u32_le(avi_data, index[i].size);
     }
 
-    cur_pos        = ftell(f);
-    long file_size = cur_pos - riff_size_pos - 4;
-    fseek(f, riff_size_pos, SEEK_SET);
-    write_u32_le(f, file_size);
-    fseek(f, cur_pos, SEEK_SET);
+    const size_t file_size = avi_data.size() - riff_size_pos - 4;
+    patch_u32_le(avi_data, riff_size_pos, static_cast<uint32_t>(file_size));
 
+    return avi_data;
+}
+
+int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+    std::vector<uint8_t> avi_data = create_mjpg_avi_from_sd_images_to_vector(images, num_images, fps, quality);
+    if (avi_data.empty()) {
+        return -1;
+    }
+    if (!write_binary_file_bytes(filename, avi_data)) {
+        perror("Error opening file for writing");
+        return -1;
+    }
     return 0;
 }
 
 #ifdef SD_USE_WEBP
-int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+std::vector<uint8_t> create_animated_webp_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality) {
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
-        return -1;
+        return {};
     }
     if (fps <= 0) {
         fprintf(stderr, "Error: FPS must be positive.\n");
-        return -1;
+        return {};
     }
 
     const int width    = static_cast<int>(images[0].width);
@@ -855,14 +941,14 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
     const int channels = static_cast<int>(images[0].channel);
     if (channels != 1 && channels != 3 && channels != 4) {
         fprintf(stderr, "Error: Unsupported channel count: %d\n", channels);
-        return -1;
+        return {};
     }
 
     WebPAnimEncoderOptions anim_options;
     WebPConfig config;
     if (!WebPAnimEncoderOptionsInit(&anim_options) || !WebPConfigInit(&config)) {
         fprintf(stderr, "Error: Failed to initialize WebP animation encoder.\n");
-        return -1;
+        return {};
     }
 
     config.quality      = static_cast<float>(quality);
@@ -873,13 +959,13 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
     }
     if (!WebPValidateConfig(&config)) {
         fprintf(stderr, "Error: Invalid WebP encoder configuration.\n");
-        return -1;
+        return {};
     }
 
     WebPAnimEncoderPtr enc(WebPAnimEncoderNew(width, height, &anim_options));
     if (enc == nullptr) {
         fprintf(stderr, "Error: Could not create WebPAnimEncoder object.\n");
-        return -1;
+        return {};
     }
 
     const int frame_duration_ms = std::max(1, static_cast<int>(std::lround(1000.0 / static_cast<double>(fps))));
@@ -889,13 +975,13 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
         const sd_image_t& image = images[i];
         if (static_cast<int>(image.width) != width || static_cast<int>(image.height) != height) {
             fprintf(stderr, "Error: Frame dimensions do not match.\n");
-            return -1;
+            return {};
         }
 
         WebPPictureGuard picture;
         if (!picture.initialized) {
             fprintf(stderr, "Error: Failed to initialize WebPPicture.\n");
-            return -1;
+            return {};
         }
         picture.picture.use_argb = 1;
         picture.picture.width    = width;
@@ -919,12 +1005,12 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
 
         if (!picture_ok) {
             fprintf(stderr, "Error: Failed to import frame into WebPPicture.\n");
-            return -1;
+            return {};
         }
 
         if (!WebPAnimEncoderAdd(enc.get(), &picture.picture, timestamp_ms, &config)) {
             fprintf(stderr, "Error: Failed to add frame to animated WebP: %s\n", WebPAnimEncoderGetError(enc.get()));
-            return -1;
+            return {};
         }
 
         timestamp_ms += frame_duration_ms;
@@ -932,52 +1018,50 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
 
     if (!WebPAnimEncoderAdd(enc.get(), nullptr, timestamp_ms, nullptr)) {
         fprintf(stderr, "Error: Failed to finalize animated WebP frames: %s\n", WebPAnimEncoderGetError(enc.get()));
-        return -1;
+        return {};
     }
 
     WebPDataGuard webp_data;
     if (!WebPAnimEncoderAssemble(enc.get(), &webp_data.data)) {
         fprintf(stderr, "Error: Failed to assemble animated WebP: %s\n", WebPAnimEncoderGetError(enc.get()));
-        return -1;
+        return {};
     }
 
-    FilePtr f(fopen(filename, "wb"));
-    if (!f) {
+    return std::vector<uint8_t>(webp_data.data.bytes, webp_data.data.bytes + webp_data.data.size);
+}
+
+int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+    std::vector<uint8_t> webp_data = create_animated_webp_from_sd_images_to_vector(images, num_images, fps, quality);
+    if (webp_data.empty()) {
+        return -1;
+    }
+    if (!write_binary_file_bytes(filename, webp_data)) {
         perror("Error opening file for writing");
         return -1;
     }
-    if (webp_data.data.size > 0 && fwrite(webp_data.data.bytes, 1, webp_data.data.size, f.get()) != webp_data.data.size) {
-        fprintf(stderr, "Error: Failed to write animated WebP file.\n");
-        return -1;
-    }
-
     return 0;
 }
 #endif
 
 #ifdef SD_USE_WEBM
-int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images, int num_images, int fps, int quality) {
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
-        return -1;
+        return {};
     }
     if (fps <= 0) {
         fprintf(stderr, "Error: FPS must be positive.\n");
-        return -1;
+        return {};
     }
 
     const int width  = static_cast<int>(images[0].width);
     const int height = static_cast<int>(images[0].height);
     if (width <= 0 || height <= 0) {
         fprintf(stderr, "Error: Invalid frame dimensions.\n");
-        return -1;
+        return {};
     }
 
-    mkvmuxer::MkvWriter writer;
-    if (!writer.Open(filename)) {
-        fprintf(stderr, "Error: Could not open WebM file for writing.\n");
-        return -1;
-    }
+    MemoryMkvWriter writer;
 
     const int ret = [&]() -> int {
         mkvmuxer::Segment segment;
@@ -1043,30 +1127,63 @@ int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num
         }
         return 0;
     }();
-    writer.Close();
-    return ret;
+    if (ret != 0) {
+        return {};
+    }
+    return writer.data();
+}
+
+int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+    std::vector<uint8_t> webm_data = create_webm_from_sd_images_to_vector(images, num_images, fps, quality);
+    if (webm_data.empty()) {
+        return -1;
+    }
+    if (!write_binary_file_bytes(filename, webm_data)) {
+        perror("Error opening file for writing");
+        return -1;
+    }
+    return 0;
 }
 #endif
 
-int create_video_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
-    std::string path = filename ? filename : "";
-    auto pos         = path.find_last_of('.');
-    std::string ext  = pos == std::string::npos ? "" : path.substr(pos);
-    for (char& ch : ext) {
-        ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& output_format,
+                                                           sd_image_t* images,
+                                                           int num_images,
+                                                           int fps,
+                                                           int quality) {
+    std::string format = output_format;
+    std::transform(format.begin(), format.end(), format.begin(),
+                   [](unsigned char c) { return static_cast<char>(tolower(c)); });
+    if (!format.empty() && format[0] == '.') {
+        format.erase(format.begin());
     }
 
 #ifdef SD_USE_WEBM
-    if (ext == ".webm") {
-        return create_webm_from_sd_images(filename, images, num_images, fps, quality);
+    if (format == "webm") {
+        return create_webm_from_sd_images_to_vector(images, num_images, fps, quality);
     }
 #endif
 
 #ifdef SD_USE_WEBP
-    if (ext == ".webp") {
-        return create_animated_webp_from_sd_images(filename, images, num_images, fps, quality);
+    if (format == "webp") {
+        return create_animated_webp_from_sd_images_to_vector(images, num_images, fps, quality);
     }
 #endif
 
-    return create_mjpg_avi_from_sd_images(filename, images, num_images, fps, quality);
+    return create_mjpg_avi_from_sd_images_to_vector(images, num_images, fps, quality);
+}
+
+int create_video_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+    std::string path                = filename ? filename : "";
+    auto pos                        = path.find_last_of('.');
+    std::string ext                 = pos == std::string::npos ? "" : path.substr(pos);
+    std::vector<uint8_t> video_data = create_video_from_sd_images_to_vector(ext, images, num_images, fps, quality);
+    if (video_data.empty()) {
+        return -1;
+    }
+    if (!write_binary_file_bytes(filename, video_data)) {
+        perror("Error opening file for writing");
+        return -1;
+    }
+    return 0;
 }

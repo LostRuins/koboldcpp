@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "log.h"
+#include "resource_owners.hpp"
 #include "stable-diffusion.h"
 
 #define SAFE_STR(s) ((s) ? (s) : "")
@@ -74,6 +75,11 @@ struct ArgOptions {
 };
 
 bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& options_list);
+bool decode_base64_image(const std::string& encoded_input,
+                         int target_channels,
+                         int expected_width,
+                         int expected_height,
+                         SDImageOwner& out_image);
 
 struct SDContextParams {
     int n_threads = -1;
@@ -129,34 +135,39 @@ struct SDContextParams {
     float flow_shift = INFINITY;
     ArgOptions get_options();
     void build_embedding_map();
-    bool process_and_check(SDMode mode);
+    bool resolve(SDMode mode);
+    bool validate(SDMode mode);
+    bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
     sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview);
 };
 
 struct SDGenerationParams {
+    // User-facing input fields.
     std::string prompt;
-    std::string prompt_with_lora;  // for metadata record only
     std::string negative_prompt;
-    int clip_skip   = -1;  // <= 0 represents unspecified
-    int width       = -1;
-    int height      = -1;
-    int batch_count = 1;
+    int clip_skip              = -1;  // <= 0 represents unspecified
+    int width                  = -1;
+    int height                 = -1;
+    int batch_count            = 1;
+    int64_t seed               = 42;
+    float strength             = 0.75f;
+    float control_strength     = 0.9f;
+    bool auto_resize_ref_image = true;
+    bool increase_ref_index    = false;
+    bool embed_image_metadata  = true;
+
     std::string init_image_path;
     std::string end_image_path;
     std::string mask_image_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
     std::string control_video_path;
-    bool auto_resize_ref_image = true;
-    bool increase_ref_index    = false;
-    bool embed_image_metadata  = true;
 
-    std::vector<int> skip_layers = {7, 8, 9};
     sd_sample_params_t sample_params;
-
-    std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
+    std::vector<int> skip_layers            = {7, 8, 9};
+    std::vector<int> high_noise_skip_layers = {7, 8, 9};
 
     std::vector<float> custom_sigmas;
 
@@ -166,19 +177,12 @@ struct SDGenerationParams {
     bool scm_policy_dynamic = true;
     sd_cache_params_t cache_params{};
 
-    float moe_boundary  = 0.875f;
-    int video_frames    = 1;
-    int fps             = 16;
-    float vace_strength = 1.f;
-
-    float strength         = 0.75f;
-    float control_strength = 0.9f;
-
-    int64_t seed = 42;
-
+    float moe_boundary                   = 0.875f;
+    int video_frames                     = 1;
+    int fps                              = 16;
+    float vace_strength                  = 1.f;
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 
-    // Photo Maker
     std::string pm_id_images_dir;
     std::string pm_id_embed_path;
     float pm_style_strength = 20.f;
@@ -188,16 +192,44 @@ struct SDGenerationParams {
 
     std::map<std::string, float> lora_map;
     std::map<std::string, float> high_noise_lora_map;
+
+    // Derived and normalized fields.
+    std::string prompt_with_lora;  // for metadata record only
     std::vector<sd_lora_t> lora_vec;
+
+    // Owned execution payload.
+    SDImageOwner init_image;
+    SDImageOwner end_image;
+    std::vector<SDImageOwner> ref_images;
+    SDImageOwner mask_image;
+    SDImageOwner control_image;
+    std::vector<SDImageOwner> pm_id_images;
+    std::vector<SDImageOwner> control_frames;
+
+    // Backing storage for sd_img_gen_params_t view fields.
+    std::vector<sd_image_t> ref_image_views;
+    std::vector<sd_image_t> pm_id_image_views;
+    std::vector<sd_image_t> control_frame_views;
+
     SDGenerationParams();
+    SDGenerationParams(const SDGenerationParams& other)                = default;
+    SDGenerationParams& operator=(const SDGenerationParams& other)     = default;
+    SDGenerationParams(SDGenerationParams&& other) noexcept            = default;
+    SDGenerationParams& operator=(SDGenerationParams&& other) noexcept = default;
     ArgOptions get_options();
-    bool from_json_str(const std::string& json_str);
+    bool from_json_str(const std::string& json_str,
+                       const std::function<std::string(const std::string&)>& lora_path_resolver = {});
+    bool initialize_cache_params();
     void extract_and_remove_lora(const std::string& lora_model_dir);
     bool width_and_height_are_set() const;
     void set_width_and_height_if_unset(int w, int h);
     int get_resolved_width() const;
     int get_resolved_height() const;
-    bool process_and_check(SDMode mode, const std::string& lora_model_dir);
+    bool resolve(const std::string& lora_model_dir, bool strict = false);
+    bool validate(SDMode mode);
+    bool resolve_and_validate(SDMode mode, const std::string& lora_model_dir, bool strict = false);
+    sd_img_gen_params_t to_sd_img_gen_params_t();
+    sd_vid_gen_params_t to_sd_vid_gen_params_t();
     std::string to_string() const;
 };
 
