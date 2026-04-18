@@ -1043,8 +1043,7 @@ rpc-all: rpc-clients-all rpc-servers-all
 	@echo "All RPC components built successfully!"
 
 # Build all RPC clients and servers with ALL available backends
-# This target automatically detects and builds Vulkan, CUDA, and HIPBLAS
-# Note: CUDA and HIPBLAS are mutually exclusive - only one will be built
+# This target automatically detects and builds ALL backends (regular + RPC variants)
 rpc-full-all:
 	@echo "Building all RPC components with all available backends..."
 	@echo ""
@@ -1068,28 +1067,40 @@ rpc-full-all:
 	@echo "Checking for Vulkan..."
 	@which vulkaninfo > /dev/null 2>&1 && echo "✓ Vulkan: Available" || echo "✗ Vulkan: Not available (will try anyway)"
 	@echo ""
+	@echo "=== Building Regular Backends (Non-RPC) ==="
+	@echo "Building Vulkan backend..."
+	$(MAKE) LLAMA_VULKAN=1 koboldcpp_vulkan
+	@if [ "$$(cat /tmp/kobold_has_hipblas)" = "1" ]; then \
+		echo "Building HIPBLAS backend..."; \
+		$(MAKE) LLAMA_HIPBLAS=1 koboldcpp_hipblas; \
+	fi
+	@if [ "$$(cat /tmp/kobold_has_cuda)" = "1" ] && [ "$$(cat /tmp/kobold_has_hipblas)" != "1" ]; then \
+		echo "Building CUDA backend..."; \
+		$(MAKE) LLAMA_CUBLAS=1 koboldcpp_cublas; \
+	fi
+	@echo ""
 	@echo "=== Building Vulkan + RPC (universal fallback) ==="
 	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-clients-all
 	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-servers-all
 	@echo ""
 	@echo "=== Building HIPBLAS + RPC (AMD GPUs) ==="
 	@if [ "$$(cat /tmp/kobold_has_hipblas)" = "1" ]; then \
-		echo "HIPBLAS detected, building..."; \
+		echo "HIPBLAS detected, building RPC client and server..."; \
 		$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 koboldcpp_hipblas_rpc; \
 		$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip; \
-		echo "✓ HIPBLAS build complete"; \
+		echo "✓ HIPBLAS + RPC build complete"; \
 	else \
 		echo "HIPBLAS not available (hipcc not found), skipping..."; \
 	fi
 	@echo ""
 	@echo "=== Building CUDA + RPC (NVIDIA GPUs) ==="
 	@if [ "$$(cat /tmp/kobold_has_cuda)" = "1" ] && [ "$$(cat /tmp/kobold_has_hipblas)" != "1" ]; then \
-		echo "CUDA detected (without HIPBLAS), building..."; \
+		echo "CUDA detected (without HIPBLAS), building RPC client and server..."; \
 		$(MAKE) LLAMA_CUBLAS=1 LLAMA_RPC=1 koboldcpp_cublas_rpc; \
 		$(MAKE) LLAMA_CUBLAS=1 LLAMA_RPC=1 rpc-server-cuda; \
-		echo "✓ CUDA build complete"; \
+		echo "✓ CUDA + RPC build complete"; \
 	elif [ "$$(cat /tmp/kobold_has_cuda)" = "1" ] && [ "$$(cat /tmp/kobold_has_hipblas)" = "1" ]; then \
-		echo "⚠ Both CUDA and HIPBLAS detected - skipping CUDA to avoid conflicts"; \
+		echo "⚠ Both CUDA and HIPBLAS detected - skipping CUDA RPC to avoid conflicts"; \
 		echo "   (HIPBLAS takes precedence for AMD systems)"; \
 	else \
 		echo "CUDA not available (nvcc not found), skipping..."; \
@@ -1097,6 +1108,11 @@ rpc-full-all:
 	@rm -f /tmp/kobold_has_cuda /tmp/kobold_has_hipblas
 	@echo ""
 	@echo "=== All RPC components built successfully! ==="
+	@echo ""
+	@echo "Built Regular Backends (Non-RPC):"
+	@ls -lh koboldcpp_vulkan.so 2>/dev/null && echo "  ✓ koboldcpp_vulkan.so (Vulkan)" || echo "  - koboldcpp_vulkan.so (Vulkan) - not built"
+	@ls -lh koboldcpp_hipblas.so 2>/dev/null && echo "  ✓ koboldcpp_hipblas.so (HIPBLAS)" || echo "  - koboldcpp_hipblas.so (HIPBLAS) - not built"
+	@ls -lh koboldcpp_cublas.so 2>/dev/null && echo "  ✓ koboldcpp_cublas.so (CUDA)" || echo "  - koboldcpp_cublas.so (CUDA) - not built"
 	@echo ""
 	@echo "Built RPC Clients:"
 	@ls -lh koboldcpp_rpc.so 2>/dev/null && echo "  ✓ koboldcpp_rpc.so (Vulkan + RPC)" || echo "  ✗ koboldcpp_rpc.so (Vulkan + RPC) - BUILD FAILED"
@@ -1107,6 +1123,11 @@ rpc-full-all:
 	@ls -lh rpc-server-vulkan 2>/dev/null && echo "  ✓ rpc-server-vulkan (Vulkan backend)" || echo "  ✗ rpc-server-vulkan (Vulkan backend) - BUILD FAILED"
 	@ls -lh rpc-server-hip 2>/dev/null && echo "  ✓ rpc-server-hip (HIPBLAS backend)" || echo "  - rpc-server-hip (HIPBLAS backend) - not built"
 	@ls -lh rpc-server-cuda 2>/dev/null && echo "  ✓ rpc-server-cuda (CUDA backend)" || echo "  - rpc-server-cuda (CUDA backend) - not built"
+	@echo ""
+	@echo "Summary:"
+	@echo "  - Regular backends: koboldcpp.so, koboldcpp_hipblas.so, koboldcpp_cublas.so"
+	@echo "  - RPC clients: koboldcpp_rpc.so, koboldcpp_hipblas_rpc.so, koboldcpp_cublas_rpc.so"
+	@echo "  - RPC servers: rpc-server-vulkan, rpc-server-hip, rpc-server-cuda"
 	@echo ""
 
 #window simple clinfo
