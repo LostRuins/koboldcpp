@@ -2221,6 +2221,50 @@ def sd_get_available_schedulers():
     info = sd_get_info()
     return info.get('available_schedulers', [])
 
+sampler_aliases = [
+    # sd.cpp name, UI name, aliases
+    ['euler',         'Euler',    'k_euler'],
+    ['euler_a',       'Euler A',  'k_euler_a', 'euler a'],
+    ['heun',          'Heun',     'k_heun'],
+    ['dpm2',          'DPM2',     'k_dpm_2'],
+    ['lcm',           'LCM',      'k_lcm'],
+    ['dpm++2m',       'DPM++ 2M', 'k_dpmpp_2m', 'dpm++ 2m karras', 'dpm++ 2m'],
+    ['ddim_trailing', 'DDIM',     'ddim'],
+    ['res_multistep', 'Res Multistep', 'k_res_multistep', 'res multistep'],
+    ['res_2s',        'Res 2s',        'k_res_2s', 'res 2s'],
+]
+
+def sd_sampler_canonical_name(name):
+    info = sd_get_info()
+    available = info.get('available_samplers', [])
+    alias_map = {}
+    for aliases in sampler_aliases:
+        for alias in aliases:
+            alias_map[alias] = aliases[0]
+            alias_map[alias.lower()] = aliases[0]
+    cname = alias_map.get(name.lower(), name)
+    if cname in available:
+        return cname
+    return 'default'
+
+def sd_sdapi_samplers():
+    result = []
+    info = sd_get_info()
+    available = set(info.get('available_samplers', []))
+    # ensure we only advertise supported samplers
+    smap = {}
+    for aliases in sampler_aliases:
+        if aliases[0] in available:
+            smap[aliases[1]] = aliases[0:1] + aliases[2:]
+            available.remove(aliases[0])
+    for sampler in available:
+        if sampler not in smap:
+            smap[sampler] = []
+    result = [{'name': k, 'aliases': v, 'options':{}}
+                  for k, v in smap.items()]
+    return result
+
+
 sd_convdirect_choices = ['off', 'vaeonly', 'full']
 
 def sd_convdirect_option(value):
@@ -2547,7 +2591,7 @@ def sd_generate(genparams):
     seed = tryparseint(genparams.get("seed", -1),-1)
     if seed < 0:
         seed = random.randint(100000, 999999)
-    sample_method = (genparams.get("sampler_name") or "default").lower()
+    sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
@@ -2600,7 +2644,7 @@ def sd_generate(genparams):
     inputs.width = width
     inputs.height = height
     inputs.seed = ((seed + 2**31) % 2**32) - 2**31
-    inputs.sample_method = sample_method.encode("UTF-8")
+    inputs.sample_method = sd_sampler_canonical_name(sample_method).encode("UTF-8")
     inputs.scheduler = scheduler.encode("UTF-8")
     inputs.clip_skip = clip_skip
     inputs.vid_req_frames = vid_req_frames
@@ -5503,8 +5547,7 @@ Change Mode<br>
             if (friendlysdmodelname=="inactive" or fullsdmodelpath=="") and not(autoswapmode and imageName is not None):
                 response_body = (json.dumps([]).encode())
             else:
-                response_body = (json.dumps([{"name":"Euler","aliases":["k_euler"],"options":{}},{"name":"Euler a","aliases":["k_euler_a","k_euler_ancestral"],"options":{}},{"name":"Heun","aliases":["k_heun"],"options":{}},{"name":"DPM2","aliases":["k_dpm_2"],"options":{}},{"name":"DPM++ 2M","aliases":["k_dpmpp_2m"],"options":{}},{"name":"DDIM","aliases":["ddim"],"options":{}},{"name":"LCM","aliases":["k_lcm"],"options":{}},{"name":"Res 2s","aliases":["k_res_2s"],"options":{}},{"name":"Res Multistep","aliases":["k_res_multistep"],"options":{}},
-                      {"name":"Default","aliases":["default"],"options":{}}]).encode())
+                response_body = (json.dumps(sd_sdapi_samplers()).encode())
         elif clean_path.endswith('/sdapi/v1/schedulers'):
             if (friendlysdmodelname=="inactive" or fullsdmodelpath=="") and not(autoswapmode and imageName is not None):
                 response_body = (json.dumps([]).encode())

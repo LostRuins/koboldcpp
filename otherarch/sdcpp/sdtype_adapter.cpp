@@ -1640,6 +1640,16 @@ sd_info_outputs sdtype_get_info()
     }
     j["available_schedulers"] = available_schedulers;
 
+    auto available_samplers = json::array();
+    available_samplers.push_back("default");
+    for (int i = 0; i < sample_method_t::SAMPLE_METHOD_COUNT; i++) {
+        std::string name = sd_sample_method_name((sample_method_t)i);
+        if (name != "NONE") {
+            available_samplers.push_back(name);
+        }
+    }
+    j["available_samplers"] = available_samplers;
+
     static std::string recent_info = j.dump();
     sd_info_outputs output;
     output.status = 0;
