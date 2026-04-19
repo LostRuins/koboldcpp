@@ -1067,17 +1067,17 @@ rpc-full-all:
 	@echo "Checking for Vulkan..."
 	@which vulkaninfo > /dev/null 2>&1 && echo "✓ Vulkan: Available" || echo "✗ Vulkan: Not available (will try anyway)"
 	@echo ""
-	@echo "=== Building Regular Backends (Non-RPC) ==="
-	@echo "Building Vulkan backend..."
-	$(MAKE) LLAMA_VULKAN=1 koboldcpp_vulkan
-	@if [ "$$(cat /tmp/kobold_has_hipblas)" = "1" ]; then \
-		echo "Building HIPBLAS backend..."; \
-		$(MAKE) LLAMA_HIPBLAS=1 koboldcpp_hipblas; \
-	fi
-	@if [ "$$(cat /tmp/kobold_has_cuda)" = "1" ] && [ "$$(cat /tmp/kobold_has_hipblas)" != "1" ]; then \
-		echo "Building CUDA backend..."; \
-		$(MAKE) LLAMA_CUBLAS=1 koboldcpp_cublas; \
-	fi
+	@echo "=== Cleaning all object files first ==="
+	@rm -vf ggml_v4_vulkan.o ggml_v3_vulkan.o ggml_v2_vulkan.o ggml_v1_failsafe.o ggml-cpu_v4_vulkan.o \
+		ggml-ops-vulkan.o ggml-vec-vulkan.o ggml-binops-vulkan.o ggml-unops-vulkan.o \
+		ggml_v3.o ggml_v2.o ggml_v1_failsafe.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
+		ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o ggml-cpu_v4_cublas.o \
+		ggml_v4_cublas.o ggml_v4_hipblas.o \
+		gpttype_adapter.o gpttype_adapter_vulkan.o gpttype_adapter_cublas.o gpttype_adapter_hipblas.o \
+		gpttype_adapter_vulkan_noavx2.o sdcpp_vulkan.o whispercpp_vulkan.o llavaclip_vulkan.o \
+		ggml-backend_vulkan.o ggml-backend-reg_vulkan.o \
+		ggml-backend_cublas.o ggml-backend-reg_cublas.o \
+		ggml.o ggml-cpu.o
 	@echo ""
 	@echo "=== Building Vulkan + RPC (universal fallback) ==="
 	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-clients-all
@@ -1104,6 +1104,30 @@ rpc-full-all:
 		echo "   (HIPBLAS takes precedence for AMD systems)"; \
 	else \
 		echo "CUDA not available (nvcc not found), skipping..."; \
+	fi
+	@echo ""
+	@echo "=== Cleaning object files before non-RPC builds (prevents symbol mismatch) ==="
+	@rm -vf ggml_v4_vulkan.o ggml_v3_vulkan.o ggml_v2_vulkan.o ggml_v1_failsafe.o ggml-cpu_v4_vulkan.o \
+		ggml-ops-vulkan.o ggml-vec-vulkan.o ggml-binops-vulkan.o ggml-unops-vulkan.o \
+		ggml_v3.o ggml_v2.o ggml_v1_failsafe.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o \
+		ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o ggml-cpu_v4_cublas.o \
+		ggml_v4_cublas.o ggml_v4_hipblas.o \
+		gpttype_adapter.o gpttype_adapter_vulkan.o gpttype_adapter_cublas.o gpttype_adapter_hipblas.o \
+		gpttype_adapter_vulkan_noavx2.o sdcpp_vulkan.o whispercpp_vulkan.o llavaclip_vulkan.o \
+		ggml-backend_vulkan.o ggml-backend-reg_vulkan.o \
+		ggml-backend_cublas.o ggml-backend-reg_cublas.o \
+		ggml.o
+	@echo ""
+	@echo "=== Building Regular Backends (Non-RPC) - LAST to ensure clean objects ==="
+	@echo "Building Vulkan backend..."
+	$(MAKE) LLAMA_VULKAN=1 koboldcpp_vulkan
+	@if [ "$$(cat /tmp/kobold_has_hipblas)" = "1" ]; then \
+		echo "Building HIPBLAS backend..."; \
+		$(MAKE) LLAMA_HIPBLAS=1 koboldcpp_hipblas; \
+	fi
+	@if [ "$$(cat /tmp/kobold_has_cuda)" = "1" ] && [ "$$(cat /tmp/kobold_has_hipblas)" != "1" ]; then \
+		echo "Building CUDA backend..."; \
+		$(MAKE) LLAMA_CUBLAS=1 koboldcpp_cublas; \
 	fi
 	@rm -f /tmp/kobold_has_cuda /tmp/kobold_has_hipblas
 	@echo ""
