@@ -364,25 +364,48 @@ endif
 ```
 1. Detect nvcc (CUDA toolkit) → sets shell variable HAS_CUDA=1 or 0
 2. Detect hipcc (ROCm toolkit) → sets shell variable HAS_HIPBLAS=1 or 0
-3. Build Regular Backends (Non-RPC)
-   - Always build Vulkan: koboldcpp_vulkan.so
-   - If HIPBLAS available: build koboldcpp_hipblas.so
-   - If CUDA available: build koboldcpp_cublas.so (independent from HIPBLAS)
-4. Build Vulkan + RPC (always): koboldcpp_rpc.so, rpc-server-vulkan
-5. If HIPBLAS available: build koboldcpp_hipblas_rpc.so, rpc-server-hip
-6. If CUDA available: build koboldcpp_cublas_rpc.so, rpc-server-cuda (independent from HIPBLAS)
+3. Clean ALL object files to start fresh
+4. Build RPC variants FIRST (with -DGGML_USE_RPC):
+   - koboldcpp_rpc.so, rpc-server-vulkan
+   - koboldcpp_hipblas_rpc.so, rpc-server-hip (if hipcc found)
+   - koboldcpp_cublas_rpc.so, rpc-server-cuda (if nvcc found, no hipcc)
+5. Clean shared object files (RPC-compiled objects contain RPC symbols)
+6. Build Non-RPC variants LAST (without RPC flags):
+   - koboldcpp_vulkan.so
+   - koboldcpp_hipblas.so (if hipcc found)
+   - koboldcpp_cublas.so (if nvcc found, no hipcc)
 ```
 
 **Key Makefile features**:
 - Shell `if/then/fi` conditionals for runtime detection (NOT Make `ifeq`)
 - `$(MAKE)` sub-calls for each backend build
+- RPC builds run FIRST, non-RPC builds run LAST (ensures clean object files for non-RPC)
+- Object file cleanup between RPC and non-RPC phases prevents `undefined symbol` errors
 - Final summary shows what was built with file listings
+
+**Build order is critical**:
+- RPC libraries need `ggml-rpc.o` compiled WITH `-DGGML_USE_RPC`
+- Non-RPC libraries must NOT have any RPC object files
+- By building RPC first, then cleaning, then building non-RPC, we ensure:
+  - RPC `.o` files exist only during RPC builds
+  - Non-RPC `.o` files are fresh (no RPC symbols)
 
 **Independent backend building**:
 - CUDA and HIPBLAS are now built INDEPENDENTLY when both toolchains are available
 - Each backend uses separate `$(MAKE)` calls with its own flags
 - Vulkan is always built as universal fallback
 - No mutual exclusion - NVIDIA + AMD GPUs can both be supported
+
+**Object file cleanup (CRITICAL)**:
+- Before RPC builds: clean ALL object files to start fresh
+- After RPC builds: clean shared `.o` files (they contain RPC symbols)
+- Before non-RPC builds: shared `.o` files are gone, so they rebuild clean
+- Removed files: `ggml_v4_vulkan.o`, `gpttype_adapter.o`, `ggml-backend_vulkan.o`, etc.
+
+**C++ guard (NEW)**:
+- `gpttype_adapter.cpp` RPC code now wrapped in `#ifdef GGML_USE_RPC`
+- This is the PRIMARY fix - prevents RPC symbols from appearing in non-RPC builds
+- Even if old `.o` files somehow remain, the source code won't reference RPC functions
 
 ---
 
