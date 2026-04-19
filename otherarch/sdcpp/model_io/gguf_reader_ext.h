@@ -1,5 +1,5 @@
-#ifndef __GGUF_READER_HPP__
-#define __GGUF_READER_HPP__
+#ifndef __SD_MODEL_IO_GGUF_READER_EXT_H__
+#define __SD_MODEL_IO_GGUF_READER_EXT_H__
 
 #include <cstdint>
 #include <fstream>
@@ -231,4 +231,4 @@ public:
     size_t data_offset() const { return data_offset_; }
 };
 
-#endif  // __GGUF_READER_HPP__
+#endif  // __SD_MODEL_IO_GGUF_READER_EXT_H__
