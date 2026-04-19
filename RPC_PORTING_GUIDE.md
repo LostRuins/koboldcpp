@@ -1501,6 +1501,8 @@ ssh -L 50054:localhost:50054 user@192.168.1.101
   - **has_rpc_in_device initialization** in import_vars() - now also checks saved RPC endpoint
   - **Independent CUDA+HIPBLAS builds** - both built when both toolchains present
   - **runopts saved to config** - backend selection persists across reloads
+  - **Object file cleanup** in rpc-full-all - prevents "undefined symbol" errors when mixing RPC and non-RPC builds
+  - **gpttype_adapter.cpp RPC code guarded** - all RPC code wrapped in #ifdef GGML_USE_RPC (prevents RPC symbols in non-RPC builds)
 
 - **v1.111.2** (2026-04-17): Added GUI dropdown updates and library selection logic
 

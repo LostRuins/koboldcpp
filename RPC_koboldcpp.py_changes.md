@@ -1203,6 +1203,49 @@ if "runopts" in dict and dict["runopts"]:
 
 4. Removed duplicate RPC Server argument import block.
 
+### 5. "undefined symbol: ggml_backend_rpc_add_server" in koboldcpp_vulkan.so (FIXED)
+
+**Symptom**: When running Vulkan backend (non-RPC), the library fails with:
+```
+OSError: koboldcpp_vulkan.so: undefined symbol: ggml_backend_rpc_add_server
+```
+
+**Root Cause**: `gpttype_adapter.cpp` lines 2391-2607 contained RPC code that was NOT guarded by `#ifdef GGML_USE_RPC`. The code called `ggml_backend_rpc_add_server()` unconditionally, so the symbol appeared in ALL builds, not just RPC builds.
+
+**PRIMARY FIX**: Wrapped entire RPC block in `gpttype_adapter.cpp` with `#ifdef GGML_USE_RPC / #endif`:
+```cpp
+#ifdef GGML_USE_RPC
+        std::string rpc_endpoints_str = inputs.rpc_endpoints;
+        bool use_rpc = false;
+        std::vector<ggml_backend_dev_t> rpc_devices;
+        // ... (all RPC code)
+#endif
+```
+
+**SECONDARY FIX**: Build order in `rpc-full-all` - RPC builds run first, then objects cleaned, then non-RPC builds run last.
+
+**Workaround (if already broken)**:
+```bash
+make clean
+make LLAMA_VULKAN=1 koboldcpp_vulkan -j8
+```
+OSError: koboldcpp_vulkan.so: undefined symbol: ggml_backend_rpc_add_server
+```
+
+**Cause**: The `rpc-full-all` Makefile target builds non-RPC and RPC libraries sharing the same `.o` files. When object files are compiled without RPC first, then reused in RPC builds with RPC symbols, the non-RPC `.so` files get corrupted references.
+
+**Fix**: Added object file cleanup step in `Makefile` `rpc-full-all` target between non-RPC and RPC builds:
+```makefile
+@echo "=== Cleaning object files before RPC builds (prevents symbol mismatch) ==="
+@rm -vf ggml_v4_vulkan.o gpttype_adapter.o ggml-backend_vulkan.o ...
+```
+
+**Workaround (if already broken)**:
+```bash
+make clean
+make LLAMA_VULKAN=1 koboldcpp_vulkan -j8
+```
+
 ---
 
 ## Quick Reference
@@ -1236,6 +1279,26 @@ if "runopts" in dict and dict["runopts"]:
 18. **ROCm device registry fix** - added "ROCM" to device enum check
 19. **has_rpc_in_device initialization** in import_vars() - now also checks saved RPC endpoint
 20. **runopts saved to config** - backend selection persists across reloads
+
+### C++ Fix: gpttype_adapter.cpp RPC Guards
+
+**File**: `gpttype_adapter.cpp`  
+**Lines**: 2391-2607
+
+**Problem**: All RPC code in `gpttype_adapter.cpp` was unguarded, causing `ggml_backend_rpc_add_server` symbol to appear in non-RPC builds.
+
+**Fix**: Wrapped entire RPC block in `#ifdef GGML_USE_RPC / #endif`:
+```cpp
+#ifdef GGML_USE_RPC
+        // Handle RPC endpoints - connect to RPC server(s) FIRST
+        std::string rpc_endpoints_str = inputs.rpc_endpoints;
+        bool use_rpc = false;
+        std::vector<ggml_backend_dev_t> rpc_devices;
+        // ... (all RPC connection, device enumeration, and reordering code)
+#endif
+```
+
+This ensures RPC code is completely excluded from non-RPC library builds.
 
 ---
 
