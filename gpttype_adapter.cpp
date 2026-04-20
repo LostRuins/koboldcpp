@@ -12,6 +12,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 #include "model_adapter.h"
 #include "otherarch.h"
 #include "llama.h"
@@ -2459,12 +2460,13 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             // Get all available devices (RPC + local)
             std::vector<std::pair<std::string, ggml_backend_dev_t>> all_devices;
             
-            // Add RPC devices
+            // Add RPC devices FIRST (so they can be matched by name)
             if(use_rpc) {
                 for(size_t i = 0; i < rpc_devices.size(); ++i) {
                     std::string name = "RPC" + std::to_string(i);
                     all_devices.push_back(std::make_pair(name, rpc_devices[i]));
                 }
+                printf("[RPC] Added %zu RPC device(s) to device pool\n", rpc_devices.size());
             }
             
             // Add local GPU devices
@@ -2491,15 +2493,12 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                     printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
                     std::string local_name = "VULKAN" + std::to_string(vulkan_count++);
                     all_devices.push_back(std::make_pair(local_name, dev));
-                    // Also add HIP alias for Vulkan devices (for compatibility)
                     if(vulkan_count == 1) {
                         printf("[RPC] DEBUG: Vulkan device 0 registered as VULKAN0\n");
                     }
                 }
                 else if(reg_name_upper.find("CUDA") != std::string::npos) {
                     printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
-                    // Register with both CUDA and HIP names for compatibility
-                    // This allows using either naming convention regardless of backend
                     std::string cuda_name = "CUDA" + std::to_string(cuda_count++);
                     std::string hip_name = "HIP" + std::to_string(hip_count++);
                     all_devices.push_back(std::make_pair(cuda_name, dev));
@@ -2508,7 +2507,6 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 }
                 else if(reg_name_upper.find("HIP") != std::string::npos || reg_name_upper.find("ROCM") != std::string::npos) {
                     printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
-                    // Register with both HIP and ROCm names for compatibility
                     std::string hip_name = "HIP" + std::to_string(hip_count);
                     std::string rocm_name = "ROCm" + std::to_string(hip_count++);
                     all_devices.push_back(std::make_pair(hip_name, dev));
@@ -2528,18 +2526,42 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             size_t end = dev_override_str.find(',');
             while (end != std::string::npos) {
                 std::string device = dev_override_str.substr(start, end - start);
-                // Trim whitespace
                 device.erase(0, device.find_first_not_of(" \t"));
                 device.erase(device.find_last_not_of(" \t") + 1);
                 device_order.push_back(device);
                 start = end + 1;
                 end = dev_override_str.find(',', start);
             }
-            // Add last device
             std::string last_device = dev_override_str.substr(start);
             last_device.erase(0, last_device.find_first_not_of(" \t"));
             last_device.erase(last_device.find_last_not_of(" \t") + 1);
             device_order.push_back(last_device);
+            
+            // If RPC devices are connected but NOT in the override string, append them
+            if(use_rpc) {
+                // Build set of device names already in override
+                std::set<std::string> override_names;
+                for(const auto& d : device_order) {
+                    std::string upper = d;
+                    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+                    override_names.insert(upper);
+                }
+                // Check which RPC devices are missing from override
+                bool has_any_rpc = false;
+                for(size_t i = 0; i < rpc_devices.size(); ++i) {
+                    std::string rpc_name = "RPC" + std::to_string(i);
+                    std::string rpc_upper = rpc_name;
+                    std::transform(rpc_upper.begin(), rpc_upper.end(), rpc_upper.begin(), ::toupper);
+                    if(override_names.find(rpc_upper) == override_names.end()) {
+                        device_order.push_back(rpc_name);
+                        printf("[RPC] Appending missing RPC device: %s\n", rpc_name.c_str());
+                        has_any_rpc = true;
+                    }
+                }
+                if(has_any_rpc) {
+                    printf("[RPC] Override string modified to include RPC devices\n");
+                }
+            }
             
             // Build ordered device list
             devices_override.clear();
