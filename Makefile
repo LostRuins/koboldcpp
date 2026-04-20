@@ -679,7 +679,7 @@ llama-impl.o: src/llama-impl.cpp src/llama-impl.h
 budget.o: common/reasoning-budget.cpp common/reasoning-budget.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-SDCPP_COMMON_BASENAMES := stable-diffusion.h stable-diffusion.cpp sample-cache.h sample-cache.cpp util.cpp upscaler.cpp model.cpp name_conversion.cpp tokenizers/bpe_tokenizer.cpp tokenizers/clip_tokenizer.cpp tokenizers/mistral_tokenizer.cpp tokenizers/qwen2_tokenizer.cpp tokenizers/t5_unigram_tokenizer.cpp tokenizers/tokenizer.cpp tokenizers/tokenize_util.cpp thirdparty/zip.c
+SDCPP_COMMON_BASENAMES := stable-diffusion.h stable-diffusion.cpp sample-cache.h sample-cache.cpp util.cpp upscaler.cpp model.cpp name_conversion.cpp tokenizers/bpe_tokenizer.cpp tokenizers/bpe_tokenizer.h tokenizers/clip_tokenizer.cpp tokenizers/clip_tokenizer.h tokenizers/mistral_tokenizer.cpp tokenizers/mistral_tokenizer.h tokenizers/qwen2_tokenizer.cpp tokenizers/qwen2_tokenizer.h tokenizers/t5_unigram_tokenizer.cpp tokenizers/t5_unigram_tokenizer.h tokenizers/tokenizer.cpp tokenizers/tokenizer.h tokenizers/tokenize_util.cpp tokenizers/tokenize_util.h thirdparty/zip.c
 SDCPP_COMMON_SOURCES := $(foreach f,$(SDCPP_COMMON_BASENAMES),otherarch/sdcpp/$(f))
 SDCPP_FLAGS := -I./vendor/nlohmann
 
