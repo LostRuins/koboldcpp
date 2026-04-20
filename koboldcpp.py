@@ -1033,8 +1033,29 @@ def init_library():
         # Check which RPC variant was selected from dropdown
         selected_backend = runopts_var.get() if "runopts_var" in dir() else ""
 
-        # Prefer selected RPC variant when RPC is needed
-        if need_rpc:
+        # Respect explicit backend selection from dropdown FIRST
+        if selected_backend:
+            if "Vulkan + RPC" in selected_backend:
+                if file_exists(lib_rpc):
+                    libname = lib_rpc
+                else:
+                    print("WARNING: Vulkan + RPC library not found")
+            elif "hipBLAS + RPC" in selected_backend:
+                if file_exists(lib_hipblas_rpc):
+                    libname = lib_hipblas_rpc
+                elif file_exists(lib_cublas_rpc):
+                    libname = lib_cublas_rpc
+                else:
+                    print("WARNING: hipBLAS + RPC library not found")
+            elif "CUDA + RPC" in selected_backend:
+                if file_exists(lib_cublas_rpc):
+                    libname = lib_cublas_rpc
+                elif file_exists(lib_hipblas_rpc):
+                    libname = lib_hipblas_rpc
+                else:
+                    print("WARNING: CUDA + RPC library not found")
+        # No explicit selection - auto-detect based on flags
+        elif need_rpc:
             if "hipBLAS + RPC" in selected_backend or (
                 has_rocm_in_device and file_exists(lib_hipblas_rpc)
             ):
@@ -1081,7 +1102,13 @@ def init_library():
             else:
                 print("WARNING: No suitable GPU library found")
     elif args.usevulkan is not None:
-        if file_exists(lib_rpc) and (args.userpc is not None or has_rpc_in_device):
+        selected_backend = runopts_var.get() if "runopts_var" in dir() else ""
+        if selected_backend and "Vulkan + RPC" in selected_backend:
+            if file_exists(lib_rpc):
+                libname = lib_rpc
+            else:
+                print("WARNING: Vulkan + RPC library not found")
+        elif file_exists(lib_rpc) and (args.userpc is not None or has_rpc_in_device):
             libname = lib_rpc
         elif file_exists(lib_vulkan):
             libname = lib_vulkan
@@ -13222,6 +13249,7 @@ def show_gui():
                 args.usecuda.append("rowsplit")
         if (
             runopts_var.get() == "Use Vulkan"
+            or runopts_var.get() == "Use Vulkan + RPC"
             or runopts_var.get() == "Use Vulkan (Old CPU)"
             or runopts_var.get() == "Use Vulkan (Older CPU)"
         ):
