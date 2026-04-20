@@ -2392,7 +2392,6 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         ggml_backend_load_all();
         printf("[RPC] Backends loaded, device count: %zu\n", ggml_backend_dev_count());
 
-#ifdef GGML_USE_RPC
         // Handle RPC endpoints - connect to RPC server(s) FIRST
         std::string rpc_endpoints_str = inputs.rpc_endpoints;
         bool use_rpc = false;
@@ -2606,7 +2605,6 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             }
             printf("[RPC] Using %zu device(s) for model offloading\n", devices_override.size() - 1);
         }
-#endif
 
         if(kcpp_parseinfo_maindevice>0)
         {
