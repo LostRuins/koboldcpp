@@ -756,7 +756,7 @@ async function generateSong(){
   }
 }
 
-function loadTrackJSON(id){
+function loadTrack(id, callback) {
   const tx = db.transaction(STORE, "readonly");
   const store = tx.objectStore(STORE);
   const req = store.get(id);
@@ -767,15 +767,27 @@ function loadTrackJSON(id){
       showMessage("No JSON data found.");
       return;
     }
-
-    const data=(item.params);
-    updateForm(data);
-
+    callback(item.params);
   };
 
   req.onerror = function(){
     showMessage("Failed to load JSON.");
   };
+}
+
+function loadTrackJSON(id){
+  loadTrack(id, updateForm);
+}
+
+function exportTrackJSON(id, title) {
+  loadTrack(id, function(data) {
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`${title}.json`;
+    a.click();
+  })
 }
 
 /* Library functions unchanged */
@@ -807,10 +819,13 @@ function loadLibrary(){
           <audio controls src="${url}"></audio>
           <div style="margin-top:6px;display:flex;gap:6px;">
             <a href="${url}" download="${item.title}${savfmt}">
-                <button class="secondary">Download</button>
+                <button class="secondary">Download Track</button>
             </a>
             <button class="secondary" onclick="loadTrackJSON(${item.id})">
                 Load Params
+            </button>
+            <button class="secondary" onclick="exportTrackJSON(${item.id}, '${item.title}')">
+                Download Params
             </button>
 
             <button class="danger" onclick="deleteTrack(${item.id})">Delete</button>
