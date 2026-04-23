@@ -1,8 +1,8 @@
 # KoboldCPP RPC - Complete Manual
 
 **Version**: 1.111.2  
-**Last Updated**: 2026-04-18  
-**Status**: ✅ Complete - All Features Working (v1.111.2 with RPC endpoint fields and config save/load)
+**Last Updated**: 2026-04-23  
+**Status**: ✅ Complete - All Features Working with Full UI (v1.111.2 with RPC Server tab, endpoint fields, config save/load, and backend dropdown)
 
 ---
 
@@ -31,6 +31,8 @@ RPC (Remote Procedure Call) allows distributing model inference across multiple 
 - ✅ **Config save/load** for all RPC settings (.kcpps files)
 - ✅ **ROCm device registry check** fix - added "ROCM" to device enum check
 - ✅ **has_rpc_in_device initialization** in import_vars() - fixes NameError on config load
+- ✅ **Full UI integration** - RPC Server tab fully functional and tested
+- ✅ **Backend auto-selection** for RPC Server mode works correctly
 
 ---
 

@@ -1,9 +1,9 @@
 # RPC Implementation Changes in koboldcpp.py
 
 **Version**: 1.111.2  
-**Date**: 2026-04-18  
+**Date**: 2026-04-23  
 **Purpose**: Complete documentation of all koboldcpp.py changes for RPC support  
-**Status**: ✅ Complete - All Features Working (v1.111.2 with RPC endpoint fields, config save/load, and independent CUDA+HIPBLAS builds)
+**Status**: ✅ Complete - All Features Working with Full UI Integration (v1.111.2 with RPC Server tab, endpoint fields, config save/load, backend dropdown, and independent CUDA+HIPBLAS builds)
 
 ---
 
@@ -21,7 +21,7 @@ This document details every code addition and modification made to `koboldcpp.py
 ✅ Manual tensor_split for layer distribution  
 ✅ Manual device ordering (--device argument)  
 ✅ Auto-offload for RPC configurations  
-✅ **Triple naming support** (HIP0 = CUDA0 = ROCm0)  
+✅ **Triple naming support** (HIP0 = CUDA0 = ROCm0 for HIPBLAS)  
 ✅ **Automatic backend detection** (make rpc-full-all)  
 ✅ **Full GUI dropdown** with all backend options  
 ✅ **RPC variant libraries** (koboldcpp_hipblas_rpc.so, etc.)  
@@ -31,11 +31,13 @@ This document details every code addition and modification made to `koboldcpp.py
 ✅ **Config save/load** for all RPC settings (.kcpps files) including backend selection (runopts)  
 ✅ **ROCm device registry check** fix (added "ROCM" to device enum)  
 ✅ **has_rpc_in_device initialization** in import_vars() - now also checks saved RPC endpoint  
-✅ **runopts saved to config** - backend selection persists across reloads
+✅ **runopts saved to config** - backend selection persists across reloads  
+✅ **Full UI integration** - RPC Server tab fully functional with all controls  
+✅ **Backend auto-selection** for RPC Server mode from GUI  
 
-**Total Changes**: 38 major modifications across 19 sections  
-**Lines Added**: ~950 lines  
-**Lines Modified**: ~280 lines
+**Total Changes**: 40 major modifications across 20 sections  
+**Lines Added**: ~1100 lines  
+**Lines Modified**: ~320 lines
 
 ---
 

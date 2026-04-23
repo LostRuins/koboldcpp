@@ -1,10 +1,10 @@
 # RPC Porting Guide - llama.cpp to koboldcpp
 
 **Version**: 1.111.2  
-**Date**: 2026-04-18  
+**Date**: 2026-04-23  
 **Purpose**: Complete step-by-step guide to port RPC from llama.cpp to koboldcpp  
 **Target Audience**: Developers, LLMs, or anyone needing to replicate the integration  
-**Status**: ✅ Complete - All Features Working (v1.111.2 with RPC endpoint fields, config save/load, and independent CUDA+HIPBLAS builds)
+**Status**: ✅ Complete - All Features Working with Full UI Integration (v1.111.2 with RPC Server tab, endpoint fields, config save/load, backend dropdown, and independent CUDA+HIPBLAS builds)
 
 ---
 
@@ -24,6 +24,7 @@ This guide provides **complete, reproducible instructions** for integrating RPC 
 ✅ **Automatic backend detection** (make rpc-full-all)  
 ✅ **Full GUI dropdown** with all backend options  
 ✅ **RPC Server mode** (launch RPC server from GUI or CLI)  
+✅ **RPC Server tab** in GUI with full configuration  
 ✅ **RPC Server Backend dropdown** (Auto-detect, Vulkan, hipBLAS, CUDA)  
 ✅ **Device name conversion** (VULKAN0 -> ROCm0, etc.)  
 ✅ **Allow Launch Without Models** for RPC Server mode  
@@ -33,9 +34,11 @@ This guide provides **complete, reproducible instructions** for integrating RPC 
 ✅ **has_rpc_in_device initialization** in import_vars() - now also checks saved RPC endpoint  
 ✅ **Independent CUDA+HIPBLAS builds** - both built when both toolchains present (no mutual exclusion)  
 ✅ **runopts saved to config** - backend selection persists across reloads  
+✅ **Full UI integration** - RPC Server tab fully functional and tested  
+✅ **Backend auto-selection** for RPC Server mode works correctly
 
 **Time Required**: 2-4 hours  
-**Difficulty**: Intermediate (requires C++ and build system knowledge)  
+**Difficulty**: Intermediate (requires C++ and build system knowledge)
 
 ---
 

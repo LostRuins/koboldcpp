@@ -1,8 +1,8 @@
 # KoboldCPP RPC - Quick Start Guide
 
 **Version**: 1.111.2  
-**Last Updated**: 2026-04-18  
-**Status**: ✅ Complete - All Features Working (v1.111.2 with RPC endpoint fields and config save/load)
+**Last Updated**: 2026-04-23  
+**Status**: ✅ Complete - All Features Working with Full UI (v1.111.2 with RPC Server tab, endpoint fields, config save/load, and backend dropdown)
 
 ---
 
