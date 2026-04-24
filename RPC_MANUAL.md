@@ -1,3 +1,58 @@
+Human Quick-Start:
+
+# RPC function
+Consult RPC_MANUAL.md for detailed explanation.
+
+Quick-Start:
+Git clone https://github.com/Neresco/koboldcpp_rpc_attempt.git
+Enter the Folder
+make clean && make rpc-full-all
+---
+Wait some (or some more) minutes until all is build (Building Not tested with nvidia because just have AMD)
+
+
+Example on Two machines:
+Machine1 RPC-Server with IP 192.168.178.10
+Machine2 RPC Client with IP 192.168.178.15
+
+
+Start python koboldcpp.py on the Machine1 that should be the server and "serve" GPU's to the Client Machine2 (Give me more VRAM!)
+Set GPUID to all (Or select just the GPU you want to serve with the Server)
+Switch to "RPC SERVER" Section
+Check "Start RPC Server Mode"
+
+Chose Backend Auto, CUDA, ROCm, Vulkan
+
+Set the IP address to listen to (Machine2 running the client later = 192.168.178.15 or 0.0.0.0)
+
+Set the Port for the network connection (Standard 50053 and each Server need another port when on the same machine)
+
+Optional write in the Devices that should be served (Backends cannot be mixed in one Server instance!).
+---
+For example:
+VULKAN0,VULKAN1 = Good
+CUDA0,CUDA1,CUDA2 = Good
+HIP0 = Good
+VULKAN0,CUDA1 = Will not work
+HIP0,VULKAN1 = Forget it
+HIP0,CUDA1 = not tested.. maybe but i doubt it
+---
+Check "Allow Launch without Model" and click "Launch"
+
+RPC Client:
+Chose Backend (hipBlas + RPC = AMD ROCm), (CUDA + RPC = Nvidia), (VULKAN + RPC = Yolo all GPU's)
+Under Backend write in the IP + Port of the RPC-Server (Machine that serves the GPU)
+example: 
+192.168.178.10:50053 (One Server + one client)
+192.168.178.10:50053,192.168.178.10:50054 (Multiple servers on the same machine Cuda + Vulkan for exmaple)
+192.168.178.10:50053,192.168.178.11:50053 (Multiple Servers on different Machines)
+
+Select the GPU's to use on the Client (If any)
+Write down the Device Order in "Device Overwrite" (Can sometimes favor fitting of Vram and / or speed)
+Write Down "Tensor Split" if not done Manual
+
+The rest is like before in Koboldcpp.
+
 # KoboldCpp RPC User Manual
 
 **Version:** 1.111.2 with RPC 4.0.0  
