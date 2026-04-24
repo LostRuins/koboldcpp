@@ -325,7 +325,25 @@ int main(int argc, char * argv[]) {
         cache_dir = cache_dir_str.c_str();
     }
 
-    // Call RPC start server function directly (no need for dynamic lookup)
-    ggml_backend_rpc_start_server(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data());
+    // Explicitly register RPC backend (for static linking)
+    // Store in static variable to prevent linker optimization
+    static ggml_backend_reg_t rpc_reg = NULL;
+    if (!rpc_reg) {
+        rpc_reg = ggml_backend_rpc_reg();
+    }
+    
+    ggml_backend_reg_t reg = rpc_reg;
+    if (!reg) {
+        fprintf(stderr, "Failed to find RPC backend\n");
+        return 1;
+    }
+
+    auto start_server_fn = (decltype(ggml_backend_rpc_start_server)*) ggml_backend_reg_get_proc_address(reg, "ggml_backend_rpc_start_server");
+    if (!start_server_fn) {
+        fprintf(stderr, "Failed to obtain RPC backend start server function\n");
+        return 1;
+    }
+
+    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data());
     return 0;
 }

@@ -24,7 +24,6 @@ extern "C"
 {
 
     std::string vulkandeviceenv;
-    std::string rpcdeviceenv;
 
     //return val: 0=fail, 1=(original ggml, alpaca), 2=(ggmf), 3=(ggjt)
     static FileFormat file_format = FileFormat::BADFORMAT;
@@ -52,15 +51,6 @@ extern "C"
         {
             vulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
             putenv((char*)vulkandeviceenv.c_str());
-        }
-
-        // Handle RPC endpoints
-        std::string rpc_endpoints_raw = inputs.rpc_endpoints;
-        if(rpc_endpoints_raw != "" && rpc_endpoints_raw.length() > 0)
-        {
-            rpcdeviceenv = "GGML_RPC_ENDPOINTS="+rpc_endpoints_raw;
-            putenv((char*)rpcdeviceenv.c_str());
-            printf("[RPC] Using RPC endpoints: %s\n", rpc_endpoints_raw.c_str());
         }
 
         executable_path = inputs.executable_path;
