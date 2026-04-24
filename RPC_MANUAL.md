@@ -26,8 +26,13 @@ Distribute model inference across multiple machines and GPUs using Remote Proced
 ## Quick Start
 
 ### 5-Minute Setup (Single Machine, Multiple GPUs)
+**Step 1: Build RPC Server All in one** (1 minute)
+```bash
+make clean  
+make rpc-full-all
+```
 
-**Step 1: Build RPC Server** (1 minute)
+**Step 1: Build RPC Server one by one** (1 minute)
 ```bash
 cd koboldcpp-1.111.2
 
@@ -75,17 +80,6 @@ python koboldcpp.py --rpc 192.168.1.100:50053
 
 ---
 
-### Quick Start: Multiple GPUs on One Machine
-
-**Start RPC server with multiple devices:**
-```bash
-./rpc-server-vulkan -H 127.0.0.1 --port 50053 --device Vulkan0,Vulkan1,Vulkan2
-```
-
-This uses all 3 GPUs for inference.
-
----
-
 ## What is RPC?
 
 **Remote Procedure Call (RPC)** allows you to split a neural network model across multiple GPUs or computers.
@@ -123,12 +117,8 @@ The client sends computation requests to the server, which processes specific mo
 
 ## System Requirements
 
-### RPC Server
-
 **Hardware:**
 - GPU with Vulkan, CUDA, or HIP support
-- Minimum 4 GB VRAM (recommended: 8+ GB)
-- Multi-core CPU (4+ cores recommended)
 
 **Software:**
 - Linux or Windows
@@ -141,15 +131,6 @@ The client sends computation requests to the server, which processes specific mo
 - 10 Gigabit Ethernet (recommended)
 - Low latency connection (< 1ms ideal)
 
-### RPC Client
-
-**Hardware:**
-- Any CPU or GPU system
-- Minimum 8 GB RAM
-
-**Software:**
-- Python 3.8+
-- koboldcpp-1.111.2+
 
 ---
 
@@ -165,23 +146,7 @@ make clean
 make rpc-server-vulkan -j8
 ```
 
-**Verify build:**
-```bash
-ls -lh rpc-server-vulkan
-# Should be ~60 MB
-```
-
 ### Option 2: CUDA (NVIDIA GPUs)
-
-**Recommended for:** NVIDIA GeForce, Tesla, Quadro GPUs
-
-**Prerequisites:**
-```bash
-# Install CUDA Toolkit (Ubuntu/Debian)
-sudo apt install nvidia-cuda-toolkit
-
-# Or download from: https://developer.nvidia.com/cuda-toolkit
-```
 
 **Build:**
 ```bash
@@ -191,16 +156,6 @@ make rpc-server-cuda -j8
 ```
 
 ### Option 3: HIP (AMD GPUs)
-
-**Recommended for:** AMD Radeon RX series (ROCm supported)
-
-**Prerequisites:**
-```bash
-# Install ROCm (Ubuntu/Debian)
-sudo apt install rocm-hip-sdk
-
-# Or follow: https://rocm.docs.amd.com/
-```
 
 **Build:**
 ```bash
@@ -237,19 +192,19 @@ options:
 
 **Start server on localhost:**
 ```bash
-./rpc-server-vulkan -H 127.0.0.1 --port 50053 --device Vulkan0
+./rpc-server-vulkan -H 192.168.1.10 --port 50053 --device Vulkan0
 ```
 
 ### Common Configurations
 
 #### Single GPU (Localhost)
 ```bash
-./rpc-server-vulkan -H 127.0.0.1 --port 50053 --device Vulkan0
+./rpc-server-vulkan -H 192.168.1.10--port 50053 --device Vulkan0
 ```
 
 #### Multiple GPUs (Localhost)
 ```bash
-./rpc-server-vulkan -H 127.0.0.1 --port 50053 --device Vulkan0,Vulkan1,Vulkan2
+./rpc-server-vulkan -H 192.168.1.10 --port 50053 --device Vulkan0,Vulkan1,Vulkan2
 ```
 
 #### Network Access (Multi-Machine)
@@ -298,39 +253,6 @@ available devices:
   CPU: AMD Ryzen 7 5800X3D (128727 MiB, 128727 MiB free)
 ```
 
-### Background Execution
-
-**Linux (systemd):**
-```bash
-# Create service file
-sudo nano /etc/systemd/system/koboldcpp-rpc.service
-```
-
-**Service file contents:**
-```ini
-[Unit]
-Description=KoboldCpp RPC Server
-After=network.target
-
-[Service]
-Type=simple
-User=your_username
-ExecStart=/path/to/rpc-server-vulkan -H 127.0.0.1 --port 50053 --device Vulkan0
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Enable and start:**
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable koboldcpp-rpc
-sudo systemctl start koboldcpp-rpc
-```
-
----
-
 ## Connecting RPC Client
 
 ### GUI Method
@@ -344,7 +266,7 @@ python koboldcpp.py
 
 **Step 3:** In Settings
 1. Enable "RPC Mode"
-2. Enter server address: `127.0.0.1:50053`
+2. Enter server address: `192.168.1.10:50053`
 3. Load your model
 4. Click "Start"
 
@@ -352,12 +274,12 @@ python koboldcpp.py
 
 **Connect to local server:**
 ```bash
-python koboldcpp.py --rpc 127.0.0.1:50053 --model model.gguf
+python koboldcpp.py --rpc 192.168.1.10:50053 --model model.gguf
 ```
 
 **Connect to remote server:**
 ```bash
-python koboldcpp.py --rpc 192.168.1.100:50053 --model model.gguf
+python koboldcpp.py --rpc 192.168.1.10:50053 --model model.gguf
 ```
 
 ### Multiple RPC Servers
@@ -647,14 +569,10 @@ Ensure RPC servers are stable before connecting.
 **A:** No theoretical limit, but practical limits:
 - **VRAM:** Total VRAM across all GPUs
 - **Network:** Larger models need more bandwidth
-- **Tested:** Up to 70B models on 4x 24GB GPUs
 
 ### Q: Does RPC work with all models?
 
 **A:** Yes, RPC is model-agnostic. Works with:
-- Llama models
-- Mistral models
-- Qwen models
 - Any GGUF format model
 
 ### Q: Can I use RPC for training?
@@ -694,34 +612,8 @@ python koboldcpp.py --rpc 192.168.1.100:50053
 python koboldcpp.py --rpc 192.168.1.100:50053 --rpc 192.168.1.101:50053
 ```
 
-### Build Commands
-
-```bash
-# Vulkan (AMD/Intel)
-make rpc-server-vulkan -j8
-
-# CUDA (NVIDIA)
-make rpc-server-cuda -j8
-
-# HIP (AMD)
-make rpc-server-hip -j8
-```
-
----
-
-## Additional Resources
-
-- **Technical Documentation:** `RPC_PORTING_LLAMACPP_TO_KOBOLDCPP.md`
-- **Porting Summary:** `RPC_PORT_SUMMARY.md`
-- **llama.cpp RPC Docs:** `llama.cpp/tools/rpc/README.md`
-- **KoboldCpp GitHub:** `https://github.com/LostRuins/koboldcpp`
-
----
-
 **Last Updated:** 2026-04-24  
 **Tested Version:** koboldcpp-1.111.2 with RPC 4.0.0  
-**Support:** Check koboldcpp GitHub issues for help
-
 ---
 
 ## Appendix A: Default Port Assignments
@@ -734,38 +626,6 @@ make rpc-server-hip -j8
 
 **Note:** You can use any available port for RPC, not just 50052-50053.
 
----
-
-## Appendix B: Example Configurations
-
-### Home Lab Setup
-
-**Machine 1 (Gaming PC):**
-- GPU: NVIDIA RTX 3080 (10GB)
-- Role: RPC Server 1
-- Command: `./rpc-server-cuda -H 0.0.0.0 --port 50053 --device CUDA0`
-
-**Machine 2 (Work PC):**
-- GPU: AMD RX 6800 XT (16GB)
-- Role: RPC Server 2
-- Command: `./rpc-server-hip -H 0.0.0.0 --port 50054 --device HIP0`
-
-**Machine 3 (Laptop):**
-- CPU: Intel i7
-- Role: Client
-- Command: `python koboldcpp.py --rpc 192.168.1.100:50053 --rpc 192.168.1.101:50054`
-
-### Single Machine, Multiple GPUs
-
-**System:**
-- GPU 1: AMD RX 7900 XTX (24GB)
-- GPU 2: AMD RX 7900 XT (20GB)
-- GPU 3: AMD RX 6800 (16GB)
-
-**Command:**
-```bash
-./rpc-server-vulkan -H 127.0.0.1 --port 50053 --device Vulkan0,Vulkan1,Vulkan2 -c
-```
 
 Total VRAM: 60GB - can run very large models!
 
