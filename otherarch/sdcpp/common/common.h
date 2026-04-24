@@ -101,6 +101,7 @@ struct SDContextParams {
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
     std::string lora_model_dir = ".";
+    std::string hires_upscalers_dir;
 
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
@@ -190,12 +191,23 @@ struct SDGenerationParams {
     int upscale_repeats   = 1;
     int upscale_tile_size = 128;
 
+    bool hires_enabled         = false;
+    std::string hires_upscaler = "Latent";
+    std::string hires_upscaler_model_path;
+    float hires_scale              = 2.f;
+    int hires_width                = 0;
+    int hires_height               = 0;
+    int hires_steps                = 0;
+    float hires_denoising_strength = 0.7f;
+    int hires_upscale_tile_size    = 128;
+
     std::map<std::string, float> lora_map;
     std::map<std::string, float> high_noise_lora_map;
 
     // Derived and normalized fields.
     std::string prompt_with_lora;  // for metadata record only
     std::vector<sd_lora_t> lora_vec;
+    sd_hires_upscaler_t resolved_hires_upscaler;
 
     // Owned execution payload.
     SDImageOwner init_image;
@@ -225,9 +237,12 @@ struct SDGenerationParams {
     void set_width_and_height_if_unset(int w, int h);
     int get_resolved_width() const;
     int get_resolved_height() const;
-    bool resolve(const std::string& lora_model_dir, bool strict = false);
+    bool resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict = false);
     bool validate(SDMode mode);
-    bool resolve_and_validate(SDMode mode, const std::string& lora_model_dir, bool strict = false);
+    bool resolve_and_validate(SDMode mode,
+                              const std::string& lora_model_dir,
+                              const std::string& hires_upscalers_dir,
+                              bool strict = false);
     sd_img_gen_params_t to_sd_img_gen_params_t();
     sd_vid_gen_params_t to_sd_vid_gen_params_t();
     std::string to_string() const;
