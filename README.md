@@ -5,12 +5,14 @@ Quick-Start:
 Git clone https://github.com/Neresco/koboldcpp_rpc_attempt.git
 Enter the Folder
 make clean && make rpc-full-all
-
+---
 Wait some (or some more) minutes until all is build (Building Not tested with nvidia because just have AMD)
+
 
 Example on Two machines:
 Machine1 RPC-Server with IP 192.168.178.10
 Machine2 RPC Client with IP 192.168.178.15
+
 
 Start python koboldcpp.py on the Machine1 that should be the server and "serve" GPU's to the Client Machine2 (Give me more VRAM!)
 Set GPUID to all (Or select just the GPU you want to serve with the Server)
