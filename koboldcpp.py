@@ -1009,10 +1009,13 @@ def init_library():
 
     has_rpc_in_device = False
     has_rocm_in_device = False
+    has_vulkan_in_device = False
     if args.device and "RPC" in args.device:
         has_rpc_in_device = True
     if args.device and ("ROCm" in args.device or "HIP" in args.device):
         has_rocm_in_device = True
+    if args.device and "VULKAN" in args.device:
+        has_vulkan_in_device = True
 
     if args.noavx2:  # failsafe implies noavx2 always
         if (
@@ -1081,7 +1084,9 @@ def init_library():
                     libname = lib_hipblas_rpc
             else:
                 # Default: try RPC variants in order, then non-RPC
-                if file_exists(lib_hipblas_rpc):
+                if has_vulkan_in_device and file_exists(lib_rpc):
+                    libname = lib_rpc
+                elif file_exists(lib_hipblas_rpc):
                     libname = lib_hipblas_rpc
                 elif file_exists(lib_cublas_rpc):
                     libname = lib_cublas_rpc
@@ -1115,14 +1120,18 @@ def init_library():
         elif file_exists(lib_vulkan_noavx2):
             libname = lib_vulkan_noavx2
     elif args.userpc is not None:
-        if has_rocm_in_device and file_exists(lib_hipblas_rpc):
+        if has_vulkan_in_device and file_exists(lib_rpc):
+            libname = lib_rpc
+        elif has_rocm_in_device and file_exists(lib_hipblas_rpc):
             libname = lib_hipblas_rpc
         elif file_exists(lib_rpc):
             libname = lib_rpc
         else:
             print("WARNING: RPC library not found. Please build with LLAMA_RPC=1")
     elif has_rpc_in_device:
-        if has_rocm_in_device and file_exists(lib_hipblas_rpc):
+        if has_vulkan_in_device and file_exists(lib_rpc):
+            libname = lib_rpc
+        elif has_rocm_in_device and file_exists(lib_hipblas_rpc):
             libname = lib_hipblas_rpc
         elif file_exists(lib_rpc):
             libname = lib_rpc
@@ -2380,6 +2389,12 @@ def fetch_gpu_properties(testCU, testVK, testmemory=False):
 def auto_set_backend_cli():
     fetch_gpu_properties(True, True)
     found_new_backend = False
+
+    # If VULKAN devices are explicitly specified in --device, force Vulkan backend
+    if args.device and "VULKAN" in args.device:
+        args.usevulkan = []
+        print(f"Auto Selected Vulkan Backend (VULKAN device specified in --device)\n")
+        return
 
     # check for avx2 and avx support
     is_oldpc_ver = "Use CPU" not in runopts  # on oldcpu ver, default lib does not exist
@@ -10301,6 +10316,8 @@ def show_gui():
         "1024",
         "2048",
         "4096",
+        "8192",
+        "12288",
     ]
     batchsize_text = [
         "Don't Batch",
@@ -10313,6 +10330,8 @@ def show_gui():
         "1024",
         "2048",
         "4096",
+        "8192",
+        "12288",
     ]
     contextsize_text = [
         "256",
@@ -10945,6 +10964,18 @@ def show_gui():
         fetch_gpu_properties(True, True)
         found_new_backend = False
 
+        # If VULKAN devices are explicitly specified in --device, force Vulkan backend
+        if args.device and "VULKAN" in args.device:
+            args.usevulkan = []
+            if "Use Vulkan + RPC" in runopts:
+                runopts_var.set("Use Vulkan + RPC")
+            else:
+                runopts_var.set("Use Vulkan")
+            print(
+                f"Auto Selected Vulkan Backend (VULKAN device specified in --device)\n"
+            )
+            return
+
         # check for avx2 and avx support (moved before RPC Server mode check)
         is_oldpc_ver = (
             "Use CPU" not in runopts
@@ -11228,6 +11259,7 @@ def show_gui():
             index == "Use Vulkan"
             or index == "Use Vulkan (Old CPU)"
             or index == "Use Vulkan (Older CPU)"
+            or index == "Use Vulkan + RPC"
             or index == "Use CUDA"
             or index == "Use CUDA + RPC"
             or index == "Use hipBLAS (ROCm)"
@@ -11264,23 +11296,16 @@ def show_gui():
             mmq_box.grid(row=4, column=0, padx=160, pady=1, stick="nw")
             quick_mmq_box.grid(row=4, column=1, padx=8, pady=1, stick="nw")
             splitmode_box.grid(row=4, column=0, padx=300, pady=1, stick="nw")
-            tensor_split_label.grid(row=8, column=0, padx=8, pady=1, stick="nw")
-            tensor_split_entry.grid(row=8, column=0, padx=160, pady=1, stick="nw")
         else:
             mmq_box.grid_remove()
             quick_mmq_box.grid_remove()
-            tensor_split_label.grid_remove()
-            tensor_split_entry.grid_remove()
             splitmode_box.grid_remove()
-
-        if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)":
-            tensor_split_label.grid(row=8, column=0, padx=8, pady=1, stick="nw")
-            tensor_split_entry.grid(row=8, column=0, padx=160, pady=1, stick="nw")
 
         if (
             index == "Use Vulkan"
             or index == "Use Vulkan (Old CPU)"
             or index == "Use Vulkan (Older CPU)"
+            or index == "Use Vulkan + RPC"
             or index == "Use CUDA"
             or index == "Use hipBLAS (ROCm)"
         ):
@@ -11579,16 +11604,6 @@ def show_gui():
     layercounter_label = ctk.CTkLabel(hardware_tab, text="")
     layercounter_label.grid(row=6, column=0, padx=230, sticky="W")
     layercounter_label.configure(text_color="#ffff00")
-    tensor_split_entry, tensor_split_label = makelabelentry(
-        hardware_tab,
-        "Tensor Split:",
-        tensor_split_str_vars,
-        8,
-        80,
-        padx=160,
-        singleline=True,
-        tooltip='When using multiple GPUs this option controls how large tensors should be split across all GPUs.\nUses a comma-separated list of non-negative values that assigns the proportion of data that each GPU should get in order.\nFor example, "3,2" will assign 60% of the data to GPU 0 and 40% to GPU 1.',
-    )
     maingpu_entry, maingpu_label = makelabelentry(
         hardware_tab,
         "Main GPU:",
@@ -11629,12 +11644,21 @@ def show_gui():
         "Device Override",
         deviceoverride_var,
         15,
-        120,
+        230,
         padx=(160),
         singleline=True,
-        tooltip="Set llama.cpp compatible device selection override. Comma separated (e.g. Vulkan0,Vulkan1). Overrides normal device choices.",
+        tooltip="Set llama.cpp compatible device selection override. Comma separated (e.g. Vulkan0,RPC0,Vulkan1). Overrides normal device choices.",
     )
-
+    tensor_split_entry, tensor_split_label = makelabelentry(
+        hardware_tab,
+        "Tensor Split:",
+        tensor_split_str_vars,
+        16,
+        230,
+        padx=(160),
+        singleline=True,
+        tooltip='When using multiple GPUs this option controls how large tensors should be split across all GPUs.\nUses a comma-separated list of non-negative values that assigns the proportion of data that each GPU should get in order.\nFor example, "3,2" will assign 60% of the data to GPU 0 and 40% to GPU 1.',
+    )
     # hardware checkboxes
     hardware_boxes = {
         "Launch Browser": [
@@ -11690,8 +11714,8 @@ def show_gui():
         blas_size_var,
         0,
         len(batchsize_values) - 1,
-        16,
-        width=200,
+        17,
+        width=250,
         set=6,
         tooltip="How many tokens to process at once per batch.\nLarger values use more memory.",
     )
@@ -13262,6 +13286,9 @@ def show_gui():
             elif runopts_var.get() == "Use Vulkan (Older CPU)":
                 args.noavx2 = True
                 args.failsafe = True
+        # If Device Override contains VULKAN devices, enumerate all local Vulkan GPUs
+        if args.device and "VULKAN" in args.device and args.usevulkan is not None:
+            args.usevulkan = []
         if gpulayers_var.get():
             args.gpulayers = (
                 0 if gpulayers_var.get() == "" else int(gpulayers_var.get())
@@ -13619,7 +13646,10 @@ def show_gui():
         nomodel.set(1 if "nomodel" in dict and dict["nomodel"] else 0)
         lowvram_var.set(1 if "lowvram" in dict and dict["lowvram"] else 0)
         if "quantkv" in dict:
-            quantkv_var.set(dict["quantkv"])
+            try:
+                quantkv_var.set(int(dict["quantkv"]))
+            except (ValueError, TypeError):
+                quantkv_var.set(0)
         if "usecuda" in dict and dict["usecuda"]:
             # Check for RPC variants first if RPC is being used
             if args.userpc is not None or has_rpc_in_device:
@@ -17601,7 +17631,7 @@ if __name__ == "__main__":
         "-b",
         help="Sets the batch size used in batched processing (default 512). Setting it to -1 disables batched mode, but keeps other benefits like GPU offload.",
         type=int,
-        choices=[-1, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096],
+        choices=[-1, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 12288],
         default=512,
     )
     advparser.add_argument(
