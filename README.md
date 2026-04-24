@@ -18,10 +18,15 @@ Start python koboldcpp.py on the Machine1 that should be the server and "serve" 
 Set GPUID to all (Or select just the GPU you want to serve with the Server)
 Switch to "RPC SERVER" Section
 Check "Start RPC Server Mode"
+
 Chose Backend Auto, CUDA, ROCm, Vulkan
+
 Set the IP address to listen to (Machine2 running the client later = 192.168.178.15 or 0.0.0.0)
+
 Set the Port for the network connection (Standard 50053 and each Server need another port when on the same machine)
+
 Optional write in the Devices that should be served (Backends cannot be mixed in one Server instance!).
+---
 For example:
 VULKAN0,VULKAN1 = Good
 CUDA0,CUDA1,CUDA2 = Good
@@ -29,7 +34,7 @@ HIP0 = Good
 VULKAN0,CUDA1 = Will not work
 HIP0,VULKAN1 = Forget it
 HIP0,CUDA1 = not tested.. maybe but i doubt it
-
+---
 Check "Allow Launch without Model" and click "Launch"
 <img width="602" height="596" alt="grafik" src="https://github.com/user-attachments/assets/4bec773e-ec73-4abb-a5c1-a42e1c6b817f" />
 
