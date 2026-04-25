@@ -389,6 +389,7 @@ class sd_generation_inputs(ctypes.Structure):
                 ("seed", ctypes.c_int),
                 ("sample_method", ctypes.c_char_p),
                 ("scheduler", ctypes.c_char_p),
+                ("eta", ctypes.c_float),
                 ("clip_skip", ctypes.c_int),
                 ("vid_req_frames", ctypes.c_int),
                 ("video_output_type", ctypes.c_int),
@@ -2645,6 +2646,7 @@ def sd_generate(genparams):
     sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
+    eta = tryparsefloat(genparams.get("eta", None), None)
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
     vid_req_frames = 1 if (not vid_req_frames or vid_req_frames < 1) else vid_req_frames
     video_output_type = genparams.get("video_output_type", 0)
@@ -2697,6 +2699,7 @@ def sd_generate(genparams):
     inputs.seed = ((seed + 2**31) % 2**32) - 2**31
     inputs.sample_method = sd_sampler_canonical_name(sample_method).encode("UTF-8")
     inputs.scheduler = scheduler.encode("UTF-8")
+    inputs.eta = -1.0 if eta is None else eta
     inputs.clip_skip = clip_skip
     inputs.vid_req_frames = vid_req_frames
     inputs.video_output_type = video_output_type

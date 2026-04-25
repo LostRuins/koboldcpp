@@ -225,6 +225,7 @@ struct sd_generation_inputs
     const int seed = 0;
     const char * sample_method = nullptr;
     const char * scheduler = nullptr;
+    const float eta = -1.0f;
     const int clip_skip = -1;
     const int vid_req_frames = 1;
     const int video_output_type = 0; //0=gif, 1=avi, 2=both

@@ -133,6 +133,7 @@ struct SDParams {
     float distilled_guidance      = -1.0f;
     float shifted_timestep        = 0;
     float flow_shift              = -1.0f;
+    float eta                     = -1.0f;
     float strength                = 0.75f;
     int64_t seed                  = 42;
     bool clip_on_cpu              = false;
@@ -600,6 +601,8 @@ static std::string get_image_params(const sd_img_gen_params_t & params, const st
         << " | Size: " << params.width << "x" << params.height
         << " | Sampler: " << sd_sample_method_name(params.sample_params.sample_method)
         << get_scheduler_name(params.sample_params.scheduler, true);
+    if (params.sample_params.eta != -1.0f)
+        ss << "| Eta: " << params.sample_params.eta;
     if (params.sample_params.shifted_timestep != 0)
         ss << "| Timestep Shift: " << params.sample_params.shifted_timestep;
     if (params.sample_params.flow_shift > 0.f && params.sample_params.flow_shift != INFINITY)
@@ -978,6 +981,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->sample_steps = inputs.sample_steps;
     sd_params->shifted_timestep = inputs.shifted_timestep;
     sd_params->flow_shift = inputs.flow_shift;
+    sd_params->eta = inputs.eta;
     sd_params->seed = inputs.seed;
     sd_params->width = inputs.width;
     sd_params->height = inputs.height;
@@ -1212,6 +1216,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.sample_params.scheduler = sd_params->scheduler;
     params.sample_params.sample_steps = sd_params->sample_steps;
     params.sample_params.shifted_timestep = sd_params->shifted_timestep;
+    if (sd_params->eta >= 0.f && sd_params->eta <= 1.f) {
+        params.sample_params.eta = sd_params->eta;
+    }
     if (sd_params->flow_shift > 0.f && sd_params->flow_shift != INFINITY) {
         params.sample_params.flow_shift = sd_params->flow_shift;
     }
@@ -1418,6 +1425,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         jsoninfo["extra_generation_params"] = nlohmann::json::object();
         if (params.sample_params.scheduler != scheduler_t::SCHEDULER_COUNT)
             jsoninfo["extra_generation_params"]["Schedule type"] = get_scheduler_name(params.sample_params.scheduler);
+        if (params.sample_params.eta >= 0 && params.sample_params.eta <= 1)
+            jsoninfo["eta"] = params.sample_params.eta;
         if (is_img2img)
             jsoninfo["denoising_strength"] = params.strength;
         if (sd_params->model_path.empty())
