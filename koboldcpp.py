@@ -6934,13 +6934,33 @@ def RunServerMultiThreaded(addr, port, server_handler):
             self.daemon = True
             self.start()
 
+        # Workaround for a !1809
+        def check_ip_version(self, addr):
+            v4 = False
+            v6 = False
+
+            try:
+                socket.getaddrinfo(addr, None, socket.AF_INET)
+                v4 = True
+            except:
+                pass
+
+            try:
+                socket.getaddrinfo(addr, None, socket.AF_INET6)
+                v6 = True
+            except:
+                pass
+
+            return v4, v6
+
         def run(self):
             global exitcounter
             handler = server_handler(addr, port)
+            enable_v4, enable_v6 = self.check_ip_version(addr)
             with http.server.HTTPServer((addr, port), handler, False) as self.httpd:
                 try:
                     if ipv6_sock:
-                        self.httpd.socket = ipv4_sock if self.i < 16 else ipv6_sock
+                        self.httpd.socket = ipv4_sock if (self.i < 16 and enable_v4) else ipv6_sock
                     else:
                         self.httpd.socket = ipv4_sock
 
