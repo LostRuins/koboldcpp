@@ -272,7 +272,8 @@ class load_model_inputs(ctypes.Structure):
                 ("lora_multiplier", ctypes.c_float),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
-                ("debugmode", ctypes.c_int)]
+                ("debugmode", ctypes.c_int),
+                ("continuous_batching_slots", ctypes.c_int)]
 
 class generation_inputs(ctypes.Structure):
     _fields_ = [("seed", ctypes.c_int),
@@ -886,6 +887,23 @@ def init_library():
     handle.new_token.argtypes = [ctypes.c_int]
     handle.get_stream_count.restype = ctypes.c_int
     handle.has_finished.restype = ctypes.c_bool
+    handle.batch_generate_enabled.restype = ctypes.c_bool
+    handle.batch_generate_submit.argtypes = [generation_inputs]
+    handle.batch_generate_submit.restype = ctypes.c_int
+    handle.batch_generate_has_finished.argtypes = [ctypes.c_int]
+    handle.batch_generate_has_finished.restype = ctypes.c_bool
+    handle.batch_generate_stream_count.argtypes = [ctypes.c_int]
+    handle.batch_generate_stream_count.restype = ctypes.c_int
+    handle.batch_generate_new_token.argtypes = [ctypes.c_int, ctypes.c_int]
+    handle.batch_generate_new_token.restype = ctypes.c_char_p
+    handle.batch_generate_pending_output.argtypes = [ctypes.c_int]
+    handle.batch_generate_pending_output.restype = ctypes.c_char_p
+    handle.batch_generate_result.argtypes = [ctypes.c_int]
+    handle.batch_generate_result.restype = generation_outputs
+    handle.batch_generate_abort.argtypes = [ctypes.c_int]
+    handle.batch_generate_abort.restype = ctypes.c_bool
+    handle.batch_generate_release.argtypes = [ctypes.c_int]
+    handle.batch_generate_release.restype = None
     handle.has_audio_support.restype = ctypes.c_bool
     handle.has_vision_support.restype = ctypes.c_bool
     handle.get_last_eval_time.restype = ctypes.c_float
@@ -1979,6 +1997,7 @@ def load_model(model_filename):
     savestate_limit = sclimit
     inputs.smartcacheslots = sclimit
     inputs.pipelineparallel = (not args.nopipelineparallel)
+    inputs.continuous_batching_slots = int(args.continuous_batching) if hasattr(args, "continuous_batching") else 0
     inputs = set_backend_props(inputs)
     ret = handle.load_model(inputs)
     return ret
@@ -2225,16 +2244,58 @@ def generate(genparams, stream_flag=False):
         pendingabortkey = ""
         return {"text":"","status":-1,"stopreason":-1, "prompt_tokens":0, "completion_tokens": 0, "total_tokens": 0}
     else:
-        ret = handle.generate(inputs)
+        batch_request_id = -1
+        if getattr(args, "continuous_batching", 0) > 1:
+            try:
+                batch_request_id = handle.batch_generate_submit(inputs)
+            except Exception:
+                batch_request_id = -1
+        if batch_request_id >= 0:
+            genparams['_batch_request_id'] = batch_request_id
+            ret = handle.batch_generate_result(batch_request_id)
+        else:
+            genparams['_batch_fallback'] = True
+            ret = handle.generate(inputs)
         outstr = ""
         if ret.status==1:
             outstr = ret.text.decode("UTF-8","ignore")
+        if batch_request_id >= 0 and not stream_flag:
+            handle.batch_generate_release(batch_request_id)
+            genparams.pop('_batch_request_id', None)
+            genparams.pop('_batch_expected', None)
+            genparams.pop('_batch_fallback', None)
         if trimstop:
             for trim_str in stop_sequence:
                 sindex = outstr.find(trim_str)
                 if sindex != -1 and trim_str!="":
                     outstr = outstr[:sindex]
         return {"text":outstr,"status":ret.status,"stopreason":ret.stopreason,"prompt_tokens":ret.prompt_tokens, "completion_tokens": ret.completion_tokens}
+
+def continuous_batching_python_eligible(genparams, api_format, stream_flag=False):
+    if getattr(args, "continuous_batching", 0) <= 1 or api_format <= 0:
+        return False
+    model_path = str(getattr(args, "model_param", "") or "").lower()
+    if model_path and not model_path.endswith(".gguf"):
+        return False
+    if not getattr(args, "noshift", False) or getattr(args, "smartcontext", False) or getattr(args, "draftmodel", "") or getattr(args, "mmproj", "") or getattr(args, "enableguidance", False):
+        return False
+    if genparams.get("memory") or genparams.get("negative_prompt") or genparams.get("images") or genparams.get("audio"):
+        return False
+    if genparams.get("ban_eos_token", False):
+        return False
+    if genparams.get("grammar") or genparams.get("grammar_retain_state") or genparams.get("logit_bias") or genparams.get("banned_tokens") or genparams.get("banned_strings"):
+        return False
+    if tryparsefloat(genparams.get("dry_multiplier", 0), 0) or tryparseint(genparams.get("mirostat", 0), 0) or tryparsefloat(genparams.get("xtc_probability", 0), 0) or tryparsefloat(genparams.get("nsigma", 0), 0):
+        return False
+    if tryparsefloat(genparams.get("smoothing_factor", 0), 0) or tryparsefloat(genparams.get("adaptive_target", -1), -1) > 0 or genparams.get("using_openai_tools", False):
+        return False
+    if tryparsefloat(genparams.get("top_a", 0), 0) or tryparsefloat(genparams.get("tfs", 1), 1) != 1 or tryparsefloat(genparams.get("dynatemp_range", 0), 0) or tryparsefloat(genparams.get("rep_pen_slope", 1), 1) != 1:
+        return False
+    if genparams.get("sampler_order") and genparams.get("sampler_order") != [6, 0, 1, 3, 4, 2, 5]:
+        return False
+    if genparams.get("reasoning_effort"):
+        return False
+    return True
 
 def sd_get_info():
     info = handle.sd_get_info()
@@ -4914,19 +4975,29 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         incomplete_token_buffer = bytearray()
         async_sleep_short = 0.02
         await asyncio.sleep(0.35) #anti race condition, prevent check from overtaking generate
+        batch_request_id = genparams.get('_batch_request_id', -1)
+        batch_final_result = None
 
         try:
             tokenReserve = "" #keeps fully formed tokens that we cannot send out yet
             while True:
-                streamDone = handle.has_finished() #exit next loop on done
+                if batch_request_id < 0:
+                    batch_request_id = genparams.get('_batch_request_id', -1)
+                    if genparams.get('_batch_expected', False) and batch_request_id < 0 and not genparams.get('_batch_fallback', False):
+                        await asyncio.sleep(async_sleep_short)
+                        continue
+                using_batch_stream = batch_request_id >= 0
+                streamDone = handle.batch_generate_has_finished(batch_request_id) if using_batch_stream else handle.has_finished() #exit next loop on done
                 if streamDone:
-                    sr = handle.get_last_stop_reason()
+                    if using_batch_stream and batch_final_result is None:
+                        batch_final_result = handle.batch_generate_result(batch_request_id)
+                    sr = batch_final_result.stopreason if using_batch_stream else handle.get_last_stop_reason()
                     currfinishreason = "error" if sr==-2 else ("length" if (sr!=1) else "stop")
-                    prompttokens = handle.get_last_input_count()
+                    prompttokens = batch_final_result.prompt_tokens if using_batch_stream else handle.get_last_input_count()
                 tokenStr = ""
-                streamcount = handle.get_stream_count()
+                streamcount = handle.batch_generate_stream_count(batch_request_id) if using_batch_stream else handle.get_stream_count()
                 while current_token < streamcount:
-                    token = handle.new_token(current_token)
+                    token = handle.batch_generate_new_token(batch_request_id, current_token) if using_batch_stream else handle.new_token(current_token)
 
                     if token is None: # Token isnt ready yet, received nullpointer
                         break
@@ -5126,7 +5197,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                     if streamDone:
                                         # content_part.done, reply full text
                                         await asyncio.sleep(async_sleep_short)
-                                        finaltxt = handle.get_pending_output().decode("UTF-8", "ignore")
+                                        finalraw = handle.batch_generate_pending_output(batch_request_id) if using_batch_stream else handle.get_pending_output()
+                                        finaltxt = finalraw.decode("UTF-8", "ignore")
                                         await asyncio.sleep(async_sleep_short)
                                         done_event = json.dumps({"type": "response.output_text.done", "item_id": item_id, "output_index": 0, "sequence_number":rseq_num, "content_index": 0, "text": finaltxt})
                                         rseq_num += 1
@@ -5135,7 +5207,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                         item_done = json.dumps({"type": "response.output_item.done", "output_index": 0, "sequence_number":rseq_num, "item": { "type": "message", "id": item_id, "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": finaltxt, "annotations": [], "logprobs": []}]}})
                                         rseq_num += 1
                                         await self.send_oai_responses_sse_event("response.output_item.done",item_done)
-                                        usage_pp = handle.get_last_input_count()
+                                        usage_pp = batch_final_result.prompt_tokens if using_batch_stream else handle.get_last_input_count()
                                         usage_gen = current_token
                                         res = self.prepare_basic_responses_body(resp_id,genparams)
                                         res["completed_at"] = int(time.time())
@@ -5183,8 +5255,17 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as ex:
             print("Token streaming was interrupted or aborted!")
             print(ex)
-            handle.abort_generate()
+            if batch_request_id >= 0:
+                handle.batch_generate_abort(batch_request_id)
+            else:
+                handle.abort_generate()
             await asyncio.sleep(0.2) #short delay
+        finally:
+            if batch_request_id >= 0:
+                handle.batch_generate_release(batch_request_id)
+                genparams.pop('_batch_request_id', None)
+            genparams.pop('_batch_expected', None)
+            genparams.pop('_batch_fallback', None)
 
         # flush buffers, sleep a bit to make sure all data sent, and then force close the connection
         self.wfile.flush()
@@ -6271,6 +6352,7 @@ Change Mode<br>
             return
 
         reqblocking = False
+        modelbusy_locked = False
         #handle rate limiting
         ratelimiter = int(args.ratelimit)
         if ratelimiter > 0:
@@ -6302,6 +6384,7 @@ Change Mode<br>
                     "type": "service_unavailable",
                 }}).encode())
             return
+        modelbusy_locked = True
         if reqblocking:
             requestsinqueue = (requestsinqueue - 1) if requestsinqueue > 0 else 0
 
@@ -6514,6 +6597,10 @@ Change Mode<br>
                     # Check if streaming chat completions, if so, set stream mode to true
                     if (api_format == 4 or api_format == 3 or api_format == 8 or api_format == 9) and "stream" in genparams and genparams["stream"]:
                         sse_stream_flag = True
+                    if continuous_batching_python_eligible(genparams, api_format, sse_stream_flag):
+                        genparams['_batch_expected'] = True
+                        modelbusy.release()
+                        modelbusy_locked = False
 
                     gendat = asyncio.run(self.handle_request(genparams, api_format, sse_stream_flag))
 
@@ -6866,7 +6953,8 @@ Change Mode<br>
 
         finally:
             time.sleep(0.05)
-            modelbusy.release()
+            if modelbusy_locked:
+                modelbusy.release()
 
         self.send_response(404)
         self.end_headers(content_type='text/html')
@@ -11309,6 +11397,7 @@ if __name__ == '__main__':
     advparser.add_argument("--analyze", metavar=('[filename]'), help="Reads the metadata, weight types and tensor names in any GGUF file.", default="")
     advparser.add_argument("--maingpu","--main-gpu","-mg", help="Only used in a multi-gpu setup. Sets the index of the main GPU that will be used.",metavar=('[Device ID]'), type=int, default=-1)
     advparser.add_argument("--batchsize","--blasbatchsize","--batch-size","-b", help="Sets the batch size used in batched processing (default 512). Setting it to -1 disables batched mode, but keeps other benefits like GPU offload.", type=int,choices=[-1,16,32,64,128,256,512,1024,2048,4096], default=512)
+    advparser.add_argument("--continuous-batching","--contbatch", help="Experimental GGUF-only continuous batching slot count. Unsupported request features fall back to the legacy single-request path.", metavar=('[slots]'), type=check_range(int,0,64), default=0)
     advparser.add_argument("--blasthreads","--batchthreads","--threadsbatch","--threads-batch", help="Use a different number of threads during batching if specified. Otherwise, has the same value as --threads",metavar=('[threads]'), type=int, default=0)
     advparser.add_argument("--lora", help="GGUF models only, applies a lora file on top of model.", metavar=('[lora_filename]'), nargs='+')
     advparser.add_argument("--loramult", metavar=('[amount]'), help="Multiplier for the Text LORA model to be applied.", type=float, default=1.0)

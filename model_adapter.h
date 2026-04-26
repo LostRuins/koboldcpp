@@ -84,6 +84,15 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
 generation_outputs gpttype_generate(const generation_inputs inputs);
 bool gpttype_generate_abort();
 std::string gpttype_get_chat_template();
+bool gpttype_batch_generate_enabled();
+int gpttype_batch_generate_submit(const generation_inputs inputs);
+bool gpttype_batch_generate_has_finished(int request_id);
+int gpttype_batch_generate_stream_count(int request_id);
+const char * gpttype_batch_generate_new_token(int request_id, int idx);
+const char * gpttype_batch_generate_pending_output(int request_id);
+generation_outputs gpttype_batch_generate_result(int request_id);
+bool gpttype_batch_generate_abort(int request_id);
+void gpttype_batch_generate_release(int request_id);
 
 const std::string & gpttype_get_pending_output();
 std::vector<int> gpttype_get_token_arr(const std::string & input, bool addbos);
