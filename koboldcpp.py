@@ -4417,7 +4417,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                         }
                         if args.adminpassword:
                             reqheaders["Authorization"] = f"Bearer {args.adminpassword}"
-                        conn = http.client.HTTPConnection('localhost', upstream_port, timeout=600)
+                        conn = http.client.HTTPConnection('localhost', upstream_port, timeout=args.routermodetimeout)
                         conn.request("POST", "/api/admin/reload_config", body=reqbody, headers=reqheaders)
                         resp = conn.getresponse()
                         time.sleep(3)
@@ -4463,7 +4463,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                     }
                     if args.adminpassword:
                         reqheaders["Authorization"] = f"Bearer {args.adminpassword}"
-                    conn = http.client.HTTPConnection('localhost', upstream_port, timeout=600)
+                    conn = http.client.HTTPConnection('localhost', upstream_port, timeout=args.routermodetimeout)
                     conn.request("POST", "/api/admin/reload_config", body=reqbody, headers=reqheaders)
                     resp = conn.getresponse()
                     time.sleep(3)
@@ -4474,7 +4474,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                     time.sleep(0.1)
 
         try:  # connect upstream
-            conn = http.client.HTTPConnection('localhost', upstream_port, timeout=600)
+            conn = http.client.HTTPConnection('localhost', upstream_port, timeout=args.routermodetimeout)
             conn.request( self.command, self.path, body=body, headers=headers)
             resp = conn.getresponse()
         except OSError as e:
@@ -11447,6 +11447,7 @@ if __name__ == '__main__':
     admingroup.add_argument("--admindir", metavar=('[directory]'), help="Specify a directory to look for .kcpps configs in, which can be used to swap models.", default="")
     admingroup.add_argument("--adminunloadtimeout", help="Set an idle timeout in seconds after which KoboldCpp will automatically unload the current model.", type=int, default=0)
     admingroup.add_argument("--routermode", help="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.", action='store_true')
+    admingroup.add_argument("--routermodetimeout", metavar=('[seconds]'), help="Timeout in seconds for the router-mode reverse proxy when forwarding requests to the loaded backend (also applies to admin reload calls). Increase this if long generations are being cut off at the proxy. Defaults to 600.", type=int, default=600)
     admingroup.add_argument("--autoswapmode", help="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.", action='store_true')
     admingroup.add_argument("--baseconfig", help="Specify a base .kcpps config to apply, if no custom base config is selected during a model swap", default="")
 
