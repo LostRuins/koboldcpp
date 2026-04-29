@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "stable-diffusion.h"
+#include "tensor.hpp"
 
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
@@ -31,20 +32,15 @@ std::u32string unicode_value_to_utf32(int unicode_value);
 
 std::string sd_get_u8path(const std::string& file_path);
 
-typedef struct {
-    uint32_t width;
-    uint32_t height;
-    uint32_t channel;
-    float* data;
-} sd_image_f32_t;
+sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index = 0);
 
-void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3]);
 
-sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image);
+sd::Tensor<float> sd_image_to_tensor(sd_image_t image,
+                                     int target_width  = -1,
+                                     int target_height = -1,
+                                     bool scale        = true);
 
-sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int target_height);
-
-sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int target_height);
+sd::Tensor<float> clip_preprocess(const sd::Tensor<float>& image, int target_width, int target_height);
 
 class MmapWrapper {
 public:
@@ -71,6 +67,7 @@ protected:
 std::string path_join(const std::string& p1, const std::string& p2);
 std::vector<std::string> split_string(const std::string& str, char delimiter);
 void pretty_progress(int step, int steps, float time);
+void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 

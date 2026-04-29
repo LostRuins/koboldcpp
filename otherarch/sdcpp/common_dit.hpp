@@ -4,11 +4,11 @@
 #include "ggml_extend.hpp"
 
 namespace DiT {
-    ggml_tensor* patchify(ggml_context* ctx,
-                          ggml_tensor* x,
-                          int pw,
-                          int ph,
-                          bool patch_last = true) {
+    inline ggml_tensor* patchify(ggml_context* ctx,
+                                 ggml_tensor* x,
+                                 int pw,
+                                 int ph,
+                                 bool patch_last = true) {
         // x: [N, C, H, W]
         // return: [N, h*w, C*ph*pw] if patch_last else [N, h*w, ph*pw*C]
         int64_t N = x->ne[3];
@@ -33,13 +33,13 @@ namespace DiT {
         return x;
     }
 
-    ggml_tensor* unpatchify(ggml_context* ctx,
-                            ggml_tensor* x,
-                            int64_t h,
-                            int64_t w,
-                            int ph,
-                            int pw,
-                            bool patch_last = true) {
+    inline ggml_tensor* unpatchify(ggml_context* ctx,
+                                   ggml_tensor* x,
+                                   int64_t h,
+                                   int64_t w,
+                                   int ph,
+                                   int pw,
+                                   bool patch_last = true) {
         // x: [N, h*w, C*ph*pw] if patch_last else [N, h*w, ph*pw*C]
         // return: [N, C, H, W]
         int64_t N = x->ne[2];
@@ -64,10 +64,10 @@ namespace DiT {
         return x;
     }
 
-    ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
-                                   ggml_tensor* x,
-                                   int ph,
-                                   int pw) {
+    inline ggml_tensor* pad_to_patch_size(GGMLRunnerContext* ctx,
+                                          ggml_tensor* x,
+                                          int ph,
+                                          int pw) {
         int64_t W = x->ne[0];
         int64_t H = x->ne[1];
 
@@ -77,23 +77,23 @@ namespace DiT {
         return x;
     }
 
-    ggml_tensor* pad_and_patchify(GGMLRunnerContext* ctx,
-                                  ggml_tensor* x,
-                                  int ph,
-                                  int pw,
-                                  bool patch_last = true) {
+    inline ggml_tensor* pad_and_patchify(GGMLRunnerContext* ctx,
+                                         ggml_tensor* x,
+                                         int ph,
+                                         int pw,
+                                         bool patch_last = true) {
         x = pad_to_patch_size(ctx, x, ph, pw);
         x = patchify(ctx->ggml_ctx, x, ph, pw, patch_last);
         return x;
     }
 
-    ggml_tensor* unpatchify_and_crop(ggml_context* ctx,
-                                     ggml_tensor* x,
-                                     int64_t H,
-                                     int64_t W,
-                                     int ph,
-                                     int pw,
-                                     bool patch_last = true) {
+    inline ggml_tensor* unpatchify_and_crop(ggml_context* ctx,
+                                            ggml_tensor* x,
+                                            int64_t H,
+                                            int64_t W,
+                                            int ph,
+                                            int pw,
+                                            bool patch_last = true) {
         int pad_h = (ph - H % ph) % ph;
         int pad_w = (pw - W % pw) % pw;
         int64_t h = ((H + pad_h) / ph);

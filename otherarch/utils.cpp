@@ -1055,6 +1055,43 @@ static std::vector<std::string> kcpp_string_split(const std::string & input, cha
 }
 
 //for llama.cpp style device overrides e.g. --device Vulkan0,Vulkan1
+static ggml_backend_dev_t kcpp_find_device_by_name(const std::string & name) {
+    ggml_backend_dev_t dev = ggml_backend_dev_by_name(name.c_str());
+    if (dev) {
+        return dev;
+    }
+    
+    std::string name_upper = name;
+    std::transform(name_upper.begin(), name_upper.end(), name_upper.begin(), ::toupper);
+    
+    if (name_upper.find("HIP") == 0 || name_upper.find("ROCm") == 0 || name_upper.find("ROCM") == 0) {
+        std::string num;
+        if (name_upper.find("HIP") == 0) {
+            num = name_upper.substr(3);
+        } else {
+            num = name_upper.substr(4);
+        }
+        std::string alt_name = (name_upper.find("HIP") == 0) ? "ROCm" + num : "HIP" + num;
+        dev = ggml_backend_dev_by_name(alt_name.c_str());
+        if (dev) {
+            printf("[RPC] Device alias: %s -> %s\n", name.c_str(), alt_name.c_str());
+            return dev;
+        }
+    }
+    
+    if (name_upper.find("CUDA") == 0) {
+        std::string num = name_upper.substr(4);
+        std::string alt_name = "HIP" + num;
+        dev = ggml_backend_dev_by_name(alt_name.c_str());
+        if (dev) {
+            printf("[RPC] Device alias: %s -> %s\n", name.c_str(), alt_name.c_str());
+            return dev;
+        }
+    }
+    
+    return nullptr;
+}
+
 std::vector<ggml_backend_dev_t> kcpp_parse_device_list(const std::string & value) {
     std::vector<ggml_backend_dev_t> devices;
     auto dev_names = kcpp_string_split(value, ',');
@@ -1066,7 +1103,7 @@ std::vector<ggml_backend_dev_t> kcpp_parse_device_list(const std::string & value
         return std::vector<ggml_backend_dev_t>();
     } else {
         for (const auto & device : dev_names) {
-            auto * dev = ggml_backend_dev_by_name(device.c_str());
+            auto * dev = kcpp_find_device_by_name(device);
             if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
                 printf("\nkcpp_parse_device_list error: invalid device: %s\n",device.c_str());
                 return std::vector<ggml_backend_dev_t>();
@@ -1076,4 +1113,57 @@ std::vector<ggml_backend_dev_t> kcpp_parse_device_list(const std::string & value
         devices.push_back(nullptr);
     }
     return devices;
+}
+
+bool kcpp_string_ends_with(const std::string& str, const std::string& suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string kcpp_rstrip(const std::string& s) {
+    size_t end = s.find_last_not_of(" \t\n\r\f\v");
+    return (end == std::string::npos) ? "" : s.substr(0, end + 1);
+}
+
+//counts the number of matching prefix tokens between two sequences
+int ComputeSharedPrefixLength(const std::vector<int> &tokens_a,const std::vector<int> &tokens_b)
+{
+    size_t min_length = std::min(tokens_a.size(), tokens_b.size());
+
+    int match_count = 0;
+    for (size_t i = 0; i < min_length; ++i) {
+        if (tokens_a[i] != tokens_b[i]) {
+            break;
+        }
+        match_count++;
+    }
+
+    return match_count;
+}
+
+//counts the number of matching prefix tokens between two sequences, returns percentage matched 0.0 to 1.0
+float ComputePrefixMatchPercent(const std::vector<int> &tokens_a,const std::vector<int> &tokens_b)
+{
+    size_t min_length = std::min(tokens_a.size(), tokens_b.size());
+
+    if (min_length == 0) {
+        return 0.0f;
+    }
+
+    int match_count = ComputeSharedPrefixLength(tokens_a, tokens_b);
+    return static_cast<float>(match_count) / static_cast<float>(min_length);
+}
+
+//returns true if and only if sequence 1 is fully contained within the starting of sequence 2
+bool FullyContainedPrefix(std::vector<int> &sequence1, std::vector<int> &sequence2)
+{
+    if (sequence1.size() > sequence2.size() || sequence1.size()==0 || sequence2.size()==0) {
+        return false;
+    }
+    for (size_t i = 0; i < sequence1.size(); ++i) {
+        if (sequence1[i] != sequence2[i]) {
+            return false;
+        }
+    }
+    return true;
 }

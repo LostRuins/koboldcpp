@@ -74,7 +74,7 @@ dry_seq_break_max = 128
 extra_images_max = 4 #for kontext/qwen img
 
 # global vars
-KcppVersion = "1.111.2"
+KcppVersion = "1.112.2"
 showdebug = True
 kcpp_instance = None # global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "autoswapmode": False}
@@ -17190,62 +17190,68 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 os.path.dirname(os.path.abspath(__file__)), "rpc-server-hip"
             )
         else:
- # Auto-detect: try in order of preference
+ # Auto-detect: check device names first, then try in order of preference
             print("Auto-detecting RPC server backend...")
-            for candidate in ["rpc-server-hip", "rpc-server-vulkan", "rpc-server-cuda"]:
-                candidate_path = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), candidate
-                )
-                if os.path.exists(candidate_path):
-                    if "hip" in candidate:
-                        device_prefix = "ROCm"
-                    elif "cuda" in candidate:
-                        device_prefix = "CUDA"
-                    else:
+            
+ # Check if device names specify a backend
+            if devices:
+                for dev in devices:
+                    dev_upper = dev.upper()
+                    if dev_upper.startswith("VULKAN"):
                         device_prefix = "VULKAN"
-                    rpc_server_path = candidate_path
-                    print(
-                        f"Auto-detected: {candidate} (device prefix: {device_prefix})"
+                        break
+                    elif dev_upper.startswith("ROCm") or dev_upper.startswith("HIP"):
+                        device_prefix = "ROCm"
+                        break
+                    elif dev_upper.startswith("CUDA"):
+                        device_prefix = "CUDA"
+                        break
+            
+ # If no device prefix found, auto-detect from available binaries
+            if not device_prefix:
+                for candidate in ["rpc-server-hip", "rpc-server-vulkan", "rpc-server-cuda"]:
+                    candidate_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), candidate
                     )
-                    break
+                    if os.path.exists(candidate_path):
+                        if "hip" in candidate:
+                            device_prefix = "ROCm"
+                        elif "cuda" in candidate:
+                            device_prefix = "CUDA"
+                        else:
+                            device_prefix = "VULKAN"
+                        rpc_server_path = candidate_path
+                        print(
+                            f"Auto-detected: {candidate} (device prefix: {device_prefix})"
+                        )
+                        break
+            else:
+ # Use device prefix to select backend
+                if device_prefix == "VULKAN":
+                    rpc_server_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "rpc-server-vulkan"
+                    )
+                elif device_prefix == "CUDA":
+                    rpc_server_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "rpc-server-cuda"
+                    )
+                else:
+                    rpc_server_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "rpc-server-hip"
+                    )
+                print(f"Backend selected from device names: {device_prefix}")
 
  # Build and validate device list
         devices = []
         if args.rpc_devices and args.rpc_devices.strip():
             devices = [d.strip() for d in args.rpc_devices.split(",") if d.strip()]
 
- # Convert device names if prefix is specified and devices are provided
+ # Do NOT convert device names - respect explicit backend prefixes in device names
+        # Device names with explicit prefixes (VULKAN, ROCm, HIP, CUDA) should be used as-is
+        # This allows mixing different backend types (e.g., VULKAN1 for Vulkan RPC, ROCm0 for HIP RPC)
         if device_prefix and devices:
-            converted_devices = []
-            for dev in devices:
-                dev_upper = dev.upper()
-                if dev_upper.startswith("VULKAN"):
-                    if device_prefix != "VULKAN":
-                        dev_num = dev_upper.replace("VULKAN", "")
-                        converted_devices.append(f"{device_prefix}{dev_num}")
-                        print(f"  Converting {dev} -> {converted_devices[-1]}")
-                    else:
-                        converted_devices.append(dev)
-                elif dev_upper.startswith("ROCm") or dev_upper.startswith("HIP"):
-                    if device_prefix != "VULKAN":
-                        dev_num = dev_upper.replace("ROCm", "").replace("HIP", "")
-                        if device_prefix == "CUDA":
-                            converted_devices.append(f"CUDA{dev_num}")
-                        else:
-                            converted_devices.append(f"{device_prefix}{dev_num}")
-                        print(f"  Converting {dev} -> {converted_devices[-1]}")
-                    else:
-                        converted_devices.append(dev)
-                elif dev_upper.startswith("CUDA"):
-                    if device_prefix != "VULKAN":
-                        dev_num = dev_upper.replace("CUDA", "")
-                        converted_devices.append(f"{device_prefix}{dev_num}")
-                        print(f"  Converting {dev} -> {converted_devices[-1]}")
-                    else:
-                        converted_devices.append(dev)
-                else:
-                    converted_devices.append(dev)
-            devices = converted_devices
+            print(f"Using device prefix: {device_prefix} (auto-detected backend)")
+            print(f"Device names preserved (explicit backend prefixes respected): {devices}")
         elif not devices and device_prefix:
             print(
                 "WARNING: No devices specified. RPC server will use default device enumeration."

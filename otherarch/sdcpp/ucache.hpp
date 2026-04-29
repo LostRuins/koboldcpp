@@ -6,8 +6,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include "condition_cache_utils.hpp"
 #include "denoiser.hpp"
 #include "ggml_extend.hpp"
+#include "tensor.hpp"
 
 struct UCacheConfig {
     bool enabled                = false;
@@ -29,15 +31,15 @@ struct UCacheCacheEntry {
 
 struct UCacheState {
     UCacheConfig config;
-    Denoiser* denoiser                  = nullptr;
-    float start_sigma                   = std::numeric_limits<float>::max();
-    float end_sigma                     = 0.0f;
-    bool initialized                    = false;
-    bool initial_step                   = true;
-    bool skip_current_step              = false;
-    bool step_active                    = false;
-    const SDCondition* anchor_condition = nullptr;
-    std::unordered_map<const SDCondition*, UCacheCacheEntry> cache_diffs;
+    Denoiser* denoiser           = nullptr;
+    float start_sigma            = std::numeric_limits<float>::max();
+    float end_sigma              = 0.0f;
+    bool initialized             = false;
+    bool initial_step            = true;
+    bool skip_current_step       = false;
+    bool step_active             = false;
+    const void* anchor_condition = nullptr;
+    std::unordered_map<const void*, UCacheCacheEntry> cache_diffs;
     std::vector<float> prev_input;
     std::vector<float> prev_output;
     float output_prev_norm                = 0.0f;
@@ -233,43 +235,30 @@ struct UCacheState {
         return base_threshold * multiplier;
     }
 
-    bool has_cache(const SDCondition* cond) const {
+    bool has_cache(const void* cond) const {
         auto it = cache_diffs.find(cond);
         return it != cache_diffs.end() && !it->second.diff.empty();
     }
 
-    void update_cache(const SDCondition* cond, ggml_tensor* input, ggml_tensor* output) {
+    void update_cache(const void* cond, const sd::Tensor<float>& input, const sd::Tensor<float>& output) {
         UCacheCacheEntry& entry = cache_diffs[cond];
-        size_t ne               = static_cast<size_t>(ggml_nelements(output));
-        entry.diff.resize(ne);
-        float* out_data = (float*)output->data;
-        float* in_data  = (float*)input->data;
-
-        for (size_t i = 0; i < ne; ++i) {
-            entry.diff[i] = out_data[i] - in_data[i];
-        }
+        sd::store_condition_cache_diff(&entry.diff, input, output);
     }
 
-    void apply_cache(const SDCondition* cond, ggml_tensor* input, ggml_tensor* output) {
+    void apply_cache(const void* cond, const sd::Tensor<float>& input, sd::Tensor<float>* output) {
         auto it = cache_diffs.find(cond);
         if (it == cache_diffs.end() || it->second.diff.empty()) {
             return;
         }
-
-        copy_ggml_tensor(output, input);
-        float* out_data                = (float*)output->data;
-        const std::vector<float>& diff = it->second.diff;
-        for (size_t i = 0; i < diff.size(); ++i) {
-            out_data[i] += diff[i];
-        }
+        sd::apply_condition_cache_diff(it->second.diff, input, output);
     }
 
-    bool before_condition(const SDCondition* cond,
-                          ggml_tensor* input,
-                          ggml_tensor* output,
+    bool before_condition(const void* cond,
+                          const sd::Tensor<float>& input,
+                          sd::Tensor<float>* output,
                           float sigma,
                           int step_index) {
-        if (!enabled() || step_index < 0) {
+        if (!enabled() || step_index < 0 || output == nullptr) {
             return false;
         }
         if (step_index != current_step_index) {
@@ -302,13 +291,13 @@ struct UCacheState {
             return false;
         }
 
-        size_t ne = static_cast<size_t>(ggml_nelements(input));
+        size_t ne = static_cast<size_t>(input.numel());
         if (prev_input.size() != ne) {
             return false;
         }
 
-        float* input_data = (float*)input->data;
-        last_input_change = 0.0f;
+        const float* input_data = input.data();
+        last_input_change       = 0.0f;
         for (size_t i = 0; i < ne; ++i) {
             last_input_change += std::fabs(input_data[i] - prev_input[i]);
         }
@@ -354,7 +343,7 @@ struct UCacheState {
         return false;
     }
 
-    void after_condition(const SDCondition* cond, ggml_tensor* input, ggml_tensor* output) {
+    void after_condition(const void* cond, const sd::Tensor<float>& input, const sd::Tensor<float>& output) {
         if (!step_is_active()) {
             return;
         }
@@ -367,16 +356,16 @@ struct UCacheState {
         steps_computed_since_active++;
         consecutive_skipped_steps = 0;
 
-        size_t ne      = static_cast<size_t>(ggml_nelements(input));
-        float* in_data = (float*)input->data;
+        size_t ne            = static_cast<size_t>(input.numel());
+        const float* in_data = input.data();
         prev_input.resize(ne);
         for (size_t i = 0; i < ne; ++i) {
             prev_input[i] = in_data[i];
         }
         has_prev_input = true;
 
-        float* out_data     = (float*)output->data;
-        float output_change = 0.0f;
+        const float* out_data = output.data();
+        float output_change   = 0.0f;
         if (has_prev_output && prev_output.size() == ne) {
             for (size_t i = 0; i < ne; ++i) {
                 output_change += std::fabs(out_data[i] - prev_output[i]);

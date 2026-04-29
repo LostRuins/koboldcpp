@@ -21,8 +21,10 @@ struct kcpp_params {
     int32_t n_ctx                 =     0; // context size
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
-    int      n_threads                   = -1;
-    int      n_blasthreads               = -1;
+    int vision_min_tokens         =    -1; // Minimum image embedding tokens
+    int vision_max_tokens         =    -1; // Maximum image embedding tokens
+    int      n_threads            = -1;
+    int      n_blasthreads        = -1;
 
     // sampling parameters
     int32_t top_k             = 40;    // <= 0 to use vocab size
@@ -52,6 +54,7 @@ struct kcpp_params {
     float   dynatemp_exponent  = 1.0f;
     float adaptive_target     = -1.0f; // 0.0 - 1.0, <=0.0 is disabled
     float adaptive_decay      = 0.9f;
+    int reasoning_budget       = 0; //if > 0, controls thinking budget
 
     std::string model_filename       = ""; // model path
     std::string prompt               = "";

@@ -47,6 +47,8 @@ struct load_model_inputs
     const char * mmproj_filename = nullptr;
     const bool mmproj_cpu = false;
     const int visionmaxres = 2048;
+    const int visionmintokens = -1;
+    const int visionmaxtokens = -1;
     const bool use_mmap = false;
     const bool use_mlock = false;
     const bool use_smartcontext = false;
@@ -73,8 +75,10 @@ struct load_model_inputs
     const int quant_k = 0;
     const int quant_v = 0;
     const bool check_slowness = false;
+    const char * jinja_template = nullptr;
     const bool highpriority = false;
     const bool swa_support = false;
+    const int swa_padding = 0;
     const bool smartcache = false;
     const int smartcacheslots = 0;
     const bool pipelineparallel = false;
@@ -140,6 +144,7 @@ struct generation_inputs
     const logit_bias * logit_biases = nullptr;
     const int banned_tokens_len = 0;
     const char ** banned_tokens = nullptr;
+    const int reasoning_budget = -1;
 };
 struct generation_outputs
 {
@@ -222,6 +227,7 @@ struct sd_generation_inputs
     const int seed = 0;
     const char * sample_method = nullptr;
     const char * scheduler = nullptr;
+    const float eta = -1.0f;
     const int clip_skip = -1;
     const int vid_req_frames = 1;
     const int video_output_type = 0; //0=gif, 1=avi, 2=both

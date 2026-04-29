@@ -49,7 +49,7 @@ static bool encode_image_with_clip(clip_ctx * ctx_clip, int n_threads, struct cl
     return true;
 }
 
-bool llava_image_embed_make_with_clip_img(clip_ctx * ctx_clip, int n_threads, const clip_image_u8 * img, float ** image_embd_out, int * n_img_pos_out, int * nx_out, int * ny_out) {
+bool llava_image_embed_make_with_clip_img(clip_ctx * ctx_clip, int n_threads, const clip_image_u8 * img, float ** image_embd_out, int * n_img_pos_out, int * nx_out, int * ny_out, bool clip_is_mrope) {
     // Granite vision uses up to 10 patches + base patch
     int num_max_patches = 11;
     if (clip_is_minicpmv(ctx_clip)) {
@@ -65,7 +65,7 @@ bool llava_image_embed_make_with_clip_img(clip_ctx * ctx_clip, int n_threads, co
         return false;
     }
 
-    if (clip_is_mrope(ctx_clip)) {
+    if (clip_is_mrope) {
         // qwen2vl don't split image into chunks, so `num_max_patches` is not needed.
         //sometimes they resize the image LARGER than before (padding up), so we must account for that
         int max_nx = img->nx;
