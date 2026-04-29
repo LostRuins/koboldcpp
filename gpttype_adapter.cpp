@@ -12,9 +12,11 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 #include "model_adapter.h"
 #include "otherarch.h"
 #include "llama.h"
+#include "ggml-rpc.h"
 #include <vector>
 #include <map>
 #include <cstdint>
@@ -22,6 +24,7 @@
 #include <cctype>
 #include <locale>
 #include <chrono>
+#include <algorithm>
 
 #include "utils.h"
 
@@ -2383,17 +2386,246 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         model_params.use_direct_io = false; //no direct io for now until stable
         model_params.n_gpu_layers = inputs.gpulayers;
 
-        //set device overrides if needed
+       //set device overrides if needed
         std::vector<ggml_backend_dev_t> devices_override;
-        std::string dev_override_str = inputs.devices_override;
-        if(dev_override_str!="")
+        
+        // Load all backends including RPC
+        ggml_backend_load_all();
+        printf("[RPC] Backends loaded, device count: %zu\n", ggml_backend_dev_count());
+
+        // Handle RPC endpoints - connect to RPC server(s) FIRST
+        std::string rpc_endpoints_str = inputs.rpc_endpoints;
+        bool use_rpc = false;
+        std::vector<ggml_backend_dev_t> rpc_devices;  // Declare outside for device reordering
+        if(rpc_endpoints_str != "" && rpc_endpoints_str.length() > 0)
         {
-            devices_override = kcpp_parse_device_list(dev_override_str);
-            if(devices_override.size()>0)
-            {
-                printf("\nOverriding with %zu devices...\n",devices_override.size()-1);
-                model_params.devices = devices_override.data();
+            printf("[RPC] Connecting to RPC server(s): %s\n", rpc_endpoints_str.c_str());
+            
+            // Parse comma-separated endpoints and add each one
+            size_t start = 0;
+            size_t end = rpc_endpoints_str.find(',');
+            while (end != std::string::npos) {
+                std::string endpoint = rpc_endpoints_str.substr(start, end - start);
+                printf("[RPC] Adding RPC server: %s\n", endpoint.c_str());
+                ggml_backend_reg_t reg = ggml_backend_rpc_add_server(endpoint.c_str());
+                if(reg != nullptr) {
+                    // Get devices from the returned registry
+                    size_t dev_count = ggml_backend_reg_dev_count(reg);
+                    printf("[RPC] Server %s has %zu devices\n", endpoint.c_str(), dev_count);
+                    for(size_t i = 0; i < dev_count; ++i) {
+                        ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, i);
+                        printf("[RPC] Found RPC device %zu: %s\n", i, ggml_backend_dev_name(dev));
+                        rpc_devices.push_back(dev);
+                    }
+                } else {
+                    printf("[RPC] WARNING: Failed to connect to RPC server %s\n", endpoint.c_str());
+                    // Continue anyway - might have local GPUs
+                }
+                start = end + 1;
+                end = rpc_endpoints_str.find(',', start);
             }
+            // Add last endpoint
+            std::string endpoint = rpc_endpoints_str.substr(start);
+            printf("[RPC] Adding RPC server: %s\n", endpoint.c_str());
+            ggml_backend_reg_t reg = ggml_backend_rpc_add_server(endpoint.c_str());
+            if(reg != nullptr) {
+                size_t dev_count = ggml_backend_reg_dev_count(reg);
+                printf("[RPC] Server %s has %zu devices\n", endpoint.c_str(), dev_count);
+                for(size_t i = 0; i < dev_count; ++i) {
+                    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, i);
+                    printf("[RPC] Found RPC device %zu: %s\n", i, ggml_backend_dev_name(dev));
+                    rpc_devices.push_back(dev);
+                }
+            } else {
+                printf("[RPC] WARNING: Failed to connect to RPC server %s\n", endpoint.c_str());
+            }
+            
+            if(rpc_devices.size() > 0) {
+                printf("[RPC] Using %zu RPC device(s) for offloading\n", rpc_devices.size());
+                // Add RPC devices to the beginning of devices_override
+                devices_override.insert(devices_override.begin(), rpc_devices.begin(), rpc_devices.end());
+                use_rpc = true;
+            } else {
+                printf("[RPC] WARNING: No RPC devices found after connecting to server\n");
+            }
+        }
+
+        std::string dev_override_str = inputs.devices_override ? inputs.devices_override : "";
+        
+        // If device override is specified, use it to reorder ALL devices
+        if(dev_override_str != "" && dev_override_str.length() > 0)
+        {
+            printf("[RPC] Manual device ordering specified: %s\n", dev_override_str.c_str());
+            
+            // Get all available devices (RPC + local)
+            std::vector<std::pair<std::string, ggml_backend_dev_t>> all_devices;
+            
+            // Add RPC devices FIRST (so they can be matched by name)
+            if(use_rpc) {
+                for(size_t i = 0; i < rpc_devices.size(); ++i) {
+                    std::string name = "RPC" + std::to_string(i);
+                    all_devices.push_back(std::make_pair(name, rpc_devices[i]));
+                }
+                printf("[RPC] Added %zu RPC device(s) to device pool\n", rpc_devices.size());
+            }
+            
+            // Add local GPU devices
+            printf("[RPC] Enumerating local GPU devices...\n");
+            int vulkan_count = 0, cuda_count = 0, hip_count = 0, metal_count = 0;
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                auto* dev = ggml_backend_dev_get(i);
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                std::string reg_name = reg ? ggml_backend_reg_name(reg) : "";
+                std::string dev_name = ggml_backend_dev_name(dev);
+                
+                // Skip RPC and CPU devices
+                std::string reg_name_upper = reg_name;
+                std::transform(reg_name_upper.begin(), reg_name_upper.end(), reg_name_upper.begin(), ::toupper);
+                
+                if(reg_name_upper.find("RPC") != std::string::npos || 
+                   reg_name_upper.find("CPU") != std::string::npos) {
+                    continue;
+                }
+                
+                // Add local GPU devices
+                if(reg_name_upper.find("VULKAN") != std::string::npos || 
+                   reg_name_upper.find("RADV") != std::string::npos) {
+                    printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+                    std::string local_name = "VULKAN" + std::to_string(vulkan_count++);
+                    all_devices.push_back(std::make_pair(local_name, dev));
+                    if(vulkan_count == 1) {
+                        printf("[RPC] DEBUG: Vulkan device 0 registered as VULKAN0\n");
+                    }
+                }
+                else if(reg_name_upper.find("CUDA") != std::string::npos) {
+                    printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+                    std::string cuda_name = "CUDA" + std::to_string(cuda_count++);
+                    std::string hip_name = "HIP" + std::to_string(hip_count++);
+                    all_devices.push_back(std::make_pair(cuda_name, dev));
+                    all_devices.push_back(std::make_pair(hip_name, dev));
+                    printf("[RPC] DEBUG: CUDA device %d registered as both %s and %s\n", cuda_count-1, cuda_name.c_str(), hip_name.c_str());
+                }
+                else if(reg_name_upper.find("HIP") != std::string::npos || reg_name_upper.find("ROCM") != std::string::npos) {
+                    printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+                    std::string hip_name = "HIP" + std::to_string(hip_count);
+                    std::string rocm_name = "ROCm" + std::to_string(hip_count++);
+                    all_devices.push_back(std::make_pair(hip_name, dev));
+                    all_devices.push_back(std::make_pair(rocm_name, dev));
+                    printf("[RPC] DEBUG: HIP/ROCM device %d registered as both %s and %s\n", hip_count-1, hip_name.c_str(), rocm_name.c_str());
+                }
+                else if(reg_name_upper.find("METAL") != std::string::npos) {
+                    printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+                    std::string local_name = "METAL" + std::to_string(metal_count++);
+                    all_devices.push_back(std::make_pair(local_name, dev));
+                }
+            }
+            
+            // Parse device order from override string
+            std::vector<std::string> device_order;
+            size_t start = 0;
+            size_t end = dev_override_str.find(',');
+            while (end != std::string::npos) {
+                std::string device = dev_override_str.substr(start, end - start);
+                device.erase(0, device.find_first_not_of(" \t"));
+                device.erase(device.find_last_not_of(" \t") + 1);
+                device_order.push_back(device);
+                start = end + 1;
+                end = dev_override_str.find(',', start);
+            }
+            std::string last_device = dev_override_str.substr(start);
+            last_device.erase(0, last_device.find_first_not_of(" \t"));
+            last_device.erase(last_device.find_last_not_of(" \t") + 1);
+            device_order.push_back(last_device);
+            
+            // If RPC devices are connected but NOT in the override string, append them
+            if(use_rpc) {
+                // Build set of device names already in override
+                std::set<std::string> override_names;
+                for(const auto& d : device_order) {
+                    std::string upper = d;
+                    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+                    override_names.insert(upper);
+                }
+                // Check which RPC devices are missing from override
+                bool has_any_rpc = false;
+                for(size_t i = 0; i < rpc_devices.size(); ++i) {
+                    std::string rpc_name = "RPC" + std::to_string(i);
+                    std::string rpc_upper = rpc_name;
+                    std::transform(rpc_upper.begin(), rpc_upper.end(), rpc_upper.begin(), ::toupper);
+                    if(override_names.find(rpc_upper) == override_names.end()) {
+                        device_order.push_back(rpc_name);
+                        printf("[RPC] Appending missing RPC device: %s\n", rpc_name.c_str());
+                        has_any_rpc = true;
+                    }
+                }
+                if(has_any_rpc) {
+                    printf("[RPC] Override string modified to include RPC devices\n");
+                }
+            }
+            
+            // Build ordered device list
+            devices_override.clear();
+            printf("[RPC] Ordering devices: ");
+            for(const auto& dev_name : device_order) {
+                std::string dev_name_upper = dev_name;
+                std::transform(dev_name_upper.begin(), dev_name_upper.end(), dev_name_upper.begin(), ::toupper);
+                printf("%s ", dev_name.c_str());
+                
+                // Find matching device
+                bool found = false;
+                for(const auto& pair : all_devices) {
+                    if(pair.first == dev_name_upper) {
+                        devices_override.push_back(pair.second);
+                        found = true;
+                        break;
+                    }
+                }
+                if(!found) {
+                    printf("\n[RPC] WARNING: Device %s not found\n", dev_name.c_str());
+                }
+            }
+            printf("\n");
+            printf("[RPC] Total devices for offloading: %zu (manually ordered)\n", devices_override.size());
+        }
+        // If using RPC but no device override specified, auto-add local GPU devices
+        else if(use_rpc && devices_override.size() > 0) {
+            // Enumerate local GPU devices and add them
+            printf("[RPC] Enumerating local GPU devices to use alongside RPC...\n");
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                auto* dev = ggml_backend_dev_get(i);
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                std::string reg_name = reg ? ggml_backend_reg_name(reg) : "";
+                std::string dev_name = ggml_backend_dev_name(dev);
+                printf("[RPC] Checking device %zu: %s (registry: %s)\n", i, dev_name.c_str(), reg_name.c_str());
+                // Add local GPU devices (not RPC, not CPU) - case insensitive check
+                std::string reg_name_upper = reg_name;
+                std::transform(reg_name_upper.begin(), reg_name_upper.end(), reg_name_upper.begin(), ::toupper);
+                
+                if(reg_name_upper.find("RPC") == std::string::npos && 
+                   reg_name_upper.find("CPU") == std::string::npos &&
+                   (reg_name_upper.find("VULKAN") != std::string::npos || 
+                    reg_name_upper.find("RADV") != std::string::npos ||
+                    reg_name_upper.find("CUDA") != std::string::npos ||
+                    reg_name_upper.find("HIP") != std::string::npos ||
+                    reg_name_upper.find("ROCM") != std::string::npos ||
+                    reg_name_upper.find("METAL") != std::string::npos)) {
+                    printf("[RPC] Found local GPU device: %s (registry: %s)\n", dev_name.c_str(), reg_name.c_str());
+                    devices_override.push_back(dev);
+                }
+            }
+            printf("[RPC] Total devices for offloading: %zu (RPC + local GPUs)\n", devices_override.size());
+        }
+        
+        // Apply device overrides if we have any devices
+        if(devices_override.size() > 0) {
+            // Add null terminator for llama.cpp (expects null-terminated array)
+            devices_override.push_back(nullptr);
+            model_params.devices = devices_override.data();
+            // Force GPU usage by setting n_gpu_layers to max when using RPC or custom devices
+            if(use_rpc) {
+                model_params.n_gpu_layers = 999;
+            }
+            printf("[RPC] Using %zu device(s) for model offloading\n", devices_override.size() - 1);
         }
 
         if(kcpp_parseinfo_maindevice>0)

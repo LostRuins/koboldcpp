@@ -158,6 +158,11 @@ ifdef LLAMA_PERF
 CFLAGS   += -DGGML_PERF
 CXXFLAGS += -DGGML_PERF
 endif
+ifdef LLAMA_RPC
+RPC_FLAGS = -DGGML_USE_RPC
+else
+RPC_FLAGS =
+endif
 
 CCV := $(shell $(CC) --version | head -n 1)
 CXXV := $(shell $(CXX) --version | head -n 1)
@@ -453,7 +458,19 @@ ifdef LLAMA_HIPBLAS
 HIPBLAS_BUILD = $(HCXX) $(CXXFLAGS) $(HIPFLAGS) $^ -shared -o $@.so $(HIPLDFLAGS) $(LDFLAGS)
 endif
 ifdef LLAMA_VULKAN
+ifdef LLAMA_RPC
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
+else
 VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
+endif
+endif
+ifdef LLAMA_RPC
+ifndef LLAMA_VULKAN
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.so $(LDFLAGS)
+endif
+endif
+ifdef LLAMA_RPC
+RPC_BUILD_WIN = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.dll $(LDFLAGS)
 endif
 endif
 
@@ -654,7 +671,13 @@ ggml_v1.o: otherarch/ggml_v1.c otherarch/ggml_v1.h
 ggml_v1_failsafe.o: otherarch/ggml_v1.c otherarch/ggml_v1.h
 	$(CC)  $(FASTCFLAGS) $(NONECFLAGS) -c $< -o $@
 
-#vulkan
+#vulkan - auto-generate shader files if missing
+$(VKGEN_HPP) $(VKGEN_CPP): vulkan-shaders-gen
+	@if [ ! -f $(VKGEN_HPP) ] || [ ! -f $(VKGEN_CPP) ]; then \
+		echo "Generating Vulkan shaders..."; \
+		./vulkan-shaders-gen --glslc ./glslc-linux --input-dir ggml/src/ggml-vulkan/vulkan-shaders --target-hpp $(VKGEN_HPP) --target-cpp $(VKGEN_CPP) --output-dir vulkan-spv-tmp; \
+	fi
+
 ggml-vulkan.o: ggml/src/ggml-vulkan/ggml-vulkan.cpp ggml/include/ggml-vulkan.h $(VKGEN_CPP)
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_ADD) $(VULKAN_FLAGS) -c $< -o $@
 ggml-vulkan-shaders.o: $(VKGEN_CPP) ggml/include/ggml-vulkan.h
@@ -663,6 +686,13 @@ ggml-vulkan-noext.o: ggml/src/ggml-vulkan/ggml-vulkan.cpp ggml/include/ggml-vulk
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_FORCE) $(VULKAN_FLAGS) -c $< -o $@
 ggml-vulkan-shaders-noext.o: ggml/src/ggml-vulkan-shaders-noext.cpp ggml/include/ggml-vulkan.h
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_FORCE) $(VULKAN_FLAGS) -c $< -o $@
+
+#rpc
+ggml-rpc.o: ggml/src/ggml-rpc/ggml-rpc.cpp ggml/include/ggml-rpc.h ggml/src/ggml-rpc/transport.h
+	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
+
+transport.o: ggml/src/ggml-rpc/transport.cpp ggml/src/ggml-rpc/transport.h
+	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
 
 # intermediate objects
 llama.o: src/llama.cpp ggml/include/ggml.h ggml/include/ggml-alloc.h ggml/include/ggml-backend.h ggml/include/ggml-cuda.h ggml/include/ggml-metal.h include/llama.h otherarch/llama-util.h
@@ -908,6 +938,26 @@ koboldcpp_vulkan_failsafe:
 	$(DONOTHING)
 endif
 
+# RPC client build targets - Vulkan RPC (default)
+koboldcpp_rpc: ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-rpc.o transport.o ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_FULL) $(OBJS)
+	$(RPC_BUILD)
+
+koboldcpp_hipblas_rpc: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o ggml-rpc.o transport.o sdcpp_cublas.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o $(HIP_OBJS) $(OBJS_FULL) $(OBJS)
+	$(HIPBLAS_BUILD)
+
+koboldcpp_cublas_rpc: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o ggml-rpc.o transport.o sdcpp_cublas.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o $(CUBLAS_OBJS) $(OBJS_FULL) $(OBJS)
+	$(CUBLAS_BUILD)
+
+# RPC server build targets - always build with backend support
+rpc-server-vulkan: tools/rpc-server.cpp ggml/src/ggml-vulkan-shaders.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o transport.o ggml-backend_vulkan.o ggml-backend-reg_vulkan.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o ggml-vulkan.o console.o
+	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) -lvulkan
+
+rpc-server-cuda: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o transport.o ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o ggml-cuda.o ggml_v2-cuda.o ggml_v2-cuda-legacy.o $(filter-out ggml_v3-cuda.o,$(CUBLAS_OBJS))
+	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(CUBLASLD_FLAGS)
+
+rpc-server-hip: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o transport.o ggml-backend_cublas.o ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o $(HIP_OBJS)
+	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HIPLDFLAGS)
+
 # tools
 quantize_gguf: tools/quantize/quantize.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o llavaclip_default.o llava.o ggml-backend_default.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
@@ -931,6 +981,33 @@ simplecpuinfo: simplecpuinfo.cpp
 
 build-info.h:
 	$(DONOTHING)
+
+# Automatic backend detection and full RPC build
+.PHONY: rpc-full-all
+rpc-full-all:
+	@echo "=== Detecting available backends ==="
+	@echo "Checking for AMD HIPBLAS (hipcc)..."
+	@if command -v hipcc &> /dev/null; then echo "✓ HIPBLAS: Available"; HAS_HIPBLAS=1; else echo "✗ HIPBLAS: Not available"; HAS_HIPBLAS=0; fi
+	@echo ""
+	@echo "=== Building Vulkan + RPC ==="
+	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 koboldcpp_rpc -j8
+	$(MAKE) LLAMA_VULKAN=1 LLAMA_RPC=1 rpc-server-vulkan -j8
+	@echo ""
+	@echo "=== Building HIPBLAS + RPC (if available) ==="
+	@if command -v hipcc &> /dev/null; then \
+		echo "HIPBLAS detected, building..."; \
+		$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 koboldcpp_hipblas_rpc -j8; \
+		$(MAKE) LLAMA_HIPBLAS=1 LLAMA_RPC=1 rpc-server-hip -j8; \
+		echo ""; \
+		echo "=== HIPBLAS RPC built successfully! ==="; \
+		echo "Use rpc-server-hip for AMD GPUs"; \
+	else \
+		echo "HIPBLAS not available, skipping"; \
+	fi
+	@echo ""
+	@echo "=== All RPC components built! ==="
+	@echo "Vulkan RPC: rpc-server-vulkan"
+	@echo "HIPBLAS RPC: rpc-server-hip (for AMD GPUs)"
 
 #phony for printing messages
 finishedmsg:
