@@ -319,6 +319,8 @@ std::string load_umt5_tokenizer_json()
     return umt5str;
 }
 
+void kcpp_sd_set_main_gpu(int value);
+
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
@@ -342,17 +344,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     cfg_square_limit = inputs.img_soft_limit;
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
 
-    {
-        //kcpp allow gpu id override
-        std::string sdmaingpu = std::to_string(inputs.kcpp_main_gpu);
-        const char* existingenv = getenv("SD_VK_DEVICE");
-        int kcpp_parseinfo_maindevice = inputs.kcpp_main_gpu<=0?0:inputs.kcpp_main_gpu;
-        if(kcpp_parseinfo_maindevice>0 && !existingenv && sdmaingpu!="")
-        {
-            sdmaingpuenv = "SD_VK_DEVICE="+sdmaingpu;
-            putenv((char*)sdmaingpuenv.c_str());
-        }
-    }
+    //kcpp allow gpu id override
+    kcpp_sd_set_main_gpu(inputs.kcpp_main_gpu);
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;

@@ -747,6 +747,41 @@ bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
     return dev_name.find(name) != std::string::npos;
 }
 
+static int kcpp_main_gpu = -1;
+void kcpp_sd_set_main_gpu(int value) {
+    ggml_backend_load_all_once();
+    if (value >= 0) {
+        size_t dev_count = ggml_backend_dev_count();
+        size_t dev_index = static_cast<size_t>(value);
+        if (dev_index >= dev_count) {
+            LOG_WARN("device %d not found, falling back to default", value);
+            value = -1;
+        }
+    } else if (value <= -2) {
+        value = -2;
+    }
+    kcpp_main_gpu = value;
+}
+static ggml_backend_t kcpp_get_main_gpu() {
+    ggml_backend_t backend = nullptr;
+    if (kcpp_main_gpu != -1) {
+        std::string dev_name;
+        if (kcpp_main_gpu <= -2) {
+            dev_name = "CPU";
+        } else {
+            auto dev = ggml_backend_dev_get(static_cast<size_t>(kcpp_main_gpu));
+            dev_name = ggml_backend_dev_name(dev);
+        }
+        backend = init_named_backend(dev_name);
+        if (backend) {
+            LOG_INFO("Setting %s as main device (#%d)", dev_name.c_str(), kcpp_main_gpu);
+        } else {
+            LOG_WARN("Couldn't initialize device #%d; falling back to the default device", kcpp_main_gpu);
+        }
+    }
+    return backend;
+}
+
 ggml_backend_t sd_get_default_backend() {
     ggml_backend_load_all_once();
     static std::once_flag once;
@@ -784,6 +819,10 @@ ggml_backend_t sd_get_default_backend() {
             LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to the default device.", SD_VK_DEVICE);
         }
     }
+
+    if (backend == nullptr) { // kcpp
+        backend = kcpp_get_main_gpu();
+    } // kcpp
 
     if (!backend) {
         std::string dev_name = get_default_backend_name();
