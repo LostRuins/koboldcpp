@@ -23,24 +23,11 @@
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml.h"
+#include "ggml_extend_backend.hpp"
 #include "zip.h"
 
 #include "name_conversion.h"
-#include "stable-diffusion.h"
-
-#ifdef SD_USE_METAL
-#include "ggml-metal.h"
-#endif
-
-#ifdef SD_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
-#ifdef SD_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
 
 /*================================================= Preprocess ==================================================*/
 

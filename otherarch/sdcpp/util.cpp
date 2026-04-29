@@ -27,8 +27,9 @@
 #include <unistd.h>
 #endif
 
-#include "ggml-cpu.h"
+#include "ggml-backend.h"
 #include "ggml.h"
+#include "ggml_extend_backend.hpp"
 #include "stable-diffusion.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
@@ -540,26 +541,6 @@ sd_progress_cb_t sd_get_progress_callback() {
 void* sd_get_progress_callback_data() {
     return sd_progress_cb_data;
 }
-const char* sd_get_system_info() {
-    static char buffer[1024];
-    std::stringstream ss;
-    ss << "System Info: \n";
-    ss << "    SSE3 = " << ggml_cpu_has_sse3() << " | ";
-    ss << "    AVX = " << ggml_cpu_has_avx() << " | ";
-    ss << "    AVX2 = " << ggml_cpu_has_avx2() << " | ";
-    ss << "    AVX512 = " << ggml_cpu_has_avx512() << " | ";
-    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << " | ";
-    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << " | ";
-    ss << "    FMA = " << ggml_cpu_has_fma() << " | ";
-    ss << "    NEON = " << ggml_cpu_has_neon() << " | ";
-    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << " | ";
-    ss << "    F16C = " << ggml_cpu_has_f16c() << " | ";
-    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << " | ";
-    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << " | ";
-    ss << "    VSX = " << ggml_cpu_has_vsx() << " | ";
-    snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
-    return buffer;
-}
 
 sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) {
     const auto& shape = tensor.shape();
@@ -569,17 +550,7 @@ sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) 
     int channel   = static_cast<int>(shape[shape.size() == 5 ? 3 : 2]);
     uint8_t* data = (uint8_t*)malloc(static_cast<size_t>(width * height * channel));
     GGML_ASSERT(data != nullptr);
-
-    for (int iw = 0; iw < width; ++iw) {
-        for (int ih = 0; ih < height; ++ih) {
-            for (int ic = 0; ic < channel; ++ic) {
-                float value                            = shape.size() == 5 ? tensor.index(iw, ih, frame_index, ic, 0)
-                                                                           : tensor.index(iw, ih, ic, frame_index);
-                value                                  = std::clamp(value, 0.0f, 1.0f);
-                data[(ih * width + iw) * channel + ic] = static_cast<uint8_t>(std::round(value * 255.0f));
-            }
-        }
-    }
+    preprocessing_tensor_frame_to_sd_image(tensor, frame_index, data);
     return {
         static_cast<uint32_t>(width),
         static_cast<uint32_t>(height),
@@ -762,4 +733,101 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     }
 
     return res;
+}
+
+// test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
+bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
+    if (!backend) {
+        return false;
+    }
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    if (!dev)
+        return false;
+    std::string dev_name = ggml_backend_dev_name(dev);
+    return dev_name.find(name) != std::string::npos;
+}
+
+ggml_backend_t sd_get_default_backend() {
+    ggml_backend_load_all_once();
+    static std::once_flag once;
+    std::call_once(once, []() {
+        size_t dev_count = ggml_backend_dev_count();
+        if (dev_count == 0) {
+            LOG_ERROR("No devices found!");
+        } else {
+            LOG_DEBUG("Found %zu backend devices:", dev_count);
+            for (size_t i = 0; i < dev_count; ++i) {
+                auto dev = ggml_backend_dev_get(i);
+                LOG_DEBUG("#%zu: %s", i, ggml_backend_dev_name(dev));
+            }
+        }
+    });
+    ggml_backend_t backend   = nullptr;
+    const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
+    if (SD_VK_DEVICE != nullptr) {
+        std::string sd_vk_device_str = SD_VK_DEVICE;
+        try {
+            unsigned long long device  = std::stoull(sd_vk_device_str);
+            std::string vk_device_name = "Vulkan" + std::to_string(device);
+            if (backend_name_exists(vk_device_name)) {
+                LOG_INFO("Selecting %s as main device by env var SD_VK_DEVICE", vk_device_name.c_str());
+                backend = init_named_backend(vk_device_name);
+                if (!backend) {
+                    LOG_WARN("Device %s requested by SD_VK_DEVICE failed to init. Falling back to the default device.", vk_device_name.c_str());
+                }
+            } else {
+                LOG_WARN("Device %s requested by SD_VK_DEVICE was not found. Falling back to the default device.", vk_device_name.c_str());
+            }
+        } catch (const std::invalid_argument&) {
+            LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to the default device.", SD_VK_DEVICE);
+        } catch (const std::out_of_range&) {
+            LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to the default device.", SD_VK_DEVICE);
+        }
+    }
+
+    if (!backend) {
+        std::string dev_name = get_default_backend_name();
+        backend              = init_named_backend(dev_name);
+        if (!backend && !dev_name.empty()) {
+            LOG_WARN("device %s failed to init", dev_name.c_str());
+        }
+    }
+
+    if (!backend) {
+        LOG_WARN("loading CPU backend");
+        backend = ggml_backend_cpu_init();
+    }
+
+    if (ggml_backend_is_cpu(backend)) {
+        LOG_DEBUG("Using CPU backend");
+    }
+
+    return backend;
+}
+
+// namespace is needed to avoid conflicts with ggml_backend_extend.hpp
+namespace ggml_cpu {
+#include "ggml-cpu.h"
+}
+
+const char* sd_get_system_info() {
+    using namespace ggml_cpu;
+    static char buffer[1024];
+    std::stringstream ss;
+    ss << "System Info: \n";
+    ss << "    SSE3 = " << ggml_cpu_has_sse3() << " | ";
+    ss << "    AVX = " << ggml_cpu_has_avx() << " | ";
+    ss << "    AVX2 = " << ggml_cpu_has_avx2() << " | ";
+    ss << "    AVX512 = " << ggml_cpu_has_avx512() << " | ";
+    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << " | ";
+    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << " | ";
+    ss << "    FMA = " << ggml_cpu_has_fma() << " | ";
+    ss << "    NEON = " << ggml_cpu_has_neon() << " | ";
+    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << " | ";
+    ss << "    F16C = " << ggml_cpu_has_f16c() << " | ";
+    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << " | ";
+    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << " | ";
+    ss << "    VSX = " << ggml_cpu_has_vsx() << " | ";
+    snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
+    return buffer;
 }

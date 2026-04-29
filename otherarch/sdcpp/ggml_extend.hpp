@@ -24,31 +24,11 @@
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml.h"
+#include "ggml_extend_backend.hpp"
 
 #include "model.h"
 #include "tensor.hpp"
-
-#ifdef SD_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef SD_USE_METAL
-#include "ggml-metal.h"
-#endif
-
-#ifdef SD_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
-#ifdef SD_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
-
-#ifdef SD_USE_SYCL
-#include "ggml-sycl.h"
-#endif
 
 #include "rng.hpp"
 #include "tensor_ggml.hpp"
@@ -88,6 +68,48 @@ __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const cha
             break;
         default:
             LOG_DEBUG(text);
+    }
+}
+
+__STATIC_INLINE__ bool backend_name_exists(std::string name) {
+    ggml_backend_load_all_once();
+    const size_t device_count = ggml_backend_dev_count();
+    for (size_t i = 0; i < device_count; ++i) {
+        if (name == ggml_backend_dev_name(ggml_backend_dev_get(i))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+__STATIC_INLINE__ std::string sanitize_backend_name(std::string name) {
+    if (name == "" || backend_name_exists(name)) {
+        return name;
+    } else {
+        LOG_WARN("Backend %s not found, using default backend", name.c_str());
+        return "";
+    }
+}
+
+__STATIC_INLINE__ std::string get_default_backend_name() {
+    ggml_backend_load_all_once();
+    // should pick the same backend as ggml_backend_init_best
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
+    dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (dev == nullptr) {
+        return "";
+    }
+    return ggml_backend_dev_name(dev);
+}
+
+__STATIC_INLINE__ ggml_backend_t init_named_backend(std::string name = "") {
+    ggml_backend_load_all_once();
+    LOG_DEBUG("Initializing backend: %s", name.c_str());
+    if (name.empty()) {
+        return ggml_backend_init_best();
+    } else {
+        return ggml_backend_init_by_name(name.c_str(), nullptr);
     }
 }
 
@@ -1286,25 +1308,25 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_ones_like(ggml_context* ctx,
     return ggml_ext_ones(ctx, x->ne[0], x->ne[1], x->ne[2], x->ne[3]);
 }
 
-__STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_tensor* a) {
-#ifdef SD_USE_VULKAN
-    auto zero_index = ggml_get_tensor(ctx, "ggml_runner_build_in_tensor:zero_int");
-    auto out        = ggml_reshape_1d(ctx, a, ggml_nelements(a));
-    out             = ggml_get_rows(ctx, out, zero_index);
-    out             = ggml_reshape(ctx, out, a);
-    // auto out = ggml_cast(ctx, a, GGML_TYPE_F32);
-    return out;
-#else
-    auto out         = ggml_reshape_2d(ctx, a, 1, ggml_nelements(a));
-    ggml_tensor* one = ggml_ext_ones(ctx, 1, 1, 1, 1);  // [1,]
-    if (ggml_is_transposed(out)) {
-        out = ggml_mul_mat(ctx, one, out);
+__STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* a) {
+    if (sd_backend_is(backend, "Vulkan")) {
+        auto zero_index = ggml_get_tensor(ctx, "ggml_runner_build_in_tensor:zero_int");
+        auto out        = ggml_reshape_1d(ctx, a, ggml_nelements(a));
+        out             = ggml_get_rows(ctx, out, zero_index);
+        out             = ggml_reshape(ctx, out, a);
+        // auto out = ggml_cast(ctx, a, GGML_TYPE_F32);
+        return out;
     } else {
-        out = ggml_mul_mat(ctx, out, one);
+        auto out         = ggml_reshape_2d(ctx, a, 1, ggml_nelements(a));
+        ggml_tensor* one = ggml_ext_ones(ctx, 1, 1, 1, 1);  // [1,]
+        if (ggml_is_transposed(out)) {
+            out = ggml_mul_mat(ctx, one, out);
+        } else {
+            out = ggml_mul_mat(ctx, out, one);
+        }
+        out = ggml_reshape(ctx, out, a);
+        return out;
     }
-    out = ggml_reshape(ctx, out, a);
-#endif
-    return out;
 }
 
 // q: [N, L_q, C(n_head*d_head)] or [N*n_head, L_q, d_head]
@@ -1496,16 +1518,14 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_group_norm(ggml_context* ctx,
 }
 
 __STATIC_INLINE__ void ggml_ext_backend_tensor_get_and_sync(ggml_backend_t backend, const ggml_tensor* tensor, void* data, size_t offset, size_t size) {
-#if defined(SD_USE_CUDA) || defined(SD_USE_SYCL)
-    if (!ggml_backend_is_cpu(backend)) {
+    if ((sd_backend_is(backend, "ROCm") || sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "SYCL")) &&
+        !ggml_backend_is_cpu(backend)) {
         ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
         ggml_backend_synchronize(backend);
-    } else {
-        ggml_backend_tensor_get(tensor, data, offset, size);
+        return;
     }
-#else
+
     ggml_backend_tensor_get(tensor, data, offset, size);
-#endif
 }
 
 __STATIC_INLINE__ float ggml_ext_backend_tensor_get_f32(ggml_tensor* tensor) {
@@ -1664,14 +1684,15 @@ struct WeightAdapter {
             float scale     = 1.f;
         } conv2d;
     };
-    virtual ggml_tensor* patch_weight(ggml_context* ctx, ggml_tensor* weight, const std::string& weight_name) = 0;
+    virtual ggml_tensor* patch_weight(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* weight, const std::string& weight_name) = 0;
     virtual ggml_tensor* forward_with_lora(ggml_context* ctx,
+                                           ggml_backend_t backend,
                                            ggml_tensor* x,
                                            ggml_tensor* w,
                                            ggml_tensor* b,
                                            const std::string& prefix,
-                                           ForwardParams forward_params)                                      = 0;
-    virtual size_t get_extra_graph_size()                                                                     = 0;
+                                           ForwardParams forward_params)                                                              = 0;
+    virtual size_t get_extra_graph_size()                                                                                             = 0;
 };
 
 struct GGMLRunnerContext {
@@ -2192,6 +2213,14 @@ public:
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {
         weight_adapter = adapter;
     }
+
+    ggml_backend_t get_runtime_backend() {
+        return runtime_backend;
+    }
+
+    ggml_backend_t get_params_backend() {
+        return params_backend;
+    }
 };
 
 class GGMLBlock {
@@ -2336,6 +2365,14 @@ public:
           force_prec_f32(force_prec_f32),
           scale(scale) {}
 
+    void set_scale(float scale_) {
+        scale = scale_;
+    }
+
+    void set_force_prec_f32(bool force_prec_f32_) {
+        force_prec_f32 = force_prec_f32_;
+    }
+
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
@@ -2347,7 +2384,7 @@ public:
             forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
             forward_params.linear.force_prec_f32 = force_prec_f32;
             forward_params.linear.scale          = scale;
-            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
+            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
         }
         return ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
     }
@@ -2463,7 +2500,7 @@ public:
             forward_params.conv2d.circular_x = ctx->circular_x_enabled;
             forward_params.conv2d.circular_y = ctx->circular_y_enabled;
             forward_params.conv2d.scale      = scale;
-            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
+            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
         }
         return ggml_ext_conv_2d(ctx->ggml_ctx,
                                 x,
@@ -2527,7 +2564,7 @@ public:
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
         if (ctx->weight_adapter) {
-            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
             if (w->type != GGML_TYPE_F16) {
                 w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F16);
             }
@@ -2535,7 +2572,7 @@ public:
         if (bias) {
             b = params["bias"];
             if (ctx->weight_adapter) {
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
         }
         return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
@@ -2582,12 +2619,12 @@ public:
         if (elementwise_affine) {
             w = params["weight"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
             }
             if (bias) {
                 b = params["bias"];
                 if (ctx->weight_adapter) {
-                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
                 }
             }
         }
@@ -2630,8 +2667,8 @@ public:
             w = params["weight"];
             b = params["bias"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
         }
         return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups);
@@ -2665,7 +2702,7 @@ public:
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         ggml_tensor* w = params["weight"];
         if (ctx->weight_adapter) {
-            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
         }
         x = ggml_rms_norm(ctx->ggml_ctx, x, eps);
         x = ggml_mul_inplace(ctx->ggml_ctx, x, w);
@@ -2748,6 +2785,7 @@ public:
 
 __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
     ggml_context* ctx,
+    ggml_backend_t backend,
     ggml_tensor* h,    // Input: [q, batch] or [W, H, q, batch]
     ggml_tensor* w1,   // Outer C (Full rank)
     ggml_tensor* w1a,  // Outer A (Low rank part 1)
@@ -2768,7 +2806,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
     int vq       = q_actual / uq;
 
     int vp = (w2 != nullptr) ? (is_conv ? (int)w2->ne[3] : (int)w2->ne[1])
-                          : (int)w2a->ne[1];
+                             : (int)w2a->ne[1];
     GGML_ASSERT(q_actual == (uq * vq) && "Input dimension mismatch for LoKR split");
 
     ggml_tensor* hb;
@@ -2778,29 +2816,29 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
         int merge_batch_uq = batch;
         int merge_batch_vp = batch;
 
-#if SD_USE_VULKAN
-        if (batch > 1) {
-            // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
-            int max_batch    = 65535;
-            int max_batch_uq = max_batch / uq;
-            merge_batch_uq   = 1;
-            for (int i = max_batch_uq; i > 0; i--) {
-                if (batch % i == 0) {
-                    merge_batch_uq = i;
-                    break;
+        if (sd_backend_is(backend, "Vulkan")) {
+            if (batch > 1) {
+                // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
+                int max_batch    = 65535;
+                int max_batch_uq = max_batch / uq;
+                merge_batch_uq   = 1;
+                for (int i = max_batch_uq; i > 0; i--) {
+                    if (batch % i == 0) {
+                        merge_batch_uq = i;
+                        break;
+                    }
                 }
-            }
 
-            int max_batch_vp = max_batch / vp;
-            merge_batch_vp   = 1;
-            for (int i = max_batch_vp; i > 0; i--) {
-                if (batch % i == 0) {
-                    merge_batch_vp = i;
-                    break;
+                int max_batch_vp = max_batch / vp;
+                merge_batch_vp   = 1;
+                for (int i = max_batch_vp; i > 0; i--) {
+                    if (batch % i == 0) {
+                        merge_batch_vp = i;
+                        break;
+                    }
                 }
             }
         }
-#endif
 
         ggml_tensor* h_split = ggml_reshape_3d(ctx, h, vq, uq * merge_batch_uq, batch / merge_batch_uq);
         if (w2 != nullptr) {
