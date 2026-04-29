@@ -14,468 +14,21 @@
 #include <utility>
 #include <vector>
 
-#include "clip.hpp"
 #include "ggml_extend.hpp"
-#include <nlohmann/json.hpp>
+#include "json.hpp"
 #include "rope.hpp"
-#include "tokenize_util.h"
-#include "vocab/vocab.h"
+#include "tokenizers/bpe_tokenizer.h"
+#include "tokenizers/mistral_tokenizer.h"
+#include "tokenizers/qwen2_tokenizer.h"
 
 namespace LLM {
     constexpr int LLM_GRAPH_SIZE = 10240;
-
-    class BPETokenizer {
-    protected:
-        std::map<int, std::u32string> byte_encoder;
-        std::map<std::u32string, int> byte_decoder;
-        std::map<std::u32string, int> encoder;
-        std::map<int, std::u32string> decoder;
-        std::map<std::pair<std::u32string, std::u32string>, int> bpe_ranks;
-        std::regex pat;
-        int encoder_len;
-        int bpe_len;
-
-        std::string UNK_TOKEN;
-        std::string BOS_TOKEN;
-        std::string EOS_TOKEN;
-        std::string PAD_TOKEN;
-
-        int UNK_TOKEN_ID;
-        int BOS_TOKEN_ID;
-        int EOS_TOKEN_ID;
-        int PAD_TOKEN_ID;
-
-        std::vector<std::string> special_tokens;
-
-        bool add_bos_token = false;
-
-    protected:
-        static std::string strip(const std::string& str) {
-            std::string::size_type start = str.find_first_not_of(" \t\n\r\v\f");
-            std::string::size_type end   = str.find_last_not_of(" \t\n\r\v\f");
-
-            if (start == std::string::npos) {
-                // String contains only whitespace characters
-                return "";
-            }
-
-            return str.substr(start, end - start + 1);
-        }
-
-        static std::string whitespace_clean(std::string text) {
-            text = std::regex_replace(text, std::regex(R"(\s+)"), " ");
-            text = strip(text);
-            return text;
-        }
-
-        static std::set<std::pair<std::u32string, std::u32string>> get_pairs(const std::vector<std::u32string>& subwords) {
-            std::set<std::pair<std::u32string, std::u32string>> pairs;
-            if (subwords.size() == 0) {
-                return pairs;
-            }
-            std::u32string prev_subword = subwords[0];
-            for (int i = 1; i < subwords.size(); i++) {
-                std::u32string subword = subwords[i];
-                std::pair<std::u32string, std::u32string> pair(prev_subword, subword);
-                pairs.insert(pair);
-                prev_subword = subword;
-            }
-            return pairs;
-        }
-
-        bool is_special_token(const std::string& token) {
-            for (auto& special_token : special_tokens) {
-                if (special_token == token) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-    public:
-        BPETokenizer() = default;
-
-        std::u32string bpe(const std::u32string& token) {
-            std::vector<std::u32string> word;
-
-            for (int i = 0; i < token.size(); i++) {
-                word.emplace_back(1, token[i]);
-            }
-
-            std::set<std::pair<std::u32string, std::u32string>> pairs = get_pairs(word);
-
-            if (pairs.empty()) {
-                return token;
-            }
-
-            while (true) {
-                auto min_pair_iter = std::min_element(pairs.begin(),
-                                                      pairs.end(),
-                                                      [&](const std::pair<std::u32string, std::u32string>& a,
-                                                          const std::pair<std::u32string, std::u32string>& b) {
-                                                          if (bpe_ranks.find(a) == bpe_ranks.end()) {
-                                                              return false;
-                                                          } else if (bpe_ranks.find(b) == bpe_ranks.end()) {
-                                                              return true;
-                                                          }
-                                                          return bpe_ranks.at(a) < bpe_ranks.at(b);
-                                                      });
-
-                const std::pair<std::u32string, std::u32string>& bigram = *min_pair_iter;
-
-                if (bpe_ranks.find(bigram) == bpe_ranks.end()) {
-                    break;
-                }
-
-                std::u32string first  = bigram.first;
-                std::u32string second = bigram.second;
-                std::vector<std::u32string> new_word;
-                int32_t i = 0;
-
-                while (i < word.size()) {
-                    auto it = std::find(word.begin() + i, word.end(), first);
-                    if (it == word.end()) {
-                        new_word.insert(new_word.end(), word.begin() + i, word.end());
-                        break;
-                    }
-                    new_word.insert(new_word.end(), word.begin() + i, it);
-                    i = static_cast<int32_t>(std::distance(word.begin(), it));
-
-                    if (word[i] == first && i < static_cast<int32_t>(word.size()) - 1 && word[i + 1] == second) {
-                        new_word.push_back(first + second);
-                        i += 2;
-                    } else {
-                        new_word.push_back(word[i]);
-                        i += 1;
-                    }
-                }
-
-                word = new_word;
-
-                if (word.size() == 1) {
-                    break;
-                }
-                pairs = get_pairs(word);
-            }
-
-            std::u32string result;
-            for (int i = 0; i < word.size(); i++) {
-                result += word[i];
-                if (i != word.size() - 1) {
-                    result += utf8_to_utf32(" ");
-                }
-            }
-
-            return result;
-        }
-
-        std::vector<int> tokenize(std::string text,
-                                  on_new_token_cb_t on_new_token_cb = nullptr,
-                                  size_t max_length                 = 0,
-                                  bool padding                      = false) {
-            std::vector<int32_t> tokens = encode(text, on_new_token_cb);
-
-            if (max_length > 0) {
-                if (tokens.size() < max_length) {
-                    tokens.resize(max_length);
-                } else {
-                    if (padding) {
-                        tokens.insert(tokens.end(), max_length - tokens.size(), PAD_TOKEN_ID);
-                    }
-                }
-            }
-
-            return tokens;
-        }
-
-        void pad_tokens(std::vector<int>& tokens,
-                        std::vector<float>& weights,
-                        size_t max_length = 0,
-                        bool padding      = false) {
-            if (add_bos_token) {
-                tokens.insert(tokens.begin(), BOS_TOKEN_ID);
-            }
-            if (max_length > 0 && padding) {
-                size_t n = static_cast<size_t>(std::ceil(tokens.size() * 1.f / max_length));
-                if (n == 0) {
-                    n = 1;
-                }
-                size_t length = max_length * n;
-                LOG_DEBUG("token length: %llu", length);
-                tokens.insert(tokens.end(), length - tokens.size(), PAD_TOKEN_ID);
-                weights.insert(weights.end(), length - weights.size(), 1.f);
-            }
-        }
-
-        std::vector<int> encode(std::string text, on_new_token_cb_t on_new_token_cb = nullptr) {
-            std::string original_text = text;
-            std::vector<int32_t> bpe_tokens;
-            std::vector<std::string> token_strs;
-
-            auto splited_texts = split_with_special_tokens(text, special_tokens);
-
-            for (auto& splited_text : splited_texts) {
-                if (is_special_token(splited_text)) {
-                    bpe_tokens.push_back(encoder[utf8_to_utf32(splited_text)]);
-                    token_strs.push_back(splited_text);
-                    continue;
-                }
-                auto tokens = token_split(splited_text);
-                for (auto& token : tokens) {
-                    if (on_new_token_cb != nullptr) {
-                        bool skip = on_new_token_cb(token, bpe_tokens);
-                        if (skip) {
-                            continue;
-                        }
-                    }
-
-                    std::string token_str = token;
-                    std::u32string utf32_token;
-                    for (int i = 0; i < token_str.length(); i++) {
-                        unsigned char b = token_str[i];
-                        utf32_token += byte_encoder[b];
-                    }
-                    auto bpe_strs = bpe(utf32_token);
-                    size_t start  = 0;
-                    size_t pos;
-                    while ((pos = bpe_strs.find(' ', start)) != std::u32string::npos) {
-                        auto bpe_str = bpe_strs.substr(start, pos - start);
-                        bpe_tokens.push_back(encoder[bpe_str]);
-                        token_strs.push_back(utf32_to_utf8(bpe_str));
-
-                        start = pos + 1;
-                    }
-                    auto bpe_str = bpe_strs.substr(start, bpe_strs.size() - start);
-                    bpe_tokens.push_back(encoder[bpe_str]);
-                    token_strs.push_back(utf32_to_utf8(bpe_str));
-                }
-            }
-
-            std::stringstream ss;
-            ss << "[";
-            for (auto token : token_strs) {
-                ss << "\"" << token << "\", ";
-            }
-            ss << "]";
-            LOG_DEBUG("split prompt \"%s\" to tokens %s", original_text.c_str(), ss.str().c_str());
-            // printf("split prompt \"%s\" to tokens %s \n", original_text.c_str(), ss.str().c_str());
-            return bpe_tokens;
-        }
-    };
-
-    class Qwen2Tokenizer : public BPETokenizer {
-    protected:
-        void load_from_merges(const std::string& merges_utf8_str) {
-            auto byte_unicode_pairs = bytes_to_unicode();
-            // printf("byte_unicode_pairs have %lu pairs \n", byte_unicode_pairs.size());
-            byte_encoder = std::map<int, std::u32string>(byte_unicode_pairs.begin(), byte_unicode_pairs.end());
-            for (auto& pair : byte_unicode_pairs) {
-                byte_decoder[pair.second] = pair.first;
-            }
-            // for (auto & pair: byte_unicode_pairs) {
-            //     std::cout << pair.first << ": " << pair.second << std::endl;
-            // }
-            std::vector<std::u32string> merges;
-            size_t start = 0;
-            size_t pos;
-            std::u32string merges_utf32_str = utf8_to_utf32(merges_utf8_str);
-            while ((pos = merges_utf32_str.find('\n', start)) != std::string::npos) {
-                merges.push_back(merges_utf32_str.substr(start, pos - start));
-                start = pos + 1;
-            }
-            LOG_DEBUG("merges size %llu", merges.size());
-            merges = std::vector<std::u32string>(merges.begin(), merges.end());
-            std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
-            // int print_num = 10;
-            for (const auto& merge : merges) {
-                size_t space_pos = merge.find(' ');
-                merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
-                // if (print_num > 0) {
-                //     print_num--;
-                //     printf("%s :: %s | %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(),
-                //                     utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
-                // }
-            }
-
-            std::vector<std::u32string> tokens;
-            for (const auto& pair : byte_unicode_pairs) {
-                tokens.push_back(pair.second);
-            }
-            for (const auto& merge : merge_pairs) {
-                tokens.push_back(merge.first + merge.second);
-            }
-            for (auto& special_token : special_tokens) {
-                tokens.push_back(utf8_to_utf32(special_token));
-            }
-
-            int i = 0;
-            for (const auto& token : tokens) {
-                encoder[token] = i;
-                decoder[i]     = token;
-                i++;
-            }
-            encoder_len = i;
-            LOG_DEBUG("vocab size: %d", encoder_len);
-
-            int rank = 0;
-            for (const auto& merge : merge_pairs) {
-                bpe_ranks[merge] = rank++;
-            }
-            bpe_len = rank;
-        };
-
-    public:
-        explicit Qwen2Tokenizer(const std::string& merges_utf8_str = "") {
-            UNK_TOKEN = "<|endoftext|>";
-            EOS_TOKEN = "<|endoftext|>";
-            PAD_TOKEN = "<|endoftext|>";
-
-            UNK_TOKEN_ID = 151643;
-            EOS_TOKEN_ID = 151643;
-            PAD_TOKEN_ID = 151643;
-
-            special_tokens = {
-                "<|endoftext|>",
-                "<|im_start|>",
-                "<|im_end|>",
-                "<|object_ref_start|>",
-                "<|object_ref_end|>",
-                "<|box_start|>",
-                "<|box_end|>",
-                "<|quad_start|>",
-                "<|quad_end|>",
-                "<|vision_start|>",
-                "<|vision_end|>",
-                "<|vision_pad|>",
-                "<|image_pad|>",
-                "<|video_pad|>",
-                "<tool_call>",
-                "</tool_call>",
-                "<|fim_prefix|>",
-                "<|fim_middle|>",
-                "<|fim_suffix|>",
-                "<|fim_pad|>",
-                "<|repo_name|>",
-                "<|file_sep|>",
-                "<tool_response>",
-                "</tool_response>",
-                "<think>",
-                "</think>",
-            };
-
-            if (merges_utf8_str.size() > 0) {
-                load_from_merges(merges_utf8_str);
-            } else {
-                load_from_merges(load_qwen2_merges());
-            }
-        }
-    };
-
-    class MistralTokenizer : public BPETokenizer {
-    protected:
-        void load_from_merges(const std::string& merges_utf8_str, const std::string& vocab_utf8_str) {
-            nlohmann::json vocab;
-
-            try {
-                vocab = nlohmann::json::parse(vocab_utf8_str);
-            } catch (const nlohmann::json::parse_error&) {
-                GGML_ABORT("invalid vocab json str");
-            }
-            for (const auto& [key, value] : vocab.items()) {
-                std::u32string token = utf8_to_utf32(key);
-                int i                = value;
-                encoder[token]       = i;
-                decoder[i]           = token;
-            }
-            encoder_len = static_cast<int>(vocab.size());
-            LOG_DEBUG("vocab size: %d", encoder_len);
-
-            auto byte_unicode_pairs = bytes_to_unicode();
-            byte_encoder            = std::map<int, std::u32string>(byte_unicode_pairs.begin(), byte_unicode_pairs.end());
-            for (auto& pair : byte_unicode_pairs) {
-                byte_decoder[pair.second] = pair.first;
-            }
-            std::vector<std::u32string> merges;
-            size_t start = 0;
-            size_t pos;
-            std::u32string merges_utf32_str = utf8_to_utf32(merges_utf8_str);
-            while ((pos = merges_utf32_str.find('\n', start)) != std::string::npos) {
-                merges.push_back(merges_utf32_str.substr(start, pos - start));
-                start = pos + 1;
-            }
-            LOG_DEBUG("merges size %llu", merges.size());
-            merges = std::vector<std::u32string>(merges.begin(), merges.end());
-            std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
-            // int print_num = 10;
-            for (const auto& merge : merges) {
-                size_t space_pos = merge.find(' ');
-                merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
-                // if (print_num > 0) {
-                //     print_num--;
-                //     printf("%s :: %s | %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(),
-                //                     utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
-                // }
-            }
-
-            int rank = 0;
-            for (const auto& merge : merge_pairs) {
-                bpe_ranks[merge] = rank++;
-            }
-            bpe_len = rank;
-        };
-
-    public:
-        explicit MistralTokenizer(const std::string& merges_utf8_str = "", const std::string& vocab_utf8_str = "") {
-            add_bos_token = true;
-
-            UNK_TOKEN = "<unk>";
-            BOS_TOKEN = "<s>";
-            EOS_TOKEN = "</s>";
-            PAD_TOKEN = "<pad>";
-
-            UNK_TOKEN_ID = 0;
-            BOS_TOKEN_ID = 1;
-            EOS_TOKEN_ID = 2;
-            PAD_TOKEN_ID = 11;
-
-            special_tokens = {
-                "<unk>",
-                "<s>",
-                "</s>",
-                "[INST]",
-                "[/INST]",
-                "[AVAILABLE_TOOLS]",
-                "[/AVAILABLE_TOOLS]",
-                "[TOOL_RESULTS]",
-                "[/TOOL_RESULTS]",
-                "[TOOL_CALLS]",
-                "[IMG]",
-                "<pad>",
-                "[IMG_BREAK]",
-                "[IMG_END]",
-                "[PREFIX]",
-                "[MIDDLE]",
-                "[SUFFIX]",
-                "[SYSTEM_PROMPT]",
-                "[/SYSTEM_PROMPT]",
-                "[TOOL_CONTENT]",
-            };
-            for (int i = 20; i < 1000; i++) {
-                special_tokens.push_back("<SPECIAL_" + std::to_string(i) + ">");
-            }
-
-            if (merges_utf8_str.size() > 0 && vocab_utf8_str.size() > 0) {
-                load_from_merges(merges_utf8_str, vocab_utf8_str);
-            } else {
-                load_from_merges(load_mistral_merges(), load_mistral_vocab_json());
-            }
-        }
-    };
 
     enum class LLMArch {
         QWEN2_5_VL,
         QWEN3,
         MISTRAL_SMALL_3_2,
+        MINISTRAL_3_3B,
         ARCH_COUNT,
     };
 
@@ -483,6 +36,7 @@ namespace LLM {
         "qwen2.5vl",
         "qwen3",
         "mistral_small3.2",
+        "ministral3.3b",
     };
 
     struct LLMVisionParams {
@@ -522,7 +76,7 @@ namespace LLM {
             blocks["down_proj"] = std::shared_ptr<GGMLBlock>(new Linear(intermediate_size, hidden_size, bias));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             // x: [N, n_token, hidden_size]
             auto gate_proj = std::dynamic_pointer_cast<Linear>(blocks["gate_proj"]);
             auto up_proj   = std::dynamic_pointer_cast<Linear>(blocks["up_proj"]);
@@ -582,7 +136,7 @@ namespace LLM {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             // x: [N*grid_t*grid_h*grid_w, in_channels, temporal_patch_size*patch_size*patch_size]
             // return: [N*grid_t*grid_h*grid_w, embed_dim]
             x = ggml_reshape_4d(ctx->ggml_ctx,
@@ -631,7 +185,7 @@ namespace LLM {
             blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, dim));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto ln_q  = std::dynamic_pointer_cast<RMSNorm>(blocks["ln_q"]);
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
@@ -668,10 +222,10 @@ namespace LLM {
             blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* mask = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* pe,
+                             ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
@@ -718,10 +272,10 @@ namespace LLM {
             blocks["norm2"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* mask = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* pe,
+                             ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
             auto attn  = std::dynamic_pointer_cast<VisionAttention>(blocks["attn"]);
             auto mlp   = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
@@ -778,12 +332,12 @@ namespace LLM {
             blocks["merger"] = std::shared_ptr<GGMLBlock>(new PatchMerger(out_hidden_size, hidden_size, spatial_merge_size));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* pixel_values,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* window_index,
-                                    struct ggml_tensor* window_inverse_index,
-                                    struct ggml_tensor* window_mask) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* pixel_values,
+                             ggml_tensor* pe,
+                             ggml_tensor* window_index,
+                             ggml_tensor* window_inverse_index,
+                             ggml_tensor* window_mask) {
             // pixel_values: [grid_t*(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw]
             // window_index: [grid_t*(H/mh/ph)*(W/mw/pw)]
             // window_inverse_index: [grid_t*(H/mh/ph)*(W/mw/pw)]
@@ -836,10 +390,10 @@ namespace LLM {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask = nullptr) {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
@@ -867,6 +421,9 @@ namespace LLM {
             if (arch == LLMArch::MISTRAL_SMALL_3_2) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            } else if (arch == LLMArch::MINISTRAL_3_3B) {
+                q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 262144, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 262144, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else if (arch == LLMArch::QWEN3) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -898,10 +455,10 @@ namespace LLM {
             blocks["post_attention_layernorm"] = std::make_shared<RMSNorm>(params.hidden_size, params.rms_norm_eps);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask = nullptr) {
             // x: [N, n_token, hidden_size]
             auto self_attn                = std::dynamic_pointer_cast<Attention>(blocks["self_attn"]);
             auto mlp                      = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
@@ -936,12 +493,12 @@ namespace LLM {
             blocks["norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(params.hidden_size, params.rms_norm_eps));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask,
-                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                                    std::set<int> out_layers) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* input_ids,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask,
+                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                             std::set<int> out_layers) {
             // input_ids: [N, n_token]
             // return: [N, n_token, hidden_size]
 
@@ -1037,12 +594,12 @@ namespace LLM {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask,
-                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                                    std::set<int> out_layers) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* input_ids,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask,
+                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                             std::set<int> out_layers) {
             // input_ids: [N, n_token]
             auto model = std::dynamic_pointer_cast<TextModel>(blocks["model"]);
 
@@ -1050,12 +607,12 @@ namespace LLM {
             return x;
         }
 
-        struct ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
-                                           struct ggml_tensor* pixel_values,
-                                           struct ggml_tensor* pe,
-                                           struct ggml_tensor* window_index,
-                                           struct ggml_tensor* window_inverse_index,
-                                           struct ggml_tensor* window_mask) {
+        ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
+                                    ggml_tensor* pixel_values,
+                                    ggml_tensor* pe,
+                                    ggml_tensor* window_index,
+                                    ggml_tensor* window_inverse_index,
+                                    ggml_tensor* window_mask) {
             GGML_ASSERT(enable_vision);
             auto vision_model = std::dynamic_pointer_cast<VisionModel>(blocks["visual"]);
             return vision_model->forward(ctx, pixel_values, pe, window_index, window_inverse_index, window_mask);
@@ -1082,7 +639,7 @@ namespace LLM {
                   bool enable_vision_ = false)
             : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
             params.arch = arch;
-            if (arch == LLMArch::MISTRAL_SMALL_3_2) {
+            if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 params.head_dim     = 128;
                 params.num_heads    = 32;
                 params.num_kv_heads = 8;
@@ -1156,44 +713,45 @@ namespace LLM {
             return llm_arch_to_str[static_cast<int>(params.arch)];
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             model.get_param_tensors(tensors, prefix);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask,
-                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                                    std::set<int> out_layers) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* input_ids,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask,
+                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                             std::set<int> out_layers) {
             auto hidden_states = model.forward(ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);  // [N, n_token, hidden_size]
             return hidden_states;
         }
 
-        struct ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
-                                           struct ggml_tensor* pixel_values,
-                                           struct ggml_tensor* input_pos,
-                                           struct ggml_tensor* window_index,
-                                           struct ggml_tensor* window_inverse_index,
-                                           struct ggml_tensor* window_mask) {
+        ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
+                                    ggml_tensor* pixel_values,
+                                    ggml_tensor* input_pos,
+                                    ggml_tensor* window_index,
+                                    ggml_tensor* window_inverse_index,
+                                    ggml_tensor* window_mask) {
             auto hidden_states = model.vision_forward(ctx, pixel_values, input_pos, window_index, window_inverse_index, window_mask);
             return hidden_states;
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
-                                        struct ggml_tensor* attention_mask,
-                                        std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                                        std::set<int> out_layers) {
-            struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
-
-            input_ids = to_backend(input_ids);
-
-            for (auto& image_embed : image_embeds) {
-                image_embed.second = to_backend(image_embed.second);
+        ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
+                                 const sd::Tensor<float>& attention_mask_tensor,
+                                 const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds_tensor,
+                                 std::set<int> out_layers) {
+            ggml_cgraph* gf        = ggml_new_graph(compute_ctx);
+            ggml_tensor* input_ids = make_input(input_ids_tensor);
+            std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+            image_embeds.reserve(image_embeds_tensor.size());
+            for (const auto& [idx, embed_tensor] : image_embeds_tensor) {
+                ggml_tensor* embed = make_input(embed_tensor);
+                image_embeds.emplace_back(idx, embed);
             }
 
             int64_t n_tokens = input_ids->ne[0];
-            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 || params.arch == LLMArch::QWEN3) {
+            if (params.arch == LLMArch::MISTRAL_SMALL_3_2 || params.arch == LLMArch::MINISTRAL_3_3B || params.arch == LLMArch::QWEN3) {
                 input_pos_vec.resize(n_tokens);
                 for (int i = 0; i < n_tokens; ++i) {
                     input_pos_vec[i] = i;
@@ -1213,8 +771,9 @@ namespace LLM {
                                                 input_pos_vec.size());
             set_backend_tensor_data(input_pos, input_pos_vec.data());
 
-            if (attention_mask != nullptr) {
-                attention_mask = to_backend(attention_mask);
+            ggml_tensor* attention_mask = nullptr;
+            if (!attention_mask_tensor.empty()) {
+                attention_mask = make_input(attention_mask_tensor);
             } else {
                 attention_mask_vec.resize(n_tokens * n_tokens);
                 for (int i0 = 0; i0 < n_tokens; i0++) {
@@ -1232,24 +791,22 @@ namespace LLM {
 
             auto runner_ctx = get_context();
 
-            struct ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);
+            ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);
 
             ggml_build_forward_expand(gf, hidden_states);
 
             return gf;
         }
 
-        bool compute(const int n_threads,
-                     struct ggml_tensor* input_ids,
-                     struct ggml_tensor* attention_mask,
-                     std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                     std::set<int> out_layers,
-                     ggml_tensor** output,
-                     ggml_context* output_ctx = nullptr) {
-            auto get_graph = [&]() -> struct ggml_cgraph* {
+        sd::Tensor<float> compute(const int n_threads,
+                                  const sd::Tensor<int32_t>& input_ids,
+                                  const sd::Tensor<float>& attention_mask,
+                                  const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
+                                  std::set<int> out_layers) {
+            auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input_ids, attention_mask, image_embeds, out_layers);
             };
-            return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true));
         }
 
         int64_t get_num_image_tokens(int64_t t, int64_t h, int64_t w) {
@@ -1261,7 +818,7 @@ namespace LLM {
             return grid_t * grid_h * grid_w;
         }
 
-        struct ggml_tensor* process_image(struct ggml_context* ctx, struct ggml_tensor* image) {
+        ggml_tensor* process_image(ggml_context* ctx, ggml_tensor* image) {
             // image: [C, H, W]
             // return: [grid_t*(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw], grid_t == 1
             int64_t C  = image->ne[2];
@@ -1288,8 +845,9 @@ namespace LLM {
             return image;
         }
 
-        struct ggml_cgraph* build_encode_image_graph(struct ggml_tensor* image) {
-            struct ggml_cgraph* gf = new_graph_custom(LLM_GRAPH_SIZE);
+        ggml_cgraph* build_encode_image_graph(const sd::Tensor<float>& image_tensor) {
+            ggml_cgraph* gf    = new_graph_custom(LLM_GRAPH_SIZE);
+            ggml_tensor* image = make_input(image_tensor);
 
             GGML_ASSERT(image->ne[1] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
@@ -1300,8 +858,6 @@ namespace LLM {
             int llm_grid_h             = grid_h / params.vision.spatial_merge_size;
             int llm_grid_w             = grid_w / params.vision.spatial_merge_size;
             int vit_merger_window_size = params.vision.window_size / params.vision.patch_size / params.vision.spatial_merge_size;
-
-            image = to_backend(image);
 
             auto pixel_values = process_image(compute_ctx, image);
 
@@ -1399,26 +955,24 @@ namespace LLM {
             // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
-            auto runnter_ctx                  = get_context();
-            struct ggml_tensor* hidden_states = vision_forward(&runnter_ctx,
-                                                               pixel_values,
-                                                               pe,
-                                                               window_index,
-                                                               window_inverse_index,
-                                                               window_mask);
+            auto runnter_ctx           = get_context();
+            ggml_tensor* hidden_states = vision_forward(&runnter_ctx,
+                                                        pixel_values,
+                                                        pe,
+                                                        window_index,
+                                                        window_inverse_index,
+                                                        window_mask);
             ggml_build_forward_expand(gf, hidden_states);
 
             return gf;
         }
 
-        void encode_image(const int n_threads,
-                          struct ggml_tensor* image,
-                          ggml_tensor** output,
-                          ggml_context* output_ctx = nullptr) {
-            auto get_graph = [&]() -> struct ggml_cgraph* {
+        sd::Tensor<float> encode_image(const int n_threads,
+                                       const sd::Tensor<float>& image) {
+            auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, false));
         }
     };
 
@@ -1433,14 +987,14 @@ namespace LLM {
                     const std::string prefix                       = "",
                     bool enable_vision                             = false)
             : model(arch, backend, offload_params_to_cpu, tensor_storage_map, prefix, enable_vision) {
-            if (arch == LLMArch::MISTRAL_SMALL_3_2) {
+            if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 tokenizer = std::make_shared<MistralTokenizer>();
             } else {
                 tokenizer = std::make_shared<Qwen2Tokenizer>();
             }
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             model.get_param_tensors(tensors, prefix);
         }
 
@@ -1481,7 +1035,7 @@ namespace LLM {
                 weights.insert(weights.end(), curr_tokens.size(), curr_weight);
             }
 
-            tokenizer->pad_tokens(tokens, weights, max_length, padding);
+            tokenizer->pad_tokens(tokens, &weights, nullptr, padding ? max_length : 0, padding ? max_length : 100000000, padding);
 
             // for (int i = 0; i < tokens.size(); i++) {
             //     std::cout << tokens[i] << ":" << weights[i] << ", ";
@@ -1492,44 +1046,46 @@ namespace LLM {
         }
 
         void test() {
-            struct ggml_init_params params;
+            ggml_init_params params;
             params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1GB
             params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
-            struct ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != nullptr);
+            ggml_context* ctx = ggml_init(params);
+            GGML_ASSERT(ctx != nullptr);
             bool test_mistral          = false;
             bool test_qwen3            = true;
             bool test_vit              = false;
             bool test_decoder_with_vit = false;
 
             if (test_decoder_with_vit) {
-                ggml_tensor* image_embed = nullptr;
+                sd::Tensor<float> image_embed;
                 {
-                    auto image = load_tensor_from_file(work_ctx, "qwen2vl_normalized.bin");
-                    print_ggml_tensor(image, false, "image");
-                    struct ggml_tensor* out = nullptr;
+                    auto image = sd::load_tensor_from_file_as_tensor<float>("qwen2vl_normalized.bin");
+                    print_sd_tensor(image, false, "image");
+                    sd::Tensor<float> out;
 
-                    int64_t t0 = ggml_time_ms();
-                    model.encode_image(8, image, &out, work_ctx);
-                    int64_t t1 = ggml_time_ms();
+                    int64_t t0   = ggml_time_ms();
+                    auto out_opt = model.encode_image(8, image);
+                    int64_t t1   = ggml_time_ms();
 
-                    print_ggml_tensor(out, false, "image_embed");
+                    GGML_ASSERT(!out_opt.empty());
+                    out = std::move(out_opt);
+                    print_sd_tensor(out, false, "image_embed");
                     image_embed = out;
                     LOG_DEBUG("llm encode_image test done in %lldms", t1 - t0);
                 }
 
                 std::string placeholder  = "<|image_pad|>";
                 std::string img_prompt   = "Picture 1: <|vision_start|>";  // [24669, 220, 16, 25, 220, 151652]
-                int64_t num_image_tokens = image_embed->ne[1];
+                int64_t num_image_tokens = image_embed.shape()[1];
                 img_prompt.reserve(num_image_tokens * placeholder.size());
                 for (int i = 0; i < num_image_tokens; i++) {
                     img_prompt += placeholder;
                 }
                 img_prompt += "<|vision_end|>";
 
-                std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+                std::vector<std::pair<int, sd::Tensor<float>>> image_embeds;
                 image_embeds.emplace_back(64, image_embed);
 
                 std::pair<int, int> prompt_attn_range;
@@ -1547,29 +1103,33 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                struct ggml_tensor* out = nullptr;
+                auto input_ids = sd::Tensor<int32_t>::from_vector(tokens);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.compute(8, input_ids, nullptr, image_embeds, {}, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.compute(8, input_ids, sd::Tensor<float>(), image_embeds, {});
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else if (test_vit) {
-                // auto image = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 280, 280, 3);
+                // auto image = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 280, 280, 3);
                 // ggml_set_f32(image, 0.f);
-                auto image = load_tensor_from_file(work_ctx, "qwen2vl_normalized.bin");
-                print_ggml_tensor(image, false, "image");
-                struct ggml_tensor* out = nullptr;
+                auto image = sd::load_tensor_from_file_as_tensor<float>("qwen2vl_normalized.bin");
+                print_sd_tensor(image, false, "image");
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.encode_image(8, image, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.encode_image(8, image);
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out, false, "out");
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out, false, "out");
 
-                // auto ref_out = load_tensor_from_file(work_ctx, "qwen2vl.bin");
+                // auto ref_out = load_tensor_from_file(ctx, "qwen2vl.bin");
                 // ggml_ext_tensor_diff(ref_out, out, 0.01f);
 
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
@@ -1587,14 +1147,16 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                struct ggml_tensor* out = nullptr;
+                auto input_ids = sd::Tensor<int32_t>::from_vector(tokens);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.compute(8, input_ids, nullptr, {}, {10, 20, 30}, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.compute(8, input_ids, sd::Tensor<float>(), {}, {10, 20, 30});
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else if (test_qwen3) {
                 std::pair<int, int> prompt_attn_range;
@@ -1610,14 +1172,16 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                struct ggml_tensor* out = nullptr;
+                auto input_ids = sd::Tensor<int32_t>::from_vector(tokens);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.compute(8, input_ids, nullptr, {}, {35}, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.compute(8, input_ids, sd::Tensor<float>(), {}, {35});
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else {
                 std::pair<int, int> prompt_attn_range;
@@ -1633,14 +1197,16 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                struct ggml_tensor* out = nullptr;
+                auto input_ids = sd::Tensor<int32_t>::from_vector(tokens);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.compute(8, input_ids, nullptr, {}, {}, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.compute(8, input_ids, sd::Tensor<float>(), {}, {});
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
             }
         }

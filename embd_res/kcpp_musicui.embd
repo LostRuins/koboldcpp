@@ -547,7 +547,27 @@ function updateForm(data){
   //let origseed = document.getElementById("seed").value;
   Object.keys(data).forEach(k=>{
     if(document.getElementById(k))
+    {
       document.getElementById(k).value=data[k]??"";
+    }else{
+      if(k=="input") //for tts input
+      {
+        document.getElementById("tts_input").value=data[k]??"";
+      }
+      else if (k == "voice") {
+        const ttsVoice = document.getElementById("tts_voice");
+        const newValue = data[k] ?? "";
+        const optionExists = ttsVoice.querySelector(`option[value="${CSS.escape(newValue)}"]`);
+        if (newValue && optionExists) {
+          ttsVoice.value = newValue;
+        }
+      }
+      else if(k=="instruction")
+      {
+        document.getElementById("tts_instruction").value=data[k]??"";
+      }
+    }
+
   });
   //if(origseed=="-1" || origseed=="")
   //{
@@ -736,7 +756,7 @@ async function generateSong(){
   }
 }
 
-function loadTrackJSON(id){
+function loadTrack(id, callback) {
   const tx = db.transaction(STORE, "readonly");
   const store = tx.objectStore(STORE);
   const req = store.get(id);
@@ -747,15 +767,27 @@ function loadTrackJSON(id){
       showMessage("No JSON data found.");
       return;
     }
-
-    const data=(item.params);
-    updateForm(data);
-
+    callback(item.params);
   };
 
   req.onerror = function(){
     showMessage("Failed to load JSON.");
   };
+}
+
+function loadTrackJSON(id){
+  loadTrack(id, updateForm);
+}
+
+function exportTrackJSON(id, title) {
+  loadTrack(id, function(data) {
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`${title}.json`;
+    a.click();
+  })
 }
 
 /* Library functions unchanged */
@@ -789,10 +821,8 @@ function loadLibrary(){
             <a href="${url}" download="${item.title}${savfmt}">
                 <button class="secondary">Download</button>
             </a>
-            <button class="secondary" onclick="loadTrackJSON(${item.id})">
-                Load Params
-            </button>
-
+            <button class="secondary" onclick="exportTrackJSON(${item.id}, '${item.title}')">JSON</button>
+             <button class="secondary" onclick="loadTrackJSON(${item.id})">Edit</button>
             <button class="danger" onclick="deleteTrack(${item.id})">Delete</button>
           </div>
         `;

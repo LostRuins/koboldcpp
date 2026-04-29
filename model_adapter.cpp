@@ -468,15 +468,15 @@ std::string gguf_get_model_arch(const std::string & gguf_filename)
      return longest;
  }
 
- void ContextFastForward(std::vector<int> &current_context_tokens, std::vector<int> &embd_inp,
- int &n_past, std::vector<int> &last_n_tokens, const int nctx, std::vector<int> &smartcontext,
- bool useSmartContext, const bool requireFullSubset, const int minimum_to_proceed)
- {
-     const int SCCtxLenThreshold = nctx * 0.8; //how much context length must be reach to trigger smartcontext
-     const int SCInpLenThreshold = nctx * 0.6; //how big must the input array be to trigger smartcontext
-     const int SCPastLenThreshold = nctx * 0.5; //how wide of a gap between the fast forwarded past and the present to trigger smart context
-     const float SCTruncationRatio = 0.5; //ratio for how many tokens to fast forward
-     const int SCTokThreshold = 32 + (nctx*0.05); //how many tokens of similarity triggers smartcontext
+void ContextFastForward(std::vector<int> &current_context_tokens, std::vector<int> &embd_inp,
+int &n_past, std::vector<int> &last_n_tokens, const int nctx, std::vector<int> &smartcontext,
+bool useSmartContext, const bool requireFullSubset, const int minimum_to_proceed, const int minimum_input_to_keep)
+{
+    const int SCCtxLenThreshold = nctx * 0.8; //how much context length must be reach to trigger smartcontext
+    const int SCInpLenThreshold = nctx * 0.6; //how big must the input array be to trigger smartcontext
+    const int SCPastLenThreshold = nctx * 0.5; //how wide of a gap between the fast forwarded past and the present to trigger smart context
+    const float SCTruncationRatio = 0.5; //ratio for how many tokens to fast forward
+    const int SCTokThreshold = 32 + (nctx*0.05); //how many tokens of similarity triggers smartcontext
 
 
     //fast forward the past based on identical tokens, stop once a divergence is noted
@@ -530,6 +530,17 @@ std::string gguf_get_model_arch(const std::string & gguf_filename)
         last_n_tokens.erase(last_n_tokens.end() - n_past, last_n_tokens.end());
         n_past = 0;
         fastforwardok = false;
+    }
+
+    //we must ensure that embd_input is at least minimum_input_to_keep if possible, or as large as it can be
+    if (minimum_input_to_keep > 0 && n_past > embd_inp_len - minimum_input_to_keep)
+    {
+        int max_allowed_past = std::max(0, embd_inp_len - minimum_input_to_keep);
+        n_past = max_allowed_past;
+        if(n_past<=0)
+        {
+            fastforwardok = false;
+        }
     }
 
     if(fastforwardok)

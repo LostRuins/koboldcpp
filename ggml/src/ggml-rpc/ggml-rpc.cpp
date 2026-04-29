@@ -293,7 +293,12 @@ static bool recv_msg(socket_ptr sock, std::vector<uint8_t> & input) {
 static bool parse_endpoint(const std::string & endpoint, std::string & host, int & port) {
     size_t pos = endpoint.find(':');
     if (pos == std::string::npos) {
-        return false;
+        pos = endpoint.find('.');
+        if (pos != std::string::npos) {
+            fprintf(stderr, "[RPC] WARNING: Endpoint '%s' uses period instead of colon. Please use format 'host:port'\n", endpoint.c_str());
+        } else {
+            return false;
+        }
     }
     host = endpoint.substr(0, pos);
     try {
@@ -364,8 +369,8 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
 }
 
 static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
-    static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);
+    // Use file-scoped g_reg_mutex
+    std::lock_guard<std::mutex> lock(g_reg_mutex);
     static std::unordered_map<std::string, std::weak_ptr<socket_t>> sockets;
 
     auto it = sockets.find(endpoint);
@@ -551,6 +556,8 @@ static ggml_backend_buffer_i ggml_backend_rpc_buffer_interface = {
     /* .memset_tensor   = */ NULL,
     /* .set_tensor      = */ ggml_backend_rpc_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_rpc_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
     /* .cpy_tensor      = */ ggml_backend_rpc_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_rpc_buffer_clear,
     /* .reset           = */ NULL,
@@ -736,8 +743,10 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
 static ggml_backend_i ggml_backend_rpc_interface = {
     /* .get_name                = */ ggml_backend_rpc_name,
     /* .free                    = */ ggml_backend_rpc_free,
-  /* .set_tensor_async        = */ NULL,
+    /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
+    /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ ggml_backend_rpc_synchronize,
     /* .graph_plan_create       = */ NULL,
@@ -751,8 +760,8 @@ static ggml_backend_i ggml_backend_rpc_interface = {
 };
 
 ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint, uint32_t device) {
-    static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);
+    // Use file-scoped g_reg_mutex
+    std::lock_guard<std::mutex> lock(g_reg_mutex);
     std::string buft_name = "RPC" + std::to_string(device) + "[" + std::string(endpoint) + "]";
     // NOTE: buffer types are allocated and never freed; this is by design
     static std::unordered_map<std::string, ggml_backend_buffer_type_t> buft_map;
@@ -1950,11 +1959,16 @@ static const ggml_backend_reg_i ggml_backend_rpc_reg_interface = {
 };
 
 ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
-    static std::unordered_map<std::string, ggml_backend_reg_t> reg_map;
-    static std::mutex mutex;
-    static uint32_t dev_id = 0;
-    std::lock_guard<std::mutex> lock(mutex);
-    if (reg_map.find(endpoint) != reg_map.end()) {
+
+// File-scoped static variables for proper cleanup control
+static std::unordered_map<std::string, ggml_backend_reg_t> g_reg_map;
+static std::mutex g_reg_mutex;
+static uint32_t g_dev_id = 0;
+    // Use file-scoped g_reg_map
+    // Use file-scoped g_reg_mutex
+    // Use file-scoped g_dev_id
+    std::lock_guard<std::mutex> lock(g_reg_mutex);
+    if (g_reg_map.find(endpoint) != g_reg_map.end()) {
         return reg_map[endpoint];
     }
     uint32_t dev_count = ggml_backend_rpc_get_device_count(endpoint);
@@ -1992,3 +2006,29 @@ ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
 
 
 GGML_BACKEND_DL_IMPL(ggml_backend_rpc_reg)
+
+
+static void ggml_backend_rpc_cleanup_buffer_types() {
+    static std::unordered_map<std::string, ggml_backend_buffer_type_t> buft_map;
+    buft_map.clear();
+}
+
+static void ggml_backend_rpc_cleanup_registries() {
+    // Use file-scoped g_reg_map
+    g_reg_map.clear();
+}
+
+// Call cleanup on library unload
+__attribute__((destructor))
+static void ggml_backend_rpc_library_cleanup() {
+    ggml_backend_rpc_cleanup_sockets();
+    ggml_backend_rpc_cleanup_buffer_types();
+    ggml_backend_rpc_cleanup_registries();
+}
+
+// Explicit cleanup to avoid destructor issues
+__attribute__((destructor))
+static void cleanup_rpc_registries() {
+    std::lock_guard<std::mutex> lock(g_reg_mutex);
+    g_reg_map.clear();
+}

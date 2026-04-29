@@ -549,6 +549,11 @@ std::string acestep_generate_audio(const music_generation_inputs inputs)
         }
     }
 
+    if(acestep_dit_lowvram)
+    {
+        unload_acestep_dit_others();
+    }
+
     // DiT Generate
     std::vector<float> output(batch_n * Oc * T);
 
@@ -626,7 +631,6 @@ std::string acestep_generate_audio(const music_generation_inputs inputs)
 
     if(acestep_dit_lowvram)
     {
-        unload_acestep_dit_others();
         unload_acestep_vae_dec();
     }
 

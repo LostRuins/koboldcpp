@@ -798,6 +798,32 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
         return false;
     }
 
+    if (n_frames <= 0) {
+        samples.clear();
+        return true;
+    }
+
+    const int32_t max_frames = 1024; //this does not actually speed up currently. we just do it to bound the graph size. but it degrades quality!
+
+    if (max_frames > 0 && n_frames > max_frames) {
+        samples.clear();
+        for (int32_t offset = 0; offset < n_frames; offset += max_frames) {
+            const int32_t chunk = std::min(max_frames, n_frames - offset);
+            std::vector<float> chunk_samples;
+            if (!decode_chunk(codes + (size_t)offset * model_.config.n_codebooks, chunk, offset, chunk_samples)) {
+                return false;
+            }
+            samples.insert(samples.end(), chunk_samples.begin(), chunk_samples.end());
+        }
+        return true;
+    }
+
+    return decode_chunk(codes, n_frames, 0, samples);
+}
+
+bool AudioTokenizerDecoder::decode_chunk(const int32_t * codes, int32_t n_frames,
+                                          int32_t position_offset,
+                                          std::vector<float> & samples) {
     const auto & cfg = model_.config;
 
     codes_buf_.resize(n_frames * cfg.n_codebooks);
@@ -838,7 +864,7 @@ bool AudioTokenizerDecoder::decode(const int32_t * codes, int32_t n_frames,
     if (positions_tensor) {
         std::vector<int32_t> positions(n_frames);
         for (int i = 0; i < n_frames; ++i) {
-            positions[i] = i;
+            positions[i] = position_offset + i;
         }
         ggml_backend_tensor_set(positions_tensor, positions.data(), 0,
                                 n_frames * sizeof(int32_t));

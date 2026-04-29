@@ -30,7 +30,7 @@ struct llava_image_embed {
 struct mtmd_audio_mel;
 
 
-LLAVA_API bool llava_image_embed_make_with_clip_img(struct clip_ctx * ctx_clip, int n_threads, const struct clip_image_u8 * img, float ** image_embd_out, int * n_img_pos_out, int * nx_out, int * ny_out);
+LLAVA_API bool llava_image_embed_make_with_clip_img(struct clip_ctx * ctx_clip, int n_threads, const struct clip_image_u8 * img, float ** image_embd_out, int * n_img_pos_out, int * nx_out, int * ny_out, bool clip_is_mrope);
 
 LLAVA_API bool audio_embd_make_with_clip_img(clip_ctx * ctx_clip, int n_threads, const mtmd_audio_mel & mel_spec, float ** image_embd_out, int * n_img_pos_out);
 

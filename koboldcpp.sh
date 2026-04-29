@@ -12,10 +12,9 @@ if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA != "rocm" || $1 == "rebui
 		KCPP_CUDA=12.1.0
 	fi
 	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f environment.tmp.yaml -y
-	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f environment.tmp.yaml -y
 	bin/micromamba run -r conda -p conda/envs/linux make clean
 	echo $KCPP_CUDA > conda/envs/linux/cudaver
-	echo rm environment.tmp.yaml
+	rm environment.tmp.yaml
 fi
 
 if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA == "rocm" || $1 == "rebuild" && $KCPP_CUDA == "rocm" ]]; then
@@ -92,5 +91,5 @@ elif [[ $1 == "dist" ]]; then
 	fi
 	bin/micromamba install --no-rc -r conda -p conda/envs/linux ocl-icd -c conda-forge -y
 else
-	bin/micromamba run -r conda -p conda/envs/linux python koboldcpp.py $*
+	bin/micromamba run -r conda -p conda/envs/linux python koboldcpp.py "$@"
 fi

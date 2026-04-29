@@ -59,6 +59,9 @@ private:
         if (!safe_read(fin, key_len))
             return false;
 
+        if (key_len > 4096)
+            return false;
+
         std::string key(key_len, '\0');
         if (!safe_read(fin, (char*)key.data(), key_len))
             return false;

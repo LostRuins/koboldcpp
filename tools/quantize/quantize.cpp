@@ -1,6 +1,7 @@
+#include "llama.h"
 #include "build-info.h"
 #include "common/common.h"
-#include "llama.h"
+
 #include "gguf.h"
 
 #include <algorithm>
@@ -30,6 +31,7 @@ struct quant_option {
 };
 
 static const std::vector<quant_option> QUANT_OPTIONS = {
+    { "Q1_0",     LLAMA_FTYPE_MOSTLY_Q1_0,     " 1.125 bpw quantization",           },
     { "Q4_0",     LLAMA_FTYPE_MOSTLY_Q4_0,     " 4.34G, +0.4685 ppl @ Llama-3-8B",  },
     { "Q4_1",     LLAMA_FTYPE_MOSTLY_Q4_1,     " 4.78G, +0.4511 ppl @ Llama-3-8B",  },
     { "MXFP4_MOE",LLAMA_FTYPE_MOSTLY_MXFP4_MOE," MXFP4 MoE",  },
@@ -709,7 +711,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    print_build_info();
+    llama_print_build_info();
 
     if (params.dry_run) {
         fprintf(stderr, "%s: calculating quantization size for '%s' as %s", __func__, fname_inp.c_str(), ftype_str.c_str());

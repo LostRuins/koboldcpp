@@ -245,11 +245,43 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
     return true;
 }
 
+static ggml_backend_dev_t find_device_by_name(const std::string & name) {
+    ggml_backend_dev_t dev = ggml_backend_dev_by_name(name.c_str());
+    if (dev) {
+        return dev;
+    }
+    
+    std::string name_upper = name;
+    std::transform(name_upper.begin(), name_upper.end(), name_upper.begin(), ::toupper);
+    
+    if (name_upper.find("HIP") == 0 || name_upper.find("ROCm") == 0) {
+        std::string num = name_upper.substr(name_upper.find("HIP") == 0 ? 3 : 4);
+        std::string alt_name = (name_upper.find("HIP") == 0) ? "ROCm" + num : "HIP" + num;
+        dev = ggml_backend_dev_by_name(alt_name.c_str());
+        if (dev) {
+            fprintf(stderr, "[RPC] Device alias: %s -> %s\n", name.c_str(), alt_name.c_str());
+            return dev;
+        }
+    }
+    
+    if (name_upper.find("CUDA") == 0) {
+        std::string num = name_upper.substr(4);
+        std::string alt_name = "HIP" + num;
+        dev = ggml_backend_dev_by_name(alt_name.c_str());
+        if (dev) {
+            fprintf(stderr, "[RPC] Device alias: %s -> %s\n", name.c_str(), alt_name.c_str());
+            return dev;
+        }
+    }
+    
+    return nullptr;
+}
+
 static std::vector<ggml_backend_dev_t> get_devices(const rpc_server_params & params) {
     std::vector<ggml_backend_dev_t> devices;
     if (!params.devices.empty()) {
         for (auto device : params.devices) {
-            ggml_backend_dev_t dev = ggml_backend_dev_by_name(device.c_str());
+            ggml_backend_dev_t dev = find_device_by_name(device);
             if (dev) {
                 devices.push_back(dev);
             } else {

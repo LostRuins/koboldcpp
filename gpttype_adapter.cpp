@@ -12,11 +12,9 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
-#include <set>
 #include "model_adapter.h"
 #include "otherarch.h"
 #include "llama.h"
-#include "ggml-rpc.h"
 #include <vector>
 #include <map>
 #include <cstdint>
@@ -24,8 +22,10 @@
 #include <cctype>
 #include <locale>
 #include <chrono>
+#include <set>
 #include <algorithm>
 
+#include "ggml-rpc.h"
 #include "utils.h"
 
 //for easier compilation
@@ -159,6 +159,7 @@ static bool check_slowness = false; //will display a suggestion to use highprior
 static bool showed_rnn_warning = false;
 static bool highpriority = false;
 static int rnn_reusable_slot_idx = -1;
+static std::string overridden_jinja_template = ""; //if set, overrides jinja template
 
 static int delayed_generated_tokens_limit = 0;
 std::deque<std::string> delayed_generated_tokens; //for use with antislop sampling
@@ -1757,9 +1758,63 @@ void sample_guidance(struct llama_context * ctx, struct llama_context * guidance
     }
 }
 
+static int apply_reasoning_budget(int id, const std::vector<int> & start_think, const std::vector<int> & end_think, std::vector<int> & think_end_phrase_toks, int budget)
+{
+    if(budget<0 || start_think.size()==0 || end_think.size()!=1 || think_end_phrase_toks.size()==0) //start_think can be 1-3 tokens long, end_think is always 1 token
+    {
+        return id;
+    }
+
+    int end_think_index = -1;
+    int start_think_index = -1;
+    int ctx_size = (int)current_context_tokens.size();
+
+    for (int i = ctx_size - 1; i >= 0; --i) { // Search backwards for the latest end_think token
+        if (end_think_index == -1 && current_context_tokens[i] == end_think[0]) {
+            end_think_index = i;
+        }
+        if (start_think_index == -1) {  // Search backwards for the latest start_think sequence
+            int seq_len = (int) start_think.size();
+            if (i - seq_len + 1 >= 0) {
+                bool match = true;
+                for (int j = 0; j < seq_len; ++j) {
+                    if (current_context_tokens[i - seq_len + 1 + j] != start_think[j]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    start_think_index = i;  // index of the last token of the start_think sequence
+                }
+            }
+        }
+        if (start_think_index != -1 && end_think_index != -1) {  // Early exit once both are found
+            break;
+        }
+    }
+
+    if (start_think_index == -1) {  // If no start_think found, do nothing
+        return id;
+    }
+
+    if (end_think_index != -1 && end_think_index > start_think_index) { // If end_think comes after start_think, thinking is already closed
+        return id;
+    }
+
+    int tokens_since_start = ctx_size - 1 - start_think_index; // start_think is unclosed, check budget
+    if (tokens_since_start >= budget) {
+        int popped = think_end_phrase_toks[0]; // Force-close thinking by returning the end thinking phrase, pop front and return
+        think_end_phrase_toks.erase(think_end_phrase_toks.begin()); // Elements shift left
+        return popped;
+    }
+
+    return id;
+}
+
 int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float temp, std::mt19937 & rng,
 int mirostat, float mirostat_tau, float mirostat_eta, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
-const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve, float adaptive_target)
+const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve, float adaptive_target,
+const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq, std::vector<int> & think_end_phrase_toks, int reasoning_budget)
 {
     // printf("SampleLogits called with: n_ctx=%d, n_vocab=%d, rep_pen_range=%d, rep_pen=%f, rep_pen_slope=%f, presence_penalty=%f, top_k=%f, top_a=%f, top_p=%f, min_p=%f, typical_p=%f, tfs=%f, nsigma=%f, temp=%f, mirostat=%d, mirostat_tau=%f, mirostat_eta=%f, dry_multiplier=%f, dry_base=%f, dry_allowed_length=%d, dry_penalty_last_n=%d, xtc_threshold=%f, xtc_probability=%f, sampler_order_size=%zu, dynatemp_range=%f, dynatemp_exponent=%f, smoothing_factor=%f\n",
     // n_ctx, n_vocab, rep_pen_range, rep_pen, rep_pen_slope, presence_penalty, top_k, top_a, top_p, min_p, typical_p, tfs, nsigma, temp, mirostat, mirostat_tau, mirostat_eta, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, xtc_threshold, xtc_probability, sampler_order.size(), dynatemp_range, dynatemp_exponent, smoothing_factor);
@@ -1778,6 +1833,19 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
     }
 
     llama_token_data_array candidates_p = { candidates.data(), candidates.size(), false };
+
+    //apply reasoning budget
+    int newid = apply_reasoning_budget(id, think_start_seq, think_end_seq, think_end_phrase_toks, kcpp_data->reasoning_budget);
+    if (id != newid) {
+        if(!is_quiet && debugmode!=-1)
+        {
+            printf("\n(Reasoning Budget of %d tokens exceeded! Finishing thinking...)\n", kcpp_data->reasoning_budget);
+        }
+        candidates[newid].logit += 99999;
+        sample_top_k(&candidates_p, 1);
+        id = sample_token(&candidates_p, rng);
+        return id;
+    }
 
     //dry always first as logits cannot be resorted
     sample_dry(n_ctx, dry_penalty_last_n, dry_multiplier, dry_base, dry_allowed_length, dry_sequence_breakers, &candidates_p);
@@ -1873,7 +1941,6 @@ const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dyna
     return id;
 }
 
-
 static void grammar_accept_token(FileFormat file_format, int32_t n_vocab, struct llama_grammar * grammar, llama_token token)
 {
     const std::vector<llama_token> eog_tokens = GetEogIDs(file_format,n_vocab);
@@ -1943,39 +2010,6 @@ static bool kcpp_eval_media(llama_context * ctx_llama, const media_chunk & media
         }
     }
     *n_past += num_img_tokens;
-    return true;
-}
-
-//counts the number of matching prefix tokens between two sequences, returns percentage matched 0.0 to 1.0
-float ComputePrefixMatchPercent(std::vector<int> &current_context_tokens, std::vector<int> &new_context_tokens)
-{
-    int match_count = 0;
-    size_t min_length = std::min(current_context_tokens.size(), new_context_tokens.size());
-    for (size_t i = 0; i < min_length; ++i) {
-        if (current_context_tokens[i] == new_context_tokens[i]) {
-            match_count++;
-        } else {
-            break;
-        }
-    }
-    // Handle case where both sequences are empty to avoid division by zero
-    if (min_length == 0) {
-        return 0.0f; // Both empty sequences are considered not matched
-    }
-    return static_cast<float>(match_count) / static_cast<float>(min_length);
-}
-
-//returns true if and only if sequence 1 is fully contained within the starting of sequence 2
-bool FullyContainedPrefix(std::vector<int> &sequence1, std::vector<int> &sequence2)
-{
-    if (sequence1.size() > sequence2.size() || sequence1.size()==0 || sequence2.size()==0) {
-        return false;
-    }
-    for (size_t i = 0; i < sequence1.size(); ++i) {
-        if (sequence1[i] != sequence2[i]) {
-            return false;
-        }
-    }
     return true;
 }
 
@@ -2126,14 +2160,19 @@ void kcpp_init_audio_proj(clip_ctx * ctx_a)
     switch (proj) {
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_QWEN25O:
+        case PROJECTOR_TYPE_QWEN3A:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
+        case PROJECTOR_TYPE_MERALION:
             audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
             break;
         case PROJECTOR_TYPE_LFM2A:
             audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
+            break;
+        case PROJECTOR_TYPE_GEMMA4A:
+            audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4a>(ctx_a);
             break;
         default:
             GGML_ABORT("unsupported audio projector type");
@@ -2157,6 +2196,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_pipeline_parallelism = inputs.pipelineparallel;
     kcpp_data->n_batch = GetBatchSize(inputs.batchsize, in_file_format);
     kcpp_data->n_ubatch = kcpp_data->n_batch;
+    kcpp_data->vision_min_tokens = inputs.visionmintokens;
+    kcpp_data->vision_max_tokens = inputs.visionmaxtokens;
     if(isGguf && kcpp_pipeline_parallelism)
     {
         //double the logical batch, while keeping the physical batch the same, pipeline parallel set GGML_SCHED_MAX_COPIES to 2
@@ -2169,6 +2210,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->use_fastforward = inputs.use_fastforward;
     kcpp_data->smartcache = inputs.smartcache;
     kcpp_data->swa_full = !inputs.swa_support;
+    kcpp_extra_swa_padding = inputs.swa_padding;
     if (!kcpp_data->swa_full) {
         if (inputs.use_contextshift) {
             kcpp_data->swa_full = true;  //cannot use SWA
@@ -2177,6 +2219,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             printf("\nSWA Mode is ENABLED!\nNote that using SWA Mode cannot be used with Context Shifting, and can lead to degraded recall when combined with Fast Forwarding!\n");
         } else {
             printf("\nSWA Mode IS ENABLED!\nNote that using SWA Mode cannot be used with Context Shifting\n");
+            //since fastforward is disabled, we need no swa padding, because full reprocess always happens
+            kcpp_extra_swa_padding = 0;
         }
     }
     debugmode = inputs.debugmode;
@@ -2185,6 +2229,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     audio_multimodal_supported = false;
     vision_multimodal_supported = false;
     use_mrope = false;
+    overridden_jinja_template = inputs.jinja_template;
 
     auto clamped_max_context_length = inputs.max_context_length;
 
@@ -2386,7 +2431,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         model_params.use_direct_io = false; //no direct io for now until stable
         model_params.n_gpu_layers = inputs.gpulayers;
 
-       //set device overrides if needed
+        //set device overrides if needed
         std::vector<ggml_backend_dev_t> devices_override;
         
         // Load all backends including RPC
@@ -2449,7 +2494,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 printf("[RPC] WARNING: No RPC devices found after connecting to server\n");
             }
         }
-
+        
         std::string dev_override_str = inputs.devices_override ? inputs.devices_override : "";
         
         // If device override is specified, use it to reorder ALL devices
@@ -2539,14 +2584,12 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             
             // If RPC devices are connected but NOT in the override string, append them
             if(use_rpc) {
-                // Build set of device names already in override
                 std::set<std::string> override_names;
                 for(const auto& d : device_order) {
                     std::string upper = d;
                     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
                     override_names.insert(upper);
                 }
-                // Check which RPC devices are missing from override
                 bool has_any_rpc = false;
                 for(size_t i = 0; i < rpc_devices.size(); ++i) {
                     std::string rpc_name = "RPC" + std::to_string(i);
@@ -2571,7 +2614,6 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 std::transform(dev_name_upper.begin(), dev_name_upper.end(), dev_name_upper.begin(), ::toupper);
                 printf("%s ", dev_name.c_str());
                 
-                // Find matching device
                 bool found = false;
                 for(const auto& pair : all_devices) {
                     if(pair.first == dev_name_upper) {
@@ -2581,15 +2623,22 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                     }
                 }
                 if(!found) {
-                    printf("\n[RPC] WARNING: Device %s not found\n", dev_name.c_str());
+                    printf("\n[RPC] ERROR: Device %s not found\n", dev_name.c_str());
+                    printf("[RPC] ERROR: This usually means the RPC server is not running or failed to connect.\n");
+                    printf("[RPC] Aborting due to missing device: %s\n", dev_name.c_str());
+                    return ModelLoadResult::FAIL;
                 }
             }
             printf("\n");
-            printf("[RPC] Total devices for offloading: %zu (manually ordered)\n", devices_override.size());
+            if(devices_override.size() > 0) {
+                printf("[RPC] Total devices for offloading: %zu (manually ordered)\n", devices_override.size());
+            } else {
+                printf("[RPC] ERROR: No valid devices found after parsing device override string.\n");
+                return ModelLoadResult::FAIL;
+            }
         }
-        // If using RPC but no device override specified, auto-add local GPU devices
-        else if(use_rpc && devices_override.size() > 0) {
-            // Enumerate local GPU devices and add them
+        else if(use_rpc && devices_override.size() > 0)
+        {
             printf("[RPC] Enumerating local GPU devices to use alongside RPC...\n");
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 auto* dev = ggml_backend_dev_get(i);
@@ -2597,7 +2646,6 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 std::string reg_name = reg ? ggml_backend_reg_name(reg) : "";
                 std::string dev_name = ggml_backend_dev_name(dev);
                 printf("[RPC] Checking device %zu: %s (registry: %s)\n", i, dev_name.c_str(), reg_name.c_str());
-                // Add local GPU devices (not RPC, not CPU) - case insensitive check
                 std::string reg_name_upper = reg_name;
                 std::transform(reg_name_upper.begin(), reg_name_upper.end(), reg_name_upper.begin(), ::toupper);
                 
@@ -2616,16 +2664,17 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             printf("[RPC] Total devices for offloading: %zu (RPC + local GPUs)\n", devices_override.size());
         }
         
-        // Apply device overrides if we have any devices
         if(devices_override.size() > 0) {
-            // Add null terminator for llama.cpp (expects null-terminated array)
             devices_override.push_back(nullptr);
             model_params.devices = devices_override.data();
-            // Force GPU usage by setting n_gpu_layers to max when using RPC or custom devices
             if(use_rpc) {
                 model_params.n_gpu_layers = 999;
             }
             printf("[RPC] Using %zu device(s) for model offloading\n", devices_override.size() - 1);
+        } else {
+            printf("[RPC] ERROR: No devices available for model offloading.\n");
+            printf("[RPC] Please check that RPC servers are running or local GPUs are available.\n");
+            return ModelLoadResult::FAIL;
         }
 
         if(kcpp_parseinfo_maindevice>0)
@@ -2783,8 +2832,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         //set some ctx params early so autofit can use them.
         llama_ctx_params.flash_attn_type = (kcpp_data->flash_attn?LLAMA_FLASH_ATTN_TYPE_ENABLED:LLAMA_FLASH_ATTN_TYPE_DISABLED);
         llama_ctx_params.swa_full = kcpp_data->swa_full;
-        llama_ctx_params.type_k = (inputs.quant_k==2?GGML_TYPE_Q4_0:(inputs.quant_k==1?GGML_TYPE_Q8_0:(inputs.quant_k==3?GGML_TYPE_BF16:GGML_TYPE_F16)));
-        llama_ctx_params.type_v = (inputs.quant_v==2?GGML_TYPE_Q4_0:(inputs.quant_v==1?GGML_TYPE_Q8_0:(inputs.quant_v==3?GGML_TYPE_BF16:GGML_TYPE_F16)));
+        llama_ctx_params.type_k = (inputs.quant_k==4?GGML_TYPE_Q4_0:(inputs.quant_k==3?GGML_TYPE_Q5_1:(inputs.quant_k==2?GGML_TYPE_Q8_0:(inputs.quant_k==1?GGML_TYPE_BF16:GGML_TYPE_F16))));
+        llama_ctx_params.type_v = (inputs.quant_v==4?GGML_TYPE_Q4_0:(inputs.quant_v==3?GGML_TYPE_Q5_1:(inputs.quant_v==2?GGML_TYPE_Q8_0:(inputs.quant_v==1?GGML_TYPE_BF16:GGML_TYPE_F16))));
 
 
         //apply overrides from autofit
@@ -2810,15 +2859,17 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             bool dospam = (debugmode==1 && !is_quiet);
             ggml_log_callback currlogger;
             void * curruserdat;
+            auto oldverbosity = common_log_get_verbosity_thold();
             if(!dospam)
             {
                 llama_log_get(&currlogger, &curruserdat);
                 llama_log_set(log_callback_off, nullptr);
+                common_log_set_verbosity_thold(GGML_LOG_LEVEL_NONE);
             }
             fit_params_target[0] = taxmb*1024*1024;
-            bool success = (llama_params_fit(kcpp_data->model_filename.c_str(), &model_params, &llama_ctx_params,
+            bool success = (common_fit_params(kcpp_data->model_filename.c_str(), &model_params, &llama_ctx_params,
             tensor_split_temp, tenos.data(), fit_params_target.data(), kcpp_data->n_ctx,
-            GGML_LOG_LEVEL_NONE)==0);
+            dospam?GGML_LOG_LEVEL_DEBUG:GGML_LOG_LEVEL_NONE)==0);
             if(!dospam)
             {
                 llama_log_set(currlogger, curruserdat);
@@ -2829,6 +2880,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             {
                 //revert to previous
                 model_params.n_gpu_layers = inputs.gpulayers;
+                common_log_set_verbosity_thold(oldverbosity);
             }
         }
 
@@ -2975,8 +3027,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             clip_context_params ctx_clip_params {
                 /* use_gpu           */ true,
                 /* flash_attn_type   */ clip_fa,
-                /* image_min_tokens  */ -1,
-                /* image_max_tokens  */ -1,
+                /* image_min_tokens  */ kcpp_data->vision_min_tokens,
+                /* image_max_tokens  */ kcpp_data->vision_max_tokens,
             };
             clip_init_result cres = clip_init(mmproj_filename.c_str(), ctx_clip_params);
             clp_ctx_v = cres.ctx_v;
@@ -3461,6 +3513,10 @@ std::string gpttype_get_chat_template()
         printf("\nWarning: KCPP text generation not initialized!\n");
         return "";
     }
+    if(overridden_jinja_template!="")
+    {
+        return overridden_jinja_template;
+    }
     if(file_format!=FileFormat::GGUF_GENERIC || !llama_ctx_v4)
     {
         return "";
@@ -3564,14 +3620,38 @@ int GetThreadsToUse(bool blasmode)
 }
 
 //this function prepares the clip embds for llava. it's only needed when images change
-static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_intro)
+static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_intro, const std::vector<int> & media_outro)
 {
     bool vision_on = (clp_ctx_v != nullptr && clp_img_data != nullptr);
     bool audio_on = (clp_ctx_a != nullptr);
     if (vision_on || audio_on)
     {
         int introsize = media_intro.size();
+        int outrosize = media_outro.size();
         last_media_mem.clear();
+
+        bool clip_is_mrope = false;
+        if(file_format == FileFormat::GGUF_GENERIC)
+        {
+            //added after https://github.com/ggml-org/llama.cpp/pull/22161, replacing clip_is_mrope function
+            auto decoder_rope_type = llama_model_rope_type(llama_get_model(llama_ctx_v4));
+            switch (decoder_rope_type) {
+                case LLAMA_ROPE_TYPE_NONE:
+                case LLAMA_ROPE_TYPE_NORM:
+                case LLAMA_ROPE_TYPE_NEOX:
+                    {
+                        clip_is_mrope = false;
+                    } break;
+                case LLAMA_ROPE_TYPE_MROPE:
+                case LLAMA_ROPE_TYPE_IMROPE:
+                    {
+                        clip_is_mrope = true;
+                    }
+                    break;
+                default:
+                    printf("\nWARNING: clip unsupported decoder rope type: %d\n", decoder_rope_type);
+            }
+        }
 
         for(int i=0;i<media_objects.size();++i)
         {
@@ -3592,7 +3672,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         printf("\nCreating clip image embed...");
                     }
                     media_chunk chunk;
-                    if (!llava_image_embed_make_with_clip_img(clp_ctx_v, kcpp_data->n_threads, clp_img_data, &chunk.clp_img_embd, &chunk.clp_image_tokens, &chunk.nx, &chunk.ny)) {
+                    if (!llava_image_embed_make_with_clip_img(clp_ctx_v, kcpp_data->n_threads, clp_img_data, &chunk.clp_img_embd, &chunk.clp_image_tokens, &chunk.nx, &chunk.ny, clip_is_mrope)) {
                         printf("\nError: Clip image %d failed to create embd!",i);
                     }
                     if(debugmode==1 && !is_quiet)
@@ -3605,7 +3685,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         int tokcnt = (chunk.clp_image_tokens + media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size());
                         if(i==0)
                         {
-                            tokcnt += introsize;
+                            tokcnt += introsize + outrosize;
                         }
                         for(int n=0;n<tokcnt;++n)
                         {
@@ -3657,7 +3737,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     int tokcnt = (cliptokensneeded + media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size());
                     if(i==0)
                     {
-                        tokcnt += introsize;
+                        tokcnt += introsize + outrosize;
                     }
                     for(int n=0;n<tokcnt;++n)
                     {
@@ -3742,7 +3822,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     top_picks_history.clear();
     early_abort = false;
 
-    double time0 = 0, time1 = 0, time2 = 0;
+    double init_time = 0, process_time = 0, gen_time = 0;
     timer_start();
 
     bool media_data_changed = false;
@@ -3859,6 +3939,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     std::string addedmemory = inputs.memory;
     std::string negative_prompt = inputs.negative_prompt;
 
+    std::vector<int> media_intro; //added before media list
+    std::vector<int> media_outro; //added before media list
+    TokenizeString("\nAttached Media:\n", media_intro, file_format, true);
+
     //clear previous run llava embd memory, just-in-time free
     for(int i=0;i<media_objects.size();++i)
     {
@@ -3926,7 +4010,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             if(clp_ctx_a)
             {
                 int ptype = clip_get_projector_type_ext(clp_ctx_a);
-                if(ptype==PROJECTOR_TYPE_QWEN2A) //qwen omni
+                if(ptype==PROJECTOR_TYPE_QWEN2A || ptype==PROJECTOR_TYPE_QWEN3A || ptype==PROJECTOR_TYPE_QWEN25O) //qwen omni
                 {
                     aud_start = "<|audio_bos|>";
                     aud_end = "<|audio_eos|>\n";
@@ -3935,6 +4019,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 {
                     aud_start = "[INST][BEGIN_AUDIO]";
                     aud_end = "[/INST]\n";
+                }
+                else if(ptype==PROJECTOR_TYPE_GEMMA4A)
+                {
+                    aud_start = "<|audio>";
+                    aud_end = "<audio|>\n";
                 }
             }
 
@@ -3986,6 +4075,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     kcpp_data->smoothing_curve = inputs.smoothing_curve;
     kcpp_data->adaptive_target = inputs.adaptive_target;
     kcpp_data->adaptive_decay = inputs.adaptive_decay;
+    kcpp_data->reasoning_budget = inputs.reasoning_budget;
 
     adaptive_p_weighted_sum = 0;
     adaptive_p_total_weight = 0;
@@ -4086,22 +4176,59 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     // For the record, the GLM4 one didn't break anyone and everyone forgot GLM4 needed this :D
     if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == llm_arch::LLM_ARCH_GEMMA4)) {
         std::string temp = gpttype_get_chat_template();
-        if (temp.find("<|channel>thought") != std::string::npos) {
+        if (temp.find("<|channel>thought\\n<channel|>") != std::string::npos) {
             const std::string channel_open  = "<|channel>";
             const std::string channel_close = "<channel|>";
             const std::string channel_prefix = channel_open + channel_close;
+            const std::string systhink = "<|think|>";
 
             const std::string fullbody = addedmemory + kcpp_data->prompt;
 
             const bool has_open  = fullbody.find(channel_open)  != std::string::npos;
             const bool has_close = fullbody.find(channel_close) != std::string::npos;
+            const bool has_systhink = fullbody.find(systhink) != std::string::npos;
+            const bool ends_with_turn = kcpp_string_ends_with(kcpp_rstrip(fullbody),"<|turn>model");
+            const bool acceptable_jinja_exception = (ends_with_turn && has_systhink);
 
             // If neither opening nor closing tag is present anywhere, prepend both
-            if (!has_open && !has_close) {
+            if (!has_open && !has_close && !acceptable_jinja_exception) {
                 addedmemory = channel_prefix + addedmemory;
             }
         }
     }
+
+    //thinking budget handling
+    std::vector<int> thinking_start_sequence;
+    std::vector<int> thinking_end_sequence;
+    std::vector<int> thinking_end_phrase_toksleft;
+    std::string chat_template = "";
+    if (file_format == FileFormat::GGUF_GENERIC) {
+        chat_template = gpttype_get_chat_template();
+        if (file_format_meta.model_architecture == llm_arch::LLM_ARCH_GEMMA4) {
+            TokenizeString("<|channel>thought",thinking_start_sequence,file_format,false);
+            TokenizeString("<channel|>",thinking_end_sequence,file_format,false);
+            TokenizeString("\n(Reasoning Budget Exceeded)\n<channel|>",thinking_end_phrase_toksleft,file_format,false);
+            //sanity check, start is 2 tokens and end is 1
+            if(thinking_start_sequence.size()!=2 || thinking_end_sequence.size()!=1)
+            {
+                thinking_start_sequence.clear();
+                thinking_end_sequence.clear();
+                thinking_end_phrase_toksleft.clear();
+            }
+        } else {
+            TokenizeString("<think>",thinking_start_sequence,file_format,false);
+            TokenizeString("</think>",thinking_end_sequence,file_format,false);
+            TokenizeString("\n(Reasoning Budget Exceeded)\n</think>",thinking_end_phrase_toksleft,file_format,false);
+            //sanity check, start is 1 tokens and end is 1
+            if(thinking_start_sequence.size()!=1 || thinking_end_sequence.size()!=1)
+            {
+                thinking_start_sequence.clear();
+                thinking_end_sequence.clear();
+                thinking_end_phrase_toksleft.clear();
+            }
+        }
+    }
+
 
     bool stream_sse = inputs.stream_sse;
     bool allow_regular_prints = (!is_quiet && debugmode!=-1);
@@ -4146,14 +4273,12 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     // tokenize the prompt
     std::vector<int> embd_inp;
     std::vector<int> embd_inp_mem; //for storing added memory
-    std::vector<int> media_intro; //added before media list
     std::vector<int> guidance_embd; //holds the guidance prompt
     bool media_embds_built = false;
 
     int32_t nctx = kcpp_data->n_ctx;
 
     TokenizeString(kcpp_data->prompt, embd_inp, file_format, add_bos_token);
-    TokenizeString("\nAttached Media:\n", media_intro, file_format, true);
 
     if(media_composite_image_signature=="")
     {
@@ -4161,7 +4286,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     }
     if(media_data_changed)
     {
-        PrepareMediaEmbds(nctx, media_intro);
+        PrepareMediaEmbds(nctx, media_intro, media_outro);
         media_embds_built = true;
     }
 
@@ -4488,7 +4613,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         {
             if(kcpp_data->use_fastforward)
             {
-                ContextFastForward(current_context_tokens, embd_inp, n_past, last_n_tokens, nctx, smartcontext, false, true, 0);
+                ContextFastForward(current_context_tokens, embd_inp, n_past, last_n_tokens, nctx, smartcontext, false, true, 0, 0);
             }
         }
         if(is_recurrent)
@@ -4537,16 +4662,32 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     else
     {
         bool triggersc = kcpp_data->use_smartcontext;
+        bool triggerff = kcpp_data->use_fastforward;
         if(!blank_prompt) //special case for blank prompts, no fast forward or shifts
         {
-            if(kcpp_data->use_fastforward && kcpp_data->use_contextshift && (file_format == FileFormat::GGUF_GENERIC))
+            int ff_swa_retain_amount = 0; //a hack for SWA to improve coherency for illegal rewinds
+            if(triggerff && !kcpp_data->swa_full && (file_format == FileFormat::GGUF_GENERIC))
+            {
+                const int swa_pos_min = llama_memory_seq_pos_min(llama_get_memory(llama_ctx_v4), 0); //this is the furthest back we can rewind to.
+                int goal_npast = ComputeSharedPrefixLength(current_context_tokens,embd_inp); //this is where we want to rewind to.
+                goal_npast -= 4;
+                goal_npast = goal_npast < 0 ? 0 : goal_npast;
+                if (swa_pos_min < 0 || goal_npast <= swa_pos_min) {
+                    ff_swa_retain_amount = kcpp_active_swa_size;
+                    if (debugmode==1 && !is_quiet)
+                    {
+                         printf("\nNote: SWA context cannot be reused (Desired n_past=%d, SWA lowest n_past=%d), to avoid this, disable SWA or increase SWA padding), output may degrade.\n", goal_npast, swa_pos_min);
+                    }
+                }
+            }
+            if(triggerff && kcpp_data->use_contextshift && (file_format == FileFormat::GGUF_GENERIC))
             {
                 DoContextShifting(llama_ctx_v4, draft_ctx, current_context_tokens, embd_inp, inputs.max_length, nctx, false);
                 triggersc = false;
             }
-            if(kcpp_data->use_fastforward)
+            if(triggerff)
             {
-                ContextFastForward(current_context_tokens, embd_inp, n_past, last_n_tokens, nctx, smartcontext, triggersc, false, 4);
+                ContextFastForward(current_context_tokens, embd_inp, n_past, last_n_tokens, nctx, smartcontext, triggersc, false, 4, ff_swa_retain_amount);
             }
         }
         if(file_format == FileFormat::GGUF_GENERIC)
@@ -4611,8 +4752,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     bool draft_used = false;
     int draft_successes = 0;
     int draft_failures = 0;
+    int real_n_processed = 0;
 
-    time0 = timer_check();
+    init_time = timer_check();
     timer_start();
 
     if(file_format == FileFormat::RWKV_1 || file_format==FileFormat::RWKV_2)
@@ -4676,9 +4818,13 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         // predict
         unsigned int embdsize = embd.size();
         //print progress
-        if (!startedsampling && allow_regular_prints)
+        if (!startedsampling)
         {
-            printf("\rProcessing Prompt%s (%d / %zu tokens)", (blasmode ? " [BATCH]" : ""), input_consumed, embd_inp.size());
+            real_n_processed = embd_inp.size();
+            if(allow_regular_prints)
+            {
+                printf("\rProcessing Prompt%s (%d / %zu tokens)", (blasmode ? " [BATCH]" : ""), input_consumed, embd_inp.size());
+            }
         }
         fflush(stdout);
 
@@ -4903,7 +5049,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             if (!startedsampling)
             {
                 startedsampling = true;
-                time1 = timer_check();
+                process_time = timer_check();
                 timer_start();
                 if(allow_regular_prints)
                 {
@@ -5060,7 +5206,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta,
                 kcpp_data->dry_multiplier, kcpp_data->dry_base,
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,
-                sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve, adaptive_target);
+                sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve, adaptive_target,
+                thinking_start_sequence, thinking_end_sequence, thinking_end_phrase_toksleft, kcpp_data->reasoning_budget);
 
                 if (adaptive_target > 0.0f) {
                     float original_prob = original_candidates[id].p;
@@ -5285,7 +5432,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 {
                     if(!media_embds_built) //this should never happen! however, handle it anyway
                     {
-                        PrepareMediaEmbds(nctx, media_intro);
+                        PrepareMediaEmbds(nctx, media_intro, media_outro);
                         media_embds_built = true;
                         printf("\nSomehow media embeds was not prepared (maybe no fast forward), rebuilding it...\n");
                     }
@@ -5301,6 +5448,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         int llavatokenscounted = 0;
                         int llavatokensevaled = 0;
                         int introsize = media_intro.size();
+                        int outrosize = media_outro.size();
                         while(input_consumed < embd_inp.size() && (embd_inp[input_consumed]==MEDIA_TOKEN_IDENTIFIER_A || embd_inp[input_consumed]==MEDIA_TOKEN_IDENTIFIER_B))
                         {
                             if (!last_n_tokens.empty())
@@ -5390,6 +5538,22 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                 llavatokensevaled += end_size;
                             }
                         }
+                        if(media_objects.size()>0 && outrosize>0)
+                        {
+                            //added after all media but before prompt
+                            kcpp_embd_batch batch = kcpp_embd_batch(media_outro, n_past, use_mrope, false);
+                            auto evr = llama_decode(llama_ctx_v4, batch.batch);
+                            if(evr!=0)
+                            {
+                                printf("\nError when appending media outro: %d\n",evr);
+                            }
+                            else
+                            {
+                                printf("\rProcessing Media Outro (%d tokens)",outrosize);
+                            }
+                            n_past += outrosize;
+                            llavatokensevaled += outrosize;
+                        }
                         if(llavatokenscounted!=llavatokensevaled)
                         {
                             media_composite_image_signature = ""; //force invalidate
@@ -5446,27 +5610,21 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         llama_perf_context_print(llama_ctx_v4);
     }
 
-    time2 = timer_check();
-    float pt1 = (time1*1000.0/(embd_inp.size()==0?1:embd_inp.size()));
-    float ts1 = (pt1>0?(1000.0/pt1):0);
-    int realnpredict = kcpp_data->n_predict-remaining_tokens;
-    float pt2 = (time2*1000.0/(realnpredict<=0?1:realnpredict));
-    float ts2 = (pt2>0?(1000.0/pt2):0);
-    float tottime = (time1 + time2);
-    float tokens_per_second = tottime>0?(realnpredict <= 0 ? 0 : realnpredict / tottime):0;
-    if(debugmode==1)
-    {
-        printf("\n[%s] CtxLimit:%d/%d, Amt:%d/%d, Init:%.2fs, Process:%.2fs (%.1fms/T = %.2fT/s), Generate:%.2fs (%.1fms/T = %.2fT/s), Total:%.2fs (%.2fT/s)",get_timestamp_str().c_str(),(int)current_context_tokens.size(),(int)nctx, realnpredict, kcpp_data->n_predict, time0, time1, pt1, ts1, time2, pt2, ts2, (time1 + time2), tokens_per_second);
-    }
-    else
-    {
-         printf("\n[%s] CtxLimit:%d/%d, Amt:%d/%d, Init:%.2fs, Process:%.2fs (%.2fT/s), Generate:%.2fs (%.2fT/s), Total:%.2fs",get_timestamp_str().c_str(),(int)current_context_tokens.size(),(int)nctx, realnpredict, kcpp_data->n_predict, time0, time1, ts1, time2, ts2, (time1 + time2));
-    }
+    gen_time = timer_check();
+    float pt1 = (process_time*1000.0/(embd_inp.size()==0?1:embd_inp.size()));
+    float processed_tps = (pt1>0?(1000.0/pt1):0);
+    int real_n_generated = kcpp_data->n_predict-remaining_tokens;
+    float pt2 = (gen_time*1000.0/(real_n_generated<=0?1:real_n_generated));
+    float generated_tps = (pt2>0?(1000.0/pt2):0);
+    float total_time = (init_time + process_time + gen_time);
+    printf("\n[%s] CtxLimit:%d/%d, Init:%.2fs, Processed:%d in %.2fs (%.2fT/s), Generated:%d/%d in %.2fs (%.2fT/s), Total:%.2fs",
+    get_timestamp_str().c_str(),(int)current_context_tokens.size(),(int)nctx, init_time, real_n_processed, process_time, processed_tps, real_n_generated, kcpp_data->n_predict, gen_time, generated_tps, total_time);
+
     if(debugmode==1 && !is_quiet && (draft_successes+draft_failures)>0)
     {
         printf("\n(Draft Results - Success:%d, Failure:%d)",draft_successes,draft_failures);
     }
-    if(check_slowness && ts2<2.0f)
+    if(check_slowness && generated_tps<2.0f && real_n_generated>1)
     {
         check_slowness = false;
         if(!is_quiet)
@@ -5476,13 +5634,13 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     }
     fflush(stdout);
     output.status = 1;
-    int finaltokcount = (int)current_context_tokens.size()-realnpredict;
+    int finaltokcount = (int)current_context_tokens.size()-real_n_generated;
     output.prompt_tokens = (finaltokcount<0?0:finaltokcount);
-    output.completion_tokens = realnpredict;
+    output.completion_tokens = real_n_generated;
     output.stopreason = last_stop_reason;
     last_eval_time = pt2;
     last_process_time = pt1;
-    last_token_count = realnpredict;
+    last_token_count = real_n_generated;
     last_input_count = (finaltokcount<0?0:finaltokcount);
     last_seed = kcpp_data->seed;
     last_draft_failed = draft_failures;

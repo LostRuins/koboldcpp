@@ -22,20 +22,20 @@
 #include <string>
 #include <vector>
 
-// Config (mirrors dit.cuh DiTConfig)
+// Config (populated from GGUF metadata by dit_ggml_load)
 struct DiTGGMLConfig {
-    int hidden_size        = 2048;
-    int intermediate_size  = 6144;
-    int n_heads            = 16;
-    int n_kv_heads         = 8;
-    int head_dim           = 128;
-    int n_layers           = 24;
-    int in_channels        = 192;           // after context concat
-    int out_channels       = 64;            // audio_acoustic_hidden_dim
-    int patch_size         = 2;
-    int sliding_window     = 128;
-    float rope_theta       = 1000000.0f;
-    float rms_norm_eps     = 1e-6f;
+    int   hidden_size;
+    int   intermediate_size;
+    int   n_heads;
+    int   n_kv_heads;
+    int   head_dim;
+    int   n_layers;
+    int   in_channels;
+    int   out_channels;
+    int   patch_size;
+    int   sliding_window;
+    float rope_theta;
+    float rms_norm_eps;
 };
 
 // Layer weights
@@ -98,9 +98,9 @@ struct DiTGGML {
     struct ggml_tensor * proj_in_w;          // [in_ch*P, H] pre-permuted F32
     struct ggml_tensor * proj_in_b;          // [hidden]
 
-    // condition_embedder: Linear(hidden, hidden)
-    struct ggml_tensor * cond_emb_w;         // [hidden, hidden]
-    struct ggml_tensor * cond_emb_b;         // [hidden]
+    // condition_embedder: Linear(encoder_H, decoder_H)
+    struct ggml_tensor * cond_emb_w;  // [encoder_H, decoder_H] projects encoder to decoder space
+    struct ggml_tensor * cond_emb_b;  // [decoder_H]
 
     // Layers
     DiTGGMLLayer layers[DIT_GGML_MAX_LAYERS];
@@ -241,8 +241,7 @@ static struct ggml_tensor * dit_load_proj_out_w(
 }
 
 // Load full DiT model from GGUF
-static bool dit_ggml_load(DiTGGML * m, const char * gguf_path, DiTGGMLConfig cfg) {
-    m->cfg = cfg;
+static bool dit_ggml_load(DiTGGML * m, const char * gguf_path, DiTGGMLConfig & cfg) {
 
     GGUFModel gf;
     if (!gf_load(&gf, gguf_path)) {
@@ -250,7 +249,31 @@ static bool dit_ggml_load(DiTGGML * m, const char * gguf_path, DiTGGMLConfig cfg
         return false;
     }
 
-    // Count tensors: temb(6*2) + proj_in(2) + cond_emb(2) + layers(19*24) + output(4) + null_cond(1) + scalar_one(1) = 476
+     // config from GGUF metadata (all keys required)
+    cfg.n_layers          = (int) gf_get_u32(gf, "acestep-dit.block_count");
+    cfg.hidden_size       = (int) gf_get_u32(gf, "acestep-dit.embedding_length");
+    cfg.intermediate_size = (int) gf_get_u32(gf, "acestep-dit.feed_forward_length");
+    cfg.n_heads           = (int) gf_get_u32(gf, "acestep-dit.attention.head_count");
+    cfg.n_kv_heads        = (int) gf_get_u32(gf, "acestep-dit.attention.head_count_kv");
+    cfg.head_dim          = (int) gf_get_u32(gf, "acestep-dit.attention.key_length");
+    cfg.in_channels       = (int) gf_get_u32(gf, "acestep.in_channels");
+    cfg.out_channels      = (int) gf_get_u32(gf, "acestep.audio_acoustic_hidden_dim");
+    cfg.patch_size        = (int) gf_get_u32(gf, "acestep.patch_size");
+    cfg.sliding_window    = (int) gf_get_u32(gf, "acestep.sliding_window");
+    cfg.rope_theta        = gf_get_f32(gf, "acestep-dit.rope.freq_base");
+    cfg.rms_norm_eps      = gf_get_f32(gf, "acestep-dit.attention.layer_norm_rms_epsilon");
+
+    if (!cfg.n_layers || !cfg.hidden_size || !cfg.intermediate_size || !cfg.n_heads || !cfg.n_kv_heads ||
+        !cfg.head_dim || !cfg.in_channels || !cfg.out_channels || !cfg.patch_size || !cfg.sliding_window ||
+        cfg.rope_theta <= 0.0f || cfg.rms_norm_eps <= 0.0f) {
+        fprintf(stderr, "[Load] FATAL: incomplete DiT config in GGUF\n");
+        gf_close(&gf);
+        return false;
+    }
+
+    m->cfg = cfg;
+
+    // tensor count: temb(6*2) + proj_in(2) + cond_emb(2) + layers(19*N) + output(4) + null_cond(1) + scalar_one(1)
     int n_tensors = 6 * 2 + 2 + 2 + 19 * cfg.n_layers + 4 + 1 + 1;
     wctx_init(&m->wctx, n_tensors);
 
@@ -386,7 +409,8 @@ static void dit_ggml_init_backend(DiTGGML * m) {
     m->sched = backend_sched_new(bp, 8192);
     // flash_attn_ext accumulates in F16 on CPU, causing audible drift over
     // 24 layers x 8 steps. Use F32 manual attention on CPU instead.
-    m->use_flash_attn = (bp.backend != bp.cpu_backend);
+    // m->use_flash_attn = (bp.backend != bp.cpu_backend);
+     m->use_flash_attn = false; //kcpp: flash attn for music is unstable on vulkan. disable it.
 }
 
 // Graph builder: single DiT layer (self-attention block)
@@ -610,6 +634,10 @@ static struct ggml_tensor * dit_ggml_build_self_attn(
         ? ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0.0f, 0.0f)
         : dit_attn_f32(ctx, q, k, v, mask, scale);
 
+    if (m->use_flash_attn) {
+        ggml_flash_attn_ext_set_prec(attn, GGML_PREC_F32);
+    }
+
     // Both return [D, Nh, S, N]
     // Reshape: [D, Nh, S, N] -> [D*Nh, S, N] = [H, S, N]
     attn = ggml_reshape_3d(ctx, attn, Nh * D, S, N);
@@ -718,6 +746,10 @@ static struct ggml_tensor * dit_ggml_build_cross_attn(
     struct ggml_tensor * attn = m->use_flash_attn
         ? ggml_flash_attn_ext(ctx, q, k, v, NULL, scale, 0.0f, 0.0f)
         : dit_attn_f32(ctx, q, k, v, NULL, scale);
+
+    if (m->use_flash_attn) {
+        ggml_flash_attn_ext_set_prec(attn, GGML_PREC_F32);
+    }
 
     // Attention output: [D, Nh, S, N], reshape to [H, S, N]
     attn = ggml_reshape_3d(ctx, attn, Nh * D, S, N);
@@ -851,8 +883,11 @@ static struct ggml_cgraph * dit_ggml_build_graph(
     ggml_set_input(input);
     *p_input = input;
 
-    // Encoder hidden states: [H, enc_S, N]
-    struct ggml_tensor * enc_hidden = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, H, enc_S, N);
+    // Encoder hidden states: [H_enc, enc_S, N]
+    // H_enc comes from the condition_embedder input dimension (2048 for both 2B and XL).
+    // The condition_embedder projects H_enc -> H (decoder) via cond_emb_w.
+    int                  H_enc      = (int) m->cond_emb_w->ne[0];
+    struct ggml_tensor * enc_hidden = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, H_enc, enc_S, N);
     ggml_set_name(enc_hidden, "enc_hidden");
     ggml_set_input(enc_hidden);
 
@@ -1069,7 +1104,7 @@ static void apg_forward(
 //
 // noise:            [N * T * Oc]  N contiguous [T, Oc] noise blocks
 // context_latents:  [N * T * ctx_ch]  N contiguous context blocks
-// enc_hidden:       [enc_S * H]  SINGLE encoder output (shared, will be broadcast to N)
+// enc_hidden:       [enc_S * H_enc * N]  per-batch encoder outputs (caller-stacked)
 // schedule:         array of num_steps timestep values
 // output:           [N * T * Oc]  generated latents (caller-allocated)
 static void dit_ggml_generate(
@@ -1095,7 +1130,6 @@ static void dit_ggml_generate(
     int S     = T / c.patch_size;
     int n_per = T * Oc;              // elements per sample
     int n_total = N * n_per;         // total output elements
-    int H     = c.hidden_size;
 
     fprintf(stderr, "[DiT] Batch N=%d, T=%d, S=%d, enc_S=%d\n", N, T, S, enc_S);
 
@@ -1118,6 +1152,7 @@ static void dit_ggml_generate(
     fprintf(stderr, "[DiT] Graph: %d nodes\n", ggml_graph_n_nodes(gf));
 
     struct ggml_tensor * t_enc = ggml_graph_get_tensor(gf, "enc_hidden");
+    int                  H_enc = (int) t_enc->ne[0];  // encoder hidden size (from condition_embedder)
 
     // Allocate compute buffers.
     // Critical: reset FIRST (clears old state), THEN force inputs to GPU, THEN alloc.
@@ -1196,17 +1231,19 @@ static void dit_ggml_generate(
                 ggml_backend_tensor_get(model->null_condition_emb, null_emb.data(), 0, emb_n * sizeof(float));
             }
 
-            // Broadcast [H] to [enc_S, H] then to N copies [H, enc_S, N]
-            std::vector<float> null_enc_single(H * enc_S);
-            for (int s = 0; s < enc_S; s++)
-                memcpy(&null_enc_single[s * H], null_emb.data(), H * sizeof(float));
-            null_enc_buf.resize(H * enc_S * N);
-            for (int b = 0; b < N; b++)
-                memcpy(null_enc_buf.data() + b * enc_S * H, null_enc_single.data(), enc_S * H * sizeof(float));
+            // Broadcast [H_enc] to [enc_S, H_enc] then to N copies [H_enc, enc_S, N]
+            std::vector<float> null_enc_single(H_enc * enc_S);
+            for (int s = 0; s < enc_S; s++) {
+                memcpy(&null_enc_single[s * H_enc], null_emb.data(), H_enc * sizeof(float));
+            }
+            null_enc_buf.resize(H_enc * enc_S * N);
+            for (int b = 0; b < N; b++) {
+                memcpy(null_enc_buf.data() + b * enc_S * H_enc, null_enc_single.data(), enc_S * H_enc * sizeof(float));
+            }
 
             if (dbg && dbg->enabled) {
                 debug_dump_1d(dbg, "null_condition_emb", null_emb.data(), emb_n);
-                debug_dump_2d(dbg, "null_enc_hidden", null_enc_single.data(), enc_S, H);
+                debug_dump_2d(dbg, "null_enc_hidden", null_enc_single.data(), enc_S, H_enc);
             }
 
             apg_mbufs.resize(N);
@@ -1235,9 +1272,9 @@ static void dit_ggml_generate(
                    ctx_ch * sizeof(float));
 
     // Pre-allocate enc_buf once (avoids heap alloc per step)
-    std::vector<float> enc_buf(H * enc_S * N);
+    std::vector<float> enc_buf(H_enc * enc_S * N);
     for (int b = 0; b < N; b++)
-        memcpy(enc_buf.data() + b * enc_S * H, enc_hidden_data, enc_S * H * sizeof(float));
+        memcpy(enc_buf.data() + b * enc_S * H_enc, enc_hidden_data, enc_S * H_enc * sizeof(float));
     ggml_backend_tensor_set(t_enc, enc_buf.data(), 0, enc_buf.size() * sizeof(float));
 
     struct ggml_tensor * t_t = ggml_graph_get_tensor(gf, "t");
@@ -1340,7 +1377,7 @@ static void dit_ggml_generate(
             }
 
             // Unconditional pass: re-upload all inputs (scheduler clobbers input buffers during compute)
-            ggml_backend_tensor_set(t_enc, null_enc_buf.data(), 0, H * enc_S * N * sizeof(float));
+            ggml_backend_tensor_set(t_enc, null_enc_buf.data(), 0, H_enc * enc_S * N * sizeof(float));
             ggml_backend_tensor_set(t_input, input_buf.data(), 0, in_ch * T * N * sizeof(float));
             if (t_t) ggml_backend_tensor_set(t_t, &t_curr, 0, sizeof(float));
             if (t_tr) ggml_backend_tensor_set(t_tr, &t_curr, 0, sizeof(float));

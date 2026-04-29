@@ -13,9 +13,9 @@
 namespace Anima {
     constexpr int ANIMA_GRAPH_SIZE = 65536;
 
-    __STATIC_INLINE__ struct ggml_tensor* apply_gate(struct ggml_context* ctx,
-                                                     struct ggml_tensor* x,
-                                                     struct ggml_tensor* gate) {
+    __STATIC_INLINE__ ggml_tensor* apply_gate(ggml_context* ctx,
+                                              ggml_tensor* x,
+                                              ggml_tensor* gate) {
         gate = ggml_reshape_3d(ctx, gate, gate->ne[0], 1, gate->ne[1]);  // [N, 1, C]
         return ggml_mul(ctx, x, gate);
     }
@@ -26,7 +26,7 @@ namespace Anima {
             blocks["proj.1"] = std::make_shared<Linear>(in_dim, out_dim, false);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj.1"]);
             return proj->forward(ctx, x);
         }
@@ -39,7 +39,7 @@ namespace Anima {
             blocks["1.linear_2"] = std::make_shared<Linear>(in_dim, out_dim, false);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto linear_1 = std::dynamic_pointer_cast<Linear>(blocks["1.linear_1"]);
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["1.linear_2"]);
 
@@ -62,10 +62,10 @@ namespace Anima {
             blocks["2"]    = std::make_shared<Linear>(hidden_features, 3 * in_features, false);
         }
 
-        std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                                                    struct ggml_tensor* hidden_states,
-                                                                    struct ggml_tensor* embedded_timestep,
-                                                                    struct ggml_tensor* temb = nullptr) {
+        std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
+                                                      ggml_tensor* hidden_states,
+                                                      ggml_tensor* embedded_timestep,
+                                                      ggml_tensor* temb = nullptr) {
             auto norm     = std::dynamic_pointer_cast<LayerNorm>(blocks["norm"]);
             auto linear_1 = std::dynamic_pointer_cast<Linear>(blocks["1"]);
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
@@ -102,10 +102,10 @@ namespace Anima {
             blocks["2"]    = std::make_shared<Linear>(hidden_features, 2 * in_features, false);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* hidden_states,
-                                    struct ggml_tensor* embedded_timestep,
-                                    struct ggml_tensor* temb = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* hidden_states,
+                             ggml_tensor* embedded_timestep,
+                             ggml_tensor* temb = nullptr) {
             auto norm     = std::dynamic_pointer_cast<LayerNorm>(blocks["norm"]);
             auto linear_1 = std::dynamic_pointer_cast<Linear>(blocks["1"]);
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
@@ -152,11 +152,11 @@ namespace Anima {
             blocks[this->out_proj_name] = std::make_shared<Linear>(inner_dim, query_dim, false);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* hidden_states,
-                                    struct ggml_tensor* encoder_hidden_states = nullptr,
-                                    struct ggml_tensor* pe_q                  = nullptr,
-                                    struct ggml_tensor* pe_k                  = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* hidden_states,
+                             ggml_tensor* encoder_hidden_states = nullptr,
+                             ggml_tensor* pe_q                  = nullptr,
+                             ggml_tensor* pe_k                  = nullptr) {
             if (encoder_hidden_states == nullptr) {
                 encoder_hidden_states = hidden_states;
             }
@@ -183,7 +183,7 @@ namespace Anima {
             q4 = q_norm->forward(ctx, q4);
             k4 = k_norm->forward(ctx, k4);
 
-            struct ggml_tensor* attn_out = nullptr;
+            ggml_tensor* attn_out = nullptr;
             if (pe_q != nullptr || pe_k != nullptr) {
                 if (pe_q == nullptr) {
                     pe_q = pe_k;
@@ -227,7 +227,7 @@ namespace Anima {
             blocks["layer2"] = std::make_shared<Linear>(hidden_dim, dim, false);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto layer1 = std::dynamic_pointer_cast<Linear>(blocks["layer1"]);
             auto layer2 = std::dynamic_pointer_cast<Linear>(blocks["layer2"]);
 
@@ -245,7 +245,7 @@ namespace Anima {
             blocks["2"] = std::make_shared<Linear>(hidden_dim, dim, true);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto layer0 = std::dynamic_pointer_cast<Linear>(blocks["0"]);
             auto layer2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
 
@@ -267,11 +267,11 @@ namespace Anima {
             blocks["mlp"]             = std::make_shared<AdapterMLP>(model_dim, model_dim * 4);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* context,
-                                    struct ggml_tensor* target_pe,
-                                    struct ggml_tensor* context_pe) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* context,
+                             ggml_tensor* target_pe,
+                             ggml_tensor* context_pe) {
             auto norm_self_attn  = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_self_attn"]);
             auto self_attn       = std::dynamic_pointer_cast<AnimaAttention>(blocks["self_attn"]);
             auto norm_cross_attn = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_cross_attn"]);
@@ -317,11 +317,11 @@ namespace Anima {
             blocks["norm"]     = std::make_shared<RMSNorm>(target_dim, 1e-6f);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* source_hidden_states,
-                                    struct ggml_tensor* target_input_ids,
-                                    struct ggml_tensor* target_pe,
-                                    struct ggml_tensor* source_pe) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* source_hidden_states,
+                             ggml_tensor* target_input_ids,
+                             ggml_tensor* target_pe,
+                             ggml_tensor* source_pe) {
             GGML_ASSERT(target_input_ids != nullptr);
             if (ggml_n_dims(target_input_ids) == 1) {
                 target_input_ids = ggml_reshape_2d(ctx->ggml_ctx, target_input_ids, target_input_ids->ne[0], 1);
@@ -360,12 +360,12 @@ namespace Anima {
             blocks["mlp"]                         = std::make_shared<AnimaMLP>(hidden_size, hidden_size * mlp_ratio);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* hidden_states,
-                                    struct ggml_tensor* encoder_hidden_states,
-                                    struct ggml_tensor* embedded_timestep,
-                                    struct ggml_tensor* temb,
-                                    struct ggml_tensor* image_pe) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* hidden_states,
+                             ggml_tensor* encoder_hidden_states,
+                             ggml_tensor* embedded_timestep,
+                             ggml_tensor* temb,
+                             ggml_tensor* image_pe) {
             auto norm1 = std::dynamic_pointer_cast<AdaLayerNormZero>(blocks["adaln_modulation_self_attn"]);
             auto attn1 = std::dynamic_pointer_cast<AnimaAttention>(blocks["self_attn"]);
             auto norm2 = std::dynamic_pointer_cast<AdaLayerNormZero>(blocks["adaln_modulation_cross_attn"]);
@@ -402,10 +402,10 @@ namespace Anima {
             blocks["linear"]           = std::make_shared<Linear>(hidden_size, patch_size * patch_size * out_channels, false);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* hidden_states,
-                                    struct ggml_tensor* embedded_timestep,
-                                    struct ggml_tensor* temb) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* hidden_states,
+                             ggml_tensor* embedded_timestep,
+                             ggml_tensor* temb) {
             auto adaln  = std::dynamic_pointer_cast<AdaLayerNorm>(blocks["adaln_modulation"]);
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
 
@@ -445,15 +445,15 @@ namespace Anima {
             blocks["llm_adapter"] = std::make_shared<LLMAdapter>(1024, 1024, 1024, 6, 16);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* timestep,
-                                    struct ggml_tensor* encoder_hidden_states,
-                                    struct ggml_tensor* image_pe,
-                                    struct ggml_tensor* t5_ids       = nullptr,
-                                    struct ggml_tensor* t5_weights   = nullptr,
-                                    struct ggml_tensor* adapter_q_pe = nullptr,
-                                    struct ggml_tensor* adapter_k_pe = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* timestep,
+                             ggml_tensor* encoder_hidden_states,
+                             ggml_tensor* image_pe,
+                             ggml_tensor* t5_ids       = nullptr,
+                             ggml_tensor* t5_weights   = nullptr,
+                             ggml_tensor* adapter_q_pe = nullptr,
+                             ggml_tensor* adapter_k_pe = nullptr) {
             GGML_ASSERT(x->ne[3] == 1);
 
             auto x_embedder       = std::dynamic_pointer_cast<XEmbedder>(blocks["x_embedder"]);
@@ -553,7 +553,7 @@ namespace Anima {
             return "anima";
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             net.get_param_tensors(tensors, prefix + ".net");
         }
 
@@ -602,19 +602,18 @@ namespace Anima {
             return Rope::embed_nd(ids, bs, axis_thetas, axes_dim);
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* x,
-                                        struct ggml_tensor* timesteps,
-                                        struct ggml_tensor* context,
-                                        struct ggml_tensor* t5_ids     = nullptr,
-                                        struct ggml_tensor* t5_weights = nullptr) {
+        ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
+                                 const sd::Tensor<float>& timesteps_tensor,
+                                 const sd::Tensor<float>& context_tensor    = {},
+                                 const sd::Tensor<int32_t>& t5_ids_tensor   = {},
+                                 const sd::Tensor<float>& t5_weights_tensor = {}) {
+            ggml_tensor* x          = make_input(x_tensor);
+            ggml_tensor* timesteps  = make_input(timesteps_tensor);
+            ggml_tensor* context    = make_optional_input(context_tensor);
+            ggml_tensor* t5_ids     = make_optional_input(t5_ids_tensor);
+            ggml_tensor* t5_weights = make_optional_input(t5_weights_tensor);
             GGML_ASSERT(x->ne[3] == 1);
-            struct ggml_cgraph* gf = new_graph_custom(ANIMA_GRAPH_SIZE);
-
-            x          = to_backend(x);
-            timesteps  = to_backend(timesteps);
-            context    = to_backend(context);
-            t5_ids     = to_backend(t5_ids);
-            t5_weights = to_backend(t5_weights);
+            ggml_cgraph* gf = new_graph_custom(ANIMA_GRAPH_SIZE);
 
             int64_t pad_h = (net.patch_size - x->ne[1] % net.patch_size) % net.patch_size;
             int64_t pad_w = (net.patch_size - x->ne[0] % net.patch_size) % net.patch_size;
@@ -667,18 +666,16 @@ namespace Anima {
             return gf;
         }
 
-        bool compute(int n_threads,
-                     struct ggml_tensor* x,
-                     struct ggml_tensor* timesteps,
-                     struct ggml_tensor* context,
-                     struct ggml_tensor* t5_ids      = nullptr,
-                     struct ggml_tensor* t5_weights  = nullptr,
-                     struct ggml_tensor** output     = nullptr,
-                     struct ggml_context* output_ctx = nullptr) {
-            auto get_graph = [&]() -> struct ggml_cgraph* {
+        sd::Tensor<float> compute(int n_threads,
+                                  const sd::Tensor<float>& x,
+                                  const sd::Tensor<float>& timesteps,
+                                  const sd::Tensor<float>& context    = {},
+                                  const sd::Tensor<int32_t>& t5_ids   = {},
+                                  const sd::Tensor<float>& t5_weights = {}) {
+            auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, t5_ids, t5_weights);
             };
-            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         }
     };
 }  // namespace Anima
