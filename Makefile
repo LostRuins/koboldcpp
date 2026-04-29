@@ -686,10 +686,6 @@ SDCPP_FLAGS := -I./vendor/nlohmann
 # sd.cpp objects
 sdcpp_default.o: otherarch/sdcpp/sdtype_adapter.cpp $(SDCPP_COMMON_SOURCES)
 	$(CXX) $(CXXFLAGS) $(SDCPP_FLAGS) -c $< -o $@
-sdcpp_cublas.o: otherarch/sdcpp/sdtype_adapter.cpp $(SDCPP_COMMON_SOURCES)
-	$(CXX) $(CXXFLAGS) $(SDCPP_FLAGS) $(CUBLAS_FLAGS) $(HIPFLAGS) -c $< -o $@
-sdcpp_vulkan.o: otherarch/sdcpp/sdtype_adapter.cpp $(SDCPP_COMMON_SOURCES)
-	$(CXX) $(CXXFLAGS) $(SDCPP_FLAGS) $(VULKAN_FLAGS) -c $< -o $@
 
 
 #whisper objects
@@ -873,7 +869,7 @@ koboldcpp_noavx2:
 endif
 
 ifdef CUBLAS_BUILD
-koboldcpp_cublas: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o sdcpp_cublas.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_cublas.o ggml-repack.o $(CUBLAS_OBJS) $(OBJS_FULL) $(OBJS)
+koboldcpp_cublas: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o sdcpp_default.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_cublas.o ggml-repack.o $(CUBLAS_OBJS) $(OBJS_FULL) $(OBJS)
 	$(CUBLAS_BUILD)
 else
 koboldcpp_cublas:
@@ -881,7 +877,7 @@ koboldcpp_cublas:
 endif
 
 ifdef HIPBLAS_BUILD
-koboldcpp_hipblas: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o sdcpp_cublas.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_cublas.o ggml-repack.o $(HIP_OBJS) $(OBJS_FULL) $(OBJS)
+koboldcpp_hipblas: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o sdcpp_default.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_cublas.o ggml-repack.o $(HIP_OBJS) $(OBJS_FULL) $(OBJS)
 	$(HIPBLAS_BUILD)
 else
 koboldcpp_hipblas:
@@ -889,12 +885,12 @@ koboldcpp_hipblas:
 endif
 
 ifdef VULKAN_BUILD
-koboldcpp_vulkan: ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_FULL) $(OBJS)
+koboldcpp_vulkan: ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_default.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(VULKAN_BUILD)
 ifdef NOAVX2_BUILD
-koboldcpp_vulkan_noavx2: ggml_v4_vulkan_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml-binops.o ggml-unops.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o expose.o gpttype_adapter_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o sdcpp_vulkan.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_SIMPLE) $(OBJS)
+koboldcpp_vulkan_noavx2: ggml_v4_vulkan_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml-binops.o ggml-unops.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o expose.o gpttype_adapter_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o sdcpp_default.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_SIMPLE) $(OBJS)
 	$(VULKAN_BUILD)
-koboldcpp_vulkan_failsafe: ggml_v4_vulkan_failsafe.o ggml-cpu_v4_failsafe.o ggml-ops-failsafe.o ggml-vec-failsafe.o ggml-binops.o ggml-unops.o ggml_v3_failsafe.o ggml_v2_failsafe.o ggml_v1_failsafe.o expose.o gpttype_adapter_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o sdcpp_vulkan.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_SIMPLER) $(OBJS)
+koboldcpp_vulkan_failsafe: ggml_v4_vulkan_failsafe.o ggml-cpu_v4_failsafe.o ggml-ops-failsafe.o ggml-vec-failsafe.o ggml-binops.o ggml-unops.o ggml_v3_failsafe.o ggml_v2_failsafe.o ggml_v1_failsafe.o expose.o gpttype_adapter_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o sdcpp_default.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_SIMPLER) $(OBJS)
 	$(VULKAN_BUILD)
 else
 koboldcpp_vulkan_noavx2:
