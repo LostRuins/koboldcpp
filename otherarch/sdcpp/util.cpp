@@ -351,9 +351,40 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
     return result;
 }
 
-
+// { kcpp
 static int sdloglevel = 0; //-1 = hide all, 0 = normal, 1 = showall
 static bool sdquiet = false;
+// } kcpp
+
+static std::string build_progress_bar(int step, int steps) {
+    std::string progress = "  |";
+    int max_progress     = 50;
+    int32_t current      = 0;
+    if (steps > 0) {
+        current = (int32_t)(step * 1.f * max_progress / steps);
+    }
+    for (int i = 0; i < 50; i++) {
+        if (i > current) {
+            progress += " ";
+        } else if (i == current && i != max_progress - 1) {
+            progress += ">";
+        } else {
+            progress += "=";
+        }
+    }
+    progress += "|";
+    return progress;
+}
+
+static void print_progress_line(int step, int steps, const std::string& speed_text) {
+    if (step == 0) {
+        return;
+    }
+    std::string progress = build_progress_bar(step, steps);
+    const char* lf       = (step == steps ? "\n" : "");
+    printf("\r%s %i/%i - %s\033[K%s", progress.c_str(), step, steps, speed_text.c_str(), lf);
+    fflush(stdout);  // for linux
+}
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
@@ -366,29 +397,36 @@ void pretty_progress(int step, int steps, float time) {
     {
         return;
     }
-    std::string progress = "  |";
-    int max_progress     = 50;
-    int32_t current      = (int32_t)(step * 1.f * max_progress / steps);
-    for (int i = 0; i < 50; i++) {
-        if (i > current) {
-            progress += " ";
-        } else if (i == current && i != max_progress - 1) {
-            progress += ">";
-        } else {
-            progress += "=";
-        }
-    }
-    progress += "|";
-
-    const char* lf   = (step == steps ? "\n" : "");
     const char* unit = "s/it";
     float speed      = time;
     if (speed < 1.0f && speed > 0.f) {
         speed = 1.0f / speed;
         unit  = "it/s";
     }
-    printf("\r%s %i/%i - %.2f%s\033[K%s", progress.c_str(), step, steps, speed, unit, lf);
-    fflush(stdout);  // for linux
+    print_progress_line(step, steps, sd_format("%.2f%s", speed, unit));
+}
+
+void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
+    if (sd_progress_cb) {
+        float time = elapsed_seconds / (step + 1e-6f);
+        sd_progress_cb(step, steps, time, sd_progress_cb_data);
+        return;
+    }
+    if (step == 0) {
+        return;
+    }
+
+    double bytes_per_second = 0.0;
+    if (elapsed_seconds > 0.0f) {
+        bytes_per_second = bytes_processed / (double)elapsed_seconds;
+    }
+
+    double speed_mb = bytes_per_second / (1024.0 * 1024.0);
+    if (speed_mb >= 1024.0) {
+        print_progress_line(step, steps, sd_format("%.2fGB/s", speed_mb / 1024.0));
+    } else {
+        print_progress_line(step, steps, sd_format("%.2fMB/s", speed_mb));
+    }
 }
 
 std::string ltrim(const std::string& s) {
@@ -523,158 +561,96 @@ const char* sd_get_system_info() {
     return buffer;
 }
 
-sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
-    sd_image_f32_t converted_image;
-    converted_image.width   = image.width;
-    converted_image.height  = image.height;
-    converted_image.channel = image.channel;
+sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) {
+    const auto& shape = tensor.shape();
+    GGML_ASSERT(shape.size() == 4 || shape.size() == 5);
+    int width     = static_cast<int>(shape[0]);
+    int height    = static_cast<int>(shape[1]);
+    int channel   = static_cast<int>(shape[shape.size() == 5 ? 3 : 2]);
+    uint8_t* data = (uint8_t*)malloc(static_cast<size_t>(width * height * channel));
+    GGML_ASSERT(data != nullptr);
 
-    // Allocate memory for float data
-    converted_image.data = (float*)malloc(image.width * image.height * image.channel * sizeof(float));
-
-    for (uint32_t i = 0; i < image.width * image.height * image.channel; i++) {
-        // Convert uint8_t to float
-        converted_image.data[i] = (float)image.data[i];
-    }
-
-    return converted_image;
-}
-
-// Function to perform double linear interpolation
-float interpolate(float v1, float v2, float v3, float v4, float x_ratio, float y_ratio) {
-    return v1 * (1 - x_ratio) * (1 - y_ratio) + v2 * x_ratio * (1 - y_ratio) + v3 * (1 - x_ratio) * y_ratio + v4 * x_ratio * y_ratio;
-}
-
-sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int target_height) {
-    sd_image_f32_t resized_image;
-    resized_image.width   = target_width;
-    resized_image.height  = target_height;
-    resized_image.channel = image.channel;
-
-    // Allocate memory for resized float data
-    resized_image.data = (float*)malloc(target_width * target_height * image.channel * sizeof(float));
-
-    for (int y = 0; y < target_height; y++) {
-        for (int x = 0; x < target_width; x++) {
-            float original_x = (float)x * image.width / target_width;
-            float original_y = (float)y * image.height / target_height;
-
-            uint32_t x1 = (uint32_t)original_x;
-            uint32_t y1 = (uint32_t)original_y;
-            uint32_t x2 = std::min(x1 + 1, image.width - 1);
-            uint32_t y2 = std::min(y1 + 1, image.height - 1);
-
-            for (uint32_t k = 0; k < image.channel; k++) {
-                float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
-                float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
-                float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
-                float v4 = *(image.data + y2 * image.width * image.channel + x2 * image.channel + k);
-
-                float x_ratio = original_x - x1;
-                float y_ratio = original_y - y1;
-
-                float value = interpolate(v1, v2, v3, v4, x_ratio, y_ratio);
-
-                *(resized_image.data + y * target_width * image.channel + x * image.channel + k) = value;
+    for (int iw = 0; iw < width; ++iw) {
+        for (int ih = 0; ih < height; ++ih) {
+            for (int ic = 0; ic < channel; ++ic) {
+                float value                            = shape.size() == 5 ? tensor.index(iw, ih, frame_index, ic, 0)
+                                                                           : tensor.index(iw, ih, ic, frame_index);
+                value                                  = std::clamp(value, 0.0f, 1.0f);
+                data[(ih * width + iw) * channel + ic] = static_cast<uint8_t>(std::round(value * 255.0f));
             }
         }
     }
-
-    return resized_image;
+    return {
+        static_cast<uint32_t>(width),
+        static_cast<uint32_t>(height),
+        static_cast<uint32_t>(channel),
+        data,
+    };
 }
 
-void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3]) {
-    for (uint32_t y = 0; y < image.height; y++) {
-        for (uint32_t x = 0; x < image.width; x++) {
-            for (uint32_t k = 0; k < image.channel; k++) {
-                int index         = (y * image.width + x) * image.channel + k;
-                image.data[index] = (image.data[index] - means[k]) / stds[k];
+sd::Tensor<float> sd_image_to_tensor(sd_image_t image,
+                                     int target_width,
+                                     int target_height,
+                                     bool scale) {
+    sd::Tensor<float> tensor = sd::zeros<float>({static_cast<int64_t>(image.width),
+                                                 static_cast<int64_t>(image.height),
+                                                 static_cast<int64_t>(image.channel),
+                                                 1});
+    for (uint32_t iw = 0; iw < image.width; ++iw) {
+        for (uint32_t ih = 0; ih < image.height; ++ih) {
+            for (uint32_t ic = 0; ic < image.channel; ++ic) {
+                tensor.index(iw, ih, ic, 0) = sd_image_get_f32(image, iw, ih, ic, scale);
             }
         }
     }
+    if (target_width >= 0 && target_height >= 0 &&
+        (tensor.shape()[0] != target_width || tensor.shape()[1] != target_height)) {
+        tensor = sd::ops::interpolate(tensor,
+                                      {target_width,
+                                       target_height,
+                                       tensor.shape()[2],
+                                       tensor.shape()[3]});
+    }
+    return tensor;
 }
 
 // Constants for means and std
 float means[3] = {0.48145466f, 0.4578275f, 0.40821073f};
 float stds[3]  = {0.26862954f, 0.26130258f, 0.27577711f};
 
-// Function to clip and preprocess sd_image_f32_t
-sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int target_height) {
-    float width_scale  = (float)target_width / image.width;
-    float height_scale = (float)target_height / image.height;
+sd::Tensor<float> clip_preprocess(const sd::Tensor<float>& image, int target_width, int target_height) {
+    GGML_ASSERT(image.dim() == 4);
+    GGML_ASSERT(image.shape()[2] == 3);
+    GGML_ASSERT(image.shape()[3] == 1);
+    GGML_ASSERT(target_width > 0 && target_height > 0);
 
-    float scale = std::fmax(width_scale, height_scale);
+    float width_scale  = static_cast<float>(target_width) / static_cast<float>(image.shape()[0]);
+    float height_scale = static_cast<float>(target_height) / static_cast<float>(image.shape()[1]);
+    float scale        = std::fmax(width_scale, height_scale);
 
-    // Interpolation
-    int resized_width   = (int)(scale * image.width);
-    int resized_height  = (int)(scale * image.height);
-    float* resized_data = (float*)malloc(resized_width * resized_height * image.channel * sizeof(float));
+    int64_t resized_width  = static_cast<int64_t>(scale * static_cast<float>(image.shape()[0]));
+    int64_t resized_height = static_cast<int64_t>(scale * static_cast<float>(image.shape()[1]));
 
-    for (int y = 0; y < resized_height; y++) {
-        for (int x = 0; x < resized_width; x++) {
-            float original_x = (float)x * image.width / resized_width;
-            float original_y = (float)y * image.height / resized_height;
+    sd::Tensor<float> resized = sd::ops::interpolate(
+        image,
+        {resized_width, resized_height, image.shape()[2], image.shape()[3]});
 
-            uint32_t x1 = (uint32_t)original_x;
-            uint32_t y1 = (uint32_t)original_y;
-            uint32_t x2 = std::min(x1 + 1, image.width - 1);
-            uint32_t y2 = std::min(y1 + 1, image.height - 1);
+    int64_t h_offset = std::max<int64_t>((resized_height - target_height) / 2, 0);
+    int64_t w_offset = std::max<int64_t>((resized_width - target_width) / 2, 0);
 
-            for (uint32_t k = 0; k < image.channel; k++) {
-                float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
-                float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
-                float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
-                float v4 = *(image.data + y2 * image.width * image.channel + x2 * image.channel + k);
-
-                float x_ratio = original_x - x1;
-                float y_ratio = original_y - y1;
-
-                float value = interpolate(v1, v2, v3, v4, x_ratio, y_ratio);
-
-                *(resized_data + y * resized_width * image.channel + x * image.channel + k) = value;
+    sd::Tensor<float> cropped({target_width, target_height, image.shape()[2], image.shape()[3]});
+    for (int64_t y = 0; y < target_height; ++y) {
+        for (int64_t x = 0; x < target_width; ++x) {
+            for (int64_t c = 0; c < image.shape()[2]; ++c) {
+                cropped.index(x, y, c, 0) = resized.index(x + w_offset, y + h_offset, c, 0);
             }
         }
     }
 
-    // Clip and preprocess
-    int h_offset = std::max((int)(resized_height - target_height) / 2, 0);
-    int w_offset = std::max((int)(resized_width - target_width) / 2, 0);
-
-    sd_image_f32_t result;
-    result.width   = target_width;
-    result.height  = target_height;
-    result.channel = image.channel;
-    result.data    = (float*)malloc(target_height * target_width * image.channel * sizeof(float));
-
-    for (uint32_t k = 0; k < image.channel; k++) {
-        for (uint32_t i = 0; i < result.height; i++) {
-            for (uint32_t j = 0; j < result.width; j++) {
-                int src_y = std::min(static_cast<int>(i + h_offset), resized_height - 1);
-                int src_x = std::min(static_cast<int>(j + w_offset), resized_width - 1);
-                *(result.data + i * result.width * image.channel + j * image.channel + k) =
-                    fmin(fmax(*(resized_data + src_y * resized_width * image.channel + src_x * image.channel + k), 0.0f), 255.0f) / 255.0f;
-            }
-        }
-    }
-
-    // Free allocated memory
-    free(resized_data);
-
-    // Normalize
-    for (uint32_t k = 0; k < image.channel; k++) {
-        for (uint32_t i = 0; i < result.height; i++) {
-            for (uint32_t j = 0; j < result.width; j++) {
-                // *(result.data + i * size * image.channel + j * image.channel + k) = 0.5f;
-                int offset  = i * result.width * image.channel + j * image.channel + k;
-                float value = *(result.data + offset);
-                value       = (value - means[k]) / stds[k];
-                // value = 0.5f;
-                *(result.data + offset) = value;
-            }
-        }
-    }
-
-    return result;
+    sd::Tensor<float> normalized = sd::ops::clamp(cropped, 0.0f, 1.0f);
+    sd::Tensor<float> mean({1, 1, 3, 1}, {means[0], means[1], means[2]});
+    sd::Tensor<float> std({1, 1, 3, 1}, {stds[0], stds[1], stds[2]});
+    return (normalized - mean) / std;
 }
 
 // Ref: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/cad87bf4e3e0b0a759afa94e933527c3123d59bc/modules/prompt_parser.py#L345

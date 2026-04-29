@@ -801,6 +801,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_F16:  return GGML_TYPE_F16;
         case LLAMA_FTYPE_MOSTLY_BF16: return GGML_TYPE_BF16;
         case LLAMA_FTYPE_ALL_F32:     return GGML_TYPE_F32;
+        case LLAMA_FTYPE_MOSTLY_Q1_0: return GGML_TYPE_Q1_0;
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return GGML_TYPE_MXFP4;
 
@@ -1284,7 +1285,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 llama_model_quantize_params llama_model_quantize_default_params() {
     llama_model_quantize_params result = {
         /*.nthread                     =*/ 0,
-        /*.ftype                       =*/ LLAMA_FTYPE_MOSTLY_Q5_1,
+        /*.ftype                       =*/ LLAMA_FTYPE_MOSTLY_Q8_0,
         /*.output_tensor_type          =*/ GGML_TYPE_COUNT,
         /*.token_embedding_type        =*/ GGML_TYPE_COUNT,
         /*.allow_requantize            =*/ false,

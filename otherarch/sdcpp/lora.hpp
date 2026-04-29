@@ -9,7 +9,7 @@
 struct LoraModel : public GGMLRunner {
     std::string lora_id;
     float multiplier = 1.0f;
-    std::unordered_map<std::string, struct ggml_tensor*> lora_tensors;
+    std::unordered_map<std::string, ggml_tensor*> lora_tensors;
     std::map<ggml_tensor*, ggml_tensor*> original_tensor_to_final_tensor;
     std::set<std::string> applied_lora_tensors;
     std::string file_path;
@@ -76,13 +76,13 @@ struct LoraModel : public GGMLRunner {
         }
 
         for (const auto& pair : tensors_to_create) {
-            const auto& name         = pair.first;
-            const auto& ts           = pair.second;
-            struct ggml_tensor* real = ggml_new_tensor(params_ctx,
-                                                       ts.type,
-                                                       ts.n_dims,
-                                                       ts.ne);
-            lora_tensors[name]       = real;
+            const auto& name   = pair.first;
+            const auto& ts     = pair.second;
+            ggml_tensor* real  = ggml_new_tensor(params_ctx,
+                                                 ts.type,
+                                                 ts.n_dims,
+                                                 ts.ne);
+            lora_tensors[name] = real;
         }
 
         alloc_params_buffer();
@@ -337,10 +337,10 @@ struct LoraModel : public GGMLRunner {
             }
             scale_value *= multiplier;
 
-            struct ggml_tensor* updown_1 = ggml_ext_merge_lora(ctx, hada_1_down, hada_1_up, hada_1_mid);
-            struct ggml_tensor* updown_2 = ggml_ext_merge_lora(ctx, hada_2_down, hada_2_up, hada_2_mid);
-            auto curr_updown             = ggml_mul_inplace(ctx, updown_1, updown_2);
-            curr_updown                  = ggml_ext_scale(ctx, curr_updown, scale_value, true);
+            ggml_tensor* updown_1 = ggml_ext_merge_lora(ctx, hada_1_down, hada_1_up, hada_1_mid);
+            ggml_tensor* updown_2 = ggml_ext_merge_lora(ctx, hada_2_down, hada_2_up, hada_2_mid);
+            auto curr_updown      = ggml_mul_inplace(ctx, updown_1, updown_2);
+            curr_updown           = ggml_ext_scale(ctx, curr_updown, scale_value, true);
             if (updown == nullptr) {
                 updown = curr_updown;
             } else {
@@ -747,9 +747,9 @@ struct LoraModel : public GGMLRunner {
         return out_diff;
     }
 
-    struct ggml_cgraph* build_lora_graph(const std::map<std::string, ggml_tensor*>& model_tensors, SDVersion version) {
+    ggml_cgraph* build_lora_graph(const std::map<std::string, ggml_tensor*>& model_tensors, SDVersion version) {
         size_t lora_graph_size = LORA_GRAPH_BASE_SIZE + lora_tensors.size() * 10;
-        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, lora_graph_size, false);
+        ggml_cgraph* gf        = ggml_new_graph_custom(compute_ctx, lora_graph_size, false);
 
         preprocess_lora_tensors(model_tensors);
 
@@ -788,11 +788,11 @@ struct LoraModel : public GGMLRunner {
         return gf;
     }
 
-    void apply(std::map<std::string, struct ggml_tensor*> model_tensors, SDVersion version, int n_threads) {
-        auto get_graph = [&]() -> struct ggml_cgraph* {
+    void apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads) {
+        auto get_graph = [&]() -> ggml_cgraph* {
             return build_lora_graph(model_tensors, version);
         };
-        GGMLRunner::compute(get_graph, n_threads, false);
+        GGMLRunner::compute<float>(get_graph, n_threads, false, true);
         stat();
         for (auto item : original_tensor_to_final_tensor) {
             ggml_tensor* original_tensor = item.first;

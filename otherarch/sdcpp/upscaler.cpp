@@ -2,6 +2,7 @@
 #include "ggml_extend.hpp"
 #include "model.h"
 #include "stable-diffusion.h"
+#include "util.h"
 
 struct UpscalerGGML {
     ggml_backend_t backend    = nullptr;  // general backend
@@ -64,6 +65,39 @@ struct UpscalerGGML {
         return true;
     }
 
+    sd::Tensor<float> upscale_tensor(const sd::Tensor<float>& input_tensor) {
+        sd::Tensor<float> upscaled;
+        if (tile_size <= 0 || (input_tensor.shape()[0] <= tile_size && input_tensor.shape()[1] <= tile_size)) {
+            upscaled = esrgan_upscaler->compute(n_threads, input_tensor);
+        } else {
+            auto on_processing = [&](const sd::Tensor<float>& input_tile) -> sd::Tensor<float> {
+                auto output_tile = esrgan_upscaler->compute(n_threads, input_tile);
+                if (output_tile.empty()) {
+                    LOG_ERROR("esrgan compute failed while processing a tile");
+                    return {};
+                }
+                return output_tile;
+            };
+
+            upscaled = process_tiles_2d(input_tensor,
+                                        static_cast<int>(input_tensor.shape()[0] * esrgan_upscaler->scale),
+                                        static_cast<int>(input_tensor.shape()[1] * esrgan_upscaler->scale),
+                                        esrgan_upscaler->scale,
+                                        tile_size,
+                                        tile_size,
+                                        0.25f,
+                                        false,
+                                        false,
+                                        on_processing);
+        }
+        esrgan_upscaler->free_compute_buffer();
+        if (upscaled.empty()) {
+            LOG_ERROR("esrgan compute failed");
+            return {};
+        }
+        return upscaled;
+    }
+
     sd_image_t upscale(sd_image_t input_image, uint32_t upscale_factor) {
         // upscale_factor, unused for RealESRGAN_x4plus_anime_6B.pth
         sd_image_t upscaled_image = {0, 0, 0, nullptr};
@@ -72,40 +106,17 @@ struct UpscalerGGML {
         LOG_INFO("upscaling from (%i x %i) to (%i x %i)",
                  input_image.width, input_image.height, output_width, output_height);
 
-        struct ggml_init_params params;
-        params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
-        params.mem_buffer = nullptr;
-        params.no_alloc   = false;
-
-        // draft context
-        struct ggml_context* upscale_ctx = ggml_init(params);
-        if (!upscale_ctx) {
-            LOG_ERROR("ggml_init() failed");
+        sd::Tensor<float> input_tensor = sd_image_to_tensor(input_image);
+        sd::Tensor<float> upscaled;
+        int64_t t0 = ggml_time_ms();
+        upscaled   = upscale_tensor(input_tensor);
+        if (upscaled.empty()) {
             return upscaled_image;
         }
-        // LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
-        ggml_tensor* input_image_tensor = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, input_image.width, input_image.height, 3, 1);
-        sd_image_to_ggml_tensor(input_image, input_image_tensor);
-
-        ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, 3, 1);
-        auto on_tiling        = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-            return esrgan_upscaler->compute(n_threads, in, &out);
-        };
-        int64_t t0 = ggml_time_ms();
-        // TODO: circular upscaling?
-        sd_tiling(input_image_tensor, upscaled, esrgan_upscaler->scale, esrgan_upscaler->tile_size, 0.25f, false, false, on_tiling);
-        esrgan_upscaler->free_compute_buffer();
-        ggml_ext_tensor_clamp_inplace(upscaled, 0.f, 1.f);
-        uint8_t* upscaled_data = ggml_tensor_to_sd_image(upscaled);
-        ggml_free(upscale_ctx);
-        int64_t t3 = ggml_time_ms();
+        sd_image_t upscaled_data = tensor_to_sd_image(upscaled);
+        int64_t t3               = ggml_time_ms();
         LOG_INFO("input_image_tensor upscaled, taking %.2fs", (t3 - t0) / 1000.0f);
-        upscaled_image = {
-            (uint32_t)output_width,
-            (uint32_t)output_height,
-            3,
-            upscaled_data,
-        };
+        upscaled_image = upscaled_data;
         return upscaled_image;
     }
 };

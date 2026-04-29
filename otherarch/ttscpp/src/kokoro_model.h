@@ -312,6 +312,8 @@ struct kokoro_ubatch {
     struct kokoro_duration_response * resp = nullptr;
 };
 
+extern bool kcpp_kokoro_alloc_hack;
+
 struct kokoro_duration_context : runner_context {
     kokoro_duration_context(kokoro_model * model, int n_threads): runner_context(n_threads), model(model) {};
     ~kokoro_duration_context() {
@@ -332,7 +334,9 @@ struct kokoro_duration_context : runner_context {
     struct ggml_tensor * token_types = nullptr;
 
     void build_schedule() {
+		kcpp_kokoro_alloc_hack = true;
         runner_context::build_schedule(model->max_duration_nodes()*5);
+		kcpp_kokoro_alloc_hack = false;
     }
 };
 
@@ -410,7 +414,9 @@ struct kokoro_context : runner_context {
     struct ggml_tensor * uv_noise_data;
 
     void build_schedule() {
+		kcpp_kokoro_alloc_hack = true;
         runner_context::build_schedule(model->max_gen_nodes()*30);
+		kcpp_kokoro_alloc_hack = false;
     }
 };
 

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "ggml_extend.hpp"
+#include "tensor.hpp"
 
 struct SpectrumConfig {
     float w            = 0.40f;
@@ -57,11 +58,8 @@ struct SpectrumState {
         return (num_cached + 1) % ws != 0;
     }
 
-    void update(const struct ggml_tensor* denoised) {
-        int64_t ne        = ggml_nelements(denoised);
-        const float* data = (const float*)denoised->data;
-
-        H_buf.emplace_back(data, data + ne);
+    void update(const sd::Tensor<float>& denoised) {
+        H_buf.emplace_back(denoised.data(), denoised.data() + denoised.numel());
         T_buf.push_back(taus(cnt));
 
         while ((int)H_buf.size() > K) {
@@ -76,13 +74,13 @@ struct SpectrumState {
         cnt++;
     }
 
-    void predict(struct ggml_tensor* denoised) {
+    void predict(sd::Tensor<float>* denoised) {
+        GGML_ASSERT(denoised != nullptr);
         int64_t F    = (int64_t)H_buf[0].size();
         int K_curr   = (int)H_buf.size();
         int M1       = config.m + 1;
         float tau_at = taus(cnt);
 
-        // Design matrix X: K_curr x M1 (Chebyshev basis)
         std::vector<float> X(K_curr * M1);
         for (int i = 0; i < K_curr; i++) {
             X[i * M1] = 1.0f;
@@ -92,7 +90,6 @@ struct SpectrumState {
                 X[i * M1 + j] = 2.0f * T_buf[i] * X[i * M1 + j - 1] - X[i * M1 + j - 2];
         }
 
-        // x_star: Chebyshev basis at current tau
         std::vector<float> x_star(M1);
         x_star[0] = 1.0f;
         if (M1 > 1)
@@ -100,7 +97,6 @@ struct SpectrumState {
         for (int j = 2; j < M1; j++)
             x_star[j] = 2.0f * tau_at * x_star[j - 1] - x_star[j - 2];
 
-        // XtX = X^T X + lambda I
         std::vector<float> XtX(M1 * M1, 0.0f);
         for (int i = 0; i < M1; i++) {
             for (int j = 0; j < M1; j++) {
@@ -111,7 +107,6 @@ struct SpectrumState {
             }
         }
 
-        // Cholesky decomposition
         std::vector<float> L(M1 * M1, 0.0f);
         if (!cholesky_decompose(XtX.data(), L.data(), M1)) {
             float trace = 0.0f;
@@ -122,18 +117,15 @@ struct SpectrumState {
             cholesky_decompose(XtX.data(), L.data(), M1);
         }
 
-        // Solve XtX v = x_star
         std::vector<float> v(M1);
         cholesky_solve(L.data(), x_star.data(), v.data(), M1);
 
-        // Prediction weights per history entry
         std::vector<float> weights(K_curr, 0.0f);
         for (int k = 0; k < K_curr; k++)
             for (int j = 0; j < M1; j++)
                 weights[k] += X[k * M1 + j] * v[j];
 
-        // Blend Chebyshev and Taylor predictions
-        float* out          = (float*)denoised->data;
+        float* out          = denoised->data();
         float w_cheb        = config.w;
         float w_taylor      = 1.0f - w_cheb;
         const float* h_last = H_buf.back().data();

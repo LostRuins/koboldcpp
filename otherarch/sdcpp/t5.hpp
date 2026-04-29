@@ -10,459 +10,16 @@
 #include <string>
 #include <unordered_map>
 
-#include "darts.h"
 #include "ggml_extend.hpp"
-#include <nlohmann/json.hpp>
 #include "model.h"
-#include "vocab/vocab.h"
-
-// Port from: https://github.com/google/sentencepiece/blob/master/src/unigram_model.h
-// and https://github.com/google/sentencepiece/blob/master/src/unigram_model.h.
-// Original License: https://github.com/google/sentencepiece/blob/master/LICENSE
-//
-// Since tokenization is not the bottleneck in SD, performance was not a major consideration
-// during the migration.
-class MetaspacePreTokenizer {
-private:
-    std::string replacement;
-    bool add_prefix_space;
-
-public:
-    MetaspacePreTokenizer(const std::string replacement = " ", bool add_prefix_space = true)
-        : replacement(replacement), add_prefix_space(add_prefix_space) {}
-
-    std::string tokenize(const std::string& input) const {
-        std::string tokens;
-        std::stringstream ss(input);
-
-        if (add_prefix_space) {
-            tokens += replacement;
-        }
-
-        std::string token;
-        bool firstToken = true;
-        while (std::getline(ss, token, ' ')) {
-            if (!firstToken)
-                tokens += replacement + token;
-            else
-                tokens += token;
-
-            firstToken = false;
-        }
-
-        return tokens;
-    }
-};
-
-using EncodeResult = std::vector<std::pair<std::string, int>>;
-class T5UniGramTokenizer {
-public:
-    enum Status {
-        OK,
-        NO_PIECES_LOADED,
-        NO_ENTRY_FOUND,
-        BUILD_DOUBLE_ARRAY_FAILED,
-        PIECE_ALREADY_DEFINED,
-        INVLIAD_JSON
-    };
-
-protected:
-    MetaspacePreTokenizer pre_tokenizer;
-
-    // all <piece, score> pairs
-    std::vector<std::pair<std::string, float>> piece_score_pairs;
-
-    float min_score_ = 0.0;
-    float max_score_ = 0.0;
-    std::unique_ptr<Darts::DoubleArray> trie_;
-
-    // Maximum size of the return value of Trie, which corresponds
-    // to the maximum size of shared common prefix in the sentence pieces.
-    int trie_results_size_;
-    // unknown id.
-    int unk_id_            = 2;
-    std::string eos_token_ = "</s>";
-    int eos_id_            = 1;
-    int pad_id_            = 0;
-    // status.
-    Status status_ = OK;
-
-    float kUnkPenalty = 10.0;
-
-    std::string replacement;
-    bool add_prefix_space = true;
-
-    void InitializePieces(const std::string& json_str) {
-        nlohmann::json data;
-
-        try {
-            data = nlohmann::json::parse(json_str);
-        } catch (const nlohmann::json::parse_error&) {
-            status_ = INVLIAD_JSON;
-            return;
-        }
-        if (!data.contains("model")) {
-            status_ = INVLIAD_JSON;
-            return;
-        }
-        nlohmann::json model = data["model"];
-        if (!model.contains("vocab")) {
-            status_ = INVLIAD_JSON;
-            return;
-        }
-        if (model.contains("unk_id")) {
-            unk_id_ = model["unk_id"];
-        }
-
-        replacement      = data["pre_tokenizer"]["replacement"];
-        add_prefix_space = data["pre_tokenizer"]["add_prefix_space"];
-
-        pre_tokenizer = MetaspacePreTokenizer(replacement, add_prefix_space);
-
-        for (const auto& item : model["vocab"]) {
-            if (item.size() != 2 || !item[0].is_string() || !item[1].is_number_float()) {
-                status_ = INVLIAD_JSON;
-                return;
-            }
-            std::string piece = item[0];
-            if (piece.empty()) {
-                piece = "<empty_token>";
-            }
-            float score = item[1];
-            piece_score_pairs.emplace_back(piece, score);
-        }
-    }
-
-    // Builds a Trie index.
-    void BuildTrie(std::vector<std::pair<std::string, int>>* pieces) {
-        if (status_ != OK)
-            return;
-
-        if (pieces->empty()) {
-            status_ = NO_PIECES_LOADED;
-            return;
-        }
-
-        // sort by sentencepiece since DoubleArray::build()
-        // only accepts sorted strings.
-        sort(pieces->begin(), pieces->end());
-
-        // Makes key/value set for DoubleArrayTrie.
-        std::vector<const char*> key(pieces->size());
-        std::vector<int> value(pieces->size());
-        for (size_t i = 0; i < pieces->size(); ++i) {
-            // LOG_DEBUG("%s %d", (*pieces)[i].first.c_str(), (*pieces)[i].second);
-            key[i]   = (*pieces)[i].first.data();  // sorted piece.
-            value[i] = (*pieces)[i].second;        // vocab_id
-        }
-
-        trie_ = std::unique_ptr<Darts::DoubleArray>(new Darts::DoubleArray());
-        if (trie_->build(key.size(), const_cast<char**>(&key[0]), nullptr,
-                         &value[0]) != 0) {
-            status_ = BUILD_DOUBLE_ARRAY_FAILED;
-            return;
-        }
-
-        // Computes the maximum number of shared prefixes in the trie.
-        const int kMaxTrieResultsSize = 1024;
-        std::vector<Darts::DoubleArray::result_pair_type> results(
-            kMaxTrieResultsSize);
-        trie_results_size_ = 0;
-        for (const auto& p : *pieces) {
-            const size_t num_nodes = trie_->commonPrefixSearch(
-                p.first.data(), results.data(), results.size(), p.first.size());
-            trie_results_size_ = std::max(trie_results_size_, static_cast<int>(num_nodes));
-        }
-
-        if (trie_results_size_ == 0)
-            status_ = NO_ENTRY_FOUND;
-    }
-
-    // Non-virtual (inlined) implementation for faster execution.
-    inline float GetScoreInlined(int id) const {
-        return piece_score_pairs[id].second;
-    }
-
-    inline bool IsUnusedInlined(int id) const {
-        return false;  // TODO
-    }
-
-    inline bool IsUserDefinedInlined(int id) const {
-        return false;  // TODO
-    }
-
-    inline size_t OneCharLen(const char* src) const {
-        return "\1\1\1\1\1\1\1\1\1\1\1\1\2\2\3\4"[(*src & 0xFF) >> 4];
-    }
-
-    // The optimized Viterbi encode.
-    // Main differences from the original function:
-    // 1. Memorizes the best path at each postion so far,
-    // 2. No need to store the Lattice nodes,
-    // 3. Works in utf-8 directly,
-    // 4. Defines a new struct with fewer fields than Lattice,
-    // 5. Does not depend on `class Lattice` nor call `SetSentence()`,
-    // `PopulateNodes()`, or `Viterbi()`. It does everything in one function.
-    // For detailed explanations please see the comments inside the function body.
-    EncodeResult EncodeOptimized(const std::string& normalized) const {
-        // An optimized Viterbi algorithm for unigram language models. Benchmarking
-        // results show that it generates almost identical outputs and achieves 2.1x
-        // speedup on average for 102 languages compared to the original
-        // implementation. It's based on the following three ideas:
-        //
-        // 1. Because it uses the *unigram* model:
-        //     best_score(x1, x2, …, xt) = best_score(x1, x2, …, x{t-1}) + score(xt)
-        // Deciding the best path (and score) can be decoupled into two isolated
-        // terms: (a) the best path ended before the last token `best_score(x1, x2, …,
-        // x{t-1})`, and (b) the last token and its `score(xt)`. The two terms are
-        // not related to each other at all.
-        //
-        // Therefore, we can compute once and store the *best_path ending at
-        // each character position*. In this way, when we know best_path_ends_at[M],
-        // we can reuse it to compute all the best_path_ends_at_[...] where the last
-        // token starts at the same character position M.
-        //
-        // This improves the time complexity from O(n*k*k) to O(n*k) because it
-        // eliminates the extra loop of recomputing the best path ending at the same
-        // position, where n is the input length and k is the maximum number of tokens
-        // that can be recognized starting at each position.
-        //
-        // 2. Again, because it uses the *unigram* model, we don’t need to actually
-        // store the lattice nodes. We still recognize all the tokens and lattice
-        // nodes from the input, but along identifying them, we use and discard them
-        // on the fly. There is no need to actually store them for best path Viterbi
-        // decoding. The only thing we need to store is the best_path ending at
-        // each character position.
-        //
-        // This improvement reduces the things needed to store in memory from O(n*k)
-        // to O(n), where n is the input length and k is the maximum number of tokens
-        // that can be recognized starting at each position.
-        //
-        // It also avoids the need of dynamic-size lattice node pool, because the
-        // number of things to store is fixed as n.
-        //
-        // 3. SentencePiece is designed to work with unicode, taking utf-8 encoding
-        // inputs. In the original implementation, the lattice positions are based on
-        // unicode positions. A mapping from unicode position to the utf-8 position is
-        // maintained to recover the utf-8 string piece.
-        //
-        // We found that it is sufficient and beneficial to directly work with utf-8
-        // positions:
-        //
-        // Firstly, it saves the conversion and mapping between unicode positions and
-        // utf-8 positions.
-        //
-        // Secondly, it reduces the number of fields we need to maintain in the
-        // node/path structure. Specifically, there are 8 fields defined in
-        // `Lattice::Node` used by the original encoder, but here in the optimized
-        // encoder we only need to define 3 fields in `BestPathNode`.
-
-        if (status() != OK || normalized.empty()) {
-            return {};
-        }
-        // Represents the last node of the best path.
-        struct BestPathNode {
-            int id = -1;  // The vocab id. (maybe -1 for UNK)
-            float best_path_score =
-                0;  // The total score of the best path ending at this node.
-            int starts_at =
-                -1;  // The starting position (in utf-8) of this node. The entire best
-                     // path can be constructed by backtracking along this link.
-        };
-        const int size        = static_cast<int>(normalized.size());
-        const float unk_score = min_score() - kUnkPenalty;
-        // The ends are exclusive.
-        std::vector<BestPathNode> best_path_ends_at(size + 1);
-        // Generate lattice on-the-fly (not stored) and update best_path_ends_at.
-        int starts_at = 0;
-        while (starts_at < size) {
-            std::size_t node_pos = 0;
-            std::size_t key_pos  = starts_at;
-            const auto best_path_score_till_here =
-                best_path_ends_at[starts_at].best_path_score;
-            bool has_single_node = false;
-            const int mblen =
-                std::min<int>(static_cast<int>(OneCharLen(normalized.data() + starts_at)),
-                              size - starts_at);
-            while (key_pos < size) {
-                const int ret =
-                    trie_->traverse(normalized.data(), node_pos, key_pos, key_pos + 1);
-                if (ret == -2)
-                    break;
-                if (ret >= 0) {
-                    if (IsUnusedInlined(ret))
-                        continue;
-                    // Update the best path node.
-                    auto& target_node = best_path_ends_at[key_pos];
-                    const auto length = (key_pos - starts_at);
-                    // User defined symbol receives extra bonus to always be selected.
-                    const auto score = IsUserDefinedInlined(ret)
-                                           ? (length * max_score_ - 0.1)
-                                           : GetScoreInlined(ret);
-                    const auto candidate_best_path_score =
-                        score + best_path_score_till_here;
-                    if (target_node.starts_at == -1 ||
-                        candidate_best_path_score > target_node.best_path_score) {
-                        target_node.best_path_score = static_cast<float>(candidate_best_path_score);
-                        target_node.starts_at       = starts_at;
-                        target_node.id              = ret;
-                    }
-                    if (!has_single_node && length == mblen) {
-                        has_single_node = true;
-                    }
-                }
-            }
-            if (!has_single_node) {
-                auto& target_node = best_path_ends_at[starts_at + mblen];
-                const auto candidate_best_path_score =
-                    unk_score + best_path_score_till_here;
-                if (target_node.starts_at == -1 ||
-                    candidate_best_path_score > target_node.best_path_score) {
-                    target_node.best_path_score = candidate_best_path_score;
-                    target_node.starts_at       = starts_at;
-                    target_node.id              = unk_id_;
-                }
-            }
-            // Move by one unicode character.
-            starts_at += mblen;
-        }
-        // Backtrack to identify the best path.
-        EncodeResult results;
-        int ends_at = size;
-        while (ends_at > 0) {
-            const auto& node = best_path_ends_at[ends_at];
-            results.emplace_back(
-                normalized.substr(node.starts_at, ends_at - node.starts_at), node.id);
-            ends_at = node.starts_at;
-        }
-        std::reverse(results.begin(), results.end());
-        return results;
-    }
-
-public:
-    explicit T5UniGramTokenizer(bool is_umt5 = false) {
-        if (is_umt5) {
-            InitializePieces(load_umt5_tokenizer_json());
-        } else {
-            InitializePieces(load_t5_tokenizer_json());
-        }
-
-        min_score_ = FLT_MAX;
-        max_score_ = FLT_MIN;
-
-        std::vector<std::pair<std::string, int>> pieces;
-        for (int i = 0; i < piece_score_pairs.size(); i++) {
-            const auto& sp = piece_score_pairs[i];
-
-            min_score_ = std::min(min_score_, sp.second);
-            max_score_ = std::max(max_score_, sp.second);
-
-            pieces.emplace_back(sp.first, i);
-        }
-
-        BuildTrie(&pieces);
-    }
-    ~T5UniGramTokenizer(){};
-
-    std::string Normalize(const std::string& input) const {
-        // Ref: https://github.com/huggingface/tokenizers/blob/1ff56c0c70b045f0cd82da1af9ac08cd4c7a6f9f/bindings/python/py_src/tokenizers/implementations/sentencepiece_unigram.py#L29
-        // TODO: nmt-nfkc
-        std::string normalized = std::regex_replace(input, std::regex(" {2,}"), " ");
-        return normalized;
-    }
-
-    std::vector<int> Encode(const std::string& input, bool append_eos_if_not_present = true) const {
-        std::string normalized = Normalize(input);
-        normalized             = pre_tokenizer.tokenize(normalized);
-        EncodeResult result    = EncodeOptimized(normalized);
-        if (result.size() > 0 && append_eos_if_not_present) {
-            auto item = result[result.size() - 1];
-            if (item.first != eos_token_) {
-                result.emplace_back(eos_token_, eos_id_);
-            }
-        }
-        std::vector<int> tokens;
-        for (auto item : result) {
-            tokens.push_back(item.second);
-        }
-        return tokens;
-    }
-
-    void pad_tokens(std::vector<int>& tokens,
-                    std::vector<float>& weights,
-                    std::vector<float>* attention_mask,
-                    size_t max_length = 0,
-                    bool padding      = false) {
-        if (max_length > 0 && padding) {
-            size_t orig_token_num = tokens.size() - 1;
-            size_t n              = static_cast<size_t>(std::ceil(orig_token_num * 1.0 / (max_length - 1)));
-            if (n == 0) {
-                n = 1;
-            }
-            size_t length = max_length * n;
-            LOG_DEBUG("token length: %llu", length);
-            std::vector<int> new_tokens;
-            std::vector<float> new_weights;
-            std::vector<float> new_attention_mask;
-            int token_idx = 0;
-            for (int i = 0; i < length; i++) {
-                if (token_idx >= orig_token_num) {
-                    break;
-                }
-                if (attention_mask != nullptr) {
-                    new_attention_mask.push_back(0.0);
-                }
-                if (i % max_length == max_length - 1) {
-                    new_tokens.push_back(eos_id_);
-                    new_weights.push_back(1.0);
-                } else {
-                    new_tokens.push_back(tokens[token_idx]);
-                    new_weights.push_back(weights[token_idx]);
-                    token_idx++;
-                }
-            }
-
-            new_tokens.push_back(eos_id_);
-            new_weights.push_back(1.0);
-            if (attention_mask != nullptr) {
-                new_attention_mask.push_back(0.0);
-            }
-
-            tokens  = new_tokens;
-            weights = new_weights;
-            if (attention_mask != nullptr) {
-                *attention_mask = new_attention_mask;
-            }
-
-            if (padding) {
-                int pad_token_id = pad_id_;
-                tokens.insert(tokens.end(), length - tokens.size(), pad_token_id);
-                weights.insert(weights.end(), length - weights.size(), 1.0);
-                if (attention_mask != nullptr) {
-                    // maybe keep some padding tokens unmasked?
-                    attention_mask->insert(attention_mask->end(), length - attention_mask->size(), -HUGE_VALF);
-                }
-            }
-        }
-    }
-
-    // Returns the minimum score in sentence pieces.
-    // min_score() - 10 is used for the cost of unknown sentence.
-    float min_score() const { return min_score_; }
-
-    // Returns the maximum score in sentence pieces.
-    // max_score() is used for the cost of user defined symbols.
-    float max_score() const { return max_score_; }
-
-    Status status() const { return status_; }
-};
+#include "tokenizers/t5_unigram_tokenizer.h"
 
 class T5LayerNorm : public UnaryBlock {
 protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
@@ -473,10 +30,10 @@ public:
         : hidden_size(hidden_size),
           eps(eps) {}
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
-        struct ggml_tensor* w = params["weight"];
-        x                     = ggml_rms_norm(ctx->ggml_ctx, x, eps);
-        x                     = ggml_mul(ctx->ggml_ctx, x, w);
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
+        ggml_tensor* w = params["weight"];
+        x              = ggml_rms_norm(ctx->ggml_ctx, x, eps);
+        x              = ggml_mul(ctx->ggml_ctx, x, w);
         return x;
     }
 };
@@ -488,7 +45,7 @@ public:
         blocks["wo"] = std::shared_ptr<GGMLBlock>(new Linear(ff_dim, model_dim, false));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // x: [N, n_token, model_dim]
         auto wi = std::dynamic_pointer_cast<Linear>(blocks["wi"]);
         auto wo = std::dynamic_pointer_cast<Linear>(blocks["wo"]);
@@ -510,7 +67,7 @@ public:
         blocks["wo"] = std::shared_ptr<GGMLBlock>(new Linear(ff_dim, model_dim, false, false, false, scale));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // x: [N, n_token, model_dim]
         auto wi_0 = std::dynamic_pointer_cast<Linear>(blocks["wi_0"]);
         auto wi_1 = std::dynamic_pointer_cast<Linear>(blocks["wi_1"]);
@@ -531,7 +88,7 @@ public:
         blocks["layer_norm"]     = std::shared_ptr<GGMLBlock>(new T5LayerNorm(model_dim));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // x: [N, n_token, model_dim]
         auto DenseReluDense = std::dynamic_pointer_cast<T5DenseGatedActDense>(blocks["DenseReluDense"]);
         auto layer_norm     = std::dynamic_pointer_cast<T5LayerNorm>(blocks["layer_norm"]);
@@ -570,8 +127,8 @@ public:
         }
     }
 
-    struct ggml_tensor* compute_bias(GGMLRunnerContext* ctx,
-                                     struct ggml_tensor* relative_position_bucket) {
+    ggml_tensor* compute_bias(GGMLRunnerContext* ctx,
+                              ggml_tensor* relative_position_bucket) {
         auto relative_attention_bias = std::dynamic_pointer_cast<Embedding>(blocks["relative_attention_bias"]);
 
         auto values = relative_attention_bias->forward(ctx, relative_position_bucket);            // shape (query_length, key_length, num_heads)
@@ -580,11 +137,11 @@ public:
     }
 
     // x: [N, n_token, model_dim]
-    std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                                                struct ggml_tensor* x,
-                                                                struct ggml_tensor* past_bias                = nullptr,
-                                                                struct ggml_tensor* mask                     = nullptr,
-                                                                struct ggml_tensor* relative_position_bucket = nullptr) {
+    std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
+                                                  ggml_tensor* x,
+                                                  ggml_tensor* past_bias                = nullptr,
+                                                  ggml_tensor* mask                     = nullptr,
+                                                  ggml_tensor* relative_position_bucket = nullptr) {
         auto q_proj   = std::dynamic_pointer_cast<Linear>(blocks["q"]);
         auto k_proj   = std::dynamic_pointer_cast<Linear>(blocks["k"]);
         auto v_proj   = std::dynamic_pointer_cast<Linear>(blocks["v"]);
@@ -629,11 +186,11 @@ public:
         blocks["layer_norm"]    = std::shared_ptr<GGMLBlock>(new T5LayerNorm(model_dim));
     }
 
-    std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                                                struct ggml_tensor* x,
-                                                                struct ggml_tensor* past_bias                = nullptr,
-                                                                struct ggml_tensor* mask                     = nullptr,
-                                                                struct ggml_tensor* relative_position_bucket = nullptr) {
+    std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
+                                                  ggml_tensor* x,
+                                                  ggml_tensor* past_bias                = nullptr,
+                                                  ggml_tensor* mask                     = nullptr,
+                                                  ggml_tensor* relative_position_bucket = nullptr) {
         // x: [N, n_token, model_dim]
         auto SelfAttention = std::dynamic_pointer_cast<T5Attention>(blocks["SelfAttention"]);
         auto layer_norm    = std::dynamic_pointer_cast<T5LayerNorm>(blocks["layer_norm"]);
@@ -655,11 +212,11 @@ public:
         blocks["layer.1"] = std::shared_ptr<GGMLBlock>(new T5LayerFF(model_dim, ff_dim));
     }
 
-    std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                                                struct ggml_tensor* x,
-                                                                struct ggml_tensor* past_bias                = nullptr,
-                                                                struct ggml_tensor* mask                     = nullptr,
-                                                                struct ggml_tensor* relative_position_bucket = nullptr) {
+    std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
+                                                  ggml_tensor* x,
+                                                  ggml_tensor* past_bias                = nullptr,
+                                                  ggml_tensor* mask                     = nullptr,
+                                                  ggml_tensor* relative_position_bucket = nullptr) {
         // x: [N, n_token, model_dim]
         auto layer_0 = std::dynamic_pointer_cast<T5LayerSelfAttention>(blocks["layer.0"]);
         auto layer_1 = std::dynamic_pointer_cast<T5LayerFF>(blocks["layer.1"]);
@@ -690,11 +247,11 @@ public:
         blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new T5LayerNorm(model_dim));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* x,
-                                struct ggml_tensor* past_bias                = nullptr,
-                                struct ggml_tensor* attention_mask           = nullptr,
-                                struct ggml_tensor* relative_position_bucket = nullptr) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* x,
+                         ggml_tensor* past_bias                = nullptr,
+                         ggml_tensor* attention_mask           = nullptr,
+                         ggml_tensor* relative_position_bucket = nullptr) {
         // x: [N, n_token, model_dim]
         for (int i = 0; i < num_layers; i++) {
             auto block = std::dynamic_pointer_cast<T5Block>(blocks["block." + std::to_string(i)]);
@@ -737,11 +294,11 @@ public:
                                                                      params.model_dim));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* input_ids,
-                                struct ggml_tensor* past_bias                = nullptr,
-                                struct ggml_tensor* attention_mask           = nullptr,
-                                struct ggml_tensor* relative_position_bucket = nullptr) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* input_ids,
+                         ggml_tensor* past_bias                = nullptr,
+                         ggml_tensor* attention_mask           = nullptr,
+                         ggml_tensor* relative_position_bucket = nullptr) {
         // input_ids: [N, n_token]
 
         auto shared  = std::dynamic_pointer_cast<Embedding>(blocks["shared"]);
@@ -776,14 +333,14 @@ struct T5Runner : public GGMLRunner {
         return "t5";
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
         model.get_param_tensors(tensors, prefix);
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* input_ids,
-                                struct ggml_tensor* relative_position_bucket,
-                                struct ggml_tensor* attention_mask = nullptr) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* input_ids,
+                         ggml_tensor* relative_position_bucket,
+                         ggml_tensor* attention_mask = nullptr) {
         size_t N       = input_ids->ne[1];
         size_t n_token = input_ids->ne[0];
 
@@ -791,12 +348,11 @@ struct T5Runner : public GGMLRunner {
         return hidden_states;
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* attention_mask = nullptr) {
-        struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
-
-        input_ids      = to_backend(input_ids);
-        attention_mask = to_backend(attention_mask);
+    ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
+                             const sd::Tensor<float>& attention_mask_tensor = {}) {
+        ggml_cgraph* gf             = ggml_new_graph(compute_ctx);
+        ggml_tensor* input_ids      = make_input(input_ids_tensor);
+        ggml_tensor* attention_mask = attention_mask_tensor.empty() ? nullptr : make_input(attention_mask_tensor);
 
         relative_position_bucket_vec = compute_relative_position_bucket(static_cast<int>(input_ids->ne[0]), static_cast<int>(input_ids->ne[0]));
 
@@ -813,23 +369,21 @@ struct T5Runner : public GGMLRunner {
                                                            input_ids->ne[0]);
         set_backend_tensor_data(relative_position_bucket, relative_position_bucket_vec.data());
 
-        auto runner_ctx                   = get_context();
-        struct ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, relative_position_bucket, attention_mask);
+        auto runner_ctx            = get_context();
+        ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, relative_position_bucket, attention_mask);
 
         ggml_build_forward_expand(gf, hidden_states);
 
         return gf;
     }
 
-    bool compute(const int n_threads,
-                 struct ggml_tensor* input_ids,
-                 struct ggml_tensor* attention_mask,
-                 ggml_tensor** output,
-                 ggml_context* output_ctx = nullptr) {
-        auto get_graph = [&]() -> struct ggml_cgraph* {
+    sd::Tensor<float> compute(const int n_threads,
+                              const sd::Tensor<int32_t>& input_ids,
+                              const sd::Tensor<float>& attention_mask) {
+        auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, attention_mask);
         };
-        return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true), 3);
     }
 
     static std::vector<int> _relative_position_bucket(const std::vector<int>& relative_position,
@@ -912,7 +466,7 @@ struct T5Embedder {
         : model(backend, offload_params_to_cpu, tensor_storage_map, prefix, is_umt5), tokenizer(is_umt5) {
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
         model.get_param_tensors(tensors, prefix);
     }
 
@@ -940,18 +494,17 @@ struct T5Embedder {
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
-            std::vector<int> curr_tokens = tokenizer.Encode(curr_text, false);
+            std::vector<int> curr_tokens = tokenizer.encode(curr_text);
             tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
         }
 
-        int EOS_TOKEN_ID = 1;
-        tokens.push_back(EOS_TOKEN_ID);
-        weights.push_back(1.0);
-
         std::vector<float> attention_mask;
 
-        tokenizer.pad_tokens(tokens, weights, &attention_mask, max_length, padding);
+        tokenizer.pad_tokens(tokens, &weights, &attention_mask, padding ? max_length : 0, padding ? max_length : 100000000, padding);
+        for (auto& mask_value : attention_mask) {
+            mask_value = mask_value > 0.0f ? 0.0f : -HUGE_VALF;
+        }
 
         // for (int i = 0; i < tokens.size(); i++) {
         //     std::cout << tokens[i] << ":" << weights[i] << ", ";
@@ -962,17 +515,16 @@ struct T5Embedder {
     }
 
     void test() {
-        struct ggml_init_params params;
+        ggml_init_params params;
         params.mem_size   = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
         params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
-        struct ggml_context* work_ctx = ggml_init(params);
-        GGML_ASSERT(work_ctx != nullptr);
+        ggml_context* ctx = ggml_init(params);
+        GGML_ASSERT(ctx != nullptr);
 
         {
             std::string text("a lovely cat");
-            // std::string text("一只可爱的猫"); // umt5 chinease test
             auto tokens_and_weights     = tokenize(text, 512, true);
             std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
             std::vector<float>& weights = std::get<1>(tokens_and_weights);
@@ -981,15 +533,17 @@ struct T5Embedder {
                 printf("%d ", token);
             }
             printf("\n");
-            auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-            auto attention_mask     = vector_to_ggml_tensor(work_ctx, masks);
-            struct ggml_tensor* out = nullptr;
+            auto input_ids      = sd::Tensor<int32_t>::from_vector(tokens);
+            auto attention_mask = sd::Tensor<float>::from_vector(masks);
+            sd::Tensor<float> out;
 
-            int64_t t0 = ggml_time_ms();
-            model.compute(8, input_ids, attention_mask, &out, work_ctx);
-            int64_t t1 = ggml_time_ms();
+            int64_t t0   = ggml_time_ms();
+            auto out_opt = model.compute(8, input_ids, attention_mask);
+            int64_t t1   = ggml_time_ms();
 
-            print_ggml_tensor(out);
+            GGML_ASSERT(!out_opt.empty());
+            out = std::move(out_opt);
+            print_sd_tensor(out);
             LOG_DEBUG("t5 test done in %lldms", t1 - t0);
         }
     }

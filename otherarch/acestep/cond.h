@@ -59,6 +59,12 @@ struct CondGGML {
     struct ggml_tensor * timbre_embed_b;  // [2048]
     struct ggml_tensor * timbre_norm;     // [2048]
 
+    // XL models prepend a learned CLS token to the timbre sequence.
+    // The CLS output (position 0) aggregates timbre info across all frames.
+    // 2B models skip this (the token exists in the GGUF but is unused).
+    struct ggml_tensor * timbre_cls;  // [2048, 1, 1] or NULL
+    bool                 use_timbre_cls;
+
     // Text projector: Linear(1024->2048) no bias
     struct ggml_tensor * text_proj_w;     // [2048, 1024] ggml
 
@@ -93,12 +99,16 @@ static bool cond_ggml_load(CondGGML * m, const char * gguf_path) {
         return false;
     }
 
+    // XL models have encoder_hidden_size in GGUF metadata (2B models omit it).
+    // When present, the timbre encoder prepends a learned CLS token.
+    m->use_timbre_cls = (gf_get_u32(gf, "acestep.encoder_hidden_size") > 0);
+
     // Count tensors:
     // lyric: embed_w(1) + embed_b(1) + 8 layers x 11(88) + norm(1) = 91
-    // timbre: embed_w(1) + embed_b(1) + 4 layers x 11(44) + norm(1) = 47
+    // timbre: embed_w(1) + embed_b(1) + 4 layers x 11(44) + norm(1) + cls(0 or 1)
     // text_proj(1) + null_cond(1) = 2
-    // Total: 140
-    int n_tensors = 91 + 47 + 2;
+    int n_tensors = 91 + 47 + 2 + (m->use_timbre_cls ? 1 : 0);
+
     wctx_init(&m->wctx, n_tensors);
 
     // Lyric encoder
@@ -123,6 +133,12 @@ static bool cond_ggml_load(CondGGML * m, const char * gguf_path) {
         qwen3_load_layer(&m->wctx, gf, &m->timbre_layers[i], prefix, i);
     }
 
+    // Timbre CLS token (XL only)
+    m->timbre_cls = NULL;
+    if (m->use_timbre_cls) {
+        m->timbre_cls = gf_load_tensor_f32(&m->wctx, gf, "encoder.timbre_encoder.special_token");
+    }
+
     // Text projector + null condition
     m->text_proj_w   = gf_load_tensor(&m->wctx, gf, "encoder.text_projector.weight");
     m->null_cond_emb = gf_load_tensor(&m->wctx, gf, "null_condition_emb");
@@ -133,8 +149,8 @@ static bool cond_ggml_load(CondGGML * m, const char * gguf_path) {
     }
     gf_close(&gf);
 
-    fprintf(stderr, "[Load] CondEncoder: lyric(%dL), timbre(%dL), text_proj, null_cond\n",
-            m->lyric_cfg.n_layers, m->timbre_cfg.n_layers);
+    fprintf(stderr, "[Load] CondEncoder: lyric(%dL), timbre(%dL%s), text_proj, null_cond\n", m->lyric_cfg.n_layers,
+            m->timbre_cfg.n_layers, m->use_timbre_cls ? ", CLS" : "");
     return true;
 }
 
@@ -159,6 +175,7 @@ static void cond_ggml_forward(CondGGML * m,
                                int * out_enc_S) {
     int H = 2048;
     bool has_timbre = (timbre_feats != NULL && S_ref > 0);
+    int  S_timbre   = has_timbre ? S_ref + (m->use_timbre_cls ? 1 : 0) : 0;
 
     // Graph context (generous fixed allocation)
     size_t ctx_size = 4096 * ggml_tensor_overhead() + ggml_graph_overhead();
@@ -215,7 +232,7 @@ static void cond_ggml_forward(CondGGML * m,
     struct ggml_tensor * timbre_slide_mask = NULL;
 
     if (has_timbre) {
-        timbre_pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, S_ref);
+        timbre_pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, S_timbre);
         ggml_set_name(timbre_pos, "timbre_pos");
         ggml_set_input(timbre_pos);
 
@@ -223,12 +240,19 @@ static void cond_ggml_forward(CondGGML * m,
         ggml_set_name(t_timbre_in, "timbre_in");
         ggml_set_input(t_timbre_in);
 
-        // Linear embed: [64, S_ref] -> [2048, S_ref]
+        // Linear embed: [64, S_ref] -> [H, S_ref]
         struct ggml_tensor * timbre_h = qwen3_linear_bias(ctx, m->timbre_embed_w,
                                                            m->timbre_embed_b, t_timbre_in);
 
+        // XL: prepend learned CLS token -> [H, S_ref+1]
+        // The CLS output at position 0 aggregates timbre across all frames.
+        if (m->use_timbre_cls) {
+            struct ggml_tensor * cls = ggml_reshape_2d(ctx, m->timbre_cls, H, 1);
+            timbre_h                 = ggml_concat(ctx, cls, timbre_h, 1);
+        }
+
         // Bidirectional sliding window mask for even layers
-        timbre_slide_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, S_ref, S_ref);
+        timbre_slide_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, S_timbre, S_timbre);
         ggml_set_name(timbre_slide_mask, "timbre_slide_mask");
         ggml_set_input(timbre_slide_mask);
 
@@ -236,11 +260,12 @@ static void cond_ggml_forward(CondGGML * m,
         for (int i = 0; i < m->timbre_cfg.n_layers; i++) {
             struct ggml_tensor * layer_mask = (i % 2 == 0) ? timbre_slide_mask : NULL;
             timbre_h = qwen3_build_layer(ctx, m->timbre_cfg, &m->timbre_layers[i],
-                                          timbre_h, timbre_pos, layer_mask, S_ref);
+                                          timbre_h, timbre_pos, layer_mask, S_timbre);
         }
         timbre_h = qwen3_rms_norm(ctx, timbre_h, m->timbre_norm, m->timbre_cfg.rms_norm_eps);
 
-        // Take first frame: [2048, S_ref] -> view [2048, 1]
+        // Take first position: [H, S_timbre] -> view [H, 1]
+        // 2B: first audio frame. XL: CLS token (aggregated timbre).
         timbre_out = ggml_view_2d(ctx, timbre_h, H, 1,
                                    timbre_h->nb[1], 0);
         ggml_set_name(timbre_out, "timbre_out");
@@ -282,22 +307,27 @@ static void cond_ggml_forward(CondGGML * m,
 
     if (has_timbre) {
         ggml_backend_tensor_set(t_timbre_in, timbre_feats, 0, 64 * S_ref * sizeof(float));
-        std::vector<int> pos(S_ref);
-        for (int i = 0; i < S_ref; i++) pos[i] = i;
-        ggml_backend_tensor_set(timbre_pos, pos.data(), 0, S_ref * sizeof(int));
+        std::vector<int> pos(S_timbre);
+        for (int i = 0; i < S_timbre; i++) {
+            pos[i] = i;
+        }
+        ggml_backend_tensor_set(timbre_pos, pos.data(), 0, S_timbre * sizeof(int));
 
         // Timbre sliding window mask: bidirectional, |i-j| <= 128
-        const int W = 128;
-        std::vector<uint16_t> mask_data(S_ref * S_ref);
-        for (int i = 0; i < S_ref; i++) {
-            for (int j = 0; j < S_ref; j++) {
-                int d = i - j; if (d < 0) d = -d;
-                mask_data[i * S_ref + j] = ggml_fp32_to_fp16(d <= W ? 0.0f : -INFINITY);
+        const int             W = 128;
+        std::vector<uint16_t> mask_data(S_timbre * S_timbre);
+        for (int i = 0; i < S_timbre; i++) {
+            for (int j = 0; j < S_timbre; j++) {
+                int d = i - j;
+                if (d < 0) {
+                    d = -d;
+                }
+                mask_data[i * S_timbre + j] = ggml_fp32_to_fp16(d <= W ? 0.0f : -INFINITY);
             }
         }
-        ggml_backend_tensor_set(timbre_slide_mask, mask_data.data(), 0,
-                                 S_ref * S_ref * sizeof(uint16_t));
-        fprintf(stderr, "[CondEnc] Timbre sliding mask: %dx%d, window=%d\n", S_ref, S_ref, W);
+        ggml_backend_tensor_set(timbre_slide_mask, mask_data.data(), 0, S_timbre * S_timbre * sizeof(uint16_t));
+        fprintf(stderr, "[CondEnc] Timbre sliding mask: %dx%d, window=%d%s\n", S_timbre, S_timbre, W,
+                m->use_timbre_cls ? " (CLS)" : "");
     }
 
     // Compute

@@ -1,4 +1,4 @@
-Human Quick-Start Guide:
+Human Quick-Start:
 
 # RPC function
 Consult RPC_MANUAL.md for detailed explanation.
@@ -52,7 +52,6 @@ Write down the Device Order in "Device Overwrite" (Can sometimes favor fitting o
 Write Down "Tensor Split" if not done Manual
 
 The rest is like before in Koboldcpp.
-
 
 # KoboldCpp RPC User Manual
 
