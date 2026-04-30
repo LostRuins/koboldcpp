@@ -142,8 +142,9 @@ public:
                                    "vae encode compute failed while processing a tile");
         } else {
             output = _compute(n_threads, input, false);
-            free_compute_buffer();
         }
+
+        free_compute_buffer();
 
         if (output.empty()) {
             LOG_ERROR("vae encode compute failed");

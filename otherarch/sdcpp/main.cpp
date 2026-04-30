@@ -433,10 +433,11 @@ bool save_results(const SDCliParams& cli_params,
         if (!img.data)
             return false;
 
-        std::string params = gen_params.embed_image_metadata
-                                 ? get_image_params(ctx_params, gen_params, gen_params.seed + idx)
-                                 : "";
-        const bool ok      = write_image_to_file(path.string(), img.data, img.width, img.height, img.channel, params, 90);
+        const int64_t metadata_seed = cli_params.mode == VID_GEN ? gen_params.seed : gen_params.seed + idx;
+        std::string params          = gen_params.embed_image_metadata
+                                          ? get_image_params(ctx_params, gen_params, metadata_seed, cli_params.mode)
+                                          : "";
+        const bool ok               = write_image_to_file(path.string(), img.data, img.width, img.height, img.channel, params, 90);
         LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
         return ok;
     };

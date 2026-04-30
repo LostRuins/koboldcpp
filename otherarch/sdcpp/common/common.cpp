@@ -2281,7 +2281,192 @@ std::string version_string() {
     return std::string("stable-diffusion.cpp version ") + sd_version() + ", commit " + sd_commit();
 }
 
-std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {
+static std::string safe_json_string(const char* value) {
+    return value ? value : "";
+}
+
+static void set_json_basename_if_not_empty(json& target, const char* key, const std::string& path) {
+    if (!path.empty()) {
+        target[key] = sd_basename(path);
+    }
+}
+
+static json build_sampling_metadata_json(const sd_sample_params_t& sample_params,
+                                         const std::vector<int>& skip_layers,
+                                         const std::vector<float>* custom_sigmas = nullptr) {
+    json sampling = {
+        {"steps", sample_params.sample_steps},
+        {"eta", sample_params.eta},
+        {"shifted_timestep", sample_params.shifted_timestep},
+        {"flow_shift", sample_params.flow_shift},
+        {"guidance",
+         {
+             {"txt_cfg", sample_params.guidance.txt_cfg},
+             {"img_cfg", sample_params.guidance.img_cfg},
+             {"distilled_guidance", sample_params.guidance.distilled_guidance},
+             {"slg",
+              {
+                  {"scale", sample_params.guidance.slg.scale},
+                  {"layers", skip_layers},
+                  {"start", sample_params.guidance.slg.layer_start},
+                  {"end", sample_params.guidance.slg.layer_end},
+              }},
+         }},
+    };
+    if (sample_params.sample_method != SAMPLE_METHOD_COUNT) {
+        sampling["method"] = safe_json_string(sd_sample_method_name(sample_params.sample_method));
+    }
+    if (sample_params.scheduler != SCHEDULER_COUNT) {
+        sampling["scheduler"] = safe_json_string(sd_scheduler_name(sample_params.scheduler));
+    }
+    if (custom_sigmas != nullptr) {
+        sampling["custom_sigmas"] = *custom_sigmas;
+    }
+    return sampling;
+}
+
+std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
+                                            const SDGenerationParams& gen_params,
+                                            int64_t seed,
+                                            SDMode mode) {
+    json root;
+    root["schema"]    = "sdcpp.image.params/v1";
+    root["mode"]      = mode == VID_GEN ? "vid_gen" : "img_gen";
+    root["generator"] = {
+        {"name", "stable-diffusion.cpp"},
+        {"version", safe_json_string(sd_version())},
+        {"commit", safe_json_string(sd_commit())},
+    };
+    root["seed"]   = seed;
+    root["width"]  = gen_params.get_resolved_width();
+    root["height"] = gen_params.get_resolved_height();
+
+    root["prompt"] = {
+        {"positive", gen_params.prompt},
+        {"negative", gen_params.negative_prompt},
+    };
+    root["sampling"] = build_sampling_metadata_json(gen_params.sample_params,
+                                                    gen_params.skip_layers,
+                                                    &gen_params.custom_sigmas);
+
+    json models;
+    set_json_basename_if_not_empty(models, "model", ctx_params.model_path);
+    set_json_basename_if_not_empty(models, "clip_l", ctx_params.clip_l_path);
+    set_json_basename_if_not_empty(models, "clip_g", ctx_params.clip_g_path);
+    set_json_basename_if_not_empty(models, "clip_vision", ctx_params.clip_vision_path);
+    set_json_basename_if_not_empty(models, "t5xxl", ctx_params.t5xxl_path);
+    set_json_basename_if_not_empty(models, "llm", ctx_params.llm_path);
+    set_json_basename_if_not_empty(models, "llm_vision", ctx_params.llm_vision_path);
+    set_json_basename_if_not_empty(models, "diffusion_model", ctx_params.diffusion_model_path);
+    set_json_basename_if_not_empty(models, "high_noise_diffusion_model", ctx_params.high_noise_diffusion_model_path);
+    set_json_basename_if_not_empty(models, "vae", ctx_params.vae_path);
+    set_json_basename_if_not_empty(models, "taesd", ctx_params.taesd_path);
+    set_json_basename_if_not_empty(models, "control_net", ctx_params.control_net_path);
+    root["models"] = std::move(models);
+
+    root["clip_skip"]             = gen_params.clip_skip;
+    root["strength"]              = gen_params.strength;
+    root["control_strength"]      = gen_params.control_strength;
+    root["auto_resize_ref_image"] = gen_params.auto_resize_ref_image;
+    root["increase_ref_index"]    = gen_params.increase_ref_index;
+    if (mode == VID_GEN) {
+        root["video"] = {
+            {"frame_count", gen_params.video_frames},
+            {"fps", gen_params.fps},
+        };
+        root["moe_boundary"]        = gen_params.moe_boundary;
+        root["vace_strength"]       = gen_params.vace_strength;
+        root["high_noise_sampling"] = build_sampling_metadata_json(gen_params.high_noise_sample_params,
+                                                                   gen_params.high_noise_skip_layers);
+    }
+
+    root["rng"] = safe_json_string(sd_rng_type_name(ctx_params.rng_type));
+    if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
+        root["sampler_rng"] = safe_json_string(sd_rng_type_name(ctx_params.sampler_rng_type));
+    }
+
+    json loras = json::array();
+    for (const auto& entry : gen_params.lora_map) {
+        loras.push_back({
+            {"name", sd_basename(entry.first)},
+            {"multiplier", entry.second},
+            {"is_high_noise", false},
+        });
+    }
+    for (const auto& entry : gen_params.high_noise_lora_map) {
+        loras.push_back({
+            {"name", sd_basename(entry.first)},
+            {"multiplier", entry.second},
+            {"is_high_noise", true},
+        });
+    }
+    if (!loras.empty()) {
+        root["loras"] = std::move(loras);
+    }
+
+    if (gen_params.hires_enabled) {
+        root["hires"] = {
+            {"enabled", gen_params.hires_enabled},
+            {"upscaler", gen_params.hires_upscaler},
+            {"model", gen_params.hires_upscaler_model_path.empty() ? "" : sd_basename(gen_params.hires_upscaler_model_path)},
+            {"scale", gen_params.hires_scale},
+            {"target_width", gen_params.hires_width},
+            {"target_height", gen_params.hires_height},
+            {"steps", gen_params.hires_steps},
+            {"denoising_strength", gen_params.hires_denoising_strength},
+            {"upscale_tile_size", gen_params.hires_upscale_tile_size},
+        };
+    }
+
+    if (gen_params.cache_params.mode != SD_CACHE_DISABLED) {
+        root["cache"] = {
+            {"requested_mode", gen_params.cache_mode},
+            {"requested_option", gen_params.cache_option},
+            {"mode", gen_params.cache_params.mode},
+            {"scm_mask", gen_params.scm_mask},
+            {"scm_policy_dynamic", gen_params.scm_policy_dynamic},
+            {"reuse_threshold", gen_params.cache_params.reuse_threshold},
+            {"start_percent", gen_params.cache_params.start_percent},
+            {"end_percent", gen_params.cache_params.end_percent},
+            {"error_decay_rate", gen_params.cache_params.error_decay_rate},
+            {"use_relative_threshold", gen_params.cache_params.use_relative_threshold},
+            {"reset_error_on_compute", gen_params.cache_params.reset_error_on_compute},
+            {"Fn_compute_blocks", gen_params.cache_params.Fn_compute_blocks},
+            {"Bn_compute_blocks", gen_params.cache_params.Bn_compute_blocks},
+            {"residual_diff_threshold", gen_params.cache_params.residual_diff_threshold},
+            {"max_warmup_steps", gen_params.cache_params.max_warmup_steps},
+            {"max_cached_steps", gen_params.cache_params.max_cached_steps},
+            {"max_continuous_cached_steps", gen_params.cache_params.max_continuous_cached_steps},
+            {"taylorseer_n_derivatives", gen_params.cache_params.taylorseer_n_derivatives},
+            {"taylorseer_skip_interval", gen_params.cache_params.taylorseer_skip_interval},
+            {"spectrum_w", gen_params.cache_params.spectrum_w},
+            {"spectrum_m", gen_params.cache_params.spectrum_m},
+            {"spectrum_lam", gen_params.cache_params.spectrum_lam},
+            {"spectrum_window_size", gen_params.cache_params.spectrum_window_size},
+            {"spectrum_flex_window", gen_params.cache_params.spectrum_flex_window},
+            {"spectrum_warmup_steps", gen_params.cache_params.spectrum_warmup_steps},
+            {"spectrum_stop_percent", gen_params.cache_params.spectrum_stop_percent},
+        };
+    }
+
+    if (gen_params.vae_tiling_params.enabled) {
+        root["vae_tiling"] = {
+            {"enabled", gen_params.vae_tiling_params.enabled},
+            {"tile_size_x", gen_params.vae_tiling_params.tile_size_x},
+            {"tile_size_y", gen_params.vae_tiling_params.tile_size_y},
+            {"target_overlap", gen_params.vae_tiling_params.target_overlap},
+            {"rel_size_x", gen_params.vae_tiling_params.rel_size_x},
+            {"rel_size_y", gen_params.vae_tiling_params.rel_size_y},
+        };
+    }
+
+    return root.dump();
+}
+
+std::string get_image_params(const SDContextParams& ctx_params,
+                             const SDGenerationParams& gen_params,
+                             int64_t seed,
+                             SDMode mode) {
     std::string parameter_string;
     if (gen_params.prompt_with_lora.size() != 0) {
         parameter_string += gen_params.prompt_with_lora + "\n";
@@ -2294,7 +2479,7 @@ std::string get_image_params(const SDContextParams& ctx_params, const SDGenerati
     parameter_string += "Steps: " + std::to_string(gen_params.sample_params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
     if (gen_params.sample_params.guidance.slg.scale != 0 && gen_params.skip_layers.size() != 0) {
-        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
+        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.slg.scale) + ", ";
         parameter_string += "Skip layers: [";
         for (const auto& layer : gen_params.skip_layers) {
             parameter_string += std::to_string(layer) + ", ";
@@ -2347,5 +2532,6 @@ std::string get_image_params(const SDContextParams& ctx_params, const SDGenerati
         parameter_string += "Denoising strength: " + std::to_string(gen_params.hires_denoising_strength) + ", ";
     }
     parameter_string += "Version: stable-diffusion.cpp";
+    parameter_string += ", SDCPP: " + build_sdcpp_image_metadata_json(ctx_params, gen_params, seed, mode);
     return parameter_string;
 }

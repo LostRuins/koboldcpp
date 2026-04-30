@@ -235,11 +235,11 @@ public:
                     device = 0;
                 }
                 if (device >= device_count) {
-                    LOG_WARN("Cannot find targeted vulkan device (%llu). Falling back to device 0.", device);
+                    LOG_WARN("Cannot find targeted vulkan device (%zu). Falling back to device 0.", device);
                     device = 0;
                 }
             }
-            LOG_INFO("Vulkan: Using device %llu", device);
+            LOG_INFO("Vulkan: Using device %zu", device);
             backend = ggml_backend_vk_init(device);
         }
         if (!backend) {
@@ -3500,7 +3500,7 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
         }
         decoded_images.push_back(std::move(image));
         int64_t t2 = ggml_time_ms();
-        LOG_INFO("latent %" PRId64 " decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
+        LOG_INFO("latent %zu decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
     }
 
     int64_t t4 = ggml_time_ms();
@@ -3742,7 +3742,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         sd_ctx->sd->diffusion_model->free_params_buffer();
     }
     int64_t denoise_end = ggml_time_ms();
-    LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs",
+    LOG_INFO("generating %zu latent images completed, taking %.2fs",
              final_latents.size(),
              (denoise_end - denoise_start) * 1.0f / 1000);
 
