@@ -247,7 +247,8 @@ NVCCFLAGS += -Wno-deprecated-gpu-targets \
              -gencode arch=compute_75,code=compute_75 \
              -gencode arch=compute_80,code=compute_80 \
              -gencode arch=compute_86,code=compute_86 \
-			 -DKCPP_LIMIT_CUDA_MAX_ARCH=860
+             -gencode arch=compute_120,code=compute_120 \
+			 -DKCPP_LIMIT_CUDA_MAX_ARCH=1200
 
 else
 NVCCFLAGS += -Wno-deprecated-gpu-targets -arch=all
