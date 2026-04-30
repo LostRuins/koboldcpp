@@ -1,4 +1,4 @@
-name: Koboldcpp Linux CU13
+name: Koboldcpp Linux CUDA13
 
 on:
   workflow_dispatch:
@@ -51,9 +51,6 @@ jobs:
         id: make_build
         run: |
           ./koboldcpp.sh dist
-
-      - name: Rename file before upload
-        run: mv dist/koboldcpp-linux-x64-cuda1310
 
       - name: Save artifact
         uses: actions/upload-artifact@v6
