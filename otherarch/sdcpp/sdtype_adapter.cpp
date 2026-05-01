@@ -1627,6 +1627,28 @@ sd_info_outputs sdtype_get_info()
     }
     j["available_samplers"] = available_samplers;
 
+    auto get_dev_type_name = [](auto dev_type) -> std::string {
+        if (dev_type == GGML_BACKEND_DEVICE_TYPE_CPU)
+            return "CPU";
+        else if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU)
+            return "GPU";
+        else if (dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU)
+            return "IGPU";
+        return "TYPE_" + std::to_string(dev_type);
+    };
+
+    auto devices = json::array();
+    size_t dev_count = ggml_backend_dev_count();
+    for (size_t i = 0; i < dev_count; ++i) {
+        auto dev = ggml_backend_dev_get(i);
+        json jdev;
+        jdev["name"]        = ggml_backend_dev_name(dev);
+        jdev["description"] = ggml_backend_dev_description(dev);
+        jdev["type"]        = get_dev_type_name(ggml_backend_dev_type(dev));
+        devices.push_back(jdev);
+    }
+    j["devices"] = devices;
+
     static std::string recent_info = j.dump();
     sd_info_outputs output;
     output.status = 0;
