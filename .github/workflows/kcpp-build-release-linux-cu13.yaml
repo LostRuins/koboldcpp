@@ -74,5 +74,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload rolling dist/koboldcpp-linux-x64 --clobber --repo ${{ github.repository }}
-          gh release upload rolling dist/koboldcpp-linux-x64-nocuda --clobber --repo ${{ github.repository }}
+          gh release upload rolling dist/koboldcpp-linux-x64-cuda1310 --clobber --repo ${{ github.repository }}
