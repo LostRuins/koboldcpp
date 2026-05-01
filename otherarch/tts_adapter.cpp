@@ -478,7 +478,6 @@ static llama_context * cts_ctx = nullptr; //codes to speech
 static TTS_VER ttsver = TTS_VER_2;
 static int ttsdebugmode = 0;
 static bool tts_is_quiet = false;
-static std::string ttsvulkandeviceenv;
 static std::string last_generated_audio = "";
 static std::string last_generation_settings_prompt = ""; //for caching purposes to fix ST bug
 static int last_generation_settings_speaker_seed;
@@ -511,26 +510,11 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     tts_is_quiet = inputs.quiet;
     tts_executable_path = inputs.executable_path;
 
-    //duplicated from expose.cpp
-    std::string vulkan_info_raw = inputs.vulkan_info;
-    std::string vulkan_info_str = "";
-    for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {
-        vulkan_info_str += vulkan_info_raw[i];
-        if (i < vulkan_info_raw.length() - 1) {
-            vulkan_info_str += ",";
-        }
-    }
-    const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
     std::vector<ggml_backend_dev_t> devices_override;
     std::string dev_override_str = inputs.devices_override;
     if(dev_override_str!="")
     {
         devices_override = kcpp_parse_device_list(dev_override_str);
-    }
-    if(!existingenv && vulkan_info_str!="")
-    {
-        ttsvulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
-        putenv((char*)ttsvulkandeviceenv.c_str());
     }
 
     llama_backend_init();

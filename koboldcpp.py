@@ -256,7 +256,6 @@ class load_model_inputs(ctypes.Structure):
                 ("use_contextshift", ctypes.c_bool),
                 ("use_fastforward", ctypes.c_bool),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("batchsize", ctypes.c_int),
                 ("autofit", ctypes.c_bool),
                 ("autofit_tax_mb", ctypes.c_int),
@@ -356,7 +355,6 @@ class sd_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("threads", ctypes.c_int),
                 ("quant", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
@@ -435,7 +433,6 @@ class whisper_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]
@@ -456,7 +453,6 @@ class tts_load_model_inputs(ctypes.Structure):
                 ("cts_model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("gpulayers", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
                 ("ttsmaxlen", ctypes.c_int),
@@ -483,7 +479,6 @@ class embeddings_load_model_inputs(ctypes.Structure):
                 ("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("gpulayers", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
                 ("use_mmap", ctypes.c_bool),
@@ -509,7 +504,6 @@ class music_load_model_inputs(ctypes.Structure):
                 ("lowvram", ctypes.c_bool),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]
@@ -993,13 +987,9 @@ def set_backend_props(inputs):
             elif (args.usecuda and "3" in args.usecuda):
                 inputs.kcpp_main_gpu = 3
 
-    if args.usevulkan: #is an empty array if using vulkan without defined gpu
-        s = ""
-        for it in range(0,len(args.usevulkan)):
-            s += str(args.usevulkan[it])
-        inputs.vulkan_info = s.encode("UTF-8")
-    else:
-        inputs.vulkan_info = "".encode("UTF-8")
+    if "GGML_VK_VISIBLE_DEVICES" not in os.environ:
+        if args.usevulkan: # is an empty array if using vulkan without defined gpu
+            os.environ["GGML_VK_VISIBLE_DEVICES"] = ','.join([str(g) for g in args.usevulkan])
 
     # set universal flags
     inputs.devices_override = (args.device if args.device else "").encode("UTF-8")
@@ -1890,7 +1880,6 @@ def load_model(model_filename):
     inputs.low_vram = True if args.lowvram else False
     inputs.use_mmq = False if args.nommq else True
     inputs.splitmode = splitmode_choices_to_int(args.splitmode) #layer=1, row=2, tensor=3
-    inputs.vulkan_info = "0".encode("UTF-8")
     inputs.blasthreads = args.blasthreads
     inputs.use_mmap = args.usemmap
     inputs.use_mlock = args.usemlock

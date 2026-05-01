@@ -187,7 +187,6 @@ static uint8_t * upscale_src_buffer = NULL;
 static std::vector<uint8_t *> input_extraimage_buffers;
 const int max_extra_images = 4;
 
-static std::string sdvulkandeviceenv;
 static std::string sdmaingpuenv;
 static int cfg_tiled_vae_threshold = 0;
 static int cfg_square_limit = 0;
@@ -428,22 +427,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(inputs.quant > 0)
     {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
-    }
-
-    //duplicated from expose.cpp
-    std::string vulkan_info_raw = inputs.vulkan_info;
-    std::string vulkan_info_str = "";
-    for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {
-        vulkan_info_str += vulkan_info_raw[i];
-        if (i < vulkan_info_raw.length() - 1) {
-            vulkan_info_str += ",";
-        }
-    }
-    const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
-    if(!existingenv && vulkan_info_str!="")
-    {
-        sdvulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
-        putenv((char*)sdvulkandeviceenv.c_str());
     }
 
     sd_params = new SDParams();
