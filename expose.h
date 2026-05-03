@@ -183,14 +183,14 @@ struct sd_load_model_inputs
 {
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
-    const int kcpp_main_gpu = -1;
+    const int kcpp_main_device = -1;
     const int threads = 0;
     const int quant = 0;
     const bool flash_attention = false;
     const bool offload_cpu = false;
     const bool use_mmap = false;
-    const bool vae_cpu = false;
-    const bool clip_cpu = false;
+    const int kcpp_vae_device = -1;
+    const int kcpp_clip_device = -1;
     const bool diffusion_conv_direct = false;
     const bool vae_conv_direct = false;
     const bool taesd = false;

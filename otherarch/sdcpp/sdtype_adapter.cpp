@@ -120,7 +120,6 @@ struct SDParams {
     float eta                     = -1.0f;
     float strength                = 0.75f;
     int64_t seed                  = 42;
-    bool clip_on_cpu              = false;
     bool diffusion_flash_attn     = false;
     bool diffusion_conv_direct    = false;
     bool vae_conv_direct          = false;
@@ -300,7 +299,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
 
     //kcpp allow gpu id override
-    std::string main_gpu_name = get_main_gpu_name(inputs.kcpp_main_gpu);
+    std::string main_gpu_name = get_main_gpu_name(inputs.kcpp_main_device);
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
@@ -451,8 +450,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.offload_params_to_cpu = inputs.offload_cpu;
     params.enable_mmap = inputs.use_mmap;
     params.backend = main_gpu_name.c_str();
-    params.keep_vae_on_cpu = inputs.vae_cpu;
-    params.keep_clip_on_cpu = inputs.clip_cpu;
+    params.keep_vae_on_cpu = (inputs.kcpp_vae_device <= -2);
+    params.keep_clip_on_cpu = (inputs.kcpp_clip_device <= -2);
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
 
     // also switches flash attn for the vae and conditioner

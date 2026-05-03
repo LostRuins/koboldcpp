@@ -363,14 +363,14 @@ class generation_outputs(ctypes.Structure):
 class sd_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
-                ("kcpp_main_gpu", ctypes.c_int),
+                ("kcpp_main_device", ctypes.c_int),
                 ("threads", ctypes.c_int),
                 ("quant", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
                 ("offload_cpu", ctypes.c_bool),
                 ("use_mmap", ctypes.c_bool),
-                ("vae_cpu", ctypes.c_bool),
-                ("clip_cpu", ctypes.c_bool),
+                ("kcpp_vae_device", ctypes.c_int),
+                ("kcpp_clip_device", ctypes.c_int),
                 ("diffusion_conv_direct", ctypes.c_bool),
                 ("vae_conv_direct", ctypes.c_bool),
                 ("taesd", ctypes.c_bool),
@@ -2415,8 +2415,8 @@ def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip
     inputs.flash_attention = args.sdflashattention
     inputs.offload_cpu = args.sdoffloadcpu
     inputs.use_mmap = args.usemmap
-    inputs.vae_cpu = args.sdvaecpu
-    inputs.clip_cpu = False if args.sdclipgpu else True
+    inputs.kcpp_vae_device = -2 if args.sdvaecpu else -1
+    inputs.kcpp_clip_device = -1 if args.sdclipgpu else -2
     sdconvdirect = sd_convdirect_option(args.sdconvdirect)
     inputs.diffusion_conv_direct = sdconvdirect == 'full'
     inputs.vae_conv_direct = sdconvdirect in ['vaeonly', 'full']
@@ -2444,7 +2444,7 @@ def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip
     inputs.img_hard_limit = args.sdclamped
     inputs.img_soft_limit = args.sdclampedsoft
     inputs = set_backend_props(inputs)
-    inputs.kcpp_main_gpu = args.sdmaingpu
+    inputs.kcpp_main_device = args.sdmaingpu
     ret = handle.sd_load_model(inputs)
     return ret
 
