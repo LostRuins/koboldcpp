@@ -11397,7 +11397,7 @@ if __name__ == '__main__':
     advparser.add_argument("--analyze", metavar=('[filename]'), help="Reads the metadata, weight types and tensor names in any GGUF file.", default="")
     advparser.add_argument("--maingpu","--main-gpu","-mg", help="Only used in a multi-gpu setup. Sets the index of the main GPU that will be used.",metavar=('[Device ID]'), type=int, default=-1)
     advparser.add_argument("--batchsize","--blasbatchsize","--batch-size","-b", help="Sets the batch size used in batched processing (default 512). Setting it to -1 disables batched mode, but keeps other benefits like GPU offload.", type=int,choices=[-1,16,32,64,128,256,512,1024,2048,4096], default=512)
-    advparser.add_argument("--continuous-batching","--contbatch", help="Experimental GGUF-only continuous batching slot count. Unsupported request features fall back to the legacy single-request path.", metavar=('[slots]'), type=check_range(int,0,64), default=0)
+    advparser.add_argument("--continuous-batching","--contbatch", help=argparse.SUPPRESS, metavar=('[slots]'), type=check_range(int,0,64), default=0)
     advparser.add_argument("--blasthreads","--batchthreads","--threadsbatch","--threads-batch", help="Use a different number of threads during batching if specified. Otherwise, has the same value as --threads",metavar=('[threads]'), type=int, default=0)
     advparser.add_argument("--lora", help="GGUF models only, applies a lora file on top of model.", metavar=('[lora_filename]'), nargs='+')
     advparser.add_argument("--loramult", metavar=('[amount]'), help="Multiplier for the Text LORA model to be applied.", type=float, default=1.0)
