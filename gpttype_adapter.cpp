@@ -3351,6 +3351,7 @@ static std::thread batch_worker_thread;
 static bool batch_worker_stop = false;
 static bool batch_worker_started = false;
 static bool batch_legacy_active = false;
+static bool batch_touched_since_legacy = false;
 static int batch_legacy_waiting = 0;
 static int batch_next_request_id = 1;
 static std::string batch_empty_string = "";
@@ -3384,6 +3385,32 @@ static bool batch_has_live_locked()
     return false;
 }
 
+static void batch_invalidate_legacy_context_locked()
+{
+    if(!batch_touched_since_legacy)
+    {
+        return;
+    }
+    batch_touched_since_legacy = false;
+    n_past = 0;
+    current_context_tokens.clear();
+    last_n_tokens.clear();
+    smartcontext.clear();
+    loaded_latest_logits.clear();
+    if(llama_ctx_v4)
+    {
+        llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), 0, -1, -1);
+    }
+    if(draft_ctx)
+    {
+        llama_memory_seq_rm(llama_get_memory(draft_ctx), 0, -1, -1);
+    }
+    if(debugmode==1 && !is_quiet)
+    {
+        printf("\n[Continuous batching touched shared context; forcing next legacy generation to reprocess prompt]\n");
+    }
+}
+
 class BatchLegacyGuard
 {
 public:
@@ -3394,6 +3421,7 @@ public:
         batch_cv.notify_all();
         batch_cv.wait(lock, [](){ return !batch_has_live_locked(); });
         batch_legacy_waiting--;
+        batch_invalidate_legacy_context_locked();
         batch_legacy_active = true;
     }
 
@@ -3692,6 +3720,7 @@ static bool batch_claim_waiting_locked()
         }
         req->slot = slot;
         req->state = BatchState::PREFILL;
+        batch_touched_since_legacy = true;
         TokenizeString(req->prompt, req->prompt_tokens, file_format, add_bos_token);
         if(req->prompt_tokens.empty())
         {
