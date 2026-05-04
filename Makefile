@@ -681,11 +681,11 @@ llama-impl.o: src/llama-impl.cpp src/llama-impl.h
 budget.o: common/reasoning-budget.cpp common/reasoning-budget.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-SDCPP_COMMON_BASENAMES := stable-diffusion.h sample-cache.h sample-cache.cpp util.cpp upscaler.h upscaler.cpp model.cpp name_conversion.cpp model_io/gguf_io.cpp model_io/gguf_io.h model_io/gguf_reader_ext.h model_io/pickle_io.cpp model_io/safetensors_io.cpp model_io/safetensors_io.h model_io/tensor_storage.h model_io/torch_legacy_io.cpp model_io/torch_zip_io.cpp tokenizers/bpe_tokenizer.cpp tokenizers/bpe_tokenizer.h tokenizers/clip_tokenizer.cpp tokenizers/clip_tokenizer.h tokenizers/mistral_tokenizer.cpp tokenizers/mistral_tokenizer.h tokenizers/qwen2_tokenizer.cpp tokenizers/qwen2_tokenizer.h tokenizers/t5_unigram_tokenizer.cpp tokenizers/t5_unigram_tokenizer.h tokenizers/tokenizer.cpp tokenizers/tokenizer.h tokenizers/tokenize_util.cpp tokenizers/tokenize_util.h thirdparty/zip.c
+SDCPP_COMMON_BASENAMES := stable-diffusion.h stable-diffusion.cpp sample-cache.h sample-cache.cpp util.cpp upscaler.h upscaler.cpp model.cpp name_conversion.cpp model_io/gguf_io.cpp model_io/gguf_io.h model_io/gguf_reader_ext.h model_io/pickle_io.cpp model_io/safetensors_io.cpp model_io/safetensors_io.h model_io/tensor_storage.h model_io/torch_legacy_io.cpp model_io/torch_zip_io.cpp tokenizers/bpe_tokenizer.cpp tokenizers/bpe_tokenizer.h tokenizers/clip_tokenizer.cpp tokenizers/clip_tokenizer.h tokenizers/mistral_tokenizer.cpp tokenizers/mistral_tokenizer.h tokenizers/qwen2_tokenizer.cpp tokenizers/qwen2_tokenizer.h tokenizers/t5_unigram_tokenizer.cpp tokenizers/t5_unigram_tokenizer.h tokenizers/tokenizer.cpp tokenizers/tokenizer.h tokenizers/tokenize_util.cpp tokenizers/tokenize_util.h thirdparty/zip.c
 SDCPP_COMMON_SOURCES := $(foreach f,$(SDCPP_COMMON_BASENAMES),otherarch/sdcpp/$(f))
 SDCPP_FLAGS := -I./vendor/nlohmann
 
-SDCPP_MAIN_BASENAMES := main.cpp stable-diffusion.cpp image_metadata.cpp convert.cpp common/log.cpp common/media_io.cpp common/common.cpp version.cpp tokenizers/vocab/vocab.cpp
+SDCPP_MAIN_BASENAMES := main.cpp image_metadata.cpp convert.cpp common/log.cpp common/media_io.cpp common/common.cpp version.cpp tokenizers/vocab/vocab.cpp
 
 HEADERS_SDCOMMON := $(filter %.h,$(SDCPP_COMMON_SOURCES)) $(filter %.hpp, $(SDCPP_COMMON_SOURCES))
 OBJS_SDCOMMON := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SDCPP_COMMON_SOURCES))) otherarch/sdcpp/thirdparty/zip.o

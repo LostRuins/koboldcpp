@@ -4205,3 +4205,61 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 }
 
 
+#include "kcpp_sd_extensions.h"
+
+namespace kcpp_sd {
+
+    static_assert((int)SD_TYPE_COUNT == (int)GGML_TYPE_COUNT,
+            "inconsistency between SD_TYPE_COUNT and GGML_TYPE_COUNT");
+
+    int get_loaded_sd_version(sd_ctx_t* ctx) {
+        return ctx->sd->version;
+    }
+
+    bool loaded_model_is_chroma(sd_ctx_t* ctx) {
+        if (ctx != nullptr && ctx->sd != nullptr) {
+            auto maybe_flux = std::dynamic_pointer_cast<FluxModel>(ctx->sd->diffusion_model);
+            if (maybe_flux != nullptr) {
+                return maybe_flux->flux.flux_params.is_chroma;
+            }
+        }
+        return false;
+    }
+
+    int get_spatial_multiple(sd_ctx_t* ctx) {
+        return ctx->sd->get_vae_scale_factor() * ctx->sd->get_diffusion_model_down_factor();
+    }
+
+    model_info get_model_info(sd_ctx_t* ctx)
+    {
+        model_info res = {};
+        auto loadedsdver = get_loaded_sd_version(ctx);
+        res.is_wan = (loadedsdver == SDVersion::VERSION_WAN2 || loadedsdver == SDVersion::VERSION_WAN2_2_I2V || loadedsdver == SDVersion::VERSION_WAN2_2_TI2V);
+        res.is_qwenimg = (loadedsdver == SDVersion::VERSION_QWEN_IMAGE);
+        res.is_chroma = loaded_model_is_chroma(ctx);
+        res.is_kontext = (loadedsdver==SDVersion::VERSION_FLUX && !res.is_chroma);
+        res.is_flux2 = (loadedsdver == SDVersion::VERSION_FLUX2 || loadedsdver == SDVersion::VERSION_FLUX2_KLEIN);
+        res.is_flux1 = (loadedsdver == SDVersion::VERSION_FLUX);
+        res.is_zimage = (loadedsdver == SDVersion::VERSION_Z_IMAGE);
+        res.is_sdxs = (loadedsdver == SDVersion::VERSION_SDXS_512_DS || loadedsdver == SDVersion::VERSION_SDXS_09);
+        res.is_sd1 = (loadedsdver == SDVersion::VERSION_SD1);
+        res.is_sd2 = (loadedsdver == SDVersion::VERSION_SD2);
+        res.spatial_multiple = get_spatial_multiple(ctx);
+        return res;
+    }
+
+    void SetCircularAxesAll(sd_ctx_t* ctx, bool circular_x, bool circular_y) {
+        ctx->sd->SetCircularAxesAll(circular_x, circular_y);
+    }
+
+    void set_lora_cache(sd_ctx_t *ctx, bool enable) {
+        ctx->sd->kcpp_lora_cache_populate = enable;
+    }
+
+    void apply_loras(sd_ctx_t *ctx, const std::vector<sd_lora_t>& lora_specs)
+    {
+        ctx->sd->apply_loras(lora_specs.data(), lora_specs.size());
+    }
+
+}
+
