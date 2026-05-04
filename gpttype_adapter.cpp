@@ -3311,6 +3311,7 @@ struct BatchGenerateRequest
     float min_p = 0.0f;
     float typical_p = 1.0f;
     float rep_pen = 1.0f;
+    float rep_pen_slope = 1.0f;
     int rep_pen_range = 0;
     float presence_penalty = 0.0f;
     bool allow_eos_token = true;
@@ -3442,7 +3443,7 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(inputs.top_a > 0.0f || inputs.tfs != 1.0f || inputs.dynatemp_range > 0.0f || inputs.rep_pen_slope != 1.0f)
+    if(inputs.top_a > 0.0f || inputs.tfs != 1.0f || inputs.dynatemp_range > 0.0f)
     {
         return false;
     }
@@ -3468,14 +3469,138 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     return true;
 }
 
+struct BatchRepPenSampler
+{
+    int32_t penalty_last_n = 0;
+    float penalty_repeat = 1.0f;
+    float penalty_slope = 1.0f;
+    float penalty_present = 0.0f;
+    std::vector<llama_token> prev;
+};
+
+static const char * batch_rep_pen_name(const llama_sampler * /*smpl*/)
+{
+    return "kcpp-batch-rep-pen";
+}
+
+static void batch_rep_pen_accept(llama_sampler * smpl, llama_token token)
+{
+    auto * ctx = (BatchRepPenSampler *) smpl->ctx;
+    if(ctx->penalty_last_n <= 0)
+    {
+        return;
+    }
+    if(ctx->prev.size() >= (size_t) ctx->penalty_last_n)
+    {
+        ctx->prev.erase(ctx->prev.begin());
+    }
+    ctx->prev.push_back(token);
+}
+
+static void batch_rep_pen_apply(llama_sampler * smpl, llama_token_data_array * cur_p)
+{
+    auto * ctx = (BatchRepPenSampler *) smpl->ctx;
+    int last_n_repeat = std::min((int) ctx->prev.size(), ctx->penalty_last_n);
+    if(last_n_repeat <= 0 || (ctx->penalty_repeat == 1.0f && ctx->penalty_present == 0.0f))
+    {
+        return;
+    }
+
+    const llama_token * last_tokens = ctx->prev.data() + ctx->prev.size() - last_n_repeat;
+    std::unordered_set<llama_token> tokens_near(last_tokens + last_n_repeat / 2, last_tokens + last_n_repeat);
+    std::unordered_set<llama_token> tokens_far(last_tokens, last_tokens + last_n_repeat / 2);
+
+    float penalty_reduced = ctx->penalty_repeat;
+    if(penalty_reduced > 1.0f)
+    {
+        penalty_reduced = 1.0f + ((ctx->penalty_repeat - 1.0f) * ctx->penalty_slope);
+    }
+
+    for(size_t i = 0; i < cur_p->size; ++i)
+    {
+        const bool token_in_near = tokens_near.find(cur_p->data[i].id) != tokens_near.end();
+        const bool token_in_far = tokens_far.find(cur_p->data[i].id) != tokens_far.end();
+        if(!token_in_near && !token_in_far)
+        {
+            continue;
+        }
+
+        float penalty = token_in_near ? ctx->penalty_repeat : penalty_reduced;
+        if(cur_p->data[i].logit <= 0)
+        {
+            cur_p->data[i].logit *= penalty;
+        }
+        else
+        {
+            cur_p->data[i].logit /= penalty;
+        }
+        cur_p->data[i].logit -= ctx->penalty_present;
+    }
+
+    cur_p->sorted = false;
+}
+
+static void batch_rep_pen_reset(llama_sampler * smpl)
+{
+    auto * ctx = (BatchRepPenSampler *) smpl->ctx;
+    ctx->prev.clear();
+}
+
+static llama_sampler * batch_rep_pen_clone(const llama_sampler * smpl)
+{
+    const auto * ctx = (const BatchRepPenSampler *) smpl->ctx;
+    auto * result = llama_sampler_init(smpl->iface, new BatchRepPenSampler {
+        ctx->penalty_last_n,
+        ctx->penalty_repeat,
+        ctx->penalty_slope,
+        ctx->penalty_present,
+        ctx->prev,
+    });
+    return result;
+}
+
+static void batch_rep_pen_free(llama_sampler * smpl)
+{
+    delete (BatchRepPenSampler *) smpl->ctx;
+}
+
+static llama_sampler_i batch_rep_pen_i = {
+    /* .name              = */ batch_rep_pen_name,
+    /* .accept            = */ batch_rep_pen_accept,
+    /* .apply             = */ batch_rep_pen_apply,
+    /* .reset             = */ batch_rep_pen_reset,
+    /* .clone             = */ batch_rep_pen_clone,
+    /* .free              = */ batch_rep_pen_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+static llama_sampler * batch_rep_pen_init(int32_t penalty_last_n, float penalty_repeat, float penalty_slope, float penalty_present)
+{
+    penalty_last_n = std::max(penalty_last_n, 0);
+    if(penalty_slope <= 0.0f || penalty_slope > 1.0f)
+    {
+        penalty_slope = 1.0f;
+    }
+    return llama_sampler_init(&batch_rep_pen_i, new BatchRepPenSampler {
+        penalty_last_n,
+        penalty_repeat <= 0.0f ? 1.0f : penalty_repeat,
+        penalty_slope,
+        penalty_present,
+        {},
+    });
+}
+
 static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
 {
     llama_sampler_chain_params params = llama_sampler_chain_default_params();
     llama_sampler * chain = llama_sampler_chain_init(params);
-    llama_sampler_chain_add(chain, llama_sampler_init_penalties(
+    llama_sampler_chain_add(chain, batch_rep_pen_init(
         req.rep_pen_range,
-        req.rep_pen <= 0.0f ? 1.0f : req.rep_pen,
-        0.0f,
+        req.rep_pen,
+        req.rep_pen_slope,
         req.presence_penalty));
     if(req.top_k > 0)
     {
@@ -3567,7 +3692,6 @@ static bool batch_claim_waiting_locked()
         }
         req->slot = slot;
         req->state = BatchState::PREFILL;
-        req->sampler = batch_build_sampler(*req);
         TokenizeString(req->prompt, req->prompt_tokens, file_format, add_bos_token);
         if(req->prompt_tokens.empty())
         {
@@ -3583,6 +3707,11 @@ static bool batch_claim_waiting_locked()
             }
         }
         req->prompt_token_count = req->prompt_tokens.size();
+        req->sampler = batch_build_sampler(*req);
+        for(llama_token token : req->prompt_tokens)
+        {
+            llama_sampler_accept(req->sampler, token);
+        }
         req->prompt_pos = 0;
         req->n_past = 0;
         req->has_pending = false;
@@ -3698,7 +3827,6 @@ static void batch_worker_loop()
             {
                 sampled = llama_sampler_sample(req->sampler, llama_ctx_v4, req->i_batch);
             }
-            llama_sampler_accept(req->sampler, sampled);
             req->completion_token_count++;
             if(sampled == eos && !req->bypass_eos_token)
             {
@@ -3766,6 +3894,7 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->min_p = inputs.min_p;
     req->typical_p = inputs.typical_p;
     req->rep_pen = inputs.rep_pen;
+    req->rep_pen_slope = inputs.rep_pen_slope;
     req->rep_pen_range = inputs.rep_pen_range;
     req->presence_penalty = inputs.presence_penalty;
     req->allow_eos_token = inputs.allow_eos_token;
