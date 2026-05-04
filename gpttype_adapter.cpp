@@ -3390,6 +3390,7 @@ public:
     {
         std::unique_lock<std::mutex> lock(batch_mutex);
         batch_legacy_waiting++;
+        batch_cv.notify_all();
         batch_cv.wait(lock, [](){ return !batch_has_live_locked(); });
         batch_legacy_waiting--;
         batch_legacy_active = true;
@@ -3603,13 +3604,13 @@ static void batch_worker_loop()
         {
             std::unique_lock<std::mutex> lock(batch_mutex);
             batch_cv.wait_for(lock, std::chrono::milliseconds(5), [](){
-                return batch_worker_stop || (!batch_legacy_active && batch_legacy_waiting == 0 && batch_has_live_locked());
+                return batch_worker_stop || (!batch_legacy_active && batch_has_live_locked());
             });
             if(batch_worker_stop)
             {
                 break;
             }
-            if(batch_legacy_active || batch_legacy_waiting > 0)
+            if(batch_legacy_active)
             {
                 continue;
             }
