@@ -158,6 +158,11 @@ ifdef LLAMA_PERF
 CFLAGS   += -DGGML_PERF
 CXXFLAGS += -DGGML_PERF
 endif
+ifdef LLAMA_RPC
+RPC_FLAGS = -DGGML_USE_RPC
+else
+RPC_FLAGS =
+endif
 
 CCV := $(shell $(CC) --version | head -n 1)
 CXXV := $(shell $(CXX) --version | head -n 1)
@@ -455,7 +460,14 @@ HIPBLAS_BUILD = $(HCXX) $(CXXFLAGS) $(HIPFLAGS) $^ -shared -o $@.so $(HIPLDFLAGS
 endif
 ifdef LLAMA_VULKAN
 VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
+ifdef LLAMA_RPC
+RPC_BUILD = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -lvulkan -shared -o $@.so $(LDFLAGS)
 endif
+endif
+ifdef LLAMA_RPC
+RPC_BUILD_WIN = $(CXX) $(CXXFLAGS) $(RPC_FLAGS) $^ -shared -o $@.dll $(LDFLAGS)
+endif
+
 endif
 
 ifndef LLAMA_CUBLAS
@@ -927,6 +939,8 @@ quantize_clip: tools/mtmd/clip.cpp tools/quantclip.cpp ggml_v3.o ggml.o ggml-cpu
 quantize_ace: otherarch/acestep/quantize-acestep.cpp tools/mtmd/clip.cpp ggml_v3.o ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
+# Include RPC build targets (rpc-full-all works without manual flags)
+include Makefile.rpc
 
 #window simple clinfo
 simplecpuinfo: simplecpuinfo.cpp

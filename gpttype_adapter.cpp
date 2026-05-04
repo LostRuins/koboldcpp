@@ -10,6 +10,7 @@
 #include <cmath>
 #include <time.h>
 #include <mutex>
+#include <dlfcn.h>
 #include <unordered_map>
 #include <unordered_set>
 #include "model_adapter.h"
@@ -45,6 +46,7 @@
 #include "tools/mtmd/llava.h"
 #include "tools/mtmd/mtmd-audio.h"
 #include "common/common.h"
+#include "ggml-backend.h"
 
 #if defined(GGML_USE_HIP)
 // for rocblas_initialize()
@@ -2185,6 +2187,62 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     ggml_time_init();
     kcpp_data = new kcpp_params(); //allocate on heap to avoid linux segfault. yes this leaks memory.
 
+    // Parse device string and set HIP_VISIBLE_DEVICES/CUDA_VISIBLE_DEVICES to restrict local devices
+    // This prevents RPC server devices from being used locally when not specified
+    {
+        const char * device_str = inputs.devices_override;
+        if (device_str && strlen(device_str) > 0) {
+            std::string devices(device_str);
+            std::vector<int> local_device_indices;
+            
+            // Parse device string to find local ROCm/CUDA devices (not RPC*)
+            size_t start = 0;
+            while (start < devices.length()) {
+                size_t end = devices.find(',', start);
+                if (end == std::string::npos) end = devices.length();
+                std::string device = devices.substr(start, end - start);
+                
+                // Trim whitespace
+                size_t first = device.find_first_not_of(" \t");
+                if (first != std::string::npos) {
+                    size_t last = device.find_last_not_of(" \t");
+                    device = device.substr(first, last - first + 1);
+                }
+                
+                // Check if this is a local ROCm or CUDA device (not RPC*)
+                if (device.length() > 0) {
+                    if (strncasecmp(device.c_str(), "ROCm", 4) == 0) {
+                        int dev_num = atoi(device.c_str() + 4);
+                        local_device_indices.push_back(dev_num);
+                    } else if (strncasecmp(device.c_str(), "CUDA", 4) == 0) {
+                        int dev_num = atoi(device.c_str() + 4);
+                        local_device_indices.push_back(dev_num);
+                    } else if (strncasecmp(device.c_str(), "HIP", 3) == 0) {
+                        int dev_num = atoi(device.c_str() + 3);
+                        local_device_indices.push_back(dev_num);
+                    }
+                }
+                
+                start = end + 1;
+            }
+            
+            if (!local_device_indices.empty()) {
+                std::string visible_devices;
+                for (size_t i = 0; i < local_device_indices.size(); i++) {
+                    if (i > 0) visible_devices += ",";
+                    visible_devices += std::to_string(local_device_indices[i]);
+                }
+#if defined(GGML_USE_HIP)
+                setenv("HIP_VISIBLE_DEVICES", visible_devices.c_str(), 1);
+                printf("HIP_VISIBLE_DEVICES=%s (restricting to specified local devices)\n", visible_devices.c_str());
+#elif defined(GGML_USE_CUDA)
+                setenv("CUDA_VISIBLE_DEVICES", visible_devices.c_str(), 1);
+                printf("CUDA_VISIBLE_DEVICES=%s (restricting to specified local devices)\n", visible_devices.c_str());
+#endif
+            }
+        }
+    }
+
     file_format = in_file_format;
     file_format_meta = in_file_format_meta;
     kcpp_data->n_threads = inputs.threads;
@@ -2427,6 +2485,28 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         model_params.use_mlock = inputs.use_mlock;
         model_params.use_direct_io = false; //no direct io for now until stable
         model_params.n_gpu_layers = inputs.gpulayers;
+
+        // Register RPC servers BEFORE parsing device list
+        const char * rpc_env = std::getenv("LLAMA_ARG_RPC");
+        if (rpc_env && strlen(rpc_env) > 0) {
+            printf("RPC Client Mode: Pre-registering RPC servers: %s\n", rpc_env);
+            fflush(stdout);
+            auto rpc_servers = string_split<std::string>(rpc_env, ',');
+            if (!rpc_servers.empty()) {
+                typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char * endpoint);
+                ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t) dlsym(RTLD_DEFAULT, "ggml_backend_rpc_add_server");
+                if (ggml_backend_rpc_add_server_fn) {
+                    for (const auto & server : rpc_servers) {
+                        auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+                        if (reg) {
+                            ggml_backend_register(reg);
+                            printf("RPC Client Mode: Pre-registered server: %s\n", server.c_str());
+                            fflush(stdout);
+                        }
+                    }
+                }
+            }
+        }
 
         //set device overrides if needed
         std::vector<ggml_backend_dev_t> devices_override;

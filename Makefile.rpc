@@ -1,0 +1,120 @@
+# RPC build targets
+# Usage: make rpc-full-all (automatically builds for all available backends)
+
+.PHONY: rpc-full-all rpc-servers-all rpc-backends-all
+
+# Main target - builds RPC for all backends with a single command
+# This automatically detects hardware and builds appropriate backends
+# Also builds standard backends for koboldcpp.py GUI
+rpc-full-all:
+	@echo "=== KoboldCpp RPC Auto-Detection Build ==="
+	@echo ""
+	@echo "Detecting hardware..."
+	@HAS_AMD=0; HAS_NVIDIA=0; HAS_VULKAN=0; \
+	if lspci -nn 2>/dev/null | grep -qi "1002:"; then HAS_AMD=1; echo "  ✓ AMD GPU detected"; fi; \
+	if lspci -nn 2>/dev/null | grep -qi "10de:"; then HAS_NVIDIA=1; echo "  ✓ NVIDIA GPU detected"; fi; \
+	if lspci -nn 2>/dev/null | grep -qi "8086:"; then echo "  ✓ Intel GPU detected"; HAS_VULKAN=1; fi; \
+	if [ $$HAS_AMD -eq 1 ] || [ $$HAS_NVIDIA -eq 1 ]; then HAS_VULKAN=1; fi; \
+	if [ $$HAS_VULKAN -eq 1 ]; then echo "  ✓ Vulkan support available"; fi; \
+	echo ""
+	@echo "Building standard backends (required for koboldcpp.py GUI)..."
+	@echo ""
+	@echo "Building CPU backend (koboldcpp_default.so)..."
+	-$(MAKE) koboldcpp_default -j$(nproc) 2>&1 | tail -3
+	@echo ""
+	@if pkg-config --exists vulkan 2>/dev/null || [ -f /usr/include/vulkan/vulkan.h ] || [ -f /usr/local/include/vulkan/vulkan.h ]; then \
+		echo "Building Vulkan backend (koboldcpp_vulkan.so)..."; \
+		$(MAKE) koboldcpp_vulkan -j$(nproc) LLAMA_VULKAN=1 2>&1 | tail -3; \
+	else \
+		echo "Vulkan headers not found, skipping Vulkan backend..."; \
+	fi
+	@echo ""
+	@if lspci -nn 2>/dev/null | grep -qi "1002:" && (command -v hipcc &> /dev/null || pkg-config --exists rocm 2>/dev/null); then \
+		echo "Building HIPBLAS backend (koboldcpp_hipblas.so)..."; \
+		$(MAKE) koboldcpp_hipblas -j$(nproc) LLAMA_HIPBLAS=1 2>&1 | tail -3 || echo "HIPBLAS backend skipped"; \
+	else \
+		echo "AMD GPU or ROCm not available, skipping HIPBLAS backend..."; \
+	fi
+	@echo ""
+	@echo "Building RPC backends..."
+	@echo ""
+	@if pkg-config --exists vulkan 2>/dev/null || [ -f /usr/include/vulkan/vulkan.h ] || [ -f /usr/local/include/vulkan/vulkan.h ]; then \
+		echo "Building Vulkan RPC..."; \
+		$(MAKE) LLAMA_RPC=1 LLAMA_VULKAN=1 rpc-server-vulkan koboldcpp_rpc || echo "Vulkan RPC build failed, continuing..."; \
+	else \
+		echo "Vulkan headers not found, skipping Vulkan RPC..."; \
+	fi
+	@echo ""
+	@if lspci -nn 2>/dev/null | grep -qi "1002:" && (command -v hipcc &> /dev/null || pkg-config --exists rocm 2>/dev/null); then \
+		echo "Building HIPBLAS RPC (AMD detected)..."; \
+		$(MAKE) LLAMA_RPC=1 LLAMA_HIPBLAS=1 rpc-server-hip koboldcpp_hipblas_rpc || echo "HIPBLAS RPC build failed, continuing..."; \
+	else \
+		echo "AMD GPU or ROCm not available, skipping HIPBLAS RPC..."; \
+	fi
+	@echo ""
+	@if lspci -nn 2>/dev/null | grep -qi "10de:" && command -v nvcc &> /dev/null; then \
+		echo "Building CUDA RPC (NVIDIA detected)..."; \
+		$(MAKE) LLAMA_RPC=1 LLAMA_CUBLAS=1 rpc-server-cuda koboldcpp_cublas_rpc || echo "CUDA RPC build failed, continuing..."; \
+	else \
+		echo "NVIDIA GPU or CUDA not available, skipping CUDA RPC..."; \
+	fi
+	@echo ""
+	@echo "=== Build Summary ==="
+	@echo "Standard backends (for koboldcpp.py GUI):"
+	@ls -lh koboldcpp_default.so 2>/dev/null && echo "  ✓ CPU backend" || echo "  ✗ CPU backend"
+	@ls -lh koboldcpp_vulkan.so 2>/dev/null && echo "  ✓ Vulkan backend" || echo "  ✗ Vulkan backend"
+	@ls -lh koboldcpp_hipblas.so 2>/dev/null && echo "  ✓ HIPBLAS backend" || echo "  ✗ HIPBLAS backend"
+	@ls -lh koboldcpp_cublas.so 2>/dev/null && echo "  ✓ CUDA backend" || echo "  ✗ CUDA backend"
+	@echo ""
+	@echo "RPC backends (for distributed inference):"
+	@ls -lh rpc-server-vulkan koboldcpp_rpc.so 2>/dev/null && echo "  ✓ Vulkan RPC" || echo "  ✗ Vulkan RPC"
+	@ls -lh rpc-server-hip koboldcpp_hipblas_rpc.so 2>/dev/null && echo "  ✓ HIPBLAS RPC" || echo "  ✗ HIPBLAS RPC"
+	@ls -lh rpc-server-cuda koboldcpp_cublas_rpc.so 2>/dev/null && echo "  ✓ CUDA RPC" || echo "  ✗ CUDA RPC"
+	@echo ""
+	@echo "Usage:"
+	@echo "  GUI: python ./koboldcpp.py"
+	@echo "  Vulkan RPC: ./rpc-server-vulkan -H 127.0.0.1 --port 50053"
+	@echo "  HIPBLAS RPC: ./rpc-server-hip -H 127.0.0.1 --port 50053"
+	@echo "  CUDA RPC: ./rpc-server-cuda -H 127.0.0.1 --port 50053"
+
+# Vulkan RPC server and client
+ifdef LLAMA_VULKAN
+rpc-server-vulkan: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o transport.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o ggml-vulkan.o ggml-vulkan-shaders.o console.o
+	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) -lvulkan
+	@echo "Built rpc-server-vulkan"
+
+koboldcpp_rpc: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o sdcpp_vulkan.o whispercpp_vulkan.o tts_default.o music_default.o embeddings_default.o llavaclip_vulkan.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-repack.o $(OBJS_FULL) $(OBJS) ggml-rpc.o transport.o
+	$(RPC_BUILD)
+	@echo "Built koboldcpp_rpc (Vulkan RPC client)"
+endif
+
+# HIPBLAS RPC server and client
+ifdef LLAMA_HIPBLAS
+rpc-server-hip: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o transport.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o $(HIP_OBJS)
+	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HIPLDFLAGS)
+	@echo "Built rpc-server-hip"
+
+koboldcpp_hipblas_rpc: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o sdcpp_cublas.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_cublas.o ggml-repack.o $(HIP_OBJS) $(OBJS_FULL) $(OBJS) ggml-rpc.o transport.o
+	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(filter-out %.h,$^) -shared -o $@.so $(LDFLAGS) $(HIPLDFLAGS)
+	@echo "Built koboldcpp_hipblas_rpc (HIPBLAS RPC client)"
+endif
+
+# CUDA RPC server and client
+ifdef LLAMA_CUBLAS
+rpc-server-cuda: tools/rpc-server.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o ggml-rpc.o transport.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_cublas.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-quants.o ggml-cpu-quants.o kcpp-quantmapper.o kcpp-repackmapper.o unicode.o unicode-common.o unicode-data.o ggml-threading.o ggml-cpu-cpp.o gguf.o sgemm.o common.o llama-impl.o sampling.o budget.o kcpputils.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o ggml-cuda.o ggml_v2-cuda.o ggml_v2-cuda-legacy.o $(filter-out ggml_v3-cuda.o,$(CUBLAS_OBJS))
+	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(CUBLASLD_FLAGS) -lcudart -lcublas -lcublasLt
+	@echo "Built rpc-server-cuda"
+
+koboldcpp_cublas_rpc: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o expose.o gpttype_adapter_cublas.o sdcpp_cublas.o whispercpp_cublas.o tts_default.o music_default.o embeddings_default.o llavaclip_cublas.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_cublas.o ggml-repack.o $(CUBLAS_OBJS) $(OBJS_FULL) $(OBJS) ggml-rpc.o transport.o
+	$(RPC_BUILD)
+	@echo "Built koboldcpp_cublas_rpc (CUDA RPC client)"
+endif
+
+# RPC object files
+ifdef LLAMA_RPC
+ggml-rpc.o: ggml/src/ggml-rpc/ggml-rpc.cpp ggml/include/ggml-rpc.h ggml/src/ggml-rpc/transport.h
+	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
+
+transport.o: ggml/src/ggml-rpc/transport.cpp ggml/src/ggml-rpc/transport.h
+	$(CXX) $(CXXFLAGS) $(RPC_FLAGS) -c $< -o $@
+endif
