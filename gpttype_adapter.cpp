@@ -2453,12 +2453,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         #endif
 
         model_params.main_gpu = kcpp_parseinfo_maindevice;
-
-        #if defined(GGML_USE_CUDA)
-        model_params.split_mode = (inputs.use_rowsplit?llama_split_mode::LLAMA_SPLIT_MODE_ROW:llama_split_mode::LLAMA_SPLIT_MODE_LAYER);
-        #else
-        model_params.split_mode = llama_split_mode::LLAMA_SPLIT_MODE_LAYER;
-        #endif
+        model_params.split_mode = (inputs.splitmode>0?((llama_split_mode)(inputs.splitmode)):llama_split_mode::LLAMA_SPLIT_MODE_LAYER);
 
         llama_ctx_params.n_batch = kcpp_data->n_batch;
         llama_ctx_params.n_ubatch = kcpp_data->n_ubatch;

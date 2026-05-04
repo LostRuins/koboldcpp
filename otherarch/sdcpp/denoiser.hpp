@@ -1523,12 +1523,10 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
                                               const std::vector<float>& sigmas,
                                               std::shared_ptr<RNG> rng,
                                               float eta) {
-
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
-
-        float sigma       = sigmas[i];
-        float sigma_to    = sigmas[i + 1];
+        float sigma    = sigmas[i];
+        float sigma_to = sigmas[i + 1];
 
         auto model_output_opt = model(x, sigma, i + 1);
         if (model_output_opt.empty()) {
@@ -1551,12 +1549,11 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
         float std_dev_t = eta * std::sqrt(variance);
 
         x = pred_original_sample +
-            std::sqrt((1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2))/ alpha_prod_t_prev) * model_output;
+            std::sqrt((1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2)) / alpha_prod_t_prev) * model_output;
 
         if (eta > 0) {
-            x+= std_dev_t / std::sqrt(alpha_prod_t_prev) * sd::Tensor<float>::randn_like(x, rng);
+            x += std_dev_t / std::sqrt(alpha_prod_t_prev) * sd::Tensor<float>::randn_like(x, rng);
         }
-
     }
     return x;
 }
@@ -1584,8 +1581,10 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
 
     auto get_timestep_from_sigma = [&](float s) -> int {
         auto it = std::lower_bound(compvis_sigmas.begin(), compvis_sigmas.end(), s);
-        if (it == compvis_sigmas.begin()) return 0;
-        if (it == compvis_sigmas.end()) return TIMESTEPS - 1;
+        if (it == compvis_sigmas.begin())
+            return 0;
+        if (it == compvis_sigmas.end())
+            return TIMESTEPS - 1;
         int idx_high = static_cast<int>(std::distance(compvis_sigmas.begin(), it));
         int idx_low  = idx_high - 1;
         if (std::abs(compvis_sigmas[idx_high] - s) < std::abs(compvis_sigmas[idx_low] - s)) {
@@ -1596,7 +1595,6 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
 
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
-
         float sigma_to    = sigmas[i + 1];
         int prev_timestep = get_timestep_from_sigma(sigma_to);
         int timestep_s    = (int)floor((1 - eta) * prev_timestep);
@@ -1626,7 +1624,6 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
             x = std::sqrt(alpha_prod_t_prev / alpha_prod_s) * x +
                 std::sqrt(1.0f / alpha_prod_t_prev - 1.0f / alpha_prod_s) * sd::Tensor<float>::randn_like(x, rng);
         }
-
     }
     return x;
 }

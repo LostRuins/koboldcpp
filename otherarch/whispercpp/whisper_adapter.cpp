@@ -59,27 +59,9 @@ static std::string output_txt(struct whisper_context * ctx) {
 
 void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
-static std::string whispervulkandeviceenv;
 bool whispertype_load_model(const whisper_load_model_inputs inputs)
 {
     whisper_is_quiet = inputs.quiet;
-
-    //duplicated from expose.cpp
-    std::string vulkan_info_raw = inputs.vulkan_info;
-    std::string vulkan_info_str = "";
-    for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {
-        vulkan_info_str += vulkan_info_raw[i];
-        if (i < vulkan_info_raw.length() - 1) {
-            vulkan_info_str += ",";
-        }
-    }
-    const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
-    if(!existingenv && vulkan_info_str!="")
-    {
-        whispervulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
-        putenv((char*)whispervulkandeviceenv.c_str());
-    }
-
 
     std::string modelfile = inputs.model_filename;
     printf("\nLoading Whisper Model: %s",modelfile.c_str());

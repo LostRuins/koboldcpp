@@ -21,7 +21,31 @@
 #include "util.cpp"
 #include "name_conversion.cpp"
 #include "upscaler.cpp"
+
+#include "zip.c"
+#include "model_io/binary_io.h"
+namespace pickle {
+#include "model_io/pickle_io.cpp"
+}
+namespace gguf {
+#include "model_io/gguf_io.cpp"
+}
+namespace safetensors {
+#include "model_io/safetensors_io.cpp"
+}
+using namespace pickle;
+namespace torch_legacy {
+#include "model_io/torch_legacy_io.cpp"
+}
+namespace torch_zip {
+#include "model_io/torch_zip_io.cpp"
+}
+using namespace gguf;
+using namespace safetensors;
+using namespace torch_legacy;
+using namespace torch_zip;
 #include "model.cpp"
+
 #include "tokenizers/bpe_tokenizer.cpp"
 #include "tokenizers/clip_tokenizer.cpp"
 #include "tokenizers/mistral_tokenizer.cpp"
@@ -29,7 +53,6 @@
 #include "tokenizers/t5_unigram_tokenizer.cpp"
 #include "tokenizers/tokenizer.cpp"
 #include "tokenizers/tokenize_util.cpp"
-#include "zip.c"
 
 #include "otherarch/utils.h"
 
@@ -164,7 +187,6 @@ static uint8_t * upscale_src_buffer = NULL;
 static std::vector<uint8_t *> input_extraimage_buffers;
 const int max_extra_images = 4;
 
-static std::string sdvulkandeviceenv;
 static std::string sdmaingpuenv;
 static int cfg_tiled_vae_threshold = 0;
 static int cfg_square_limit = 0;
@@ -405,22 +427,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(inputs.quant > 0)
     {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
-    }
-
-    //duplicated from expose.cpp
-    std::string vulkan_info_raw = inputs.vulkan_info;
-    std::string vulkan_info_str = "";
-    for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {
-        vulkan_info_str += vulkan_info_raw[i];
-        if (i < vulkan_info_raw.length() - 1) {
-            vulkan_info_str += ",";
-        }
-    }
-    const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
-    if(!existingenv && vulkan_info_str!="")
-    {
-        sdvulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
-        putenv((char*)sdvulkandeviceenv.c_str());
     }
 
     sd_params = new SDParams();

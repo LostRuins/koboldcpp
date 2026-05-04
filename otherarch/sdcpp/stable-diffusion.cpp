@@ -17,6 +17,7 @@
 #include "pmid.hpp"
 #include "sample-cache.h"
 #include "tae.hpp"
+#include "upscaler.h"
 #include "vae.hpp"
 
 #include "latent-preview.h"
@@ -234,11 +235,11 @@ public:
                     device = 0;
                 }
                 if (device >= device_count) {
-                    LOG_WARN("Cannot find targeted vulkan device (%llu). Falling back to device 0.", device);
+                    LOG_WARN("Cannot find targeted vulkan device (%zu). Falling back to device 0.", device);
                     device = 0;
                 }
             }
-            LOG_INFO("Vulkan: Using device %llu", device);
+            LOG_INFO("Vulkan: Using device %zu", device);
             backend = ggml_backend_vk_init(device);
         }
         if (!backend) {
@@ -2380,6 +2381,35 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
     return LORA_APPLY_MODE_COUNT;
 }
 
+const char* hires_upscaler_to_str[] = {
+    "None",
+    "Latent",
+    "Latent (nearest)",
+    "Latent (nearest-exact)",
+    "Latent (antialiased)",
+    "Latent (bicubic)",
+    "Latent (bicubic antialiased)",
+    "Lanczos",
+    "Nearest",
+    "Model",
+};
+
+const char* sd_hires_upscaler_name(enum sd_hires_upscaler_t upscaler) {
+    if (upscaler >= SD_HIRES_UPSCALER_NONE && upscaler < SD_HIRES_UPSCALER_COUNT) {
+        return hires_upscaler_to_str[upscaler];
+    }
+    return NONE_STR;
+}
+
+enum sd_hires_upscaler_t str_to_sd_hires_upscaler(const char* str) {
+    for (int i = 0; i < SD_HIRES_UPSCALER_COUNT; i++) {
+        if (!strcmp(str, hires_upscaler_to_str[i])) {
+            return (enum sd_hires_upscaler_t)i;
+        }
+    }
+    return SD_HIRES_UPSCALER_COUNT;
+}
+
 void sd_cache_params_init(sd_cache_params_t* cache_params) {
     *cache_params                             = {};
     cache_params->mode                        = SD_CACHE_DISABLED;
@@ -2406,6 +2436,19 @@ void sd_cache_params_init(sd_cache_params_t* cache_params) {
     cache_params->spectrum_flex_window        = 0.50f;
     cache_params->spectrum_warmup_steps       = 4;
     cache_params->spectrum_stop_percent       = 0.9f;
+}
+
+void sd_hires_params_init(sd_hires_params_t* hires_params) {
+    *hires_params                    = {};
+    hires_params->enabled            = false;
+    hires_params->upscaler           = SD_HIRES_UPSCALER_LATENT;
+    hires_params->model_path         = nullptr;
+    hires_params->scale              = 2.0f;
+    hires_params->target_width       = 0;
+    hires_params->target_height      = 0;
+    hires_params->steps              = 0;
+    hires_params->denoising_strength = 0.7f;
+    hires_params->upscale_tile_size  = 128;
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
@@ -2577,6 +2620,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
     sd_img_gen_params->vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
     sd_cache_params_init(&sd_img_gen_params->cache);
+    sd_hires_params_init(&sd_img_gen_params->hires);
 }
 
 char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
@@ -2603,7 +2647,8 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
-             "VAE tiling: %s\n",
+             "VAE tiling: %s\n"
+             "hires: {enabled=%s, upscaler=%s, model_path=%s, scale=%.2f, target=%dx%d, steps=%d, denoising_strength=%.2f}\n",
              SAFE_STR(sd_img_gen_params->prompt),
              SAFE_STR(sd_img_gen_params->negative_prompt),
              sd_img_gen_params->clip_skip,
@@ -2620,7 +2665,15 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->pm_params.style_strength,
              sd_img_gen_params->pm_params.id_images_count,
              SAFE_STR(sd_img_gen_params->pm_params.id_embed_path),
-             BOOL_STR(sd_img_gen_params->vae_tiling_params.enabled));
+             BOOL_STR(sd_img_gen_params->vae_tiling_params.enabled),
+             BOOL_STR(sd_img_gen_params->hires.enabled),
+             sd_hires_upscaler_name(sd_img_gen_params->hires.upscaler),
+             SAFE_STR(sd_img_gen_params->hires.model_path),
+             sd_img_gen_params->hires.scale,
+             sd_img_gen_params->hires.target_width,
+             sd_img_gen_params->hires.target_height,
+             sd_img_gen_params->hires.steps,
+             sd_img_gen_params->hires.denoising_strength);
     const char* cache_mode_str = "disabled";
     if (sd_img_gen_params->cache.mode == SD_CACHE_EASYCACHE) {
         cache_mode_str = "easycache";
@@ -2724,8 +2777,10 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
             return EXPONENTIAL_SCHEDULER;
         }
     }
-    if (sample_method == LCM_SAMPLE_METHOD) {
+    if (sample_method == LCM_SAMPLE_METHOD || sample_method == TCD_SAMPLE_METHOD) {
         return LCM_SCHEDULER;
+    } else if (sample_method == DDIM_TRAILING_SAMPLE_METHOD) {
+        return SIMPLE_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
 }
@@ -2799,6 +2854,7 @@ struct GenerationRequest {
     sd_guidance_params_t guidance            = {};
     sd_guidance_params_t high_noise_guidance = {};
     sd_pm_params_t pm_params                 = {};
+    sd_hires_params_t hires                  = {};
     int frames                               = -1;
     float vace_strength                      = 1.f;
 
@@ -2820,6 +2876,7 @@ struct GenerationRequest {
         auto_resize_ref_image       = sd_img_gen_params->auto_resize_ref_image;
         guidance                    = sd_img_gen_params->sample_params.guidance;
         pm_params                   = sd_img_gen_params->pm_params;
+        hires                       = sd_img_gen_params->hires;
         cache_params                = &sd_img_gen_params->cache;
         resolve(sd_ctx);
     }
@@ -2842,24 +2899,74 @@ struct GenerationRequest {
     }
 
     void align_generation_request_size() {
+        align_image_size(&width, &height, "generation request");
+    }
+
+    void align_image_size(int* target_width, int* target_height, const char* label) {
         int spatial_multiple = vae_scale_factor * diffusion_model_down_factor;
-        int width_offset     = align_up_offset(width, spatial_multiple);
-        int height_offset    = align_up_offset(height, spatial_multiple);
+        int width_offset     = align_up_offset(*target_width, spatial_multiple);
+        int height_offset    = align_up_offset(*target_height, spatial_multiple);
         if (width_offset <= 0 && height_offset <= 0) {
             return;
         }
 
-        int original_width  = width;
-        int original_height = height;
+        int original_width  = *target_width;
+        int original_height = *target_height;
 
-        width += width_offset;
-        height += height_offset;
-        LOG_WARN("align up %dx%d to %dx%d (multiple=%d)",
+        *target_width += width_offset;
+        *target_height += height_offset;
+        LOG_WARN("align %s up %dx%d to %dx%d (multiple=%d)",
+                 label,
                  original_width,
                  original_height,
-                 width,
-                 height,
+                 *target_width,
+                 *target_height,
                  spatial_multiple);
+    }
+
+    void resolve_hires() {
+        if (!hires.enabled) {
+            return;
+        }
+        if (hires.upscaler == SD_HIRES_UPSCALER_NONE) {
+            hires.enabled = false;
+            return;
+        }
+        if (hires.upscaler < SD_HIRES_UPSCALER_NONE || hires.upscaler >= SD_HIRES_UPSCALER_COUNT) {
+            LOG_WARN("hires upscaler '%d' is invalid, disabling hires", hires.upscaler);
+            hires.enabled = false;
+            return;
+        }
+        if (hires.upscaler == SD_HIRES_UPSCALER_MODEL && strlen(SAFE_STR(hires.model_path)) == 0) {
+            LOG_WARN("hires model upscaler requires a model path, disabling hires");
+            hires.enabled = false;
+            return;
+        }
+        if (hires.scale <= 0.f && hires.target_width <= 0 && hires.target_height <= 0) {
+            LOG_WARN("hires scale must be positive when no target size is set, disabling hires");
+            hires.enabled = false;
+            return;
+        }
+        hires.denoising_strength = std::clamp(hires.denoising_strength, 0.0001f, 1.f);
+        hires.steps              = std::max(0, hires.steps);
+
+        if (hires.target_width > 0 && hires.target_height > 0) {
+            // pass
+        } else if (hires.target_width > 0) {
+            hires.target_height = hires.target_width;
+        } else if (hires.target_height > 0) {
+            hires.target_width = hires.target_height;
+        } else {
+            hires.target_width  = static_cast<int>(std::round(width * hires.scale));
+            hires.target_height = static_cast<int>(std::round(height * hires.scale));
+        }
+
+        if (hires.target_width <= 0 || hires.target_height <= 0) {
+            LOG_WARN("hires target size is not positive, disabling hires");
+            hires.enabled = false;
+            return;
+        }
+        align_image_size(&hires.target_width, &hires.target_height, "hires target");
     }
 
     static void resolve_guidance(sd_ctx_t* sd_ctx,
@@ -2902,6 +3009,7 @@ struct GenerationRequest {
 
     void resolve(sd_ctx_t* sd_ctx) {
         align_generation_request_size();
+        resolve_hires();
         seed = resolve_seed(seed);
 
         resolve_guidance(sd_ctx, &guidance, &use_uncond, &use_img_cond);
@@ -3392,7 +3500,7 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
         }
         decoded_images.push_back(std::move(image));
         int64_t t2 = ggml_time_ms();
-        LOG_INFO("latent %" PRId64 " decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
+        LOG_INFO("latent %zu decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
     }
 
     int64_t t4 = ggml_time_ms();
@@ -3412,6 +3520,135 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
     }
 
     return result_images;
+}
+
+static sd::Tensor<float> upscale_hires_latent(sd_ctx_t* sd_ctx,
+                                              const sd::Tensor<float>& latent,
+                                              const GenerationRequest& request,
+                                              UpscalerGGML* upscaler) {
+    auto get_hires_latent_target_shape = [&]() {
+        std::vector<int64_t> target_shape = latent.shape();
+        if (target_shape.size() < 2) {
+            target_shape.clear();
+            return target_shape;
+        }
+        target_shape[0] = request.hires.target_width / request.vae_scale_factor;
+        target_shape[1] = request.hires.target_height / request.vae_scale_factor;
+        return target_shape;
+    };
+
+    if (request.hires.upscaler == SD_HIRES_UPSCALER_LATENT ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_NEAREST ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_NEAREST_EXACT ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_ANTIALIASED ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_BICUBIC ||
+        request.hires.upscaler == SD_HIRES_UPSCALER_LATENT_BICUBIC_ANTIALIASED) {
+        std::vector<int64_t> target_shape = get_hires_latent_target_shape();
+        if (target_shape.empty()) {
+            LOG_ERROR("latent has invalid shape for hires upscale");
+            return {};
+        }
+
+        sd::ops::InterpolateMode mode = sd::ops::InterpolateMode::Nearest;
+        bool antialias                = false;
+        switch (request.hires.upscaler) {
+            case SD_HIRES_UPSCALER_LATENT:
+                mode = sd::ops::InterpolateMode::Bilinear;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_NEAREST:
+                mode = sd::ops::InterpolateMode::Nearest;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_NEAREST_EXACT:
+                mode = sd::ops::InterpolateMode::NearestExact;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_ANTIALIASED:
+                mode      = sd::ops::InterpolateMode::Bilinear;
+                antialias = true;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_BICUBIC:
+                mode = sd::ops::InterpolateMode::Bicubic;
+                break;
+            case SD_HIRES_UPSCALER_LATENT_BICUBIC_ANTIALIASED:
+                mode      = sd::ops::InterpolateMode::Bicubic;
+                antialias = true;
+                break;
+            default:
+                break;
+        }
+
+        LOG_INFO("hires %s upscale %" PRId64 "x%" PRId64 " -> %" PRId64 "x%" PRId64,
+                 sd_hires_upscaler_name(request.hires.upscaler),
+                 latent.shape()[0],
+                 latent.shape()[1],
+                 target_shape[0],
+                 target_shape[1]);
+
+        return sd::ops::interpolate(latent, target_shape, mode, false, antialias);
+    } else if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL ||
+               request.hires.upscaler == SD_HIRES_UPSCALER_LANCZOS ||
+               request.hires.upscaler == SD_HIRES_UPSCALER_NEAREST) {
+        if (sd_ctx->sd->vae_decode_only) {
+            LOG_ERROR("hires %s upscaler requires VAE encoder weights; create the context with vae_decode_only=false",
+                      sd_hires_upscaler_name(request.hires.upscaler));
+            return {};
+        }
+        if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL && upscaler == nullptr) {
+            LOG_ERROR("hires model upscaler context is null");
+            return {};
+        }
+
+        sd::Tensor<float> decoded = sd_ctx->sd->decode_first_stage(latent);
+        if (decoded.empty()) {
+            LOG_ERROR("decode_first_stage failed before hires %s upscale",
+                      sd_hires_upscaler_name(request.hires.upscaler));
+            return {};
+        }
+
+        sd::Tensor<float> upscaled_tensor;
+        if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
+            upscaled_tensor = upscaler->upscale_tensor(decoded);
+            if (upscaled_tensor.empty()) {
+                LOG_ERROR("hires model upscale failed");
+                return {};
+            }
+
+            if (upscaled_tensor.shape()[0] != request.hires.target_width ||
+                upscaled_tensor.shape()[1] != request.hires.target_height) {
+                upscaled_tensor = sd::ops::interpolate(upscaled_tensor,
+                                                       {request.hires.target_width,
+                                                        request.hires.target_height,
+                                                        upscaled_tensor.shape()[2],
+                                                        upscaled_tensor.shape()[3]});
+            }
+        } else {
+            sd::ops::InterpolateMode mode = request.hires.upscaler == SD_HIRES_UPSCALER_LANCZOS
+                                                ? sd::ops::InterpolateMode::Lanczos
+                                                : sd::ops::InterpolateMode::Nearest;
+            LOG_INFO("hires %s image upscale %" PRId64 "x%" PRId64 " -> %dx%d",
+                     sd_hires_upscaler_name(request.hires.upscaler),
+                     decoded.shape()[0],
+                     decoded.shape()[1],
+                     request.hires.target_width,
+                     request.hires.target_height);
+            upscaled_tensor = sd::ops::interpolate(decoded,
+                                                   {request.hires.target_width,
+                                                    request.hires.target_height,
+                                                    decoded.shape()[2],
+                                                    decoded.shape()[3]},
+                                                   mode);
+            upscaled_tensor = sd::ops::clamp(upscaled_tensor, 0.0f, 1.0f);
+        }
+
+        sd::Tensor<float> upscaled_latent = sd_ctx->sd->encode_first_stage(upscaled_tensor);
+        if (upscaled_latent.empty()) {
+            LOG_ERROR("encode_first_stage failed after hires %s upscale",
+                      sd_hires_upscaler_name(request.hires.upscaler));
+        }
+        return upscaled_latent;
+    }
+
+    LOG_ERROR("unsupported hires upscaler '%s'", sd_hires_upscaler_name(request.hires.upscaler));
+    return {};
 }
 
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
@@ -3501,13 +3738,138 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         }
         return nullptr;
     }
-    if (sd_ctx->sd->free_params_immediately) {
+    if (sd_ctx->sd->free_params_immediately && !request.hires.enabled) {
         sd_ctx->sd->diffusion_model->free_params_buffer();
     }
     int64_t denoise_end = ggml_time_ms();
-    LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs",
+    LOG_INFO("generating %zu latent images completed, taking %.2fs",
              final_latents.size(),
              (denoise_end - denoise_start) * 1.0f / 1000);
+
+    if (request.hires.enabled && request.hires.target_width > 0) {
+        LOG_INFO("hires fix: upscaling to %dx%d", request.hires.target_width, request.hires.target_height);
+
+        std::unique_ptr<UpscalerGGML> hires_upscaler;
+        if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
+            LOG_INFO("hires fix: loading model upscaler from '%s'", request.hires.model_path);
+            hires_upscaler = std::make_unique<UpscalerGGML>(sd_ctx->sd->n_threads,
+                                                            false,
+                                                            request.hires.upscale_tile_size);
+            if (!hires_upscaler->load_from_file(request.hires.model_path,
+                                                sd_ctx->sd->offload_params_to_cpu,
+                                                sd_ctx->sd->n_threads)) {
+                LOG_ERROR("load hires model upscaler failed");
+                if (sd_ctx->sd->free_params_immediately) {
+                    sd_ctx->sd->diffusion_model->free_params_buffer();
+                }
+                return nullptr;
+            }
+        }
+
+        int hires_steps = request.hires.steps > 0 ? request.hires.steps : plan.sample_steps;
+
+        // sd-webui behavior: scale up total steps so trimming by denoising_strength yields exactly hires_steps effective steps,
+        // unlike img2img which trims from a fixed step count
+        hires_steps = static_cast<int>(hires_steps / request.hires.denoising_strength);
+
+        std::vector<float> hires_sigmas = sd_ctx->sd->denoiser->get_sigmas(
+            hires_steps,
+            sd_ctx->sd->get_image_seq_len(request.hires.target_height, request.hires.target_width),
+            sd_img_gen_params->sample_params.scheduler,
+            sd_ctx->sd->version);
+
+        size_t t_enc = static_cast<size_t>(hires_steps * request.hires.denoising_strength);
+        if (t_enc >= static_cast<size_t>(hires_steps)) {
+            t_enc = static_cast<size_t>(hires_steps) - 1;
+        }
+        std::vector<float> hires_sigma_sched(hires_sigmas.begin() + hires_steps - static_cast<int>(t_enc) - 1,
+                                             hires_sigmas.end());
+        LOG_INFO("hires fix: %d steps, denoising_strength=%.2f, sigma_sched_size=%zu",
+                 hires_steps,
+                 request.hires.denoising_strength,
+                 hires_sigma_sched.size());
+
+        std::vector<sd::Tensor<float>> hires_final_latents;
+        int64_t hires_denoise_start = ggml_time_ms();
+        for (int b = 0; b < (int)final_latents.size(); b++) {
+            int64_t cur_seed = request.seed + b;
+            sd_ctx->sd->rng->manual_seed(cur_seed);
+            sd_ctx->sd->sampler_rng->manual_seed(cur_seed);
+
+            sd::Tensor<float> upscaled = upscale_hires_latent(sd_ctx,
+                                                              final_latents[b],
+                                                              request,
+                                                              hires_upscaler.get());
+            if (upscaled.empty()) {
+                if (sd_ctx->sd->free_params_immediately) {
+                    sd_ctx->sd->diffusion_model->free_params_buffer();
+                }
+                return nullptr;
+            }
+
+            sd::Tensor<float> noise = sd::randn_like<float>(upscaled, sd_ctx->sd->rng);
+
+            sd::Tensor<float> hires_denoise_mask;
+            if (!latents.denoise_mask.empty()) {
+                std::vector<int64_t> mask_shape = latents.denoise_mask.shape();
+                mask_shape[0]                   = upscaled.shape()[0];
+                mask_shape[1]                   = upscaled.shape()[1];
+                hires_denoise_mask              = sd::ops::interpolate(latents.denoise_mask,
+                                                                       mask_shape,
+                                                                       sd::ops::InterpolateMode::NearestMax);
+            }
+
+            int64_t hires_sample_start = ggml_time_ms();
+            sd::Tensor<float> x_0      = sd_ctx->sd->sample(sd_ctx->sd->diffusion_model,
+                                                            true,
+                                                            upscaled,
+                                                            std::move(noise),
+                                                            embeds.cond,
+                                                            embeds.uncond,
+                                                            embeds.img_cond,
+                                                            embeds.id_cond,
+                                                            latents.control_image,
+                                                            request.control_strength,
+                                                            request.guidance,
+                                                            plan.eta,
+                                                            request.shifted_timestep,
+                                                            plan.sample_method,
+                                                            sd_ctx->sd->is_flow_denoiser(),
+                                                            hires_sigma_sched,
+                                                            plan.start_merge_step,
+                                                            latents.ref_latents,
+                                                            request.increase_ref_index,
+                                                            hires_denoise_mask,
+                                                            sd::Tensor<float>(),
+                                                            1.f,
+                                                            request.cache_params);
+            int64_t hires_sample_end   = ggml_time_ms();
+            if (!x_0.empty()) {
+                LOG_INFO("hires sampling %d/%d completed, taking %.2fs",
+                         b + 1,
+                         (int)final_latents.size(),
+                         (hires_sample_end - hires_sample_start) * 1.0f / 1000);
+                hires_final_latents.push_back(std::move(x_0));
+                continue;
+            }
+
+            LOG_ERROR("hires sampling for image %d/%d failed after %.2fs",
+                      b + 1,
+                      (int)final_latents.size(),
+                      (hires_sample_end - hires_sample_start) * 1.0f / 1000);
+            if (sd_ctx->sd->free_params_immediately) {
+                sd_ctx->sd->diffusion_model->free_params_buffer();
+            }
+            return nullptr;
+        }
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->diffusion_model->free_params_buffer();
+        }
+        int64_t hires_denoise_end = ggml_time_ms();
+        LOG_INFO("hires fix completed, taking %.2fs", (hires_denoise_end - hires_denoise_start) * 1.0f / 1000);
+
+        final_latents = std::move(hires_final_latents);
+    }
 
     auto result = decode_image_outputs(sd_ctx, request, final_latents);
     if (result == nullptr) {

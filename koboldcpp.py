@@ -184,6 +184,17 @@ tool_call_pairs = [ #third element is whether its stream-handleable
     ("<|tool_call>", "<tool_call|>", True),
     ("<|end|><|start|>assistant<|channel|>commentary to=", "", False),
 ]
+deprecated_keys = {
+    "hordeconfig",
+    "sdconfig",
+    "noblas",
+    "nommap",
+    "pipelineparallel",
+    "sdnotile",
+    "forceversion",
+    "sdgendefaults",
+    "flashattention",
+}
 
 saved_stdout = None
 saved_stderr = None
@@ -226,7 +237,7 @@ class load_model_inputs(ctypes.Structure):
                 ("max_context_length", ctypes.c_int),
                 ("low_vram", ctypes.c_bool),
                 ("use_mmq", ctypes.c_bool),
-                ("use_rowsplit", ctypes.c_bool),
+                ("splitmode", ctypes.c_int),
                 ("executable_path", ctypes.c_char_p),
                 ("model_filename", ctypes.c_char_p),
                 ("lora_filename", ctypes.c_char_p),
@@ -245,7 +256,6 @@ class load_model_inputs(ctypes.Structure):
                 ("use_contextshift", ctypes.c_bool),
                 ("use_fastforward", ctypes.c_bool),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("batchsize", ctypes.c_int),
                 ("autofit", ctypes.c_bool),
                 ("autofit_tax_mb", ctypes.c_int),
@@ -345,7 +355,6 @@ class sd_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("threads", ctypes.c_int),
                 ("quant", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
@@ -424,7 +433,6 @@ class whisper_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]
@@ -445,7 +453,6 @@ class tts_load_model_inputs(ctypes.Structure):
                 ("cts_model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("gpulayers", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
                 ("ttsmaxlen", ctypes.c_int),
@@ -472,7 +479,6 @@ class embeddings_load_model_inputs(ctypes.Structure):
                 ("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("gpulayers", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
                 ("use_mmap", ctypes.c_bool),
@@ -498,7 +504,6 @@ class music_load_model_inputs(ctypes.Structure):
                 ("lowvram", ctypes.c_bool),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
-                ("vulkan_info", ctypes.c_char_p),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]
@@ -944,6 +949,8 @@ def init_library():
     handle.last_logprobs.restype = last_logprobs_outputs
     handle.detokenize.argtypes = [token_count_outputs]
     handle.detokenize.restype = ctypes.c_char_p
+    handle.set_environment_variable.restype = ctypes.c_int
+    handle.set_environment_variable.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
 
 def set_backend_props(inputs):
     # we must force an explicit tensor split
@@ -982,13 +989,10 @@ def set_backend_props(inputs):
             elif (args.usecuda and "3" in args.usecuda):
                 inputs.kcpp_main_gpu = 3
 
-    if args.usevulkan: #is an empty array if using vulkan without defined gpu
-        s = ""
-        for it in range(0,len(args.usevulkan)):
-            s += str(args.usevulkan[it])
-        inputs.vulkan_info = s.encode("UTF-8")
-    else:
-        inputs.vulkan_info = "".encode("UTF-8")
+    if "GGML_VK_VISIBLE_DEVICES" not in os.environ:
+        if args.usevulkan: # is an empty array if using vulkan without defined gpu
+            vulkangpus = ','.join([str(g) for g in args.usevulkan])
+            handle.set_environment_variable("GGML_VK_VISIBLE_DEVICES".encode("UTF-8"),vulkangpus.encode("UTF-8"))
 
     # set universal flags
     inputs.devices_override = (args.device if args.device else "").encode("UTF-8")
@@ -1877,9 +1881,8 @@ def load_model(model_filename):
     inputs.max_context_length = maxctx #initial value to use for ctx, can be overwritten
     inputs.threads = args.threads
     inputs.low_vram = True if args.lowvram else False
-    inputs.use_mmq = (True if (args.usecuda and "nommq" not in args.usecuda) else False)
-    inputs.use_rowsplit = (True if (args.usecuda and "rowsplit" in args.usecuda) else False)
-    inputs.vulkan_info = "0".encode("UTF-8")
+    inputs.use_mmq = False if args.nommq else True
+    inputs.splitmode = splitmode_choices_to_int(args.splitmode) #layer=1, row=2, tensor=3
     inputs.blasthreads = args.blasthreads
     inputs.use_mmap = args.usemmap
     inputs.use_mlock = args.usemlock
@@ -3830,7 +3833,7 @@ def compress_tools_array(tools_array):
             tool_props[prop_name] = prop_type
         tools_array_filtered.append({
             "name": tool_data['name'],
-            "description": tool_data['description'],
+            "description": tool_data.get("description", ""),
             "properties": tool_props
         })
 
@@ -4983,10 +4986,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                             if api_format == 4 and using_openai_tools:
                                 tokenStr = tokenReserve + tokenStr
                                 tokenReserve = ""
-                                splitter = tool_segment_tag
-                                if splitter in tokenStr:
+                                if tool_segment_tag in tokenStr:
                                     if not genparams.get("sync_toolcall_potential_triggered",False):
-                                        sync_potential_toolcall_splitmatch = splitter
+                                        sync_potential_toolcall_splitmatch = tool_segment_tag
                                         genparams['sync_toolcall_potential_triggered'] = True #if tool calls is triggered, rest will be sync fake streaming. we'll buffer it for later
 
                             need_split_final_msg = True if (currfinishreason is not None and streamDone and tokenStr!="") else False
@@ -5001,14 +5003,23 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                             encap_in_thinking = False
                                             foundend = True
                                             out1, out2 = tokenStr.split(pair["end"], 1)
+                                            # Swallow any extraneous start tags that appear while already thinking
+                                            if pair["start"] in out1:
+                                                out1 = out1.replace(pair["start"], "")
                                             if out1:
                                                 delta['reasoning_content'] = out1
+                                            # Swallow any extraneous end tags that appear after already ending
+                                            if pair["end"] in out2:
+                                                out2 = out2.replace(pair["end"], "")
                                             if out2:
                                                 delta['content'] = out2
                                             break
                                     if not foundend:
-                                        # Still thinking
-                                        delta['reasoning_content'] = tokenStr
+                                        # Still thinking - swallow extraneous start tags from THIS pair only
+                                        cleaned = tokenStr
+                                        if pair["start"] in cleaned:
+                                            cleaned = cleaned.replace(pair["start"], "")
+                                        delta['reasoning_content'] = cleaned
                                 else:
                                     # Not thinking. Let's see if a start tag appears in this chunk.
                                     matched_start = False
@@ -5042,8 +5053,13 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                             matched_start = True
                                             break
                                     # Condition C: No start tag found, just normal text
+                                    # Swallow any extraneous end tags that appear while not thinking
                                     if not matched_start:
-                                        delta['content'] = tokenStr
+                                        cleaned = tokenStr
+                                        # Only swallow stray end tags if we've already locked in a pair
+                                        if len(thinkpairs) == 1 and thinkpairs[0]["end"] in cleaned:
+                                            cleaned = cleaned.replace(thinkpairs[0]["end"], "")
+                                        delta['content'] = cleaned
                                 encap_first_loop = False
                             else:
                                 delta['content'] = tokenStr
@@ -7133,6 +7149,16 @@ def save_config_dict(filename, savdict, template):
         file.write(json.dumps(filtered,indent=2))
     return filenamestr
 
+splitmode_choices = ['layer','row','tensor']
+def splitmode_choices_to_int(value): #layer=1, row=2, tensor=3
+    if value=='layer':
+        return 1
+    elif value=='row':
+        return 2
+    elif value=='tensor':
+        return 3
+    return 1
+
 # note: customtkinter-5.2.0
 def show_gui():
     global using_gui_launcher
@@ -7261,6 +7287,7 @@ def show_gui():
         togglectxshift(1,1,1)
         togglehorde(1,1,1)
         toggletaesd(1,1,1)
+        togglesdlora(1,1,1)
         togglejinja(1,1,1)
         toggleadmin(1,1,1)
         tabbuttonaction(tabnames[curr_tab_idx])
@@ -7387,7 +7414,7 @@ def show_gui():
     blas_size_var = ctk.IntVar()
     autofit_var = ctk.IntVar()
     tensor_split_str_vars = ctk.StringVar(value="")
-    rowsplit_var = ctk.IntVar()
+    splitmode_var = ctk.StringVar(value=splitmode_choices[0])
     maingpu_var = ctk.StringVar(value="-1")
     deviceoverride_var = ctk.StringVar(value="")
 
@@ -7440,7 +7467,7 @@ def show_gui():
 
     port_var = ctk.StringVar(value=defaultport)
     host_var = ctk.StringVar(value="")
-    multiuser_var = ctk.IntVar(value=1)
+    multiuser_var = ctk.StringVar(value=str(multiuser_concurrent_limit))
     multiplayer_var = ctk.IntVar(value=has_multiplayer)
     websearch_var = ctk.IntVar(value=0)
     horde_name_var = ctk.StringVar(value="koboldcpp")
@@ -7469,6 +7496,7 @@ def show_gui():
     sd_offload_cpu_var = ctk.IntVar(value=0)
     sd_vae_cpu_var = ctk.IntVar(value=0)
     sd_clip_gpu_var = ctk.IntVar(value=0)
+    sd_runtime_loras_var = ctk.IntVar(value=0)
     sd_vaeauto_var = ctk.IntVar(value=0)
     sd_tiled_vae_var = ctk.StringVar(value=str(default_vae_tile_threshold))
     sd_convdirect_var = ctk.StringVar(value=str(sd_convdirect_choices[0]))
@@ -7553,7 +7581,6 @@ def show_gui():
 
     def makelabelcombobox(parent, text, variable=None, row=0, width=50, command=None, padx=8,tooltiptxt="", values=[], labelpadx=8):
         label = makelabel(parent, text, row, 0, tooltiptxt, padx=labelpadx)
-        label=None
         combo = ctk.CTkComboBox(parent, variable=variable, width=width, values=values, state="readonly")
         if command is not None and variable is not None:
             variable.trace_add("write", command)
@@ -7943,7 +7970,9 @@ def show_gui():
             CUDA_quick_gpu_selector_box.grid(row=3, column=1, padx=8, pady=1, stick="nw")
             maingpu_label.grid(row=8, column=0, padx = 270, pady=1, stick="nw")
             maingpu_entry.grid(row=8, column=0, padx = 340, pady=1, stick="nw")
-            lowvram_box.grid(row=4, column=0, padx=8, pady=1,  stick="nw")
+            lowvram_box.grid(row=4, column=0, padx=8, pady=1, stick="nw")
+            splitmode_box.grid(row=4, column=0, padx=230, pady=1, stick="nw")
+            splitmode_box_label.grid(row=4, column=0, padx=160, pady=1, stick="nw")
         else:
             quick_gpuname_label.grid_remove()
             gpuname_label.grid_remove()
@@ -7954,11 +7983,12 @@ def show_gui():
             maingpu_label.grid_remove()
             maingpu_entry.grid_remove()
             lowvram_box.grid_remove()
+            splitmode_box.grid_remove()
+            splitmode_box_label.grid_remove()
 
         if index == "Use CUDA" or index == "Use hipBLAS (ROCm)":
-            mmq_box.grid(row=4, column=0, padx=160, pady=1,  stick="nw")
+            mmq_box.grid(row=4, column=0, padx=340, pady=1,  stick="nw")
             quick_mmq_box.grid(row=4, column=1, padx=8, pady=1,  stick="nw")
-            splitmode_box.grid(row=4, column=0, padx=300, pady=1,  stick="nw")
             tensor_split_label.grid(row=8, column=0, padx = 8, pady=1, stick="nw")
             tensor_split_entry.grid(row=8, column=0, padx = 160, pady=1, stick="nw")
         else:
@@ -7966,7 +7996,6 @@ def show_gui():
             quick_mmq_box.grid_remove()
             tensor_split_label.grid_remove()
             tensor_split_entry.grid_remove()
-            splitmode_box.grid_remove()
 
         if index == "Use Vulkan" or index == "Use Vulkan (Old CPU)":
             tensor_split_label.grid(row=8, column=0, padx = 8, pady=1, stick="nw")
@@ -8071,8 +8100,8 @@ def show_gui():
     gpuname_label.grid(row=3, column=0, padx=230, sticky="W")
     gpuname_label.configure(text_color="#ffff00")
     lowvram_box = makecheckbox(hardware_tab,  "No KV offload", lowvram_var, 4,0, tooltiptxt='Avoid offloading KV Cache or scratch buffers to VRAM.\nAllows more layers to fit, but may result in a large speed loss.')
-    mmq_box = makecheckbox(hardware_tab,  "Use MMQ", mmq_var, 4,0,padx=160, tooltiptxt="Enable MMQ mode to use finetuned kernels instead of default CuBLAS/HipBLAS for prompt processing.\nRead the wiki. Speed may vary.")
-    splitmode_box = makecheckbox(hardware_tab,  "Row-Split", rowsplit_var, 4,0,padx=300, tooltiptxt="Split rows across GPUs instead of splitting layers and KV across GPUs.\nUses the main GPU for small tensors and intermediate results. Speed may vary.")
+    mmq_box = makecheckbox(hardware_tab,  "Use MMQ", mmq_var, 4,0,padx=340, tooltiptxt="Enable MMQ mode to use finetuned kernels instead of default CuBLAS/HipBLAS for prompt processing.\nRead the wiki. Speed may vary.")
+    splitmode_box,splitmode_box_label = makelabelcombobox(hardware_tab, "SplitMode: ", splitmode_var, 4, width=(80), padx=(230), labelpadx=160, tooltiptxt="How to split the model across multiple GPUs. Layer split is default.", values=splitmode_choices)
     gpu_layers_entry,gpu_layers_label = makelabelentry(hardware_tab,"GPU Layers:", gpulayers_var, 6, 50, padx=160,singleline=True,tooltip="How many layers to offload onto the GPU.\nUsage varies based on model type and increases with model and context size.\nRequires some trial and error to find the best fit value.\n\nNote: The auto estimation is often inaccurate! Please set layers yourself for best results!")
     autofit_padding_entry,autofit_padding_label = makelabelentry(hardware_tab,"Autofit Padding (MB):", autofit_padding_var, 6, 50, padx=160,singleline=True,tooltip="How much spare allowance in MB should autofit reserve? If it's too little, the load might fail.")
     layercounter_label = ctk.CTkLabel(hardware_tab, text="")
@@ -8227,8 +8256,7 @@ def show_gui():
     makelabelentry(network_tab, "Port: ", port_var, 1, 150,tooltip=f"Select the port to host the KoboldCPP webserver.\n(Defaults to {defaultport})")
     makelabelentry(network_tab, "Host: ", host_var, 2, 150,tooltip="Select a specific host interface to bind to.\n(Defaults to all)")
 
-    makecheckbox(network_tab, "Multiuser Mode", multiuser_var, 3,tooltiptxt="Allows requests by multiple different clients to be queued and handled in sequence.")
-    makecheckbox(network_tab, "Remote Tunnel", remotetunnel_var, 3, 1,tooltiptxt="Creates a trycloudflare tunnel.\nAllows you to access koboldcpp from other devices over an internet URL.")
+    makecheckbox(network_tab, "Remote Tunnel", remotetunnel_var, 3,tooltiptxt="Creates a trycloudflare tunnel.\nAllows you to access koboldcpp from other devices over an internet URL.")
     makecheckbox(network_tab, "Quiet Mode", quietmode, 4,tooltiptxt="Prevents all generation related terminal output from being displayed.")
     makecheckbox(network_tab, "NoCertify Mode (Insecure)", nocertifymode, 4, 1,tooltiptxt="Allows insecure SSL connections. Use this if you have cert errors and need to bypass certificate restrictions.")
     makecheckbox(network_tab, "Shared Multiplayer", multiplayer_var, 5,tooltiptxt="Hosts a shared multiplayer session that others can join.")
@@ -8238,9 +8266,10 @@ def show_gui():
     makefileentry(network_tab, "SSL Key:", "Select SSL key.pem file", ssl_key_var, 9, width=200, filetypes=[("Unencrypted Key PEM", "*.pem")], singlerow=True, singlecol=False, tooltiptxt="Select your unencrypted .pem SSL key file for https.\nCan be generated with OpenSSL.")
     makelabelentry(network_tab, "Password: ", password_var, 10, 200,tooltip="Enter a password required to use this instance.\nThis key will be required for all text endpoints.\nImage endpoints are not secured.")
 
-    makelabelentry(network_tab, "Max Req. Size (MB):", maxrequestsize_var, row=20, width=50, tooltip="Specify a max request payload size. Any requests to the server larger than this size will be dropped. Do not change if unsure.")
-    makelabelentry(network_tab, "IP Rate Limiter (s):", ratelimit_var, row=22, width=50, tooltip="Rate limits each IP to allow a new request once per X seconds. Do not change if unsure.")
-    makelabelentry(network_tab, "Request Timeout (s):", reqtimeout_var, row=24, width=50, tooltip="Timeout in seconds for HTTP requests")
+    makelabelentry(network_tab, "Multiuser Queue:", multiuser_var, row=20, width=50, tooltip="Maximum queued incoming requests.")
+    makelabelentry(network_tab, "Max Req. Size (MB):", maxrequestsize_var, row=22, width=50, tooltip="Specify a max request payload size. Any requests to the server larger than this size will be dropped. Do not change if unsure.")
+    makelabelentry(network_tab, "IP Rate Limiter (s):", ratelimit_var, row=24, width=50, tooltip="Rate limits each IP to allow a new request once per X seconds. Do not change if unsure.")
+    makelabelentry(network_tab, "Request Timeout (s):", reqtimeout_var, row=26, width=50, tooltip="Timeout in seconds for HTTP requests")
 
 
     # Horde Tab
@@ -8273,18 +8302,41 @@ def show_gui():
     # Image Gen Tab
 
     images_tab = tabcontent["Image Gen"]
-    makefileentry(images_tab, "Image Gen. Model (safetensors/gguf):", "Select Image Gen Model File", sd_model_var, 1, width=280, singlecol=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")], tooltiptxt="Select a .safetensors or .gguf Image Generation model file on disk to be loaded.")
-    makelabelentry(images_tab, "Clamp Resolution Limit (Hard):", sd_clamped_var, 4, 50, padx=(190),singleline=True,tooltip="Limit generation steps and output image size for shared use.\nSet to 0 to disable, otherwise value is clamped to the max size limit (min 512px).")
-    makelabelentry(images_tab, "(Soft):", sd_clamped_soft_var, 4, 50, padx=(290),singleline=True,tooltip="Square image size restriction, to protect the server against memory crashes.\nAllows width-height tradeoffs, eg. 640 allows 640x640 and 512x768\nLeave at 0 for the default value: 832 for SD1.5/SD2, 1024 otherwise.",labelpadx=(250))
+    makefileentry(images_tab, "Image Model:", "Select Image Gen Model File (safetensors/gguf)", sd_model_var, 1, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")], tooltiptxt="Select a .safetensors or .gguf Image Generation model file on disk to be loaded.")
+
+    def togglesdlora(a,b,c):
+        if sd_runtime_loras_var.get()==1:
+            imglora1.grid_remove()
+            imglora2.grid_remove()
+            imglora3.grid_remove()
+            imglora4.grid_remove()
+            imglora5.grid_remove()
+            imglora6.grid()
+            imglora7.grid()
+            imglora8.grid()
+        else:
+            imglora1.grid()
+            imglora2.grid()
+            imglora3.grid()
+            imglora4.grid()
+            imglora5.grid()
+            imglora6.grid_remove()
+            imglora7.grid_remove()
+            imglora8.grid_remove()
+
+    makelabelentry(images_tab, "Clamp Resolution (Hard):", sd_clamped_var, 14, 50, padx=(150),singleline=True,tooltip="Limit generation steps and output image size for shared use.\nSet to 0 to disable, otherwise value is clamped to the max size limit (min 512px).")
+    makelabelentry(images_tab, "(Soft):", sd_clamped_soft_var, 14, 50, padx=(250),singleline=True,tooltip="Square image size restriction, to protect the server against memory crashes.\nAllows width-height tradeoffs, eg. 640 allows 640x640 and 512x768\nLeave at 0 for the default value: 832 for SD1.5/SD2, 1024 otherwise.",labelpadx=(210))
+    makecheckbox(images_tab, "Runtime LoRAs", sd_runtime_loras_var, 14,command=togglesdlora, padx=(310), tooltiptxt="Allow using LoRAs in a directory dynamically (syntax is <lora:name:weight>)")
+
     makelabelentry(images_tab, "ImgThreads:" , sd_threads_var, 8, 40,padx=(280),singleline=True,tooltip="How many threads to use during image generation.\nIf left blank, uses same value as threads.",labelpadx=(200))
     makelabelentry(images_tab, "ImgGPU:" , sd_main_gpu_var, 8, 40,padx=394,singleline=True,tooltip="Which GPU ID to use for Image Gen?\nIf left blank or -1, uses default value.",labelpadx=340)
-
     sd_model_var.trace_add("write", gui_changed_modelfile)
     makelabelcombobox(images_tab, "Compress Weights: ", sd_quant_var, 8, width=(60), padx=(126), labelpadx=8, tooltiptxt="Quantizes the SD model weights to save memory.\nHigher levels save more memory, and cause more quality degradation.", values=sd_quant_choices)
     sd_quant_var.trace_add("write", changed_gpulayers_estimate)
 
-    makefileentry(images_tab, "Image LoRA:", "Select SD lora file",sd_lora_var, 20, width=160, singlerow=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select a .safetensors or .gguf SD LoRA model file to be loaded. Should be unquantized!", multiple=True)
-    makelabelentry(images_tab, "Multiplier:" , sd_loramult_var, 20, 50,padx=(390),singleline=True,tooltip="What mutiplier value to apply the SD LoRA with.",labelpadx=(330))
+    imglora1,imglora2,imglora3 = makefileentry(images_tab, "Image LoRAs:", "Select SD lora files to load",sd_lora_var, 20, width=160, singlerow=True, filetypes=[("*.safetensors *.gguf", "*.safetensors *.gguf")],tooltiptxt="Select multiple .safetensors or .gguf SD LoRA model files to be loaded. Should be unquantized!", multiple=True)
+    imglora4,imglora5 = makelabelentry(images_tab, "Multiplier:" , sd_loramult_var, 20, 50,padx=(390),singleline=True,tooltip="What mutiplier value to apply the SD LoRA with.",labelpadx=(330))
+    imglora6,imglora7,imglora8 = makefileentry(images_tab, "LoRA Dir:", "Select directory for runtime lora triggers",sd_lora_var, 20, width=280, singlerow=True, dialog_type=2,tooltiptxt="Select directory containing LoRAs that can be used at runtime.\nSyntax is <lora:name:weight>")
 
     makefileentry(images_tab, "T5-XXL File:", "Select T5-XXL model file (SD3, Flux, WAN)",sd_t5xxl_var, 24, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors t5xxl file to be loaded.")
     makefileentry(images_tab, "Clip-1 File:", "Select First Clip model file (Clip-L for SD3 or Flux, or other vision encoder)",sd_clip1_var, 26, width=280, singlerow=True, filetypes=[("*.safetensors *.gguf","*.safetensors *.gguf")],tooltiptxt="Select a .safetensors Clip-1 file to be loaded.\nThis is Clip-L for SD3 and Flux, Clip Vision for WAN, and Qwen2.5VL for QwenImage")
@@ -8367,6 +8419,8 @@ def show_gui():
         export_vars()
         kcpp_exporting_template = False
         savdict = json.loads(json.dumps(args.__dict__,indent=2))
+        for key in deprecated_keys:
+            savdict.pop(key, None)  # avoids KeyError if missing
         file_type = [("KoboldCpp LaunchTemplate", "*.kcppt")]
         #remove blacklisted fields
         savdict = convert_args_to_template(savdict)
@@ -8432,6 +8486,8 @@ def show_gui():
     toggleflashattn(1,1,1)
     togglectxshift(1,1,1)
     togglehorde(1,1,1)
+    toggletaesd(1,1,1)
+    togglesdlora(1,1,1)
     togglejinja(1,1,1)
     toggleadmin(1,1,1)
 
@@ -8474,6 +8530,8 @@ def show_gui():
         qkvopt = quantkv_text[quantkv_var.get()].lower() if (quantkv_var.get()>=0 and quantkv_var.get() < len(quantkv_text)) else "f16"
         args.quantkv = qkvopt
         args.lowvram = lowvram_var.get()==1
+        args.nommq = mmq_var.get()==1
+        args.splitmode = splitmode_var.get() if splitmode_var.get() in splitmode_choices else splitmode_choices[0]
 
         gpuchoiceidx = 0
         args.usecpu = False
@@ -8488,12 +8546,6 @@ def show_gui():
                 args.usecuda = ["normal"]
             else:
                 args.usecuda = ["normal",str(gpuchoiceidx)]
-            if mmq_var.get()==1:
-                args.usecuda.append("mmq")
-            else:
-                args.usecuda.append("nommq")
-            if rowsplit_var.get()==1:
-                args.usecuda.append("rowsplit")
         if runopts_var.get() == "Use Vulkan" or runopts_var.get() == "Use Vulkan (Old CPU)" or runopts_var.get() == "Use Vulkan (Older CPU)":
             if gpu_choice_var.get()=="All":
                 args.usevulkan = []
@@ -8605,7 +8657,7 @@ def show_gui():
         args.port_param = defaultport if port_var.get()=="" else int(port_var.get())
         args.port = args.port_param
         args.host = host_var.get()
-        args.multiuser = multiuser_var.get()
+        args.multiuser = int(multiuser_var.get()) if multiuser_var.get()!="" else multiuser_concurrent_limit
         args.multiplayer = (multiplayer_var.get()==1)
         args.websearch = (websearch_var.get()==1)
         args.maxrequestsize = int(maxrequestsize_var.get()) if maxrequestsize_var.get()!="" else 32
@@ -8730,8 +8782,6 @@ def show_gui():
                     runopts_var.set(cublas_option)
                 elif hipblas_option:
                     runopts_var.set(hipblas_option)
-                mmq_var.set(1 if "mmq" in mydict["usecuda"] else 0)
-                rowsplit_var.set(1 if "rowsplit" in mydict["usecuda"] else 0)
                 gpu_choice_var.set("All")
                 for g in range(4):
                     if str(g) in mydict["usecuda"]:
@@ -8858,6 +8908,9 @@ def show_gui():
                 lora_var.set(mydict["lora"][0])
         loramult_var.set(str(mydict["loramult"]) if ("loramult" in mydict and mydict["loramult"]) else "1.0")
 
+        splitmode_var.set(mydict["splitmode"] if ("splitmode" in mydict and mydict["splitmode"] in splitmode_choices) else splitmode_choices[0])
+        mmq_var.set(0 if "nommq" in mydict and mydict["nommq"] else 1)
+
         mmproj_var.set(mydict["mmproj"] if ("mmproj" in mydict and mydict["mmproj"]) else "")
         mmprojcpu_var.set(1 if ("mmprojcpu" in mydict and mydict["mmprojcpu"]) else 0)
         if "visionmaxres" in mydict and mydict["visionmaxres"]:
@@ -8889,7 +8942,7 @@ def show_gui():
         chatcompletionsadapter_var.set(mydict["chatcompletionsadapter"] if ("chatcompletionsadapter" in mydict and mydict["chatcompletionsadapter"]) else "")
         port_var.set(mydict["port_param"] if ("port_param" in mydict and mydict["port_param"]) else defaultport)
         host_var.set(mydict["host"] if ("host" in mydict and mydict["host"]) else "")
-        multiuser_var.set(mydict["multiuser"] if ("multiuser" in mydict) else 1)
+        multiuser_var.set(mydict["multiuser"] if ("multiuser" in mydict and mydict["multiuser"]>1) else multiuser_concurrent_limit)
         multiplayer_var.set(mydict["multiplayer"] if ("multiplayer" in mydict) else 0)
         websearch_var.set(mydict["websearch"] if ("websearch" in mydict) else 0)
         download_dir_var.set(mydict["downloaddir"] if ("downloaddir" in mydict and mydict["downloaddir"]) else "")
@@ -8922,12 +8975,17 @@ def show_gui():
         sd_upscaler_var.set(mydict["sdupscaler"] if ("sdupscaler" in mydict and mydict["sdupscaler"]) else "")
         sd_vaeauto_var.set(1 if ("sdvaeauto" in mydict and mydict["sdvaeauto"]) else 0)
         sd_tiled_vae_var.set(str(mydict["sdtiledvae"]) if ("sdtiledvae" in mydict and mydict["sdtiledvae"]) else str(default_vae_tile_threshold))
-        sd_lora_var.set("|".join(sanitize_lora_list(mydict.get('sdlora'))))
+        sdl_sanitized = sanitize_lora_list(mydict.get('sdlora'))
+        sd_lora_var.set("|".join(sdl_sanitized))
         sd_loramult_var.set(" ".join(f"{n:.3f}".rstrip('0').rstrip('.') for n in mydict.get("sdloramult", [])))
         if "sdmaingpu" in mydict:
             sd_main_gpu_var.set(mydict["sdmaingpu"])
         else:
             sd_main_gpu_var.set("-1")
+        if sdl_sanitized and len(sdl_sanitized)==1 and os.path.isdir(sdl_sanitized[0]):
+            sd_runtime_loras_var.set(1)
+        else:
+            sd_runtime_loras_var.set(0)
 
         gendefaults = (mydict["gendefaults"] if ("gendefaults" in mydict and mydict["gendefaults"]) else "")
         if isinstance(gendefaults, type({})):
@@ -8973,6 +9031,8 @@ def show_gui():
         kcpp_exporting_template = False
         export_vars()
         savdict = json.loads(json.dumps(args.__dict__,indent=2))
+        for key in deprecated_keys:
+            savdict.pop(key, None)  # avoids KeyError if missing
         savdict["istemplate"] = False
         file_type = [("KoboldCpp Settings", "*.kcpps")]
         filename = zentk_asksaveasfilename(filetypes=file_type, defaultextension=".kcpps",title="Save kcpps settings config file")
@@ -9355,6 +9415,10 @@ def convert_invalid_args(args):
         dict["usecuda"] = dict["usecublas"]
     if "usecuda" in dict and dict["usecuda"] and "lowvram" in dict["usecuda"]:
         dict["lowvram"] = True
+    if "usecuda" in dict and dict["usecuda"] and "nommq" in dict["usecuda"]:
+        dict["nommq"] = True
+    if "usecuda" in dict and dict["usecuda"] and "rowsplit" in dict["usecuda"]:
+        dict["splitmode"] = "row"
     if "batchsize" not in dict and "blasbatchsize" in dict and dict["blasbatchsize"]:
         dict["batchsize"] = dict["blasbatchsize"]
     if "sdconfig" in dict and dict["sdconfig"] and len(dict["sdconfig"])>0:
@@ -9541,6 +9605,9 @@ def load_config_cli(filename):
             config["onready"] = "" #do not allow onready commands from config
         args.istemplate = False
         raw_args = (sys.argv[1:]) #a lousy hack to allow for overriding kcpps
+        # special: overriding model applies to model_param too
+        if "--model" in raw_args:
+            raw_args.append("--model_param")
         for key, value in config.items():
             if f"--{key}" in raw_args:
                 if key!="config":
@@ -9575,6 +9642,8 @@ def convert_args_to_template(savdict):
     savdict["draftgpusplit"] = None
     savdict["config"] = None
     savdict["ttsthreads"] = 0
+    savdict["nommq"] = False
+    savdict["splitmode"] = splitmode_choices[0]
     return savdict
 
 def save_config_cli(filename, template):
@@ -10178,20 +10247,14 @@ def main(launch_args, default_args):
                 input()
 
 
-def mk_lora_info(imgloras, multipliers, mock_filesystem=False):
+def mk_lora_info(imgloras, multipliers):
     first_multiplier = multipliers[0] if len(multipliers) > 0 else 1.
     lora_files = []
     lora_dirs = []
     # identify files and dirs
     for i, lora_path in enumerate(imgloras):
         multiplier = multipliers[i] if i < len(multipliers) else first_multiplier
-        if mock_filesystem:
-            print('fake filesystem access')
-            if lora_path.endswith('/'):
-                lora_dirs.append(lora_path)
-            else:
-                lora_files.append(('', lora_path, multiplier))
-        elif os.path.isfile(lora_path):
+        if os.path.isfile(lora_path):
             lora_files.append(('', lora_path, multiplier))
         elif os.path.isdir(lora_path):
             lora_dirs.append(lora_path)
@@ -10202,11 +10265,7 @@ def mk_lora_info(imgloras, multipliers, mock_filesystem=False):
     # scan all dirs
     for lora_dir in lora_dirs:
         print(f'Scanning {lora_dir} for LoRAs...')
-        if mock_filesystem:
-            print('fake directory scan')
-            files = ['lora1_makebelieve.gguf', 'lora2/makebelieve.gguf']
-        else:
-            files = scan_directory(lora_dir, ('.safetensors', '.gguf'), 1)
+        files = scan_directory(lora_dir, ('.safetensors', '.gguf'), 1)
         print(f'  found {len(files)} files under {lora_dir}')
         for file in files:
             lora_files.append((lora_dir, file, 0.0))
@@ -10225,8 +10284,7 @@ def mk_lora_info(imgloras, multipliers, mock_filesystem=False):
             # we don't know which portion of the path we can show, so omit it
             lora_file = os.path.basename(lora_path)
             preloaded = True
-        if not mock_filesystem:
-            lora_fullpath = os.path.abspath(lora_fullpath)
+        lora_fullpath = os.path.abspath(lora_fullpath)
         # dedup paths (e.g. preloaded and on directory)
         info = lora_fullmap.get(lora_fullpath)
         if info:
@@ -11238,7 +11296,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 s_pp = float(benchmaxctx-benchlen)/t_pp
                 s_gen = float(benchlen)/t_gen
                 datetimestamp = datetime.now(timezone.utc)
-                benchflagstr = f"NoAVX2={args.noavx2} Threads={args.threads} HighPriority={args.highpriority} Cuda_Args={args.usecuda} Tensor_Split={args.tensor_split} BlasThreads={args.blasthreads} BatchSize={args.batchsize} FlashAttention={not args.noflashattention} KvCache={args.quantkv}"
+                benchflagstr = f"{str(vars(args))}"
                 print(f"\nBenchmark Completed - v{KcppVersion} Results:\n======")
                 print(f"Flags: {benchflagstr}")
                 print(f"Timestamp: {datetimestamp}")
@@ -11305,7 +11363,7 @@ if __name__ == '__main__':
     parser.add_argument("--config", metavar=('[filename]'), help="Load settings from a .kcpps file. Other arguments will be ignored", type=str, nargs=1)
     parser.add_argument("--threads","-t", metavar=('[threads]'), help="Use a custom number of threads if specified. Otherwise, uses an amount based on CPU cores", type=int, default=get_default_threads())
     compatgroup = parser.add_mutually_exclusive_group()
-    compatgroup.add_argument("--usecuda", "--usecublas", "--usehipblas", help="Use CUDA for GPU Acceleration. Requires CUDA. Enter a number afterwards to select and use 1 GPU. Leaving no number will use all GPUs.", nargs='*',metavar=('[main GPU ID] [mmq|nommq] [rowsplit]'), choices=['normal', 'lowvram', '0', '1', '2', '3', 'all', 'mmq', 'nommq', 'rowsplit'])
+    compatgroup.add_argument("--usecuda", "--usecublas", "--usehipblas", help="Use CUDA for GPU Acceleration. Requires CUDA. Enter a number afterwards to select and use 1 GPU. Leaving no number will use all GPUs.", nargs='*',metavar=('[main GPU ID]'), choices=['0','1','2','3','all',  'mmq','nommq','normal','lowvram','rowsplit'])
     compatgroup.add_argument("--usevulkan", help="Use Vulkan for GPU Acceleration. Can optionally specify one or more GPU Device ID (e.g. --usevulkan 0), leave blank to autodetect.", metavar=('[Device IDs]'), nargs='*', type=int, default=None)
     compatgroup.add_argument("--usecpu", help="Do not use any GPU acceleration (CPU Only)", action='store_true')
     parser.add_argument("--contextsize","--ctx-size", "-c", help="Controls the memory allocated for maximum context size, only change if you need more RAM for big contexts. (default 8192).",metavar=('[256 to 262144]'), type=check_range(int,256,262144), default=8192)
@@ -11320,6 +11378,8 @@ if __name__ == '__main__':
     advparser.add_argument("--maingpu","--main-gpu","-mg", help="Only used in a multi-gpu setup. Sets the index of the main GPU that will be used.",metavar=('[Device ID]'), type=int, default=-1)
     advparser.add_argument("--batchsize","--blasbatchsize","--batch-size","-b", help="Sets the batch size used in batched processing (default 512). Setting it to -1 disables batched mode, but keeps other benefits like GPU offload.", type=int,choices=[-1,16,32,64,128,256,512,1024,2048,4096], default=512)
     advparser.add_argument("--blasthreads","--batchthreads","--threadsbatch","--threads-batch", help="Use a different number of threads during batching if specified. Otherwise, has the same value as --threads",metavar=('[threads]'), type=int, default=0)
+    advparser.add_argument("--splitmode","-sm","--split-mode", help="How to split the model across multiple GPUs", metavar=('[split mode]'), type=str, choices=splitmode_choices, default=splitmode_choices[0])
+    advparser.add_argument("--nommq", help="Disables MMQ, only used for cuda backend. This flag may be removed in future.", action='store_true')
     advparser.add_argument("--lora", help="GGUF models only, applies a lora file on top of model.", metavar=('[lora_filename]'), nargs='+')
     advparser.add_argument("--loramult", metavar=('[amount]'), help="Multiplier for the Text LORA model to be applied.", type=float, default=1.0)
     advparser.add_argument("--noshift","--no-context-shift", help="If set, do not attempt to Trim and Shift the GGUF context.", action='store_true')
@@ -11334,13 +11394,13 @@ if __name__ == '__main__':
     advparser.add_argument("--usemlock","--mlock", help="Enables mlock, preventing the RAM used to load the model from being paged out. Not usually recommended.", action='store_true')
     advparser.add_argument("--noavx2", help="Do not use AVX2 instructions, a slower compatibility mode for older devices.", action='store_true')
     advparser.add_argument("--failsafe", help="Use failsafe mode, extremely old CPU compatibility mode that should work on all devices.", action='store_true')
-    advparser.add_argument("--debugmode", help="Shows additional debug info in the terminal.", nargs='?', const=1, type=int, default=0)
+    advparser.add_argument("--debugmode", help="Shows additional debug info in the terminal. Levels: -1 (Horde-quiet, suppresses non-essential prints; auto-applied when Horde args are set), 0 (default, normal output), 1 (verbose: extra slot/cache info, larger print buffers, retains horde-debug prefix). Passing the flag without a value implies 1.", nargs='?', const=1, type=int, default=0)
     advparser.add_argument("--onready", help="An optional shell command to execute after the model has been loaded.", metavar=('[shell command]'), type=str, default="",nargs=1)
     advparser.add_argument("--benchmark", help="Do not start server, instead run benchmarks. If filename is provided, appends results to provided file.", metavar=('[filename]'), nargs='?', const="stdout", type=str, default=None)
     advparser.add_argument("--prompt","-p", metavar=('[prompt]'), help="Passing a prompt string triggers a direct inference, loading the model, outputs the response to stdout and exits. Can be used alone or with benchmark.", type=str, default="")
     advparser.add_argument("--cli", help="Does not launch KoboldCpp HTTP server. Instead, enables KoboldCpp from the command line, accepting interactive console input and displaying responses to the terminal.", action='store_true')
     advparser.add_argument("--genlimit","--promptlimit", help="Sets the maximum number of generated tokens, it will restrict all generations to this or lower. Also usable with --prompt or --benchmark.",metavar=('[token limit]'), type=int, default=0)
-    advparser.add_argument("--multiuser", help="Runs in multiuser mode, which queues incoming requests instead of blocking them.", metavar=('limit'), nargs='?', const=1, type=int, default=1)
+    advparser.add_argument("--multiuser", help="Set maximum number of queued incoming requests allowed.", metavar=('limit'), type=int, default=multiuser_concurrent_limit)
     advparser.add_argument("--multiplayer", help="Hosts a shared multiplayer session that others can join.", action='store_true')
     advparser.add_argument("--websearch", help="Enable the local search engine proxy so Web Searches can be done.", action='store_true')
     advparser.add_argument("--remotetunnel", help="Uses Cloudflare to create a remote tunnel, allowing you to access koboldcpp remotely over the internet even behind a firewall.", action='store_true')

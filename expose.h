@@ -36,7 +36,7 @@ struct load_model_inputs
     const int max_context_length = 0;
     const bool low_vram = 0;
     const bool use_mmq = 0;
-    const bool use_rowsplit = 0;
+    const int splitmode = 1;
     const char * executable_path = nullptr;
     const char * model_filename = nullptr;
     const char * lora_filename = nullptr;
@@ -55,7 +55,6 @@ struct load_model_inputs
     const bool use_contextshift = false;
     const bool use_fastforward = false;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const int batchsize = 512;
     const bool autofit = false;
     const int autofit_tax_mb = 0;
@@ -178,7 +177,6 @@ struct sd_load_model_inputs
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const int threads = 0;
     const int quant = 0;
     const bool flash_attention = false;
@@ -263,7 +261,6 @@ struct whisper_load_model_inputs
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
@@ -288,7 +285,6 @@ struct tts_load_model_inputs
     const char * cts_model_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const int gpulayers = 0;
     const bool flash_attention = false;
     const int ttsmaxlen = 4096;
@@ -319,7 +315,6 @@ struct embeddings_load_model_inputs
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const int gpulayers = 0;
     const bool flash_attention = false;
     const bool use_mmap = false;
@@ -349,7 +344,6 @@ struct music_load_model_inputs
     const bool lowvram = false;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;

@@ -33,22 +33,6 @@ bool musictype_load_model(const music_load_model_inputs inputs)
 {
     music_is_quiet = inputs.quiet;
 
-    //duplicated from expose.cpp
-    std::string vulkan_info_raw = inputs.vulkan_info;
-    std::string vulkan_info_str = "";
-    for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {
-        vulkan_info_str += vulkan_info_raw[i];
-        if (i < vulkan_info_raw.length() - 1) {
-            vulkan_info_str += ",";
-        }
-    }
-    const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
-    if(!existingenv && vulkan_info_str!="")
-    {
-        musicvulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
-        putenv((char*)musicvulkandeviceenv.c_str());
-    }
-
     std::string musicllm_filename = inputs.musicllm_filename;
     std::string musicembedding_filename = inputs.musicembedding_filename;
     std::string musicdiffusion_filename = inputs.musicdiffusion_filename;

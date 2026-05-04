@@ -823,7 +823,7 @@ function loadLibrary(){
                 <button class="secondary">Download</button>
             </a>
             <button class="secondary" onclick="exportTrackJSON(${item.id}, '${item.title}')">JSON</button>
-            <button class="secondary" onclick="loadTrackJSON(${item.id})">Edit</button>
+            <button class="secondary" onclick="loadTrackJSON(${item.id})">Load</button>
             <button class="danger" onclick="deleteTrack(${item.id})">Delete</button>
           </div>
         `;

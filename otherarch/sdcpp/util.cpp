@@ -128,10 +128,10 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
         filename.c_str(),
         GENERIC_READ,
         FILE_SHARE_READ,
-        NULL,
+        nullptr,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
-        NULL);
+        nullptr);
 
     if (file_handle == INVALID_HANDLE_VALUE) {
         return nullptr;
@@ -145,16 +145,16 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     file_size = static_cast<size_t>(size.QuadPart);
 
-    HANDLE mapping_handle = CreateFileMapping(file_handle, NULL, PAGE_READONLY, 0, 0, NULL);
+    HANDLE mapping_handle = CreateFileMapping(file_handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
 
-    if (mapping_handle == NULL) {
+    if (mapping_handle == nullptr) {
         CloseHandle(file_handle);
         return nullptr;
     }
 
     mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
 
-    if (mapped_data == NULL) {
+    if (mapped_data == nullptr) {
         CloseHandle(mapping_handle);
         CloseHandle(file_handle);
         return nullptr;
@@ -217,7 +217,7 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     size_t file_size = sb.st_size;
 
-    void* mapped_data = mmap(NULL, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+    void* mapped_data = mmap(nullptr, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
 
     close(file_descriptor);
 

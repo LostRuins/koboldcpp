@@ -23,8 +23,6 @@
 extern "C"
 {
 
-    std::string vulkandeviceenv;
-
     //return val: 0=fail, 1=(original ggml, alpaca), 2=(ggmf), 3=(ggjt)
     static FileFormat file_format = FileFormat::BADFORMAT;
     static FileFormatExtraMeta file_format_meta;
@@ -37,21 +35,6 @@ extern "C"
         draftmodel_filename = inputs.draftmodel_filename;
 
         file_format = check_file_format(model.c_str(),&file_format_meta);
-
-        std::string vulkan_info_raw = inputs.vulkan_info;
-        std::string vulkan_info_str = "";
-        for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {
-            vulkan_info_str += vulkan_info_raw[i];
-            if (i < vulkan_info_raw.length() - 1) {
-                vulkan_info_str += ",";
-            }
-        }
-        const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
-        if(!existingenv && vulkan_info_str!="")
-        {
-            vulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
-            putenv((char*)vulkandeviceenv.c_str());
-        }
 
         executable_path = inputs.executable_path;
 
@@ -418,5 +401,15 @@ extern "C"
     bool clear_state_kv()
     {
         return gpttype_clear_state_kv(true);
+    }
+
+    int set_environment_variable(const char * identifier, const char * value)
+    {
+        if (!identifier || !value) return -1;
+        #ifdef _WIN32
+            return _putenv_s(identifier, value);
+        #else
+            return setenv(identifier, value, 1);
+        #endif
     }
 }

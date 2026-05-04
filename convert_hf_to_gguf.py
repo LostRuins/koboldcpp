@@ -728,6 +728,9 @@ class ModelBase:
 
         del experts, merged
 
+    def _needs_nvfp4_processing(self) -> bool:
+        return True
+
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt format)
         quant_algo = (self.hparams.get("quantization_config") or {}).get("quant_algo")
@@ -758,7 +761,7 @@ class ModelBase:
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
         # from model_tensors, leaving only non-NVFP4 (e.g. FP8) for dequant.
-        if self._is_nvfp4:
+        if self._is_nvfp4 and self._needs_nvfp4_processing():
             self._generate_nvfp4_tensors()
 
         self.dequant_model()
@@ -2189,6 +2192,10 @@ class MmprojModel(ModelBase):
                     }
                 # merge configs
                 self.preprocessor_config = {**self.preprocessor_config, **cfg}
+
+    def _needs_nvfp4_processing(self) -> bool:
+        # nvfp4 quantization applies to the text model only.
+        return False
 
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
@@ -4450,6 +4457,12 @@ class NemotronNanoV2VLModel(MmprojModel):
         }
         return vision_config
 
+    def dequant_model(self):
+        if self._is_nvfp4:
+            # Skip nvfp4 quantization for vision/audio model.
+            return
+        super().dequant_model()
+
     def set_gguf_parameters(self):
         if "image_mean" not in self.preprocessor_config:
             self.preprocessor_config["image_mean"] = [0.485, 0.456, 0.406]
@@ -4471,6 +4484,10 @@ class NemotronNanoV2VLModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "input_conditioner" in name:
+            return
+
+        # mtmd does not support video yet so skip tensors related to video.
+        if "radio_model.model.patch_generator.video_embedder" in name:
             return
 
         # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
@@ -6641,7 +6658,7 @@ class BertModel(TextModel):
 
         tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
         scores: list[float] = [-10000.0] * vocab_size
-        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size  # ty: ignore[invalid-assignment]
+        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size
 
         if isinstance(tokenizer, SentencePieceProcessor):
             for token_id in range(tokenizer.vocab_size()):
@@ -10820,7 +10837,11 @@ class NemotronHModel(GraniteHybridModel):
         # uses self.model_arch to build the tensor name map, and all MoE-specific
         # mappings would be missed if it were called with the default non-MoE arch.
         hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
-        if "num_experts_per_tok" in hparams:
+        has_moe_params = (
+            "num_experts_per_tok" in hparams
+            or (isinstance(hparams.get("llm_config"), dict) and "num_experts_per_tok" in hparams["llm_config"])
+        )
+        if has_moe_params:
             self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
             self.is_moe = True
 
@@ -10965,6 +10986,11 @@ class NemotronHModel(GraniteHybridModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision model and projector tensors for VLM models (handled by mmproj) (e.g., Nemotron Nano 12B v2 VL)
         if name.startswith(("vision_model.", "mlp1.")):
+            return
+
+        if name.startswith(("sound_encoder.")):
+            return
+        if name.startswith(("sound_projection.")):
             return
 
         # Strip language_model. prefix for VLM models (e.g., Nemotron Nano 12B v2 VL)
@@ -13206,17 +13232,18 @@ class LazyTorchTensor(gguf.LazyBase):
     }
 
     # only used when byteswapping data. Only correct size is needed
+    # TODO: uncomment uint64, uint32, and uint16, ref: https://github.com/pytorch/pytorch/issues/58734
     _dtype_byteswap_map: dict[torch.dtype, type] = {
         torch.float64: np.float64,
         torch.float32: np.float32,
         torch.bfloat16: np.float16,
         torch.float16: np.float16,
         torch.int64: np.int64,
-        torch.uint64: np.uint64,
+        # torch.uint64: np.uint64,
         torch.int32: np.int32,
-        torch.uint32: np.uint32,
+        # torch.uint32: np.uint32,
         torch.int16: np.int16,
-        torch.uint16: np.uint16,
+        # torch.uint16: np.uint16,
         torch.int8: np.int8,
         torch.uint8: np.uint8,
         torch.bool: np.uint8,

@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 <head>
 	<script id="init-config">
-	const LITEVER = 330;
+	const LITEVER = 331;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -4557,6 +4557,36 @@ Current version indicated by LITEVER below.
 		custom_sampler_fields: {},
 	};
 
+	const PROTECTED_FIELDS = {
+		my_api_key: true,
+		saved_oai_key: true,
+		saved_oai_addr: true,
+		saved_dalle_key: true,
+		saved_dalle_url: true,
+		saved_oai_tts_key: true,
+		saved_oai_tts_url: true,
+		saved_oai_embd_key: true,
+		saved_oai_embd_url: true,
+		saved_openrouter_key: true,
+		saved_mistralai_key: true,
+		saved_featherless_key: true,
+		saved_nvidianim_key: true,
+		saved_pollinations_key: true,
+		saved_grok_key: true,
+		saved_claude_key: true,
+		saved_claude_addr: true,
+		saved_palm_key: true,
+		saved_cohere_key: true,
+		saved_kai_addr: true,
+		saved_kai_key: true,
+		saved_a1111_url: true,
+		saved_comfy_url: true,
+		saved_comfy_bearer_token: true,
+		saved_xtts_url: true,
+		generate_images_mode: true,
+		saved_mcp_urls: true
+	};
+
 	const defaultsettings = JSON.parse(JSON.stringify(localsettings));
 	//visionmode 0=disabled, 1=hordeinterrogate, 2=localinterrogate, 3=multimodal
 	//type 0=img, 1=audio
@@ -5271,6 +5301,19 @@ Current version indicated by LITEVER below.
 		}
 
 		return result;
+	}
+
+	function preserve_protected_fields(source) {
+		const out = {};
+		for (const key in PROTECTED_FIELDS) {
+			if (source[key] !== undefined) {
+			out[key] = source[key];
+			}
+		}
+		return out;
+	}
+	function restore_protected_fields(target, snapshot) {
+		Object.assign(target, snapshot);
 	}
 
 	function asyncRunner(generatorFn) { //allows async/await like syntax before it exists
@@ -10533,33 +10576,7 @@ Current version indicated by LITEVER below.
 
 				if (storyobj.savedsettings && storyobj.savedsettings != "")
 				{
-					let tmpapikey1 = localsettings.my_api_key;
-					let tmp_oai1 = localsettings.saved_oai_key;
-					let tmp_oai2 = localsettings.saved_oai_addr;
-					let tmp_oai3 = localsettings.saved_dalle_key;
-					let tmp_oai4 = localsettings.saved_dalle_url;
-					let tmp_oai5 = localsettings.saved_oai_tts_key;
-					let tmp_oai6 = localsettings.saved_oai_tts_url;
-					let tmp_oai7 = localsettings.saved_oai_embd_key;
-					let tmp_oai8 = localsettings.saved_oai_embd_url;
-					let tmp_or1 = localsettings.saved_openrouter_key;
-					let tmp_mai = localsettings.saved_mistralai_key;
-					let tmp_fai = localsettings.saved_featherless_key;
-					let tmp_nvai = localsettings.saved_nvidianim_key;
-					let tmp_pol = localsettings.saved_pollinations_key;
-					let tmp_grok = localsettings.saved_grok_key;
-					let tmp_claude1 = localsettings.saved_claude_key;
-					let tmp_claude2 = localsettings.saved_claude_addr;
-					let tmp_palm1 = localsettings.saved_palm_key;
-					let tmp_cohere1 = localsettings.saved_cohere_key;
-					let tmp_kai = localsettings.saved_kai_addr;
-					let tmp_kai2 = localsettings.saved_kai_key;
-					let tmp_a1111 = localsettings.saved_a1111_url;
-					let tmp_comfy = localsettings.saved_comfy_url;
-					let tmp_comfy_bearer_token = localsettings.saved_comfy_bearer_token;
-					let tmp_xtts = localsettings.saved_xtts_url;
-					let tmp_imggen = localsettings.generate_images_mode;
-					let tmp_mcp = localsettings.saved_mcp_urls;
+					let tmp_essentials = preserve_protected_fields(localsettings);
 
 					if(loadgensettings)
 					{
@@ -10591,33 +10608,7 @@ Current version indicated by LITEVER below.
 						localsettings.hide_think_stream = old_hide_think_stream;
 					}
 
-					localsettings.my_api_key = tmpapikey1;
-					localsettings.saved_oai_key = tmp_oai1;
-					localsettings.saved_oai_addr = tmp_oai2;
-					localsettings.saved_dalle_key = tmp_oai3;
-					localsettings.saved_dalle_url = tmp_oai4;
-					localsettings.saved_oai_tts_key = tmp_oai5;
-					localsettings.saved_oai_tts_url = tmp_oai6;
-					localsettings.saved_oai_embd_key = tmp_oai7;
-					localsettings.saved_oai_embd_url = tmp_oai8;
-					localsettings.saved_openrouter_key = tmp_or1;
-					localsettings.saved_mistralai_key = tmp_mai;
-					localsettings.saved_featherless_key = tmp_fai;
-					localsettings.saved_nvidianim_key = tmp_nvai;
-					localsettings.saved_pollinations_key = tmp_pol;
-					localsettings.saved_grok_key = tmp_grok;
-					localsettings.saved_claude_key = tmp_claude1;
-					localsettings.saved_claude_addr = tmp_claude2;
-					localsettings.saved_palm_key = tmp_palm1;
-					localsettings.saved_cohere_key = tmp_cohere1;
-					localsettings.saved_kai_addr = tmp_kai;
-					localsettings.saved_kai_key = tmp_kai2;
-					localsettings.saved_a1111_url = tmp_a1111;
-					localsettings.saved_comfy_url = tmp_comfy;
-					localsettings.saved_comfy_bearer_token = tmp_comfy_bearer_token;
-					localsettings.saved_xtts_url = tmp_xtts;
-					localsettings.generate_images_mode = tmp_imggen;
-					localsettings.saved_mcp_urls = tmp_mcp;
+					restore_protected_fields(localsettings,tmp_essentials);
 
 					if(loadaessettings)
 					{
@@ -17969,7 +17960,13 @@ Current version indicated by LITEVER below.
 	function reset_all_settings()
 	{
 		msgboxYesNo("Reset ALL settings to their defaults? This will also reset your aesthetic UI and your current story!","Confirm Reset All Settings",()=>{
+			let also_clear_api_keys = msgboxYesNoChecked?true:false;
+			let essentials = preserve_protected_fields(localsettings);
 			localsettings = JSON.parse(JSON.stringify(defaultsettings));
+			if(!also_clear_api_keys)
+			{
+				restore_protected_fields(localsettings,essentials);
+			}
 			let ns = new AestheticInstructUISettings();
 			aestheticInstructUISettings = deepCopyAestheticSettings(ns);
 			refreshAestheticPreview(false);
@@ -17985,7 +17982,7 @@ Current version indicated by LITEVER below.
 			let styleElement = document.getElementById('custom_css');
 			styleElement.innerHTML = "";
 			show_welcome_panel();
-		},null);
+		},null,false,"Also clear API keys");
 
 	}
 
@@ -21006,7 +21003,7 @@ Current version indicated by LITEVER below.
 							submit_payload.tools = senttools;
 						}
 					}
-					let targetep = apply_proxy_url(custom_kobold_endpoint + oai_submit_endpoint_chat);
+					let targetep = apply_proxy_url(custom_kobold_endpoint + "/v1" + oai_submit_endpoint_chat);
 					if(is_browser_supports_sse() && localsettings.tokenstreammode!=0)
 					{
 						submit_payload.stream = true;
@@ -25586,8 +25583,12 @@ Current version indicated by LITEVER below.
 				continue;
 			}
 
-			// NEW: split system first
-			let syschunks = chnk.split(systag);
+			// split system first
+			let syschunks = [chnk];
+			if(systag && systag.trim()!="")
+			{
+				syschunks = chnk.split(systag);
+			}
 			for(let s=0;s<syschunks.length;++s)
 			{
 				let syschnk = syschunks[s];

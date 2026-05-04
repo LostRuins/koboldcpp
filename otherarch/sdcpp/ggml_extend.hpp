@@ -2758,16 +2758,16 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
     bool is_conv,
     WeightAdapter::ForwardParams::conv2d_params_t conv_params,
     float scale) {
-    GGML_ASSERT((w1 != NULL || (w1a != NULL && w1b != NULL)));
-    GGML_ASSERT((w2 != NULL || (w2a != NULL && w2b != NULL)));
+    GGML_ASSERT((w1 != nullptr || (w1a != nullptr && w1b != nullptr)));
+    GGML_ASSERT((w2 != nullptr || (w2a != nullptr && w2b != nullptr)));
 
-    int uq = (w1 != NULL) ? (int)w1->ne[0] : (int)w1a->ne[0];
-    int up = (w1 != NULL) ? (int)w1->ne[1] : (int)w1b->ne[1];
+    int uq = (w1 != nullptr) ? (int)w1->ne[0] : (int)w1a->ne[0];
+    int up = (w1 != nullptr) ? (int)w1->ne[1] : (int)w1b->ne[1];
 
     int q_actual = is_conv ? (int)h->ne[2] : (int)h->ne[0];
     int vq       = q_actual / uq;
 
-    int vp = (w2 != NULL) ? (is_conv ? (int)w2->ne[3] : (int)w2->ne[1])
+    int vp = (w2 != nullptr) ? (is_conv ? (int)w2->ne[3] : (int)w2->ne[1])
                           : (int)w2a->ne[1];
     GGML_ASSERT(q_actual == (uq * vq) && "Input dimension mismatch for LoKR split");
 
@@ -2803,7 +2803,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
 #endif
 
         ggml_tensor* h_split = ggml_reshape_3d(ctx, h, vq, uq * merge_batch_uq, batch / merge_batch_uq);
-        if (w2 != NULL) {
+        if (w2 != nullptr) {
             hb = ggml_mul_mat(ctx, w2, h_split);
         } else {
             hb = ggml_mul_mat(ctx, w2b, ggml_mul_mat(ctx, w2a, h_split));
@@ -2816,7 +2816,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
         hb_t              = ggml_reshape_3d(ctx, hb_t, uq, vp * merge_batch_vp, batch / merge_batch_vp);
 
         ggml_tensor* hc_t;
-        if (w1 != NULL) {
+        if (w1 != nullptr) {
             hc_t = ggml_mul_mat(ctx, w1, hb_t);
         } else {
             hc_t = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_t));
@@ -2834,7 +2834,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
         // 1. Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
         ggml_tensor* h_split = ggml_reshape_4d(ctx, h, h->ne[0], h->ne[1], vq, uq * batch);
 
-        if (w2 != NULL) {
+        if (w2 != nullptr) {
             hb = ggml_ext_conv_2d(ctx, h_split, w2, nullptr,
                                   conv_params.s0,
                                   conv_params.s1,
@@ -2902,7 +2902,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
         ggml_tensor* hb_merged = ggml_reshape_2d(ctx, hb, w_out * h_out * vp, uq * batch);
         ggml_tensor* hc_t;
         ggml_tensor* hb_merged_t = ggml_cont(ctx, ggml_transpose(ctx, hb_merged));
-        if (w1 != NULL) {
+        if (w1 != nullptr) {
             // Would be great to be able to transpose w1 instead to avoid transposing both hb and hc
             hc_t = ggml_mul_mat(ctx, w1, hb_merged_t);
         } else {
