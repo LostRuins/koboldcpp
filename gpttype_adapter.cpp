@@ -2475,7 +2475,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         llama_ctx_params.n_ubatch = kcpp_data->n_ubatch;
         if(continuous_batching_slots > 0)
         {
-            llama_ctx_params.n_seq_max = continuous_batching_slots;
+            llama_ctx_params.n_seq_max = continuous_batching_slots + 1;
         }
         llama_ctx_params.n_threads = kcpp_data->n_threads;
         llama_ctx_params.n_threads_batch = kcpp_data->n_blasthreads;
@@ -3668,7 +3668,7 @@ static bool batch_output_hit_stop(const BatchGenerateRequest & req)
 static bool batch_claim_waiting_locked()
 {
     bool claimed = false;
-    for(int slot = 0; slot < continuous_batching_slots && !batch_waiting.empty(); ++slot)
+    for(int slot = 1; slot <= continuous_batching_slots && !batch_waiting.empty(); ++slot)
     {
         bool occupied = false;
         for(const auto & req : batch_requests)
