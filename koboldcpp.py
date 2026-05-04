@@ -1925,6 +1925,9 @@ def load_model(model_filename):
     inputs.visionmintokens = vmintk
     inputs.visionmaxtokens = vmaxtk
     inputs.use_smartcontext = args.smartcontext
+    if getattr(args, "continuous_batching", 0) > 1 and not args.noshift:
+        print("\nWarning: Continuous batching is enabled, so context shifting has been disabled automatically.\n")
+        args.noshift = True
     inputs.use_contextshift = (0 if args.noshift else 1)
     inputs.use_fastforward = (0 if args.nofastforward else 1)
     inputs.flash_attention =  (False if args.noflashattention else True)
