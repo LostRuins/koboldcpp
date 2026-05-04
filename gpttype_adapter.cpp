@@ -3291,7 +3291,7 @@ enum class BatchState
     PREFILL,
     GENERATING,
     FINISHED,
-    ERROR,
+    FAILED,
     ABORTED,
 };
 
@@ -3516,7 +3516,7 @@ static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason 
     req.result.prompt_tokens = req.prompt_token_count;
     req.result.completion_tokens = req.completion_token_count;
     req.result.text = req.output.c_str();
-    req.state = reason == stop_reason::ERROR_ENCOUNTERED ? BatchState::ERROR : (reason == stop_reason::INVALID ? BatchState::ABORTED : BatchState::FINISHED);
+    req.state = reason == stop_reason::ERROR_ENCOUNTERED ? BatchState::FAILED : (reason == stop_reason::INVALID ? BatchState::ABORTED : BatchState::FINISHED);
     if(req.slot >= 0 && llama_ctx_v4)
     {
         llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), req.slot, -1, -1);
