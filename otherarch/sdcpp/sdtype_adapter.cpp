@@ -18,44 +18,8 @@
 
 #include "model_adapter.h"
 #include "tokenizers/vocab/vocab.h"
+#include "tokenizers/bpe_tokenizer.h"
 #include "flux.hpp"
-#include "sample-cache.cpp"
-#include "util.cpp"
-#include "name_conversion.cpp"
-#include "upscaler.cpp"
-
-#include "zip.c"
-#include "model_io/binary_io.h"
-namespace pickle {
-#include "model_io/pickle_io.cpp"
-}
-namespace gguf {
-#include "model_io/gguf_io.cpp"
-}
-namespace safetensors {
-#include "model_io/safetensors_io.cpp"
-}
-using namespace pickle;
-namespace torch_legacy {
-#include "model_io/torch_legacy_io.cpp"
-}
-namespace torch_zip {
-#include "model_io/torch_zip_io.cpp"
-}
-using namespace gguf;
-using namespace safetensors;
-using namespace torch_legacy;
-using namespace torch_zip;
-#include "model.cpp"
-
-#include "tokenizers/bpe_tokenizer.cpp"
-#include "tokenizers/clip_tokenizer.cpp"
-#include "tokenizers/mistral_tokenizer.cpp"
-#include "tokenizers/qwen2_tokenizer.cpp"
-#include "tokenizers/t5_unigram_tokenizer.cpp"
-#include "tokenizers/tokenizer.cpp"
-#include "tokenizers/tokenize_util.cpp"
-
 
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
