@@ -7619,6 +7619,7 @@ def show_gui():
     rpc_host_var = ctk.StringVar(value="0.0.0.0")
     rpc_port_var = ctk.StringVar(value="50053")
     rpc_devices_var = ctk.StringVar(value="")
+    rpc_cache_layers_var = ctk.IntVar(value=0)
 
     # RPC endpoint for client mode
     rpc_endpoint_var = ctk.StringVar(value="")
@@ -7998,14 +7999,20 @@ def show_gui():
                 if v == "Use Vulkan" or v == "Use Vulkan (Old CPU)" or v == "Use Vulkan (Older CPU)":
                     quick_gpuname_label.configure(text=VKDevicesNames[s])
                     gpuname_label.configure(text=VKDevicesNames[s])
+                    if 'rpc_gpuname_label' in globals():
+                        rpc_gpuname_label.configure(text=VKDevicesNames[s])
                 else:
                     quick_gpuname_label.configure(text=CUDevicesNames[s])
                     gpuname_label.configure(text=CUDevicesNames[s])
+                    if 'rpc_gpuname_label' in globals():
+                        rpc_gpuname_label.configure(text=CUDevicesNames[s])
             except Exception:
                 pass
         else:
             quick_gpuname_label.configure(text="(dGPUs only, tensor split sets ratio)")
             gpuname_label.configure(text="(dGPUs only, tensor split sets ratio)")
+            if 'rpc_gpuname_label' in globals():
+                rpc_gpuname_label.configure(text="(dGPUs only, tensor split sets ratio)")
 
     gpu_choice_var.trace_add("write", changed_gpu_choice_var)
     gpulayers_var.trace_add("write", changed_gpulayers_estimate)
@@ -8482,7 +8489,7 @@ def show_gui():
     makefileentry(audio_tab, "MusicVAE:", "Select music VAE model", musicvae_var, 36, width=280, singlerow=True, dialog_type=0, tooltiptxt="Select music VAE model")
     makecheckbox(audio_tab, "Music Low VRAM", musiclowvram_var, 38, 0,tooltiptxt="Unload music models when not in use.")
 
-    # RPC Server Tab
+# RPC Server Tab
     rpc_tab = tabcontent["RPC Server"]
 
     ctk.CTkLabel(
@@ -8491,7 +8498,7 @@ def show_gui():
         fg_color="transparent",
         text_color="#5DA5E5",
         font=("Helvetica", 14, "bold"),
-    ).grid(row=0, column=0, columnspan=2, sticky="w", padx=0, pady=10)
+    ).grid(row=0, column=0, columnspan=4, sticky="w", padx=0, pady=10)
 
     makecheckbox(
         rpc_tab,
@@ -8502,6 +8509,7 @@ def show_gui():
         tooltiptxt="Start KoboldCPP in RPC server mode. Exposes local GPUs for remote clients to use.",
     )
 
+    # Backend selector (row 2-3, column 0)
     makelabel(
         rpc_tab,
         "RPC Server Backend:",
@@ -8525,7 +8533,7 @@ def show_gui():
         state="readonly",
     )
     rpc_server_backend_dropdown.grid(
-        row=4, column=0, columnspan=2, sticky="w", padx=0, pady=5
+        row=4, column=0, sticky="w", padx=0, pady=0
     )
     makelabel(
         rpc_tab,
@@ -8535,6 +8543,31 @@ def show_gui():
         padx=0,
     )
 
+    # GPU ID selector (row 4, column 1) - synced with Hardware and Quick Launch
+    makelabel(
+        rpc_tab,
+        "GPU ID:",
+        2,
+        0,
+        padx=260,
+    )
+    rpc_gpu_selector_box = ctk.CTkComboBox(
+        rpc_tab,
+        values=CUDevices,
+        variable=gpu_choice_var,
+        width=60,
+        state="readonly",
+    )
+    rpc_gpu_selector_box.grid(
+        row=4, column=0, sticky="w", padx=260, pady=0
+    )
+    rpc_gpuname_label = ctk.CTkLabel(rpc_tab, text="")
+    rpc_gpuname_label.grid(
+        row=4, column=1, sticky="w", padx=85, pady=5
+    )
+    rpc_gpuname_label.configure(text_color="#ffff00")
+
+    # Listening IP Address (row 6-7, column 0)
     makelabel(
         rpc_tab,
         "Listening IP Address:",
@@ -8560,15 +8593,8 @@ def show_gui():
 
     makelabel(
         rpc_tab,
-        "Listening Port:",
+        "Listening Port number for RPC server connections (default: 50053).",
         9,
-        0,
-        padx=0,
-    )
-    makelabel(
-        rpc_tab,
-        "Port number for RPC server connections (default: 50053).",
-        10,
         0,
         padx=0,
     )
@@ -8576,11 +8602,13 @@ def show_gui():
         rpc_tab,
         "",
         rpc_port_var,
-        11,
+        10,
         100,
         singleline=True,
+        padx=7,
     )
 
+    # RPC Devices (row 9-10, column 0)
     makelabel(
         rpc_tab,
         "RPC Devices:",
@@ -8604,13 +8632,36 @@ def show_gui():
         singleline=True,
     )
 
+    # Allow Launch Without Models (row 12, column 0)
     makecheckbox(
         rpc_tab,
         "Allow Launch Without Models",
         nomodel,
-        16,
+        15,
         0,
         tooltiptxt="Allows starting RPC server without loading a model file.",
+    )
+
+    # Cache Layers Locally checkbox (row 16, column 0)
+    makecheckbox(
+        rpc_tab,
+        "Cache Layers Locally (-c)",
+        rpc_cache_layers_var,
+        16,
+        0,
+        padx=7,
+        tooltiptxt="Save layers locally when using RPC server. Equivalent to the '-c' flag.",
+    )
+
+    # Launch Browser checkbox (row 17, column 0)
+    makecheckbox(
+        rpc_tab,
+        "Launch Browser",
+        launchbrowser,
+        15,
+        0,
+        padx=200,
+        tooltiptxt="Enable/Disable Browserlaunch",
     )
 
     ctk.CTkLabel(
@@ -8618,8 +8669,8 @@ def show_gui():
         text="WARNING: RPC Server mode replaces the WebUI API. Clients must connect via --rpc.",
         fg_color="transparent",
         text_color="red",
-        font=("Helvetica", 14, "bold"),
-    ).grid(row=18, column=0, columnspan=2, sticky="w", padx=0, pady=10)
+        font=("Helvetica", 15, "bold"),
+    ).grid(row=18, column=0, columnspan=3, sticky="w", padx=0, pady=10)
 
     admin_tab = tabcontent["Admin"]
     def toggleadmin(a,b,c):
@@ -8974,6 +9025,7 @@ def show_gui():
         args.rpc_port = int(rpc_port_var.get())
         args.rpc_device = rpc_devices_var.get()
         args.rpc_server_backend = rpc_server_backend_var.get()
+        args.rpc_cache_layers = (rpc_cache_layers_var.get()==1)
         if rpc_endpoint_var.get() != "":
             rpc_eps = rpc_endpoint_var.get()
             if ',' in rpc_eps:
@@ -9287,6 +9339,7 @@ def show_gui():
         rpc_port_var.set(mydict["rpc_port"] if ("rpc_port" in mydict and mydict["rpc_port"]) else "50053")
         rpc_devices_var.set(mydict["rpc_device"] if ("rpc_device" in mydict and mydict["rpc_device"]) else "")
         rpc_server_backend_var.set(mydict["rpc_server_backend"] if ("rpc_server_backend" in mydict and mydict["rpc_server_backend"]) else "Auto-detect")
+        rpc_cache_layers_var.set(mydict["rpc_cache_layers"] if ("rpc_cache_layers" in mydict) else 0)
         if "rpc_endpoint" in mydict and mydict["rpc_endpoint"]:
             if isinstance(mydict["rpc_endpoint"], list):
                 rpc_endpoint_var.set(','.join(mydict["rpc_endpoint"]))
@@ -11123,6 +11176,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         rpc_cmd = [rpc_server_bin, "-H", args.rpc_host, "--port", str(args.rpc_port)]
         if args.rpc_device and args.rpc_device != "":
             rpc_cmd.extend(["--device", args.rpc_device])
+        if hasattr(args, 'rpc_cache_layers') and args.rpc_cache_layers:
+            rpc_cmd.append("-c")
         
         print(f"Starting RPC server: {' '.join(rpc_cmd)}")
         
@@ -11767,6 +11822,7 @@ if __name__ == '__main__':
     parser.add_argument("--rpc-host", help="RPC server host to listen on (default: 0.0.0.0)", default="0.0.0.0")
     parser.add_argument("--rpc-port", help="RPC server port (default: 50053)", type=int, default=50053)
     parser.add_argument("--rpc-device", help="RPC server device string (e.g., Vulkan0,Vulkan1)", default="")
+    parser.add_argument("--rpc-cache-layers", help="Save layers locally when using RPC server (equivalent to -c flag)", action='store_true')
     
     parser.add_argument("--contextsize","--ctx-size", "-c", help="Controls the memory allocated for maximum context size, only change if you need more RAM for big contexts. (default 8192).",metavar=('[256 to 262144]'), type=check_range(int,256,262144), default=8192)
     parser.add_argument("--gpulayers","--gpu-layers","--n-gpu-layers","-ngl", help="Set number of layers to offload to GPU when using GPU. Requires GPU. Set to -1 to try autodetect, set to 0 to disable GPU offload.",metavar=('[GPU layers]'), nargs='?', const=1, type=int, default=-1)
