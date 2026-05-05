@@ -19,8 +19,8 @@
 
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
-#include "util.h"
 #include "kcpp_sd_extensions.h"
+#include "ggml-backend.h"
 
 using namespace kcpp_sd;
 
@@ -261,8 +261,6 @@ std::string load_umt5_tokenizer_json()
     return umt5str;
 }
 
-void kcpp_sd_set_main_gpu(int value);
-
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
@@ -287,7 +285,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
 
     //kcpp allow gpu id override
-    kcpp_sd_set_main_gpu(inputs.kcpp_main_gpu);
+    config_main_gpu(inputs.kcpp_main_gpu);
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;

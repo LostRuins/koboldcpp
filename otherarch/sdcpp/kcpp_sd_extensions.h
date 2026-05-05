@@ -28,6 +28,12 @@ namespace kcpp_sd {
 
     void apply_loras(sd_ctx_t *ctx, const std::vector<sd_lora_t>& lora_specs);
 
+    void set_sd_quiet(bool quiet);
+
+    void set_sd_log_level(int log);
+
+    void config_main_gpu(int value);
+
 }
 
 #endif

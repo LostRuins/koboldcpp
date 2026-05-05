@@ -463,18 +463,6 @@ void log_message(const char* format, ...) {
         fflush(stdout);
     }
 }
-void set_sd_log_level(int log)
-{
-    sdloglevel = log;
-}
-bool get_sd_log_level()
-{
-    return sdloglevel;
-}
-void set_sd_quiet(bool quiet)
-{
-    sdquiet = quiet;
-}
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
     va_list args;
@@ -747,8 +735,20 @@ bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
     return dev_name.find(name) != std::string::npos;
 }
 
+#include "kcpp_sd_extensions.h"
+
+void kcpp_sd::set_sd_quiet(bool quiet)
+{
+    sdquiet = quiet;
+}
+
+void kcpp_sd::set_sd_log_level(int log)
+{
+    sdloglevel = log;
+}
+
 static int kcpp_main_gpu = -1;
-void kcpp_sd_set_main_gpu(int value) {
+void kcpp_sd::config_main_gpu(int value) {
     ggml_backend_load_all_once();
     if (value >= 0) {
         size_t dev_count = ggml_backend_dev_count();
