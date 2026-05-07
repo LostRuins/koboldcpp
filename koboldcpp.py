@@ -11464,4 +11464,14 @@ if __name__ == '__main__':
     debuggroup = parser.add_argument_group('Debug Commands')
     debuggroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')
 
+    # Catch common typo: ---flag (3+ dashes). argparse silently treats it
+    # as a positional, which can produce confusing mutually-exclusive errors
+    # (e.g. ---port is mistaken for model_param when --model/-m is also given).
+    bad_dash_args = [a for a in sys.argv[1:] if isinstance(a, str) and a.startswith("---")]
+    if bad_dash_args:
+        for bad in bad_dash_args:
+            suggestion = "--" + bad.lstrip("-")
+            print(f"error: unrecognized argument {bad!r} (did you mean {suggestion!r}?). Flags use exactly two leading dashes.", file=sys.stderr)
+        sys.exit(2)
+
     main(launch_args=parser.parse_args(),default_args=parser.parse_args([]))
