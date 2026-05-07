@@ -9516,7 +9516,11 @@ def reload_new_config(filename,defaultargs,overwrite_blank=False): #for changing
             for key, value in defaultargs.items():   # Fill missing defaults directly into config
                 if key not in config:
                     config[key] = value
-                elif overwrite_blank and key in config and not config[key]:
+                elif overwrite_blank and key in config and (config[key] is None or config[key] == ""):
+                    # Only treat None/empty-string as blank. Empty list/0/False are
+                    # intentional (e.g. usevulkan=[] means "use Vulkan, autodetect
+                    # device"); replacing them with the default would silently flip
+                    # the backend to CPU. See issue #2190.
                     config[key] = value
             reload_from_new_args(config)
         except Exception as e:
