@@ -11464,14 +11464,23 @@ if __name__ == '__main__':
     debuggroup = parser.add_argument_group('Debug Commands')
     debuggroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')
 
-    # Catch common typo: ---flag (3+ dashes). argparse silently treats it
-    # as a positional, which can produce confusing mutually-exclusive errors
-    # (e.g. ---port is mistaken for model_param when --model/-m is also given).
-    bad_dash_args = [a for a in sys.argv[1:] if isinstance(a, str) and a.startswith("---")]
-    if bad_dash_args:
-        for bad in bad_dash_args:
-            suggestion = "--" + bad.lstrip("-")
-            print(f"error: unrecognized argument {bad!r} (did you mean {suggestion!r}?). Flags use exactly two leading dashes.", file=sys.stderr)
+    # Catch common flag typos (e.g. ---port for --port, -prot for --port).
+    # argparse silently treats unknown ---flags as positionals, which can
+    # produce confusing mutually-exclusive errors. Suggest the closest valid
+    # option using difflib.
+    import difflib as _difflib
+    _, _unknown = parser.parse_known_args()
+    _bad_flags = [u for u in _unknown if isinstance(u, str) and u.startswith("-")]
+    if _bad_flags:
+        _valid = [opt for action in parser._actions for opt in action.option_strings]
+        _valid_stripped = [o.lstrip("-") for o in _valid]
+        for _bad in _bad_flags:
+            _close = _difflib.get_close_matches(_bad.lstrip("-"), _valid_stripped, n=1, cutoff=0.6)
+            if _close:
+                _suggestion = next((o for o in _valid if o.lstrip("-") == _close[0]), _close[0])
+                print(f"error: unrecognized argument {_bad!r} (did you mean {_suggestion!r}?)", file=sys.stderr)
+            else:
+                print(f"error: unrecognized argument {_bad!r}", file=sys.stderr)
         sys.exit(2)
 
     main(launch_args=parser.parse_args(),default_args=parser.parse_args([]))
