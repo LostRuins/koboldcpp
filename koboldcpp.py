@@ -109,6 +109,9 @@ maxctx = 8192
 maxhordectx = 0 #set to whatever maxctx is if 0
 maxhordelen = 1024
 modelbusy = threading.Lock()
+batched_lock = threading.Lock()
+batched_cond = threading.Condition(batched_lock)
+batched_request_runner_count = 0 #incremented when a batched request is running, prevents all non-batched requests
 requestsinqueue = 0
 ratelimitlookup = {}
 defaultport = 5001
@@ -2274,7 +2277,7 @@ def generate(genparams, stream_flag=False):
                     outstr = outstr[:sindex]
         return {"text":outstr,"status":ret.status,"stopreason":ret.stopreason,"prompt_tokens":ret.prompt_tokens, "completion_tokens": ret.completion_tokens}
 
-def continuous_batching_python_eligible(genparams, api_format, stream_flag=False):
+def continuous_batching_python_eligible(genparams, api_format):
     if getattr(args, "continuous_batching", 0) <= 1 or api_format <= 0:
         return False
     model_path = str(getattr(args, "model_param", "") or "").lower()
@@ -5334,7 +5337,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                     pass
 
     def get_multiplayer_idle_state(self,userid):
-        if modelbusy.locked():
+        if modelbusy.locked() or batched_request_runner_count>0:
             return False
         for key, value in multiplayer_lastactive.items():
             if key!=userid and time.time()-value<6: #6s to idle
@@ -5371,7 +5374,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         return True
 
     def noscript_webui(self):
-        global modelbusy, sslvalid
+        global modelbusy, sslvalid, batched_request_runner_count
         parsed_url = urllib.parse.urlparse(self.path)
         parsed_dict = urllib.parse.parse_qs(parsed_url.query)
         reply = ""
@@ -5411,7 +5414,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 gencommand = False
 
-        if modelbusy.locked():
+        if modelbusy.locked() or batched_request_runner_count>0:
             status = "Model is currently busy, try again later."
         elif gencommand:
             if prompt=="" or max_length<=0:
@@ -5650,7 +5653,7 @@ Change Mode<br>
                     "total_tts_gens": totalttsgens,
                     "total_transcribe_gens": totaltranscribegens,
                     "queue": requestsinqueue,
-                    "idle": (0 if modelbusy.locked() else 1),
+                    "idle": (0 if (modelbusy.locked() or batched_request_runner_count>0) else 1),
                     "hordeexitcounter": exitcounter,
                     "uptime": uptime,
                     "idletime": idletime,
@@ -5913,7 +5916,7 @@ Change Mode<br>
 
     def do_POST(self):
         global thinkformats
-        global modelbusy, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
+        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
         contlenstr = self.headers['content-length']
         content_length = 0
@@ -6355,7 +6358,6 @@ Change Mode<br>
             return
 
         reqblocking = False
-        modelbusy_locked = False
         #handle rate limiting
         ratelimiter = int(args.ratelimit)
         if ratelimiter > 0:
@@ -6387,7 +6389,7 @@ Change Mode<br>
                     "type": "service_unavailable",
                 }}).encode())
             return
-        modelbusy_locked = True
+        is_batchable_req = False
         if reqblocking:
             requestsinqueue = (requestsinqueue - 1) if requestsinqueue > 0 else 0
 
@@ -6596,14 +6598,22 @@ Change Mode<br>
                 if args.foreground:
                     bring_terminal_to_foreground()
 
+                #if it's a non-batchable request and we already have batching ongoing, stall this request
+                if batched_request_runner_count > 0 and not continuous_batching_python_eligible(genparams, api_format):
+                    with batched_cond:
+                        while batched_request_runner_count > 0:
+                            batched_cond.wait()
+
                 if api_format > 0: #text gen
                     # Check if streaming chat completions, if so, set stream mode to true
                     if (api_format == 4 or api_format == 3 or api_format == 8 or api_format == 9) and "stream" in genparams and genparams["stream"]:
                         sse_stream_flag = True
-                    if continuous_batching_python_eligible(genparams, api_format, sse_stream_flag):
+                    if continuous_batching_python_eligible(genparams, api_format):
                         genparams['_batch_expected'] = True
                         modelbusy.release()
-                        modelbusy_locked = False
+                        is_batchable_req = True
+                        with batched_cond:
+                            batched_request_runner_count += 1
 
                     gendat = asyncio.run(self.handle_request(genparams, api_format, sse_stream_flag))
 
@@ -6956,7 +6966,11 @@ Change Mode<br>
 
         finally:
             time.sleep(0.05)
-            if modelbusy_locked:
+            if is_batchable_req:
+                with batched_cond:
+                    batched_request_runner_count -= 1
+                    batched_cond.notify_all()
+            else:
                 modelbusy.release()
 
         self.send_response(404)
