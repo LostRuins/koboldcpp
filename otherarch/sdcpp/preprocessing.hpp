@@ -24,6 +24,75 @@ static inline void preprocessing_set_4d(sd::Tensor<float>& tensor, float value, 
     tensor.values()[static_cast<size_t>(preprocessing_offset_4d(tensor, i0, i1, i2, i3))] = value;
 }
 
+static inline uint8_t preprocessing_float_to_u8(float value) {
+    if (value <= 0.0f) {
+        return 0;
+    }
+    if (value >= 1.0f) {
+        return 255;
+    }
+    return static_cast<uint8_t>(value * 255.0f + 0.5f);
+}
+
+static inline void preprocessing_tensor_frame_to_sd_image(const sd::Tensor<float>& tensor, int frame_index, uint8_t* image_data) {
+    const auto& shape = tensor.shape();
+    GGML_ASSERT(shape.size() == 4 || shape.size() == 5);
+    GGML_ASSERT(image_data != nullptr);
+
+    const int width     = static_cast<int>(shape[0]);
+    const int height    = static_cast<int>(shape[1]);
+    const int channel   = static_cast<int>(shape[shape.size() == 5 ? 3 : 2]);
+    const size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const float* src    = tensor.data();
+
+    if (shape.size() == 4) {
+        GGML_ASSERT(frame_index >= 0 && frame_index < shape[3]);
+        const size_t frame_stride = pixels * static_cast<size_t>(channel);
+        const float* frame_ptr    = src + static_cast<size_t>(frame_index) * frame_stride;
+        if (channel == 3) {
+            const float* c0 = frame_ptr;
+            const float* c1 = frame_ptr + pixels;
+            const float* c2 = frame_ptr + pixels * 2;
+            for (size_t i = 0; i < pixels; ++i) {
+                image_data[i * 3 + 0] = preprocessing_float_to_u8(c0[i]);
+                image_data[i * 3 + 1] = preprocessing_float_to_u8(c1[i]);
+                image_data[i * 3 + 2] = preprocessing_float_to_u8(c2[i]);
+            }
+            return;
+        }
+
+        for (size_t i = 0; i < pixels; ++i) {
+            for (int c = 0; c < channel; ++c) {
+                image_data[i * static_cast<size_t>(channel) + static_cast<size_t>(c)] =
+                    preprocessing_float_to_u8(frame_ptr[i + pixels * static_cast<size_t>(c)]);
+            }
+        }
+        return;
+    }
+
+    GGML_ASSERT(frame_index >= 0 && frame_index < shape[2]);
+    const size_t channel_stride = pixels * static_cast<size_t>(shape[2]);
+    const float* frame_ptr      = src + static_cast<size_t>(frame_index) * pixels;
+    if (channel == 3) {
+        const float* c0 = frame_ptr;
+        const float* c1 = frame_ptr + channel_stride;
+        const float* c2 = frame_ptr + channel_stride * 2;
+        for (size_t i = 0; i < pixels; ++i) {
+            image_data[i * 3 + 0] = preprocessing_float_to_u8(c0[i]);
+            image_data[i * 3 + 1] = preprocessing_float_to_u8(c1[i]);
+            image_data[i * 3 + 2] = preprocessing_float_to_u8(c2[i]);
+        }
+        return;
+    }
+
+    for (size_t i = 0; i < pixels; ++i) {
+        for (int c = 0; c < channel; ++c) {
+            image_data[i * static_cast<size_t>(channel) + static_cast<size_t>(c)] =
+                preprocessing_float_to_u8(frame_ptr[i + channel_stride * static_cast<size_t>(c)]);
+        }
+    }
+}
+
 static inline sd::Tensor<float> sd_image_to_preprocessing_tensor(sd_image_t image) {
     sd::Tensor<float> tensor({static_cast<int64_t>(image.width), static_cast<int64_t>(image.height), static_cast<int64_t>(image.channel), 1});
     for (uint32_t y = 0; y < image.height; ++y) {
@@ -39,20 +108,7 @@ static inline sd::Tensor<float> sd_image_to_preprocessing_tensor(sd_image_t imag
 static inline void preprocessing_tensor_to_sd_image(const sd::Tensor<float>& tensor, uint8_t* image_data) {
     GGML_ASSERT(tensor.dim() == 4);
     GGML_ASSERT(tensor.shape()[3] == 1);
-    GGML_ASSERT(image_data != nullptr);
-
-    int width   = static_cast<int>(tensor.shape()[0]);
-    int height  = static_cast<int>(tensor.shape()[1]);
-    int channel = static_cast<int>(tensor.shape()[2]);
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            for (int c = 0; c < channel; ++c) {
-                float value                               = preprocessing_get_4d(tensor, x, y, c, 0);
-                value                                     = std::min(1.0f, std::max(0.0f, value));
-                image_data[(y * width + x) * channel + c] = static_cast<uint8_t>(std::round(value * 255.0f));
-            }
-        }
-    }
+    preprocessing_tensor_frame_to_sd_image(tensor, 0, image_data);
 }
 
 static inline sd::Tensor<float> gaussian_kernel_tensor(int kernel_size) {

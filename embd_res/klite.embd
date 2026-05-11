@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 <head>
 	<script id="init-config">
-	const LITEVER = 330;
+	const LITEVER = 331;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -2270,16 +2270,16 @@ Current version indicated by LITEVER below.
 		max-width: 75%;
 	}
 
-	.chat_received_withd_msg p {
+	.chat_received_withd_msg .chat_para {
 		font-size: 14px;
 		margin: 0;
-		padding: 5px 10px 5px 12px;
 		width: 100%;
 		white-space: pre-wrap;
 	}
 
 	.chat_received_withd_msg {
 		width: 100%;
+		padding: 5px 10px 5px 12px;
 		background: var(--theme_color_ai_msg_bg) none repeat scroll 0 0;
 		border-radius: 0 15px 15px 15px;
 		color: var(--theme_color_ai_msg_fg);
@@ -2292,11 +2292,10 @@ Current version indicated by LITEVER below.
 	.chat_mesgs_inner{
 		padding: 2px 12px 2px 12px;
 	}
-	.chat_sent_msg p {
+	.chat_sent_msg .chat_para {
 		font-size: 14px;
 		margin: 0;
 		color: var(--theme_color_user_msg_fg);
-		padding: 5px 10px 5px 12px;
 		width: 100%;
 		white-space: pre-wrap;
 	}
@@ -2306,6 +2305,7 @@ Current version indicated by LITEVER below.
 		overflow:auto;
 		background: var(--theme_color_user_msg_bg);
 		border-radius: 12px 15px 0px 15px;
+		padding: 5px 10px 5px 12px;
 	}
 	.chat_outgoing_msg {
 		overflow: hidden;
@@ -4519,8 +4519,8 @@ Current version indicated by LITEVER below.
 		second_ep_model:"gpt2",
 		second_ep_url:"",
 
-		max_context_length: (localflag?8192:3800),
-		max_length: (localflag?1024:500),
+		max_context_length: (localflag?8192:4096),
+		max_length: (localflag?1024:512),
 		last_maxctx: 0,
 		auto_ctxlen: true,
 		auto_genamt: true,
@@ -4555,6 +4555,36 @@ Current version indicated by LITEVER below.
 		adaptivep_decay: 0.9,
 		sampler_order: [6, 0, 1, 3, 4, 2, 5],
 		custom_sampler_fields: {},
+	};
+
+	const PROTECTED_FIELDS = {
+		my_api_key: true,
+		saved_oai_key: true,
+		saved_oai_addr: true,
+		saved_dalle_key: true,
+		saved_dalle_url: true,
+		saved_oai_tts_key: true,
+		saved_oai_tts_url: true,
+		saved_oai_embd_key: true,
+		saved_oai_embd_url: true,
+		saved_openrouter_key: true,
+		saved_mistralai_key: true,
+		saved_featherless_key: true,
+		saved_nvidianim_key: true,
+		saved_pollinations_key: true,
+		saved_grok_key: true,
+		saved_claude_key: true,
+		saved_claude_addr: true,
+		saved_palm_key: true,
+		saved_cohere_key: true,
+		saved_kai_addr: true,
+		saved_kai_key: true,
+		saved_a1111_url: true,
+		saved_comfy_url: true,
+		saved_comfy_bearer_token: true,
+		saved_xtts_url: true,
+		generate_images_mode: true,
+		saved_mcp_urls: true
 	};
 
 	const defaultsettings = JSON.parse(JSON.stringify(localsettings));
@@ -5273,6 +5303,19 @@ Current version indicated by LITEVER below.
 		return result;
 	}
 
+	function preserve_protected_fields(source) {
+		const out = {};
+		for (const key in PROTECTED_FIELDS) {
+			if (source[key] !== undefined) {
+			out[key] = source[key];
+			}
+		}
+		return out;
+	}
+	function restore_protected_fields(target, snapshot) {
+		Object.assign(target, snapshot);
+	}
+
 	function asyncRunner(generatorFn) { //allows async/await like syntax before it exists
 		return function (...args) {
 			const generator = generatorFn.apply(this, args);
@@ -5830,7 +5873,7 @@ Current version indicated by LITEVER below.
 		let instag = localsettings.instruct_systag;
 		if(instag=="{{[SYSTEM]}}" && !(custom_kobold_endpoint != "" && is_using_kcpp_with_autotags()))
 		{
-			instag = ""; //backend not compatible with auto
+			instag = "\n### System:\n"; //backend not compatible with auto
 		}
 		if(doTrim){
 			return replaceAll(instag, "\\n", "\n").trim();
@@ -7185,7 +7228,7 @@ Current version indicated by LITEVER below.
 		.then((data) => {
 			console.log("sync finished response: " + JSON.stringify(data));
 			last_response_obj = JSON.parse(JSON.stringify(data));
-			if ((custom_oai_key != "" || determine_if_mcp_active()) && data.choices != null && data.choices.length > 0) {
+			if ((custom_oai_key != "" || is_using_kcpp_with_jinja() || determine_if_mcp_active()) && data.choices != null && data.choices.length > 0) {
 				let dch = data.choices[0];
 				if (dch.text) {
 					synchro_polled_response = dch.text;
@@ -7735,22 +7778,60 @@ Current version indicated by LITEVER below.
 		function stashLatex(text) { //this function preserves the contents of multiline latex blocks so they don't get corrupted by markdown
 			const latexBlocks = [];
 			let counter = 0;
+
+			const stash = (match) => {
+				const key = `%%LATEXBLK${counter++}%%`;
+				latexBlocks.push({ key, value: match });
+				return key;
+			};
+
+			// 1. Blockquote-wrapped $$ blocks (existing)
 			text = text.replace(/(^> \$\$\n([\s\S]*?)\n\$\$)/gm, (match) => {
 				const key = `%%LATEXBLK${counter++}%%`;
 				latexBlocks.push({ key, value: match.slice(2) });
 				return key;
 			});
-			text = text.replace(/(^ {0,6}\\\[\n([\s\S]*?)\n {0,6}\\\] {0,2}$|^\$\$\n([\s\S]*?)\n\$\$$|^ {2}\$\$\n {2}([\s\S]*?)\n {2}\$\$$|\$\$([^\n]+?)\$\$|\\\(([^\n]+?)\\\)|\\\[([^\n]+?)\\\])/gm, (match, p1, p2, p3, p4, p5, p6, p7) => {
+
+			// 2. All block-level latex (existing)
+			text = text.replace(/(^ {0,6}\\\[\n([\s\S]*?)\n {0,6}\\\] {0,2}$|^\$\$\n([\s\S]*?)\n\$\$$|^ {2}\$\$\n {2}([\s\S]*?)\n {2}\$\$$|\$\$([^\n]+?)\$\$|\\\(([^\n]+?)\\\)|\\\[([^\n]+?)\\\])/gm,
+				(match) => stash(match)
+			);
+
+			// 3. Inline: $word$ or $letter$ — mirrors replaceLatex patterns
+			text = text.replace(/(^|[^\\])\$(\S[^$\n]*?\S)\$(?!\w)/g, (match, prefix, inner) => {
+				if (inner.startsWith('$')) return match; // buggy match guard
+				if (inner.replace(/\s+/g, '').match(/^\$+$/)) return match; // only dollar signs
 				const key = `%%LATEXBLK${counter++}%%`;
-				latexBlocks.push({ key, value: match });
-				return key;
+				latexBlocks.push({ key, value: `$${inner}$` });
+				return prefix + key;
 			});
-			return { "text":text, "blocks":latexBlocks };
+
+			// 4. Inline: single letter/number $x$
+			text = text.replace(/(^|[^\\])\$([A-Za-z0-9])\$(?!\d)/g, (match, prefix, inner) => {
+				const key = `%%LATEXBLK${counter++}%%`;
+				latexBlocks.push({ key, value: `$${inner}$` });
+				return prefix + key;
+			});
+
+			// 5. Inline: $ content $ (space-padded variant)
+			text = text.replace(/(^|[^\\])\$ (\S[^$\n]*?) \$(?!\d)/g, (match, prefix, inner) => {
+				if (inner.replace(/\s+/g, '').match(/^\$+$/)) return match;
+				const key = `%%LATEXBLK${counter++}%%`;
+				latexBlocks.push({ key, value: `$ ${inner} $` });
+				return prefix + key;
+			});
+
+			return { text, blocks: latexBlocks };
 		}
-		function unstashLatex(text, latexBlocks) {
+		function unstashLatex(text, latexBlocks, render) {
 			for(let i=0;i<latexBlocks.length;++i)
 			{
-				text = literalReplace(text,latexBlocks[i].key,latexBlocks[i].value);
+				let val = latexBlocks[i].value;
+				if(render)
+				{
+					val = replaceLatex(val);
+				}
+				text = literalReplace(text,latexBlocks[i].key,val);
 			}
 			return text;
 		}
@@ -7967,16 +8048,16 @@ Current version indicated by LITEVER below.
 			md = md.replace(/<\/code\><\/pre\>\n<pre\><code\>/g, "\n");
 			if(renderLatex)
 			{
-				if(stashLatexRes!=null)
-				{
-					md = unstashLatex(md,stashLatexRes.blocks);
-				}
 				//to aid the latex renderer, we temporarily add newlines between some blocks
 				md = md.replace(/<\/li><li>/gm, "</li>\n<li>");
 				md = md.replace(/<\/tr><tr class/gm, "</tr>\n<tr class");
-				md = replaceLatex(md);
+				md = replaceLatex(md); //catch all the latex that wasn't stashed
 				md = md.replace(/<\/li>\n<li>/gm, "</li><li>");
 				md = md.replace(/<\/tr>\n<tr class/gm, "</tr><tr class");
+				if(stashLatexRes!=null)
+				{
+					md = unstashLatex(md,stashLatexRes.blocks,true); //for each stashed block, render it
+				}
 			}
 			md = md.replace(/<\/ul>\n/gm, "</ul>").replace(/<\/ol>\n/gm, "</ol>");
 			md = md.replace(/\\([`_~\*\+\-\.\^\\\<\>\(\)\[\]])/gm, "$1");
@@ -10533,33 +10614,7 @@ Current version indicated by LITEVER below.
 
 				if (storyobj.savedsettings && storyobj.savedsettings != "")
 				{
-					let tmpapikey1 = localsettings.my_api_key;
-					let tmp_oai1 = localsettings.saved_oai_key;
-					let tmp_oai2 = localsettings.saved_oai_addr;
-					let tmp_oai3 = localsettings.saved_dalle_key;
-					let tmp_oai4 = localsettings.saved_dalle_url;
-					let tmp_oai5 = localsettings.saved_oai_tts_key;
-					let tmp_oai6 = localsettings.saved_oai_tts_url;
-					let tmp_oai7 = localsettings.saved_oai_embd_key;
-					let tmp_oai8 = localsettings.saved_oai_embd_url;
-					let tmp_or1 = localsettings.saved_openrouter_key;
-					let tmp_mai = localsettings.saved_mistralai_key;
-					let tmp_fai = localsettings.saved_featherless_key;
-					let tmp_nvai = localsettings.saved_nvidianim_key;
-					let tmp_pol = localsettings.saved_pollinations_key;
-					let tmp_grok = localsettings.saved_grok_key;
-					let tmp_claude1 = localsettings.saved_claude_key;
-					let tmp_claude2 = localsettings.saved_claude_addr;
-					let tmp_palm1 = localsettings.saved_palm_key;
-					let tmp_cohere1 = localsettings.saved_cohere_key;
-					let tmp_kai = localsettings.saved_kai_addr;
-					let tmp_kai2 = localsettings.saved_kai_key;
-					let tmp_a1111 = localsettings.saved_a1111_url;
-					let tmp_comfy = localsettings.saved_comfy_url;
-					let tmp_comfy_bearer_token = localsettings.saved_comfy_bearer_token;
-					let tmp_xtts = localsettings.saved_xtts_url;
-					let tmp_imggen = localsettings.generate_images_mode;
-					let tmp_mcp = localsettings.saved_mcp_urls;
+					let tmp_essentials = preserve_protected_fields(localsettings);
 
 					if(loadgensettings)
 					{
@@ -10591,33 +10646,7 @@ Current version indicated by LITEVER below.
 						localsettings.hide_think_stream = old_hide_think_stream;
 					}
 
-					localsettings.my_api_key = tmpapikey1;
-					localsettings.saved_oai_key = tmp_oai1;
-					localsettings.saved_oai_addr = tmp_oai2;
-					localsettings.saved_dalle_key = tmp_oai3;
-					localsettings.saved_dalle_url = tmp_oai4;
-					localsettings.saved_oai_tts_key = tmp_oai5;
-					localsettings.saved_oai_tts_url = tmp_oai6;
-					localsettings.saved_oai_embd_key = tmp_oai7;
-					localsettings.saved_oai_embd_url = tmp_oai8;
-					localsettings.saved_openrouter_key = tmp_or1;
-					localsettings.saved_mistralai_key = tmp_mai;
-					localsettings.saved_featherless_key = tmp_fai;
-					localsettings.saved_nvidianim_key = tmp_nvai;
-					localsettings.saved_pollinations_key = tmp_pol;
-					localsettings.saved_grok_key = tmp_grok;
-					localsettings.saved_claude_key = tmp_claude1;
-					localsettings.saved_claude_addr = tmp_claude2;
-					localsettings.saved_palm_key = tmp_palm1;
-					localsettings.saved_cohere_key = tmp_cohere1;
-					localsettings.saved_kai_addr = tmp_kai;
-					localsettings.saved_kai_key = tmp_kai2;
-					localsettings.saved_a1111_url = tmp_a1111;
-					localsettings.saved_comfy_url = tmp_comfy;
-					localsettings.saved_comfy_bearer_token = tmp_comfy_bearer_token;
-					localsettings.saved_xtts_url = tmp_xtts;
-					localsettings.generate_images_mode = tmp_imggen;
-					localsettings.saved_mcp_urls = tmp_mcp;
+					restore_protected_fields(localsettings,tmp_essentials);
 
 					if(loadaessettings)
 					{
@@ -17178,7 +17207,7 @@ Current version indicated by LITEVER below.
 		switch(themeid)
 		{
 			case "0": return "The classic simple Kobold theme everyone loves."; break;
-			case "1": return "A compact instant messenger styled chat theme."; break;
+			case "1": return "A compact instant-messenger-styled chat theme."; break;
 			case "2": return "Customizable aesthetic theme with character portraits."; break;
 			case "3": return "Clean, minimalistic, corporate AI assistant theme."; break;
 			default: return ""; break;
@@ -17272,7 +17301,7 @@ Current version indicated by LITEVER below.
 			case "1": document.getElementById("opmodedesc").innerText = "Let the AI co-write a story."; break;
 			case "2": document.getElementById("opmodedesc").innerText = "Participate in turn-based interactive adventures."; break;
 			case "3": document.getElementById("opmodedesc").innerText = "Roleplay with a virtual chatbot AI."; break;
-			case "4": document.getElementById("opmodedesc").innerText = "Give the AI instructions, questions, or do tasks."; break;
+			case "4": document.getElementById("opmodedesc").innerText = "Give the AI instructions, questions, or tasks."; break;
 			default: document.getElementById("opmodedesc").innerText = ""; break;
 		}
 
@@ -17969,7 +17998,13 @@ Current version indicated by LITEVER below.
 	function reset_all_settings()
 	{
 		msgboxYesNo("Reset ALL settings to their defaults? This will also reset your aesthetic UI and your current story!","Confirm Reset All Settings",()=>{
+			let also_clear_api_keys = msgboxYesNoChecked?true:false;
+			let essentials = preserve_protected_fields(localsettings);
 			localsettings = JSON.parse(JSON.stringify(defaultsettings));
+			if(!also_clear_api_keys)
+			{
+				restore_protected_fields(localsettings,essentials);
+			}
 			let ns = new AestheticInstructUISettings();
 			aestheticInstructUISettings = deepCopyAestheticSettings(ns);
 			refreshAestheticPreview(false);
@@ -17985,7 +18020,7 @@ Current version indicated by LITEVER below.
 			let styleElement = document.getElementById('custom_css');
 			styleElement.innerHTML = "";
 			show_welcome_panel();
-		},null);
+		},null,false,"Also clear API keys");
 
 	}
 
@@ -20985,7 +21020,7 @@ Current version indicated by LITEVER below.
 					}
 					for(let i=0;i<mhistory.length;++i)
 					{
-						let cturn = { "role": (mhistory[i].myturn?"user":"assistant"), "content": mhistory[i].msg };
+						let cturn = { "role": (mhistory[i].myturn?"user":(mhistory[i].issystem?"system":"assistant")), "content": mhistory[i].msg };
 						if(!mhistory[i].myturn && mhistory[i].tool_calls)
 						{
 							cturn.content = null;
@@ -21006,7 +21041,7 @@ Current version indicated by LITEVER below.
 							submit_payload.tools = senttools;
 						}
 					}
-					let targetep = apply_proxy_url(custom_kobold_endpoint + oai_submit_endpoint_chat);
+					let targetep = apply_proxy_url(custom_kobold_endpoint + "/v1" + oai_submit_endpoint_chat);
 					if(is_browser_supports_sse() && localsettings.tokenstreammode!=0)
 					{
 						submit_payload.stream = true;
@@ -21172,7 +21207,7 @@ Current version indicated by LITEVER below.
 						}
 
 						//many backends REFUSE to allow the assistant to go first. If the first turn belongs to assistant, we turn it into user
-						if(mhistory.length>0 && !mhistory[0].myturn)
+						if(mhistory.length>0 && !mhistory[0].myturn && !mhistory[0].issystem)
 						{
 							mhistory[0].myturn = true;
 						}
@@ -21202,7 +21237,7 @@ Current version indicated by LITEVER below.
 
 						for(let i=0;i<mhistory.length;++i)
 						{
-							let cturn = { "role": (mhistory[i].myturn?"user":"assistant"), "content": mhistory[i].msg };
+							let cturn = { "role": (mhistory[i].myturn?"user":(mhistory[i].issystem?"system":"assistant")), "content": mhistory[i].msg };
 							if(!mhistory[i].myturn && mhistory[i].tool_calls)
 							{
 								cturn.content = null;
@@ -21268,6 +21303,13 @@ Current version indicated by LITEVER below.
 					if(localsettings.opmode==1)
 					{
 						oai_payload.messages.unshift({ "role": "system", "content": "Please continue this text directly from where it stopped. Just respond with a direct partial continuation of the text immediately from the latest word." });
+					}
+
+					if(oai_payload.messages.length>1 && oai_payload.messages[0].role=="system" && oai_payload.messages[1].role=="system" )
+					{
+						//first 2 turns are system, merge them
+						oai_payload.messages[0].content += "\n" + oai_payload.messages[1].content;
+						oai_payload.messages.splice(1, 1);
 					}
 				}
 				else
@@ -25200,6 +25242,10 @@ Current version indicated by LITEVER below.
 			//do nothing on cancel
 		},true,true);
 	}
+	function classic_retry_turn(idx)
+	{
+		corpo_retry_chunk(idx);
+	}
 
 	function classic_click_turn(button,idx,toggleopen = true)
 	{
@@ -25216,6 +25262,7 @@ Current version indicated by LITEVER below.
 
 		let popcontent = `<button type="button" onclick="classic_edit_turn(${idx})">Edit Turn</button>`;
 		popcontent += `<button type="button" onclick="classic_delete_turn(${idx})">Delete Turn</button>`;
+		popcontent += `<button type="button" onclick="classic_retry_turn(${idx})">Retry Turn</button>`;
 		popcontent += `<button type="button" onclick="">Cancel</button>`;
 		popupMenu.innerHTML = popcontent;
 
@@ -25552,9 +25599,10 @@ Current version indicated by LITEVER below.
 			</div>`;
 	}
 
-	function repack_instruct_turns(input,usertag,aitag,allow_blank)
+	function repack_instruct_turns(input,usertag,aitag,systag,allow_blank)
 	{
 		let myturnchat = false; //who is currently speaking?
+		let issystem = false; //is this a system turn?
 		let chatunits = []; //parse chat body into nice chat chunks
 
 		let combined_chunks = [];
@@ -25572,27 +25620,48 @@ Current version indicated by LITEVER below.
 				}
 				continue;
 			}
-			let turnchunks2 = chnk.split(aitag);
-			for(let j=0;j<turnchunks2.length;++j)
+
+			// split system first
+			let syschunks = [chnk];
+			if(systag && systag.trim()!="")
 			{
-				if(j==0)
+				syschunks = chnk.split(systag);
+			}
+			for(let s=0;s<syschunks.length;++s)
+			{
+				let syschnk = syschunks[s];
+
+				// inject system placeholder except first
+				if(s>0)
 				{
-					if(startoppo)
+					combined_chunks.push("%SystemPlaceholder%");
+				}
+
+				let turnchunks2 = syschnk.split(aitag);
+				for(let j=0;j<turnchunks2.length;++j)
+				{
+					if(j==0)
 					{
-						startoppo = false;
-						combined_chunks.push("%AIPlaceholder%");
+						if(s==0) // only apply original logic on first system split
+						{
+							if(startoppo)
+							{
+								startoppo = false;
+								combined_chunks.push("%AIPlaceholder%");
+							}
+							else
+							{
+								combined_chunks.push("%HumanPlaceholder%");
+							}
+						}
+
+						combined_chunks.push(turnchunks2[j]);
 					}
 					else
 					{
-						combined_chunks.push("%HumanPlaceholder%");
+						combined_chunks.push("%AIPlaceholder%");
+						combined_chunks.push(turnchunks2[j]);
 					}
-
-					combined_chunks.push(turnchunks2[j]);
-				}
-				else
-				{
-					combined_chunks.push("%AIPlaceholder%");
-					combined_chunks.push(turnchunks2[j]);
 				}
 			}
 		}
@@ -25603,21 +25672,29 @@ Current version indicated by LITEVER below.
 			if(curr=="%HumanPlaceholder%")
 			{
 				myturnchat = true;
+				issystem = false;
 			}
 			else if(curr=="%AIPlaceholder%")
 			{
 				myturnchat = false;
+				issystem = false;
+			}
+			else if(curr=="%SystemPlaceholder%")
+			{
+				myturnchat = false;
+				issystem = true;
 			}
 			else
 			{
 				if(allow_blank || curr.trim()!="")
 				{
 					chatunits.push({
-					msg:curr,
-					myturn:myturnchat,
-					unlabelled_name:unlabelled_turns,
-					unlabelled_img:unlabelled_turns
-				});
+						msg:curr,
+						myturn:myturnchat,
+						issystem:issystem,
+						unlabelled_name:unlabelled_turns,
+						unlabelled_img:unlabelled_turns
+					});
 				}
 				unlabelled_turns = false;
 			}
@@ -25626,7 +25703,7 @@ Current version indicated by LITEVER below.
 		//post process the chatunits to handle tool calls
 		for(let i=0;i<chatunits.length;++i)
 		{
-			if(!chatunits[i].myturnchat && (chatunits[i].msg.includes("tool_call_id") || chatunits[i].msg.includes("tool_calls")))
+			if(!chatunits[i].myturn && !chatunits[i].issystem && (chatunits[i].msg.includes("tool_call_id") || chatunits[i].msg.includes("tool_calls")))
 			{
 				try {
 					let unsc = unescape_html(chatunits[i].msg);
@@ -25788,9 +25865,12 @@ Current version indicated by LITEVER below.
 
 		let st = get_instruct_starttag(false);
 		let et = get_instruct_endtag(false);
+		let syst = get_instruct_systag(false);
 
 		let ste = get_instruct_starttag_end(false);
 		let ete = get_instruct_endtag_end(false);
+		let syste = get_instruct_systag_end(false);
+
 		let foundpreset = find_matching_instruct_preset(st,et);
 		if(foundpreset && !ete && foundpreset.assistant_end && !ste && foundpreset.user_end)
 		{
@@ -25808,7 +25888,7 @@ Current version indicated by LITEVER below.
 			}
 		}
 
-		let turns = repack_instruct_turns(input,st,et,allow_blank);
+		let turns = repack_instruct_turns(input,st,et,syst,allow_blank);
 		return turns;
 	}
 
@@ -26529,7 +26609,7 @@ Current version indicated by LITEVER below.
 				{
 					namepart = "";
 				}
-				newbodystr += `<div class="chat_outgoing_msg"><div class="chat_sent_msg"><p>`+namepart+curr.msg+`</p></div></div>`;
+				newbodystr += `<div class="chat_outgoing_msg"><div class="chat_sent_msg"><span class="chat_para">`+namepart+curr.msg+`</span></div></div>`;
 			}else{
 				let oname = (curr.name?escape_html(curr.name):"");
 				let onametrim = oname.trim();
@@ -26543,13 +26623,13 @@ Current version indicated by LITEVER below.
 				{
 					namepart = "";
 				}
-				newbodystr += `<div class="incoming_msg"><div class="chat_received_msg"><div class="chat_received_withd_msg"><p>`+namepart+curr.msg+`</p></div></div></div>`;
+				newbodystr += `<div class="incoming_msg"><div class="chat_received_msg"><div class="chat_received_withd_msg"><span class="chat_para">`+namepart+curr.msg+`</span></div></div></div>`;
 			}
 
 		}
 		if(synchro_pending_stream!="")
 		{
-			newbodystr += `<div class="incoming_msg"><div class="chat_received_msg"><div class="chat_received_withd_msg"><p><span class="color_pendingtext pending_text">` + escape_html(pending_context_preinjection) + format_streaming_text(escape_html(synchro_pending_stream)) + `</span></p></div></div></div>`;
+			newbodystr += `<div class="incoming_msg"><div class="chat_received_msg"><div class="chat_received_withd_msg"><span class="chat_para"><span class="color_pendingtext pending_text">` + escape_html(pending_context_preinjection) + format_streaming_text(escape_html(synchro_pending_stream)) + `</span></span></div></div></div>`;
 		}
 
 		return newbodystr;
@@ -29383,11 +29463,7 @@ Current version indicated by LITEVER below.
 					<div id="documentdb_oai_buttons" style="display: flex;">
 						<button type="button" class="btn btn-primary" style="margin:0px; padding:0px; padding-left:2px;padding-right:2px;font-size:12px;margin-right:2px;margin-left:2px;" onclick="set_oai_embd_url()">Set URL</button>
 						<button type="button" class="btn btn-primary" style="margin:0px; padding:0px; padding-left:2px;padding-right:2px;font-size:12px;" onclick="set_oai_embd_key()">Set Key</button>
-						<select title="Select OpenAI Embed Model" style="margin:0px 4px 0; width:150px;" class="form-control" id="oai_embd_model">
-							<option value="text-embedding-3-small">text-embedding-3-small</option>
-							<option value="text-embedding-3-large">text-embedding-3-large</option>
-							<option value="text-embedding-ada-002">text-embedding-ada-002</option>
-						</select>
+						<input type="text" title="Select OpenAI Embed Model" id="oai_embd_model" style="margin:0px 4px 0; width:150px;" placeholder="Enter embedding model" value="text-embedding-3-small"/>
 					</div>
 				</div>
 
@@ -29495,7 +29571,7 @@ Current version indicated by LITEVER below.
 						<h3 style="margin-top: 4px;">Usage Mode</h3>
 						<div>
 							<div class="settinglabel">
-								<div class="justifyleft">Usage mode <span class="helpicon">?<span class="helptext">Story Mode is best for novel style writing. Adventure Mode is best for Interactive Fiction RPGs. Chat Mode is best for chat conversations with the AI. Instruct mode is for giving the AI ChatGPT styled tasks.</span></span></div>
+								<div class="justifyleft">Usage mode <span class="helpicon">?<span class="helptext">Story Mode is best for novel-style writing. Adventure Mode is best for Interactive Fiction RPGs. Chat Mode is best for chat conversations with the AI. Instruct mode is for giving the AI ChatGPT-styled tasks.</span></span></div>
 								<div style="margin:0px 0 0 auto;">
 								<select title="Usage Mode Selection" class="form-control" id="opmode" onchange="toggle_opmode()">
 									<option value="4">Instruct Mode</option>
@@ -29611,7 +29687,7 @@ Current version indicated by LITEVER below.
 							</div>
 							<div class="settinglabel">
 								<div class="justifyleft">Separate end tags <span class="helpicon">?<span
-									class="helptext">Allows using separate Instruction and Response End Tags, instead of combing them with the start tag. Don't change this halfway through a story!</span></span></div>
+									class="helptext">Allows using separate Instruction and Response End Tags, instead of combining them with the start tag. Don't change this halfway through a story!</span></span></div>
 								<input type="checkbox" title="Separate End Tags" id="separate_end_tags" class="push-right" onchange="toggle_separate_end_tags()">
 							</div>
 							<div class="settinglabel">
@@ -29640,12 +29716,12 @@ Current version indicated by LITEVER below.
 							</div>
 						</div>
 						<div class="settinglabel">
-							<div class="justifyleft">Allow continue user turns <span class="helpicon">?<span
+							<div class="justifyleft">Allow continuing user turns <span class="helpicon">?<span
 								class="helptext">In instruct mode, allows the AI to continue generating the user's turn when pressing Generate More.</span></span></div>
 							<input title="Legacy Savefile" type="checkbox" id="allow_continue_user_turn" class="push-right">
 						</div>
 						<div class="settinglabel">
-							<div class="justifyleft">Allow continue AI replies <span class="helpicon">?<span
+							<div class="justifyleft">Allow continuing AI replies <span class="helpicon">?<span
 							class="helptext">Allow the AI to continue incomplete past responses, which can be extended by pressing submit again. Not recommended for newbies.</span></span></div>
 							<input type="checkbox" title="Continue Bot Replies" id="allow_continue_chat" class="push-right">
 						</div>
@@ -29765,23 +29841,23 @@ Current version indicated by LITEVER below.
 								</div>
 						</div>
 						<div class="settinglabel">
-							<div class="justifyleft">Enable markdown <span class="helpicon">?<span
-								class="helptext">Allows the UI to use markdown formatting such as quotes and code blocks.</span></span></div>
+							<div class="justifyleft">Enable Markdown <span class="helpicon">?<span
+								class="helptext">Allows the UI to use Markdown formatting, such as quotes and code blocks.</span></span></div>
 								<input type="checkbox" title="Enabled Markdown" id="instruct_has_markdown" class="push-right">
 						</div>
 						<div class="settinglabel">
-							<div class="justifyleft">Render markdown while streaming <span class="helpicon">?<span
-								class="helptext">Attempt to render markdown when streaming. May result in wonky output or lag on older devices.</span></span></div>
+							<div class="justifyleft">Render Markdown while streaming <span class="helpicon">?<span
+								class="helptext">Attempt to render Markdown when streaming. May result in wonky output or lag on older devices.</span></span></div>
 							<input title="Show Local Endpoint Selector" type="checkbox" id="render_streaming_markdown" class="push-right">
 						</div>
 						<div class="settinglabel">
 							<div class="justifyleft">Enable LaTeX <span class="helpicon">?<span
-								class="helptext">Allows the UI to render LaTeX within markdown formatting (Needs Markdown).</span></span></div>
+								class="helptext">Allows the UI to render LaTeX within Markdown formatting (Needs Markdown).</span></span></div>
 								<input type="checkbox" title="Enable LaTeX (Needs Markdown)" id="instruct_has_latex" class="push-right">
 						</div>
 						<div class="settinglabel">
 							<div class="justifyleft">Show Nametags <span class="helpicon">?<span
-								class="helptext">Controls if user and AI nametags are shown or hidden. Recommended.</span></span></div>
+								class="helptext">Controls whether user and AI nametags are shown or hidden. Recommended.</span></span></div>
 							<input title="Show Nametags" type="checkbox" id="show_nametags" class="push-right">
 						</div>
 						<div class="settinglabel">
@@ -29809,7 +29885,7 @@ Current version indicated by LITEVER below.
 						</div>
 						<div class="settinglabel">
 							<div class="justifyleft">Max Displayed Text Characters&nbsp;<span class="helpicon">?<span
-								class="helptext">If set above 0, will limit the number of text characters rendered to display (any earlier text will still be submitted but stay hidden).</span></span></div>
+								class="helptext">If set above 0, will limit the number of text characters rendered to display. (Any earlier text will still be submitted but stay hidden.)</span></span></div>
 							<input class="push-right" title="Max Displayed Text Characters" type="text" inputmode="decimal" value="0" style="width:10ch" id="max_display_chars">
 						</div>
 						<div class="settinglabel">

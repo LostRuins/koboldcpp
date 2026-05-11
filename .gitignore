@@ -96,6 +96,8 @@ perf-*.txt
 
 poetry.lock
 poetry.toml
+poetry.lock
+uv.lock
 
 ggml-metal-merged.metal
 

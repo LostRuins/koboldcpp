@@ -1,7 +1,9 @@
 #ifndef __COMMON_BLOCK_HPP__
 #define __COMMON_BLOCK_HPP__
 
+#include "ggml-backend.h"
 #include "ggml_extend.hpp"
+#include "util.h"
 
 class DownSampleBlock : public GGMLBlock {
 protected:
@@ -248,9 +250,6 @@ public:
         float scale         = 1.f;
         if (precision_fix) {
             scale = 1.f / 128.f;
-#ifdef SD_USE_VULKAN
-            force_prec_f32 = true;
-#endif
         }
         // The purpose of the scale here is to prevent NaN issues in certain situations.
         // For example, when using Vulkan without enabling force_prec_f32,
@@ -264,6 +263,9 @@ public:
 
         auto net_0 = std::dynamic_pointer_cast<UnaryBlock>(blocks["net.0"]);
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
+        if (sd_backend_is(ctx->backend, "Vulkan")) {
+            net_2->set_force_prec_f32(true);
+        }
 
         x = net_0->forward(ctx, x);  // [ne3, ne2, ne1, inner_dim]
         x = net_2->forward(ctx, x);  // [ne3, ne2, ne1, dim_out]

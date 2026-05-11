@@ -8,16 +8,6 @@
 #include <random>
 #include <thread>
 #include "ggml_v3.h"
-#include "llama.h"
-
-//
-// CLI argument parsing
-//
-
-
-//
-// Vocab utils
-//
 
 struct gpt_vocab {
     using id    = int32_t;
@@ -73,6 +63,7 @@ std::vector<std::string> split_string(const std::string& input, const std::strin
 bool kcpp_decode_audio_from_buf(const unsigned char * buf_in, size_t len, int target_sampler_rate, std::vector<float> & pcmf32_mono);
 bool kcpp_decode_audio_to_f32_stereo_48k(const uint8_t * data, size_t data_size, std::vector<float> & pcm, int & T_audio);
 
+typedef struct ggml_backend_device * ggml_backend_dev_t;
 std::vector<ggml_backend_dev_t> kcpp_parse_device_list(const std::string & value);
 
 bool kcpp_string_ends_with(const std::string& str, const std::string& suffix);
@@ -80,52 +71,6 @@ std::string kcpp_rstrip(const std::string& s);
 int ComputeSharedPrefixLength(const std::vector<int> &tokens_a,const std::vector<int> &tokens_b);
 float ComputePrefixMatchPercent(const std::vector<int> &tokens_a,const std::vector<int> &tokens_b);
 bool FullyContainedPrefix(std::vector<int> &sequence1, std::vector<int> &sequence2);
-
-//duplcated and modified from llava_embd_batch
-struct kcpp_embd_batch {
-    std::vector<llama_pos>    pos;
-    std::vector<llama_pos>    pos_view;
-    std::vector<int32_t>      n_seq_id;
-    std::vector<llama_seq_id> seq_id_0;
-    std::vector<llama_seq_id*> seq_ids;
-    std::vector<int8_t>       logits;
-    llama_batch batch;
-
-    llama_batch get_view(int offset, int n_tokens, int n_embd_mmproj);
-
-    // Embedding constructor
-    kcpp_embd_batch(
-        float * embd,
-        int32_t n_tokens,
-        int32_t npast,
-        bool use_mrope,
-        bool mrope_is_image = false,
-        int img_nx = 0,
-        int img_ny = 0
-    );
-
-    // Token constructor
-    kcpp_embd_batch(
-        std::vector<llama_token> & tokens,
-        int32_t npast,
-        bool use_mrope,
-        bool return_all_logits,
-        bool mrope_is_image = false,
-        int img_nx = 0,
-        int img_ny = 0
-    );
-
-private:
-    void init_kcpp_batch(
-        int32_t n_tokens,
-        int32_t npast,
-        bool use_mrope,
-        bool return_all_logits,
-        bool mrope_is_image,
-        int img_nx,
-        int img_ny
-    );
-};
 
 #pragma pack(push, 1)
 struct wav16_header {

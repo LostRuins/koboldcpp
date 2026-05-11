@@ -1043,9 +1043,6 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
     return nullptr;
 }
 
-//this is a very dirty kcpp hack that attempts to reuse the most recently use ctx for old mixtral models
-static ggml_context * last_used_ctx = nullptr;
-
 struct ggml_tensor * llama_model_loader::create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
         const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
@@ -1266,7 +1263,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             return t;
         }
     }
-    last_used_ctx = ctx; //this caches the last ctx which should match the buft we want for this layer. kobo forgive me.
 
     // LLAMA_LOG_DEBUG("%s: loading tensor %s\n", __func__, tn.str().c_str());
     const struct ggml_tensor * cur = check_tensor_dims(tn.str(), ne, !(flags & TENSOR_NOT_REQUIRED));

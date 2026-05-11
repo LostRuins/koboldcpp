@@ -180,8 +180,34 @@ jobs:
             whispermain.exe
             sdmain.exe
             ttsmain.exe
-            whispermain.exe
             convert_hf_to_gguf.py
             convert_hf_to_gguf_update.py
             gguf-py
             legacy
+
+      - name: Package Tools Release
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path `
+              gguf-split.exe,
+              quantize_clip.exe,
+              quantize_gguf.exe,
+              whispermain.exe,
+              sdmain.exe,
+              ttsmain.exe,
+              convert_hf_to_gguf.py,
+              convert_hf_to_gguf_update.py,
+              gguf-py,
+              legacy `
+            -DestinationPath koboldcpp_tools.zip `
+            -Force
+
+      - name: Upload tools to GitHub Rolling Tools Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release upload kcpp_tools_rolling `
+            koboldcpp_tools.zip `
+            --clobber

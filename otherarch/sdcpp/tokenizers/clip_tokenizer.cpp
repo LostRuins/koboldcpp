@@ -62,7 +62,7 @@ void CLIPTokenizer::load_from_merges(const std::string& merges_utf8_str) {
     }
     vocab.push_back(utf8_to_utf32("<|startoftext|>"));
     vocab.push_back(utf8_to_utf32("<|endoftext|>"));
-    LOG_DEBUG("vocab size: %llu", vocab.size());
+    LOG_DEBUG("vocab size: %zu", vocab.size());
     int i = 0;
     for (const auto& token : vocab) {
         encoder[token] = i;

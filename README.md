@@ -61,8 +61,9 @@ Finally, obtain and load a GGUF model. See [here](#Obtaining-a-GGUF-model)
 - KoboldCpp can now be used on RunPod cloud GPUs! This is an easy way to get started without installing anything in a minute or two, and is very scalable, capable of running 70B+ models at afforable cost. [Try our RunPod image here!](https://koboldai.org/runpodcpp). Alternatively, you can also try [SimplePod](https://koboldai.org/simplepod) for smaller models
 
 ## Docker
-- The official docker can be found at https://hub.docker.com/r/koboldai/koboldcpp
-- If you're building your own docker, remember to enable LLAMA_PORTABLE
+- Caution: The KoboldCpp docker is intended for experts only, and primarily intended for cloud GPU rental users! If you're NOT an experienced user, you're recommended to use the [precompiled binaries directly instead](https://github.com/LostRuins/koboldcpp/releases/latest)
+- The docker uses a x86-64 Ubuntu Linux based environment interally, and expects a Nvidia or AMD GPU. It may perform suboptimally on some Windows and MacOS devices, and may outright fail for ARM. It applies crude AVX/AVX2 feature detection which may not work correctly on all systems, resulting in the failsafe binaries being loaded (speed will become extremely slow).
+- If you still want to proceed, the official docker can be found at https://hub.docker.com/r/koboldai/koboldcpp
 
 ## Obtaining a GGUF model
 - KoboldCpp uses GGUF models. They are not included with KoboldCpp, but you can download GGUF files from other places such as [Bartowski's Huggingface](https://huggingface.co/bartowski). Search for "GGUF" on huggingface.co for plenty of compatible models in the `.gguf` format.
@@ -192,6 +193,7 @@ and it will install everything required. Alternatively, you can download the abo
 - **I try to keep backwards compatibility with ALL past llama.cpp models**. But you are also encouraged to reconvert/update your models if possible for best results.
 - Since v1.75, openblas has been deprecated and removed in favor of the native CPU implementation.
 - Since v1.107, CLBlast has been deprecated and removed in favor of Vulkan.
+- Phishing SCAM Warning: koboldcpp(dot)com is NOT an official site, please help to report it to google for impersonation. You should ONLY trust official downloads from the release binaries on the official github at https://github.com/LostRuins/koboldcpp/releases/latest
 
 ## License
 - The original GGML library, stable-diffusion.cpp and llama.cpp by ggerganov are licensed under the MIT License

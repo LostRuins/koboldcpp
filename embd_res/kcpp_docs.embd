@@ -1575,6 +1575,31 @@
                       ]
                    }
                 },
+                "/api/extra/speakers_list": {
+                   "get": {
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {
+                                     "results": ["kobo", "cheery", "sleepy", "shouty", "chatty", "random", "instruct"]
+                                  },
+                                  "schema": {
+                                    "properties": {},
+                                    "type": "object"
+                                 }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      },
+                      "summary": "Get a list of available TTS speakers.",
+                      "description": "Get a list of available TTS speakers.",
+                      "tags": [
+                         "api/extra"
+                      ]
+                   }
+                },
                 "/api/extra/embeddings": {
                    "post": {
                       "summary": "Creates an embedding vector representing the input text. Please refer to OpenAI documentation",

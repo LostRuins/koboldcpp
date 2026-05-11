@@ -194,13 +194,13 @@ select{
 
 <div class="panel">
 <div style="display:flex; gap:8px; margin-bottom:10px;">
-  <button class="secondary" onclick="switchTab('music')" id="tab_music">🎵 Music</button>
-  <button class="secondary" onclick="switchTab('tts')" id="tab_tts">🗣 TTS</button>
+  <button class="secondary" onclick="switchTab('music')" id="tab_music">🎵 Create Music</button>
+  <button class="secondary" onclick="switchTab('tts')" id="tab_tts">🗣 Create TTS</button>
 </div>
 <div id="musicTab">
   <h2>Song Setup</h2>
 
-  <label>Caption</label> <div style="float:right"><input id="rewrite_caption" type="checkbox" style="width: auto;vertical-align: middle;" checked><label>Rewrite Caption</label></div>
+  <label>Caption</label> <div style="float:right"><input title="Rewrite Caption" id="rewrite_caption" type="checkbox" style="width: auto;vertical-align: middle;" checked><label>Rewrite Caption</label></div>
 
   <input id="caption" placeholder="Describe the song">
 
@@ -210,16 +210,16 @@ select{
   </div>
 
   <div class="form-grid" style="margin-top:12px">
-    <div><label>BPM</label><input id="bpm" type="number"></div>
-    <div><label>Duration</label><input id="duration" type="number"></div>
-    <div><label>Key</label><input id="keyscale"></div>
-    <div><label>Time Sig</label><input id="timesignature"></div>
-    <div><label>Language</label><input id="vocal_language"></div>
+    <div><label>BPM</label><input title="BPM" id="bpm" type="number"></div>
+    <div><label>Duration</label><input title="Duration" id="duration" type="number"></div>
+    <div><label>Key</label><input title="Keyscale" id="keyscale"></div>
+    <div><label>Time Sig</label><input title="Time Signature" id="timesignature"></div>
+    <div><label>Language</label><input title="Vocal Language" id="vocal_language"></div>
     <div>
       <label>Seed</label>
       <div style="display:flex; gap:6px;">
-        <input id="seed" type="number" style="flex:1;">
-        <button type="button" class="secondary" onclick="randomizeSeed()">🎲</button>
+        <input id="seed" title="Seed" type="number" style="flex:1;">
+        <button type="button" title="Randomize Seed" class="secondary" onclick="randomizeSeed()">🎲</button>
       </div>
     </div>
   </div>
@@ -228,43 +228,43 @@ select{
 
   <div id="advanced" class="hidden">
     <div class="compact-row" style="margin-top:10px">
-      <div><label>Temp</label><input id="lm_temperature" type="number" step="0.01" value="0.9"></div>
-      <div><label>CFG</label><input id="lm_cfg_scale" type="number" step="0.1" value="3.0"></div>
-      <div><label>Top-P</label><input id="lm_top_p" type="number" step="0.01" value="0.9"></div>
-      <div><label>Top-K</label><input id="lm_top_k" type="number" value="50"></div>
-      <div><label>RepPen</label><input id="lm_rep_pen" type="number" value="1.03"></div>
-      <div><label>Codes Top-P</label><input id="codes_top_p" type="number" value="0.99"></div>
-      <div><label>Codes Top-K</label><input id="codes_top_k" type="number" value="1000"></div>
-      <div><label>Codes Temp</label><input id="codes_temperature" type="number" value="1.0"></div>
-      <div><label>Steps</label><input id="inference_steps" type="number" value="8"></div>
-      <div><label>Guidance</label><input id="guidance_scale" type="number" value="1"></div>
-      <div><label>Shift</label><input id="shift" type="number" value="3"></div>
-      <div><label>Save as MP3</label><input id="use_mp3" type="checkbox"></div>
-      <div><label>Stereo</label><input id="stereo" type="checkbox" checked></div>
-      <div><label>Gen Codes</label><input id="gen_codes" type="checkbox"></div>
-      <div><label>Plan with LLM</label><input id="plan_with_main_llm" type="checkbox"></div>
+      <div><label>Temp</label><input title="Temperature" id="lm_temperature" type="number" step="0.01" value="0.9"></div>
+      <div><label>CFG</label><input title="CFG Scale" id="lm_cfg_scale" type="number" step="0.1" value="3.0"></div>
+      <div><label>Top-P</label><input title="Top-P" id="lm_top_p" type="number" step="0.01" value="0.9"></div>
+      <div><label>Top-K</label><input title="Top-K" id="lm_top_k" type="number" value="50"></div>
+      <div><label>RepPen</label><input title="Repetition Penalty" id="lm_rep_pen" type="number" value="1.03"></div>
+      <div><label>Codes Top-P</label><input title="Codes Top-P" id="codes_top_p" type="number" value="0.99"></div>
+      <div><label>Codes Top-K</label><input title="Codes Top-K" id="codes_top_k" type="number" value="1000"></div>
+      <div><label>Codes Temp</label><input title="Codes Temperature" id="codes_temperature" type="number" value="1.0"></div>
+      <div><label>Steps</label><input title="Generation Steps" id="inference_steps" type="number" value="8"></div>
+      <div><label>Guidance</label><input title="Guidance Scale" id="guidance_scale" type="number" value="1"></div>
+      <div><label>Shift</label><input title="Audio Shift" id="shift" type="number" value="3"></div>
+      <div><label>Save as MP3</label><input title="Save as MP3" id="use_mp3" type="checkbox"></div>
+      <div><label>Stereo</label><input title="Save as Stereo" id="stereo" type="checkbox" checked></div>
+      <div><label>Gen Codes</label><input title="Generate Audio Codes" id="gen_codes" type="checkbox"></div>
+      <div><label>Plan with LLM</label><input title="Plan with LLM" id="plan_with_main_llm" type="checkbox"></div>
     </div>
     <div>
-      <div><label>AudioCodes</label><textarea id="audio_codes"></textarea></div>
+      <div><label>AudioCodes</label><textarea placeholder="Input or generate audio codes here" id="audio_codes"></textarea></div>
     </div>
     <div style="margin-top:8px">
       <label>Music Reference Audio (.wav / .mp3)</label>
       <div style="display:flex; gap:6px; align-items:center;">
-        <input id="music_reference_audio" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg">
-        <button type="button" class="secondary" onclick="clearReferenceAudio()">Clear</button>
+        <input title="Upload reference audio" id="music_reference_audio" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg">
+        <button type="button" title="Clear Upload" class="secondary" onclick="clearReferenceAudio()">Clear</button>
       </div>
-      <div><label>Reference Audio Strength (0.0 to 1.0)</label><input id="audio_cover_strength" type="number" step="0.1" value="0.5"></div>
+      <div><label>Reference Audio Strength (0.0 to 1.0)</label><input title="Reference Audio Strength" id="audio_cover_strength" type="number" step="0.1" value="0.5"></div>
     </div>
   </div>
 
   <div style="margin-top:14px">
     <label>API Base URL (optional)</label>
     <div style="display:flex; gap:6px;">
-      <input id="baseUrl" placeholder="http://localhost:5001">
+      <input title="Custom API URL" id="baseUrl" placeholder="http://localhost:5001">
     </div>
     <label>API Key (optional)</label>
     <div style="display:flex; gap:6px;">
-      <input type="password" id="baseUrlKey" placeholder="(Input Key)">
+      <input title="Custom API Key" type="password" id="baseUrlKey" placeholder="(Input Key)">
     </div>
   </div>
 
@@ -278,9 +278,9 @@ select{
     </div>
 
     <button id="abortBtn" class="danger hidden" onclick="abortRequest()">Abort</button>
-    <div id="inlineSpinner" class="inline-spinner hidden"></div>
+    <div title="Please Wait, Generation In Progress" id="inlineSpinner" class="inline-spinner hidden"></div>
 
-    <input type="file" id="importFile" hidden accept="application/json" onchange="importPlan(event)">
+    <input title="Import Plan" type="file" id="importFile" hidden accept="application/json" onchange="importPlan(event)">
   </div>
   <div>
   <p style="font-size:14px">Click 'Plan' first to generate lyrics, BPM and duration. Edit as needed.
@@ -292,19 +292,19 @@ select{
   <h2>TTS Generation</h2>
 
   <label>Text</label>
-  <textarea id="tts_input" placeholder="Enter text to speak..."></textarea>
+  <textarea id="tts_input" placeholder="Enter text to speak using TTS..."></textarea>
 
   <div style="margin-top:10px">
     <label>Voice</label>
     <div style="display:flex; gap:6px;">
       <select id="tts_voice" style="flex:1;"></select>
-      <button class="secondary" onclick="fetchVoices()">↻</button>
+      <button title="Fetch Voices" class="secondary" onclick="fetchVoices()">↻</button>
     </div>
   </div>
 
   <div style="margin-top:10px">
     <label>Instruction (optional)</label>
-    <input id="tts_instruction" placeholder="e.g. angry shouting loud male">
+    <input title="TTS Instruction" id="tts_instruction" placeholder="e.g. angry shouting loud male">
   </div>
 
   <div style="margin-top:14px">
@@ -320,7 +320,7 @@ select{
     <button class="primary" onclick="generateTTS()">Generate Speech</button>
     <button class="danger" onclick="clearTTS()">Clear</button>
   </div>
-  <div id="inlineSpinner2" class="inline-spinner hidden"></div>
+  <div title="Please Wait, Generation In Progress" id="inlineSpinner2" class="inline-spinner hidden"></div>
 
   <p style="font-size:14px;margin-top:10px">
     Generate speech clips and store them in your library.
@@ -813,16 +813,17 @@ function loadLibrary(){
         const url=URL.createObjectURL(item.audio);
         let ismp3 = (item.params?(item.params.use_mp3?true:false):false);
         let savfmt = (ismp3?".mp3":".wav");
+        let currtrack = `${item.type==="tts" ? "🗣 " : "🎵 "}${item.title}`;
         div.innerHTML=`
-          <h4>${item.type==="tts" ? "🗣 " : "🎵 "}${item.title}</h4>
+          <h4>${currtrack}</h4>
           <div class="meta">${new Date(item.date).toLocaleString()}</div>
-          <audio controls src="${url}"></audio>
+          <audio title="Generated Track: ${currtrack}" controls src="${url}"></audio>
           <div style="margin-top:6px;display:flex;gap:6px;">
             <a href="${url}" download="${item.title}${savfmt}">
                 <button class="secondary">Download</button>
             </a>
             <button class="secondary" onclick="exportTrackJSON(${item.id}, '${item.title}')">JSON</button>
-             <button class="secondary" onclick="loadTrackJSON(${item.id})">Edit</button>
+            <button class="secondary" onclick="loadTrackJSON(${item.id})">Load</button>
             <button class="danger" onclick="deleteTrack(${item.id})">Delete</button>
           </div>
         `;

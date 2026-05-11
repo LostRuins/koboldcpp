@@ -1,5 +1,6 @@
 #include "model_adapter.h"
 #include "otherarch/utils.h"
+#include "otherarch/llmutils.h"
 
 #include "common.h"
 #include "sampling.h"
@@ -478,7 +479,6 @@ static llama_context * cts_ctx = nullptr; //codes to speech
 static TTS_VER ttsver = TTS_VER_2;
 static int ttsdebugmode = 0;
 static bool tts_is_quiet = false;
-static std::string ttsvulkandeviceenv;
 static std::string last_generated_audio = "";
 static std::string last_generation_settings_prompt = ""; //for caching purposes to fix ST bug
 static int last_generation_settings_speaker_seed;
@@ -511,26 +511,11 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     tts_is_quiet = inputs.quiet;
     tts_executable_path = inputs.executable_path;
 
-    //duplicated from expose.cpp
-    std::string vulkan_info_raw = inputs.vulkan_info;
-    std::string vulkan_info_str = "";
-    for (size_t i = 0; i < vulkan_info_raw.length(); ++i) {
-        vulkan_info_str += vulkan_info_raw[i];
-        if (i < vulkan_info_raw.length() - 1) {
-            vulkan_info_str += ",";
-        }
-    }
-    const char* existingenv = getenv("GGML_VK_VISIBLE_DEVICES");
     std::vector<ggml_backend_dev_t> devices_override;
     std::string dev_override_str = inputs.devices_override;
     if(dev_override_str!="")
     {
         devices_override = kcpp_parse_device_list(dev_override_str);
-    }
-    if(!existingenv && vulkan_info_str!="")
-    {
-        ttsvulkandeviceenv = "GGML_VK_VISIBLE_DEVICES="+vulkan_info_str;
-        putenv((char*)ttsvulkandeviceenv.c_str());
     }
 
     llama_backend_init();
@@ -733,7 +718,7 @@ static tts_generation_outputs ttstype_generate_ttscpp(const tts_generation_input
         printf("\nTTS Generated audio in %.2fs.\n",ttstime);
         std::vector<float> wavdat = std::vector(response_data.data, response_data.data + response_data.n_outputs);
         //audio_post_clean(wavdat);
-        last_generated_audio = save_ulaw_wav8_base64(wavdat, ttscpp_runner->sampling_rate);
+        last_generated_audio = save_wav16_base64(wavdat, ttscpp_runner->sampling_rate);
         output.data = last_generated_audio.c_str();
         output.status = 1;
         last_generation_settings_audio_seed = 0;
@@ -1146,7 +1131,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             return output;
         }
 
-        last_generated_audio = save_ulaw_wav8_base64(audio, t_sr);
+        last_generated_audio = save_wav16_base64(audio, t_sr);
         ttstime = timer_check();
 
         printf("\nTTS Generated %d audio tokens in %.2fs.\n",(int) codes.size(),ttstime);
@@ -1254,7 +1239,7 @@ static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inp
 
         ttstime = timer_check();
         printf("\nTTS Generated audio in %.2fs.\n",ttstime);
-        last_generated_audio = save_ulaw_wav8_base64(result.audio, result.sample_rate);
+        last_generated_audio = save_wav16_base64(result.audio, result.sample_rate);
         output.data = last_generated_audio.c_str();
         output.status = 1;
         last_generation_settings_audio_seed = inputs.audio_seed;

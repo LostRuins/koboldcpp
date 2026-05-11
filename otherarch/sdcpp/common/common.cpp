@@ -107,47 +107,60 @@ static bool is_absolute_path(const std::string& p) {
 
 std::string ArgOptions::wrap_text(const std::string& text, size_t width, size_t indent) {
     std::ostringstream oss;
-    size_t line_len = 0;
     size_t pos      = 0;
+    size_t line_len = 0;
 
     while (pos < text.size()) {
-        // Preserve manual newlines
         if (text[pos] == '\n') {
             oss << '\n'
                 << std::string(indent, ' ');
-            line_len = indent;
+            line_len = 0;
             ++pos;
             continue;
         }
 
-        // Add the character
-        oss << text[pos];
-        ++line_len;
-        ++pos;
+        if (std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+            continue;
+        }
 
-        // If the current line exceeds width, try to break at the last space
-        if (line_len >= width) {
-            std::string current = oss.str();
-            size_t back         = current.size();
+        size_t word_start = pos;
+        while (pos < text.size() &&
+               text[pos] != '\n' &&
+               !std::isspace(static_cast<unsigned char>(text[pos]))) {
+            ++pos;
+        }
 
-            // Find the last space (for a clean break)
-            while (back > 0 && current[back - 1] != ' ' && current[back - 1] != '\n')
-                --back;
-
-            // If found a space to break on
-            if (back > 0 && current[back - 1] != '\n') {
-                std::string before = current.substr(0, back - 1);
-                std::string after  = current.substr(back);
-                oss.str("");
-                oss.clear();
-                oss << before << "\n"
-                    << std::string(indent, ' ') << after;
-            } else {
-                // If no space found, just break at width
-                oss << "\n"
-                    << std::string(indent, ' ');
+        std::string word = text.substr(word_start, pos - word_start);
+        while (!word.empty()) {
+            size_t separator_len = line_len == 0 ? 0 : 1;
+            if (line_len + separator_len + word.size() <= width) {
+                if (separator_len > 0) {
+                    oss << ' ';
+                    ++line_len;
+                }
+                oss << word;
+                line_len += word.size();
+                word.clear();
+                continue;
             }
-            line_len = indent;
+
+            if (line_len > 0) {
+                oss << '\n'
+                    << std::string(indent, ' ');
+                line_len = 0;
+                continue;
+            }
+
+            size_t chunk_len = std::min(width, word.size());
+            oss << word.substr(0, chunk_len);
+            line_len = chunk_len;
+            word.erase(0, chunk_len);
+            if (!word.empty()) {
+                oss << '\n'
+                    << std::string(indent, ' ');
+                line_len = 0;
+            }
         }
     }
 
@@ -351,7 +364,10 @@ ArgOptions SDContextParams::get_options() {
          "--lora-model-dir",
          "lora model directory",
          &lora_model_dir},
-
+        {"",
+         "--hires-upscalers-dir",
+         "highres fix upscaler model directory",
+         &hires_upscalers_dir},
         {"",
          "--tensor-type-rules",
          "weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")",
@@ -649,6 +665,7 @@ std::string SDContextParams::to_string() const {
         << "  wtype: " << sd_type_name(wtype) << ",\n"
         << "  tensor_type_rules: \"" << tensor_type_rules << "\",\n"
         << "  lora_model_dir: \"" << lora_model_dir << "\",\n"
+        << "  hires_upscalers_dir: \"" << hires_upscalers_dir << "\",\n"
         << "  photo_maker_path: \"" << photo_maker_path << "\",\n"
         << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
@@ -777,6 +794,12 @@ ArgOptions SDGenerationParams::get_options() {
          "--pm-id-embed-path",
          "path to PHOTOMAKER v2 id embed",
          &pm_id_embed_path},
+        {"",
+         "--hires-upscaler",
+         "highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent (nearest-exact), "
+         "Latent (antialiased), Latent (bicubic), Latent (bicubic antialiased), or a model name "
+         "under --hires-upscalers-dir (default: Latent)",
+         &hires_upscaler},
     };
 
     options.int_options = {
@@ -826,6 +849,22 @@ ArgOptions SDGenerationParams::get_options() {
          "--upscale-tile-size",
          "tile size for ESRGAN upscaling (default: 128)",
          &upscale_tile_size},
+        {"",
+         "--hires-width",
+         "highres fix target width, 0 to use --hires-scale (default: 0)",
+         &hires_width},
+        {"",
+         "--hires-height",
+         "highres fix target height, 0 to use --hires-scale (default: 0)",
+         &hires_height},
+        {"",
+         "--hires-steps",
+         "highres fix second pass sample steps, 0 to reuse --steps (default: 0)",
+         &hires_steps},
+        {"",
+         "--hires-upscale-tile-size",
+         "highres fix upscaler tile size, reserved for model-backed upscalers (default: 128)",
+         &hires_upscale_tile_size},
     };
 
     options.float_options = {
@@ -913,6 +952,14 @@ ArgOptions SDGenerationParams::get_options() {
          "--vae-tile-overlap",
          "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
          &vae_tiling_params.target_overlap},
+        {"",
+         "--hires-scale",
+         "highres fix scale when target size is not set (default: 2.0)",
+         &hires_scale},
+        {"",
+         "--hires-denoising-strength",
+         "highres fix second pass denoising strength (default: 0.7)",
+         &hires_denoising_strength},
     };
 
     options.bool_options = {
@@ -936,6 +983,11 @@ ArgOptions SDGenerationParams::get_options() {
          "process vae in tiles to reduce memory usage",
          true,
          &vae_tiling_params.enabled},
+        {"",
+         "--hires",
+         "enable highres fix",
+         true,
+         &hires_enabled},
     };
 
     auto on_seed_arg = [&](int argc, const char** argv, int index) {
@@ -1424,6 +1476,37 @@ static bool parse_lora_json_field(const json& parent,
     return true;
 }
 
+static bool resolve_model_file_from_dir(const std::string& model_name,
+                                        const std::string& model_dir,
+                                        const std::vector<std::string>& valid_ext,
+                                        const char* label,
+                                        std::string& resolved_path) {
+    if (model_dir.empty()) {
+        LOG_ERROR("%s directory is empty", label);
+        return false;
+    }
+    if (model_name.empty() ||
+        model_name.find('/') != std::string::npos ||
+        model_name.find('\\') != std::string::npos ||
+        fs::path(model_name).has_root_path() ||
+        fs::path(model_name).has_extension()) {
+        LOG_ERROR("%s must be a model name without path or extension: %s", label, model_name.c_str());
+        return false;
+    }
+
+    fs::path model_dir_path = model_dir;
+    for (const auto& ext : valid_ext) {
+        fs::path try_path = model_dir_path / (model_name + ext);
+        if (fs::exists(try_path) && fs::is_regular_file(try_path)) {
+            resolved_path = try_path.lexically_normal().string();
+            return true;
+        }
+    }
+
+    LOG_ERROR("can not find %s %s in %s", label, model_name.c_str(), model_dir_path.lexically_normal().string().c_str());
+    return false;
+}
+
 bool SDGenerationParams::from_json_str(
     const std::string& json_str,
     const std::function<std::string(const std::string&)>& lora_path_resolver) {
@@ -1486,6 +1569,34 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("auto_resize_ref_image", auto_resize_ref_image);
     load_if_exists("increase_ref_index", increase_ref_index);
     load_if_exists("embed_image_metadata", embed_image_metadata);
+
+    if (j.contains("hires") && j["hires"].is_object()) {
+        const json& hires_json = j["hires"];
+        if (hires_json.contains("enabled") && hires_json["enabled"].is_boolean()) {
+            hires_enabled = hires_json["enabled"];
+        }
+        if (hires_json.contains("upscaler") && hires_json["upscaler"].is_string()) {
+            hires_upscaler = hires_json["upscaler"];
+        }
+        if (hires_json.contains("scale") && hires_json["scale"].is_number()) {
+            hires_scale = hires_json["scale"];
+        }
+        if (hires_json.contains("target_width") && hires_json["target_width"].is_number_integer()) {
+            hires_width = hires_json["target_width"];
+        }
+        if (hires_json.contains("target_height") && hires_json["target_height"].is_number_integer()) {
+            hires_height = hires_json["target_height"];
+        }
+        if (hires_json.contains("steps") && hires_json["steps"].is_number_integer()) {
+            hires_steps = hires_json["steps"];
+        }
+        if (hires_json.contains("denoising_strength") && hires_json["denoising_strength"].is_number()) {
+            hires_denoising_strength = hires_json["denoising_strength"];
+        }
+        if (hires_json.contains("upscale_tile_size") && hires_json["upscale_tile_size"].is_number_integer()) {
+            hires_upscale_tile_size = hires_json["upscale_tile_size"];
+        }
+    }
 
     auto parse_sample_params_json = [&](const json& sample_json,
                                         sd_sample_params_t& target_params,
@@ -1800,7 +1911,7 @@ bool SDGenerationParams::initialize_cache_params() {
     return true;
 }
 
-bool SDGenerationParams::resolve(const std::string& lora_model_dir, bool strict) {
+bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict) {
     if (high_noise_sample_params.sample_steps <= 0) {
         high_noise_sample_params.sample_steps = -1;
     }
@@ -1817,6 +1928,27 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, bool strict)
     if (strict) {
         batch_count                = std::clamp(batch_count, 1, 8);
         sample_params.sample_steps = std::clamp(sample_params.sample_steps, 1, 100);
+    }
+
+    hires_upscaler_model_path.clear();
+    if (hires_enabled) {
+        if (hires_upscaler.empty()) {
+            hires_upscaler = "Latent";
+        }
+        resolved_hires_upscaler = str_to_sd_hires_upscaler(hires_upscaler.c_str());
+        if (resolved_hires_upscaler == SD_HIRES_UPSCALER_NONE) {
+            hires_enabled = false;
+        } else if (resolved_hires_upscaler == SD_HIRES_UPSCALER_COUNT) {
+            static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".pth"};
+            if (!resolve_model_file_from_dir(hires_upscaler,
+                                             hires_upscalers_dir,
+                                             valid_ext,
+                                             "hires upscaler",
+                                             hires_upscaler_model_path)) {
+                return false;
+            }
+            resolved_hires_upscaler = SD_HIRES_UPSCALER_MODEL;
+        }
     }
 
     prompt_with_lora = prompt;
@@ -1883,6 +2015,29 @@ bool SDGenerationParams::validate(SDMode mode) {
         return false;
     }
 
+    if (hires_enabled) {
+        if (hires_width < 0 || hires_height < 0) {
+            LOG_ERROR("error: hires target width and height must be >= 0");
+            return false;
+        }
+        if (hires_scale <= 0.f && hires_width <= 0 && hires_height <= 0) {
+            LOG_ERROR("error: hires scale must be positive when target size is not set");
+            return false;
+        }
+        if (hires_steps < 0) {
+            LOG_ERROR("error: hires steps must be >= 0");
+            return false;
+        }
+        if (hires_denoising_strength <= 0.f || hires_denoising_strength > 1.f) {
+            LOG_ERROR("error: hires denoising strength must be in (0.0, 1.0]");
+            return false;
+        }
+        if (hires_upscale_tile_size < 1) {
+            LOG_ERROR("error: hires upscale tile size must be positive");
+            return false;
+        }
+    }
+
     if (mode == UPSCALE) {
         if (init_image_path.length() == 0) {
             LOG_ERROR("error: upscale mode needs an init image (--init-img)\n");
@@ -1893,8 +2048,11 @@ bool SDGenerationParams::validate(SDMode mode) {
     return true;
 }
 
-bool SDGenerationParams::resolve_and_validate(SDMode mode, const std::string& lora_model_dir, bool strict) {
-    if (!resolve(lora_model_dir, strict)) {
+bool SDGenerationParams::resolve_and_validate(SDMode mode,
+                                              const std::string& lora_model_dir,
+                                              const std::string& hires_upscalers_dir,
+                                              bool strict) {
+    if (!resolve(lora_model_dir, hires_upscalers_dir, strict)) {
         return false;
     }
     if (!validate(mode)) {
@@ -1965,6 +2123,16 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.pm_params             = pm_params;
     params.vae_tiling_params     = vae_tiling_params;
     params.cache                 = cache_params;
+
+    params.hires.enabled            = hires_enabled;
+    params.hires.upscaler           = resolved_hires_upscaler;
+    params.hires.model_path         = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
+    params.hires.scale              = hires_scale;
+    params.hires.target_width       = hires_width;
+    params.hires.target_height      = hires_height;
+    params.hires.steps              = hires_steps;
+    params.hires.denoising_strength = hires_denoising_strength;
+    params.hires.upscale_tile_size  = hires_upscale_tile_size;
     return params;
 }
 
@@ -2089,6 +2257,15 @@ std::string SDGenerationParams::to_string() const {
         << "  seed: " << seed << ",\n"
         << "  upscale_repeats: " << upscale_repeats << ",\n"
         << "  upscale_tile_size: " << upscale_tile_size << ",\n"
+        << "  hires: { enabled: " << (hires_enabled ? "true" : "false")
+        << ", upscaler: \"" << hires_upscaler << "\""
+        << ", model_path: \"" << hires_upscaler_model_path << "\""
+        << ", scale: " << hires_scale
+        << ", target_width: " << hires_width
+        << ", target_height: " << hires_height
+        << ", steps: " << hires_steps
+        << ", denoising_strength: " << hires_denoising_strength
+        << ", upscale_tile_size: " << hires_upscale_tile_size << " },\n"
         << "  vae_tiling_params: { "
         << vae_tiling_params.enabled << ", "
         << vae_tiling_params.tile_size_x << ", "
@@ -2104,7 +2281,192 @@ std::string version_string() {
     return std::string("stable-diffusion.cpp version ") + sd_version() + ", commit " + sd_commit();
 }
 
-std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {
+static std::string safe_json_string(const char* value) {
+    return value ? value : "";
+}
+
+static void set_json_basename_if_not_empty(json& target, const char* key, const std::string& path) {
+    if (!path.empty()) {
+        target[key] = sd_basename(path);
+    }
+}
+
+static json build_sampling_metadata_json(const sd_sample_params_t& sample_params,
+                                         const std::vector<int>& skip_layers,
+                                         const std::vector<float>* custom_sigmas = nullptr) {
+    json sampling = {
+        {"steps", sample_params.sample_steps},
+        {"eta", sample_params.eta},
+        {"shifted_timestep", sample_params.shifted_timestep},
+        {"flow_shift", sample_params.flow_shift},
+        {"guidance",
+         {
+             {"txt_cfg", sample_params.guidance.txt_cfg},
+             {"img_cfg", sample_params.guidance.img_cfg},
+             {"distilled_guidance", sample_params.guidance.distilled_guidance},
+             {"slg",
+              {
+                  {"scale", sample_params.guidance.slg.scale},
+                  {"layers", skip_layers},
+                  {"start", sample_params.guidance.slg.layer_start},
+                  {"end", sample_params.guidance.slg.layer_end},
+              }},
+         }},
+    };
+    if (sample_params.sample_method != SAMPLE_METHOD_COUNT) {
+        sampling["method"] = safe_json_string(sd_sample_method_name(sample_params.sample_method));
+    }
+    if (sample_params.scheduler != SCHEDULER_COUNT) {
+        sampling["scheduler"] = safe_json_string(sd_scheduler_name(sample_params.scheduler));
+    }
+    if (custom_sigmas != nullptr) {
+        sampling["custom_sigmas"] = *custom_sigmas;
+    }
+    return sampling;
+}
+
+std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
+                                            const SDGenerationParams& gen_params,
+                                            int64_t seed,
+                                            SDMode mode) {
+    json root;
+    root["schema"]    = "sdcpp.image.params/v1";
+    root["mode"]      = mode == VID_GEN ? "vid_gen" : "img_gen";
+    root["generator"] = {
+        {"name", "stable-diffusion.cpp"},
+        {"version", safe_json_string(sd_version())},
+        {"commit", safe_json_string(sd_commit())},
+    };
+    root["seed"]   = seed;
+    root["width"]  = gen_params.get_resolved_width();
+    root["height"] = gen_params.get_resolved_height();
+
+    root["prompt"] = {
+        {"positive", gen_params.prompt},
+        {"negative", gen_params.negative_prompt},
+    };
+    root["sampling"] = build_sampling_metadata_json(gen_params.sample_params,
+                                                    gen_params.skip_layers,
+                                                    &gen_params.custom_sigmas);
+
+    json models;
+    set_json_basename_if_not_empty(models, "model", ctx_params.model_path);
+    set_json_basename_if_not_empty(models, "clip_l", ctx_params.clip_l_path);
+    set_json_basename_if_not_empty(models, "clip_g", ctx_params.clip_g_path);
+    set_json_basename_if_not_empty(models, "clip_vision", ctx_params.clip_vision_path);
+    set_json_basename_if_not_empty(models, "t5xxl", ctx_params.t5xxl_path);
+    set_json_basename_if_not_empty(models, "llm", ctx_params.llm_path);
+    set_json_basename_if_not_empty(models, "llm_vision", ctx_params.llm_vision_path);
+    set_json_basename_if_not_empty(models, "diffusion_model", ctx_params.diffusion_model_path);
+    set_json_basename_if_not_empty(models, "high_noise_diffusion_model", ctx_params.high_noise_diffusion_model_path);
+    set_json_basename_if_not_empty(models, "vae", ctx_params.vae_path);
+    set_json_basename_if_not_empty(models, "taesd", ctx_params.taesd_path);
+    set_json_basename_if_not_empty(models, "control_net", ctx_params.control_net_path);
+    root["models"] = std::move(models);
+
+    root["clip_skip"]             = gen_params.clip_skip;
+    root["strength"]              = gen_params.strength;
+    root["control_strength"]      = gen_params.control_strength;
+    root["auto_resize_ref_image"] = gen_params.auto_resize_ref_image;
+    root["increase_ref_index"]    = gen_params.increase_ref_index;
+    if (mode == VID_GEN) {
+        root["video"] = {
+            {"frame_count", gen_params.video_frames},
+            {"fps", gen_params.fps},
+        };
+        root["moe_boundary"]        = gen_params.moe_boundary;
+        root["vace_strength"]       = gen_params.vace_strength;
+        root["high_noise_sampling"] = build_sampling_metadata_json(gen_params.high_noise_sample_params,
+                                                                   gen_params.high_noise_skip_layers);
+    }
+
+    root["rng"] = safe_json_string(sd_rng_type_name(ctx_params.rng_type));
+    if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
+        root["sampler_rng"] = safe_json_string(sd_rng_type_name(ctx_params.sampler_rng_type));
+    }
+
+    json loras = json::array();
+    for (const auto& entry : gen_params.lora_map) {
+        loras.push_back({
+            {"name", sd_basename(entry.first)},
+            {"multiplier", entry.second},
+            {"is_high_noise", false},
+        });
+    }
+    for (const auto& entry : gen_params.high_noise_lora_map) {
+        loras.push_back({
+            {"name", sd_basename(entry.first)},
+            {"multiplier", entry.second},
+            {"is_high_noise", true},
+        });
+    }
+    if (!loras.empty()) {
+        root["loras"] = std::move(loras);
+    }
+
+    if (gen_params.hires_enabled) {
+        root["hires"] = {
+            {"enabled", gen_params.hires_enabled},
+            {"upscaler", gen_params.hires_upscaler},
+            {"model", gen_params.hires_upscaler_model_path.empty() ? "" : sd_basename(gen_params.hires_upscaler_model_path)},
+            {"scale", gen_params.hires_scale},
+            {"target_width", gen_params.hires_width},
+            {"target_height", gen_params.hires_height},
+            {"steps", gen_params.hires_steps},
+            {"denoising_strength", gen_params.hires_denoising_strength},
+            {"upscale_tile_size", gen_params.hires_upscale_tile_size},
+        };
+    }
+
+    if (gen_params.cache_params.mode != SD_CACHE_DISABLED) {
+        root["cache"] = {
+            {"requested_mode", gen_params.cache_mode},
+            {"requested_option", gen_params.cache_option},
+            {"mode", gen_params.cache_params.mode},
+            {"scm_mask", gen_params.scm_mask},
+            {"scm_policy_dynamic", gen_params.scm_policy_dynamic},
+            {"reuse_threshold", gen_params.cache_params.reuse_threshold},
+            {"start_percent", gen_params.cache_params.start_percent},
+            {"end_percent", gen_params.cache_params.end_percent},
+            {"error_decay_rate", gen_params.cache_params.error_decay_rate},
+            {"use_relative_threshold", gen_params.cache_params.use_relative_threshold},
+            {"reset_error_on_compute", gen_params.cache_params.reset_error_on_compute},
+            {"Fn_compute_blocks", gen_params.cache_params.Fn_compute_blocks},
+            {"Bn_compute_blocks", gen_params.cache_params.Bn_compute_blocks},
+            {"residual_diff_threshold", gen_params.cache_params.residual_diff_threshold},
+            {"max_warmup_steps", gen_params.cache_params.max_warmup_steps},
+            {"max_cached_steps", gen_params.cache_params.max_cached_steps},
+            {"max_continuous_cached_steps", gen_params.cache_params.max_continuous_cached_steps},
+            {"taylorseer_n_derivatives", gen_params.cache_params.taylorseer_n_derivatives},
+            {"taylorseer_skip_interval", gen_params.cache_params.taylorseer_skip_interval},
+            {"spectrum_w", gen_params.cache_params.spectrum_w},
+            {"spectrum_m", gen_params.cache_params.spectrum_m},
+            {"spectrum_lam", gen_params.cache_params.spectrum_lam},
+            {"spectrum_window_size", gen_params.cache_params.spectrum_window_size},
+            {"spectrum_flex_window", gen_params.cache_params.spectrum_flex_window},
+            {"spectrum_warmup_steps", gen_params.cache_params.spectrum_warmup_steps},
+            {"spectrum_stop_percent", gen_params.cache_params.spectrum_stop_percent},
+        };
+    }
+
+    if (gen_params.vae_tiling_params.enabled) {
+        root["vae_tiling"] = {
+            {"enabled", gen_params.vae_tiling_params.enabled},
+            {"tile_size_x", gen_params.vae_tiling_params.tile_size_x},
+            {"tile_size_y", gen_params.vae_tiling_params.tile_size_y},
+            {"target_overlap", gen_params.vae_tiling_params.target_overlap},
+            {"rel_size_x", gen_params.vae_tiling_params.rel_size_x},
+            {"rel_size_y", gen_params.vae_tiling_params.rel_size_y},
+        };
+    }
+
+    return root.dump();
+}
+
+std::string get_image_params(const SDContextParams& ctx_params,
+                             const SDGenerationParams& gen_params,
+                             int64_t seed,
+                             SDMode mode) {
     std::string parameter_string;
     if (gen_params.prompt_with_lora.size() != 0) {
         parameter_string += gen_params.prompt_with_lora + "\n";
@@ -2117,7 +2479,7 @@ std::string get_image_params(const SDContextParams& ctx_params, const SDGenerati
     parameter_string += "Steps: " + std::to_string(gen_params.sample_params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
     if (gen_params.sample_params.guidance.slg.scale != 0 && gen_params.skip_layers.size() != 0) {
-        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
+        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.slg.scale) + ", ";
         parameter_string += "Skip layers: [";
         for (const auto& layer : gen_params.skip_layers) {
             parameter_string += std::to_string(layer) + ", ";
@@ -2162,6 +2524,14 @@ std::string get_image_params(const SDContextParams& ctx_params, const SDGenerati
     if (gen_params.clip_skip != -1) {
         parameter_string += "Clip skip: " + std::to_string(gen_params.clip_skip) + ", ";
     }
+    if (gen_params.hires_enabled) {
+        parameter_string += "Hires upscale: " + gen_params.hires_upscaler + ", ";
+        parameter_string += "Hires scale: " + std::to_string(gen_params.hires_scale) + ", ";
+        parameter_string += "Hires resize: " + std::to_string(gen_params.hires_width) + "x" + std::to_string(gen_params.hires_height) + ", ";
+        parameter_string += "Hires steps: " + std::to_string(gen_params.hires_steps) + ", ";
+        parameter_string += "Denoising strength: " + std::to_string(gen_params.hires_denoising_strength) + ", ";
+    }
     parameter_string += "Version: stable-diffusion.cpp";
+    parameter_string += ", SDCPP: " + build_sdcpp_image_metadata_json(ctx_params, gen_params, seed, mode);
     return parameter_string;
 }

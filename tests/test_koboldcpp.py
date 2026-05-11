@@ -53,61 +53,62 @@ def extract_loras_from_prompt(*args, **kwargs):
 
     return koboldcpp.extract_loras_from_prompt(*args, **kwargs)
 
-def mk_lora_info(imgloras, multipliers):
-    """
-    >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora2.gguf'], [])
-    fake filesystem access
-    fake filesystem access
-    >>> pre
-    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 1.0, 'preloaded': True, 'fixed': True}, {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 1.0, 'preloaded': True, 'fixed': True}]
-    >>> path
-    {}
-    >>> name
-    {}
+# the mock filesystem was polluting the actualy function - todo: rework this test
+# def mk_lora_info(imgloras, multipliers):
+#     """
+#     >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora2.gguf'], [])
+#     fake filesystem access
+#     fake filesystem access
+#     >>> pre
+#     [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 1.0, 'preloaded': True, 'fixed': True}, {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 1.0, 'preloaded': True, 'fixed': True}]
+#     >>> path
+#     {}
+#     >>> name
+#     {}
 
-    >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora2.gguf'], [0.])
-    fake filesystem access
-    fake filesystem access
-    >>> pre
-    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.0, 'preloaded': True}, {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 0.0, 'preloaded': True}]
-    >>> path
-    {'lora1.safetensors': {'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.0, 'preloaded': True}, 'lora2.gguf': {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 0.0, 'preloaded': True}}
-    >>> name
-    {'lora1': 'lora1.safetensors', 'lora2': 'lora2.gguf'}
+#     >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora2.gguf'], [0.])
+#     fake filesystem access
+#     fake filesystem access
+#     >>> pre
+#     [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.0, 'preloaded': True}, {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 0.0, 'preloaded': True}]
+#     >>> path
+#     {'lora1.safetensors': {'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.0, 'preloaded': True}, 'lora2.gguf': {'fullpath': '/y/lora2.gguf', 'name': 'lora2', 'path': 'lora2.gguf', 'multiplier': 0.0, 'preloaded': True}}
+#     >>> name
+#     {'lora1': 'lora1.safetensors', 'lora2': 'lora2.gguf'}
 
-    >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora1.safetensors'], [0.3])
-    fake filesystem access
-    fake filesystem access
-    >>> pre
-    [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.3, 'preloaded': True, 'fixed': True}, {'fullpath': '/y/lora1.safetensors', 'name': 'lora1_2', 'path': 'lora1_2.safetensors', 'multiplier': 0.3, 'preloaded': True, 'fixed': True}]
-    >>> path
-    {}
+#     >>> pre, path, name = mk_lora_info(['/x/lora1.safetensors', '/y/lora1.safetensors'], [0.3])
+#     fake filesystem access
+#     fake filesystem access
+#     >>> pre
+#     [{'fullpath': '/x/lora1.safetensors', 'name': 'lora1', 'path': 'lora1.safetensors', 'multiplier': 0.3, 'preloaded': True, 'fixed': True}, {'fullpath': '/y/lora1.safetensors', 'name': 'lora1_2', 'path': 'lora1_2.safetensors', 'multiplier': 0.3, 'preloaded': True, 'fixed': True}]
+#     >>> path
+#     {}
 
-    >>> pre, path, name = mk_lora_info(['/lora/dir/'], [0.3])
-    fake filesystem access
-    Scanning /lora/dir/ for LoRAs...
-    fake directory scan
-      found 2 files under /lora/dir/
-    >>> pre
-    []
-    >>> expected = {
-    ... 'lora1_makebelieve.gguf': {
-    ...     'fullpath': '/lora/dir/lora1_makebelieve.gguf',
-    ...     'name': 'lora1_makebelieve',
-    ...     'path': 'lora1_makebelieve.gguf',
-    ...     'multiplier': 0.0},
-    ... 'lora2/makebelieve.gguf': {
-    ...     'fullpath': '/lora/dir/lora2/makebelieve.gguf',
-    ...     'name': 'lora2/makebelieve',
-    ...     'path': 'lora2/makebelieve.gguf',
-    ...     'multiplier': 0.0}}
-    >>> path == expected
-    True
-    >>> name
-    {'lora1_makebelieve': 'lora1_makebelieve.gguf', 'lora2/makebelieve': 'lora2/makebelieve.gguf'}
+#     >>> pre, path, name = mk_lora_info(['/lora/dir/'], [0.3])
+#     fake filesystem access
+#     Scanning /lora/dir/ for LoRAs...
+#     fake directory scan
+#       found 2 files under /lora/dir/
+#     >>> pre
+#     []
+#     >>> expected = {
+#     ... 'lora1_makebelieve.gguf': {
+#     ...     'fullpath': '/lora/dir/lora1_makebelieve.gguf',
+#     ...     'name': 'lora1_makebelieve',
+#     ...     'path': 'lora1_makebelieve.gguf',
+#     ...     'multiplier': 0.0},
+#     ... 'lora2/makebelieve.gguf': {
+#     ...     'fullpath': '/lora/dir/lora2/makebelieve.gguf',
+#     ...     'name': 'lora2/makebelieve',
+#     ...     'path': 'lora2/makebelieve.gguf',
+#     ...     'multiplier': 0.0}}
+#     >>> path == expected
+#     True
+#     >>> name
+#     {'lora1_makebelieve': 'lora1_makebelieve.gguf', 'lora2/makebelieve': 'lora2/makebelieve.gguf'}
 
-    """
-    return koboldcpp.mk_lora_info(imgloras, multipliers, True)
+#     """
+#     return koboldcpp.mk_lora_info(imgloras, multipliers, True)
 
 def sanitize_lora_multipliers(*args, **kwargs):
     """
@@ -225,7 +226,7 @@ def gendefaults_parse_meta_field(*args, **kwargs):
 
     >>> gendefaults_parse_meta_field('{"cfg-scale": 0.5, "cfg_scale": 0.7}')
     {'cfg-scale': 0.5, 'cfg_scale': 0.7}
- 
+
     >>> gendefaults_parse_meta_field('{"guidance": 1.2, "sampler": "ddim"}')
     {'distilled_guidance': 1.2, 'sampler_name': 'ddim', 'guidance': 1.2, 'sampler': 'ddim'}
     '''

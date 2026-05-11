@@ -36,7 +36,7 @@ struct load_model_inputs
     const int max_context_length = 0;
     const bool low_vram = 0;
     const bool use_mmq = 0;
-    const bool use_rowsplit = 0;
+    const int splitmode = 1;
     const char * executable_path = nullptr;
     const char * model_filename = nullptr;
     const char * lora_filename = nullptr;
@@ -55,7 +55,6 @@ struct load_model_inputs
     const bool use_contextshift = false;
     const bool use_fastforward = false;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const int batchsize = 512;
     const bool autofit = false;
     const int autofit_tax_mb = 0;
@@ -85,6 +84,7 @@ struct load_model_inputs
     const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
+    const int continuous_batching_slots = 0;
 };
 struct generation_inputs
 {
@@ -178,7 +178,6 @@ struct sd_load_model_inputs
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const int threads = 0;
     const int quant = 0;
     const bool flash_attention = false;
@@ -263,7 +262,6 @@ struct whisper_load_model_inputs
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
@@ -288,7 +286,6 @@ struct tts_load_model_inputs
     const char * cts_model_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const int gpulayers = 0;
     const bool flash_attention = false;
     const int ttsmaxlen = 4096;
@@ -319,7 +316,6 @@ struct embeddings_load_model_inputs
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const int gpulayers = 0;
     const bool flash_attention = false;
     const bool use_mmap = false;
@@ -349,7 +345,6 @@ struct music_load_model_inputs
     const bool lowvram = false;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
-    const char * vulkan_info = nullptr;
     const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
@@ -391,3 +386,13 @@ extern int total_transcribe_gens;
 extern int last_draft_success;
 extern int last_draft_failed;
 extern stop_reason last_stop_reason;
+
+bool gpttype_batch_generate_enabled();
+int gpttype_batch_generate_submit(const generation_inputs inputs);
+bool gpttype_batch_generate_has_finished(int request_id);
+int gpttype_batch_generate_stream_count(int request_id);
+const char * gpttype_batch_generate_new_token(int request_id, int idx);
+const char * gpttype_batch_generate_pending_output(int request_id);
+generation_outputs gpttype_batch_generate_result(int request_id);
+bool gpttype_batch_generate_abort(int request_id);
+void gpttype_batch_generate_release(int request_id);

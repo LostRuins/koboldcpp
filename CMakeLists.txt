@@ -463,6 +463,8 @@ add_library(common2
             src/unicode-data.cpp
             otherarch/utils.cpp
             otherarch/utils.h
+            otherarch/llmutils.cpp
+            otherarch/llmutils.h
             common/reasoning-budget.cpp
             common/reasoning-budget.h
             tools/mtmd/mtmd-audio.cpp
@@ -473,7 +475,27 @@ target_link_libraries(common2 PRIVATE ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(common2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(sdtype_adapter
-            otherarch/sdcpp/sdtype_adapter.cpp)
+            otherarch/sdcpp/sdtype_adapter.cpp
+            otherarch/sdcpp/image_metadata.cpp
+            otherarch/sdcpp/model.cpp
+            otherarch/sdcpp/sample-cache.cpp
+            otherarch/sdcpp/util.cpp
+            otherarch/sdcpp/name_conversion.cpp
+            otherarch/sdcpp/upscaler.cpp
+            otherarch/sdcpp/stable-diffusion.cpp
+            otherarch/sdcpp/thirdparty/zip.c
+            otherarch/sdcpp/model_io/gguf_io.cpp
+            otherarch/sdcpp/model_io/pickle_io.cpp
+            otherarch/sdcpp/model_io/safetensors_io.cpp
+            otherarch/sdcpp/model_io/torch_legacy_io.cpp
+            otherarch/sdcpp/model_io/torch_zip_io.cpp
+            otherarch/sdcpp/tokenizers/bpe_tokenizer.cpp
+            otherarch/sdcpp/tokenizers/clip_tokenizer.cpp
+            otherarch/sdcpp/tokenizers/mistral_tokenizer.cpp
+            otherarch/sdcpp/tokenizers/qwen2_tokenizer.cpp
+            otherarch/sdcpp/tokenizers/t5_unigram_tokenizer.cpp
+            otherarch/sdcpp/tokenizers/tokenizer.cpp
+            otherarch/sdcpp/tokenizers/tokenize_util.cpp)
 target_include_directories(sdtype_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
 target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(sdtype_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
@@ -509,7 +531,7 @@ set_target_properties(embeddings_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON
 
 add_library(gpttype_adapter
             gpttype_adapter.cpp)
-target_include_directories(gpttype_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
+target_include_directories(gpttype_adapter PUBLIC . ./src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
 target_compile_features(gpttype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(gpttype_adapter PRIVATE common2 ggml ggml_v1 ggml_v2 ggml_v3 ${LLAMA_EXTRA_LIBS})
 set_target_properties(gpttype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -1,0 +1,3 @@
+As the koboldcpp docker does not have it's dockerfile or source code easily available, the following startup scripts are provided for reference purposes for docker users who need information on what exactly is being executed. 
+
+The koboldcpp docker is primarily intended for cloud GPU rentals. If you intend to run locally, you are recommended to download the release binaries instead at https://github.com/LostRuins/koboldcpp/releases/latest

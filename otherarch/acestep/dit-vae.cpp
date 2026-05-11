@@ -250,7 +250,7 @@ std::string acestep_generate_audio(const music_generation_inputs inputs)
     int Oc = music_dit_cfg.out_channels;          // 64
     int ctx_ch = music_dit_cfg.in_channels - Oc;  // 128
     int batch_n                = 1;
-    int vae_chunk              = 256;
+    int vae_chunk              = 512;
     int vae_overlap            = 64;
 
     // Parse request JSON
