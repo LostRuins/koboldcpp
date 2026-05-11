@@ -3510,9 +3510,9 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
         assist_should_prefill = False
         chat_template_kwargs = chat_template_kwargs or {}
         last_assist_msg = ""
-        if messages:
+        if len(messages) > 1:
             last_assist_msg = messages[-1]["content"]
-            assist_should_prefill = (messages and messages[-1]["role"] == "assistant" and last_assist_msg and isinstance(last_assist_msg, str) and len(last_assist_msg.strip())>0) #avoid single character newline or space content
+            assist_should_prefill = (messages and messages[-1]["role"].lower() == "assistant" and last_assist_msg and isinstance(last_assist_msg, str) and len(last_assist_msg.strip())>0) #avoid single character newline or space content
             last_assist_msg = "" if not assist_should_prefill else last_assist_msg
             messages_for_render = messages[:-1] if assist_should_prefill else messages
         if tools and len(tools)>0:
