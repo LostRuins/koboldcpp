@@ -394,7 +394,12 @@ ArgOptions SDContextParams::get_options() {
          &chroma_t5_mask_pad},
     };
 
-    options.float_options = {};
+    options.float_options = {
+        {"",
+         "--max-vram",
+         "maximum VRAM budget in GiB for graph-cut segmented execution. 0 disables graph splitting",
+         &max_vram},
+    };
 
     options.bool_options = {
         {"",
@@ -670,6 +675,7 @@ std::string SDContextParams::to_string() const {
         << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
+        << "  max_vram: " << max_vram << ",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
@@ -744,6 +750,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         chroma_use_t5_mask,
         chroma_t5_mask_pad,
         qwen_image_zero_cond_t,
+        max_vram,
     };
     return sd_ctx_params;
 }

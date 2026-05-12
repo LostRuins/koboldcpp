@@ -412,6 +412,9 @@ namespace Qwen {
             auto img = img_in->forward(ctx, x);
             auto txt = txt_norm->forward(ctx, context);
             txt      = txt_in->forward(ctx, txt);
+            sd::ggml_graph_cut::mark_graph_cut(img, "qwen_image.prelude", "img");
+            sd::ggml_graph_cut::mark_graph_cut(txt, "qwen_image.prelude", "txt");
+            // sd::ggml_graph_cut::mark_graph_cut(t_emb, "qwen_image.prelude", "t_emb");
 
             for (int i = 0; i < params.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<QwenImageTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
@@ -419,6 +422,8 @@ namespace Qwen {
                 auto result = block->forward(ctx, img, txt, t_emb, pe, modulate_index);
                 img         = result.first;
                 txt         = result.second;
+                sd::ggml_graph_cut::mark_graph_cut(img, "qwen_image.transformer_blocks." + std::to_string(i), "img");
+                sd::ggml_graph_cut::mark_graph_cut(txt, "qwen_image.transformer_blocks." + std::to_string(i), "txt");
             }
 
             if (params.zero_cond_t) {

@@ -85,7 +85,8 @@ public:
     virtual void free_params_buffer()                                                      = 0;
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)           = 0;
     virtual size_t get_params_buffer_size()                                                = 0;
-    virtual void set_flash_attention_enabled(bool enabled)                                 = 0;
+    virtual void set_max_graph_vram_bytes(size_t max_vram_bytes) {}
+    virtual void set_flash_attention_enabled(bool enabled) = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
     virtual std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(int n_threads,
                                                                                           const ConditionerParams& conditioner_params) {
@@ -163,6 +164,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             buffer_size += text_model2->get_params_buffer_size();
         }
         return buffer_size;
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        text_model->set_max_graph_vram_bytes(max_vram_bytes);
+        if (sd_version_is_sdxl(version)) {
+            text_model2->set_max_graph_vram_bytes(max_vram_bytes);
+        }
     }
 
     void set_flash_attention_enabled(bool enabled) override {
@@ -781,6 +789,18 @@ struct SD3CLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        if (clip_l) {
+            clip_l->set_max_graph_vram_bytes(max_vram_bytes);
+        }
+        if (clip_g) {
+            clip_g->set_max_graph_vram_bytes(max_vram_bytes);
+        }
+        if (t5) {
+            t5->set_max_graph_vram_bytes(max_vram_bytes);
+        }
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         if (clip_l) {
             clip_l->set_flash_attention_enabled(enabled);
@@ -1124,6 +1144,15 @@ struct FluxCLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        if (clip_l) {
+            clip_l->set_max_graph_vram_bytes(max_vram_bytes);
+        }
+        if (t5) {
+            t5->set_max_graph_vram_bytes(max_vram_bytes);
+        }
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         if (clip_l) {
             clip_l->set_flash_attention_enabled(enabled);
@@ -1349,6 +1378,12 @@ struct T5CLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        if (t5) {
+            t5->set_max_graph_vram_bytes(max_vram_bytes);
+        }
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         if (t5) {
             t5->set_flash_attention_enabled(enabled);
@@ -1525,6 +1560,10 @@ struct AnimaConditioner : public Conditioner {
         return llm->get_params_buffer_size();
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        llm->set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
     }
@@ -1655,6 +1694,10 @@ struct LLMEmbedder : public Conditioner {
         size_t buffer_size = 0;
         buffer_size += llm->get_params_buffer_size();
         return buffer_size;
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        llm->set_max_graph_vram_bytes(max_vram_bytes);
     }
 
     void set_flash_attention_enabled(bool enabled) override {

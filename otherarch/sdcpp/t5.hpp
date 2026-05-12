@@ -251,7 +251,8 @@ public:
                          ggml_tensor* x,
                          ggml_tensor* past_bias                = nullptr,
                          ggml_tensor* attention_mask           = nullptr,
-                         ggml_tensor* relative_position_bucket = nullptr) {
+                         ggml_tensor* relative_position_bucket = nullptr,
+                         const std::string& graph_cut_prefix   = "") {
         // x: [N, n_token, model_dim]
         for (int i = 0; i < num_layers; i++) {
             auto block = std::dynamic_pointer_cast<T5Block>(blocks["block." + std::to_string(i)]);
@@ -259,6 +260,9 @@ public:
             auto ret  = block->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
             x         = ret.first;
             past_bias = ret.second;
+            if (!graph_cut_prefix.empty()) {
+                sd::ggml_graph_cut::mark_graph_cut(x, graph_cut_prefix + ".block." + std::to_string(i), "x");
+            }
         }
 
         auto final_layer_norm = std::dynamic_pointer_cast<T5LayerNorm>(blocks["final_layer_norm"]);
@@ -305,7 +309,8 @@ public:
         auto encoder = std::dynamic_pointer_cast<T5Stack>(blocks["encoder"]);
 
         auto x = shared->forward(ctx, input_ids);
-        x      = encoder->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
+        sd::ggml_graph_cut::mark_graph_cut(x, "t5.prelude", "x");
+        x = encoder->forward(ctx, x, past_bias, attention_mask, relative_position_bucket, "t5");
         return x;
     }
 };

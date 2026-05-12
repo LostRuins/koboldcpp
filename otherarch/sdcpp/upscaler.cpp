@@ -12,6 +12,13 @@ UpscalerGGML::UpscalerGGML(int n_threads,
       tile_size(tile_size) {
 }
 
+void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
+    max_graph_vram_bytes = max_vram_bytes;
+    if (esrgan_upscaler) {
+        esrgan_upscaler->set_max_graph_vram_bytes(max_vram_bytes);
+    }
+}
+
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   bool offload_params_to_cpu,
                                   int n_threads) {
@@ -30,6 +37,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
     }
     LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
     esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, tile_size, model_loader.get_tensor_storage_map());
+    esrgan_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
     if (direct) {
         esrgan_upscaler->set_conv2d_direct_enabled(true);
     }

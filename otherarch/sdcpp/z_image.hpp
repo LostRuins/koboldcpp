@@ -371,6 +371,9 @@ namespace ZImage {
 
             auto txt = cap_embedder_1->forward(ctx, cap_embedder_0->forward(ctx, context));  // [N, n_txt_token, hidden_size]
             auto img = x_embedder->forward(ctx, x);                                          // [N, n_img_token, hidden_size]
+            sd::ggml_graph_cut::mark_graph_cut(txt, "z_image.prelude", "txt");
+            sd::ggml_graph_cut::mark_graph_cut(img, "z_image.prelude", "img");
+            sd::ggml_graph_cut::mark_graph_cut(t_emb, "z_image.prelude", "t_emb");
 
             int64_t n_txt_pad_token = Rope::bound_mod(static_cast<int>(n_txt_token), SEQ_MULTI_OF);
             if (n_txt_pad_token > 0) {
@@ -393,20 +396,24 @@ namespace ZImage {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["context_refiner." + std::to_string(i)]);
 
                 txt = block->forward(ctx, txt, txt_pe, nullptr, nullptr);
+                sd::ggml_graph_cut::mark_graph_cut(txt, "z_image.context_refiner." + std::to_string(i), "txt");
             }
 
             for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["noise_refiner." + std::to_string(i)]);
 
                 img = block->forward(ctx, img, img_pe, nullptr, t_emb);
+                sd::ggml_graph_cut::mark_graph_cut(img, "z_image.noise_refiner." + std::to_string(i), "img");
             }
 
             auto txt_img = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, hidden_size]
+            sd::ggml_graph_cut::mark_graph_cut(txt_img, "z_image.prelude", "txt_img");
 
             for (int i = 0; i < z_image_params.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["layers." + std::to_string(i)]);
 
                 txt_img = block->forward(ctx, txt_img, pe, nullptr, t_emb);
+                sd::ggml_graph_cut::mark_graph_cut(txt_img, "z_image.layers." + std::to_string(i), "txt_img");
             }
 
             txt_img = final_layer->forward(ctx, txt_img, t_emb);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, ph*pw*C]

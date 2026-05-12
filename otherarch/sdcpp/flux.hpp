@@ -928,6 +928,9 @@ namespace Flux {
             }
 
             txt = txt_in->forward(ctx, txt);
+            sd::ggml_graph_cut::mark_graph_cut(img, "flux.prelude", "img");
+            sd::ggml_graph_cut::mark_graph_cut(txt, "flux.prelude", "txt");
+            sd::ggml_graph_cut::mark_graph_cut(vec, "flux.prelude", "vec");
 
             for (int i = 0; i < params.depth; i++) {
                 if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), i) != skip_layers.end()) {
@@ -939,6 +942,8 @@ namespace Flux {
                 auto img_txt = block->forward(ctx, img, txt, vec, pe, txt_img_mask, ds_img_mods, ds_txt_mods);
                 img          = img_txt.first;   // [N, n_img_token, hidden_size]
                 txt          = img_txt.second;  // [N, n_txt_token, hidden_size]
+                sd::ggml_graph_cut::mark_graph_cut(img, "flux.double_blocks." + std::to_string(i), "img");
+                sd::ggml_graph_cut::mark_graph_cut(txt, "flux.double_blocks." + std::to_string(i), "txt");
             }
 
             auto txt_img = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_img_token, hidden_size]
@@ -949,6 +954,7 @@ namespace Flux {
                 auto block = std::dynamic_pointer_cast<SingleStreamBlock>(blocks["single_blocks." + std::to_string(i)]);
 
                 txt_img = block->forward(ctx, txt_img, vec, pe, txt_img_mask, ss_mods);
+                sd::ggml_graph_cut::mark_graph_cut(txt_img, "flux.single_blocks." + std::to_string(i), "txt_img");
             }
 
             img = ggml_view_3d(ctx->ggml_ctx,

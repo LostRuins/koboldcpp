@@ -692,6 +692,7 @@ namespace WAN {
             } else {
                 x = conv1->forward(ctx, x);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encoder.prelude", "x");
 
             // downsamples
             std::vector<int64_t> dims = {dim};
@@ -717,12 +718,14 @@ namespace WAN {
                         x = layer->forward(ctx, x, b, feat_cache, feat_idx, chunk_idx);
                     }
                 }
+                // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encoder.down." + std::to_string(i), "x");
             }
 
             // middle
             x = middle_0->forward(ctx, x, b, feat_cache, feat_idx);
             x = middle_1->forward(ctx, x, b);
             x = middle_2->forward(ctx, x, b, feat_cache, feat_idx);
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encoder.mid", "x");
 
             // head
             x = head_0->forward(ctx, x);
@@ -863,11 +866,13 @@ namespace WAN {
             } else {
                 x = conv1->forward(ctx, x);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decoder.prelude", "x");
 
             // middle
             x = middle_0->forward(ctx, x, b, feat_cache, feat_idx);
             x = middle_1->forward(ctx, x, b);
             x = middle_2->forward(ctx, x, b, feat_cache, feat_idx);
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decoder.mid", "x");
 
             // upsamples
             std::vector<int64_t> dims = {dim_mult[dim_mult.size() - 1] * dim};
@@ -893,6 +898,7 @@ namespace WAN {
                         x = layer->forward(ctx, x, b, feat_cache, feat_idx, chunk_idx);
                     }
                 }
+                // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decoder.up." + std::to_string(i), "x");
             }
 
             // head
@@ -1031,6 +1037,7 @@ namespace WAN {
             if (wan2_2) {
                 x = patchify(ctx->ggml_ctx, x, 2, b);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encode.prelude", "x");
 
             auto encoder = std::dynamic_pointer_cast<Encoder3d>(blocks["encoder"]);
             auto conv1   = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
@@ -1051,6 +1058,7 @@ namespace WAN {
             }
             out     = conv1->forward(ctx, out);
             auto mu = ggml_ext_chunk(ctx->ggml_ctx, out, 2, 3)[0];
+            // sd::ggml_graph_cut::mark_graph_cut(mu, "wan_vae.encode.final", "mu");
             clear_cache();
             return mu;
         }
@@ -1068,6 +1076,7 @@ namespace WAN {
 
             int64_t iter_ = z->ne[2];
             auto x        = conv2->forward(ctx, z);
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decode.prelude", "x");
             ggml_tensor* out;
             for (int i = 0; i < iter_; i++) {
                 _conv_idx = 0;
@@ -1083,6 +1092,7 @@ namespace WAN {
             if (wan2_2) {
                 out = unpatchify(ctx->ggml_ctx, out, 2, b);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode.final", "out");
             clear_cache();
             return out;
         }
@@ -1097,13 +1107,15 @@ namespace WAN {
             auto decoder = std::dynamic_pointer_cast<Decoder3d>(blocks["decoder"]);
             auto conv2   = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv2"]);
 
-            auto x    = conv2->forward(ctx, z);
+            auto x = conv2->forward(ctx, z);
+            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decode_partial.prelude", "x");
             auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
             _conv_idx = 0;
             auto out  = decoder->forward(ctx, in, b, _feat_map, _conv_idx, i);
             if (wan2_2) {
                 out = unpatchify(ctx->ggml_ctx, out, 2, b);
             }
+            // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode_partial.final", "out");
             return out;
         }
     };
@@ -1984,6 +1996,13 @@ namespace WAN {
                 c = ggml_reshape_3d(ctx->ggml_ctx, c, c->ne[0] * c->ne[1] * c->ne[2], c->ne[3] / N, N);  // [N, dim, t_len*h_len*w_len]
                 c = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, c, 1, 0, 2, 3));  // [N, t_len*h_len*w_len, dim]
             }
+            sd::ggml_graph_cut::mark_graph_cut(x, "wan.prelude", "x");
+            // sd::ggml_graph_cut::mark_graph_cut(e, "wan.prelude", "e");
+            // sd::ggml_graph_cut::mark_graph_cut(e0, "wan.prelude", "e0");
+            // sd::ggml_graph_cut::mark_graph_cut(context, "wan.prelude", "context");
+            if (c != nullptr) {
+                sd::ggml_graph_cut::mark_graph_cut(c, "wan.prelude", "c");
+            }
 
             auto x_orig = x;
 
@@ -2003,6 +2022,10 @@ namespace WAN {
                     c           = result.second;
                     c_skip      = ggml_ext_scale(ctx->ggml_ctx, c_skip, vace_strength);
                     x           = ggml_add(ctx->ggml_ctx, x, c_skip);
+                }
+                sd::ggml_graph_cut::mark_graph_cut(x, "wan.blocks." + std::to_string(i), "x");
+                if (c != nullptr) {
+                    sd::ggml_graph_cut::mark_graph_cut(c, "wan.blocks." + std::to_string(i), "c");
                 }
             }
 

@@ -328,6 +328,7 @@ public:
         auto conv_out    = std::dynamic_pointer_cast<Conv2d>(blocks["conv_out"]);
 
         auto h = conv_in->forward(ctx, x);  // [N, ch, h, w]
+        // sd::ggml_graph_cut::mark_graph_cut(h, "vae.encoder.prelude", "h");
 
         // downsampling
         size_t num_resolutions = ch_mult.size();
@@ -337,12 +338,14 @@ public:
                 auto down_block  = std::dynamic_pointer_cast<ResnetBlock>(blocks[name]);
 
                 h = down_block->forward(ctx, h);
+                // sd::ggml_graph_cut::mark_graph_cut(h, "vae.encoder.down." + std::to_string(i) + ".block." + std::to_string(j), "h");
             }
             if (i != num_resolutions - 1) {
                 std::string name = "down." + std::to_string(i) + ".downsample";
                 auto down_sample = std::dynamic_pointer_cast<DownSampleBlock>(blocks[name]);
 
                 h = down_sample->forward(ctx, h);
+                // sd::ggml_graph_cut::mark_graph_cut(h, "vae.encoder.down." + std::to_string(i) + ".downsample", "h");
             }
         }
 
@@ -350,6 +353,7 @@ public:
         h = mid_block_1->forward(ctx, h);
         h = mid_attn_1->forward(ctx, h);
         h = mid_block_2->forward(ctx, h);  // [N, block_in, h, w]
+        // sd::ggml_graph_cut::mark_graph_cut(h, "vae.encoder.mid", "h");
 
         // end
         h = norm_out->forward(ctx, h);
@@ -450,6 +454,7 @@ public:
 
         // conv_in
         auto h = conv_in->forward(ctx, z);  // [N, block_in, h, w]
+        // sd::ggml_graph_cut::mark_graph_cut(h, "vae.decoder.prelude", "h");
 
         // middle
         h = mid_block_1->forward(ctx, h);
@@ -457,6 +462,7 @@ public:
 
         h = mid_attn_1->forward(ctx, h);
         h = mid_block_2->forward(ctx, h);  // [N, block_in, h, w]
+        // sd::ggml_graph_cut::mark_graph_cut(h, "vae.decoder.mid", "h");
 
         // upsampling
         int num_resolutions = static_cast<int>(ch_mult.size());
@@ -466,12 +472,14 @@ public:
                 auto up_block    = std::dynamic_pointer_cast<ResnetBlock>(blocks[name]);
 
                 h = up_block->forward(ctx, h);
+                // sd::ggml_graph_cut::mark_graph_cut(h, "vae.decoder.up." + std::to_string(i) + ".block." + std::to_string(j), "h");
             }
             if (i != 0) {
                 std::string name = "up." + std::to_string(i) + ".upsample";
                 auto up_sample   = std::dynamic_pointer_cast<UpSampleBlock>(blocks[name]);
 
                 h = up_sample->forward(ctx, h);
+                // sd::ggml_graph_cut::mark_graph_cut(h, "vae.decoder.up." + std::to_string(i) + ".upsample", "h");
             }
         }
 
@@ -599,6 +607,7 @@ public:
         if (use_quant) {
             auto post_quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["post_quant_conv"]);
             z                    = post_quant_conv->forward(ctx, z);  // [N, z_channels, h, w]
+            // sd::ggml_graph_cut::mark_graph_cut(z, "vae.decode.prelude", "z");
         }
         auto decoder = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
 
@@ -616,6 +625,7 @@ public:
         if (use_quant) {
             auto quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["quant_conv"]);
             z               = quant_conv->forward(ctx, z);  // [N, 2*embed_dim, h/8, w/8]
+            // sd::ggml_graph_cut::mark_graph_cut(z, "vae.encode.final", "z");
         }
         if (sd_version_uses_flux2_vae(version)) {
             z = ggml_ext_chunk(ctx->ggml_ctx, z, 2, 2)[0];

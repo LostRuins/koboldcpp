@@ -14,8 +14,9 @@ struct UpscalerGGML {
     std::shared_ptr<ESRGAN> esrgan_upscaler;
     std::string esrgan_path;
     int n_threads;
-    bool direct   = false;
-    int tile_size = 128;
+    bool direct                 = false;
+    int tile_size               = 128;
+    size_t max_graph_vram_bytes = 0;
 
     UpscalerGGML(int n_threads,
                  bool direct   = false,
@@ -24,6 +25,7 @@ struct UpscalerGGML {
     bool load_from_file(const std::string& esrgan_path,
                         bool offload_params_to_cpu,
                         int n_threads);
+    void set_max_graph_vram_bytes(size_t max_vram_bytes);
     sd::Tensor<float> upscale_tensor(const sd::Tensor<float>& input_tensor);
     sd_image_t upscale(sd_image_t input_image, uint32_t upscale_factor);
 };

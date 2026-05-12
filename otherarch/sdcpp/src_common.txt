@@ -17,6 +17,8 @@ esrgan.hpp
 flux.hpp
 ggml_extend.hpp
 ggml_extend_backend.hpp
+ggml_graph_cut.cpp
+ggml_graph_cut.h
 image_metadata.cpp
 image_metadata.h
 kcpp_sd_extensions.h

@@ -482,12 +482,14 @@ public:
 
             emb = ggml_add(ctx->ggml_ctx, emb, label_emb);  // [N, time_embed_dim]
         }
+        // sd::ggml_graph_cut::mark_graph_cut(emb, "unet.prelude", "emb");
 
         // input_blocks
         std::vector<ggml_tensor*> hs;
 
         // input block 0
         auto h = input_blocks_0_0->forward(ctx, x);
+        sd::ggml_graph_cut::mark_graph_cut(h, "unet.input_blocks.0", "h");
 
         ggml_set_name(h, "bench-start");
         hs.push_back(h);
@@ -505,6 +507,7 @@ public:
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
                     h                = attention_layer_forward(name, ctx, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
                 }
+                sd::ggml_graph_cut::mark_graph_cut(h, "unet.input_blocks." + std::to_string(input_block_idx), "h");
                 hs.push_back(h);
             }
             if (tiny_unet) {
@@ -518,6 +521,7 @@ public:
                 auto block       = std::dynamic_pointer_cast<DownSampleBlock>(blocks[name]);
 
                 h = block->forward(ctx, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
+                // sd::ggml_graph_cut::mark_graph_cut(h, "unet.input_blocks." + std::to_string(input_block_idx), "h");
                 hs.push_back(h);
             }
         }
@@ -531,6 +535,7 @@ public:
                 h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
             }
         }
+        sd::ggml_graph_cut::mark_graph_cut(h, "unet.middle_block", "h");
         if (controls.size() > 0) {
             auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, true);
             h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
@@ -581,6 +586,7 @@ public:
                 }
 
                 output_block_idx += 1;
+                sd::ggml_graph_cut::mark_graph_cut(h, "unet.output_blocks." + std::to_string(output_block_idx - 1), "h");
             }
         }
 

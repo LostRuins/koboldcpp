@@ -95,8 +95,9 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx,
                          ggml_tensor* x,
-                         ggml_tensor* mask = nullptr,
-                         int clip_skip     = -1) {
+                         ggml_tensor* mask                   = nullptr,
+                         int clip_skip                       = -1,
+                         const std::string& graph_cut_prefix = "") {
         // x: [N, n_token, d_model]
         int layer_idx = n_layer - 1;
         // LOG_DEBUG("clip_skip %d", clip_skip);
@@ -112,6 +113,9 @@ public:
             std::string name = "layers." + std::to_string(i);
             auto layer       = std::dynamic_pointer_cast<CLIPLayer>(blocks[name]);
             x                = layer->forward(ctx, x, mask);  // [N, n_token, d_model]
+            if (!graph_cut_prefix.empty()) {
+                sd::ggml_graph_cut::mark_graph_cut(x, graph_cut_prefix + ".layers." + std::to_string(i), "x");
+            }
             // LOG_DEBUG("layer %d", i);
         }
         return x;
@@ -304,7 +308,8 @@ public:
         auto final_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
 
         auto x = embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
-        x      = encoder->forward(ctx, x, mask, return_pooled ? -1 : clip_skip);
+        sd::ggml_graph_cut::mark_graph_cut(x, "clip_text.prelude", "x");
+        x = encoder->forward(ctx, x, mask, return_pooled ? -1 : clip_skip, "clip_text");
         if (return_pooled || with_final_ln) {
             x = final_layer_norm->forward(ctx, x);
         }
@@ -368,7 +373,8 @@ public:
 
         auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
         x      = pre_layernorm->forward(ctx, x);
-        x      = encoder->forward(ctx, x, nullptr, clip_skip);
+        sd::ggml_graph_cut::mark_graph_cut(x, "clip_vision.prelude", "x");
+        x = encoder->forward(ctx, x, nullptr, clip_skip, "clip_vision");
 
         auto last_hidden_state = x;
 

@@ -767,6 +767,8 @@ public:
             auto context_x = block->forward(ctx, context, x, c_mod);
             context        = context_x.first;
             x              = context_x.second;
+            sd::ggml_graph_cut::mark_graph_cut(context, "mmdit.joint_blocks." + std::to_string(i), "context");
+            sd::ggml_graph_cut::mark_graph_cut(x, "mmdit.joint_blocks." + std::to_string(i), "x");
         }
 
         x = final_layer->forward(ctx, x, c_mod);  // (N, T, patch_size ** 2 * out_channels)
@@ -808,6 +810,11 @@ public:
             auto context_embedder = std::dynamic_pointer_cast<Linear>(blocks["context_embedder"]);
 
             context = context_embedder->forward(ctx, context);  // [N, L, D] aka [N, L, 1536]
+        }
+        sd::ggml_graph_cut::mark_graph_cut(x, "mmdit.prelude", "x");
+        sd::ggml_graph_cut::mark_graph_cut(c, "mmdit.prelude", "c");
+        if (context != nullptr) {
+            sd::ggml_graph_cut::mark_graph_cut(context, "mmdit.prelude", "context");
         }
 
         x = forward_core_with_concat(ctx, x, c, context, skip_layers);  // (N, H*W, patch_size ** 2 * out_channels)

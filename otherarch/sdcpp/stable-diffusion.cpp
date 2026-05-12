@@ -148,6 +148,7 @@ public:
     std::string taesd_path;
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
+    float max_vram                       = 0.f;
     bool use_pmid                        = false;
 
     bool is_using_v_parameterization     = false;
@@ -208,6 +209,7 @@ public:
         vae_decode_only         = sd_ctx_params->vae_decode_only;
         free_params_immediately = sd_ctx_params->free_params_immediately;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
+        max_vram                = sd_ctx_params->max_vram;
 
         bool use_tae = false;
 
@@ -575,6 +577,10 @@ public:
 
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
 
+        const size_t max_graph_vram_bytes = max_vram <= 0.f
+                                                ? 0
+                                                : static_cast<size_t>(static_cast<double>(max_vram) * 1024.0 * 1024.0 * 1024.0);
+
         {
             clip_backend = backend;
             if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
@@ -664,6 +670,7 @@ public:
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
+                    clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes);
                     clip_vision->alloc_params_buffer();
                     clip_vision->get_param_tensors(tensors);
                 }
@@ -740,9 +747,11 @@ public:
                 }
             }
 
+            cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
             cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors);
 
+            diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
             diffusion_model->alloc_params_buffer();
             diffusion_model->get_param_tensors(tensors);
 
@@ -751,6 +760,7 @@ public:
             }
 
             if (high_noise_diffusion_model) {
+                high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
                 high_noise_diffusion_model->alloc_params_buffer();
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
@@ -823,16 +833,19 @@ public:
             } else if (use_tae && !tae_preview_only) {
                 LOG_INFO("using TAE for encoding / decoding");
                 first_stage_model = create_tae();
+                first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "tae");
             } else {
                 LOG_INFO("using VAE for encoding / decoding");
                 first_stage_model = create_vae();
+                first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
                 if (use_tae && tae_preview_only) {
                     LOG_INFO("using TAE for preview");
                     preview_vae = create_tae();
+                    preview_vae->set_max_graph_vram_bytes(max_graph_vram_bytes);
                     preview_vae->alloc_params_buffer();
                     preview_vae->get_param_tensors(tensors, "tae");
                 }
@@ -1332,8 +1345,13 @@ public:
                     cond_stage_lora_models.push_back(lora);
                 }
             }
-            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(cond_stage_lora_models);
-            cond_stage_model->set_weight_adapter(multi_lora_adapter);
+            // Only attach the adapter when there are LoRAs targeting the cond_stage model.
+            // An empty MultiLoraAdapter still routes every linear/conv through
+            // forward_with_lora() instead of the direct kernel path — slower for no benefit.
+            if (!cond_stage_lora_models.empty()) {
+                auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(cond_stage_lora_models);
+                cond_stage_model->set_weight_adapter(multi_lora_adapter);
+            }
         }
         if (diffusion_model) {
             std::vector<std::shared_ptr<LoraModel>> lora_models;
@@ -1364,10 +1382,12 @@ public:
                     diffusion_lora_models.push_back(lora);
                 }
             }
-            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(diffusion_lora_models);
-            diffusion_model->set_weight_adapter(multi_lora_adapter);
-            if (high_noise_diffusion_model) {
-                high_noise_diffusion_model->set_weight_adapter(multi_lora_adapter);
+            if (!diffusion_lora_models.empty()) {
+                auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(diffusion_lora_models);
+                diffusion_model->set_weight_adapter(multi_lora_adapter);
+                if (high_noise_diffusion_model) {
+                    high_noise_diffusion_model->set_weight_adapter(multi_lora_adapter);
+                }
             }
         }
 
@@ -1400,8 +1420,10 @@ public:
                     first_stage_lora_models.push_back(lora);
                 }
             }
-            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(first_stage_lora_models);
-            first_stage_model->set_weight_adapter(multi_lora_adapter);
+            if (!first_stage_lora_models.empty()) {
+                auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(first_stage_lora_models);
+                first_stage_model->set_weight_adapter(multi_lora_adapter);
+            }
         }
     }
 
@@ -2387,6 +2409,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->prediction              = PREDICTION_COUNT;
     sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
+    sd_ctx_params->max_vram                = 0.f;
     sd_ctx_params->enable_mmap             = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -2428,6 +2451,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "sampler_rng_type: %s\n"
              "prediction: %s\n"
              "offload_params_to_cpu: %s\n"
+             "max_vram: %.3f\n"
              "keep_clip_on_cpu: %s\n"
              "keep_control_net_on_cpu: %s\n"
              "keep_vae_on_cpu: %s\n"
@@ -2460,6 +2484,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
              sd_prediction_name(sd_ctx_params->prediction),
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
+             sd_ctx_params->max_vram,
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
              BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
              BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
@@ -3677,9 +3702,13 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         std::unique_ptr<UpscalerGGML> hires_upscaler;
         if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
             LOG_INFO("hires fix: loading model upscaler from '%s'", request.hires.model_path);
-            hires_upscaler = std::make_unique<UpscalerGGML>(sd_ctx->sd->n_threads,
+            hires_upscaler                    = std::make_unique<UpscalerGGML>(sd_ctx->sd->n_threads,
                                                             false,
                                                             request.hires.upscale_tile_size);
+            const size_t max_graph_vram_bytes = sd_ctx->sd->max_vram <= 0.f
+                                                    ? 0
+                                                    : static_cast<size_t>(static_cast<double>(sd_ctx->sd->max_vram) * 1024.0 * 1024.0 * 1024.0);
+            hires_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
             if (!hires_upscaler->load_from_file(request.hires.model_path,
                                                 sd_ctx->sd->offload_params_to_cpu,
                                                 sd_ctx->sd->n_threads)) {
