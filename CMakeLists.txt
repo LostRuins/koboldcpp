@@ -474,28 +474,17 @@ target_compile_features(common2 PUBLIC cxx_std_17) # don't bump
 target_link_libraries(common2 PRIVATE ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(common2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(sdtype_adapter
-            otherarch/sdcpp/sdtype_adapter.cpp
-            otherarch/sdcpp/image_metadata.cpp
-            otherarch/sdcpp/model.cpp
-            otherarch/sdcpp/sample-cache.cpp
-            otherarch/sdcpp/util.cpp
-            otherarch/sdcpp/name_conversion.cpp
-            otherarch/sdcpp/upscaler.cpp
-            otherarch/sdcpp/stable-diffusion.cpp
-            otherarch/sdcpp/thirdparty/zip.c
-            otherarch/sdcpp/model_io/gguf_io.cpp
-            otherarch/sdcpp/model_io/pickle_io.cpp
-            otherarch/sdcpp/model_io/safetensors_io.cpp
-            otherarch/sdcpp/model_io/torch_legacy_io.cpp
-            otherarch/sdcpp/model_io/torch_zip_io.cpp
-            otherarch/sdcpp/tokenizers/bpe_tokenizer.cpp
-            otherarch/sdcpp/tokenizers/clip_tokenizer.cpp
-            otherarch/sdcpp/tokenizers/mistral_tokenizer.cpp
-            otherarch/sdcpp/tokenizers/qwen2_tokenizer.cpp
-            otherarch/sdcpp/tokenizers/t5_unigram_tokenizer.cpp
-            otherarch/sdcpp/tokenizers/tokenizer.cpp
-            otherarch/sdcpp/tokenizers/tokenize_util.cpp)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/otherarch/sdcpp/src_common.txt" SDCPP_COMMON_SOURCES)
+list(FILTER SDCPP_COMMON_SOURCES EXCLUDE REGEX "^#")
+list(REMOVE_ITEM SDCPP_COMMON_SOURCES "")
+
+set(SDCPP_SOURCES)
+list(APPEND SDCPP_SOURCES "sdtype_adapter.cpp")
+foreach(src_file ${SDCPP_COMMON_SOURCES})
+    list(APPEND SDCPP_SOURCES "otherarch/sdcpp/${src_file}")
+endforeach()
+
+add_library(sdtype_adapter ${SDCPP_SOURCES})
 target_include_directories(sdtype_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
 target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(sdtype_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})

@@ -683,31 +683,33 @@ llama-impl.o: src/llama-impl.cpp src/llama-impl.h
 budget.o: common/reasoning-budget.cpp common/reasoning-budget.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-SDCPP_COMMON_BASENAMES := anima.hpp auto_encoder_kl.hpp avi_writer.h cache_dit.hpp clip.hpp common_block.hpp  common_dit.hpp  condition_cache_utils.hpp conditioner.hpp control.hpp convert.cpp denoiser.hpp diffusion_model.hpp easycache.hpp ernie_image.hpp esrgan.hpp flux.hpp ggml_extend_backend.hpp ggml_extend.hpp image_metadata.cpp image_metadata.h kcpp_sd_extensions.h latent-preview.h llm.hpp lora.hpp ltxv.hpp mmdit.hpp model.cpp model.h model_io/binary_io.h model_io/gguf_io.cpp model_io/gguf_io.h model_io/gguf_reader_ext.h model_io/pickle_io.cpp model_io/pickle_io.h model_io/safetensors_io.cpp model_io/safetensors_io.h model_io/tensor_storage.h model_io/torch_legacy_io.cpp model_io/torch_legacy_io.h model_io/torch_zip_io.cpp model_io/torch_zip_io.h msf_gif.h name_conversion.cpp name_conversion.h ordered_map.hpp pmid.hpp preprocessing.hpp qwen_image.hpp rng.hpp rng_mt19937.hpp rng_philox.hpp rope.hpp sample-cache.cpp sample-cache.h spectrum.hpp stable-diffusion.cpp stable-diffusion.h t5.hpp tae.hpp tensor_ggml.hpp tensor.hpp thirdparty/darts.h thirdparty/miniz.h thirdparty/stb_image_resize.h thirdparty/stb_image_write.h thirdparty/zip.c thirdparty/zip.h tokenizers/bpe_tokenizer.cpp tokenizers/bpe_tokenizer.h tokenizers/clip_tokenizer.cpp tokenizers/clip_tokenizer.h tokenizers/mistral_tokenizer.cpp tokenizers/mistral_tokenizer.h tokenizers/qwen2_tokenizer.cpp tokenizers/qwen2_tokenizer.h tokenizers/t5_unigram_tokenizer.cpp tokenizers/t5_unigram_tokenizer.h tokenizers/tokenizer.cpp tokenizers/tokenizer.h tokenizers/tokenize_util.cpp tokenizers/tokenize_util.h  tokenizers/vocab/vocab.h ucache.hpp unet.hpp upscaler.cpp upscaler.h util.cpp util.h vae.hpp version.cpp wan.hpp z_image.hpp
+SDCPP_DIR := otherarch/sdcpp
 
-SDCPP_MAIN_BASENAMES := common/common.cpp common/common.h common/log.cpp common/log.h common/media_io.cpp common/media_io.cpp common/media_io.h common/resource_owners.hpp convert.cpp image_metadata.cpp main.cpp version.cpp tokenizers/vocab/clip_t5.hpp tokenizers/vocab/mistral.hpp tokenizers/vocab/qwen.hpp tokenizers/vocab/umt5.hpp tokenizers/vocab/vocab.cpp
+SDCPP_COMMON_FILENAMES := $(foreach f,$(filter-out #%,$(file < $(SDCPP_DIR)/src_common.txt)),$(SDCPP_DIR)/$(f))
+SOURCES_C_SDCOMMON := $(filter %.c,$(SDCPP_COMMON_FILENAMES))
+SOURCES_CPP_SDCOMMON := $(filter %.cpp,$(SDCPP_COMMON_FILENAMES))
+HEADERS_SDCOMMON := $(filter %.h %.hpp,$(SDCPP_COMMON_FILENAMES))
+OBJS_SDCOMMON := $(patsubst %.cpp,%.o,$(SOURCES_CPP_SDCOMMON)) $(patsubst %.c,%.o,$(SOURCES_C_SDCOMMON))
 
-SOURCES_SDCOMMON := $(foreach f,$(SDCPP_COMMON_BASENAMES),otherarch/sdcpp/$(f))
-HEADERS_SDCOMMON := $(filter %.h,$(SOURCES_SDCOMMON)) $(filter %.hpp, $(SOURCES_SDCOMMON))
-OBJS_SDCOMMON := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON))) otherarch/sdcpp/thirdparty/zip.o
+SDCPP_MAIN_FILENAMES := $(foreach f,$(filter-out #%,$(file < $(SDCPP_DIR)/src_main.txt)),$(SDCPP_DIR)/$(f))
+SOURCES_C_SDMAIN := $(filter %.c,$(SDCPP_MAIN_FILENAMES))
+SOURCES_CPP_SDMAIN := $(filter %.cpp,$(SDCPP_MAIN_FILENAMES))
+HEADERS_SDMAIN := $(filter %.h %.hpp,$(SDCPP_MAIN_FILENAMES))
+OBJS_SDMAIN := $(patsubst %.cpp,%.o,$(SOURCES_CPP_SDMAIN)) $(patsubst %.c,%.o,$(SOURCES_C_SDMAIN))
 
-SOURCES_SDMAIN := $(foreach f,$(SDCPP_MAIN_BASENAMES),otherarch/sdcpp/$(f))
-HEADERS_SDMAIN := $(filter %.h,$(SOURCES_SDMAIN)) $(filter %.hpp, $(SOURCES_SDMAIN))
-OBJS_SDMAIN := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDMAIN)))
-
-otherarch/sdcpp/%.o: $(HEADERS_SDCOMMON)
+$(SDCPP_DIR)/%.o: $(HEADERS_SDCOMMON)
 
 $(OBJS_SDMAIN): $(HEADERS_SDMAIN)
 
 SDCPP_FLAGS := -I./vendor/nlohmann
 
-otherarch/sdcpp/%.o: otherarch/sdcpp/%.cpp
+$(SDCPP_DIR)/%.o: $(SDCPP_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) $(SDCPP_FLAGS) -c $< -o $@
 
-otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
-	$(CC) $(CFLAGS) $(SDCPP_FLAGS) -c $< -o $@
+$(SDCPP_DIR)/%.o: $(SDCPP_DIR)/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-OBJS_SDTYPE := otherarch/sdcpp/sdtype_adapter.o $(OBJS_SDCOMMON)
+OBJS_SDTYPE := $(SDCPP_DIR)/sdtype_adapter.o $(OBJS_SDCOMMON)
 
 
 #whisper objects
