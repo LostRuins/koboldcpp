@@ -121,7 +121,7 @@ private:
     HANDLE hmapping_;
 };
 
-std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bool writable) {
     void* mapped_data = nullptr;
     size_t file_size  = 0;
 
@@ -146,14 +146,18 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     file_size = static_cast<size_t>(size.QuadPart);
 
-    HANDLE mapping_handle = CreateFileMapping(file_handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    DWORD page_prot = writable ? PAGE_WRITECOPY : PAGE_READONLY;
+
+    HANDLE mapping_handle = CreateFileMapping(file_handle, nullptr, page_prot, 0, 0, nullptr);
 
     if (mapping_handle == nullptr) {
         CloseHandle(file_handle);
         return nullptr;
     }
 
-    mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
+    DWORD view_access = writable ? FILE_MAP_COPY : FILE_MAP_READ;
+
+    mapped_data = MapViewOfFile(mapping_handle, view_access, 0, 0, file_size);
 
     if (mapped_data == nullptr) {
         CloseHandle(mapping_handle);
@@ -186,28 +190,85 @@ std::string sd_get_u8path(const std::string& file_path)
     return std::filesystem::path(file_path).string();
 }
 
-class MmapWrapperImpl : public MmapWrapper {
-public:
-    MmapWrapperImpl(void* data, size_t size)
-        : MmapWrapper(data, size) {}
-
-    ~MmapWrapperImpl() override {
-        munmap(data_, size_);
-    }
+struct MmapFlags {
+    bool sequential;
+    bool populate;
+    bool willneed;
+    bool dontneed;
 };
 
-std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+static MmapFlags get_mmap_flags() {
+    MmapFlags result          = {};
+    const char* SD_MMAP_FLAGS = std::getenv("SD_MMAP_FLAGS");
+    if (SD_MMAP_FLAGS && *SD_MMAP_FLAGS) {
+        std::stringstream ss(SD_MMAP_FLAGS);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            std::string ntoken = trim(token);
+            std::transform(ntoken.begin(), ntoken.end(), ntoken.begin(), ::tolower);
+            if (ntoken == "sequential") {
+                result.sequential = true;
+            } else if (ntoken == "populate") {
+                result.populate = true;
+            } else if (ntoken == "willneed") {
+                result.willneed = true;
+            } else if (ntoken == "dontneed") {
+                result.dontneed = true;
+            }
+        }
+    }
+    return result;
+}
+
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size, int fd)
+        : MmapWrapper(data, size), fd_(fd) {}
+
+    ~MmapWrapperImpl() override {
+#ifdef __linux__
+        auto cfg_flags = get_mmap_flags();
+
+        // Drop the kernel pagecache pages for this file. madvise(DONTNEED)
+        // alone only unmaps from the process address space; pagecache
+        // entries persist (`free` reports them as buff/cache and the OOM
+        // killer doesn't touch them, but they ARE counted against
+        // overcommit and can starve other allocations on tight-RAM
+        // systems). posix_fadvise(POSIX_FADV_DONTNEED) is the documented
+        // way to evict pagecache for a specific fd's pages.
+        if (cfg_flags.dontneed) {
+            madvise(data_, size_, MADV_DONTNEED);
+            posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED);
+        }
+#endif
+        munmap(data_, size_);
+        close(fd_);
+    }
+
+private:
+    int fd_;
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bool writable) {
     int file_descriptor = open(filename.c_str(), O_RDONLY);
     if (file_descriptor == -1) {
         return nullptr;
     }
 
+    auto cfg_flags = get_mmap_flags();
+
     int mmap_flags = MAP_PRIVATE;
 
 #ifdef __linux__
-    // performance flags used by llama.cpp
-    // posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
-    // mmap_flags |= MAP_POPULATE;
+    // Sequential access hint helps the kernel read-ahead efficiently and
+    // also encourages eviction of already-read pages (the kernel keeps
+    // a smaller working set when this is set).
+    if (cfg_flags.sequential) {
+        posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+    }
+    if (cfg_flags.populate) {
+        mmap_flags |= MAP_POPULATE;
+    }
 #endif
 
     struct stat sb;
@@ -218,20 +279,27 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
     size_t file_size = sb.st_size;
 
-    void* mapped_data = mmap(nullptr, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+    if (file_size == 0) {
+        close(file_descriptor);
+        return nullptr;
+    }
 
-    close(file_descriptor);
+    int mmap_prot = PROT_READ | (writable ? PROT_WRITE : 0);
+
+    void* mapped_data = mmap(nullptr, file_size, mmap_prot, mmap_flags, file_descriptor, 0);
 
     if (mapped_data == MAP_FAILED) {
+        close(file_descriptor);
         return nullptr;
     }
 
 #ifdef __linux__
-    // performance flags used by llama.cpp
-    // posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+    if (cfg_flags.willneed) {
+        posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+    }
 #endif
 
-    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size, file_descriptor);
 }
 
 #endif

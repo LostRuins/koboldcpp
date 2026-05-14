@@ -193,10 +193,27 @@ using TensorTypeRules = std::vector<std::pair<std::string, ggml_type>>;
 
 TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules);
 
+class MmapWrapper;
+
+struct ModelFileData {
+    std::string path;
+    std::vector<TensorStorage> tensors;
+    std::shared_ptr<MmapWrapper> mmapped;
+    std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
+    bool is_zip;
+};
+
+struct MmapTensorStore {
+    std::shared_ptr<MmapWrapper> mmapped;
+    std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
+};
+
 class ModelLoader {
 protected:
     SDVersion version_ = VERSION_COUNT;
     std::vector<std::string> file_paths_;
+    std::vector<ModelFileData> file_data;
+    bool model_files_processed = false;
     String2TensorStorage tensor_storage_map;
 
     void add_tensor_storage(const TensorStorage& tensor_storage);
@@ -221,6 +238,10 @@ public:
     std::map<ggml_type, uint32_t> get_vae_wtype_stat();
     String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
     void set_wtype_override(ggml_type wtype, std::string tensor_type_rules = "");
+    void process_model_files(bool enable_mmap = false, bool writable_mmap = true);
+    std::vector<MmapTensorStore> mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
+                                              std::set<std::string> ignore_tensors = {},
+                                              bool writable                        = true);
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0, bool use_mmap = false);
     bool load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},

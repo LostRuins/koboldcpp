@@ -2567,7 +2567,24 @@ public:
 
     bool alloc_params_buffer() {
         size_t num_tensors = ggml_tensor_num(params_ctx);
-        params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
+        if (num_tensors > 0) {
+            // ggml_backend_alloc_ctx_tensors fails when all tensors are already allocated
+            // (typical for memory-mapped weights). See ggml-alloc.c n_buffers==0 branch.
+            bool all_have_data = true;
+            for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t)) {
+                if (t->data == nullptr) {
+                    all_have_data = false;
+                    break;
+                }
+            }
+            if (all_have_data) {
+                LOG_DEBUG("%s all params already mmap-allocated (no separate buffer needed)", get_desc().c_str());
+                params_buffer = nullptr;
+                rebuild_params_tensor_set();
+                return true;
+            }
+        }
+        params_buffer = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
         if (params_buffer == nullptr) {
             LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
                       get_desc().c_str(),

@@ -45,7 +45,7 @@ sd::Tensor<float> clip_preprocess(const sd::Tensor<float>& image, int target_wid
 
 class MmapWrapper {
 public:
-    static std::unique_ptr<MmapWrapper> create(const std::string& filename);
+    static std::unique_ptr<MmapWrapper> create(const std::string& filename, bool writable = false);
 
     virtual ~MmapWrapper() = default;
 
@@ -55,6 +55,7 @@ public:
     MmapWrapper& operator=(MmapWrapper&&)      = delete;
 
     const uint8_t* data() const { return static_cast<uint8_t*>(data_); }
+    uint8_t* writable_data() { return static_cast<uint8_t*>(data_); }
     size_t size() const { return size_; }
     bool copy_data(void* buf, size_t n, size_t offset) const;
 
