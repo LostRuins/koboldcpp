@@ -182,6 +182,7 @@ struct sd_load_model_inputs
     const int quant = 0;
     const bool flash_attention = false;
     const bool offload_cpu = false;
+    const bool use_mmap = false;
     const bool vae_cpu = false;
     const bool clip_cpu = false;
     const bool diffusion_conv_direct = false;

@@ -363,6 +363,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("quant", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
                 ("offload_cpu", ctypes.c_bool),
+                ("use_mmap", ctypes.c_bool),
                 ("vae_cpu", ctypes.c_bool),
                 ("clip_cpu", ctypes.c_bool),
                 ("diffusion_conv_direct", ctypes.c_bool),
@@ -2401,6 +2402,7 @@ def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip
     inputs.quant = args.sdquant
     inputs.flash_attention = args.sdflashattention
     inputs.offload_cpu = args.sdoffloadcpu
+    inputs.use_mmap = args.usemmap
     inputs.vae_cpu = args.sdvaecpu
     inputs.clip_cpu = False if args.sdclipgpu else True
     sdconvdirect = sd_convdirect_option(args.sdconvdirect)

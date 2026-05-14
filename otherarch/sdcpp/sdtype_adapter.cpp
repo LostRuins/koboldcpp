@@ -360,6 +360,16 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     {
         printf("Conv2D Direct for VAE model is enabled\n");
     }
+    if (inputs.use_mmap && inputs.offload_cpu) {
+        printf("Offloading weights to system RAM with mmap\n");
+        if (!lora_dynamic && inputs.lora_len > 0) {
+            printf("Note: static LoRAs can reduce mmap memory savings!\n");
+        }
+    } else if (inputs.offload_cpu) {
+        printf("Offloading weights to system RAM\n");
+    } else if (inputs.use_mmap) {
+        printf("Using mmap for I/O\n");
+    }
     if(inputs.quant > 0)
     {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
@@ -424,6 +434,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
     params.offload_params_to_cpu = inputs.offload_cpu;
+    params.enable_mmap = inputs.use_mmap;
     params.keep_vae_on_cpu = inputs.vae_cpu;
     params.keep_clip_on_cpu = inputs.clip_cpu;
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
