@@ -479,7 +479,7 @@ list(FILTER SDCPP_COMMON_SOURCES EXCLUDE REGEX "^#")
 list(REMOVE_ITEM SDCPP_COMMON_SOURCES "")
 
 set(SDCPP_SOURCES)
-list(APPEND SDCPP_SOURCES "sdtype_adapter.cpp")
+list(APPEND SDCPP_SOURCES "otherarch/sdcpp/sdtype_adapter.cpp")
 foreach(src_file ${SDCPP_COMMON_SOURCES})
     list(APPEND SDCPP_SOURCES "otherarch/sdcpp/${src_file}")
 endforeach()
