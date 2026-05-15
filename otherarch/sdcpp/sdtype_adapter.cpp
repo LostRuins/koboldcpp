@@ -1043,6 +1043,16 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
     bool dotile = (sd_params->width*sd_params->height > cfg_tiled_vae_threshold*cfg_tiled_vae_threshold);
 
+    int vae_tile_size = -1;
+    if (dotile) {
+        int new_vae_tile_size = cfg_tiled_vae_threshold / info.vae_scale_factor;
+        new_vae_tile_size = new_vae_tile_size / 2;
+        new_vae_tile_size -= new_vae_tile_size % 2;
+        if (new_vae_tile_size > vae_tile_size) {
+            vae_tile_size = new_vae_tile_size;
+        }
+    }
+
     //for img2img
     sd_image_t input_image = {0,0,0,nullptr};
     std::vector<sd_image_t> reference_imgs;
@@ -1193,6 +1203,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.seed = sd_params->seed;
     params.strength = sd_params->strength;
     params.vae_tiling_params.enabled = dotile;
+    if (vae_tile_size > 0) {
+        params.vae_tiling_params.tile_size_x = vae_tile_size;
+        params.vae_tiling_params.tile_size_y = vae_tile_size;
+    }
     parse_cache_options(params.cache, sd_params->cache_mode, sd_params->cache_options);
 
     LoraMap lora_map = sd_params->lora_map;
