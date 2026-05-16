@@ -62,8 +62,8 @@ protected:
     }
 
 public:
-    VAE(SDVersion version, ggml_backend_t backend, bool offload_params_to_cpu)
-        : version(version), GGMLRunner(backend, offload_params_to_cpu) {}
+    VAE(SDVersion version, ggml_backend_t backend, ggml_backend_t params_backend)
+        : version(version), GGMLRunner(backend, params_backend) {}
 
     int get_scale_factor() {
         int scale_factor = 8;
@@ -216,8 +216,8 @@ public:
 };
 
 struct FakeVAE : public VAE {
-    FakeVAE(SDVersion version, ggml_backend_t backend, bool offload_params_to_cpu)
-        : VAE(version, backend, offload_params_to_cpu) {}
+    FakeVAE(SDVersion version, ggml_backend_t backend, ggml_backend_t params_backend)
+        : VAE(version, backend, params_backend) {}
 
     int get_encoder_output_channels(int input_channels) {
         return input_channels;

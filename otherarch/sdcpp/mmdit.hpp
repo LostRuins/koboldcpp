@@ -828,10 +828,10 @@ struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
     MMDiTRunner(ggml_backend_t backend,
-                bool offload_params_to_cpu,
+                ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map = {},
                 const std::string prefix                       = "")
-        : GGMLRunner(backend, offload_params_to_cpu), mmdit(tensor_storage_map) {
+        : GGMLRunner(backend, params_backend), mmdit(tensor_storage_map) {
         mmdit.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -934,7 +934,7 @@ struct MMDiTRunner : public GGMLRunner {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend             = ggml_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
-        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, false);
+        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, backend);
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 

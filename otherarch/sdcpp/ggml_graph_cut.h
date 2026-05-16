@@ -83,6 +83,8 @@ namespace sd::ggml_graph_cut {
                                           ggml_cgraph* gf,
                                           const Segment& segment,
                                           const char* log_desc);
+    size_t max_vram_gib_to_bytes(float max_vram);
+    float resolve_max_vram_gib(float max_vram, ggml_backend_t backend);
     Plan build_plan(ggml_backend_t backend,
                     ggml_cgraph* gf,
                     const std::unordered_set<const ggml_tensor*>& params_tensor_set,

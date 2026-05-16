@@ -664,13 +664,13 @@ struct AutoEncoderKL : public VAE {
     AutoEncoderKLModel ae;
 
     AutoEncoderKL(ggml_backend_t backend,
-                  bool offload_params_to_cpu,
+                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map,
                   const std::string prefix,
                   bool decode_only       = false,
                   bool use_video_decoder = false,
                   SDVersion version      = VERSION_SD1)
-        : decode_only(decode_only), VAE(version, backend, offload_params_to_cpu) {
+        : decode_only(decode_only), VAE(version, backend, params_backend) {
         if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
             scale_factor = 0.18215f;
             shift_factor = 0.f;

@@ -26,7 +26,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
-#include "ggml_extend_backend.hpp"
+#include "ggml_extend_backend.h"
 #include "ggml_graph_cut.h"
 
 #include "model.h"
@@ -70,48 +70,6 @@ __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const cha
             break;
         default:
             LOG_DEBUG(text);
-    }
-}
-
-__STATIC_INLINE__ bool backend_name_exists(std::string name) {
-    ggml_backend_load_all_once();
-    const size_t device_count = ggml_backend_dev_count();
-    for (size_t i = 0; i < device_count; ++i) {
-        if (name == ggml_backend_dev_name(ggml_backend_dev_get(i))) {
-            return true;
-        }
-    }
-    return false;
-}
-
-__STATIC_INLINE__ std::string sanitize_backend_name(std::string name) {
-    if (name == "" || backend_name_exists(name)) {
-        return name;
-    } else {
-        LOG_WARN("Backend %s not found, using default backend", name.c_str());
-        return "";
-    }
-}
-
-__STATIC_INLINE__ std::string get_default_backend_name() {
-    ggml_backend_load_all_once();
-    // should pick the same backend as ggml_backend_init_best
-    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-    dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
-    dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    if (dev == nullptr) {
-        return "";
-    }
-    return ggml_backend_dev_name(dev);
-}
-
-__STATIC_INLINE__ ggml_backend_t init_named_backend(std::string name = "") {
-    ggml_backend_load_all_once();
-    LOG_DEBUG("Initializing backend: %s", name.c_str());
-    if (name.empty()) {
-        return ggml_backend_init_best();
-    } else {
-        return ggml_backend_init_by_name(name.c_str(), nullptr);
     }
 }
 
@@ -190,7 +148,7 @@ __STATIC_INLINE__ void ggml_ext_im_set_randn_f32(ggml_tensor* tensor, std::share
     uint32_t n                        = (uint32_t)ggml_nelements(tensor);
     std::vector<float> random_numbers = rng->randn(n);
     for (uint32_t i = 0; i < n; i++) {
-        ggml_set_f32_1d(tensor, i, random_numbers[i]);
+        ggml_ext_im_set_f32_1d(tensor, i, random_numbers[i]);
     }
 }
 
@@ -421,39 +379,6 @@ __STATIC_INLINE__ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const st
 //     file.write((char*)tensor->data, ggml_nbytes(tensor));
 //     file.close();
 // }
-
-__STATIC_INLINE__ void copy_ggml_tensor(ggml_tensor* dst, ggml_tensor* src) {
-    if (dst->type == src->type) {
-        dst->nb[0] = src->nb[0];
-        dst->nb[1] = src->nb[1];
-        dst->nb[2] = src->nb[2];
-        dst->nb[3] = src->nb[3];
-
-        memcpy(((char*)dst->data), ((char*)src->data), ggml_nbytes(dst));
-        return;
-    }
-    ggml_init_params params;
-    params.mem_size   = 10 * 1024 * 1024;  // for padding
-    params.mem_buffer = nullptr;
-    params.no_alloc   = false;
-    ggml_context* ctx = ggml_init(params);
-    if (!ctx) {
-        LOG_ERROR("ggml_init() failed");
-        return;
-    }
-    ggml_tensor* final = ggml_cpy(ctx, src, dst);
-
-    ggml_cgraph* graph = ggml_new_graph(ctx);
-    ggml_build_forward_expand(graph, final);
-    ggml_graph_compute_with_ctx(ctx, graph, 1);
-    ggml_free(ctx);
-}
-
-__STATIC_INLINE__ ggml_tensor* ggml_ext_dup_and_cpy_tensor(ggml_context* ctx, ggml_tensor* src) {
-    ggml_tensor* dup = ggml_dup_tensor(ctx, src);
-    copy_ggml_tensor(dup, src);
-    return dup;
-}
 
 __STATIC_INLINE__ float sigmoid(float x) {
     return 1 / (1.0f + expf(-x));
@@ -2669,13 +2594,11 @@ protected:
 public:
     virtual std::string get_desc() = 0;
 
-    GGMLRunner(ggml_backend_t backend, bool offload_params_to_cpu = false)
-        : runtime_backend(backend) {
-        if (!ggml_backend_is_cpu(runtime_backend) && offload_params_to_cpu) {
-            params_backend = ggml_backend_cpu_init();
-        } else {
-            params_backend = runtime_backend;
-        }
+    GGMLRunner(ggml_backend_t backend, ggml_backend_t params_backend)
+        : params_backend(params_backend),
+          runtime_backend(backend) {
+        GGML_ASSERT(runtime_backend != nullptr);
+        GGML_ASSERT(params_backend != nullptr);
         alloc_params_ctx();
     }
 
@@ -2684,9 +2607,6 @@ public:
         free_compute_buffer();
         free_params_ctx();
         free_compute_ctx();
-        if (params_backend != runtime_backend) {
-            ggml_backend_free(params_backend);
-        }
         free_cache_ctx_and_buffer();
     }
 

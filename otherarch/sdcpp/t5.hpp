@@ -321,11 +321,11 @@ struct T5Runner : public GGMLRunner {
     std::vector<int> relative_position_bucket_vec;
 
     T5Runner(ggml_backend_t backend,
-             bool offload_params_to_cpu,
+             ggml_backend_t params_backend,
              const String2TensorStorage& tensor_storage_map,
              const std::string prefix,
              bool is_umt5 = false)
-        : GGMLRunner(backend, offload_params_to_cpu) {
+        : GGMLRunner(backend, params_backend) {
         if (is_umt5) {
             params.vocab_size         = 256384;
             params.relative_attention = false;
@@ -464,11 +464,11 @@ struct T5Embedder {
     T5Runner model;
 
     T5Embedder(ggml_backend_t backend,
-               bool offload_params_to_cpu,
+               ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {},
                const std::string prefix                       = "",
                bool is_umt5                                   = false)
-        : model(backend, offload_params_to_cpu, tensor_storage_map, prefix, is_umt5), tokenizer(is_umt5) {
+        : model(backend, params_backend, tensor_storage_map, prefix, is_umt5), tokenizer(is_umt5) {
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
@@ -576,7 +576,7 @@ struct T5Embedder {
             }
         }
 
-        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, false, tensor_storage_map, "", true);
+        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, backend, tensor_storage_map, "", true);
 
         t5->alloc_params_buffer();
         std::map<std::string, ggml_tensor*> tensors;

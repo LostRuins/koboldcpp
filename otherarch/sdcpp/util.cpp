@@ -29,7 +29,7 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
-#include "ggml_extend_backend.hpp"
+#include "ggml_extend_backend.h"
 #include "stable-diffusion.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
@@ -790,19 +790,6 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
 
     return res;
 }
-
-// test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
-bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
-    if (!backend) {
-        return false;
-    }
-    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
-    if (!dev)
-        return false;
-    std::string dev_name = ggml_backend_dev_name(dev);
-    return dev_name.find(name) != std::string::npos;
-}
-
 #include "kcpp_sd_extensions.h"
 
 void kcpp_sd::set_sd_quiet(bool quiet)
@@ -815,102 +802,6 @@ void kcpp_sd::set_sd_log_level(int log)
     sdloglevel = log;
 }
 
-static int kcpp_main_gpu = -1;
-void kcpp_sd::config_main_gpu(int value) {
-    ggml_backend_load_all_once();
-    if (value >= 0) {
-        size_t dev_count = ggml_backend_dev_count();
-        size_t dev_index = static_cast<size_t>(value);
-        if (dev_index >= dev_count) {
-            LOG_WARN("device %d not found, falling back to default", value);
-            value = -1;
-        }
-    } else if (value <= -2) {
-        value = -2;
-    }
-    kcpp_main_gpu = value;
-}
-static ggml_backend_t kcpp_get_main_gpu() {
-    ggml_backend_t backend = nullptr;
-    if (kcpp_main_gpu != -1) {
-        std::string dev_name;
-        if (kcpp_main_gpu <= -2) {
-            dev_name = "CPU";
-        } else {
-            auto dev = ggml_backend_dev_get(static_cast<size_t>(kcpp_main_gpu));
-            dev_name = ggml_backend_dev_name(dev);
-        }
-        backend = init_named_backend(dev_name);
-        if (backend) {
-            LOG_INFO("Setting %s as main device (#%d)", dev_name.c_str(), kcpp_main_gpu);
-        } else {
-            LOG_WARN("Couldn't initialize device #%d; falling back to the default device", kcpp_main_gpu);
-        }
-    }
-    return backend;
-}
-
-ggml_backend_t sd_get_default_backend() {
-    ggml_backend_load_all_once();
-    static std::once_flag once;
-    std::call_once(once, []() {
-        size_t dev_count = ggml_backend_dev_count();
-        if (dev_count == 0) {
-            LOG_ERROR("No devices found!");
-        } else {
-            LOG_DEBUG("Found %zu backend devices:", dev_count);
-            for (size_t i = 0; i < dev_count; ++i) {
-                auto dev = ggml_backend_dev_get(i);
-                LOG_DEBUG("#%zu: %s", i, ggml_backend_dev_name(dev));
-            }
-        }
-    });
-    ggml_backend_t backend   = nullptr;
-    const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
-    if (SD_VK_DEVICE != nullptr) {
-        std::string sd_vk_device_str = SD_VK_DEVICE;
-        try {
-            unsigned long long device  = std::stoull(sd_vk_device_str);
-            std::string vk_device_name = "Vulkan" + std::to_string(device);
-            if (backend_name_exists(vk_device_name)) {
-                LOG_INFO("Selecting %s as main device by env var SD_VK_DEVICE", vk_device_name.c_str());
-                backend = init_named_backend(vk_device_name);
-                if (!backend) {
-                    LOG_WARN("Device %s requested by SD_VK_DEVICE failed to init. Falling back to the default device.", vk_device_name.c_str());
-                }
-            } else {
-                LOG_WARN("Device %s requested by SD_VK_DEVICE was not found. Falling back to the default device.", vk_device_name.c_str());
-            }
-        } catch (const std::invalid_argument&) {
-            LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to the default device.", SD_VK_DEVICE);
-        } catch (const std::out_of_range&) {
-            LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to the default device.", SD_VK_DEVICE);
-        }
-    }
-
-    if (backend == nullptr) { // kcpp
-        backend = kcpp_get_main_gpu();
-    } // kcpp
-
-    if (!backend) {
-        std::string dev_name = get_default_backend_name();
-        backend              = init_named_backend(dev_name);
-        if (!backend && !dev_name.empty()) {
-            LOG_WARN("device %s failed to init", dev_name.c_str());
-        }
-    }
-
-    if (!backend) {
-        LOG_WARN("loading CPU backend");
-        backend = ggml_backend_cpu_init();
-    }
-
-    if (ggml_backend_is_cpu(backend)) {
-        LOG_DEBUG("Using CPU backend");
-    }
-
-    return backend;
-}
 
 // namespace is needed to avoid conflicts with ggml_backend_extend.hpp
 namespace ggml_cpu {

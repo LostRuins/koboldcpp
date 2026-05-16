@@ -261,6 +261,21 @@ std::string load_umt5_tokenizer_json()
     return umt5str;
 }
 
+static const char * get_main_gpu_name(int value)
+{
+    if (value < 0)
+        return "";
+    size_t gpu_index = static_cast<size_t>(value);
+    if (gpu_index >= ggml_backend_dev_count()) {
+        printf("\nWARNING: device %zu doesn't exist, falling back to the default\n", gpu_index);
+        return "";
+    }
+    auto dev = ggml_backend_dev_get(gpu_index);
+    auto name = ggml_backend_dev_name(dev);
+    printf("Setting %s as image generation device\n", name);
+    return name;
+}
+
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
@@ -285,7 +300,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
 
     //kcpp allow gpu id override
-    config_main_gpu(inputs.kcpp_main_gpu);
+    std::string main_gpu_name = get_main_gpu_name(inputs.kcpp_main_gpu);
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
@@ -435,6 +450,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
     params.offload_params_to_cpu = inputs.offload_cpu;
     params.enable_mmap = inputs.use_mmap;
+    params.backend = main_gpu_name.c_str();
     params.keep_vae_on_cpu = inputs.vae_cpu;
     params.keep_clip_on_cpu = inputs.clip_cpu;
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
@@ -499,7 +515,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
                                         params.offload_params_to_cpu,
                                         params.diffusion_conv_direct,
                                         params.n_threads,
-                                        upscale_tile_size);
+                                        upscale_tile_size,
+                                        main_gpu_name.c_str(),
+                                        nullptr);
 
         if (upscaler_ctx == nullptr) {
              printf("\nError: KCPP failed to load upscaler!\n");

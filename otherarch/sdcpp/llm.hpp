@@ -979,11 +979,11 @@ namespace LLM {
     public:
         LLMRunner(LLMArch arch,
                   ggml_backend_t backend,
-                  bool offload_params_to_cpu,
+                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map,
                   const std::string prefix,
                   bool enable_vision_ = false)
-            : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
+            : GGMLRunner(backend, params_backend), enable_vision(enable_vision_) {
             params.arch = arch;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 params.head_dim     = 128;
@@ -1227,11 +1227,11 @@ namespace LLM {
 
         LLMEmbedder(LLMArch arch,
                     ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "",
                     bool enable_vision                             = false)
-            : model(arch, backend, offload_params_to_cpu, tensor_storage_map, prefix, enable_vision) {
+            : model(arch, backend, params_backend, tensor_storage_map, prefix, enable_vision) {
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 tokenizer = std::make_shared<MistralTokenizer>();
             } else {
@@ -1481,7 +1481,7 @@ namespace LLM {
 
             std::shared_ptr<LLMEmbedder> llm = std::make_shared<LLMEmbedder>(arch,
                                                                              backend,
-                                                                             true,
+                                                                             backend,
                                                                              tensor_storage_map,
                                                                              "text_encoders.llm",
                                                                              true);

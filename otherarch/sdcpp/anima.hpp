@@ -526,10 +526,10 @@ namespace Anima {
         AnimaNet net;
 
         AnimaRunner(ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "model.diffusion_model")
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : GGMLRunner(backend, params_backend) {
             int64_t num_layers    = 0;
             std::string layer_tag = prefix + ".net.blocks.";
             for (const auto& kv : tensor_storage_map) {

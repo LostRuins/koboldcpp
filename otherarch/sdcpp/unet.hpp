@@ -603,11 +603,11 @@ struct UNetModelRunner : public GGMLRunner {
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
-                    bool offload_params_to_cpu,
+                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1)
-        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_storage_map) {
+        : GGMLRunner(backend, params_backend), unet(version, tensor_storage_map) {
         unet.init(params_ctx, tensor_storage_map, prefix);
     }
 

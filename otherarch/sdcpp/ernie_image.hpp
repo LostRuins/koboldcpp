@@ -331,10 +331,10 @@ namespace ErnieImage {
         std::vector<float> pe_vec;
 
         ErnieImageRunner(ggml_backend_t backend,
-                         bool offload_params_to_cpu,
+                         ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "")
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : GGMLRunner(backend, params_backend) {
             ernie_params.num_layers = 0;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {

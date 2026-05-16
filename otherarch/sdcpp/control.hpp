@@ -319,10 +319,10 @@ struct ControlNet : public GGMLRunner {
     bool guided_hint_cached = false;
 
     ControlNet(ggml_backend_t backend,
-               bool offload_params_to_cpu,
+               ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {},
                SDVersion version                              = VERSION_SD1)
-        : GGMLRunner(backend, offload_params_to_cpu), control_net(version) {
+        : GGMLRunner(backend, params_backend), control_net(version) {
         control_net.init(params_ctx, tensor_storage_map, "");
     }
 

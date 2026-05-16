@@ -542,14 +542,14 @@ struct TinyImageAutoEncoder : public VAE {
     bool decode_only = false;
 
     TinyImageAutoEncoder(ggml_backend_t backend,
-                         bool offload_params_to_cpu,
+                         ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map,
                          const std::string prefix,
                          bool decoder_only = true,
                          SDVersion version = VERSION_SD1)
         : decode_only(decoder_only),
           taesd(decoder_only, version),
-          VAE(version, backend, offload_params_to_cpu) {
+          VAE(version, backend, params_backend) {
         scale_input = false;
         taesd.init(params_ctx, tensor_storage_map, prefix);
     }
@@ -604,14 +604,14 @@ struct TinyVideoAutoEncoder : public VAE {
     bool decode_only = false;
 
     TinyVideoAutoEncoder(ggml_backend_t backend,
-                         bool offload_params_to_cpu,
+                         ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map,
                          const std::string prefix,
                          bool decoder_only = true,
                          SDVersion version = VERSION_WAN2)
         : decode_only(decoder_only),
           taehv(decoder_only, version),
-          VAE(version, backend, offload_params_to_cpu) {
+          VAE(version, backend, params_backend) {
         scale_input = false;
         taehv.init(params_ctx, tensor_storage_map, prefix);
     }

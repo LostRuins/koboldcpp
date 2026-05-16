@@ -22,10 +22,11 @@ struct LoraModel : public GGMLRunner {
 
     LoraModel(const std::string& lora_id,
               ggml_backend_t backend,
+              ggml_backend_t params_backend,
               const std::string& file_path = "",
               std::string prefix           = "",
               SDVersion version            = VERSION_COUNT)
-        : lora_id(lora_id), file_path(file_path), GGMLRunner(backend, false) {
+        : lora_id(lora_id), file_path(file_path), GGMLRunner(backend, params_backend) {
         prefix = "lora." + prefix;
         if (!model_loader.init_from_file_and_convert_name(file_path, prefix, version)) {
             load_failed = true;

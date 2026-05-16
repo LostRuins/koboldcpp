@@ -473,11 +473,11 @@ namespace ZImage {
         SDVersion version;
 
         ZImageRunner(ggml_backend_t backend,
-                     bool offload_params_to_cpu,
+                     ggml_backend_t params_backend,
                      const String2TensorStorage& tensor_storage_map = {},
                      const std::string prefix                       = "",
                      SDVersion version                              = VERSION_Z_IMAGE)
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : GGMLRunner(backend, params_backend) {
             z_image = ZImageModel(z_image_params);
             z_image.init(params_ctx, tensor_storage_map, prefix);
         }
@@ -620,7 +620,7 @@ namespace ZImage {
             }
 
             std::shared_ptr<ZImageRunner> z_image = std::make_shared<ZImageRunner>(backend,
-                                                                                   false,
+                                                                                   backend,
                                                                                    tensor_storage_map,
                                                                                    "model.diffusion_model",
                                                                                    VERSION_QWEN_IMAGE);

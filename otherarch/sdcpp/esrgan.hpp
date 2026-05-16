@@ -161,10 +161,10 @@ struct ESRGAN : public GGMLRunner {
     int tile_size = 128;  // avoid cuda OOM for 4gb VRAM
 
     ESRGAN(ggml_backend_t backend,
-           bool offload_params_to_cpu,
+           ggml_backend_t params_backend,
            int tile_size                                  = 128,
            const String2TensorStorage& tensor_storage_map = {})
-        : GGMLRunner(backend, offload_params_to_cpu) {
+        : GGMLRunner(backend, params_backend) {
         this->tile_size = tile_size;
     }
 

@@ -89,7 +89,6 @@ bool sd_should_preview_noisy();
 
 // test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
 bool sd_backend_is(ggml_backend_t backend, const std::string& name);
-ggml_backend_t sd_get_default_backend();
 
 void log_message(const char* format, ...);
 #define LOG_DEBUG(...)  log_message(__VA_ARGS__)

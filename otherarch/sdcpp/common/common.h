@@ -110,14 +110,16 @@ struct SDContextParams {
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
     float max_vram              = 0.f;
-    bool enable_mmap            = false;
-    bool control_net_cpu        = false;
-    bool clip_on_cpu            = false;
-    bool vae_on_cpu             = false;
-    bool flash_attn             = false;
-    bool diffusion_flash_attn   = false;
-    bool diffusion_conv_direct  = false;
-    bool vae_conv_direct        = false;
+    std::string backend;
+    std::string params_backend;
+    bool enable_mmap           = false;
+    bool control_net_cpu       = false;
+    bool clip_on_cpu           = false;
+    bool vae_on_cpu            = false;
+    bool flash_attn            = false;
+    bool diffusion_flash_attn  = false;
+    bool diffusion_conv_direct = false;
+    bool vae_conv_direct       = false;
 
     bool circular   = false;
     bool circular_x = false;

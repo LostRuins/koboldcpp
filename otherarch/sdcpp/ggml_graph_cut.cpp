@@ -16,6 +16,9 @@
 
 namespace sd::ggml_graph_cut {
 
+    static constexpr double MAX_VRAM_BYTES_PER_GIB      = 1024.0 * 1024.0 * 1024.0;
+    static constexpr size_t MAX_VRAM_AUTO_RESERVE_BYTES = 1024ULL * 1024ULL * 1024ULL;
+
     static std::string graph_cut_tensor_display_name(const ggml_tensor* tensor) {
         if (tensor == nullptr) {
             return "<null>";
@@ -77,6 +80,58 @@ namespace sd::ggml_graph_cut {
                segment.input_param_bytes +
                segment.input_previous_cut_bytes +
                segment.output_bytes;
+    }
+
+    size_t max_vram_gib_to_bytes(float max_vram) {
+        if (max_vram <= 0.f) {
+            return 0;
+        }
+        return static_cast<size_t>(static_cast<double>(max_vram) * MAX_VRAM_BYTES_PER_GIB);
+    }
+
+    static float max_vram_bytes_to_gib(size_t max_vram_bytes) {
+        return static_cast<float>(static_cast<double>(max_vram_bytes) / MAX_VRAM_BYTES_PER_GIB);
+    }
+
+    static size_t resolve_auto_max_vram_bytes(ggml_backend_t backend) {
+        if (backend == nullptr) {
+            LOG_WARN("--max-vram -1 requested, but no backend is available; disabling graph splitting");
+            return 0;
+        }
+
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        if (dev == nullptr) {
+            LOG_WARN("--max-vram -1 requested, but no backend device is available; disabling graph splitting");
+            return 0;
+        }
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            LOG_WARN("--max-vram -1 requested, but the main backend is CPU; disabling graph splitting");
+            return 0;
+        }
+
+        size_t free_vram  = 0;
+        size_t total_vram = 0;
+        ggml_backend_dev_memory(dev, &free_vram, &total_vram);
+
+        if (free_vram <= MAX_VRAM_AUTO_RESERVE_BYTES) {
+            LOG_WARN("--max-vram -1 requested, but free VRAM is %.2f GiB; reserving 1.00 GiB leaves no graph budget",
+                     free_vram / MAX_VRAM_BYTES_PER_GIB);
+            return 0;
+        }
+
+        const size_t max_vram_bytes = free_vram - MAX_VRAM_AUTO_RESERVE_BYTES;
+        LOG_INFO("--max-vram -1 auto-detected %.2f GiB free VRAM (%.2f GiB total), reserving 1.00 GiB; using %.2f GiB",
+                 free_vram / MAX_VRAM_BYTES_PER_GIB,
+                 total_vram / MAX_VRAM_BYTES_PER_GIB,
+                 max_vram_bytes / MAX_VRAM_BYTES_PER_GIB);
+        return max_vram_bytes;
+    }
+
+    float resolve_max_vram_gib(float max_vram, ggml_backend_t backend) {
+        if (max_vram != -1.f) {
+            return max_vram;
+        }
+        return max_vram_bytes_to_gib(resolve_auto_max_vram_bytes(backend));
     }
 
     static Segment make_segment_seed(const Plan& plan,

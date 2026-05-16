@@ -4,12 +4,18 @@
 #include "stable-diffusion.h"
 #include "util.h"
 
+#include <utility>
+
 UpscalerGGML::UpscalerGGML(int n_threads,
                            bool direct,
-                           int tile_size)
+                           int tile_size,
+                           std::string backend_spec,
+                           std::string params_backend_spec)
     : n_threads(n_threads),
       direct(direct),
-      tile_size(tile_size) {
+      tile_size(tile_size),
+      backend_spec(std::move(backend_spec)),
+      params_backend_spec(std::move(params_backend_spec)) {
 }
 
 void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
@@ -24,19 +30,51 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   int n_threads) {
     ggml_log_set(ggml_log_callback_default, nullptr);
 
-    backend = sd_get_default_backend();
+    std::string error;
+    if (!backend_manager.init(backend_spec.c_str(),
+                              params_backend_spec.c_str(),
+                              offload_params_to_cpu,
+                              false,
+                              false,
+                              false,
+                              &error)) {
+        LOG_ERROR("upscaler backend config failed: %s", error.c_str());
+        return false;
+    }
+    auto backend_for = [&](SDBackendModule module) {
+        ggml_backend_t module_backend = backend_manager.runtime_backend(module);
+        if (module_backend == nullptr) {
+            LOG_ERROR("failed to initialize %s backend", sd_backend_module_name(module));
+        }
+        return module_backend;
+    };
+    auto params_backend_for = [&](SDBackendModule module) {
+        ggml_backend_t module_backend = backend_manager.params_backend(module);
+        if (module_backend == nullptr) {
+            LOG_ERROR("failed to initialize %s params backend", sd_backend_module_name(module));
+        }
+        return module_backend;
+    };
+    auto ensure_backend_pair = [&](SDBackendModule module) {
+        if (backend_for(module) == nullptr) {
+            return false;
+        }
+        return params_backend_for(module) != nullptr;
+    };
+    if (!ensure_backend_pair(SDBackendModule::UPSCALER)) {
+        return false;
+    }
 
     ModelLoader model_loader;
     if (!model_loader.init_from_file_and_convert_name(esrgan_path)) {
         LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
     }
     model_loader.set_wtype_override(model_data_type);
-    if (!backend) {
-        LOG_DEBUG("Using CPU backend");
-        backend = ggml_backend_cpu_init();
-    }
     LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
-    esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, tile_size, model_loader.get_tensor_storage_map());
+    esrgan_upscaler = std::make_shared<ESRGAN>(backend_for(SDBackendModule::UPSCALER),
+                                               params_backend_for(SDBackendModule::UPSCALER),
+                                               tile_size,
+                                               model_loader.get_tensor_storage_map());
     esrgan_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
     if (direct) {
         esrgan_upscaler->set_conv2d_direct_enabled(true);
@@ -110,14 +148,16 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
                                  bool offload_params_to_cpu,
                                  bool direct,
                                  int n_threads,
-                                 int tile_size) {
+                                 int tile_size,
+                                 const char* backend,
+                                 const char* params_backend) {
     upscaler_ctx_t* upscaler_ctx = (upscaler_ctx_t*)malloc(sizeof(upscaler_ctx_t));
     if (upscaler_ctx == nullptr) {
         return nullptr;
     }
     std::string esrgan_path(esrgan_path_c_str);
 
-    upscaler_ctx->upscaler = new UpscalerGGML(n_threads, direct, tile_size);
+    upscaler_ctx->upscaler = new UpscalerGGML(n_threads, direct, tile_size, SAFE_STR(backend), SAFE_STR(params_backend));
     if (upscaler_ctx->upscaler == nullptr) {
         return nullptr;
     }

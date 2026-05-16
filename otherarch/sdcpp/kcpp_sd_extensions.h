@@ -32,8 +32,6 @@ namespace kcpp_sd {
 
     void set_sd_log_level(int log);
 
-    void config_main_gpu(int value);
-
 }
 
 #endif

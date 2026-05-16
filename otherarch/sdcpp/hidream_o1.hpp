@@ -279,10 +279,10 @@ namespace HiDreamO1 {
         std::array<std::vector<float>, 4> pos_embed_weight_data_;
 
         HiDreamO1VisionRunner(ggml_backend_t backend,
-                              bool offload_params_to_cpu,
+                              ggml_backend_t params_backend,
                               const String2TensorStorage& tensor_storage_map = {},
                               const std::string& prefix                      = "model.visual")
-            : GGMLRunner(backend, offload_params_to_cpu),
+            : GGMLRunner(backend, params_backend),
               params(make_hidream_o1_params()),
               model(std::make_shared<LLM::VisionModel>(false, params.llm.vision)) {
             model->init(params_ctx, tensor_storage_map, prefix);
@@ -336,10 +336,10 @@ namespace HiDreamO1 {
         std::vector<float> attention_mask_vec;
 
         HiDreamO1Runner(ggml_backend_t backend,
-                        bool offload_params_to_cpu,
+                        ggml_backend_t params_backend,
                         const String2TensorStorage& tensor_storage_map = {},
                         const std::string& prefix                      = "model")
-            : GGMLRunner(backend, offload_params_to_cpu),
+            : GGMLRunner(backend, params_backend),
               params(make_hidream_o1_params()) {
             model = HiDreamO1Model(params);
             model.init(params_ctx, tensor_storage_map, prefix);
@@ -461,9 +461,9 @@ namespace HiDreamO1 {
         std::shared_ptr<HiDreamO1VisionRunner> vision_runner;
 
         HiDreamO1Conditioner(ggml_backend_t backend,
-                             bool offload_params_to_cpu,
+                             ggml_backend_t params_backend,
                              const String2TensorStorage& tensor_storage_map = {})
-            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, offload_params_to_cpu, tensor_storage_map)) {}
+            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, params_backend, tensor_storage_map)) {}
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
             vision_runner->get_param_tensors(tensors);
