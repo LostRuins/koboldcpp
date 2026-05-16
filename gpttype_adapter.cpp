@@ -172,7 +172,7 @@ static std::map<int,std::vector<int>> antislop_banned_token_ids; //first is the 
 static int savestate_limit = 0;
 static std::vector<savestate_data> savestates;
 
-extern int kcpp_permit_any_repack;
+extern bool kcpp_permit_any_repack;
 
 inline int kcpp_cpu_has_blas(void) {
 #if defined(GGML_USE_BLAS) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
