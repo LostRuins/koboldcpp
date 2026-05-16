@@ -54,6 +54,7 @@ const char* model_version_to_str[] = {
     "Anima",
     "Flux.2",
     "Flux.2 klein",
+    "HiDream O1",
     "Z-Image",
     "Ovis Image",
     "Ernie Image",
@@ -738,6 +739,14 @@ public:
                                                                    "model.diffusion_model",
                                                                    version,
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
+            } else if (version == VERSION_HIDREAM_O1) {
+                cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(clip_backend,
+                                                                                     offload_params_to_cpu,
+                                                                                     tensor_storage_map);
+                diffusion_model  = std::make_shared<HiDreamO1Model>(backend,
+                                                                   offload_params_to_cpu,
+                                                                   tensor_storage_map,
+                                                                   "model");
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
                                                                       offload_params_to_cpu,
@@ -871,7 +880,7 @@ public:
 
             bool force_vae_cpu = sd_ctx_params->keep_vae_on_cpu;
 
-            if (version == VERSION_CHROMA_RADIANCE) {
+            if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1) {
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               vae_backend,
@@ -1042,6 +1051,10 @@ public:
             ignore_tensors.insert("text_encoders.llm.vision_tower.");
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
         }
+        if (version == VERSION_HIDREAM_O1) {
+            ignore_tensors.insert("lm_head.");
+            ignore_tensors.insert("model.visual.deepstack_merger_list.");
+        }
 
         if (enable_mmap_tensors) {
             if (mmap_able_tensors.empty()) {
@@ -1179,6 +1192,7 @@ public:
                 } else if (sd_version_is_sd3(version) ||
                            sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
+                           version == VERSION_HIDREAM_O1 ||
                            sd_version_is_anima(version) ||
                            sd_version_is_ernie_image(version) ||
                            sd_version_is_z_image(version)) {
@@ -1797,6 +1811,9 @@ public:
         if (sd_version_is_anima(version)) {
             return std::vector<float>{t / static_cast<float>(TIMESTEPS)};
         }
+        if (version == VERSION_HIDREAM_O1) {
+            return std::vector<float>{1.0f - (t / static_cast<float>(TIMESTEPS))};
+        }
         if (sd_version_is_z_image(version)) {
             return std::vector<float>{1000.f - t};
         }
@@ -1885,6 +1902,7 @@ public:
                              int shifted_timestep,
                              sample_method_t method,
                              bool is_flow_denoiser,
+                             const char* extra_sample_args,
                              const std::vector<float>& sigmas,
                              int start_merge_step,
                              const std::vector<sd::Tensor<float>>& ref_latents,
@@ -1911,11 +1929,15 @@ public:
             }
         }
 
-        size_t steps                                = sigmas.size() - 1;
-        bool has_skiplayer                          = slg_scale != 0.0f && !skip_layers.empty();
+        size_t steps       = sigmas.size() - 1;
+        bool has_skiplayer = slg_scale != 0.0f && !skip_layers.empty();
         if (has_skiplayer && !sd_version_is_dit(version)) {
             has_skiplayer = false;
             LOG_WARN("SLG is incompatible with this model type");
+        }
+
+        if (version == VERSION_HIDREAM_O1 && !noise.empty()) {
+            noise *= eta;
         }
 
         int64_t t0                   = ggml_time_us();
@@ -1992,12 +2014,18 @@ public:
             auto run_condition = [&](const SDCondition& condition,
                                      const sd::Tensor<float>* c_concat_override = nullptr,
                                      const std::vector<int>* local_skip_layers  = nullptr) -> sd::Tensor<float> {
-                diffusion_params.context     = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
-                diffusion_params.c_concat    = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
-                diffusion_params.y           = condition.c_vector.empty() ? nullptr : &condition.c_vector;
-                diffusion_params.t5_ids      = condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids;
-                diffusion_params.t5_weights  = condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights;
-                diffusion_params.skip_layers = local_skip_layers;
+                diffusion_params.context      = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
+                diffusion_params.c_concat     = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
+                diffusion_params.y            = condition.c_vector.empty() ? nullptr : &condition.c_vector;
+                diffusion_params.t5_ids       = condition.c_t5_ids.empty() ? nullptr : &condition.c_t5_ids;
+                diffusion_params.t5_weights   = condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights;
+                diffusion_params.input_ids    = condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids;
+                diffusion_params.input_pos    = condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids;
+                diffusion_params.token_types  = condition.c_token_types.empty() ? nullptr : &condition.c_token_types;
+                diffusion_params.vinput_mask  = condition.c_vinput_mask.empty() ? nullptr : &condition.c_vinput_mask;
+                diffusion_params.image_embeds = condition.c_image_embeds.empty() ? nullptr : &condition.c_image_embeds;
+                diffusion_params.ref_latents  = condition.c_ref_images.empty() ? &ref_latents : &condition.c_ref_images;
+                diffusion_params.skip_layers  = local_skip_layers;
 
                 sd::Tensor<float> cached_output;
                 if (step_cache.before_condition(&condition, noised_input, &cached_output)) {
@@ -2083,7 +2111,7 @@ public:
             denoised = latent_result * c_out + x * c_skip;
             if (out_uncond_denoised != nullptr) {
                 sd::Tensor<float> base_uncond = !uncond_out.empty() ? uncond_out : cond_out;
-                *out_uncond_denoised = base_uncond * c_out + x * c_skip;
+                *out_uncond_denoised          = base_uncond * c_out + x * c_skip;
             }
             if (cache_runtime.spectrum_enabled) {
                 cache_runtime.spectrum.update(denoised);
@@ -2098,7 +2126,7 @@ public:
             return denoised;
         };
 
-        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser);
+        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args);
         if (x0_opt.empty()) {
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
@@ -2148,6 +2176,8 @@ public:
         if (sd_version_is_dit(version)) {
             if (version == VERSION_WAN2_2_TI2V) {
                 latent_channel = 48;
+            } else if (version == VERSION_HIDREAM_O1) {
+                latent_channel = 3;
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 latent_channel = 3;
             } else if (sd_version_uses_flux2_vae(version)) {
@@ -2606,6 +2636,7 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->custom_sigmas               = nullptr;
     sample_params->custom_sigmas_count         = 0;
     sample_params->flow_shift                  = INFINITY;
+    sample_params->extra_sample_args           = nullptr;
 }
 
 char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
@@ -2627,7 +2658,8 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              "sample_steps: %d, "
              "eta: %.2f, "
              "shifted_timestep: %d, "
-             "flow_shift: %.2f)",
+             "flow_shift: %.2f, "
+             "extra_sample_args: %s)",
              sample_params->guidance.txt_cfg,
              std::isfinite(sample_params->guidance.img_cfg)
                  ? sample_params->guidance.img_cfg
@@ -2642,7 +2674,8 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              sample_params->sample_steps,
              sample_params->eta,
              sample_params->shifted_timestep,
-             sample_params->flow_shift);
+             sample_params->flow_shift,
+             SAFE_STR(sample_params->extra_sample_args));
 
     return buf;
 }
@@ -2854,6 +2887,9 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
                          float eta,
                          enum sample_method_t sample_method) {
     if (eta == INFINITY) {
+        if (sd_ctx->sd->version == VERSION_HIDREAM_O1) {
+            return 8.f;
+        }
         switch (sample_method) {
             case DDIM_TRAILING_SAMPLE_METHOD:
             case TCD_SAMPLE_METHOD:
@@ -3073,6 +3109,8 @@ struct GenerationRequest {
 struct SamplePlan {
     enum sample_method_t sample_method            = SAMPLE_METHOD_COUNT;
     enum sample_method_t high_noise_sample_method = SAMPLE_METHOD_COUNT;
+    const char* extra_sample_args                 = nullptr;
+    const char* high_noise_extra_sample_args      = nullptr;
     float eta                                     = 0.f;
     float high_noise_eta                          = 0.f;
     int sample_steps                              = 0;
@@ -3085,22 +3123,25 @@ struct SamplePlan {
     SamplePlan(sd_ctx_t* sd_ctx,
                const sd_img_gen_params_t* sd_img_gen_params,
                const GenerationRequest& request) {
-        sample_method = sd_img_gen_params->sample_params.sample_method;
-        eta           = sd_img_gen_params->sample_params.eta;
-        sample_steps  = sd_img_gen_params->sample_params.sample_steps;
+        sample_method     = sd_img_gen_params->sample_params.sample_method;
+        extra_sample_args = sd_img_gen_params->sample_params.extra_sample_args;
+        eta               = sd_img_gen_params->sample_params.eta;
+        sample_steps      = sd_img_gen_params->sample_params.sample_steps;
         resolve(sd_ctx, &request, &sd_img_gen_params->sample_params);
     }
 
     SamplePlan(sd_ctx_t* sd_ctx,
                const sd_vid_gen_params_t* sd_vid_gen_params,
                const GenerationRequest& request) {
-        sample_method = sd_vid_gen_params->sample_params.sample_method;
-        eta           = sd_vid_gen_params->sample_params.eta;
-        sample_steps  = sd_vid_gen_params->sample_params.sample_steps;
+        sample_method     = sd_vid_gen_params->sample_params.sample_method;
+        extra_sample_args = sd_vid_gen_params->sample_params.extra_sample_args;
+        eta               = sd_vid_gen_params->sample_params.eta;
+        sample_steps      = sd_vid_gen_params->sample_params.sample_steps;
         if (sd_ctx->sd->high_noise_diffusion_model) {
-            high_noise_sample_steps  = sd_vid_gen_params->high_noise_sample_params.sample_steps;
-            high_noise_sample_method = sd_vid_gen_params->high_noise_sample_params.sample_method;
-            high_noise_eta           = sd_vid_gen_params->high_noise_sample_params.eta;
+            high_noise_sample_steps      = sd_vid_gen_params->high_noise_sample_params.sample_steps;
+            high_noise_sample_method     = sd_vid_gen_params->high_noise_sample_params.sample_method;
+            high_noise_extra_sample_args = sd_vid_gen_params->high_noise_sample_params.extra_sample_args;
+            high_noise_eta               = sd_vid_gen_params->high_noise_sample_params.eta;
         }
         moe_boundary = sd_vid_gen_params->moe_boundary;
         resolve(sd_ctx, &request, &sd_vid_gen_params->sample_params);
@@ -3346,6 +3387,9 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
 
     std::vector<sd::Tensor<float>> ref_latents;
     for (size_t i = 0; i < ref_images.size(); i++) {
+        if (sd_ctx->sd->version == VERSION_HIDREAM_O1) {
+            continue;
+        }
         sd::Tensor<float> ref_latent;
         if (request->auto_resize_ref_image) {
             LOG_DEBUG("auto resize ref images");
@@ -3756,6 +3800,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                    request.shifted_timestep,
                                                    plan.sample_method,
                                                    sd_ctx->sd->is_flow_denoiser(),
+                                                   plan.extra_sample_args,
                                                    plan.sigmas,
                                                    plan.start_merge_step,
                                                    latents.ref_latents,
@@ -3881,6 +3926,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                             request.shifted_timestep,
                                                             plan.sample_method,
                                                             sd_ctx->sd->is_flow_denoiser(),
+                                                            plan.extra_sample_args,
                                                             hires_sigma_sched,
                                                             plan.start_merge_step,
                                                             latents.ref_latents,
@@ -4245,6 +4291,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                            request.shifted_timestep,
                                                            plan.high_noise_sample_method,
                                                            sd_ctx->sd->is_flow_denoiser(),
+                                                           plan.high_noise_extra_sample_args,
                                                            high_noise_sigmas,
                                                            -1,
                                                            std::vector<sd::Tensor<float>>{},
@@ -4287,6 +4334,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                         sd_vid_gen_params->sample_params.shifted_timestep,
                                                         plan.sample_method,
                                                         sd_ctx->sd->is_flow_denoiser(),
+                                                        plan.extra_sample_args,
                                                         plan.sigmas,
                                                         -1,
                                                         std::vector<sd::Tensor<float>>{},

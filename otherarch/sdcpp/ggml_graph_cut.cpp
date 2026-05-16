@@ -45,6 +45,21 @@ namespace sd::ggml_graph_cut {
         return params_tensor_set.find(tensor) != params_tensor_set.end();
     }
 
+    static int graph_node_index_by_name(ggml_cgraph* gf, const char* name) {
+        GGML_ASSERT(gf != nullptr);
+        if (name == nullptr || name[0] == '\0') {
+            return -1;
+        }
+        const int n_nodes = ggml_graph_n_nodes(gf);
+        for (int i = 0; i < n_nodes; ++i) {
+            ggml_tensor* node = ggml_graph_node(gf, i);
+            if (node != nullptr && std::strcmp(node->name, name) == 0) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     static Plan::InputShape input_shape(const ggml_tensor* tensor) {
         Plan::InputShape shape;
         if (tensor == nullptr) {
@@ -243,6 +258,11 @@ namespace sd::ggml_graph_cut {
     ggml_tensor* cache_source_tensor(ggml_tensor* tensor) {
         if (tensor == nullptr) {
             return nullptr;
+        }
+        if (tensor_buffer(tensor) == nullptr && tensor->src[0] != nullptr &&
+            ggml_nelements(tensor->src[0]) == ggml_nelements(tensor) &&
+            ggml_nbytes(tensor->src[0]) == ggml_nbytes(tensor)) {
+            return cache_source_tensor(tensor->src[0]);
         }
         return tensor->view_src ? tensor->view_src : tensor;
     }
@@ -503,11 +523,15 @@ namespace sd::ggml_graph_cut {
                           log_desc);
         }
 
-        ggml_tensor* final_output = ggml_graph_node(gf, -1);
-        if (final_output != nullptr && available_cut_output_node_indices.find(n_nodes - 1) == available_cut_output_node_indices.end()) {
+        int final_output_index = graph_node_index_by_name(gf, "ggml_runner_final_result_tensor");
+        if (final_output_index < 0) {
+            final_output_index = n_nodes - 1;
+        }
+        ggml_tensor* final_output = final_output_index >= 0 ? ggml_graph_node(gf, final_output_index) : nullptr;
+        if (final_output != nullptr && available_cut_output_node_indices.find(final_output_index) == available_cut_output_node_indices.end()) {
             Segment final_segment;
             final_segment.group_name = "ggml_runner.final";
-            final_segment.output_node_indices.push_back(n_nodes - 1);
+            final_segment.output_node_indices.push_back(final_output_index);
             build_segment(gf,
                           plan,
                           final_segment,

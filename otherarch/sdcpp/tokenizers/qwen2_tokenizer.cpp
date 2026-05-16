@@ -81,6 +81,11 @@ Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str) {
         "</tool_response>",
         "<think>",
         "</think>",
+        "<|boi_token|>",
+        "<|bor_token|>",
+        "<|eor_token|>",
+        "<|bot_token|>",
+        "<|tms_token|>",
     };
 
     if (merges_utf8_str.size() > 0) {

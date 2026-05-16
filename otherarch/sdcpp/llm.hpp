@@ -2,7 +2,10 @@
 #define __LLM_HPP__
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -27,6 +30,7 @@ namespace LLM {
     enum class LLMArch {
         QWEN2_5_VL,
         QWEN3,
+        QWEN3_VL,
         MISTRAL_SMALL_3_2,
         MINISTRAL_3_3B,
         ARCH_COUNT,
@@ -35,11 +39,18 @@ namespace LLM {
     static const char* llm_arch_to_str[] = {
         "qwen2.5vl",
         "qwen3",
+        "qwen3vl",
         "mistral_small3.2",
         "ministral3.3b",
     };
 
+    enum class LLMVisionArch {
+        QWEN2_5_VL,
+        QWEN3_VL,
+    };
+
     struct LLMVisionParams {
+        LLMVisionArch arch                  = LLMVisionArch::QWEN2_5_VL;
         int num_layers                      = 32;
         int64_t hidden_size                 = 1280;
         int64_t intermediate_size           = 3420;
@@ -50,6 +61,7 @@ namespace LLM {
         int patch_size                      = 14;
         int spatial_merge_size              = 2;
         int window_size                     = 112;
+        int num_position_embeddings         = 0;
         std::set<int> fullatt_block_indexes = {7, 15, 23, 31};
     };
 
@@ -90,6 +102,84 @@ namespace LLM {
         }
     };
 
+    static ggml_tensor* splice_image_embeds(GGMLRunnerContext* ctx,
+                                            ggml_tensor* x,
+                                            const std::vector<std::pair<int, ggml_tensor*>>& image_embeds) {
+        if (image_embeds.empty()) {
+            return x;
+        }
+
+        GGML_ASSERT(x->ne[2] == 1);  // N == 1
+
+        auto raw_x               = ggml_cast(ctx->ggml_ctx, x, image_embeds[0].second->type);
+        int64_t txt_token_start  = 0;
+        int64_t txt_token_end    = 0;
+        ggml_tensor* input_embed = nullptr;
+
+        for (int i = 0; i < image_embeds.size(); i++) {
+            if (i == 0) {
+                txt_token_start = 0;
+            } else {
+                txt_token_start = image_embeds[i - 1].first + image_embeds[i - 1].second->ne[1];
+            }
+            txt_token_end = image_embeds[i].first;
+
+            auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+            if (input_embed == nullptr) {
+                input_embed = txt_embed;
+            } else {
+                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
+            }
+
+            input_embed = ggml_concat(ctx->ggml_ctx, input_embed, image_embeds[i].second, 1);
+        }
+
+        txt_token_start = image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1];
+        txt_token_end   = raw_x->ne[1];
+
+        auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+        input_embed          = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
+        GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);
+        return input_embed;
+    }
+
+    struct VisionMLP : public GGMLBlock {
+    protected:
+        LLMVisionArch arch_;
+
+    public:
+        VisionMLP(LLMVisionArch arch, int64_t hidden_size, int64_t intermediate_size)
+            : arch_(arch) {
+            if (arch_ == LLMVisionArch::QWEN3_VL) {
+                blocks["linear_fc1"] = std::make_shared<Linear>(hidden_size, intermediate_size, true);
+                blocks["linear_fc2"] = std::make_shared<Linear>(intermediate_size, hidden_size, true);
+            } else {
+                blocks["gate_proj"] = std::make_shared<Linear>(hidden_size, intermediate_size, true);
+                blocks["up_proj"]   = std::make_shared<Linear>(hidden_size, intermediate_size, true);
+                blocks["down_proj"] = std::make_shared<Linear>(intermediate_size, hidden_size, true);
+            }
+        }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+            if (arch_ == LLMVisionArch::QWEN3_VL) {
+                auto linear_fc1 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc1"]);
+                auto linear_fc2 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc2"]);
+                x               = linear_fc1->forward(ctx, x);
+                x               = ggml_ext_gelu(ctx->ggml_ctx, x);
+                x               = linear_fc2->forward(ctx, x);
+            } else {
+                auto gate_proj = std::dynamic_pointer_cast<Linear>(blocks["gate_proj"]);
+                auto up_proj   = std::dynamic_pointer_cast<Linear>(blocks["up_proj"]);
+                auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
+                auto h         = gate_proj->forward(ctx, x);
+                h              = ggml_silu_inplace(ctx->ggml_ctx, h);
+                h              = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
+                x              = down_proj->forward(ctx, h);
+            }
+            return x;
+        }
+    };
+
     struct VisionPatchEmbed : public GGMLBlock {
     protected:
         bool llama_cpp_style;
@@ -100,6 +190,7 @@ namespace LLM {
 
     public:
         VisionPatchEmbed(bool llama_cpp_style,
+                         LLMVisionArch arch,
                          int patch_size          = 14,
                          int temporal_patch_size = 2,
                          int64_t in_channels     = 3,
@@ -109,36 +200,35 @@ namespace LLM {
               temporal_patch_size(temporal_patch_size),
               in_channels(in_channels),
               embed_dim(embed_dim) {
+            bool bias = arch == LLMVisionArch::QWEN3_VL;
             if (llama_cpp_style) {
                 blocks["proj.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels,
                                                                          embed_dim,
                                                                          {patch_size, patch_size},
-                                                                         {patch_size, patch_size},  // stride
-                                                                         {0, 0},                    // padding
-                                                                         {1, 1},                    // dilation
-                                                                         false));
+                                                                         {patch_size, patch_size},
+                                                                         {0, 0},
+                                                                         {1, 1},
+                                                                         bias));
                 blocks["proj.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels,
                                                                          embed_dim,
                                                                          {patch_size, patch_size},
-                                                                         {patch_size, patch_size},  // stride
-                                                                         {0, 0},                    // padding
-                                                                         {1, 1},                    // dilation
-                                                                         false));
+                                                                         {patch_size, patch_size},
+                                                                         {0, 0},
+                                                                         {1, 1},
+                                                                         bias));
             } else {
                 std::tuple<int, int, int> kernel_size = {(int)temporal_patch_size, (int)patch_size, (int)patch_size};
                 blocks["proj"]                        = std::shared_ptr<GGMLBlock>(new Conv3d(in_channels,
                                                                                               embed_dim,
                                                                                               kernel_size,
-                                                                                              kernel_size,  // stride
-                                                                                              {0, 0, 0},    // padding
-                                                                                              {1, 1, 1},    // dilation
-                                                                                              false));
+                                                                                              kernel_size,
+                                                                                              {0, 0, 0},
+                                                                                              {1, 1, 1},
+                                                                                              bias));
             }
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            // x: [N*grid_t*grid_h*grid_w, in_channels, temporal_patch_size*patch_size*patch_size]
-            // return: [N*grid_t*grid_h*grid_w, embed_dim]
             x = ggml_reshape_4d(ctx->ggml_ctx,
                                 x,
                                 patch_size,
@@ -170,22 +260,43 @@ namespace LLM {
         }
     };
 
-    struct PatchMerger : public GGMLBlock {
+    struct VisionPatchMerger : public GGMLBlock {
     protected:
+        LLMVisionArch arch_;
         int64_t hidden_size;
 
     public:
-        PatchMerger(int64_t dim,
-                    int64_t context_dim,
-                    int64_t spatial_merge_size) {
-            hidden_size     = context_dim * spatial_merge_size * spatial_merge_size;
-            blocks["ln_q"]  = std::shared_ptr<GGMLBlock>(new RMSNorm(context_dim, 1e-6f));
-            blocks["mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
-            // mlp.1 is nn.GELU()
-            blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, dim));
+        VisionPatchMerger(LLMVisionArch arch,
+                          int64_t dim,
+                          int64_t context_dim,
+                          int64_t spatial_merge_size)
+            : arch_(arch),
+              hidden_size(context_dim * spatial_merge_size * spatial_merge_size) {
+            if (arch_ == LLMVisionArch::QWEN3_VL) {
+                blocks["norm"]       = std::make_shared<LayerNorm>(context_dim, 1e-6f);
+                blocks["linear_fc1"] = std::make_shared<Linear>(hidden_size, hidden_size, true);
+                blocks["linear_fc2"] = std::make_shared<Linear>(hidden_size, dim, true);
+            } else {
+                blocks["ln_q"]  = std::make_shared<RMSNorm>(context_dim, 1e-6f);
+                blocks["mlp.0"] = std::make_shared<Linear>(hidden_size, hidden_size);
+                blocks["mlp.2"] = std::make_shared<Linear>(hidden_size, dim);
+            }
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+            if (arch_ == LLMVisionArch::QWEN3_VL) {
+                auto norm       = std::dynamic_pointer_cast<LayerNorm>(blocks["norm"]);
+                auto linear_fc1 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc1"]);
+                auto linear_fc2 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc2"]);
+
+                x = norm->forward(ctx, x);
+                x = ggml_reshape_2d(ctx->ggml_ctx, x, hidden_size, ggml_nelements(x) / hidden_size);
+                x = linear_fc1->forward(ctx, x);
+                x = ggml_gelu_erf(ctx->ggml_ctx, x);
+                x = linear_fc2->forward(ctx, x);
+                return x;
+            }
+
             auto ln_q  = std::dynamic_pointer_cast<RMSNorm>(blocks["ln_q"]);
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
@@ -260,16 +371,35 @@ namespace LLM {
     };
 
     struct VisionBlock : public GGMLBlock {
+    protected:
+        LLMVisionArch arch_;
+
+        ggml_tensor* forward_norm(GGMLRunnerContext* ctx, const std::string& name, ggml_tensor* x) {
+            if (arch_ == LLMVisionArch::QWEN3_VL) {
+                auto norm = std::dynamic_pointer_cast<LayerNorm>(blocks[name]);
+                return norm->forward(ctx, x);
+            }
+            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks[name]);
+            return norm->forward(ctx, x);
+        }
+
     public:
         VisionBlock(bool llama_cpp_style,
+                    LLMVisionArch arch,
                     int64_t hidden_size,
                     int64_t intermediate_size,
                     int num_heads,
-                    float eps = 1e-6f) {
-            blocks["attn"]  = std::shared_ptr<GGMLBlock>(new VisionAttention(llama_cpp_style, hidden_size, num_heads));
-            blocks["mlp"]   = std::shared_ptr<GGMLBlock>(new MLP(hidden_size, intermediate_size, true));
-            blocks["norm1"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
-            blocks["norm2"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
+                    float eps = 1e-6f)
+            : arch_(arch) {
+            blocks["attn"] = std::shared_ptr<GGMLBlock>(new VisionAttention(llama_cpp_style, hidden_size, num_heads));
+            blocks["mlp"]  = std::shared_ptr<GGMLBlock>(new VisionMLP(arch_, hidden_size, intermediate_size));
+            if (arch_ == LLMVisionArch::QWEN3_VL) {
+                blocks["norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, eps));
+                blocks["norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, eps));
+            } else {
+                blocks["norm1"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
+                blocks["norm2"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
+            }
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -277,18 +407,16 @@ namespace LLM {
                              ggml_tensor* pe,
                              ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
-            auto attn  = std::dynamic_pointer_cast<VisionAttention>(blocks["attn"]);
-            auto mlp   = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
-            auto norm1 = std::dynamic_pointer_cast<RMSNorm>(blocks["norm1"]);
-            auto norm2 = std::dynamic_pointer_cast<RMSNorm>(blocks["norm2"]);
+            auto attn = std::dynamic_pointer_cast<VisionAttention>(blocks["attn"]);
+            auto mlp  = std::dynamic_pointer_cast<VisionMLP>(blocks["mlp"]);
 
             auto residual = x;
-            x             = norm1->forward(ctx, x);
+            x             = forward_norm(ctx, "norm1", x);
             x             = attn->forward(ctx, x, pe, mask);
             x             = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             residual = x;
-            x        = norm2->forward(ctx, x);
+            x        = forward_norm(ctx, "norm2", x);
             x        = mlp->forward(ctx, x);
             x        = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
@@ -298,38 +426,58 @@ namespace LLM {
 
     struct VisionModel : public GGMLBlock {
     protected:
+        LLMVisionArch arch_;
         int num_layers;
         int spatial_merge_size;
+        int num_grid_per_side;
         std::set<int> fullatt_block_indexes;
 
     public:
         VisionModel(bool llama_cpp_style,
-                    int num_layers,
-                    int64_t in_channels,
-                    int64_t hidden_size,
-                    int64_t out_hidden_size,
-                    int64_t intermediate_size,
-                    int num_heads,
-                    int spatial_merge_size,
-                    int patch_size,
-                    int temporal_patch_size,
-                    int window_size,
-                    std::set<int> fullatt_block_indexes = {7, 15, 23, 31},
-                    float eps                           = 1e-6f)
-            : num_layers(num_layers), fullatt_block_indexes(std::move(fullatt_block_indexes)), spatial_merge_size(spatial_merge_size) {
+                    const LLMVisionParams& vision_params,
+                    float eps = 1e-6f)
+            : arch_(vision_params.arch),
+              num_layers(vision_params.num_layers),
+              spatial_merge_size(vision_params.spatial_merge_size),
+              num_grid_per_side(vision_params.num_position_embeddings > 0 ? static_cast<int>(std::sqrt(vision_params.num_position_embeddings)) : 0),
+              fullatt_block_indexes(vision_params.fullatt_block_indexes) {
             blocks["patch_embed"] = std::shared_ptr<GGMLBlock>(new VisionPatchEmbed(llama_cpp_style,
-                                                                                    patch_size,
-                                                                                    temporal_patch_size,
-                                                                                    in_channels,
-                                                                                    hidden_size));
+                                                                                    arch_,
+                                                                                    vision_params.patch_size,
+                                                                                    vision_params.temporal_patch_size,
+                                                                                    vision_params.in_channels,
+                                                                                    vision_params.hidden_size));
+            if (vision_params.num_position_embeddings > 0) {
+                blocks["pos_embed"] = std::make_shared<Embedding>(vision_params.num_position_embeddings, vision_params.hidden_size);
+            }
             for (int i = 0; i < num_layers; i++) {
                 blocks["blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new VisionBlock(llama_cpp_style,
-                                                                                                   hidden_size,
-                                                                                                   intermediate_size,
-                                                                                                   num_heads,
+                                                                                                   arch_,
+                                                                                                   vision_params.hidden_size,
+                                                                                                   vision_params.intermediate_size,
+                                                                                                   vision_params.num_heads,
                                                                                                    eps));
             }
-            blocks["merger"] = std::shared_ptr<GGMLBlock>(new PatchMerger(out_hidden_size, hidden_size, spatial_merge_size));
+            blocks["merger"] = std::shared_ptr<GGMLBlock>(new VisionPatchMerger(arch_,
+                                                                                vision_params.out_hidden_size,
+                                                                                vision_params.hidden_size,
+                                                                                spatial_merge_size));
+        }
+
+        std::shared_ptr<Embedding> pos_embedder() {
+            auto it = blocks.find("pos_embed");
+            if (it == blocks.end()) {
+                return nullptr;
+            }
+            return std::dynamic_pointer_cast<Embedding>(it->second);
+        }
+
+        int get_num_grid_per_side() const {
+            return num_grid_per_side;
+        }
+
+        int get_spatial_merge_size() const {
+            return spatial_merge_size;
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -337,20 +485,26 @@ namespace LLM {
                              ggml_tensor* pe,
                              ggml_tensor* window_index,
                              ggml_tensor* window_inverse_index,
-                             ggml_tensor* window_mask) {
+                             ggml_tensor* window_mask,
+                             ggml_tensor* pos_embeds = nullptr) {
             // pixel_values: [grid_t*(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw]
             // window_index: [grid_t*(H/mh/ph)*(W/mw/pw)]
             // window_inverse_index: [grid_t*(H/mh/ph)*(W/mw/pw)]
             // window_mask: [grid_h*grid_w, grid_h*grid_w]
             auto patch_embed = std::dynamic_pointer_cast<VisionPatchEmbed>(blocks["patch_embed"]);
-            auto merger      = std::dynamic_pointer_cast<PatchMerger>(blocks["merger"]);
+            auto merger      = std::dynamic_pointer_cast<VisionPatchMerger>(blocks["merger"]);
 
             auto x = patch_embed->forward(ctx, pixel_values);
             sd::ggml_graph_cut::mark_graph_cut(x, "llm.vision.prelude", "x");
+            if (pos_embeds != nullptr) {
+                x = ggml_add(ctx->ggml_ctx, x, pos_embeds);
+            }
 
-            x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0] * spatial_merge_size * spatial_merge_size, x->ne[1] / spatial_merge_size / spatial_merge_size, x->ne[2], x->ne[3]);
-            x = ggml_get_rows(ctx->ggml_ctx, x, window_index);
-            x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0] / spatial_merge_size / spatial_merge_size, x->ne[1] * spatial_merge_size * spatial_merge_size, x->ne[2], x->ne[3]);
+            if (window_index != nullptr) {
+                x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0] * spatial_merge_size * spatial_merge_size, x->ne[1] / spatial_merge_size / spatial_merge_size, x->ne[2], x->ne[3]);
+                x = ggml_get_rows(ctx->ggml_ctx, x, window_index);
+                x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0] / spatial_merge_size / spatial_merge_size, x->ne[1] * spatial_merge_size * spatial_merge_size, x->ne[2], x->ne[3]);
+            }
 
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<VisionBlock>(blocks["blocks." + std::to_string(i)]);
@@ -360,13 +514,17 @@ namespace LLM {
                     mask = nullptr;
                 }
                 x = block->forward(ctx, x, pe, mask);
+                if (i == 0) {
+                }
                 sd::ggml_graph_cut::mark_graph_cut(x, "llm.vision.blocks." + std::to_string(i), "x");
             }
 
             x = merger->forward(ctx, x);
             sd::ggml_graph_cut::mark_graph_cut(x, "llm.vision.final", "x");
 
-            x = ggml_get_rows(ctx->ggml_ctx, x, window_inverse_index);
+            if (window_inverse_index != nullptr) {
+                x = ggml_get_rows(ctx->ggml_ctx, x, window_inverse_index);
+            }
 
             return x;
         }
@@ -430,6 +588,10 @@ namespace LLM {
             } else if (arch == LLMArch::QWEN3) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            } else if (arch == LLMArch::QWEN3_VL) {
+                int sections[4] = {24, 20, 20, 0};
+                q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+                k               = ggml_rope_multi(ctx->ggml_ctx, k, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else {
                 int sections[4] = {16, 24, 24, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_MROPE, 128000, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -485,10 +647,11 @@ namespace LLM {
     struct TextModel : public GGMLBlock {
     protected:
         int64_t num_layers;
+        LLMParams params;
 
     public:
         TextModel(const LLMParams& params)
-            : num_layers(params.num_layers) {
+            : num_layers(params.num_layers), params(params) {
             blocks["embed_tokens"] = std::shared_ptr<GGMLBlock>(new Embedding(params.vocab_size, params.hidden_size));
             for (int i = 0; i < num_layers; i++) {
                 blocks["layers." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new TransformerBlock(params));
@@ -496,62 +659,22 @@ namespace LLM {
             blocks["norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(params.hidden_size, params.rms_norm_eps));
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx,
-                             ggml_tensor* input_ids,
-                             ggml_tensor* input_pos,
-                             ggml_tensor* attention_mask,
-                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                             std::set<int> out_layers) {
-            // input_ids: [N, n_token]
-            // return: [N, n_token, hidden_size]
-
+        ggml_tensor* embed(GGMLRunnerContext* ctx,
+                           ggml_tensor* input_ids) {
             auto embed_tokens = std::dynamic_pointer_cast<Embedding>(blocks["embed_tokens"]);
-            auto norm         = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
+            auto x            = embed_tokens->forward(ctx, input_ids);
+            return x;
+        }
 
-            auto x = embed_tokens->forward(ctx, input_ids);
-            sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.prelude", "x");
-
+        ggml_tensor* forward_embeds(GGMLRunnerContext* ctx,
+                                    ggml_tensor* x,
+                                    ggml_tensor* input_pos,
+                                    ggml_tensor* attention_mask,
+                                    std::set<int> out_layers) {
+            auto norm = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
             std::vector<ggml_tensor*> intermediate_outputs;
 
-            if (image_embeds.size() > 0) {
-                GGML_ASSERT(x->ne[2] == 1);  // N == 1
-
-                auto raw_x              = ggml_cast(ctx->ggml_ctx, x, image_embeds[0].second->type);
-                int64_t txt_token_start = 0;
-                int64_t txt_token_end   = 0;
-
-                ggml_tensor* input_embed = nullptr;
-
-                for (int i = 0; i < image_embeds.size(); i++) {
-                    if (i == 0) {
-                        txt_token_start = 0;
-                    } else {
-                        txt_token_start = image_embeds[i - 1].first + image_embeds[i - 1].second->ne[1];
-                    }
-                    txt_token_end = image_embeds[i].first;
-
-                    auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
-                    if (input_embed == nullptr) {
-                        input_embed = txt_embed;
-                    } else {
-                        input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
-                    }
-
-                    auto image_embed = image_embeds[i].second;
-                    input_embed      = ggml_concat(ctx->ggml_ctx, input_embed, image_embed, 1);
-                }
-
-                txt_token_start = image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1];
-                txt_token_end   = raw_x->ne[1];
-
-                auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
-
-                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
-                GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);
-
-                x = input_embed;
-            }
-
+            sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.prelude", "x");
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["layers." + std::to_string(i)]);
 
@@ -570,10 +693,23 @@ namespace LLM {
                 for (int i = 1; i < intermediate_outputs.size(); i++) {
                     x = ggml_concat(ctx->ggml_ctx, x, intermediate_outputs[i], 0);
                 }
-            } else {
-                x = norm->forward(ctx, x);
+                return x;
             }
-            return x;
+
+            return norm->forward(ctx, x);
+        }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* input_ids,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask,
+                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                             std::set<int> out_layers) {
+            // input_ids: [N, n_token]
+            // return: [N, n_token, hidden_size]
+            auto x = embed(ctx, input_ids);
+            x      = splice_image_embeds(ctx, x, image_embeds);
+            return forward_embeds(ctx, x, input_pos, attention_mask, std::move(out_layers));
         }
     };
 
@@ -587,18 +723,7 @@ namespace LLM {
             : enable_vision(enable_vision), params(params) {
             blocks["model"] = std::shared_ptr<GGMLBlock>(new TextModel(params));
             if (enable_vision) {
-                blocks["visual"] = std::shared_ptr<GGMLBlock>(new VisionModel(llama_cpp_style,
-                                                                              params.vision.num_layers,
-                                                                              params.vision.in_channels,
-                                                                              params.vision.hidden_size,
-                                                                              params.vision.out_hidden_size,
-                                                                              params.vision.intermediate_size,
-                                                                              params.vision.num_heads,
-                                                                              params.vision.spatial_merge_size,
-                                                                              params.vision.patch_size,
-                                                                              params.vision.temporal_patch_size,
-                                                                              params.vision.window_size,
-                                                                              params.vision.fullatt_block_indexes));
+                blocks["visual"] = std::shared_ptr<GGMLBlock>(new VisionModel(llama_cpp_style, params.vision));
             }
         }
 
@@ -615,15 +740,20 @@ namespace LLM {
             return x;
         }
 
+        std::shared_ptr<VisionModel> vision_model() {
+            GGML_ASSERT(enable_vision);
+            return std::dynamic_pointer_cast<VisionModel>(blocks["visual"]);
+        }
+
         ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
                                     ggml_tensor* pixel_values,
                                     ggml_tensor* pe,
                                     ggml_tensor* window_index,
                                     ggml_tensor* window_inverse_index,
-                                    ggml_tensor* window_mask) {
+                                    ggml_tensor* window_mask,
+                                    ggml_tensor* pos_embeds = nullptr) {
             GGML_ASSERT(enable_vision);
-            auto vision_model = std::dynamic_pointer_cast<VisionModel>(blocks["visual"]);
-            return vision_model->forward(ctx, pixel_values, pe, window_index, window_inverse_index, window_mask);
+            return vision_model()->forward(ctx, pixel_values, pe, window_index, window_inverse_index, window_mask, pos_embeds);
         }
     };
 
@@ -638,7 +768,215 @@ namespace LLM {
         std::vector<int> window_index_vec;
         std::vector<int> window_inverse_index_vec;
         std::vector<float> pe_vec;
+        std::array<std::vector<int32_t>, 4> pos_embed_idx_data_;
+        std::array<std::vector<float>, 4> pos_embed_weight_data_;
 
+        static ggml_tensor* process_image_common(ggml_context* ctx,
+                                                 ggml_tensor* image,
+                                                 const LLMVisionParams& vision_params) {
+            // image: [C, H, W]
+            // return: [grid_t*(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw], grid_t == 1
+            int64_t C  = image->ne[2];
+            int64_t H  = image->ne[1];
+            int64_t W  = image->ne[0];
+            int64_t mh = vision_params.spatial_merge_size;
+            int64_t mw = vision_params.spatial_merge_size;
+            int64_t pt = vision_params.temporal_patch_size;
+            int64_t ph = vision_params.patch_size;
+            int64_t pw = vision_params.patch_size;
+
+            image = ggml_reshape_4d(ctx, image, pw, mw, (W / mw / pw), H * C);                               // [C*H, (W/mw/pw), mw, pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 3, 1));                          // [mw, C*H, (W/mw/pw), pw]
+            image = ggml_reshape_4d(ctx, image, pw * (W / mw / pw), H, C, mw);                               // [mw, C, H, (W/mw/pw)*pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 3, 1));                          // [H, mw, C, (W/mw/pw)*pw]
+            image = ggml_reshape_4d(ctx, image, pw, (W / mw / pw) * C * mw, ph, mh * (H / mh / ph));         // [(H/mh/ph)*mh, ph, mw*C*(W/mw/pw), pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph)*mh, mw*C*(W/mw/pw), ph, pw]
+            image = ggml_reshape_4d(ctx, image, pw * ph, (W / mw / pw), C, mw * mh * (H / mh / ph));         // [(H/mh/ph)*mh*mw, C, (W/mw/pw), ph*pw]
+            image = ggml_concat(ctx, image, image, 0);                                                       // [(H/mh/ph)*mh*mw, C, (W/mw/pw), pt*ph*pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph)*mh*mw, (W/mw/pw), C, pt*ph*pw]
+            image = ggml_reshape_4d(ctx, image, pw * ph * pt * C, (W / mw / pw), mw * mh, (H / mh / ph));    // [(H/mh/ph), mh*mw, (W/mw/pw), C*pt*ph*pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph), (W/mw/pw), mh*mw, C*pt*ph*pw]
+            image = ggml_reshape_2d(ctx, image, pw * ph * pt * C, mw * mh * (W / mw / pw) * (H / mh / ph));  // [(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw]
+            return image;
+        }
+
+        static ggml_tensor* build_patch_pos_embeds_common(GGMLRunner* runner,
+                                                          ggml_context* compute_ctx,
+                                                          GGMLRunnerContext* runner_ctx,
+                                                          std::shared_ptr<VisionModel> vision,
+                                                          int grid_h,
+                                                          int grid_w,
+                                                          std::array<std::vector<int32_t>, 4>& pos_embed_idx_data,
+                                                          std::array<std::vector<float>, 4>& pos_embed_weight_data) {
+            auto pos_embed = vision->pos_embedder();
+            GGML_ASSERT(pos_embed != nullptr);
+            for (int i = 0; i < 4; ++i) {
+                pos_embed_idx_data[i].clear();
+                pos_embed_weight_data[i].clear();
+                pos_embed_idx_data[i].reserve(static_cast<size_t>(grid_h * grid_w));
+                pos_embed_weight_data[i].reserve(static_cast<size_t>(grid_h * grid_w));
+            }
+
+            int num_grid_per_side = vision->get_num_grid_per_side();
+            double max_index      = static_cast<double>(num_grid_per_side - 1);
+            int merge_size        = vision->get_spatial_merge_size();
+            GGML_ASSERT(grid_h % merge_size == 0);
+            GGML_ASSERT(grid_w % merge_size == 0);
+            for (int bh = 0; bh < grid_h / merge_size; ++bh) {
+                for (int bw = 0; bw < grid_w / merge_size; ++bw) {
+                    for (int ih = 0; ih < merge_size; ++ih) {
+                        int h        = bh * merge_size + ih;
+                        double h_pos = grid_h == 1 ? 0.0 : max_index * h / static_cast<double>(grid_h - 1);
+                        int h_floor  = static_cast<int>(std::floor(h_pos));
+                        int h_ceil   = std::min(h_floor + 1, num_grid_per_side - 1);
+                        double dh    = h_pos - h_floor;
+                        for (int iw = 0; iw < merge_size; ++iw) {
+                            int w        = bw * merge_size + iw;
+                            double w_pos = grid_w == 1 ? 0.0 : max_index * w / static_cast<double>(grid_w - 1);
+                            int w_floor  = static_cast<int>(std::floor(w_pos));
+                            int w_ceil   = std::min(w_floor + 1, num_grid_per_side - 1);
+                            double dw    = w_pos - w_floor;
+
+                            pos_embed_idx_data[0].push_back(h_floor * num_grid_per_side + w_floor);
+                            pos_embed_idx_data[1].push_back(h_floor * num_grid_per_side + w_ceil);
+                            pos_embed_idx_data[2].push_back(h_ceil * num_grid_per_side + w_floor);
+                            pos_embed_idx_data[3].push_back(h_ceil * num_grid_per_side + w_ceil);
+
+                            pos_embed_weight_data[0].push_back(static_cast<float>((1.0 - dh) * (1.0 - dw)));
+                            pos_embed_weight_data[1].push_back(static_cast<float>((1.0 - dh) * dw));
+                            pos_embed_weight_data[2].push_back(static_cast<float>(dh * (1.0 - dw)));
+                            pos_embed_weight_data[3].push_back(static_cast<float>(dh * dw));
+                        }
+                    }
+                }
+            }
+
+            ggml_tensor* patch_pos_embeds = nullptr;
+            for (int i = 0; i < 4; ++i) {
+                auto idx_tensor = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, static_cast<int64_t>(pos_embed_idx_data[i].size()));
+                runner->set_backend_tensor_data(idx_tensor, pos_embed_idx_data[i].data());
+                auto embed         = pos_embed->forward(runner_ctx, idx_tensor);
+                auto weight_tensor = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, 1, static_cast<int64_t>(pos_embed_weight_data[i].size()));
+                runner->set_backend_tensor_data(weight_tensor, pos_embed_weight_data[i].data());
+                embed            = ggml_mul(compute_ctx, embed, weight_tensor);
+                patch_pos_embeds = patch_pos_embeds == nullptr ? embed : ggml_add(compute_ctx, patch_pos_embeds, embed);
+            }
+            return patch_pos_embeds;
+        }
+
+        static ggml_tensor* encode_image_common(GGMLRunner* runner,
+                                                ggml_context* compute_ctx,
+                                                GGMLRunnerContext* runner_ctx,
+                                                ggml_tensor* image,
+                                                const LLMVisionParams& vision_params,
+                                                std::shared_ptr<VisionModel> vision_model,
+                                                std::vector<int>& window_index_vec,
+                                                std::vector<int>& window_inverse_index_vec,
+                                                std::vector<float>& window_mask_vec,
+                                                std::vector<float>& pe_vec,
+                                                std::array<std::vector<int32_t>, 4>& pos_embed_idx_data,
+                                                std::array<std::vector<float>, 4>& pos_embed_weight_data) {
+            GGML_ASSERT(image->ne[1] % (vision_params.patch_size * vision_params.spatial_merge_size) == 0);
+            GGML_ASSERT(image->ne[0] % (vision_params.patch_size * vision_params.spatial_merge_size) == 0);
+
+            int grid_h = static_cast<int>(image->ne[1]) / vision_params.patch_size;
+            int grid_w = static_cast<int>(image->ne[0]) / vision_params.patch_size;
+
+            auto pixel_values = process_image_common(compute_ctx, image, vision_params);
+            int head_dim      = static_cast<int>(vision_params.hidden_size / vision_params.num_heads);
+
+            if (vision_params.arch == LLMVisionArch::QWEN3_VL) {
+                auto pos_embeds = build_patch_pos_embeds_common(runner,
+                                                                compute_ctx,
+                                                                runner_ctx,
+                                                                vision_model,
+                                                                grid_h,
+                                                                grid_w,
+                                                                pos_embed_idx_data,
+                                                                pos_embed_weight_data);
+                window_index_vec.resize(static_cast<size_t>((grid_h / vision_params.spatial_merge_size) * (grid_w / vision_params.spatial_merge_size)));
+                for (int i = 0; i < static_cast<int>(window_index_vec.size()); ++i) {
+                    window_index_vec[static_cast<size_t>(i)] = i;
+                }
+                pe_vec      = Rope::gen_qwen2vl_pe(grid_h,
+                                                   grid_w,
+                                                   vision_params.spatial_merge_size,
+                                                   window_index_vec,
+                                                   10000,
+                                                   {head_dim / 2, head_dim / 2});
+                int pos_len = static_cast<int>(pe_vec.size() / head_dim / 2);
+                auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
+                runner->set_backend_tensor_data(pe, pe_vec.data());
+                return vision_model->forward(runner_ctx, pixel_values, pe, nullptr, nullptr, nullptr, pos_embeds);
+            }
+
+            int llm_grid_h             = grid_h / vision_params.spatial_merge_size;
+            int llm_grid_w             = grid_w / vision_params.spatial_merge_size;
+            int vit_merger_window_size = vision_params.window_size / vision_params.patch_size / vision_params.spatial_merge_size;
+
+            int inverse_index = 0;
+            window_index_vec.resize(llm_grid_h * llm_grid_w);
+            window_inverse_index_vec.resize(llm_grid_h * llm_grid_w);
+            std::vector<int> seqlens;
+            for (int ih = 0; ih < llm_grid_h; ih += vit_merger_window_size) {
+                for (int iw = 0; iw < llm_grid_w; iw += vit_merger_window_size) {
+                    int win_h = std::min(vit_merger_window_size, llm_grid_h - ih);
+                    int win_w = std::min(vit_merger_window_size, llm_grid_w - iw);
+                    for (int iy = 0; iy < win_h; iy++) {
+                        for (int ix = 0; ix < win_w; ix++) {
+                            int index                       = (ih + iy) * llm_grid_w + iw + ix;
+                            window_index_vec[inverse_index] = index;
+                            window_inverse_index_vec[index] = inverse_index;
+                            inverse_index++;
+                        }
+                    }
+                    seqlens.push_back(win_h * win_w * vision_params.spatial_merge_size * vision_params.spatial_merge_size);
+                }
+            }
+            auto window_index         = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, llm_grid_h * llm_grid_w);
+            auto window_inverse_index = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, llm_grid_h * llm_grid_w);
+            runner->set_backend_tensor_data(window_index, window_index_vec.data());
+            runner->set_backend_tensor_data(window_inverse_index, window_inverse_index_vec.data());
+
+            window_mask_vec.resize((grid_h * grid_w) * (grid_h * grid_w));
+            int window_start_index = 0;
+            for (int seq_index = 0; seq_index < seqlens.size(); seq_index++) {
+                int window_end_index = window_start_index + seqlens[seq_index];
+                GGML_ASSERT(window_end_index <= grid_h * grid_w);
+                for (int i = window_start_index; i < window_end_index; i++) {
+                    for (int j = 0; j < grid_h * grid_w; j++) {
+                        float mask_value = -INFINITY;
+                        if (j >= window_start_index && j < window_end_index) {
+                            mask_value = 0;
+                        }
+                        GGML_ASSERT((i * (grid_h * grid_w) + j) < window_mask_vec.size());
+                        window_mask_vec[i * (grid_h * grid_w) + j] = mask_value;
+                    }
+                }
+                window_start_index = window_end_index;
+            }
+
+            auto window_mask = ggml_new_tensor_2d(compute_ctx,
+                                                  GGML_TYPE_F32,
+                                                  grid_h * grid_w,
+                                                  grid_h * grid_w);
+            runner->set_backend_tensor_data(window_mask, window_mask_vec.data());
+
+            pe_vec      = Rope::gen_qwen2vl_pe(grid_h,
+                                               grid_w,
+                                               vision_params.spatial_merge_size,
+                                               window_inverse_index_vec,
+                                               10000,
+                                               {head_dim / 2, head_dim / 2});
+            int pos_len = static_cast<int>(pe_vec.size() / head_dim / 2);
+
+            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
+            runner->set_backend_tensor_data(pe, pe_vec.data());
+
+            return vision_model->forward(runner_ctx, pixel_values, pe, window_index, window_inverse_index, window_mask);
+        }
+
+    public:
         LLMRunner(LLMArch arch,
                   ggml_backend_t backend,
                   bool offload_params_to_cpu,
@@ -740,8 +1078,9 @@ namespace LLM {
                                     ggml_tensor* input_pos,
                                     ggml_tensor* window_index,
                                     ggml_tensor* window_inverse_index,
-                                    ggml_tensor* window_mask) {
-            auto hidden_states = model.vision_forward(ctx, pixel_values, input_pos, window_index, window_inverse_index, window_mask);
+                                    ggml_tensor* window_mask,
+                                    ggml_tensor* pos_embeds = nullptr) {
+            auto hidden_states = model.vision_forward(ctx, pixel_values, input_pos, window_index, window_inverse_index, window_mask, pos_embeds);
             return hidden_states;
         }
 
@@ -827,30 +1166,36 @@ namespace LLM {
         }
 
         ggml_tensor* process_image(ggml_context* ctx, ggml_tensor* image) {
-            // image: [C, H, W]
-            // return: [grid_t*(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw], grid_t == 1
-            int64_t C  = image->ne[2];
-            int64_t H  = image->ne[1];
-            int64_t W  = image->ne[0];
-            int64_t mh = params.vision.spatial_merge_size;
-            int64_t mw = params.vision.spatial_merge_size;
-            int64_t pt = params.vision.temporal_patch_size;
-            int64_t ph = params.vision.patch_size;
-            int64_t pw = params.vision.patch_size;
+            return process_image_common(ctx, image, params.vision);
+        }
 
-            image = ggml_reshape_4d(ctx, image, pw, mw, (W / mw / pw), H * C);                               // [C*H, (W/mw/pw), mw, pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 3, 1));                          // [mw, C*H, (W/mw/pw), pw]
-            image = ggml_reshape_4d(ctx, image, pw * (W / mw / pw), H, C, mw);                               // [mw, C, H, (W/mw/pw)*pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 3, 1));                          // [H, mw, C, (W/mw/pw)*pw]
-            image = ggml_reshape_4d(ctx, image, pw, (W / mw / pw) * C * mw, ph, mh * (H / mh / ph));         // [(H/mh/ph)*mh, ph, mw*C*(W/mw/pw), pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph)*mh, mw*C*(W/mw/pw), ph, pw]
-            image = ggml_reshape_4d(ctx, image, pw * ph, (W / mw / pw), C, mw * mh * (H / mh / ph));         // [(H/mh/ph)*mh*mw, C, (W/mw/pw), ph*pw]
-            image = ggml_concat(ctx, image, image, 0);                                                       // [(H/mh/ph)*mh*mw, C, (W/mw/pw), pt*ph*pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph)*mh*mw, (W/mw/pw), C, pt*ph*pw]
-            image = ggml_reshape_4d(ctx, image, pw * ph * pt * C, (W / mw / pw), mw * mh, (H / mh / ph));    // [(H/mh/ph), mh*mw, (W/mw/pw), C*pt*ph*pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph), (W/mw/pw), mh*mw, C*pt*ph*pw]
-            image = ggml_reshape_2d(ctx, image, pw * ph * pt * C, mw * mh * (W / mw / pw) * (H / mh / ph));  // [(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw]
-            return image;
+        ggml_tensor* build_patch_pos_embeds(GGMLRunnerContext* runner_ctx,
+                                            std::shared_ptr<VisionModel> vision,
+                                            int grid_h,
+                                            int grid_w) {
+            return build_patch_pos_embeds_common(this,
+                                                 compute_ctx,
+                                                 runner_ctx,
+                                                 vision,
+                                                 grid_h,
+                                                 grid_w,
+                                                 pos_embed_idx_data_,
+                                                 pos_embed_weight_data_);
+        }
+
+        ggml_tensor* encode_image(GGMLRunnerContext* runner_ctx, ggml_tensor* image) {
+            return encode_image_common(this,
+                                       compute_ctx,
+                                       runner_ctx,
+                                       image,
+                                       params.vision,
+                                       model.vision_model(),
+                                       window_index_vec,
+                                       window_inverse_index_vec,
+                                       window_mask_vec,
+                                       pe_vec,
+                                       pos_embed_idx_data_,
+                                       pos_embed_weight_data_);
         }
 
         ggml_cgraph* build_encode_image_graph(const sd::Tensor<float>& image_tensor) {
@@ -860,116 +1205,8 @@ namespace LLM {
             GGML_ASSERT(image->ne[1] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
 
-            int grid_t                 = 1;
-            int grid_h                 = static_cast<int>(image->ne[1]) / params.vision.patch_size;
-            int grid_w                 = static_cast<int>(image->ne[0]) / params.vision.patch_size;
-            int llm_grid_h             = grid_h / params.vision.spatial_merge_size;
-            int llm_grid_w             = grid_w / params.vision.spatial_merge_size;
-            int vit_merger_window_size = params.vision.window_size / params.vision.patch_size / params.vision.spatial_merge_size;
-
-            auto pixel_values = process_image(compute_ctx, image);
-
-            // window index
-            int inverse_index = 0;
-            window_index_vec.resize(llm_grid_h * llm_grid_w);
-            window_inverse_index_vec.resize(llm_grid_h * llm_grid_w);
-            std::vector<int> seqlens;
-            for (int ih = 0; ih < llm_grid_h; ih += vit_merger_window_size) {
-                for (int iw = 0; iw < llm_grid_w; iw += vit_merger_window_size) {
-                    int win_h = std::min(vit_merger_window_size, llm_grid_h - ih);
-                    int win_w = std::min(vit_merger_window_size, llm_grid_w - iw);
-                    for (int iy = 0; iy < win_h; iy++) {
-                        for (int ix = 0; ix < win_w; ix++) {
-                            int index                       = (ih + iy) * llm_grid_w + iw + ix;
-                            window_index_vec[inverse_index] = index;
-                            window_inverse_index_vec[index] = inverse_index;
-                            inverse_index++;
-                        }
-                    }
-                    seqlens.push_back(win_h * win_w * params.vision.spatial_merge_size * params.vision.spatial_merge_size);
-                }
-            }
-            // printf("window_index: ");
-            // for (int i : window_index_vec) {
-            //     printf("%d ", i);
-            // }
-            // printf("\n");
-            // printf("window_inverse_index: ");
-            // for (int i : window_inverse_index_vec) {
-            //     printf("%d ", i);
-            // }
-            // printf("\n");
-            // printf("seqlens: ");
-            // for (int i : seqlens) {
-            //     printf("%d ", i);
-            // }
-            // printf("\n");
-            auto window_index         = ggml_new_tensor_1d(compute_ctx,
-                                                           GGML_TYPE_I32,
-                                                           llm_grid_h * llm_grid_w);
-            auto window_inverse_index = ggml_new_tensor_1d(compute_ctx,
-                                                           GGML_TYPE_I32,
-                                                           llm_grid_h * llm_grid_w);
-            set_backend_tensor_data(window_index, window_index_vec.data());
-            set_backend_tensor_data(window_inverse_index, window_inverse_index_vec.data());
-
-            // window mask
-            int seq_window_size = (vit_merger_window_size * params.vision.spatial_merge_size) * (vit_merger_window_size * params.vision.spatial_merge_size);
-            window_mask_vec.resize((grid_h * grid_w) * (grid_h * grid_w));
-            int window_start_index = 0;
-            for (int seq_index = 0; seq_index < seqlens.size(); seq_index++) {
-                int window_end_index = window_start_index + seqlens[seq_index];
-                // LOG_DEBUG("%d %d", window_start_index, window_end_index);
-                GGML_ASSERT(window_end_index <= grid_h * grid_w);
-                for (int i = window_start_index; i < window_end_index; i++) {
-                    for (int j = 0; j < grid_h * grid_w; j++) {
-                        float mask_value = -INFINITY;
-                        if (j >= window_start_index && j < window_end_index) {
-                            mask_value = 0;
-                        }
-                        GGML_ASSERT((i * (grid_h * grid_w) + j) < window_mask_vec.size());
-                        window_mask_vec[i * (grid_h * grid_w) + j] = mask_value;
-                    }
-                }
-                window_start_index = window_end_index;
-                // printf("\n");
-            }
-            // printf("window_mask: \n");
-            // for (int i = 0; i < grid_h*grid_w; i++) {
-            //     for (int j = 0; j < grid_h*grid_w; j++) {
-            //         printf("%f ", window_mask_vec[i * (grid_h * grid_w) + j]);
-            //     }
-            //     printf("\n");
-            // }
-            auto window_mask = ggml_new_tensor_2d(compute_ctx,
-                                                  GGML_TYPE_F32,
-                                                  grid_h * grid_w,
-                                                  grid_h * grid_w);
-            set_backend_tensor_data(window_mask, window_mask_vec.data());
-
-            // pe
-            int head_dim = static_cast<int>(params.vision.hidden_size / params.vision.num_heads);
-            pe_vec       = Rope::gen_qwen2vl_pe(grid_h,
-                                                grid_w,
-                                                params.vision.spatial_merge_size,
-                                                window_inverse_index_vec,
-                                                10000,
-                                                {head_dim / 2, head_dim / 2});
-            int pos_len  = static_cast<int>(pe_vec.size() / head_dim / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
-            // pe->data = pe_vec.data();
-            // print_ggml_tensor(pe);
-            // pe->data = nullptr;
-            set_backend_tensor_data(pe, pe_vec.data());
-
             auto runnter_ctx           = get_context();
-            ggml_tensor* hidden_states = vision_forward(&runnter_ctx,
-                                                        pixel_values,
-                                                        pe,
-                                                        window_index,
-                                                        window_inverse_index,
-                                                        window_mask);
+            ggml_tensor* hidden_states = encode_image(&runnter_ctx, image);
             ggml_build_forward_expand(gf, hidden_states);
 
             return gf;

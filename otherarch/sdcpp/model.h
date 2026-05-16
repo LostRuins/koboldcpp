@@ -42,6 +42,7 @@ enum SDVersion {
     VERSION_ANIMA,
     VERSION_FLUX2,
     VERSION_FLUX2_KLEIN,
+    VERSION_HIDREAM_O1,
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
@@ -163,6 +164,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_sd3(version) ||
         sd_version_is_wan(version) ||
         sd_version_is_qwen_image(version) ||
+        version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
         sd_version_is_ernie_image(version)) {
