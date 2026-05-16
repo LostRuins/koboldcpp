@@ -260,19 +260,33 @@ std::string load_umt5_tokenizer_json()
     return umt5str;
 }
 
-static const char * get_main_gpu_name(int value)
+static std::string get_device_override(int value, const char * module = nullptr)
 {
-    if (value < 0)
-        return "";
-    size_t gpu_index = static_cast<size_t>(value);
-    if (gpu_index >= ggml_backend_dev_count()) {
-        printf("\nWARNING: device %zu doesn't exist, falling back to the default\n", gpu_index);
-        return "";
+    std::string device_name;
+    if (value <= -2) {
+        device_name = "CPU";
+    } else if (value >= 0) {
+        size_t gpu_index = static_cast<size_t>(value);
+        if (gpu_index >= ggml_backend_dev_count()) {
+            printf("\nWARNING: device %zu doesn't exist, falling back to default for %s\n",
+                   gpu_index,
+                   module ? module : "the main device");
+        } else {
+            auto dev = ggml_backend_dev_get(gpu_index);
+            device_name = ggml_backend_dev_name(dev);
+        }
     }
-    auto dev = ggml_backend_dev_get(gpu_index);
-    auto name = ggml_backend_dev_name(dev);
-    printf("Setting %s as image generation device\n", name);
-    return name;
+    std::string result;
+    if (device_name == "") {
+        result = ""; // no override: sdcpp will use the main device
+    } else if (module) {
+        printf("Selecting %s as %s image generation device\n", device_name.c_str(), module);
+        result = std::string{","} + module + "=" + device_name;
+    } else {
+        printf("Selecting %s as the main image generation device\n", device_name.c_str());
+        result = device_name;
+    }
+    return result;
 }
 
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
@@ -298,8 +312,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     cfg_square_limit = inputs.img_soft_limit;
     printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
 
-    //kcpp allow gpu id override
-    std::string main_gpu_name = get_main_gpu_name(inputs.kcpp_main_device);
+    std::string backends = get_device_override(inputs.kcpp_main_device);
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
@@ -447,11 +460,22 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
-    params.offload_params_to_cpu = inputs.offload_cpu;
     params.enable_mmap = inputs.use_mmap;
-    params.backend = main_gpu_name.c_str();
+    // the _cpu flags are only used if the backend string is empty, but
+    // we always set both for consistency
+    params.offload_params_to_cpu = inputs.offload_cpu;
+    params.params_backend = inputs.offload_cpu ? "CPU" : "";
     params.keep_vae_on_cpu = (inputs.kcpp_vae_device <= -2);
+    backends += get_device_override(inputs.kcpp_vae_device, "VAE");
     params.keep_clip_on_cpu = (inputs.kcpp_clip_device <= -2);
+    backends += get_device_override(inputs.kcpp_clip_device, "CLIP");
+    if (backends.rfind(",", 0) == 0) {
+        backends = "auto" + backends;
+    }
+    params.backend = backends.c_str();
+    if (inputs.debugmode==1) {
+        printf("\nSetting sd backend list to \"%s\", params backend list to \"%s\"", params.backend, params.params_backend);
+    }
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
 
     // also switches flash attn for the vae and conditioner
@@ -515,8 +539,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
                                         params.diffusion_conv_direct,
                                         params.n_threads,
                                         upscale_tile_size,
-                                        main_gpu_name.c_str(),
-                                        nullptr);
+                                        params.backend,
+                                        params.params_backend);
 
         if (upscaler_ctx == nullptr) {
              printf("\nError: KCPP failed to load upscaler!\n");
