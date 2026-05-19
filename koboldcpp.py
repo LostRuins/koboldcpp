@@ -2403,8 +2403,9 @@ def sd_quant_option(value):
 
 sd_device_choices = ['CPU', 'main', '0', '1', '2', '3']
 
-def sd_get_device_number(name, offset=0):
-    if name is None: # default handling should be done elsewhere
+def sd_get_device_number(name):
+    '''maps device name to device number'''
+    if name is None: # default handling should be done by sd_resolve_device
         return None
     if not name:
         return -1
@@ -2412,21 +2413,23 @@ def sd_get_device_number(name, offset=0):
     aliases = {"cpu": -2, "gpu": -1, "": -1, "main": -1, "default": -1}
     if name in aliases:
         return aliases[name]
-    return tryparseint(name, -1) + offset
+    return tryparseint(name, -1)
 
-def sd_get_device_name(value, offset=0):
+def sd_get_device_name(value):
+    '''maps device number to device name'''
     if value <= -2:
         return "CPU"
     if value == -1:
         return "main"
-    return value + offset
+    return str(value)
 
-def sd_resolve_device(name, default_=-1, offset=0):
+def sd_resolve_device(name, default_=-1):
+    '''maps device name to device number, handling the default device'''
     if name is None:
         name = default_
     if isinstance(name, int):
         name = str(max(name, -2))
-    return sd_get_device_number(name, offset=offset)
+    return sd_get_device_number(name)
 
 def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename):
     global args
