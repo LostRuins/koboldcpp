@@ -8832,8 +8832,8 @@ def show_gui():
         args.sdmodel = sd_model_var.get() if sd_model_var.get() != "" else ""
         args.sdflashattention = True if sd_flash_attention_var.get()==1 else False
         args.sdoffloadcpu = True if sd_offload_cpu_var.get()==1 else False
-        args.sdvaedevice = sd_resolve_device(sd_vae_device_var.get(), -1)
-        args.sdclipdevice = sd_resolve_device(sd_clip_device_var.get(), -1)
+        args.sdvaedevice = sd_resolve_device(sd_vae_device_var.get())
+        args.sdclipdevice = sd_resolve_device(sd_clip_device_var.get())
         args.sdthreads = (0 if sd_threads_var.get()=="" else int(sd_threads_var.get()))
         args.sdclamped = (0 if int(sd_clamped_var.get())<=0 else int(sd_clamped_var.get()))
         args.sdclampedsoft = (0 if int(sd_clamped_soft_var.get())<=0 else int(sd_clamped_soft_var.get()))
@@ -9121,8 +9121,8 @@ def show_gui():
         sd_quant_var.set(sd_quant_choices[(mydict["sdquant"] if ("sdquant" in mydict and mydict["sdquant"]>=0 and mydict["sdquant"]<len(sd_quant_choices)) else 0)])
         sd_flash_attention_var.set(1 if ("sdflashattention" in mydict and mydict["sdflashattention"]) else 0)
         sd_offload_cpu_var.set(1 if ("sdoffloadcpu" in mydict and mydict["sdoffloadcpu"]) else 0)
-        sd_vae_device_var.set(sd_get_device_name(sd_resolve_device(mydict.get("sdvaedevice"), default_sdvaedevice), 1))
-        sd_clip_device_var.set(sd_get_device_name(sd_resolve_device(mydict.get("sdclipdevice"), default_sdclipdevice), 1))
+        sd_vae_device_var.set(sd_get_device_name(sd_resolve_device(mydict.get("sdvaedevice"), default_sdvaedevice)))
+        sd_clip_device_var.set(sd_get_device_name(sd_resolve_device(mydict.get("sdclipdevice"), default_sdclipdevice)))
         sd_convdirect_var.set(sd_convdirect_option(mydict.get("sdconvdirect")))
         sd_vae_var.set(mydict["sdvae"] if ("sdvae" in mydict and mydict["sdvae"]) else "")
         sd_t5xxl_var.set(mydict["sdt5xxl"] if ("sdt5xxl" in mydict and mydict["sdt5xxl"]) else "")
