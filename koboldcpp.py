@@ -389,6 +389,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("upscaler_filename", ctypes.c_char_p),
                 ("img_hard_limit", ctypes.c_int),
                 ("img_soft_limit", ctypes.c_int),
+                ("max_vram", ctypes.c_float),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]

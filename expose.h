@@ -207,6 +207,7 @@ struct sd_load_model_inputs
     const char * upscaler_filename = nullptr;
     const int img_hard_limit = 0;
     const int img_soft_limit = 0;
+    float max_vram = 0.f;
     const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;

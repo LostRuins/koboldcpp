@@ -397,6 +397,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     } else if (inputs.use_mmap) {
         printf("Using mmap for I/O\n");
     }
+    if(inputs.max_vram != 0.f) {
+        printf("Using max VRAM = %0.2f\n", inputs.max_vram);
+    }
     if(inputs.quant > 0)
     {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
@@ -460,6 +463,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
+    params.max_vram = inputs.max_vram;
     params.enable_mmap = inputs.use_mmap;
     // the _cpu flags are only used if the backend string is empty, but
     // we always set both for consistency
