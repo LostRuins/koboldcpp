@@ -339,7 +339,8 @@ public:
         bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
         bool is_anima = sd_version_is_anima(tempver);
         bool is_ernie = sd_version_is_ernie_image(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie);
+        bool is_longcat = sd_version_is_longcat(tempver);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
         if(conditioner_is_llm && t5_path_fixed!="")
@@ -422,7 +423,7 @@ public:
             {
                 to_replace = "taesd_xl.embd";
             }
-            else if(sd_version_is_flux(tempver)||sd_version_is_z_image(tempver)||tempver == VERSION_OVIS_IMAGE)
+            else if(sd_version_is_flux(tempver)||sd_version_is_z_image(tempver)||tempver == VERSION_OVIS_IMAGE||is_longcat)
             {
                 to_replace = "taesd_f.embd";
             }
