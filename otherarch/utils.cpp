@@ -642,6 +642,42 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
 
     const int kbps = 128;
 
+    // Common PCM-to-MP3 encoder for a single [offset, offset+len) range.
+    // enc_audio has planar layout: [L:0..enc_T-1][R:0..enc_T-1].
+    // Returns raw MP3 bytes (empty on failure, error already logged).
+    auto encode_chunk = [&](int offset, int len) -> std::string {
+        mp3enc_t * enc = mp3enc_init(enc_sr, 2, kbps);
+        if (!enc) {
+            fprintf(stderr, "[Audio] mp3enc_init failed\n");
+            return "";
+        }
+
+        std::string result;
+        result.reserve(len / 4);
+
+        int chunk_size = enc_sr;
+        std::vector<float> buf((size_t)chunk_size * 2);
+
+        for (int pos = 0; pos < len; pos += chunk_size) {
+            int n = (pos + chunk_size <= len) ? chunk_size : (len - pos);
+            memcpy(buf.data(),     enc_audio + offset + pos,          (size_t)n * sizeof(float));
+            memcpy(buf.data() + n, enc_audio + enc_T + offset + pos,  (size_t)n * sizeof(float));
+            int out_size = 0;
+            const uint8_t * mp3 = mp3enc_encode(enc, buf.data(), n, &out_size);
+            if (out_size > 0) {
+                result.append((const char *) mp3, out_size);
+            }
+        }
+
+        int flush_size = 0;
+        const uint8_t * flush_data = mp3enc_flush(enc, &flush_size);
+        if (flush_size > 0) {
+            result.append((const char *) flush_data, flush_size);
+        }
+        mp3enc_free(enc);
+        return result;
+    };
+
     // Determine thread count: at most 1 thread per ~0.5s of audio
     int n_threads = (int)std::thread::hardware_concurrency();
     int min_chunk = enc_sr / 2;
@@ -649,41 +685,14 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
         n_threads = std::max(1, enc_T / min_chunk);
     }
 
-    // Single-threaded fallback for short audio or 1 thread
+    // Single-threaded path — call encode_chunk directly
     if (n_threads <= 1) {
-        mp3enc_t * enc = mp3enc_init(enc_sr, 2, kbps);
-        if (!enc) {
-            fprintf(stderr, "[Audio] mp3enc_init failed\n");
-            return "";
-        }
-
-        std::string mp3_data;
-        mp3_data.reserve(enc_T);
-
-        int chunk = enc_sr;
-        std::vector<float> buf((size_t)chunk * 2);
-
-        for (int pos = 0; pos < enc_T; pos += chunk) {
-            int n = (pos + chunk <= enc_T) ? chunk : (enc_T - pos);
-            memcpy(buf.data(),     enc_audio + pos,          (size_t)n * sizeof(float));
-            memcpy(buf.data() + n, enc_audio + enc_T + pos,  (size_t)n * sizeof(float));
-            int out_size = 0;
-            const uint8_t * mp3 = mp3enc_encode(enc, buf.data(), n, &out_size);
-            if (out_size > 0) {
-                mp3_data.append((const char *) mp3, out_size);
-            }
-        }
-        int flush_size = 0;
-        const uint8_t * flush_data = mp3enc_flush(enc, &flush_size);
-        if (flush_size > 0) {
-            mp3_data.append((const char *) flush_data, flush_size);
-        }
-        mp3enc_free(enc);
+        std::string mp3_data = encode_chunk(0, enc_T);
+        if (mp3_data.empty()) return "";
         return kcpp_base64_encode(mp3_data);
     }
 
-    // Multi-threaded path: partition audio into independent chunks
-    // Each chunk gets its own mp3enc_t (no shared bit reservoir)
+    // Multi-threaded path: partition audio, encode chunks in parallel
     struct Chunk { int offset; int n_samples; };
     std::vector<Chunk> chunks(n_threads);
 
@@ -712,43 +721,14 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
 
     for (int i = 0; i < n_threads; i++) {
         threads.emplace_back([&, i]() {
-            int offset = chunks[i].offset;
-            int len    = chunks[i].n_samples;
-            if (len <= 0) return;
-
-            mp3enc_t * enc = mp3enc_init(enc_sr, 2, kbps);
-            if (!enc) return;
-
-            std::string local_mp3;
-            local_mp3.reserve(len / 4);
-
-            int chunk_size = enc_sr;
-            std::vector<float> buf((size_t)chunk_size * 2);
-
-            for (int pos = 0; pos < len; pos += chunk_size) {
-                int n = (pos + chunk_size <= len) ? chunk_size : (len - pos);
-                memcpy(buf.data(),     enc_audio + offset + pos,           (size_t)n * sizeof(float));
-                memcpy(buf.data() + n, enc_audio + enc_T + offset + pos,  (size_t)n * sizeof(float));
-                int out_size = 0;
-                const uint8_t * mp3 = mp3enc_encode(enc, buf.data(), n, &out_size);
-                if (out_size > 0) {
-                    local_mp3.append((const char *) mp3, out_size);
-                }
+            if (chunks[i].n_samples > 0) {
+                results[i] = encode_chunk(chunks[i].offset, chunks[i].n_samples);
             }
-
-            int flush_size = 0;
-            const uint8_t * flush_data = mp3enc_flush(enc, &flush_size);
-            if (flush_size > 0) {
-                local_mp3.append((const char *) flush_data, flush_size);
-            }
-            mp3enc_free(enc);
-
-            results[i] = std::move(local_mp3);
         });
     }
 
     for (auto & t : threads) {
-        if (t.joinable()) t.join();
+        t.join();
     }
 
     std::string mp3_data;
