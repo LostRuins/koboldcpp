@@ -11,6 +11,7 @@
 #include <sstream>
 #include <ctime>
 #include <thread>
+#include <atomic>
 #include <algorithm>
 
 #define MINIAUDIO_IMPLEMENTATION
@@ -644,13 +645,10 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
 
     // Common PCM-to-MP3 encoder for a single [offset, offset+len) range.
     // enc_audio has planar layout: [L:0..enc_T-1][R:0..enc_T-1].
-    // Returns raw MP3 bytes (empty on failure, error already logged).
+    // Returns raw MP3 bytes, or empty string on failure (no logging).
     auto encode_chunk = [&](int offset, int len) -> std::string {
         mp3enc_t * enc = mp3enc_init(enc_sr, 2, kbps);
-        if (!enc) {
-            fprintf(stderr, "[Audio] mp3enc_init failed\n");
-            return "";
-        }
+        if (!enc) return "";
 
         std::string result;
         result.reserve(len / 4);
@@ -688,7 +686,10 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
     // Single-threaded path — call encode_chunk directly
     if (n_threads <= 1) {
         std::string mp3_data = encode_chunk(0, enc_T);
-        if (mp3_data.empty()) return "";
+        if (mp3_data.empty()) {
+            fprintf(stderr, "[Audio] mp3enc_init failed\n");
+            return "";
+        }
         return kcpp_base64_encode(mp3_data);
     }
 
@@ -718,17 +719,26 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
 
     std::vector<std::string> results(n_threads);
     std::vector<std::thread> threads;
+    std::atomic<int> init_failures{0};
 
     for (int i = 0; i < n_threads; i++) {
         threads.emplace_back([&, i]() {
             if (chunks[i].n_samples > 0) {
                 results[i] = encode_chunk(chunks[i].offset, chunks[i].n_samples);
+                if (results[i].empty()) {
+                    init_failures.fetch_add(1, std::memory_order_relaxed);
+                }
             }
         });
     }
 
     for (auto & t : threads) {
         t.join();
+    }
+
+    if (init_failures.load(std::memory_order_relaxed) > 0) {
+        fprintf(stderr, "[Audio] mp3enc_init failed for %d chunk(s)\n", init_failures.load());
+        return "";
     }
 
     std::string mp3_data;
