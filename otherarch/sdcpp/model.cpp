@@ -438,7 +438,7 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
 }
 
 SDVersion ModelLoader::get_sd_version() {
-    TensorStorage token_embedding_weight, input_block_weight;
+    TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;
 
     bool has_multiple_encoders = false;
     bool is_unet               = false;
@@ -456,7 +456,8 @@ SDVersion ModelLoader::get_sd_version() {
     bool has_attn_1024               = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
-        if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
+        if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.single_transformer_blocks.") != std::string::npos) {
             is_flux = true;
         }
         if (tensor_storage.name.find("model.diffusion_model.nerf_final_layer_conv.") != std::string::npos) {
@@ -550,6 +551,9 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage.name == "unet.conv_in.weight") {
             input_block_weight = tensor_storage;
         }
+        if (tensor_storage.name == "model.diffusion_model.txt_in.weight" || tensor_storage.name == "model.diffusion_model.context_embedder.weight") {
+            context_ebedding_weight = tensor_storage;
+        }
     }
     if (is_wan) {
         LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);
@@ -580,16 +584,20 @@ SDVersion ModelLoader::get_sd_version() {
     }
 
     if (is_flux && !is_flux2) {
-        if (input_block_weight.ne[0] == 384) {
-            return VERSION_FLUX_FILL;
+        if (context_ebedding_weight.ne[0] == 3584) {
+            return VERSION_LONGCAT;
+        } else {
+            if (input_block_weight.ne[0] == 384) {
+                return VERSION_FLUX_FILL;
+            }
+            if (input_block_weight.ne[0] == 128) {
+                return VERSION_FLUX_CONTROLS;
+            }
+            if (input_block_weight.ne[0] == 196) {
+                return VERSION_FLEX_2;
+            }
+            return VERSION_FLUX;
         }
-        if (input_block_weight.ne[0] == 128) {
-            return VERSION_FLUX_CONTROLS;
-        }
-        if (input_block_weight.ne[0] == 196) {
-            return VERSION_FLEX_2;
-        }
-        return VERSION_FLUX;
     }
 
     if (is_flux2) {

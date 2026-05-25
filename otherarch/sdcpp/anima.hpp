@@ -598,7 +598,8 @@ namespace Anima {
                                           {},
                                           empty_ref_latents,
                                           false,
-                                          1.0f);
+                                          1.0f,
+                                          false);
 
             std::vector<float> axis_thetas = {
                 static_cast<float>(theta) * calc_ntk_factor(t_extrapolation_ratio, axes_dim[0]),

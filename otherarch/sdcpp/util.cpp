@@ -887,6 +887,139 @@ void kcpp_sd::set_sd_log_level(int log)
 }
 
 
+static size_t get_utf8_char_len(char c) {
+    unsigned char uc = static_cast<unsigned char>(c);
+    if ((uc & 0x80) == 0) {
+        return 1;
+    }
+    if ((uc & 0xE0) == 0xC0) {
+        return 2;
+    }
+    if ((uc & 0xF0) == 0xE0) {
+        return 3;
+    }
+    if ((uc & 0xF8) == 0xF0) {
+        return 4;
+    }
+    return 1;
+}
+
+static bool is_ascii_alpha(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static bool starts_with_at(const std::string& text, size_t pos, const std::string& needle) {
+    return pos + needle.size() <= text.size() && text.compare(pos, needle.size(), needle) == 0;
+}
+
+static bool is_word_internal_apostrophe(const std::string& text, size_t pos) {
+    return pos > 0 && pos + 1 < text.size() &&
+           is_ascii_alpha(text[pos - 1]) && is_ascii_alpha(text[pos + 1]);
+}
+
+static std::vector<std::pair<std::string, bool>> split_quotation(const std::string& text) {
+    static const std::vector<std::pair<std::string, std::string>> quote_pairs = {
+        {"'", "'"},
+        {"\"", "\""},
+        {"\xE2\x80\x98", "\xE2\x80\x99"},
+        {"\xE2\x80\x9C", "\xE2\x80\x9D"},
+    };
+
+    std::vector<std::pair<std::string, bool>> result;
+    size_t segment_start = 0;
+    size_t i             = 0;
+
+    auto push_segment = [&](size_t begin, size_t end, bool matched) {
+        if (end > begin) {
+            result.emplace_back(text.substr(begin, end - begin), matched);
+        }
+    };
+
+    while (i < text.size()) {
+        bool matched_quote = false;
+        for (const auto& quote_pair : quote_pairs) {
+            const std::string& open_quote  = quote_pair.first;
+            const std::string& close_quote = quote_pair.second;
+            if (!starts_with_at(text, i, open_quote)) {
+                continue;
+            }
+            if (open_quote == "'" && is_word_internal_apostrophe(text, i)) {
+                continue;
+            }
+
+            size_t search_pos = i + open_quote.size();
+            size_t close_pos  = std::string::npos;
+            bool invalid      = false;
+            while (search_pos < text.size()) {
+                if (open_quote != close_quote && starts_with_at(text, search_pos, open_quote)) {
+                    invalid = true;
+                    break;
+                }
+                if (starts_with_at(text, search_pos, close_quote)) {
+                    if (close_quote == "'" && is_word_internal_apostrophe(text, search_pos)) {
+                        search_pos += close_quote.size();
+                        continue;
+                    }
+                    close_pos = search_pos;
+                    break;
+                }
+
+                size_t char_len = get_utf8_char_len(text[search_pos]);
+                if (search_pos + char_len > text.size()) {
+                    char_len = 1;
+                }
+                search_pos += char_len;
+            }
+            if (invalid || close_pos == std::string::npos) {
+                continue;
+            }
+
+            size_t quote_start = i;
+            push_segment(segment_start, quote_start, false);
+            i = close_pos + close_quote.size();
+            push_segment(quote_start, i, true);
+            segment_start = i;
+            matched_quote = true;
+            break;
+        }
+        if (!matched_quote) {
+            size_t char_len = get_utf8_char_len(text[i]);
+            if (i + char_len > text.size()) {
+                char_len = 1;
+            }
+            i += char_len;
+        }
+    }
+
+    push_segment(segment_start, text.size(), false);
+    return result;
+}
+
+std::vector<std::pair<std::string, float>> split_quotation_attention(
+    const std::vector<std::pair<std::string, float>>& parsed_attention) {
+    std::vector<std::pair<std::string, float>> result;
+    for (const auto& item : parsed_attention) {
+        const std::string& text = item.first;
+        float weight            = item.second;
+        for (const auto& part : split_quotation(text)) {
+            if (part.second) {
+                size_t i = 0;
+                while (i < part.first.size()) {
+                    size_t char_len = get_utf8_char_len(part.first[i]);
+                    if (i + char_len > part.first.size()) {
+                        char_len = 1;
+                    }
+                    result.emplace_back(part.first.substr(i, char_len), weight);
+                    i += char_len;
+                }
+            } else {
+                result.emplace_back(part.first, weight);
+            }
+        }
+    }
+    return result;
+}
+
 // namespace is needed to avoid conflicts with ggml_backend_extend.hpp
 namespace ggml_cpu {
 #include "ggml-cpu.h"

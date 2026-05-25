@@ -86,6 +86,8 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
 std::string trim(const std::string& s);
 
 std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::string& text);
+std::vector<std::pair<std::string, float>> split_quotation_attention(
+    const std::vector<std::pair<std::string, float>>& parsed_attention);
 
 sd_progress_cb_t sd_get_progress_callback();
 void* sd_get_progress_callback_data();

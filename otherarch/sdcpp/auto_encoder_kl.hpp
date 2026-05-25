@@ -680,7 +680,7 @@ struct AutoEncoderKL : public VAE {
         } else if (sd_version_is_sd3(version)) {
             scale_factor = 1.5305f;
             shift_factor = 0.0609f;
-        } else if (sd_version_is_flux(version) || sd_version_is_z_image(version)) {
+        } else if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_longcat(version)) {
             scale_factor = 0.3611f;
             shift_factor = 0.1159f;
         } else if (sd_version_uses_flux2_vae(version)) {

@@ -446,7 +446,6 @@ namespace Flux {
             if (use_yak_mlp || use_mlp_silu_act) {
                 mlp_mult_factor = 2;
             }
-
             blocks["linear1"]  = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size * 3 + mlp_hidden_dim * mlp_mult_factor, mlp_proj_bias));
             blocks["linear2"]  = std::shared_ptr<GGMLBlock>(new Linear(hidden_size + mlp_hidden_dim, hidden_size, mlp_proj_bias));
             blocks["norm"]     = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
@@ -1225,6 +1224,9 @@ namespace Flux {
                 flux_params.share_modulation = true;
                 flux_params.ref_index_scale  = 10.f;
                 flux_params.use_mlp_silu_act = true;
+            } else if (sd_version_is_longcat(version)) {
+                flux_params.context_in_dim = 3584;
+                flux_params.vec_in_dim     = 0;
             }
             int64_t head_dim                   = 0;
             int64_t actual_radiance_patch_size = -1;
@@ -1412,7 +1414,6 @@ namespace Flux {
             } else if (version == VERSION_OVIS_IMAGE) {
                 txt_arange_dims = {1, 2};
             }
-
             pe_vec      = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
                                             static_cast<int>(x->ne[0]),
                                             flux_params.patch_size,
@@ -1425,7 +1426,8 @@ namespace Flux {
                                             flux_params.theta,
                                             circular_y_enabled,
                                             circular_x_enabled,
-                                            flux_params.axes_dim);
+                                            flux_params.axes_dim,
+                                            sd_version_is_longcat(version));
             int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);

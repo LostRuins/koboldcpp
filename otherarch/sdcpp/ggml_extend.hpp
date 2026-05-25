@@ -953,11 +953,17 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_group_norm_32(ggml_context* ctx,
     return ggml_group_norm(ctx, a, 32, eps);
 }
 
+__STATIC_INLINE__ bool ggml_ext_is_padded_1d(const ggml_tensor* x) {
+    return x->nb[0] == ggml_type_size(x->type) &&
+           x->nb[2] == x->nb[1] * x->ne[1] &&
+           x->nb[3] == x->nb[2] * x->ne[2];
+}
+
 __STATIC_INLINE__ ggml_tensor* ggml_ext_scale(ggml_context* ctx,
                                               ggml_tensor* x,
                                               float factor,
                                               bool inplace = false) {
-    if (!ggml_is_contiguous(x)) {
+    if (!ggml_ext_is_padded_1d(x)) {
         x = ggml_cont(ctx, x);
     }
     if (inplace) {
@@ -3664,7 +3670,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
 
         ggml_tensor* hc  = ggml_transpose(ctx, hc_t);
         ggml_tensor* out = ggml_reshape_2d(ctx, ggml_cont(ctx, hc), up * vp, batch);
-        return ggml_scale(ctx, out, scale);
+        return ggml_ext_scale(ctx, out, scale);
     } else {
         int batch = (int)h->ne[3];
         // 1. Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
@@ -3747,7 +3753,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
         ggml_tensor* hc = ggml_transpose(ctx, hc_t);
         // ungroup
         ggml_tensor* out = ggml_reshape_4d(ctx, ggml_cont(ctx, hc), w_out, h_out, up * vp, batch);
-        return ggml_scale(ctx, out, scale);
+        return ggml_ext_scale(ctx, out, scale);
     }
 }
 

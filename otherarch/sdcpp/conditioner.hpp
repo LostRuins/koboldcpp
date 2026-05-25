@@ -1747,7 +1747,8 @@ struct LLMEmbedder : public Conditioner {
     std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
                                                                                   const std::pair<int, int>& attn_range,
                                                                                   size_t min_length = 0,
-                                                                                  size_t max_length = 100000000) {
+                                                                                  size_t max_length = 100000000,
+                                                                                  bool spell_quotes = false) {
         std::vector<std::pair<std::string, float>> parsed_attention;
         if (attn_range.first >= 0 && attn_range.second > 0) {
             if (attn_range.first > 0) {
@@ -1755,6 +1756,9 @@ struct LLMEmbedder : public Conditioner {
             }
             if (attn_range.second - attn_range.first > 0) {
                 auto new_parsed_attention = parse_prompt_attention(text.substr(attn_range.first, attn_range.second - attn_range.first));
+                if (spell_quotes) {
+                    new_parsed_attention = split_quotation_attention(new_parsed_attention);
+                }
                 parsed_attention.insert(parsed_attention.end(),
                                         new_parsed_attention.begin(),
                                         new_parsed_attention.end());
@@ -1804,8 +1808,10 @@ struct LLMEmbedder : public Conditioner {
                                     int hidden_states_min_length,
                                     const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
                                     const std::set<int>& out_layers,
-                                    int prompt_template_encode_start_idx) {
-        auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length);
+                                    int prompt_template_encode_start_idx,
+                                    bool spell_quotes = false,
+                                    int max_length    = 100000000) {
+        auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length, max_length, spell_quotes);
         auto& tokens             = std::get<0>(tokens_weights_mask);
         auto& weights            = std::get<1>(tokens_weights_mask);
         auto& mask               = std::get<2>(tokens_weights_mask);
@@ -1866,6 +1872,7 @@ struct LLMEmbedder : public Conditioner {
         int prompt_template_encode_start_idx = 34;
         int min_length                       = 0;  // pad tokens
         int hidden_states_min_length         = 0;  // zero pad hidden_states
+        bool spell_quotes                    = false;
         std::set<int> out_layers;
 
         int64_t t0 = ggml_time_ms();
@@ -1938,6 +1945,71 @@ struct LLMEmbedder : public Conditioner {
 
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
+        } else if (sd_version_is_longcat(version)) {
+            spell_quotes = true;
+
+            if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+                LOG_INFO("LongCatEditPipeline");
+                prompt_template_encode_start_idx = 67;
+                min_length                       = 512 + prompt_template_encode_start_idx;
+                int image_embed_idx              = 36 + 6;
+
+                int min_pixels          = 384 * 384;
+                int max_pixels          = 560 * 560;
+                std::string placeholder = "<|image_pad|>";
+                std::string img_prompt;
+
+                for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
+                    const auto& image = (*conditioner_params.ref_images)[i];
+                    double factor     = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
+                    int height        = static_cast<int>(image.shape()[1]);
+                    int width         = static_cast<int>(image.shape()[0]);
+                    int h_bar         = static_cast<int>(std::round(height / factor) * factor);
+                    int w_bar         = static_cast<int>(std::round(width / factor) * factor);
+
+                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
+                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
+                        h_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                        w_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
+                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
+                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                    }
+
+                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
+
+                    auto resized_image = clip_preprocess(image, w_bar, h_bar);
+                    auto image_embed   = llm->encode_image(n_threads, resized_image);
+                    GGML_ASSERT(!image_embed.empty());
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+                    image_embed_idx += 1 + static_cast<int>(image_embed.shape()[1]) + 6;
+
+                    img_prompt += "<|vision_start|>";
+                    int64_t num_image_tokens = image_embed.shape()[1];
+                    img_prompt.reserve(num_image_tokens * placeholder.size());
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
+                }
+
+                prompt = "<|im_start|>system\nAs an image editing expert, first analyze the content and attributes of the input image(s). Then, based on the user's editing instructions, clearly and precisely determine how to modify the given image(s), ensuring that only the specified parts are altered and all other aspects remain consistent with the original(s).<|im_end|>\n<|im_start|>user\n";
+                prompt += img_prompt;
+            } else {
+                prompt_template_encode_start_idx = 36;
+                min_length                       = 512 + prompt_template_encode_start_idx;
+
+                prompt = "<|im_start|>system\nAs an image captioning expert, generate a descriptive text prompt based on an image content, suitable for input to a text-to-image model.<|im_end|>\n<|im_start|>user\n";
+            }
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (version == VERSION_FLUX2) {
             prompt_template_encode_start_idx = 0;
             hidden_states_min_length         = 512;
@@ -2012,7 +2084,8 @@ struct LLMEmbedder : public Conditioner {
                                            hidden_states_min_length,
                                            image_embeds,
                                            out_layers,
-                                           prompt_template_encode_start_idx);
+                                           prompt_template_encode_start_idx,
+                                           spell_quotes);
         std::vector<sd::Tensor<float>> extra_hidden_states_vec;
         for (int i = 0; i < extra_prompts.size(); i++) {
             auto extra_hidden_states = encode_prompt(n_threads,
@@ -2022,7 +2095,8 @@ struct LLMEmbedder : public Conditioner {
                                                      hidden_states_min_length,
                                                      image_embeds,
                                                      out_layers,
-                                                     prompt_template_encode_start_idx);
+                                                     prompt_template_encode_start_idx,
+                                                     spell_quotes);
             extra_hidden_states_vec.push_back(std::move(extra_hidden_states));
         }
 
