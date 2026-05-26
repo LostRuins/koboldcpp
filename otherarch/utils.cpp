@@ -688,7 +688,7 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
     };
 
     // Determine thread count: at most 1 thread per ~0.5s of audio
-    int n_threads = (int)std::thread::hardware_concurrency();
+    int n_threads = std::max(1, (int)std::thread::hardware_concurrency());
     int min_chunk = enc_sr / 2;
     if (n_threads * min_chunk > enc_T) {
         n_threads = std::max(1, enc_T / min_chunk);
@@ -706,21 +706,41 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
 
     // Multi-threaded path: partition audio, encode chunks in parallel
     struct Chunk { int offset; int n_samples; };
-    std::vector<Chunk> chunks(n_threads);
+    std::vector<Chunk> chunks(n_threads);    
     {
-        int base = enc_T / n_threads;
-        int rem  = enc_T % n_threads;
-        int pos  = 0;
+        constexpr int FRAME = 1152;
+    
+        int pos = 0;
+    
         for (int i = 0; i < n_threads; i++) {
-            int sz = base + (i < rem ? 1 : 0);
-            sz = (sz / 1152) * 1152;
-            if (sz < 1152) sz = 1152;
-            if (pos + sz > enc_T) sz = enc_T - pos;
-            chunks[i].offset    = pos;
-            chunks[i].n_samples = sz;
-            pos += sz;
+            // Compute ideal boundaries
+            int start = (int)(((int64_t)enc_T * i) / n_threads);
+            int end   = (int)(((int64_t)enc_T * (i + 1)) / n_threads);
+    
+            // Align internal boundaries down to frame boundaries
+            if (i != 0) {
+                start = (start / FRAME) * FRAME;
+            }
+            if (i != n_threads - 1) {
+                end = (end / FRAME) * FRAME;
+            }
+    
+            // Enforce monotonicity
+            if (start < pos) {
+                start = pos;
+            }
+            if (end < start) {
+                end = start;
+            }
+    
+            chunks[i].offset    = start;
+            chunks[i].n_samples = end - start;
+    
+            pos = end;
         }
-        if (pos < enc_T) {
+    
+        // Ensure final chunk reaches exact end
+        if (!chunks.empty()) {
             chunks.back().n_samples = enc_T - chunks.back().offset;
         }
     }
