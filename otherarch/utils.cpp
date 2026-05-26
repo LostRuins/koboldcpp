@@ -643,12 +643,23 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
 
     const int kbps = 128;
 
-    // Common PCM-to-MP3 encoder for a single [offset, offset+len) range.
-    // enc_audio has planar layout: [L:0..enc_T-1][R:0..enc_T-1].
-    // Returns raw MP3 bytes, or empty string on failure (no logging).
-    auto encode_chunk = [&](int offset, int len) -> std::string {
+    // Encode PCM [offset, offset+len) with optional warm-up.
+    // warmup=true primes filterbank/MDCT/psy with the 1152 PCM samples
+    // immediately preceding offset (caller guarantees offset >= 1152).
+    // Returns raw MP3 bytes, or empty string on init failure.
+    auto encode_chunk = [&](int offset, int len, bool warmup) -> std::string {
         mp3enc_t * enc = mp3enc_init(enc_sr, 2, kbps);
         if (!enc) return "";
+
+        if (warmup) {
+            int wo = offset - 1152;
+            float wb[1152 * 2];
+            memcpy(wb,          enc_audio + wo,        1152 * sizeof(float));
+            memcpy(wb + 1152,   enc_audio + enc_T + wo, 1152 * sizeof(float));
+            int dummy = 0;
+            mp3enc_encode(enc, wb, 1152, &dummy);
+            mp3enc_flush(enc, &dummy);
+        }
 
         std::string result;
         result.reserve(len / 4);
@@ -685,7 +696,7 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
 
     // Single-threaded path — call encode_chunk directly
     if (n_threads <= 1) {
-        std::string mp3_data = encode_chunk(0, enc_T);
+        std::string mp3_data = encode_chunk(0, enc_T, false);
         if (mp3_data.empty()) {
             fprintf(stderr, "[Audio] mp3enc_init failed\n");
             return "";
@@ -696,14 +707,12 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
     // Multi-threaded path: partition audio, encode chunks in parallel
     struct Chunk { int offset; int n_samples; };
     std::vector<Chunk> chunks(n_threads);
-
     {
         int base = enc_T / n_threads;
         int rem  = enc_T % n_threads;
         int pos  = 0;
         for (int i = 0; i < n_threads; i++) {
             int sz = base + (i < rem ? 1 : 0);
-            // Align down to MP3 frame boundary (1152 samples)
             sz = (sz / 1152) * 1152;
             if (sz < 1152) sz = 1152;
             if (pos + sz > enc_T) sz = enc_T - pos;
@@ -711,7 +720,6 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
             chunks[i].n_samples = sz;
             pos += sz;
         }
-        // Last chunk absorbs any remainder
         if (pos < enc_T) {
             chunks.back().n_samples = enc_T - chunks.back().offset;
         }
@@ -721,13 +729,23 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
     std::vector<std::thread> threads;
     std::atomic<int> init_failures{0};
 
+    // RAII guard: join all threads on any exception
+    struct ThreadGuard {
+        std::vector<std::thread> & t;
+        ~ThreadGuard() { for (auto & th : t) if (th.joinable()) th.join(); }
+    } guard{threads};
+
     for (int i = 0; i < n_threads; i++) {
         threads.emplace_back([&, i]() {
-            if (chunks[i].n_samples > 0) {
-                results[i] = encode_chunk(chunks[i].offset, chunks[i].n_samples);
-                if (results[i].empty()) {
-                    init_failures.fetch_add(1, std::memory_order_relaxed);
-                }
+            if (chunks[i].n_samples <= 0) return;
+
+            // Chunk 0 starts fresh; chunks 1..N-1 get warm-up from prior chunk
+            bool warmup = (i > 0);
+            std::string r = encode_chunk(chunks[i].offset, chunks[i].n_samples, warmup);
+            if (r.empty()) {
+                init_failures.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                results[i] = std::move(r);
             }
         });
     }
