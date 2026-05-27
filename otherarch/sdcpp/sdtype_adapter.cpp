@@ -279,6 +279,19 @@ std::string load_umt5_tokenizer_json()
     umt5str = read_str_from_disk(filepath);
     return umt5str;
 }
+// TODO replace with embd files
+#include "tokenizers/vocab/gpt_oss_merges.hpp"
+#include "tokenizers/vocab/gpt_oss_vocab.hpp"
+std::string load_gpt_oss_merges()
+{
+    std::string merges_utf8_str(reinterpret_cast<const char*>(gpt_oss_merges_utf8_c_str), sizeof(gpt_oss_merges_utf8_c_str));
+    return merges_utf8_str;
+}
+std::string load_gpt_oss_vocab_json()
+{
+    std::string json_str(reinterpret_cast<const char*>(gpt_oss_vocab_json_utf8_c_str), sizeof(gpt_oss_vocab_json_utf8_c_str));
+    return json_str;
+}
 
 static std::string get_device_override(int value, const char * module = nullptr)
 {

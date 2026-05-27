@@ -341,7 +341,8 @@ public:
         bool is_anima = sd_version_is_anima(tempver);
         bool is_ernie = sd_version_is_ernie_image(tempver);
         bool is_longcat = sd_version_is_longcat(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat);
+        bool is_lens = sd_version_is_lens(tempver);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
         if(conditioner_is_llm && t5_path_fixed!="")
