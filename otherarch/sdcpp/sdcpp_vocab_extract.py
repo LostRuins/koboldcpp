@@ -5,6 +5,10 @@ def hexfile_to_text(input_file, output_file):
     print(f"Reading {input_file}")
     with open(input_file, "r") as f:
         data = f.read()
+    startpos = data.find('{')
+    endpos = data.rfind('}')
+    if startpos != -1 and endpos != -1:
+        data = data[startpos+1:endpos]
 
     print("Processing 1...")
     # Split into tokens like ["0x7b", "0x22", "0x76", ...]
