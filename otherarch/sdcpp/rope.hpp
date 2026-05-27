@@ -478,6 +478,52 @@ namespace Rope {
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_lens_ids(int h,
+                                                                   int w,
+                                                                   int bs,
+                                                                   int context_len,
+                                                                   bool scale_rope = true) {
+        auto img_ids_repeated = gen_flux_img_ids(h, w, 1, bs, 3, 0, 0, 0, scale_rope);
+
+        int txt_id_start = scale_rope ? std::max(h / 2, w / 2) : 0;
+        auto txt_ids     = linspace<float>(1.f * txt_id_start, 1.f * context_len + txt_id_start, context_len);
+        std::vector<std::vector<float>> txt_ids_repeated(bs * context_len, std::vector<float>(3));
+        for (int i = 0; i < bs; ++i) {
+            for (int j = 0; j < txt_ids.size(); ++j) {
+                txt_ids_repeated[i * txt_ids.size() + j] = {txt_ids[j], txt_ids[j], txt_ids[j]};
+            }
+        }
+
+        return concat_ids(img_ids_repeated, txt_ids_repeated, bs);
+    }
+
+    __STATIC_INLINE__ std::vector<float> gen_lens_pe(int h,
+                                                     int w,
+                                                     int bs,
+                                                     int context_len,
+                                                     int theta,
+                                                     bool circular_h,
+                                                     bool circular_w,
+                                                     const std::vector<int>& axes_dim) {
+        std::vector<std::vector<float>> ids = gen_lens_ids(h, w, bs, context_len, true);
+        std::vector<std::vector<int>> wrap_dims;
+        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
+            size_t pos_len = ids.size() / bs;
+            wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
+            const size_t img_tokens = static_cast<size_t>(h) * static_cast<size_t>(w);
+            for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
+                if (circular_h) {
+                    wrap_dims[1][token_i] = h;
+                }
+                if (circular_w) {
+                    wrap_dims[2][token_i] = w;
+                }
+            }
+        }
+
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
+    }
+
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_ernie_image_ids(int h,
                                                                           int w,
                                                                           int patch_size,

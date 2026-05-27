@@ -23,11 +23,12 @@
 #include "rope.hpp"
 #include "tokenizers/bpe_tokenizer.h"
 #include "tokenizers/gemma_tokenizer.h"
+#include "tokenizers/gpt_oss_tokenizer.h"
 #include "tokenizers/mistral_tokenizer.h"
 #include "tokenizers/qwen2_tokenizer.h"
 
 namespace LLM {
-    constexpr int LLM_GRAPH_SIZE = 10240;
+    constexpr int LLM_GRAPH_SIZE = 65536;
 
     enum class LLMArch {
         QWEN2_5_VL,
@@ -36,6 +37,7 @@ namespace LLM {
         MISTRAL_SMALL_3_2,
         MINISTRAL_3_3B,
         GEMMA3_12B,
+        GPT_OSS_20B,
         ARCH_COUNT,
     };
 
@@ -46,6 +48,7 @@ namespace LLM {
         "mistral_small3.2",
         "ministral3.3b",
         "gemma3_12b",
+        "gpt_oss_20b",
     };
 
     enum class MLPActivation {
@@ -83,6 +86,7 @@ namespace LLM {
         int num_kv_heads                = 4;
         int head_dim                    = 128;
         bool qkv_bias                   = true;
+        bool attention_out_bias         = false;
         bool qk_norm                    = false;
         bool rms_norm_add               = false;
         bool normalize_input            = false;
@@ -93,6 +97,8 @@ namespace LLM {
         std::vector<float> rope_thetas  = {1000000.f};
         std::vector<float> rope_scales  = {1.f};
         std::vector<int> sliding_attention;
+        int64_t num_experts         = 0;
+        int64_t num_experts_per_tok = 0;
         LLMVisionParams vision;
     };
 
@@ -160,6 +166,170 @@ namespace LLM {
             h = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
             h = down_proj->forward(ctx, h);
             return h;
+        }
+    };
+
+    struct GPTOSSMLP : public GGMLBlock {
+    protected:
+        int64_t hidden_size;
+        int64_t intermediate_size;
+        int64_t num_experts;
+        int64_t num_experts_per_tok;
+        bool has_combined_gate_up = false;
+
+        void init_params(ggml_context* ctx,
+                         const String2TensorStorage& tensor_storage_map = {},
+                         std::string prefix                             = "") override {
+            auto supported_type = [](ggml_type wtype, int64_t in_features) {
+                if (in_features % ggml_blck_size(wtype) != 0) {
+                    return GGML_TYPE_F32;
+                }
+                return wtype;
+            };
+
+            params["router.weight"] = ggml_new_tensor_2d(ctx,
+                                                         supported_type(get_type(prefix + "router.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size),
+                                                         hidden_size,
+                                                         num_experts);
+            params["router.bias"]   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_experts);
+
+            has_combined_gate_up = tensor_storage_map.find(prefix + "experts.gate_up_proj.weight") != tensor_storage_map.end();
+            if (has_combined_gate_up) {
+                ggml_type gate_up_type                = supported_type(get_type(prefix + "experts.gate_up_proj.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size);
+                params["experts.gate_up_proj.weight"] = ggml_new_tensor_3d(ctx,
+                                                                           gate_up_type,
+                                                                           hidden_size,
+                                                                           intermediate_size * 2,
+                                                                           num_experts);
+                params["experts.gate_up_proj.bias"]   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, intermediate_size * 2, num_experts);
+            } else {
+                ggml_type gate_type                = supported_type(get_type(prefix + "experts.gate_proj.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size);
+                ggml_type up_type                  = supported_type(get_type(prefix + "experts.up_proj.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size);
+                params["experts.gate_proj.weight"] = ggml_new_tensor_3d(ctx, gate_type, hidden_size, intermediate_size, num_experts);
+                params["experts.up_proj.weight"]   = ggml_new_tensor_3d(ctx, up_type, hidden_size, intermediate_size, num_experts);
+                params["experts.gate_proj.bias"]   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, intermediate_size, num_experts);
+                params["experts.up_proj.bias"]     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, intermediate_size, num_experts);
+            }
+
+            ggml_type down_type                = supported_type(get_type(prefix + "experts.down_proj.weight", tensor_storage_map, GGML_TYPE_F32), intermediate_size);
+            params["experts.down_proj.weight"] = ggml_new_tensor_3d(ctx, down_type, intermediate_size, hidden_size, num_experts);
+            params["experts.down_proj.bias"]   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, num_experts);
+        }
+
+        ggml_tensor* expert_linear(GGMLRunnerContext* ctx,
+                                   const std::string& weight_name,
+                                   const std::string& bias_name,
+                                   ggml_tensor* x,
+                                   ggml_tensor* selected_experts) {
+            auto out = ggml_mul_mat_id(ctx->ggml_ctx, params[weight_name], x, selected_experts);
+            auto it  = params.find(bias_name);
+            if (it != params.end()) {
+                out = ggml_add_id(ctx->ggml_ctx, out, it->second, selected_experts);
+            }
+            return out;
+        }
+
+    public:
+        GPTOSSMLP(const LLMParams& params)
+            : hidden_size(params.hidden_size),
+              intermediate_size(params.intermediate_size),
+              num_experts(params.num_experts),
+              num_experts_per_tok(params.num_experts_per_tok) {}
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+            // x: [N, n_token, hidden_size]
+            GGML_ASSERT(num_experts > 0 && num_experts_per_tok > 0);
+
+            const int64_t n_token       = x->ne[1];
+            const int64_t N             = x->ne[2];
+            const int64_t n_token_total = n_token * N;
+            ggml_tensor* router_weight  = params["router.weight"];
+            ggml_tensor* router_bias    = params["router.bias"];
+            ggml_tensor* router_logits  = ggml_mul_mat(ctx->ggml_ctx, router_weight, x);
+            router_logits               = ggml_add(ctx->ggml_ctx, router_logits, router_bias);
+            router_logits               = ggml_reshape_2d(ctx->ggml_ctx, router_logits, num_experts, n_token_total);
+
+            ggml_tensor* selected_experts = ggml_argsort_top_k(ctx->ggml_ctx, router_logits, (int)num_experts_per_tok);  // [top_k, tokens]
+            ggml_tensor* probs            = ggml_reshape_3d(ctx->ggml_ctx, router_logits, 1, num_experts, n_token_total);
+            ggml_tensor* weights          = ggml_get_rows(ctx->ggml_ctx, probs, selected_experts);  // [1, top_k, tokens]
+            weights                       = ggml_reshape_2d(ctx->ggml_ctx, weights, num_experts_per_tok, n_token_total);
+            weights                       = ggml_soft_max(ctx->ggml_ctx, weights);
+            weights                       = ggml_reshape_3d(ctx->ggml_ctx, weights, 1, num_experts_per_tok, n_token_total);
+
+            x = ggml_reshape_3d(ctx->ggml_ctx, x, hidden_size, 1, n_token_total);
+
+            ggml_tensor* gate = nullptr;
+            ggml_tensor* up   = nullptr;
+            if (has_combined_gate_up) {
+                auto gate_up = expert_linear(ctx,
+                                             "experts.gate_up_proj.weight",
+                                             "experts.gate_up_proj.bias",
+                                             x,
+                                             selected_experts);  // [2 * intermediate, top_k, tokens]
+                gate_up      = ggml_reshape_4d(ctx->ggml_ctx,
+                                               gate_up,
+                                               2,
+                                               intermediate_size,
+                                               num_experts_per_tok,
+                                               n_token_total);
+                gate         = ggml_view_4d(ctx->ggml_ctx,
+                                            gate_up,
+                                            1,
+                                            intermediate_size,
+                                            num_experts_per_tok,
+                                            n_token_total,
+                                            gate_up->nb[1],
+                                            gate_up->nb[2],
+                                            gate_up->nb[3],
+                                            0);
+                up           = ggml_view_4d(ctx->ggml_ctx,
+                                            gate_up,
+                                            1,
+                                            intermediate_size,
+                                            num_experts_per_tok,
+                                            n_token_total,
+                                            gate_up->nb[1],
+                                            gate_up->nb[2],
+                                            gate_up->nb[3],
+                                            gate_up->nb[0]);
+                gate         = ggml_reshape_3d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, gate), intermediate_size, num_experts_per_tok, n_token_total);
+                up           = ggml_reshape_3d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, up), intermediate_size, num_experts_per_tok, n_token_total);
+            } else {
+                gate = expert_linear(ctx,
+                                     "experts.gate_proj.weight",
+                                     "experts.gate_proj.bias",
+                                     x,
+                                     selected_experts);
+                up   = expert_linear(ctx,
+                                     "experts.up_proj.weight",
+                                     "experts.up_proj.bias",
+                                     x,
+                                     selected_experts);
+            }
+
+            auto activated = ggml_swiglu_oai(ctx->ggml_ctx, gate, up, 1.702f, 7.0f);
+            auto experts   = expert_linear(ctx,
+                                           "experts.down_proj.weight",
+                                           "experts.down_proj.bias",
+                                           activated,
+                                           selected_experts);
+            experts        = ggml_mul(ctx->ggml_ctx, experts, weights);
+
+            ggml_tensor* out = nullptr;
+            for (int64_t i = 0; i < num_experts_per_tok; ++i) {
+                auto expert_out = ggml_view_2d(ctx->ggml_ctx,
+                                               experts,
+                                               hidden_size,
+                                               n_token_total,
+                                               experts->nb[2],
+                                               i * experts->nb[1]);
+                out             = out == nullptr ? expert_out : ggml_add(ctx->ggml_ctx, out, expert_out);
+            }
+            if (num_experts_per_tok == 1) {
+                out = ggml_cont(ctx->ggml_ctx, out);
+            }
+
+            return ggml_reshape_3d(ctx->ggml_ctx, out, hidden_size, n_token, N);
         }
     };
 
@@ -601,6 +771,15 @@ namespace LLM {
         int64_t max_position_embeddings;
         std::vector<float> rope_thetas;
         std::vector<float> rope_scales;
+        bool has_attention_sinks;
+
+        void init_params(ggml_context* ctx,
+                         const String2TensorStorage& tensor_storage_map = {},
+                         std::string prefix                             = "") override {
+            if (has_attention_sinks) {
+                params["sinks"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_heads);
+            }
+        }
 
     public:
         Attention(const LLMParams& params)
@@ -611,11 +790,12 @@ namespace LLM {
               qk_norm(params.qk_norm),
               max_position_embeddings(params.max_position_embeddings),
               rope_thetas(params.rope_thetas),
-              rope_scales(params.rope_scales) {
+              rope_scales(params.rope_scales),
+              has_attention_sinks(params.arch == LLMArch::GPT_OSS_20B) {
             blocks["q_proj"] = std::make_shared<Linear>(params.hidden_size, num_heads * head_dim, params.qkv_bias);
             blocks["k_proj"] = std::make_shared<Linear>(params.hidden_size, num_kv_heads * head_dim, params.qkv_bias);
             blocks["v_proj"] = std::make_shared<Linear>(params.hidden_size, num_kv_heads * head_dim, params.qkv_bias);
-            blocks["o_proj"] = std::make_shared<Linear>(num_heads * head_dim, params.hidden_size, false);
+            blocks["o_proj"] = std::make_shared<Linear>(num_heads * head_dim, params.hidden_size, params.attention_out_bias);
             if (params.qk_norm) {
                 blocks["q_norm"] = std::make_shared<LLMRMSNorm>(head_dim, params.rms_norm_eps, params.rms_norm_add);
                 blocks["k_norm"] = std::make_shared<LLMRMSNorm>(head_dim, params.rms_norm_eps, params.rms_norm_add);
@@ -660,6 +840,36 @@ namespace LLM {
             } else if (arch == LLMArch::QWEN3) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
+            } else if (arch == LLMArch::GPT_OSS_20B) {
+                float rope_theta = rope_thetas.empty() ? 150000.f : rope_thetas[0];
+                float rope_scale = rope_scales.empty() ? 32.f : rope_scales[0];
+                float freq_scale = 1.f / rope_scale;
+                q                = ggml_rope_ext(ctx->ggml_ctx,
+                                                 q,
+                                                 input_pos,
+                                                 nullptr,
+                                                 head_dim,
+                                                 GGML_ROPE_TYPE_NEOX,
+                                                 4096,
+                                                 rope_theta,
+                                                 freq_scale,
+                                                 1.f,
+                                                 1.f,
+                                                 32.f,
+                                                 1.f);
+                k                = ggml_rope_ext(ctx->ggml_ctx,
+                                                 k,
+                                                 input_pos,
+                                                 nullptr,
+                                                 head_dim,
+                                                 GGML_ROPE_TYPE_NEOX,
+                                                 4096,
+                                                 rope_theta,
+                                                 freq_scale,
+                                                 1.f,
+                                                 1.f,
+                                                 32.f,
+                                                 1.f);
             } else if (arch == LLMArch::GEMMA3_12B) {
                 float rope_theta = (rope_index == 1 ? 10000.0f : 1000000.0f);
                 float rope_scale = (rope_index == 1 ? 1.f : 8.f);
@@ -706,7 +916,28 @@ namespace LLM {
             k = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 0, 2, 1, 3));  // [N, num_kv_heads, n_token, head_dim]
             k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0], k->ne[1], k->ne[2] * k->ne[3]);      // [N*num_kv_heads, n_token, head_dim]
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
+            if (arch == LLMArch::GPT_OSS_20B) {
+                GGML_ASSERT(N == 1);
+                auto v_attn = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, v, 1, 2, 0, 3));  // [N, kv_heads, head_dim, tokens]
+                v_attn      = ggml_reshape_3d(ctx->ggml_ctx, v_attn, n_token, head_dim, num_kv_heads * N);
+
+                auto kq = ggml_mul_mat(ctx->ggml_ctx, k, q);
+                ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+                kq = ggml_scale_inplace(ctx->ggml_ctx, kq, 1.0f / std::sqrt(static_cast<float>(head_dim)));
+                if (attention_mask != nullptr) {
+                    kq = ggml_add_inplace(ctx->ggml_ctx, kq, attention_mask);
+                }
+                kq = ggml_soft_max_inplace(ctx->ggml_ctx, kq);
+                ggml_soft_max_add_sinks(kq, params["sinks"]);
+
+                auto kqv = ggml_mul_mat(ctx->ggml_ctx, v_attn, kq);
+                kqv      = ggml_reshape_4d(ctx->ggml_ctx, kqv, head_dim, n_token, num_heads, N);
+                kqv      = ggml_permute(ctx->ggml_ctx, kqv, 0, 2, 1, 3);
+                x        = ggml_ext_cont(ctx->ggml_ctx, kqv);
+                x        = ggml_reshape_3d(ctx->ggml_ctx, x, head_dim * num_heads, n_token, N);
+            } else {
+                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
+            }
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
             return x;
@@ -726,11 +957,15 @@ namespace LLM {
               sliding_attention(0),
               has_post_attention_norm(params.arch == LLMArch::GEMMA3_12B),
               has_post_ffw_norm(params.arch == LLMArch::GEMMA3_12B) {
-            blocks["self_attn"]                = std::make_shared<Attention>(params);
-            blocks["mlp"]                      = std::make_shared<MLP>(params.hidden_size,
-                                                  params.intermediate_size,
-                                                  false,
-                                                  params.mlp_activation);
+            blocks["self_attn"] = std::make_shared<Attention>(params);
+            if (params.arch == LLMArch::GPT_OSS_20B) {
+                blocks["mlp"] = std::make_shared<GPTOSSMLP>(params);
+            } else {
+                blocks["mlp"] = std::make_shared<MLP>(params.hidden_size,
+                                                      params.intermediate_size,
+                                                      false,
+                                                      params.mlp_activation);
+            }
             blocks["input_layernorm"]          = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
             blocks["post_attention_layernorm"] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
             if (has_post_attention_norm) {
@@ -751,7 +986,6 @@ namespace LLM {
                              ggml_tensor* sliding_attention_mask = nullptr) {
             // x: [N, n_token, hidden_size]
             auto self_attn                                  = std::dynamic_pointer_cast<Attention>(blocks["self_attn"]);
-            auto mlp                                        = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
             auto input_layernorm                            = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["input_layernorm"]);
             auto post_attention_layernorm                   = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["post_attention_layernorm"]);
             std::shared_ptr<LLMRMSNorm> post_attention_norm = nullptr;
@@ -764,7 +998,7 @@ namespace LLM {
             }
             ggml_tensor* block_attention_mask = attention_mask;
             int rope_index                    = 0;
-            if (arch == LLMArch::GEMMA3_12B && sliding_attention > 0) {
+            if ((arch == LLMArch::GEMMA3_12B || arch == LLMArch::GPT_OSS_20B) && sliding_attention > 0) {
                 block_attention_mask = sliding_attention_mask;
                 rope_index           = 1;
             }
@@ -779,7 +1013,13 @@ namespace LLM {
 
             residual = x;
             x        = post_attention_layernorm->forward(ctx, x);
-            x        = mlp->forward(ctx, x);
+            if (arch == LLMArch::GPT_OSS_20B) {
+                auto mlp = std::dynamic_pointer_cast<GPTOSSMLP>(blocks["mlp"]);
+                x        = mlp->forward(ctx, x);
+            } else {
+                auto mlp = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
+                x        = mlp->forward(ctx, x);
+            }
             if (post_ffw_norm != nullptr) {
                 x = post_ffw_norm->forward(ctx, x);
             }
@@ -1202,6 +1442,24 @@ namespace LLM {
                 params.rope_thetas             = {1000000.f, 10000.f};
                 params.rope_scales             = {8.f, 1.f};
                 params.sliding_attention       = {1024, 1024, 1024, 1024, 1024, 0};
+            } else if (arch == LLMArch::GPT_OSS_20B) {
+                params.head_dim                = 64;
+                params.num_heads               = 64;
+                params.num_kv_heads            = 8;
+                params.qkv_bias                = true;
+                params.attention_out_bias      = true;
+                params.qk_norm                 = false;
+                params.rms_norm_eps            = 1e-5f;
+                params.hidden_size             = 2880;
+                params.intermediate_size       = 2880;
+                params.num_layers              = 24;
+                params.vocab_size              = 201088;
+                params.max_position_embeddings = 131072;
+                params.rope_thetas             = {150000.f};
+                params.rope_scales             = {32.f};
+                params.sliding_attention       = {128, 0};
+                params.num_experts             = 32;
+                params.num_experts_per_tok     = 4;
             }
             bool have_vision_weight = false;
             bool llama_cpp_style    = false;
@@ -1234,6 +1492,12 @@ namespace LLM {
                     params.vocab_size  = pair.second.ne[1];
                 }
                 if (contains(tensor_name, "layers.0.mlp.gate_proj.weight")) {
+                    params.intermediate_size = pair.second.ne[1];
+                }
+                if (contains(tensor_name, "layers.0.mlp.experts.gate_up_proj.weight")) {
+                    params.intermediate_size = pair.second.ne[1] / 2;
+                }
+                if (contains(tensor_name, "layers.0.mlp.experts.gate_proj.weight")) {
                     params.intermediate_size = pair.second.ne[1];
                 }
             }
@@ -1315,7 +1579,8 @@ namespace LLM {
             if (params.arch == LLMArch::MISTRAL_SMALL_3_2 ||
                 params.arch == LLMArch::MINISTRAL_3_3B ||
                 params.arch == LLMArch::QWEN3 ||
-                params.arch == LLMArch::GEMMA3_12B) {
+                params.arch == LLMArch::GEMMA3_12B ||
+                params.arch == LLMArch::GPT_OSS_20B) {
                 input_pos_vec.resize(n_tokens);
                 for (int i = 0; i < n_tokens; ++i) {
                     input_pos_vec[i] = i;
@@ -1354,7 +1619,11 @@ namespace LLM {
                 set_backend_tensor_data(attention_mask, attention_mask_vec.data());
             }
 
-            if (params.arch == LLMArch::GEMMA3_12B) {
+            if (params.arch == LLMArch::GEMMA3_12B || params.arch == LLMArch::GPT_OSS_20B) {
+                int sliding_window = 0;
+                for (int window : params.sliding_attention) {
+                    sliding_window = std::max(sliding_window, window);
+                }
                 sliding_attention_mask_vec.resize(n_tokens * n_tokens);
                 if (!attention_mask_tensor.empty()) {
                     GGML_ASSERT(attention_mask_tensor.numel() == n_tokens * n_tokens);
@@ -1364,8 +1633,7 @@ namespace LLM {
                 }
                 for (int i0 = 0; i0 < n_tokens; i0++) {
                     for (int i1 = 0; i1 < n_tokens; i1++) {
-                        if (i0 + 1024 <= i1) {
-                            LOG_DEBUG("xxxxxxxxxxxxxx");
+                        if (sliding_window > 0 && i0 + sliding_window <= i1) {
                             sliding_attention_mask_vec[i1 * n_tokens + i0] = -INFINITY;
                         }
                     }
@@ -1485,6 +1753,8 @@ namespace LLM {
             : model(arch, backend, params_backend, tensor_storage_map, prefix, enable_vision) {
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 tokenizer = std::make_shared<MistralTokenizer>();
+            } else if (arch == LLMArch::GPT_OSS_20B) {
+                tokenizer = std::make_shared<GPTOSSTokenizer>();
             } else {
                 tokenizer = std::make_shared<Qwen2Tokenizer>();
             }

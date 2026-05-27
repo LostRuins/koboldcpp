@@ -128,6 +128,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
     };
 
     static const std::vector<std::pair<std::string, std::string>> llm_name_map{
+        {"attn_sinks.weight", "self_attn.sinks"},
         {"token_embd.", "model.embed_tokens."},
         {"blk.", "model.layers."},
         {"attn_q.", "self_attn.q_proj."},
@@ -137,6 +138,12 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"attn_k_norm.", "self_attn.k_norm."},
         {"attn_output.", "self_attn.o_proj."},
         {"attn_norm.", "input_layernorm."},
+        {"attn_post_norm.", "post_attention_layernorm."},
+        {"post_attention_norm.", "post_attention_layernorm."},
+        {"ffn_gate_inp.", "mlp.router."},
+        {"ffn_gate_exps.", "mlp.experts.gate_proj."},
+        {"ffn_up_exps.", "mlp.experts.up_proj."},
+        {"ffn_down_exps.", "mlp.experts.down_proj."},
         {"ffn_down.", "mlp.down_proj."},
         {"ffn_gate.", "mlp.gate_proj."},
         {"ffn_up.", "mlp.up_proj."},

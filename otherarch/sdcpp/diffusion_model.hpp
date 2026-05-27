@@ -6,6 +6,7 @@
 #include "ernie_image.hpp"
 #include "flux.hpp"
 #include "hidream_o1.hpp"
+#include "lens.hpp"
 #include "ltxv.hpp"
 #include "mmdit.hpp"
 #include "qwen_image.hpp"
@@ -698,6 +699,72 @@ struct ErnieImageModel : public DiffusionModel {
                                    *diffusion_params.x,
                                    *diffusion_params.timesteps,
                                    tensor_or_empty(diffusion_params.context));
+    }
+};
+
+struct LensModel : public DiffusionModel {
+    std::string prefix;
+    Lens::LensRunner lens;
+
+    LensModel(ggml_backend_t backend,
+              ggml_backend_t params_backend,
+              const String2TensorStorage& tensor_storage_map = {},
+              const std::string prefix                       = "model.diffusion_model")
+        : prefix(prefix), lens(backend, params_backend, tensor_storage_map, prefix) {
+    }
+
+    std::string get_desc() override {
+        return lens.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        lens.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        lens.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        lens.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        lens.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return lens.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        lens.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 768;
+    }
+
+    void set_flash_attention_enabled(bool enabled) {
+        lens.set_flash_attention_enabled(enabled);
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        lens.set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
+    void set_circular_axes(bool circular_x, bool circular_y) override {
+        lens.set_circular_axes(circular_x, circular_y);
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        return lens.compute(n_threads,
+                            *diffusion_params.x,
+                            *diffusion_params.timesteps,
+                            tensor_or_empty(diffusion_params.context));
     }
 };
 

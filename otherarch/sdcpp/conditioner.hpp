@@ -1696,11 +1696,15 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
         } else if (sd_version_is_ernie_image(version)) {
             arch = LLM::LLMArch::MINISTRAL_3_3B;
+        } else if (sd_version_is_lens(version)) {
+            arch = LLM::LLMArch::GPT_OSS_20B;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {
             tokenizer = std::make_shared<MistralTokenizer>();
+        } else if (arch == LLM::LLMArch::GPT_OSS_20B) {
+            tokenizer = std::make_shared<GPTOSSTokenizer>();
         } else {
             tokenizer = std::make_shared<Qwen2Tokenizer>();
         }
@@ -1871,6 +1875,7 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, sd::Tensor<float>>> image_embeds;
         int prompt_template_encode_start_idx = 34;
         int min_length                       = 0;  // pad tokens
+        int max_length                       = 100000000;
         int hidden_states_min_length         = 0;  // zero pad hidden_states
         bool spell_quotes                    = false;
         std::set<int> out_layers;
@@ -2029,6 +2034,30 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.first = 0;
             prompt += conditioner_params.text;
             prompt_attn_range.second = static_cast<int>(prompt.size());
+        } else if (sd_version_is_lens(version)) {
+            prompt_template_encode_start_idx = 97;
+            min_length                       = 0;
+            max_length                       = 512;
+            out_layers                       = {6, 12, 18, 24};
+
+            prompt =
+                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\n"
+                "Knowledge cutoff: 2024-06\n"
+                "Current date: 2026-05-26\n"  // fix for current date
+                "\n"
+                "Reasoning: medium\n"
+                "\n"
+                "# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n"
+                "\n"
+                "Describe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background.\n"
+                "\n"
+                "<|end|><|start|>user<|message|>";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|end|><|start|>assistant<|channel|>analysis<|message|>Need to generate one image according to the description.<|end|><|start|>assistant<|channel|>final<|message|>";
         } else if (sd_version_is_z_image(version)) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {35};  // -2
@@ -2085,7 +2114,8 @@ struct LLMEmbedder : public Conditioner {
                                            image_embeds,
                                            out_layers,
                                            prompt_template_encode_start_idx,
-                                           spell_quotes);
+                                           spell_quotes,
+                                           max_length);
         std::vector<sd::Tensor<float>> extra_hidden_states_vec;
         for (int i = 0; i < extra_prompts.size(); i++) {
             auto extra_hidden_states = encode_prompt(n_threads,
@@ -2096,7 +2126,8 @@ struct LLMEmbedder : public Conditioner {
                                                      image_embeds,
                                                      out_layers,
                                                      prompt_template_encode_start_idx,
-                                                     spell_quotes);
+                                                     spell_quotes,
+                                                     max_length);
             extra_hidden_states_vec.push_back(std::move(extra_hidden_states));
         }
 

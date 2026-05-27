@@ -2,6 +2,8 @@
 #include "clip_merges.hpp"
 #include "gemma_merges.hpp"
 #include "gemma_vocab.hpp"
+#include "gpt_oss_merges.hpp"
+#include "gpt_oss_vocab.hpp"
 #include "mistral_merges.hpp"
 #include "mistral_vocab.hpp"
 #include "qwen_merges.hpp"
@@ -45,5 +47,15 @@ std::string load_gemma_merges() {
 
 std::string load_gemma_vocab_json() {
     std::string json_str(reinterpret_cast<const char*>(gemma_vocab_json_utf8_c_str), sizeof(gemma_vocab_json_utf8_c_str));
+    return json_str;
+}
+
+std::string load_gpt_oss_merges() {
+    std::string merges_utf8_str(reinterpret_cast<const char*>(gpt_oss_merges_utf8_c_str), sizeof(gpt_oss_merges_utf8_c_str));
+    return merges_utf8_str;
+}
+
+std::string load_gpt_oss_vocab_json() {
+    std::string json_str(reinterpret_cast<const char*>(gpt_oss_vocab_json_utf8_c_str), sizeof(gpt_oss_vocab_json_utf8_c_str));
     return json_str;
 }
