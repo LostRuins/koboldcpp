@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common_dit.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "qwen_image.hpp"
 #include "rope.hpp"
@@ -325,7 +326,7 @@ namespace ErnieImage {
         }
     };
 
-    struct ErnieImageRunner : public GGMLRunner {
+    struct ErnieImageRunner : public DiffusionModelRunner {
         ErnieImageParams ernie_params;
         ErnieImageModel ernie_image;
         std::vector<float> pe_vec;
@@ -334,7 +335,7 @@ namespace ErnieImage {
                          ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "")
-            : GGMLRunner(backend, params_backend) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             ernie_params.num_layers = 0;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {
@@ -393,7 +394,7 @@ namespace ErnieImage {
             return "ernie_image";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             ernie_image.get_param_tensors(tensors, prefix);
         }
 
@@ -434,6 +435,16 @@ namespace ErnieImage {
                 return build_graph(x, timesteps, context);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        }
+
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context));
         }
     };
 }  // namespace ErnieImage

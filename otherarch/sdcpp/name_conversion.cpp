@@ -138,8 +138,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"attn_k_norm.", "self_attn.k_norm."},
         {"attn_output.", "self_attn.o_proj."},
         {"attn_norm.", "input_layernorm."},
-        {"attn_post_norm.", "post_attention_layernorm."},
-        {"post_attention_norm.", "post_attention_layernorm."},
+        {"attn_post_norm.", "post_attention_norm."},
         {"ffn_gate_inp.", "mlp.router."},
         {"ffn_gate_exps.", "mlp.experts.gate_proj."},
         {"ffn_up_exps.", "mlp.experts.up_proj."},
@@ -147,6 +146,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"ffn_down.", "mlp.down_proj."},
         {"ffn_gate.", "mlp.gate_proj."},
         {"ffn_up.", "mlp.up_proj."},
+        {"ffn_post_norm.", "post_ffw_norm."},
         {"ffn_norm.", "post_attention_layernorm."},
         {"output_norm.", "model.norm."},
     };

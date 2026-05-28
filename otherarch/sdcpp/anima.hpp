@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "rope.hpp"
 
@@ -518,7 +519,7 @@ namespace Anima {
         }
     };
 
-    struct AnimaRunner : public GGMLRunner {
+    struct AnimaRunner : public DiffusionModelRunner {
     public:
         std::vector<float> image_pe_vec;
         std::vector<float> adapter_q_pe_vec;
@@ -529,7 +530,7 @@ namespace Anima {
                     ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "model.diffusion_model")
-            : GGMLRunner(backend, params_backend) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             int64_t num_layers    = 0;
             std::string layer_tag = prefix + ".net.blocks.";
             for (const auto& kv : tensor_storage_map) {
@@ -559,7 +560,7 @@ namespace Anima {
             return "anima";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             net.get_param_tensors(tensors, prefix + ".net");
         }
 
@@ -683,6 +684,19 @@ namespace Anima {
                 return build_graph(x, timesteps, context, t5_ids, t5_weights);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        }
+
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            const auto* extra = diffusion_extra_as<AnimaDiffusionExtra>(diffusion_params);
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           tensor_or_empty(extra->t5_ids),
+                           tensor_or_empty(extra->t5_weights));
         }
     };
 }  // namespace Anima

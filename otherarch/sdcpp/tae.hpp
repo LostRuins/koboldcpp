@@ -584,7 +584,7 @@ public:
     TAESD(bool decode_only = true, SDVersion version = VERSION_SD1)
         : decode_only(decode_only) {
         bool use_midblock_gn = false;
-        taef2                = sd_version_is_flux2(version);
+        taef2                = sd_version_uses_flux2_vae(version);
 
         if (sd_version_is_dit(version)) {
             z_channels = 16;

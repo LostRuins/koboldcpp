@@ -2,6 +2,7 @@
 #define __UNET_HPP__
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "model.h"
 
 /*==================================================== UnetModel =====================================================*/
@@ -599,7 +600,7 @@ public:
     }
 };
 
-struct UNetModelRunner : public GGMLRunner {
+struct UNetModelRunner : public DiffusionModelRunner {
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
@@ -607,7 +608,7 @@ struct UNetModelRunner : public GGMLRunner {
                     const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1)
-        : GGMLRunner(backend, params_backend), unet(version, tensor_storage_map) {
+        : DiffusionModelRunner(backend, params_backend, prefix), unet(version, tensor_storage_map) {
         unet.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -615,7 +616,7 @@ struct UNetModelRunner : public GGMLRunner {
         return "unet";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
         unet.get_param_tensors(tensors, prefix);
     }
 
@@ -680,6 +681,23 @@ struct UNetModelRunner : public GGMLRunner {
         };
 
         return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        const auto* extra = diffusion_extra_as<UNetDiffusionExtra>(diffusion_params);
+        static const std::vector<sd::Tensor<float>> empty_controls;
+        return compute(n_threads,
+                       *diffusion_params.x,
+                       *diffusion_params.timesteps,
+                       tensor_or_empty(diffusion_params.context),
+                       tensor_or_empty(diffusion_params.c_concat),
+                       tensor_or_empty(diffusion_params.y),
+                       extra->num_video_frames,
+                       extra->controls ? *extra->controls : empty_controls,
+                       extra->control_strength);
     }
 
     void test() {

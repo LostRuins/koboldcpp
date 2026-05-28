@@ -3,6 +3,7 @@
 
 #include <algorithm>
 
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "ggml_extend.hpp"
 #include "mmdit.hpp"
@@ -464,7 +465,7 @@ namespace ZImage {
         }
     };
 
-    struct ZImageRunner : public GGMLRunner {
+    struct ZImageRunner : public DiffusionModelRunner {
     public:
         ZImageParams z_image_params;
         ZImageModel z_image;
@@ -477,7 +478,7 @@ namespace ZImage {
                      const String2TensorStorage& tensor_storage_map = {},
                      const std::string prefix                       = "",
                      SDVersion version                              = VERSION_Z_IMAGE)
-            : GGMLRunner(backend, params_backend) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             z_image = ZImageModel(z_image_params);
             z_image.init(params_ctx, tensor_storage_map, prefix);
         }
@@ -486,7 +487,7 @@ namespace ZImage {
             return "z_image";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             z_image.get_param_tensors(tensors, prefix);
         }
 
@@ -554,6 +555,19 @@ namespace ZImage {
             };
 
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        }
+
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            static const std::vector<sd::Tensor<float>> empty_ref_latents;
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.increase_ref_index);
         }
 
         void test() {

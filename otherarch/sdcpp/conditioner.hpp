@@ -102,7 +102,6 @@ struct ConditionerParams {
     int clip_skip                                    = -1;
     int width                                        = -1;
     int height                                       = -1;
-    int adm_in_channels                              = -1;
     bool zero_out_masked                             = false;
     int num_input_imgs                               = 0;        // for photomaker
     const std::vector<sd::Tensor<float>>* ref_images = nullptr;  // for qwen image edit
@@ -502,7 +501,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                              int clip_skip,
                                              int width,
                                              int height,
-                                             int adm_in_channels  = -1,
                                              bool zero_out_masked = false) {
         int64_t t0 = ggml_time_ms();
         sd::Tensor<float> hidden_states;  // [n_token, hidden_size] or [n_token, hidden_size + hidden_size2]
@@ -588,7 +586,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
         sd::Tensor<float> vec;
         if (sd_version_is_sdxl(version)) {
-            int out_dim = 256;
+            int out_dim         = 256;
+            int adm_in_channels = 2816;
             GGML_ASSERT(!pooled.empty());
             vec = sd::Tensor<float>({adm_in_channels});
             vec.fill_(0.0f);
@@ -647,7 +646,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                                  conditioner_params.clip_skip,
                                                  conditioner_params.width,
                                                  conditioner_params.height,
-                                                 conditioner_params.adm_in_channels,
                                                  conditioner_params.zero_out_masked);
         return std::make_tuple(cond, clsm);
     }
@@ -674,7 +672,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                             conditioner_params.clip_skip,
                                             conditioner_params.width,
                                             conditioner_params.height,
-                                            conditioner_params.adm_in_channels,
                                             conditioner_params.zero_out_masked);
     }
 };

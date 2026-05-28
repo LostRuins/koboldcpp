@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common_block.hpp"
+#include "diffusion_model.hpp"
 #include "flux.hpp"
 #include "qwen_image.hpp"
 #include "rope.hpp"
@@ -298,7 +299,7 @@ namespace Lens {
         }
     };
 
-    struct LensRunner : public GGMLRunner {
+    struct LensRunner : public DiffusionModelRunner {
         LensParams lens_params;
         LensModel lens;
         std::vector<float> pe_vec;
@@ -307,7 +308,7 @@ namespace Lens {
                    ggml_backend_t params_backend,
                    const String2TensorStorage& tensor_storage_map = {},
                    const std::string prefix                       = "")
-            : GGMLRunner(backend, params_backend) {
+            : DiffusionModelRunner(backend, params_backend, prefix) {
             lens_params.num_layers = 0;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {
@@ -361,7 +362,7 @@ namespace Lens {
             return "lens";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             lens.get_param_tensors(tensors, prefix);
         }
 
@@ -401,6 +402,16 @@ namespace Lens {
                 return build_graph(x, timesteps, context);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        }
+
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context));
         }
     };
 }  // namespace Lens

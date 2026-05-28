@@ -948,15 +948,20 @@ namespace LLM {
     protected:
         LLMArch arch;
         int sliding_attention;
-        bool has_post_attention_norm;
-        bool has_post_ffw_norm;
+        std::string post_attention_norm_name;
+        std::string pre_ffw_norm_name;
+        std::string post_ffw_norm_name;
 
     public:
         TransformerBlock(const LLMParams& params, int layer_index)
             : arch(params.arch),
-              sliding_attention(0),
-              has_post_attention_norm(params.arch == LLMArch::GEMMA3_12B),
-              has_post_ffw_norm(params.arch == LLMArch::GEMMA3_12B) {
+              sliding_attention(0) {
+            if (params.arch == LLMArch::GEMMA3_12B) {
+                post_attention_norm_name = "post_attention_norm";
+                post_ffw_norm_name       = "post_ffw_norm";
+            }
+            pre_ffw_norm_name = params.arch == LLMArch::GPT_OSS_20B ? "post_attention_norm" : "post_attention_layernorm";
+
             blocks["self_attn"] = std::make_shared<Attention>(params);
             if (params.arch == LLMArch::GPT_OSS_20B) {
                 blocks["mlp"] = std::make_shared<GPTOSSMLP>(params);
@@ -966,13 +971,13 @@ namespace LLM {
                                                       false,
                                                       params.mlp_activation);
             }
-            blocks["input_layernorm"]          = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
-            blocks["post_attention_layernorm"] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
-            if (has_post_attention_norm) {
-                blocks["post_attention_norm"] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
+            blocks["input_layernorm"] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
+            blocks[pre_ffw_norm_name] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
+            if (!post_attention_norm_name.empty()) {
+                blocks[post_attention_norm_name] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
             }
-            if (has_post_ffw_norm) {
-                blocks["post_ffw_norm"] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
+            if (!post_ffw_norm_name.empty()) {
+                blocks[post_ffw_norm_name] = std::make_shared<LLMRMSNorm>(params.hidden_size, params.rms_norm_eps, params.rms_norm_add);
             }
             if (!params.sliding_attention.empty()) {
                 sliding_attention = params.sliding_attention[layer_index % params.sliding_attention.size()];
@@ -987,14 +992,14 @@ namespace LLM {
             // x: [N, n_token, hidden_size]
             auto self_attn                                  = std::dynamic_pointer_cast<Attention>(blocks["self_attn"]);
             auto input_layernorm                            = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["input_layernorm"]);
-            auto post_attention_layernorm                   = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["post_attention_layernorm"]);
+            auto pre_ffw_norm                               = std::dynamic_pointer_cast<LLMRMSNorm>(blocks[pre_ffw_norm_name]);
             std::shared_ptr<LLMRMSNorm> post_attention_norm = nullptr;
             std::shared_ptr<LLMRMSNorm> post_ffw_norm       = nullptr;
-            if (has_post_attention_norm) {
-                post_attention_norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["post_attention_norm"]);
+            if (!post_attention_norm_name.empty()) {
+                post_attention_norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks[post_attention_norm_name]);
             }
-            if (has_post_ffw_norm) {
-                post_ffw_norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["post_ffw_norm"]);
+            if (!post_ffw_norm_name.empty()) {
+                post_ffw_norm = std::dynamic_pointer_cast<LLMRMSNorm>(blocks[post_ffw_norm_name]);
             }
             ggml_tensor* block_attention_mask = attention_mask;
             int rope_index                    = 0;
@@ -1012,7 +1017,7 @@ namespace LLM {
             x = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             residual = x;
-            x        = post_attention_layernorm->forward(ctx, x);
+            x        = pre_ffw_norm->forward(ctx, x);
             if (arch == LLMArch::GPT_OSS_20B) {
                 auto mlp = std::dynamic_pointer_cast<GPTOSSMLP>(blocks["mlp"]);
                 x        = mlp->forward(ctx, x);

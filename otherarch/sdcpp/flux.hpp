@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common_dit.hpp"
+#include "diffusion_model.hpp"
 #include "model.h"
 #include "rope.hpp"
 
@@ -1176,7 +1177,7 @@ namespace Flux {
         }
     };
 
-    struct FluxRunner : public GGMLRunner {
+    struct FluxRunner : public DiffusionModelRunner {
     public:
         FluxParams flux_params;
         Flux flux;
@@ -1193,7 +1194,7 @@ namespace Flux {
                    const std::string prefix                       = "",
                    SDVersion version                              = VERSION_FLUX,
                    bool use_mask                                  = false)
-            : GGMLRunner(backend, params_backend), version(version), use_mask(use_mask) {
+            : DiffusionModelRunner(backend, params_backend, prefix), version(version), use_mask(use_mask) {
             flux_params.version             = version;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
@@ -1308,7 +1309,7 @@ namespace Flux {
             return "flux";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             flux.get_param_tensors(tensors, prefix);
         }
 
@@ -1488,6 +1489,25 @@ namespace Flux {
 
             auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
             return result;
+        }
+
+        sd::Tensor<float> compute(int n_threads,
+                                  const DiffusionParams& diffusion_params) override {
+            GGML_ASSERT(diffusion_params.x != nullptr);
+            GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            const auto* extra = diffusion_extra_as<FluxDiffusionExtra>(diffusion_params);
+            static const std::vector<sd::Tensor<float>> empty_ref_latents;
+            static const std::vector<int> empty_skip_layers;
+            return compute(n_threads,
+                           *diffusion_params.x,
+                           *diffusion_params.timesteps,
+                           tensor_or_empty(diffusion_params.context),
+                           tensor_or_empty(diffusion_params.c_concat),
+                           tensor_or_empty(diffusion_params.y),
+                           tensor_or_empty(extra->guidance),
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.increase_ref_index,
+                           extra->skip_layers ? *extra->skip_layers : empty_skip_layers);
         }
 
         void test() {

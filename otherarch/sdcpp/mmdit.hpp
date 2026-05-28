@@ -3,6 +3,7 @@
 
 #include <memory>
 
+#include "diffusion_model.hpp"
 #include "ggml_extend.hpp"
 #include "model.h"
 
@@ -824,14 +825,14 @@ public:
         return x;
     }
 };
-struct MMDiTRunner : public GGMLRunner {
+struct MMDiTRunner : public DiffusionModelRunner {
     MMDiT mmdit;
 
     MMDiTRunner(ggml_backend_t backend,
                 ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map = {},
                 const std::string prefix                       = "")
-        : GGMLRunner(backend, params_backend), mmdit(tensor_storage_map) {
+        : DiffusionModelRunner(backend, params_backend, prefix), mmdit(tensor_storage_map) {
         mmdit.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -839,7 +840,7 @@ struct MMDiTRunner : public GGMLRunner {
         return "mmdit";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
         mmdit.get_param_tensors(tensors, prefix);
     }
 
@@ -883,6 +884,20 @@ struct MMDiTRunner : public GGMLRunner {
         };
 
         return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+    }
+
+    sd::Tensor<float> compute(int n_threads,
+                              const DiffusionParams& diffusion_params) override {
+        GGML_ASSERT(diffusion_params.x != nullptr);
+        GGML_ASSERT(diffusion_params.timesteps != nullptr);
+        const auto* extra = diffusion_extra_as<SkipLayerDiffusionExtra>(diffusion_params);
+        static const std::vector<int> empty_skip_layers;
+        return compute(n_threads,
+                       *diffusion_params.x,
+                       *diffusion_params.timesteps,
+                       tensor_or_empty(diffusion_params.context),
+                       tensor_or_empty(diffusion_params.y),
+                       extra->skip_layers ? *extra->skip_layers : empty_skip_layers);
     }
 
     void test() {
