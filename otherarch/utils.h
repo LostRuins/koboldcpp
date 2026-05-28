@@ -112,4 +112,4 @@ struct wav_ulaw_header {
 std::string save_ulaw_wav8_base64(const std::vector<float> &data, int sample_rate);
 std::string save_wav16_base64(const std::vector<float> &data, int sample_rate);
 std::string save_stereo_wav16_base64(const std::vector<float> & raw_audio, int T_audio, int sample_rate);
-std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_audio,int sample_rate);
+std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_audio,int sample_rate,int bitrate_kbps = 128);

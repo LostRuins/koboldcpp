@@ -627,7 +627,7 @@ std::string save_stereo_wav16_base64(const std::vector<float> & raw_audio, int T
     return kcpp_base64_encode(wav_data);
 }
 
-std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_audio,int sample_rate) {
+std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_audio,int sample_rate,int bitrate_kbps) {
     const float * enc_audio = raw_audio.data();
     int enc_T  = T_audio;
     int enc_sr = sample_rate;
@@ -641,7 +641,10 @@ std::string save_stereo_mp3_base64(const std::vector<float> & raw_audio,int T_au
         enc_T     = (int)resampled.size() / 2;
     }
 
-    const int kbps = 128;
+    int kbps = bitrate_kbps;
+    // Clamp to valid MPEG1 bitrate range
+    if (kbps < 32) kbps = 32;
+    if (kbps > 320) kbps = 320;
 
     // Encode PCM [offset, offset+len) with optional warm-up.
     // warmup=true primes filterbank/MDCT/psy with the 1152 PCM samples

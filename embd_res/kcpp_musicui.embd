@@ -239,7 +239,7 @@ select{
       <div><label>Steps</label><input title="Generation Steps" id="inference_steps" type="number" value="8"></div>
       <div><label>Guidance</label><input title="Guidance Scale" id="guidance_scale" type="number" value="1"></div>
       <div><label>Shift</label><input title="Audio Shift" id="shift" type="number" value="3"></div>
-      <div><label>Save as MP3</label><input title="Save as MP3" id="use_mp3" type="checkbox"></div>
+      <div><label>Save as MP3</label><input title="Save as MP3" id="use_mp3" type="checkbox" onchange="document.getElementById('kbps').disabled=!this.checked"><select id="kbps" disabled><option value="64">64 kbps</option><option value="96">96 kbps</option><option value="128" selected>128 kbps</option><option value="160">160 kbps</option><option value="192">192 kbps</option><option value="256">256 kbps</option><option value="320">320 kbps</option></select></div>
       <div><label>Stereo</label><input title="Save as Stereo" id="stereo" type="checkbox" checked></div>
       <div><label>Gen Codes</label><input title="Generate Audio Codes" id="gen_codes" type="checkbox"></div>
       <div><label>Plan with LLM</label><input title="Plan with LLM" id="plan_with_main_llm" type="checkbox"></div>
@@ -538,6 +538,8 @@ function getFormData(){
   });
   data["stereo"] = (document.getElementById("stereo").checked ? true : false);
   data["use_mp3"] = (document.getElementById("use_mp3").checked ? true : false);
+  const kbpsEl = document.getElementById("kbps");
+  data["kbps"] = kbpsEl.disabled ? 128 : Number(kbpsEl.value);
   data["gen_codes"] = (document.getElementById("gen_codes").checked ? true : false);
   data["rewrite_caption"] = (document.getElementById("rewrite_caption").checked ? true : false);
   return data;
