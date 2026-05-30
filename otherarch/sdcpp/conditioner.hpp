@@ -2290,6 +2290,11 @@ struct LTXAVEmbedder : public Conditioner {
         projector->set_flash_attention_enabled(enabled);
     }
 
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        llm->set_max_graph_vram_bytes(max_vram_bytes);
+        projector->set_max_graph_vram_bytes(max_vram_bytes);
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         llm->set_weight_adapter(adapter);
         projector->set_weight_adapter(adapter);
