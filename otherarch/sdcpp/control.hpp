@@ -457,7 +457,11 @@ struct ControlNet : public GGMLRunner {
 
     bool load_from_file(const std::string& file_path, int n_threads) {
         LOG_INFO("loading control net from '%s'", file_path.c_str());
-        alloc_params_buffer();
+        if (!alloc_params_buffer()) {
+            LOG_ERROR("control net model buffer allocation failed");
+            return false;
+        }
+
         std::map<std::string, ggml_tensor*> tensors;
         control_net.get_param_tensors(tensors);
         std::set<std::string> ignore_tensors;

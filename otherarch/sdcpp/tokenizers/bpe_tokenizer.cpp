@@ -131,11 +131,10 @@ std::vector<std::u32string> BPETokenizer::bpe(const std::u32string& token) const
 }
 
 std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t on_new_token_cb) {
-    std::string normalized_text = normalize(text);
     std::vector<int32_t> bpe_tokens;
     std::vector<std::string> token_strs;
 
-    auto splited_texts = split_with_special_tokens(normalized_text, special_tokens);
+    auto splited_texts = split_with_special_tokens(text, special_tokens);
 
     for (auto& splited_text : splited_texts) {
         if (is_special_token(splited_text)) {
@@ -160,7 +159,7 @@ std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t
                 }
             }
 
-            std::string token_str = token;
+            std::string token_str = normalize(token);
             std::u32string utf32_token;
             if (byte_level_bpe) {
                 for (int i = 0; i < token_str.length(); i++) {

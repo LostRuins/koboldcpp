@@ -615,7 +615,10 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
         };
 
         model_loader->load_tensors(on_new_tensor_cb, n_threads);
-        alloc_params_buffer();
+        if (!alloc_params_buffer()) {
+            LOG_ERROR("PhotoMaker ID embeds buffer allocation failed");
+            return false;
+        }
 
         dry_run = false;
         model_loader->load_tensors(on_new_tensor_cb, n_threads);

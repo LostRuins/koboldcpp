@@ -639,7 +639,10 @@ namespace ZImage {
                                                                                    "model.diffusion_model",
                                                                                    VERSION_QWEN_IMAGE);
 
-            z_image->alloc_params_buffer();
+            if (!z_image->alloc_params_buffer()) {
+                LOG_ERROR("z_image buffer allocation failed");
+                return;
+            }
             std::map<std::string, ggml_tensor*> tensors;
             z_image->get_param_tensors(tensors, "model.diffusion_model");
 

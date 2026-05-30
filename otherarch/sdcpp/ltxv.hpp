@@ -2017,7 +2017,10 @@ namespace LTXV {
                                                                                tensor_storage_map,
                                                                                "model.diffusion_model");
 
-            ltxav->alloc_params_buffer();
+            if (!ltxav->alloc_params_buffer()) {
+                LOG_ERROR("ltxav buffer allocation failed");
+                return;
+            }
             std::map<std::string, ggml_tensor*> tensors;
             ltxav->get_param_tensors(tensors, "model.diffusion_model");
 

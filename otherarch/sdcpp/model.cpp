@@ -1032,6 +1032,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         continue;
                     }
 
+                    if (dst_tensor->data == nullptr) {
+                        LOG_ERROR("process tensor data failed: '%s'", tensor_storage.name.c_str());
+                        failed = true;
+                        break;
+                    }
+
                     // skip mmapped tensors
                     if (dst_tensor->buffer != nullptr && dst_tensor->buffer == fdata.mmbuffer.get()) {
                         continue;

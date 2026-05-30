@@ -475,8 +475,11 @@ struct T5Embedder {
         model.get_param_tensors(tensors, prefix);
     }
 
-    void alloc_params_buffer() {
-        model.alloc_params_buffer();
+    bool alloc_params_buffer() {
+        if (!model.alloc_params_buffer()) {
+            return false;
+         }
+        return true;
     }
 
     std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
@@ -578,7 +581,10 @@ struct T5Embedder {
 
         std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, backend, tensor_storage_map, "", true);
 
-        t5->alloc_params_buffer();
+        if (!t5->alloc_params_buffer()) {
+            LOG_ERROR("t5 params buffer allocation failed");
+            return;
+        }
         std::map<std::string, ggml_tensor*> tensors;
         t5->get_param_tensors(tensors, "");
 

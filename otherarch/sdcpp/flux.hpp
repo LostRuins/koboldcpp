@@ -1592,7 +1592,11 @@ namespace Flux {
                                                                             VERSION_FLUX2,
                                                                             false);
 
-            flux->alloc_params_buffer();
+            if (!flux->alloc_params_buffer()) {
+                LOG_ERROR("flux model allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             flux->get_param_tensors(tensors, "model.diffusion_model");
 

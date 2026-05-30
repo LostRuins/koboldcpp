@@ -86,7 +86,11 @@ struct LoraModel : public GGMLRunner {
             lora_tensors[name] = real;
         }
 
-        alloc_params_buffer();
+        if (!alloc_params_buffer()) {
+            LOG_ERROR("lora model buffer allocation failed");
+            return false;
+        }
+
 
         dry_run = false;
         model_loader.load_tensors(on_new_tensor_cb, n_threads);

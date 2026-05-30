@@ -492,8 +492,11 @@ namespace HiDreamO1 {
             vision_runner->get_param_tensors(tensors);
         }
 
-        void alloc_params_buffer() override {
-            vision_runner->alloc_params_buffer();
+        bool alloc_params_buffer() override {
+            if (!vision_runner->alloc_params_buffer()) {
+                return false;
+            }
+            return true;
         }
 
         void free_params_buffer() override {

@@ -270,7 +270,11 @@ struct ESRGAN : public GGMLRunner {
         rrdb_net = std::make_unique<RRDBNet>(detected_scale, detected_num_block, detected_num_in_ch, detected_num_out_ch, detected_num_feat, detected_num_grow_ch);
         rrdb_net->init(params_ctx, {}, "");
 
-        alloc_params_buffer();
+        if (!alloc_params_buffer()) {
+            LOG_ERROR("esrgan model buffer allocation failed");
+            return false;
+        }
+
         std::map<std::string, ggml_tensor*> esrgan_tensors;
         rrdb_net->get_param_tensors(esrgan_tensors);
 

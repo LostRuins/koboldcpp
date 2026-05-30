@@ -1334,7 +1334,10 @@ namespace WAN {
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
-                vae->alloc_params_buffer();
+                if (!vae->alloc_params_buffer()) {
+                    LOG_ERROR("vae buffer allocation failed");
+                    return;
+                }
                 std::map<std::string, ggml_tensor*> tensors;
                 vae->get_param_tensors(tensors, "first_stage_model");
 
@@ -2368,7 +2371,11 @@ namespace WAN {
                                                                          "model.diffusion_model",
                                                                          VERSION_WAN2_2_TI2V);
 
-            wan->alloc_params_buffer();
+            if (!wan->alloc_params_buffer()) {
+                LOG_ERROR("wan buffer allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             wan->get_param_tensors(tensors, "model.diffusion_model");
 

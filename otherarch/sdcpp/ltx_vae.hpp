@@ -1534,7 +1534,11 @@ struct LTXVideoVAE : public VAE {
                                                                          true,
                                                                          VERSION_LTXAV);
 
-        vae->alloc_params_buffer();
+        if (!vae->alloc_params_buffer()) {
+            LOG_ERROR("vae buffer allocation failed");
+            return;
+        }
+
         std::map<std::string, ggml_tensor*> tensors;
         vae->get_param_tensors(tensors, "first_stage_model");
 

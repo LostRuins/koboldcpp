@@ -1225,14 +1225,20 @@ public:
             ggml_free(ctx);
             return false;
         }
-        if (cond_stage_model) {
-            cond_stage_model->alloc_params_buffer();
+        if (cond_stage_model && !cond_stage_model->alloc_params_buffer()) {
+            LOG_ERROR("Conditioner model params buffer allocation failed");
+            ggml_free(ctx);
+            return false;
         }
-        if (diffusion_model) {
-            diffusion_model->alloc_params_buffer();
+        if (diffusion_model && !diffusion_model->alloc_params_buffer()) {
+            LOG_ERROR("Diffusion model params buffer allocation failed");
+            ggml_free(ctx);
+            return false;
         }
-        if (high_noise_diffusion_model) {
-            high_noise_diffusion_model->alloc_params_buffer();
+        if (high_noise_diffusion_model && !high_noise_diffusion_model->alloc_params_buffer()) {
+            LOG_ERROR("High noise diffusion model params buffer allocation failed");
+            ggml_free(ctx);
+            return false;
         }
         if (first_stage_model && !first_stage_model->alloc_params_buffer()) {
             LOG_ERROR("VAE params buffer allocation failed");

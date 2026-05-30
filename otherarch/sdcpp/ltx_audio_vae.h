@@ -1068,7 +1068,11 @@ namespace LTXV {
                                                                      tensor_storage_map,
                                                                      prefix);
 
-            ltx_audio_vae->alloc_params_buffer();
+            if (!ltx_audio_vae->alloc_params_buffer()) {
+               LOG_ERROR("ltx audio vae buffer allocation failed");
+               return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             ltx_audio_vae->get_param_tensors(tensors, "");
 

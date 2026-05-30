@@ -705,7 +705,11 @@ namespace Qwen {
                                                                                             "model.diffusion_model",
                                                                                             VERSION_QWEN_IMAGE);
 
-            qwen_image->alloc_params_buffer();
+            if (!qwen_image->alloc_params_buffer()) {
+                LOG_ERROR("qwen_image buffer allocation failed");
+                return;
+            }
+
             std::map<std::string, ggml_tensor*> tensors;
             qwen_image->get_param_tensors(tensors, "model.diffusion_model");
 
