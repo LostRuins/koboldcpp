@@ -222,3 +222,7 @@ and it will install everything required. Alternatively, you can download the abo
   - Image Recognition MMproj: [Pick the correct one for your model architecture here](https://huggingface.co/koboldcpp/mmproj/tree/main)
   - Speech Recognition: [Whisper models for Speech-To-Text](https://huggingface.co/koboldcpp/whisper/tree/main)
   - Text-To-Speech: [TTS models for Narration](https://huggingface.co/koboldcpp/tts/tree/main)
+
+# Export formats
+
+- @SuperCowProducts has worked on a bash script (JSON->Markdown->PDF) for this task: [Kobold2PDF](https://codeberg.org/jipmelon/Kobold2PDF) - feature-incomplete, open to contributions
