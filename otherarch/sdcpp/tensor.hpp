@@ -235,6 +235,7 @@ namespace sd {
 
         Tensor& masked_fill_(const Tensor<uint8_t>& mask, const T& value);
 
+        T sum() const;
         T mean() const;
 
         static Tensor zeros(std::vector<int64_t> shape) {
@@ -326,6 +327,24 @@ namespace sd {
         std::vector<T> data_;
         std::vector<int64_t> shape_;
     };
+
+    template <typename T>
+    inline T Tensor<T>::sum() const {
+        T total = T{};
+        for (const T& value : data_) {
+            total += value;
+        }
+        return total;
+    }
+
+    template <>
+    inline float Tensor<float>::sum() const {
+        double total = 0.0;
+        for (float value : data_) {
+            total += static_cast<double>(value);
+        }
+        return static_cast<float>(total);
+    }
 
     template <typename T>
     inline T Tensor<T>::mean() const {

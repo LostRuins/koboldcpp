@@ -615,7 +615,7 @@ namespace ZImage {
             // cuda q8: pass
             // cuda q8 fa: pass
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
-            ggml_backend_t backend    = ggml_backend_cpu_init();
+            ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;
 
             ModelLoader model_loader;

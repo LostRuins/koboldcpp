@@ -947,7 +947,7 @@ struct MMDiTRunner : public DiffusionModelRunner {
 
     static void load_from_file_and_test(const std::string& file_path) {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
-        ggml_backend_t backend             = ggml_backend_cpu_init();
+        ggml_backend_t backend             = sd_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
         std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, backend);
         {

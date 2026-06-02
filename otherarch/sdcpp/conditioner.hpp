@@ -1171,7 +1171,6 @@ struct FluxCLIPEmbedder : public Conditioner {
         return true;
     }
 
-
     void free_params_buffer() override {
         if (clip_l) {
             clip_l->free_params_buffer();
@@ -1601,8 +1600,8 @@ struct AnimaConditioner : public Conditioner {
 
     bool alloc_params_buffer() override {
         if (!llm->alloc_params_buffer()) {
-                return false;
-            }
+            return false;
+        }
         return true;
     }
 
@@ -1719,6 +1718,8 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::MINISTRAL_3_3B;
         } else if (sd_version_is_lens(version)) {
             arch = LLM::LLMArch::GPT_OSS_20B;
+        } else if (sd_version_is_pid(version)) {
+            arch = LLM::LLMArch::GEMMA2_2B;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
         }
@@ -1726,6 +1727,8 @@ struct LLMEmbedder : public Conditioner {
             tokenizer = std::make_shared<MistralTokenizer>();
         } else if (arch == LLM::LLMArch::GPT_OSS_20B) {
             tokenizer = std::make_shared<GPTOSSTokenizer>();
+        } else if (arch == LLM::LLMArch::GEMMA2_2B) {
+            tokenizer = std::make_shared<Gemma2Tokenizer>();
         } else {
             tokenizer = std::make_shared<Qwen2Tokenizer>();
         }
@@ -1743,7 +1746,7 @@ struct LLMEmbedder : public Conditioner {
 
     bool alloc_params_buffer() override {
         if (!llm->alloc_params_buffer()) {
-                return false;
+            return false;
         }
         return true;
     }
@@ -1847,12 +1850,16 @@ struct LLMEmbedder : public Conditioner {
         sd::Tensor<int32_t> input_ids({static_cast<int64_t>(tokens.size())}, tokens);
         sd::Tensor<float> attention_mask;
         if (!mask.empty()) {
-            attention_mask = sd::Tensor<float>({static_cast<int64_t>(mask.size()), static_cast<int64_t>(mask.size())});
+            attention_mask                     = sd::Tensor<float>({static_cast<int64_t>(mask.size()), static_cast<int64_t>(mask.size())});
+            const float masked_attention_value = -std::numeric_limits<float>::max() / 4.0f;
             for (size_t i1 = 0; i1 < mask.size(); ++i1) {
                 for (size_t i0 = 0; i0 < mask.size(); ++i0) {
                     float value = 0.0f;
-                    if (mask[i0] == 0.0f || i0 > i1) {
-                        value = -INFINITY;
+                    if (mask[i0] == 0.0f) {
+                        value += masked_attention_value;
+                    }
+                    if (i0 > i1) {
+                        value += masked_attention_value;
                     }
                     attention_mask[static_cast<int64_t>(i0 + mask.size() * i1)] = value;
                 }
@@ -2126,6 +2133,53 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+        } else if (sd_version_is_pid(version)) {
+            constexpr int pixeldit_max_length = 300;
+            const std::string chi_prompt =
+                "Given a user prompt, generate an \"Enhanced prompt\" that provides detailed visual descriptions suitable for image generation. Evaluate the level of detail in the user prompt:\n"
+                "- If the prompt is simple, focus on adding specifics about colors, shapes, sizes, textures, and spatial relationships to create vivid and concrete scenes.\n"
+                "- If the prompt is already detailed, refine and enhance the existing details slightly without overcomplicating.\n"
+                "Here are examples of how to transform or refine prompts:\n"
+                "- User Prompt: A cat sleeping -> Enhanced: A small, fluffy white cat curled up in a round shape, sleeping peacefully on a warm sunny windowsill, surrounded by pots of blooming red flowers.\n"
+                "- User Prompt: A busy city street -> Enhanced: A bustling city street scene at dusk, featuring glowing street lamps, a diverse crowd of people in colorful clothing, and a double-decker bus passing by towering glass skyscrapers.\n"
+                "Please generate only the enhanced description for the prompt below and avoid including any additional commentary or evaluations:\n"
+                "User Prompt: ";
+            auto chi_tokens       = std::get<0>(tokenize(chi_prompt, {0, 0}));
+            size_t num_chi_tokens = chi_tokens.size();
+            max_length            = (int)num_chi_tokens + pixeldit_max_length - 2;
+            min_length            = max_length;
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += " " + conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            auto hidden_states = encode_prompt(n_threads,
+                                               prompt,
+                                               prompt_attn_range,
+                                               min_length,
+                                               0,
+                                               image_embeds,
+                                               out_layers,
+                                               0,
+                                               false,
+                                               max_length);
+            GGML_ASSERT(!hidden_states.empty());
+
+            if (hidden_states.shape()[1] > pixeldit_max_length) {
+                auto bos      = sd::ops::slice(hidden_states, 1, 0, 1);
+                auto tail     = sd::ops::slice(hidden_states,
+                                               1,
+                                               hidden_states.shape()[1] - (pixeldit_max_length - 1),
+                                               hidden_states.shape()[1]);
+                hidden_states = sd::ops::concat(bos, tail, 1);
+            }
+
+            int64_t t1 = ggml_time_ms();
+            LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+
+            SDCondition result;
+            result.c_crossattn = std::move(hidden_states);
+            return result;
         } else {
             GGML_ABORT("unknown version %d", version);
         }
@@ -2268,10 +2322,10 @@ struct LTXAVEmbedder : public Conditioner {
 
     bool alloc_params_buffer() override {
         if (!llm->alloc_params_buffer()) {
-                return false;
+            return false;
         }
         if (!projector->alloc_params_buffer()) {
-                return false;
+            return false;
         }
         return true;
     }

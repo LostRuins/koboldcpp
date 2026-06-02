@@ -514,8 +514,6 @@ struct LTX2Scheduler : SigmaScheduler {
                 if (!parse_strict_bool(value, stretch)) {
                     LOG_WARN("ignoring invalid ltx2 scheduler arg '%s=%s'", key.c_str(), value.c_str());
                 }
-            } else {
-                LOG_WARN("ignoring unknown ltx2 scheduler arg '%s'", key.c_str());
             }
         }
     }
@@ -1238,20 +1236,26 @@ static sd::Tensor<float> sample_lcm(denoise_cb_t model,
 
     for (const auto& [key, value] : extra_sample_args) {
         float parsed = 0.0f;
-        if (!parse_strict_float(value, parsed)) {
-            LOG_WARN("ignoring invalid lcm extra sample arg '%s=%s'", key.c_str(), value.c_str());
-            continue;
-        }
         if (key == "noise_clip_std") {
+            if (!parse_strict_float(value, parsed)) {
+                LOG_WARN("ignoring invalid lcm extra sample arg '%s=%s'", key.c_str(), value.c_str());
+                continue;
+            }
             args.noise_clip_std = parsed;
         } else if (key == "noise_scale_start") {
+            if (!parse_strict_float(value, parsed)) {
+                LOG_WARN("ignoring invalid lcm extra sample arg '%s=%s'", key.c_str(), value.c_str());
+                continue;
+            }
             args.noise_scale_start    = parsed;
             noise_scale_start_was_set = true;
         } else if (key == "noise_scale_end") {
+            if (!parse_strict_float(value, parsed)) {
+                LOG_WARN("ignoring invalid lcm extra sample arg '%s=%s'", key.c_str(), value.c_str());
+                continue;
+            }
             args.noise_scale_end    = parsed;
             noise_scale_end_was_set = true;
-        } else {
-            LOG_WARN("ignoring unknown lcm extra sample arg '%s'", key.c_str());
         }
     }
 
@@ -1795,16 +1799,14 @@ static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
     float ge_gamma = 2.0f;
 
     for (const auto& [key, value] : extra_sample_args) {
-        float parsed = 0.0f;
-        if (!parse_strict_float(value, parsed)) {
-            LOG_WARN("ignoring invalid euler_ge extra sample arg '%s=%s'", key.c_str(), value.c_str());
-            continue;
-        }
         if (key == "gamma") {
+            float parsed = 0.0f;
+            if (!parse_strict_float(value, parsed)) {
+                LOG_WARN("ignoring invalid euler_ge extra sample arg '%s=%s'", key.c_str(), value.c_str());
+                continue;
+            }
             LOG_DEBUG("setting euler_ge gamma to %.2f", parsed);
             ge_gamma = parsed;
-        } else {
-            LOG_WARN("ignoring unknown euler_ge extra sample arg '%s'", key.c_str());
         }
     }
 

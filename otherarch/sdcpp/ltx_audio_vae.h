@@ -1052,7 +1052,7 @@ namespace LTXV {
         static void load_from_file_and_test(const std::string& model_path,
                                             const std::string& input_path,
                                             const std::string& prefix = "") {
-            ggml_backend_t backend = ggml_backend_cpu_init();
+            ggml_backend_t backend = sd_backend_cpu_init();
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             LOG_INFO("loading ltx audio vae from '%s'", model_path.c_str());
 
@@ -1069,8 +1069,8 @@ namespace LTXV {
                                                                      prefix);
 
             if (!ltx_audio_vae->alloc_params_buffer()) {
-               LOG_ERROR("ltx audio vae buffer allocation failed");
-               return;
+                LOG_ERROR("ltx audio vae buffer allocation failed");
+                return;
             }
 
             std::map<std::string, ggml_tensor*> tensors;

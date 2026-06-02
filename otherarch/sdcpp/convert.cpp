@@ -8,7 +8,7 @@
 #include "model_io/safetensors_io.h"
 #include "util.h"
 
-#include "ggml-cpu.h"
+#include "ggml_extend_backend.h"
 
 static ggml_type get_export_tensor_type(ModelLoader& model_loader,
                                         const TensorStorage& tensor_storage,
@@ -103,7 +103,7 @@ bool convert(const char* input_path,
     bool output_is_safetensors = ends_with(output_path, ".safetensors");
     TensorTypeRules type_rules = parse_tensor_type_rules(tensor_type_rules);
 
-    auto backend    = ggml_backend_cpu_init();
+    auto backend    = sd_backend_cpu_init();
     size_t mem_size = 1 * 1024 * 1024;  // for padding
     mem_size += model_loader.get_tensor_storage_map().size() * ggml_tensor_overhead();
     mem_size += model_loader.get_params_mem_size(backend, type);

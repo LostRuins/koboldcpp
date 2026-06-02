@@ -17,6 +17,17 @@ namespace sd::guidance {
         sd::Tensor<float> pred_skip_layer;
     };
 
+    struct AdaptiveProjectedGuidanceParams {
+        float eta                      = 1.0f;
+        float momentum                 = 0.0f;
+        float norm_threshold           = 0.0f;
+        float norm_threshold_smoothing = 0.0f;
+    };
+
+    AdaptiveProjectedGuidanceParams parse_adaptive_projected_guidance_args(const char* extra_sample_args);
+    bool is_adaptive_projected_guidance_enabled(const AdaptiveProjectedGuidanceParams& params);
+    bool parse_skip_layer_guidance_uncond_arg(const char* extra_sample_args);
+
     struct GuidanceInput {
         int step                               = 0;
         size_t schedule_size                   = 0;
@@ -41,6 +52,21 @@ namespace sd::guidance {
     public:
         ClassifierFreeGuidance(float guidance_scale,
                                float image_guidance_scale);
+
+        GuiderOutput forward(const GuidanceInput& input,
+                             GuiderOutput previous) const override;
+    };
+
+    class AdaptiveProjectedGuidance : public BaseGuidance {
+        float guidance_scale_       = 1.0f;
+        float image_guidance_scale_ = 1.0f;
+        AdaptiveProjectedGuidanceParams params_;
+        mutable sd::Tensor<float> momentum_buffer_;
+
+    public:
+        AdaptiveProjectedGuidance(float guidance_scale,
+                                  float image_guidance_scale,
+                                  AdaptiveProjectedGuidanceParams params);
 
         GuiderOutput forward(const GuidanceInput& input,
                              GuiderOutput previous) const override;

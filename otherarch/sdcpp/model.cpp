@@ -460,6 +460,9 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage.name.find("model.diffusion_model.single_transformer_blocks.") != std::string::npos) {
             is_flux = true;
         }
+        if (tensor_storage.name.find("model.diffusion_model.net.lq_proj.latent_proj.0.weight") != std::string::npos) {
+            return VERSION_PID;
+        }
         if (tensor_storage.name.find("model.diffusion_model.nerf_final_layer_conv.") != std::string::npos) {
             return VERSION_CHROMA_RADIANCE;
         }

@@ -1,5 +1,7 @@
 #include "vocab.h"
 #include "clip_merges.hpp"
+#include "gemma2_merges.hpp"
+#include "gemma2_vocab.hpp"
 #include "gemma_merges.hpp"
 #include "gemma_vocab.hpp"
 #include "gpt_oss_merges.hpp"
@@ -47,6 +49,16 @@ std::string load_gemma_merges() {
 
 std::string load_gemma_vocab_json() {
     std::string json_str(reinterpret_cast<const char*>(gemma_vocab_json_utf8_c_str), sizeof(gemma_vocab_json_utf8_c_str));
+    return json_str;
+}
+
+std::string load_gemma2_merges() {
+    std::string merges_utf8_str(reinterpret_cast<const char*>(gemma2_merges_utf8_c_str), sizeof(gemma2_merges_utf8_c_str));
+    return merges_utf8_str;
+}
+
+std::string load_gemma2_vocab_json() {
+    std::string json_str(reinterpret_cast<const char*>(gemma2_vocab_json_utf8_c_str), sizeof(gemma2_vocab_json_utf8_c_str));
     return json_str;
 }
 

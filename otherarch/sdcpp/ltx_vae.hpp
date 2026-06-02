@@ -1517,7 +1517,7 @@ struct LTXVideoVAE : public VAE {
     static void load_from_file_and_test(const std::string& model_path,
                                         const std::string& input_path) {
         // ggml_backend_t backend = ggml_backend_cuda_init(0);
-        ggml_backend_t backend = ggml_backend_cpu_init();
+        ggml_backend_t backend = sd_backend_cpu_init();
         LOG_INFO("loading ltx vae from '%s'", model_path.c_str());
 
         ModelLoader model_loader;

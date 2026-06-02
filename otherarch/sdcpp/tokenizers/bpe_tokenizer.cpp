@@ -182,7 +182,8 @@ std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t
                             unsigned char b = utf8_token_str[i];
                             char hex_buf[16];
                             snprintf(hex_buf, sizeof(hex_buf), "<0x%02X>", b);
-                            iter = encoder.find(utf8_to_utf32(hex_buf));
+                            iter     = encoder.find(utf8_to_utf32(hex_buf));
+                            token_id = iter != encoder.end() ? iter->second : UNK_TOKEN_ID;
                             bpe_tokens.push_back(token_id);
                             token_strs.push_back(hex_buf);
                         }

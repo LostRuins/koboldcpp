@@ -1328,7 +1328,7 @@ namespace WAN {
 
         static void load_from_file_and_test(const std::string& file_path) {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
-            ggml_backend_t backend            = ggml_backend_cpu_init();
+            ggml_backend_t backend            = sd_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
             std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, backend, String2TensorStorage{}, "", false, VERSION_WAN2_2_TI2V);
             {
@@ -2348,7 +2348,7 @@ namespace WAN {
 
         static void load_from_file_and_test(const std::string& file_path) {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
-            ggml_backend_t backend    = ggml_backend_cpu_init();
+            ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_F16;
             LOG_INFO("loading from '%s'", file_path.c_str());
 

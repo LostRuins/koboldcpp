@@ -37,6 +37,7 @@ namespace LLM {
         MISTRAL_SMALL_3_2,
         MINISTRAL_3_3B,
         GEMMA3_12B,
+        GEMMA2_2B,
         GPT_OSS_20B,
         ARCH_COUNT,
     };
@@ -48,6 +49,7 @@ namespace LLM {
         "mistral_small3.2",
         "ministral3.3b",
         "gemma3_12b",
+        "gemma2_2b",
         "gpt_oss_20b",
     };
 
@@ -900,6 +902,33 @@ namespace LLM {
                                                  1.f,
                                                  32.f,
                                                  1.f);
+            } else if (arch == LLMArch::GEMMA2_2B) {
+                q = ggml_rope_ext(ctx->ggml_ctx,
+                                  q,
+                                  input_pos,
+                                  nullptr,
+                                  head_dim,
+                                  GGML_ROPE_TYPE_NEOX,
+                                  8192,
+                                  10000.f,
+                                  1.f,
+                                  0.f,
+                                  1.f,
+                                  32.f,
+                                  1.f);
+                k = ggml_rope_ext(ctx->ggml_ctx,
+                                  k,
+                                  input_pos,
+                                  nullptr,
+                                  head_dim,
+                                  GGML_ROPE_TYPE_NEOX,
+                                  8192,
+                                  10000.f,
+                                  1.f,
+                                  0.f,
+                                  1.f,
+                                  32.f,
+                                  1.f);
             } else if (arch == LLMArch::QWEN3_VL) {
                 int sections[4] = {24, 20, 20, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -957,10 +986,18 @@ namespace LLM {
             : arch(params.arch),
               sliding_attention(0) {
             if (params.arch == LLMArch::GEMMA3_12B) {
-                post_attention_norm_name = "post_attention_norm";
-                post_ffw_norm_name       = "post_ffw_norm";
+                post_attention_norm_name = "post_attention_norm";       // attn_post_norm
+                pre_ffw_norm_name        = "post_attention_layernorm";  // ffn_norm
+                post_ffw_norm_name       = "post_ffw_norm";             // ffn_post_norm
+            } else if (params.arch == LLMArch::GEMMA2_2B) {
+                post_attention_norm_name = "post_attention_layernorm";  // ffn_norm
+                pre_ffw_norm_name        = "pre_feedforward_layernorm";
+                post_ffw_norm_name       = "post_feedforward_layernorm";
+            } else if (params.arch == LLMArch::GPT_OSS_20B) {
+                pre_ffw_norm_name = "post_attention_norm";  // attn_post_norm
+            } else {
+                pre_ffw_norm_name = "post_attention_layernorm";  // ffn_norm
             }
-            pre_ffw_norm_name = params.arch == LLMArch::GPT_OSS_20B ? "post_attention_norm" : "post_attention_layernorm";
 
             blocks["self_attn"] = std::make_shared<Attention>(params);
             if (params.arch == LLMArch::GPT_OSS_20B) {
@@ -1447,6 +1484,21 @@ namespace LLM {
                 params.rope_thetas             = {1000000.f, 10000.f};
                 params.rope_scales             = {8.f, 1.f};
                 params.sliding_attention       = {1024, 1024, 1024, 1024, 1024, 0};
+            } else if (arch == LLMArch::GEMMA2_2B) {
+                params.head_dim                = 256;
+                params.num_heads               = 8;
+                params.num_kv_heads            = 4;
+                params.qkv_bias                = false;
+                params.qk_norm                 = false;
+                params.rms_norm_eps            = 1e-6f;
+                params.rms_norm_add            = true;
+                params.normalize_input         = true;
+                params.max_position_embeddings = 8192;
+                params.mlp_activation          = MLPActivation::GELU_TANH;
+                params.hidden_size             = 2304;
+                params.intermediate_size       = 9216;
+                params.num_layers              = 26;
+                params.vocab_size              = 256000;
             } else if (arch == LLMArch::GPT_OSS_20B) {
                 params.head_dim                = 64;
                 params.num_heads               = 64;
@@ -1585,6 +1637,7 @@ namespace LLM {
                 params.arch == LLMArch::MINISTRAL_3_3B ||
                 params.arch == LLMArch::QWEN3 ||
                 params.arch == LLMArch::GEMMA3_12B ||
+                params.arch == LLMArch::GEMMA2_2B ||
                 params.arch == LLMArch::GPT_OSS_20B) {
                 input_pos_vec.resize(n_tokens);
                 for (int i = 0; i < n_tokens; ++i) {
@@ -1988,7 +2041,7 @@ namespace LLM {
         static void load_from_file_and_test(const std::string& file_path) {
             // cpu f16: pass
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
-            ggml_backend_t backend    = ggml_backend_cpu_init();
+            ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
             ModelLoader model_loader;

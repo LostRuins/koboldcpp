@@ -1995,7 +1995,7 @@ namespace LTXV {
                                             const std::string& audio_x_path         = "",
                                             const std::string& audio_timesteps_path = "") {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
-            ggml_backend_t backend = ggml_backend_cpu_init();
+            ggml_backend_t backend = sd_backend_cpu_init();
             LOG_INFO("loading ltxav from '%s'", model_path.c_str());
 
             ModelLoader model_loader;

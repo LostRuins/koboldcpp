@@ -478,7 +478,7 @@ struct T5Embedder {
     bool alloc_params_buffer() {
         if (!model.alloc_params_buffer()) {
             return false;
-         }
+        }
         return true;
     }
 
@@ -563,7 +563,7 @@ struct T5Embedder {
         // cuda f32: pass
         // cuda q8_0: pass
         // ggml_backend_t backend = ggml_backend_cuda_init(0);
-        ggml_backend_t backend    = ggml_backend_cpu_init();
+        ggml_backend_t backend    = sd_backend_cpu_init();
         ggml_type model_data_type = GGML_TYPE_F16;
 
         ModelLoader model_loader;

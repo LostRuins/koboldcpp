@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "stable-diffusion.h"
 #include "util.h"
 
 static std::string trim_copy(const std::string& value) {
@@ -300,6 +301,61 @@ static ggml_backend_t init_named_backend(const std::string& name) {
     return ggml_backend_init_by_name(resolved.c_str(), nullptr);
 }
 
+bool sd_backend_is_cpu(ggml_backend_t backend) {
+    if (backend == nullptr) {
+        return false;
+    }
+    auto dev = ggml_backend_get_device(backend);
+    return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
+ggml_backend_t sd_backend_cpu_init() {
+    ggml_backend_load_all_once();
+    return ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+}
+
+bool sd_backend_cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
+    if (backend == nullptr) {
+        return false;
+    }
+    auto dev = ggml_backend_get_device(backend);
+    if (dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        auto reg                           = ggml_backend_dev_backend_reg(dev);
+        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t)ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+        if (ggml_backend_set_n_threads_fn != nullptr) {
+            ggml_backend_set_n_threads_fn(backend, n_threads);
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* sd_get_system_info() {
+    static std::string cache_info = []() -> std::string {
+        ggml_backend_load_all_once();
+        std::stringstream ss;
+        ss << "System Info: \n";
+        auto dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (dev != nullptr) {
+            auto reg                          = ggml_backend_dev_backend_reg(dev);
+            auto ggml_backend_get_features_fn = (ggml_backend_get_features_t)ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+            if (ggml_backend_get_features_fn != nullptr) {
+                ggml_backend_feature* feat = ggml_backend_get_features_fn(reg);
+                while (feat->name && feat->value) {
+                    ss << "   " << feat->name << " = " << feat->value << " | ";
+                    feat++;
+                }
+            } else {
+                LOG_WARN("unable to get CPU features");
+            }
+        } else {
+            LOG_WARN("unable to get CPU features");
+        }
+        return ss.str();
+    }();
+    return cache_info.c_str();
+}
+
 static ggml_backend_t sd_get_default_backend() {
     ggml_backend_load_all_once();
     static std::once_flag once;
@@ -349,10 +405,10 @@ static ggml_backend_t sd_get_default_backend() {
 
     if (!backend) {
         LOG_WARN("loading CPU backend");
-        backend = ggml_backend_cpu_init();
+        backend = sd_backend_cpu_init();
     }
 
-    if (ggml_backend_is_cpu(backend)) {
+    if (sd_backend_is_cpu(backend)) {
         LOG_DEBUG("Using CPU backend");
     }
 
@@ -452,11 +508,11 @@ ggml_backend_t SDBackendManager::params_backend(SDBackendModule module) {
 }
 
 bool SDBackendManager::runtime_backend_is_cpu(SDBackendModule module) {
-    return ggml_backend_is_cpu(runtime_backend(module));
+    return sd_backend_is_cpu(runtime_backend(module));
 }
 
 bool SDBackendManager::params_backend_is_cpu(SDBackendModule module) {
-    return ggml_backend_is_cpu(params_backend(module));
+    return sd_backend_is_cpu(params_backend(module));
 }
 
 bool SDBackendManager::runtime_backend_supports_host_buffer(SDBackendModule module) {
@@ -464,7 +520,7 @@ bool SDBackendManager::runtime_backend_supports_host_buffer(SDBackendModule modu
     if (backend == nullptr) {
         return false;
     }
-    if (ggml_backend_is_cpu(backend)) {
+    if (sd_backend_is_cpu(backend)) {
         return true;
     }
     ggml_backend_dev_t dev = ggml_backend_get_device(backend);

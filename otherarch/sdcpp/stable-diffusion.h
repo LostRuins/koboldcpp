@@ -168,6 +168,14 @@ typedef struct {
     const char* path;
 } sd_embedding_t;
 
+enum sd_vae_format_t {
+    SD_VAE_FORMAT_AUTO = -1,
+    SD_VAE_FORMAT_FLUX,
+    SD_VAE_FORMAT_SD3,
+    SD_VAE_FORMAT_FLUX2,
+    SD_VAE_FORMAT_COUNT,
+};
+
 typedef struct {
     const char* model_path;
     const char* clip_l_path;
@@ -212,6 +220,7 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
+    enum sd_vae_format_t vae_format;
     float max_vram;  // GiB budget for graph-cut segmented param offload (0 = disabled, -1 = auto free VRAM minus 1 GiB)
     const char* backend;
     const char* params_backend;

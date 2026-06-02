@@ -94,6 +94,7 @@ struct SDContextParams {
     std::string high_noise_diffusion_model_path;
     std::string embeddings_connectors_path;
     std::string vae_path;
+    std::string vae_format = "auto";
     std::string audio_vae_path;
     std::string taesd_path;
     std::string esrgan_path;
