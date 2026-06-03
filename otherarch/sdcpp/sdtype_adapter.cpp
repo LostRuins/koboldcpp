@@ -225,9 +225,19 @@ std::string load_qwen2_merges()
 std::string load_gemma_merges()
 {
     static std::string cache;
-    return load_embd_file(cache, "embd_res/gemma2_merges_utf8_c_str.embd");
+    return load_embd_file(cache, "embd_res/gemma_merges_utf8_c_str.embd");
 }
 std::string load_gemma_vocab_json()
+{
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/gemma_vocab_json.embd");
+}
+std::string load_gemma2_merges()
+{
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/gemma2_merges_utf8_c_str.embd");
+}
+std::string load_gemma2_vocab_json()
 {
     static std::string cache;
     return load_embd_file(cache, "embd_res/gemma2_vocab_json.embd");
