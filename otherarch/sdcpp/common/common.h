@@ -113,6 +113,7 @@ struct SDContextParams {
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
     float max_vram              = 0.f;
+    bool stream_layers          = false;
     std::string backend;
     std::string params_backend;
     bool enable_mmap           = false;

@@ -753,4 +753,54 @@ namespace sd::ggml_graph_cut {
         return resolved_plan;
     }
 
+    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes) {
+        // Cached plans may be reused with a smaller live budget.
+        for (auto& seg : plan.segments) {
+            seg.residency = SegmentResidency::STREAMED;
+        }
+        if (max_graph_vram_bytes == 0 || plan.segments.size() < 2) {
+            return;
+        }
+
+        bool any_param_bearing = false;
+        for (const auto& seg : plan.segments) {
+            if (seg.input_param_bytes > 0) {
+                any_param_bearing = true;
+                break;
+            }
+        }
+        if (!any_param_bearing) {
+            return;
+        }
+
+        // Leave room for the largest active streamed segment.
+        size_t worst_streamed_footprint = 0;
+        for (const auto& seg : plan.segments) {
+            const size_t seg_footprint = seg.input_param_bytes +
+                                         seg.compute_buffer_size +
+                                         seg.output_bytes +
+                                         seg.input_previous_cut_bytes +
+                                         seg.input_external_bytes;
+            if (seg_footprint > worst_streamed_footprint) {
+                worst_streamed_footprint = seg_footprint;
+            }
+        }
+        constexpr size_t safety = 512ull * 1024 * 1024;
+        const size_t reserved   = safety + worst_streamed_footprint;
+
+        if (max_graph_vram_bytes <= reserved) {
+            return;
+        }
+        const size_t available = max_graph_vram_bytes - reserved;
+
+        size_t cumulative = 0;
+        for (auto& seg : plan.segments) {
+            if (cumulative + seg.input_param_bytes > available) {
+                break;
+            }
+            seg.residency = SegmentResidency::RESIDENT;
+            cumulative += seg.input_param_bytes;
+        }
+    }
+
 }  // namespace sd::ggml_graph_cut

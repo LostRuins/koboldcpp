@@ -25,6 +25,13 @@ void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
     }
 }
 
+void UpscalerGGML::set_stream_layers_enabled(bool enabled) {
+    stream_layers_enabled = enabled;
+    if (esrgan_upscaler) {
+        esrgan_upscaler->set_stream_layers_enabled(enabled);
+    }
+}
+
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   bool offload_params_to_cpu,
                                   int n_threads) {
@@ -76,6 +83,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                                tile_size,
                                                model_loader.get_tensor_storage_map());
     esrgan_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
+    esrgan_upscaler->set_stream_layers_enabled(stream_layers_enabled);
     if (direct) {
         esrgan_upscaler->set_conv2d_direct_enabled(true);
     }

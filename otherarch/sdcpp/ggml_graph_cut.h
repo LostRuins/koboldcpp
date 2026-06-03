@@ -2,6 +2,7 @@
 #define __SD_GGML_GRAPH_CUT_H__
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -10,6 +11,12 @@
 #include "ggml.h"
 
 namespace sd::ggml_graph_cut {
+
+    // Streaming residency for a segment's params.
+    enum class SegmentResidency : uint8_t {
+        STREAMED = 0,
+        RESIDENT = 1,
+    };
 
     struct Segment {
         enum InputType {
@@ -34,6 +41,7 @@ namespace sd::ggml_graph_cut {
         std::vector<int> internal_node_indices;
         std::vector<int> output_node_indices;
         std::vector<InputRef> input_refs;
+        SegmentResidency residency = SegmentResidency::STREAMED;
     };
 
     struct Plan {
@@ -101,6 +109,9 @@ namespace sd::ggml_graph_cut {
                       size_t max_graph_vram_bytes,
                       const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                       const char* log_desc);
+
+    // Mark leading segments resident when they fit after streamed-segment headroom.
+    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes);
 }  // namespace sd::ggml_graph_cut
 
 #endif

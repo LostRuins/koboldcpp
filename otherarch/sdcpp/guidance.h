@@ -29,11 +29,11 @@ namespace sd::guidance {
     bool parse_skip_layer_guidance_uncond_arg(const char* extra_sample_args);
 
     struct GuidanceInput {
-        int step                               = 0;
-        size_t schedule_size                   = 0;
-        const sd::Tensor<float>* pred_cond     = nullptr;
-        const sd::Tensor<float>* pred_uncond   = nullptr;
-        const sd::Tensor<float>* pred_img_cond = nullptr;
+        int step                                 = 0;
+        size_t schedule_size                     = 0;
+        const sd::Tensor<float>* pred_cond       = nullptr;
+        const sd::Tensor<float>* pred_uncond     = nullptr;
+        const sd::Tensor<float>* pred_img_uncond = nullptr;
 
         std::function<sd::Tensor<float>()> predict_skip_layer;
     };
