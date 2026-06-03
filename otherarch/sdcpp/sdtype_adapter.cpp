@@ -203,105 +203,64 @@ static std::string read_str_from_disk(std::string filepath)
     return output;
 }
 
+static std::string load_embd_file(std::string& cache, const char* filename)
+{
+    if (cache.empty()) {
+        std::string filepath = executable_path + filename;
+        cache = read_str_from_disk(filepath);
+    }
+    return cache;
+}
+
 std::string load_clip_merges()
 {
-    static std::string mergesstr;  // cached string
-    if (!mergesstr.empty()) {
-        return mergesstr;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/merges_utf8_c_str.embd";
-    mergesstr = read_str_from_disk(filepath);
-    return mergesstr;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/merges_utf8_c_str.embd");
 }
 std::string load_qwen2_merges()
 {
-    static std::string qwenmergesstr;  // cached string
-    if (!qwenmergesstr.empty()) {
-        return qwenmergesstr;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/qwen2_merges_utf8_c_str.embd";
-    qwenmergesstr = read_str_from_disk(filepath);
-    return qwenmergesstr;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/qwen2_merges_utf8_c_str.embd");
 }
 std::string load_gemma_merges()
 {
-    static std::string gemmamergesstr;  // cached string
-    if (!gemmamergesstr.empty()) {
-        return gemmamergesstr;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/gemma2_merges_utf8_c_str.embd";
-    gemmamergesstr = read_str_from_disk(filepath);
-    return gemmamergesstr;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/gemma2_merges_utf8_c_str.embd");
 }
 std::string load_gemma_vocab_json()
 {
-    static std::string gemmavocabstr;  // cached string
-    if (!gemmavocabstr.empty()) {
-        return gemmavocabstr;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/gemma2_vocab_json.embd";
-    gemmavocabstr = read_str_from_disk(filepath);
-    return gemmavocabstr;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/gemma2_vocab_json.embd");
 }
 std::string load_mistral_merges()
 {
-    static std::string mistralmergesstr;  // cached string
-    if (!mistralmergesstr.empty()) {
-        return mistralmergesstr;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/mistral2_merges_utf8_c_str.embd";
-    mistralmergesstr = read_str_from_disk(filepath);
-    return mistralmergesstr;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/mistral2_merges_utf8_c_str.embd");
 }
 std::string load_mistral_vocab_json()
 {
-    static std::string mistralvocabstr;  // cached string
-    if (!mistralvocabstr.empty()) {
-        return mistralvocabstr;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/mistral2_vocab_json.embd";
-    mistralvocabstr = read_str_from_disk(filepath);
-    return mistralvocabstr;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/mistral2_vocab_json.embd");
 }
 std::string load_t5_tokenizer_json()
 {
-    static std::string t5str = "";
-    if (!t5str.empty()) {
-        return t5str;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/t5_tokenizer_json.embd";
-    t5str = read_str_from_disk(filepath);
-    return t5str;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/t5_tokenizer_json.embd");
 }
 std::string load_umt5_tokenizer_json()
 {
-    static std::string umt5str = "";
-    if (!umt5str.empty()) {
-        return umt5str;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/umt5_tokenizer_json.embd";
-    umt5str = read_str_from_disk(filepath);
-    return umt5str;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/umt5_tokenizer_json.embd");
 }
 std::string load_gpt_oss_merges()
 {
-    static std::string mergesstr;  // cached string
-    if (!mergesstr.empty()) {
-        return mergesstr;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/gpt_oss_merges_utf8_c_str.embd";
-    mergesstr = read_str_from_disk(filepath);
-    return mergesstr;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/gpt_oss_merges_utf8_c_str.embd");
 }
 std::string load_gpt_oss_vocab_json()
 {
-    static std::string vocabstr;  // cached string
-    if (!vocabstr.empty()) {
-        return vocabstr;  // already loaded
-    }
-    std::string filepath = executable_path + "embd_res/gpt_oss_vocab_json.embd";
-    vocabstr = read_str_from_disk(filepath);
-    return vocabstr;
+    static std::string cache;
+    return load_embd_file(cache, "embd_res/gpt_oss_vocab_json.embd");
 }
 
 static std::string get_device_override(int value, const char * module = nullptr)
