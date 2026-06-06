@@ -1,13 +1,138 @@
 #ifndef __MMDIT_HPP__
 #define __MMDIT_HPP__
 
+#include <algorithm>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "diffusion_model.hpp"
 #include "ggml_extend.hpp"
 #include "model.h"
 
 #define MMDIT_GRAPH_SIZE 10240
+
+struct MMDiTConfig {
+    int64_t input_size               = -1;
+    int patch_size                   = 2;
+    int64_t in_channels              = 16;
+    int64_t d_self                   = -1;  // >=0 for MMdiT-X
+    int64_t depth                    = 24;
+    float mlp_ratio                  = 4.0f;
+    int64_t adm_in_channels          = 2048;
+    int64_t out_channels             = 16;
+    int64_t pos_embed_max_size       = 192;
+    int64_t num_patches              = 36864;  // 192 * 192
+    int64_t context_size             = 4096;
+    int64_t context_embedder_out_dim = 1536;
+    int64_t hidden_size              = 1536;
+    std::string qk_norm;
+
+    static MMDiTConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+        MMDiTConfig config;
+        bool has_weight_config = false;
+        bool has_pos_embed     = false;
+        bool has_hidden_size   = false;
+        bool has_context_embed = false;
+
+        for (const auto& [name, tensor_storage] : tensor_storage_map) {
+            if (!starts_with(name, prefix)) {
+                continue;
+            }
+
+            if (name.find("x_embedder.proj.weight") != std::string::npos && tensor_storage.n_dims == 4) {
+                has_weight_config  = true;
+                has_hidden_size    = true;
+                config.patch_size  = static_cast<int>(tensor_storage.ne[0]);
+                config.in_channels = tensor_storage.ne[2];
+                config.hidden_size = tensor_storage.ne[3];
+            } else if (name.find("t_embedder.mlp.0.weight") != std::string::npos && tensor_storage.n_dims == 2) {
+                has_weight_config  = true;
+                has_hidden_size    = true;
+                config.hidden_size = tensor_storage.ne[1];
+            } else if (name.find("y_embedder.mlp.0.weight") != std::string::npos && tensor_storage.n_dims == 2) {
+                has_weight_config      = true;
+                has_hidden_size        = true;
+                config.adm_in_channels = tensor_storage.ne[0];
+                config.hidden_size     = tensor_storage.ne[1];
+            } else if (name.find("context_embedder.weight") != std::string::npos && tensor_storage.n_dims == 2) {
+                has_weight_config               = true;
+                has_context_embed               = true;
+                config.context_size             = tensor_storage.ne[0];
+                config.context_embedder_out_dim = tensor_storage.ne[1];
+            } else if (name.find("final_layer.linear.weight") != std::string::npos && tensor_storage.n_dims == 2) {
+                has_weight_config  = true;
+                has_hidden_size    = true;
+                config.hidden_size = tensor_storage.ne[0];
+                int64_t patch_area = static_cast<int64_t>(config.patch_size) * config.patch_size;
+                if (patch_area > 0) {
+                    config.out_channels = tensor_storage.ne[1] / patch_area;
+                }
+            } else if (name.find("pos_embed") != std::string::npos && tensor_storage.n_dims == 3) {
+                has_weight_config  = true;
+                has_pos_embed      = true;
+                has_hidden_size    = true;
+                config.hidden_size = tensor_storage.ne[0];
+                config.num_patches = tensor_storage.ne[1];
+                for (int64_t size = 1; size * size <= config.num_patches; size++) {
+                    if (size * size == config.num_patches) {
+                        config.pos_embed_max_size = size;
+                        break;
+                    }
+                }
+            }
+
+            size_t jb = name.find("joint_blocks.");
+            if (jb == std::string::npos) {
+                continue;
+            }
+
+            has_weight_config      = true;
+            std::string block_name = name.substr(jb);
+            int64_t block_depth    = atoi(block_name.substr(13, block_name.find(".", 13)).c_str());
+            if (block_depth + 1 > config.depth) {
+                config.depth = block_depth + 1;
+            }
+            if (block_name.find("attn.ln") != std::string::npos) {
+                if (block_name.find(".bias") != std::string::npos) {
+                    config.qk_norm = "ln";
+                } else {
+                    config.qk_norm = "rms";
+                }
+            }
+            if (block_name.find("attn2") != std::string::npos) {
+                if (block_depth > config.d_self) {
+                    config.d_self = block_depth;
+                }
+            }
+        }
+
+        if (!has_pos_embed && config.d_self >= 0) {
+            config.pos_embed_max_size *= 2;
+            config.num_patches *= 4;
+        }
+        if (!has_hidden_size || config.hidden_size <= 0) {
+            config.hidden_size = 64 * config.depth;
+        }
+        if (!has_context_embed || config.context_embedder_out_dim <= 0) {
+            config.context_embedder_out_dim = config.hidden_size;
+        }
+
+        if (has_weight_config) {
+            LOG_DEBUG("mmdit: num_layers = %" PRId64 ", num_mmdit_x_layers = %" PRId64 ", hidden_size = %" PRId64 ", patch_size = %d, in_channels = %" PRId64 ", out_channels = %" PRId64 ", context_size = %" PRId64 ", adm_in_channels = %" PRId64 ", qk_norm = %s",
+                      config.depth,
+                      config.d_self + 1,
+                      config.hidden_size,
+                      config.patch_size,
+                      config.in_channels,
+                      config.out_channels,
+                      config.context_size,
+                      config.adm_in_channels,
+                      config.qk_norm.empty() ? "none" : config.qk_norm.c_str());
+        }
+        return config;
+    }
+};
 
 struct Mlp : public GGMLBlock {
 public:
@@ -612,28 +737,16 @@ public:
 struct MMDiT : public GGMLBlock {
     // Diffusion model with a Transformer backbone.
 protected:
-    int64_t input_size               = -1;
-    int patch_size                   = 2;
-    int64_t in_channels              = 16;
-    int64_t d_self                   = -1;  // >=0 for MMdiT-X
-    int64_t depth                    = 24;
-    float mlp_ratio                  = 4.0f;
-    int64_t adm_in_channels          = 2048;
-    int64_t out_channels             = 16;
-    int64_t pos_embed_max_size       = 192;
-    int64_t num_patchs               = 36864;  // 192 * 192
-    int64_t context_size             = 4096;
-    int64_t context_embedder_out_dim = 1536;
-    int64_t hidden_size;
-    std::string qk_norm;
-
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F32;
-        params["pos_embed"]  = ggml_new_tensor_3d(ctx, wtype, hidden_size, num_patchs, 1);
+        params["pos_embed"]  = ggml_new_tensor_3d(ctx, wtype, config.hidden_size, config.num_patches, 1);
     }
 
 public:
-    MMDiT(const String2TensorStorage& tensor_storage_map = {}) {
+    MMDiTConfig config;
+
+    explicit MMDiT(MMDiTConfig config = {})
+        : config(config) {
         // input_size is always None
         // learn_sigma is always False
         // register_length is alwalys 0
@@ -646,64 +759,30 @@ public:
         // pos_embed_offset is not used
         // context_embedder_config is always {'target': 'torch.nn.Linear', 'params': {'in_features': 4096, 'out_features': 1536}}
 
-        for (auto pair : tensor_storage_map) {
-            std::string tensor_name = pair.first;
-            if (tensor_name.find("model.diffusion_model.") == std::string::npos)
-                continue;
-            size_t jb = tensor_name.find("joint_blocks.");
-            if (jb != std::string::npos) {
-                tensor_name     = tensor_name.substr(jb);  // remove prefix
-                int block_depth = atoi(tensor_name.substr(13, tensor_name.find(".", 13)).c_str());
-                if (block_depth + 1 > depth) {
-                    depth = block_depth + 1;
-                }
-                if (tensor_name.find("attn.ln") != std::string::npos) {
-                    if (tensor_name.find(".bias") != std::string::npos) {
-                        qk_norm = "ln";
-                    } else {
-                        qk_norm = "rms";
-                    }
-                }
-                if (tensor_name.find("attn2") != std::string::npos) {
-                    if (block_depth > d_self) {
-                        d_self = block_depth;
-                    }
-                }
-            }
+        blocks["x_embedder"] = std::shared_ptr<GGMLBlock>(new PatchEmbed(config.input_size,
+                                                                         config.patch_size,
+                                                                         config.in_channels,
+                                                                         config.hidden_size,
+                                                                         true));
+        blocks["t_embedder"] = std::shared_ptr<GGMLBlock>(new TimestepEmbedder(config.hidden_size));
+
+        if (config.adm_in_channels != -1) {
+            blocks["y_embedder"] = std::shared_ptr<GGMLBlock>(new VectorEmbedder(config.adm_in_channels, config.hidden_size));
         }
 
-        if (d_self >= 0) {
-            pos_embed_max_size *= 2;
-            num_patchs *= 4;
-        }
+        blocks["context_embedder"] = std::shared_ptr<GGMLBlock>(new Linear(config.context_size, config.context_embedder_out_dim, true, true));
 
-        LOG_INFO("MMDiT layers: %d (including %d MMDiT-x layers)", depth, d_self + 1);
-
-        int64_t default_out_channels = in_channels;
-        hidden_size                  = 64 * depth;
-        context_embedder_out_dim     = 64 * depth;
-        int64_t num_heads            = depth;
-
-        blocks["x_embedder"] = std::shared_ptr<GGMLBlock>(new PatchEmbed(input_size, patch_size, in_channels, hidden_size, true));
-        blocks["t_embedder"] = std::shared_ptr<GGMLBlock>(new TimestepEmbedder(hidden_size));
-
-        if (adm_in_channels != -1) {
-            blocks["y_embedder"] = std::shared_ptr<GGMLBlock>(new VectorEmbedder(adm_in_channels, hidden_size));
-        }
-
-        blocks["context_embedder"] = std::shared_ptr<GGMLBlock>(new Linear(4096, context_embedder_out_dim, true, true));
-
-        for (int i = 0; i < depth; i++) {
-            blocks["joint_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new JointBlock(hidden_size,
-                                                                                                    num_heads,
-                                                                                                    mlp_ratio,
-                                                                                                    qk_norm,
+        for (int i = 0; i < config.depth; i++) {
+            blocks["joint_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new JointBlock(config.hidden_size,
+                                                                                                    config.depth,
+                                                                                                    config.mlp_ratio,
+                                                                                                    config.qk_norm,
                                                                                                     true,
-                                                                                                    i == depth - 1,
-                                                                                                    i <= d_self));
+                                                                                                    i == config.depth - 1,
+                                                                                                    i <= config.d_self));
         }
 
-        blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new FinalLayer(hidden_size, patch_size, out_channels));
+        blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new FinalLayer(config.hidden_size, config.patch_size, config.out_channels));
     }
 
     ggml_tensor*
@@ -712,22 +791,22 @@ public:
                       int64_t w) {
         auto pos_embed = params["pos_embed"];
 
-        h = (h + 1) / patch_size;
-        w = (w + 1) / patch_size;
+        h = (h + 1) / config.patch_size;
+        w = (w + 1) / config.patch_size;
 
-        GGML_ASSERT(h <= pos_embed_max_size && h > 0);
-        GGML_ASSERT(w <= pos_embed_max_size && w > 0);
+        GGML_ASSERT(h <= config.pos_embed_max_size && h > 0);
+        GGML_ASSERT(w <= config.pos_embed_max_size && w > 0);
 
-        int64_t top  = (pos_embed_max_size - h) / 2;
-        int64_t left = (pos_embed_max_size - w) / 2;
+        int64_t top  = (config.pos_embed_max_size - h) / 2;
+        int64_t left = (config.pos_embed_max_size - w) / 2;
 
-        auto spatial_pos_embed = ggml_reshape_3d(ctx, pos_embed, hidden_size, pos_embed_max_size, pos_embed_max_size);
+        auto spatial_pos_embed = ggml_reshape_3d(ctx, pos_embed, config.hidden_size, config.pos_embed_max_size, config.pos_embed_max_size);
 
         // spatial_pos_embed = spatial_pos_embed[:, top : top + h, left : left + w, :]
         spatial_pos_embed = ggml_view_3d(ctx,
                                          spatial_pos_embed,
-                                         hidden_size,
-                                         pos_embed_max_size,
+                                         config.hidden_size,
+                                         config.pos_embed_max_size,
                                          h,
                                          spatial_pos_embed->nb[1],
                                          spatial_pos_embed->nb[2],
@@ -735,14 +814,14 @@ public:
         spatial_pos_embed = ggml_cont(ctx, ggml_permute(ctx, spatial_pos_embed, 0, 2, 1, 3));  // [pos_embed_max_size, h, hidden_size]
         spatial_pos_embed = ggml_view_3d(ctx,
                                          spatial_pos_embed,
-                                         hidden_size,
+                                         config.hidden_size,
                                          h,
                                          w,
                                          spatial_pos_embed->nb[1],
                                          spatial_pos_embed->nb[2],
-                                         spatial_pos_embed->nb[2] * left);                     // [w, h, hidden_size]
-        spatial_pos_embed = ggml_cont(ctx, ggml_permute(ctx, spatial_pos_embed, 0, 2, 1, 3));  // [h, w, hidden_size]
-        spatial_pos_embed = ggml_reshape_3d(ctx, spatial_pos_embed, hidden_size, h * w, 1);    // [1, h*w, hidden_size]
+                                         spatial_pos_embed->nb[2] * left);                          // [w, h, hidden_size]
+        spatial_pos_embed = ggml_cont(ctx, ggml_permute(ctx, spatial_pos_embed, 0, 2, 1, 3));       // [h, w, hidden_size]
+        spatial_pos_embed = ggml_reshape_3d(ctx, spatial_pos_embed, config.hidden_size, h * w, 1);  // [1, h*w, hidden_size]
         return spatial_pos_embed;
     }
 
@@ -757,7 +836,7 @@ public:
         // return: [N, N*W, patch_size * patch_size * out_channels]
         auto final_layer = std::dynamic_pointer_cast<FinalLayer>(blocks["final_layer"]);
 
-        for (int i = 0; i < depth; i++) {
+        for (int i = 0; i < config.depth; i++) {
             // skip iteration if i is in skip_layers
             if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), i) != skip_layers.end()) {
                 continue;
@@ -800,7 +879,7 @@ public:
         x                = ggml_add(ctx->ggml_ctx, patch_embed, pos_embed);  // [N, H*W, hidden_size]
 
         auto c = t_embedder->forward(ctx, t);  // [N, hidden_size]
-        if (y != nullptr && adm_in_channels != -1) {
+        if (y != nullptr && config.adm_in_channels != -1) {
             auto y_embedder = std::dynamic_pointer_cast<VectorEmbedder>(blocks["y_embedder"]);
 
             y = y_embedder->forward(ctx, y);  // [N, hidden_size]
@@ -820,19 +899,22 @@ public:
 
         x = forward_core_with_concat(ctx, x, c, context, skip_layers);  // (N, H*W, patch_size ** 2 * out_channels)
 
-        x = DiT::unpatchify_and_crop(ctx->ggml_ctx, x, H, W, patch_size, patch_size, /*patch_last*/ false);  // [N, C, H, W]
+        x = DiT::unpatchify_and_crop(ctx->ggml_ctx, x, H, W, config.patch_size, config.patch_size, /*patch_last*/ false);  // [N, C, H, W]
 
         return x;
     }
 };
 struct MMDiTRunner : public DiffusionModelRunner {
+    MMDiTConfig config;
     MMDiT mmdit;
 
     MMDiTRunner(ggml_backend_t backend,
                 ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map = {},
                 const std::string prefix                       = "")
-        : DiffusionModelRunner(backend, params_backend, prefix), mmdit(tensor_storage_map) {
+        : DiffusionModelRunner(backend, params_backend, prefix),
+          config(MMDiTConfig::detect_from_weights(tensor_storage_map, prefix)),
+          mmdit(config) {
         mmdit.init(params_ctx, tensor_storage_map, prefix);
     }
 

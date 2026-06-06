@@ -1971,7 +1971,7 @@ struct LLMEmbedder : public Conditioner {
 
                 for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
                     const auto& image = (*conditioner_params.ref_images)[i];
-                    double factor     = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
+                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
                     int h_bar         = static_cast<int>(std::round(height / factor) * factor);
@@ -2042,7 +2042,7 @@ struct LLMEmbedder : public Conditioner {
 
                 for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
                     const auto& image = (*conditioner_params.ref_images)[i];
-                    double factor     = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
+                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
                     int h_bar         = static_cast<int>(std::round(height / factor) * factor);

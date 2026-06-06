@@ -10,6 +10,48 @@
 namespace Qwen {
     constexpr int QWEN_IMAGE_GRAPH_SIZE = 20480;
 
+    struct QwenImageConfig {
+        int patch_size              = 2;
+        int64_t in_channels         = 64;
+        int64_t out_channels        = 16;
+        int num_layers              = 60;
+        int64_t attention_head_dim  = 128;
+        int64_t num_attention_heads = 24;
+        int64_t joint_attention_dim = 3584;
+        int theta                   = 10000;
+        std::vector<int> axes_dim   = {16, 56, 56};
+        int axes_dim_sum            = 128;
+        bool zero_cond_t            = false;
+
+        static QwenImageConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            QwenImageConfig config;
+            config.num_layers = 0;
+            for (const auto& [name, _] : tensor_storage_map) {
+                if (!starts_with(name, prefix)) {
+                    continue;
+                }
+                if (name.find("__index_timestep_zero__") != std::string::npos) {
+                    config.zero_cond_t = true;
+                }
+                size_t pos = name.find("transformer_blocks.");
+                if (pos == std::string::npos) {
+                    continue;
+                }
+                auto items = split_string(name.substr(pos), '.');
+                if (items.size() > 1) {
+                    int block_index = atoi(items[1].c_str());
+                    if (block_index + 1 > config.num_layers) {
+                        config.num_layers = block_index + 1;
+                    }
+                }
+            }
+            LOG_DEBUG("qwen_image: num_layers = %d, zero_cond_t = %s",
+                      config.num_layers,
+                      config.zero_cond_t ? "true" : "false");
+            return config;
+        }
+    };
+
     struct TimestepEmbedding : public GGMLBlock {
     public:
         TimestepEmbedding(int64_t in_channels,
@@ -350,46 +392,32 @@ namespace Qwen {
         }
     };
 
-    struct QwenImageParams {
-        int patch_size              = 2;
-        int64_t in_channels         = 64;
-        int64_t out_channels        = 16;
-        int num_layers              = 60;
-        int64_t attention_head_dim  = 128;
-        int64_t num_attention_heads = 24;
-        int64_t joint_attention_dim = 3584;
-        int theta                   = 10000;
-        std::vector<int> axes_dim   = {16, 56, 56};
-        int axes_dim_sum            = 128;
-        bool zero_cond_t            = false;
-    };
-
     class QwenImageModel : public GGMLBlock {
     protected:
-        QwenImageParams params;
+        QwenImageConfig config;
 
     public:
         QwenImageModel() {}
-        QwenImageModel(QwenImageParams params)
-            : params(params) {
-            int64_t inner_dim         = params.num_attention_heads * params.attention_head_dim;
+        QwenImageModel(QwenImageConfig config)
+            : config(config) {
+            int64_t inner_dim         = config.num_attention_heads * config.attention_head_dim;
             blocks["time_text_embed"] = std::shared_ptr<GGMLBlock>(new QwenTimestepProjEmbeddings(inner_dim));
-            blocks["txt_norm"]        = std::shared_ptr<GGMLBlock>(new RMSNorm(params.joint_attention_dim, 1e-6f));
-            blocks["img_in"]          = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, inner_dim));
-            blocks["txt_in"]          = std::shared_ptr<GGMLBlock>(new Linear(params.joint_attention_dim, inner_dim));
+            blocks["txt_norm"]        = std::shared_ptr<GGMLBlock>(new RMSNorm(config.joint_attention_dim, 1e-6f));
+            blocks["img_in"]          = std::shared_ptr<GGMLBlock>(new Linear(config.in_channels, inner_dim));
+            blocks["txt_in"]          = std::shared_ptr<GGMLBlock>(new Linear(config.joint_attention_dim, inner_dim));
 
             // blocks
-            for (int i = 0; i < params.num_layers; i++) {
+            for (int i = 0; i < config.num_layers; i++) {
                 auto block                                        = std::shared_ptr<GGMLBlock>(new QwenImageTransformerBlock(inner_dim,
-                                                                                                                             params.num_attention_heads,
-                                                                                                                             params.attention_head_dim,
+                                                                                                                             config.num_attention_heads,
+                                                                                                                             config.attention_head_dim,
                                                                                                                              1e-6f,
-                                                                                                                             params.zero_cond_t));
+                                                                                                                             config.zero_cond_t));
                 blocks["transformer_blocks." + std::to_string(i)] = block;
             }
 
             blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new AdaLayerNormContinuous(inner_dim, inner_dim, false, 1e-6f));
-            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, params.patch_size * params.patch_size * params.out_channels));
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, config.patch_size * config.patch_size * config.out_channels));
         }
 
         ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
@@ -406,7 +434,7 @@ namespace Qwen {
             auto proj_out        = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
 
             auto t_emb = time_text_embed->forward(ctx, timestep);
-            if (params.zero_cond_t) {
+            if (config.zero_cond_t) {
                 auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros_like(ctx->ggml_ctx, timestep));
                 t_emb        = ggml_concat(ctx->ggml_ctx, t_emb, t_emb_0, 1);
             }
@@ -417,7 +445,7 @@ namespace Qwen {
             sd::ggml_graph_cut::mark_graph_cut(txt, "qwen_image.prelude", "txt");
             // sd::ggml_graph_cut::mark_graph_cut(t_emb, "qwen_image.prelude", "t_emb");
 
-            for (int i = 0; i < params.num_layers; i++) {
+            for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<QwenImageTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
 
                 auto result = block->forward(ctx, img, txt, t_emb, pe, modulate_index);
@@ -427,7 +455,7 @@ namespace Qwen {
                 sd::ggml_graph_cut::mark_graph_cut(txt, "qwen_image.transformer_blocks." + std::to_string(i), "txt");
             }
 
-            if (params.zero_cond_t) {
+            if (config.zero_cond_t) {
                 t_emb = ggml_ext_chunk(ctx->ggml_ctx, t_emb, 2, 1)[0];
             }
 
@@ -456,12 +484,12 @@ namespace Qwen {
             int64_t C = x->ne[2];
             int64_t N = x->ne[3];
 
-            auto img           = DiT::pad_and_patchify(ctx, x, params.patch_size, params.patch_size);
+            auto img           = DiT::pad_and_patchify(ctx, x, config.patch_size, config.patch_size);
             int64_t img_tokens = img->ne[1];
 
             if (ref_latents.size() > 0) {
                 for (ggml_tensor* ref : ref_latents) {
-                    ref = DiT::pad_and_patchify(ctx, ref, params.patch_size, params.patch_size);
+                    ref = DiT::pad_and_patchify(ctx, ref, config.patch_size, config.patch_size);
                     img = ggml_concat(ctx->ggml_ctx, img, ref, 1);
                 }
             }
@@ -474,7 +502,7 @@ namespace Qwen {
                 out = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, out, 0, 2, 1, 3));  // [N, h*w, C * patch_size * patch_size]
             }
 
-            out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, params.patch_size, params.patch_size);  // [N, C, H, W]
+            out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, config.patch_size, config.patch_size);  // [N, C, H, W]
 
             return out;
         }
@@ -482,7 +510,7 @@ namespace Qwen {
 
     struct QwenImageRunner : public DiffusionModelRunner {
     public:
-        QwenImageParams qwen_image_params;
+        QwenImageConfig config;
         QwenImageModel qwen_image;
         std::vector<float> pe_vec;
         std::vector<float> modulate_index_vec;
@@ -494,34 +522,10 @@ namespace Qwen {
                         const std::string prefix                       = "",
                         SDVersion version                              = VERSION_QWEN_IMAGE,
                         bool zero_cond_t                               = false)
-            : DiffusionModelRunner(backend, params_backend, prefix) {
-            qwen_image_params.num_layers  = 0;
-            qwen_image_params.zero_cond_t = zero_cond_t;
-            for (auto pair : tensor_storage_map) {
-                std::string tensor_name = pair.first;
-                if (tensor_name.find(prefix) == std::string::npos)
-                    continue;
-                if (tensor_name.find("__index_timestep_zero__") != std::string::npos) {
-                    qwen_image_params.zero_cond_t = true;
-                }
-                size_t pos = tensor_name.find("transformer_blocks.");
-                if (pos != std::string::npos) {
-                    tensor_name = tensor_name.substr(pos);  // remove prefix
-                    auto items  = split_string(tensor_name, '.');
-                    if (items.size() > 1) {
-                        int block_index = atoi(items[1].c_str());
-                        if (block_index + 1 > qwen_image_params.num_layers) {
-                            qwen_image_params.num_layers = block_index + 1;
-                        }
-                    }
-                    continue;
-                }
-            }
-            LOG_INFO("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
-            if (qwen_image_params.zero_cond_t) {
-                LOG_INFO("use zero_cond_t");
-            }
-            qwen_image = QwenImageModel(qwen_image_params);
+            : DiffusionModelRunner(backend, params_backend, prefix),
+              config(QwenImageConfig::detect_from_weights(tensor_storage_map, prefix)) {
+            config.zero_cond_t = config.zero_cond_t || zero_cond_t;
+            qwen_image         = QwenImageModel(config);
             qwen_image.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -552,36 +556,36 @@ namespace Qwen {
 
             pe_vec      = Rope::gen_qwen_image_pe(static_cast<int>(x->ne[1]),
                                                   static_cast<int>(x->ne[0]),
-                                                  qwen_image_params.patch_size,
+                                                  config.patch_size,
                                                   static_cast<int>(x->ne[3]),
                                                   static_cast<int>(context->ne[1]),
                                                   ref_latents,
                                                   increase_ref_index,
-                                                  qwen_image_params.theta,
+                                                  config.theta,
                                                   circular_y_enabled,
                                                   circular_x_enabled,
-                                                  qwen_image_params.axes_dim);
-            int pos_len = static_cast<int>(pe_vec.size() / qwen_image_params.axes_dim_sum / 2);
+                                                  config.axes_dim);
+            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, qwen_image_params.axes_dim_sum / 2, pos_len);
+            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe, true, "pe");
             // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
             ggml_tensor* modulate_index = nullptr;
-            if (qwen_image_params.zero_cond_t) {
+            if (config.zero_cond_t) {
                 modulate_index_vec.clear();
 
-                int64_t h_len          = ((x->ne[1] + (qwen_image_params.patch_size / 2)) / qwen_image_params.patch_size);
-                int64_t w_len          = ((x->ne[0] + (qwen_image_params.patch_size / 2)) / qwen_image_params.patch_size);
+                int64_t h_len          = ((x->ne[1] + (config.patch_size / 2)) / config.patch_size);
+                int64_t w_len          = ((x->ne[0] + (config.patch_size / 2)) / config.patch_size);
                 int64_t num_img_tokens = h_len * w_len;
 
                 modulate_index_vec.insert(modulate_index_vec.end(), num_img_tokens, 0.f);
                 int64_t num_ref_img_tokens = 0;
                 for (ggml_tensor* ref : ref_latents) {
-                    int64_t h_len = ((ref->ne[1] + (qwen_image_params.patch_size / 2)) / qwen_image_params.patch_size);
-                    int64_t w_len = ((ref->ne[0] + (qwen_image_params.patch_size / 2)) / qwen_image_params.patch_size);
+                    int64_t h_len = ((ref->ne[1] + (config.patch_size / 2)) / config.patch_size);
+                    int64_t w_len = ((ref->ne[0] + (config.patch_size / 2)) / config.patch_size);
 
                     num_ref_img_tokens += h_len * w_len;
                 }

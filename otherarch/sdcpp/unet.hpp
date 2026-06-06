@@ -1,6 +1,9 @@
 #ifndef __UNET_HPP__
 #define __UNET_HPP__
 
+#include <algorithm>
+#include <vector>
+
 #include "common_block.hpp"
 #include "diffusion_model.hpp"
 #include "model.h"
@@ -8,6 +11,125 @@
 /*==================================================== UnetModel =====================================================*/
 
 #define UNET_GRAPH_SIZE 102400
+
+struct UNetConfig {
+    SDVersion version = VERSION_SD1;
+    // network hparams
+    int in_channels                        = 4;
+    int out_channels                       = 4;
+    int num_res_blocks                     = 2;
+    std::vector<int> attention_resolutions = {4, 2, 1};
+    std::vector<int> channel_mult          = {1, 2, 4, 4};
+    std::vector<int> transformer_depth     = {1, 1, 1, 1};
+    int time_embed_dim                     = 1280;  // model_channels*4
+    int num_heads                          = 8;
+    int num_head_channels                  = -1;   // channels // num_heads
+    int context_dim                        = 768;  // 1024 for VERSION_SD2, 2048 for VERSION_SDXL
+    bool use_linear_projection             = false;
+    bool tiny_unet                         = false;
+    int model_channels                     = 320;
+    int adm_in_channels                    = 2816;  // only for VERSION_SDXL/SVD
+
+    static UNetConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
+                                          const std::string& prefix,
+                                          SDVersion version = VERSION_SD1) {
+        UNetConfig config;
+        config.version = version;
+
+        if (sd_version_is_sd2(version)) {
+            config.context_dim           = 1024;
+            config.num_head_channels     = 64;
+            config.num_heads             = -1;
+            config.use_linear_projection = true;
+        } else if (sd_version_is_sdxl(version)) {
+            config.context_dim           = 2048;
+            config.attention_resolutions = {4, 2};
+            config.channel_mult          = {1, 2, 4};
+            config.transformer_depth     = {1, 2, 10};
+            config.num_head_channels     = 64;
+            config.num_heads             = -1;
+            config.use_linear_projection = true;
+            if (version == VERSION_SDXL_VEGA) {
+                config.transformer_depth = {1, 1, 2};
+            }
+        } else if (version == VERSION_SVD) {
+            config.in_channels           = 8;
+            config.out_channels          = 4;
+            config.context_dim           = 1024;
+            config.adm_in_channels       = 768;
+            config.num_head_channels     = 64;
+            config.num_heads             = -1;
+            config.use_linear_projection = true;
+        }
+        if (sd_version_is_inpaint(version)) {
+            config.in_channels = 9;
+        } else if (sd_version_is_unet_edit(version)) {
+            config.in_channels = 8;
+        }
+        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET || version == VERSION_SDXS_512_DS || version == VERSION_SDXS_09) {
+            config.num_res_blocks = 1;
+            config.channel_mult   = {1, 2, 4};
+            config.tiny_unet      = true;
+            if (version == VERSION_SDXS_512_DS) {
+                config.attention_resolutions = {4, 2};  // here just like SDXL
+            }
+        }
+
+        auto find_weight = [&](const std::string& suffix) -> const TensorStorage* {
+            std::string name = prefix.empty() ? suffix : prefix + "." + suffix;
+            auto it          = tensor_storage_map.find(name);
+            if (it == tensor_storage_map.end()) {
+                return nullptr;
+            }
+            return &it->second;
+        };
+
+        if (const TensorStorage* input = find_weight("input_blocks.0.0.weight")) {
+            if (input->n_dims == 4) {
+                config.in_channels    = static_cast<int>(input->ne[2]);
+                config.model_channels = static_cast<int>(input->ne[3]);
+                config.time_embed_dim = config.model_channels * 4;
+            }
+        }
+        if (const TensorStorage* time_embed = find_weight("time_embed.0.weight")) {
+            if (time_embed->n_dims == 2) {
+                config.model_channels = static_cast<int>(time_embed->ne[0]);
+                config.time_embed_dim = static_cast<int>(time_embed->ne[1]);
+            }
+        }
+        if (const TensorStorage* label_emb = find_weight("label_emb.0.0.weight")) {
+            if (label_emb->n_dims == 2) {
+                config.adm_in_channels = static_cast<int>(label_emb->ne[0]);
+                config.time_embed_dim  = static_cast<int>(label_emb->ne[1]);
+            }
+        }
+        if (const TensorStorage* out = find_weight("out.2.weight")) {
+            if (out->n_dims == 4) {
+                config.out_channels = static_cast<int>(out->ne[3]);
+            }
+        }
+        for (const auto& [name, tensor_storage] : tensor_storage_map) {
+            if (!starts_with(name, prefix)) {
+                continue;
+            }
+            if (name.find("attn2.to_k.weight") != std::string::npos && tensor_storage.n_dims == 2) {
+                config.context_dim = static_cast<int>(tensor_storage.ne[0]);
+                break;
+            }
+        }
+
+        LOG_DEBUG("unet: in_channels = %d, out_channels = %d, model_channels = %d, time_embed_dim = %d, context_dim = %d, adm_in_channels = %d, num_res_blocks = %d, tiny_unet = %s",
+                  config.in_channels,
+                  config.out_channels,
+                  config.model_channels,
+                  config.time_embed_dim,
+                  config.context_dim,
+                  config.adm_in_channels,
+                  config.num_res_blocks,
+                  config.tiny_unet ? "true" : "false");
+        return config;
+    }
+};
 
 class SpatialVideoTransformer : public SpatialTransformer {
 protected:
@@ -166,66 +288,26 @@ public:
 
 // ldm.modules.diffusionmodules.openaimodel.UNetModel
 class UnetModelBlock : public GGMLBlock {
-protected:
-    SDVersion version = VERSION_SD1;
-    // network hparams
-    int in_channels                        = 4;
-    int out_channels                       = 4;
-    int num_res_blocks                     = 2;
-    std::vector<int> attention_resolutions = {4, 2, 1};
-    std::vector<int> channel_mult          = {1, 2, 4, 4};
-    std::vector<int> transformer_depth     = {1, 1, 1, 1};
-    int time_embed_dim                     = 1280;  // model_channels*4
-    int num_heads                          = 8;
-    int num_head_channels                  = -1;   // channels // num_heads
-    int context_dim                        = 768;  // 1024 for VERSION_SD2, 2048 for VERSION_SDXL
-    bool use_linear_projection             = false;
-    bool tiny_unet                         = false;
-
 public:
-    int model_channels  = 320;
-    int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
+    UNetConfig config;
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, const String2TensorStorage& tensor_storage_map = {})
-        : version(version) {
-        if (sd_version_is_sd2(version)) {
-            context_dim           = 1024;
-            num_head_channels     = 64;
-            num_heads             = -1;
-            use_linear_projection = true;
-        } else if (sd_version_is_sdxl(version)) {
-            context_dim           = 2048;
-            attention_resolutions = {4, 2};
-            channel_mult          = {1, 2, 4};
-            transformer_depth     = {1, 2, 10};
-            num_head_channels     = 64;
-            num_heads             = -1;
-            use_linear_projection = true;
-            if (version == VERSION_SDXL_VEGA) {
-                transformer_depth = {1, 1, 2};
-            }
-        } else if (version == VERSION_SVD) {
-            in_channels           = 8;
-            out_channels          = 4;
-            context_dim           = 1024;
-            adm_in_channels       = 768;
-            num_head_channels     = 64;
-            num_heads             = -1;
-            use_linear_projection = true;
-        }
-        if (sd_version_is_inpaint(version)) {
-            in_channels = 9;
-        } else if (sd_version_is_unet_edit(version)) {
-            in_channels = 8;
-        }
-        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET || version == VERSION_SDXS_512_DS || version == VERSION_SDXS_09) {
-            num_res_blocks = 1;
-            channel_mult   = {1, 2, 4};
-            tiny_unet      = true;
-            if (version == VERSION_SDXS_512_DS) {
-                attention_resolutions = {4, 2};  // here just like SDXL
-            }
-        }
+    explicit UnetModelBlock(UNetConfig config = {})
+        : config(config) {
+        const SDVersion version           = this->config.version;
+        const int in_channels             = this->config.in_channels;
+        const int out_channels            = this->config.out_channels;
+        const int num_res_blocks          = this->config.num_res_blocks;
+        const auto& attention_resolutions = this->config.attention_resolutions;
+        const auto& channel_mult          = this->config.channel_mult;
+        const auto& transformer_depth     = this->config.transformer_depth;
+        const int time_embed_dim          = this->config.time_embed_dim;
+        const int num_heads               = this->config.num_heads;
+        const int num_head_channels       = this->config.num_head_channels;
+        const int context_dim             = this->config.context_dim;
+        const bool use_linear_projection  = this->config.use_linear_projection;
+        const bool tiny_unet              = this->config.tiny_unet;
+        const int model_channels          = this->config.model_channels;
+        const int adm_in_channels         = this->config.adm_in_channels;
 
         // dims is always 2
         // use_temporal_attention is always True for SVD
@@ -398,7 +480,7 @@ public:
                                   ggml_tensor* x,
                                   ggml_tensor* emb,
                                   int num_video_frames) {
-        if (version == VERSION_SVD) {
+        if (config.version == VERSION_SVD) {
             auto block = std::dynamic_pointer_cast<VideoResBlock>(blocks[name]);
 
             return block->forward(ctx, x, emb, num_video_frames);
@@ -414,7 +496,7 @@ public:
                                          ggml_tensor* x,
                                          ggml_tensor* context,
                                          int timesteps) {
-        if (version == VERSION_SVD) {
+        if (config.version == VERSION_SVD) {
             auto block = std::dynamic_pointer_cast<SpatialVideoTransformer>(blocks[name]);
 
             return block->forward(ctx, x, context, timesteps);
@@ -440,6 +522,13 @@ public:
         // c_concat: [N, in_channels, h, w] or [1, in_channels, h, w]
         // y: [N, adm_in_channels] or [1, adm_in_channels]
         // return: [N, out_channels, h, w]
+        const SDVersion version           = config.version;
+        const int model_channels          = config.model_channels;
+        const int num_res_blocks          = config.num_res_blocks;
+        const auto& attention_resolutions = config.attention_resolutions;
+        const auto& channel_mult          = config.channel_mult;
+        const bool tiny_unet              = config.tiny_unet;
+
         if (context != nullptr) {
             if (context->ne[2] != x->ne[3]) {
                 context = ggml_repeat(ctx->ggml_ctx, context, ggml_new_tensor_3d(ctx->ggml_ctx, GGML_TYPE_F32, context->ne[0], context->ne[1], x->ne[3]));
@@ -601,6 +690,7 @@ public:
 };
 
 struct UNetModelRunner : public DiffusionModelRunner {
+    UNetConfig config;
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
@@ -608,7 +698,9 @@ struct UNetModelRunner : public DiffusionModelRunner {
                     const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1)
-        : DiffusionModelRunner(backend, params_backend, prefix), unet(version, tensor_storage_map) {
+        : DiffusionModelRunner(backend, params_backend, prefix),
+          config(UNetConfig::detect_from_weights(tensor_storage_map, prefix, version)),
+          unet(config) {
         unet.init(params_ctx, tensor_storage_map, prefix);
     }
 

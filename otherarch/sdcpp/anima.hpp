@@ -1,6 +1,7 @@
 #ifndef __ANIMA_HPP__
 #define __ANIMA_HPP__
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <utility>
@@ -13,6 +14,47 @@
 
 namespace Anima {
     constexpr int ANIMA_GRAPH_SIZE = 65536;
+
+    struct AnimaConfig {
+        int64_t in_channels       = 16;
+        int64_t out_channels      = 16;
+        int64_t hidden_size       = 2048;
+        int64_t text_embed_dim    = 1024;
+        int64_t num_heads         = 16;
+        int64_t head_dim          = 128;
+        int patch_size            = 2;
+        int64_t num_layers        = 28;
+        std::vector<int> axes_dim = {44, 42, 42};
+        int theta                 = 10000;
+
+        static AnimaConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            AnimaConfig config;
+            int64_t detected_layers = 0;
+            std::string layer_tag   = prefix.empty() ? "blocks." : prefix + ".blocks.";
+            for (const auto& [name, _] : tensor_storage_map) {
+                size_t pos = name.find(layer_tag);
+                if (pos == std::string::npos) {
+                    continue;
+                }
+                size_t start = pos + layer_tag.size();
+                size_t end   = name.find('.', start);
+                if (end == std::string::npos) {
+                    continue;
+                }
+                int64_t layer_id = atoll(name.substr(start, end - start).c_str());
+                detected_layers  = std::max(detected_layers, layer_id + 1);
+            }
+            if (detected_layers > 0) {
+                config.num_layers = detected_layers;
+                LOG_DEBUG("anima: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", head_dim = %" PRId64,
+                          config.num_layers,
+                          config.hidden_size,
+                          config.num_heads,
+                          config.head_dim);
+            }
+            return config;
+        }
+    };
 
     __STATIC_INLINE__ ggml_tensor* apply_gate(ggml_context* ctx,
                                               ggml_tensor* x,
@@ -418,31 +460,22 @@ namespace Anima {
 
     struct AnimaNet : public GGMLBlock {
     public:
-        int64_t in_channels       = 16;
-        int64_t out_channels      = 16;
-        int64_t hidden_size       = 2048;
-        int64_t text_embed_dim    = 1024;
-        int64_t num_heads         = 16;
-        int64_t head_dim          = 128;
-        int patch_size            = 2;
-        int64_t num_layers        = 28;
-        std::vector<int> axes_dim = {44, 42, 42};
-        int theta                 = 10000;
+        AnimaConfig config;
 
     public:
         AnimaNet() = default;
-        explicit AnimaNet(int64_t num_layers)
-            : num_layers(num_layers) {
-            blocks["x_embedder"]       = std::make_shared<XEmbedder>((in_channels + 1) * patch_size * patch_size, hidden_size);
-            blocks["t_embedder"]       = std::make_shared<TimestepEmbedder>(hidden_size, hidden_size * 3);
-            blocks["t_embedding_norm"] = std::make_shared<RMSNorm>(hidden_size, 1e-6f);
-            for (int i = 0; i < num_layers; i++) {
-                blocks["blocks." + std::to_string(i)] = std::make_shared<TransformerBlock>(hidden_size,
-                                                                                           text_embed_dim,
-                                                                                           num_heads,
-                                                                                           head_dim);
+        explicit AnimaNet(AnimaConfig config)
+            : config(config) {
+            blocks["x_embedder"]       = std::make_shared<XEmbedder>((config.in_channels + 1) * config.patch_size * config.patch_size, config.hidden_size);
+            blocks["t_embedder"]       = std::make_shared<TimestepEmbedder>(config.hidden_size, config.hidden_size * 3);
+            blocks["t_embedding_norm"] = std::make_shared<RMSNorm>(config.hidden_size, 1e-6f);
+            for (int i = 0; i < config.num_layers; i++) {
+                blocks["blocks." + std::to_string(i)] = std::make_shared<TransformerBlock>(config.hidden_size,
+                                                                                           config.text_embed_dim,
+                                                                                           config.num_heads,
+                                                                                           config.head_dim);
             }
-            blocks["final_layer"] = std::make_shared<FinalLayer>(hidden_size, patch_size, out_channels);
+            blocks["final_layer"] = std::make_shared<FinalLayer>(config.hidden_size, config.patch_size, config.out_channels);
             blocks["llm_adapter"] = std::make_shared<LLMAdapter>(1024, 1024, 1024, 6, 16);
         }
 
@@ -469,11 +502,11 @@ namespace Anima {
             auto padding_mask = ggml_ext_zeros(ctx->ggml_ctx, x->ne[0], x->ne[1], 1, x->ne[3]);
             x                 = ggml_concat(ctx->ggml_ctx, x, padding_mask, 2);  // [N, C + 1, H, W]
 
-            x = DiT::pad_and_patchify(ctx, x, patch_size, patch_size);  // [N, h*w, (C+1)*ph*pw]
+            x = DiT::pad_and_patchify(ctx, x, config.patch_size, config.patch_size);  // [N, h*w, (C+1)*ph*pw]
 
             x = x_embedder->forward(ctx, x);
 
-            auto timestep_proj     = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(hidden_size));
+            auto timestep_proj     = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(config.hidden_size));
             auto temb              = t_embedder->forward(ctx, timestep_proj);
             auto embedded_timestep = t_embedding_norm->forward(ctx, timestep_proj);
 
@@ -505,7 +538,7 @@ namespace Anima {
             sd::ggml_graph_cut::mark_graph_cut(temb, "anima.prelude", "temb");
             sd::ggml_graph_cut::mark_graph_cut(encoder_hidden_states, "anima.prelude", "context");
 
-            for (int i = 0; i < num_layers; i++) {
+            for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["blocks." + std::to_string(i)]);
                 x          = block->forward(ctx, x, encoder_hidden_states, embedded_timestep, temb, image_pe);
                 sd::ggml_graph_cut::mark_graph_cut(x, "anima.blocks." + std::to_string(i), "x");
@@ -513,7 +546,7 @@ namespace Anima {
 
             x = final_layer->forward(ctx, x, embedded_timestep, temb);  // [N, h*w, ph*pw*C]
 
-            x = DiT::unpatchify_and_crop(ctx->ggml_ctx, x, H, W, patch_size, patch_size, false);  // [N, C, H, W]
+            x = DiT::unpatchify_and_crop(ctx->ggml_ctx, x, H, W, config.patch_size, config.patch_size, false);  // [N, C, H, W]
 
             return x;
         }
@@ -524,35 +557,16 @@ namespace Anima {
         std::vector<float> image_pe_vec;
         std::vector<float> adapter_q_pe_vec;
         std::vector<float> adapter_k_pe_vec;
+        AnimaConfig config;
         AnimaNet net;
 
         AnimaRunner(ggml_backend_t backend,
                     ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "model.diffusion_model")
-            : DiffusionModelRunner(backend, params_backend, prefix) {
-            int64_t num_layers    = 0;
-            std::string layer_tag = prefix + ".net.blocks.";
-            for (const auto& kv : tensor_storage_map) {
-                const std::string& tensor_name = kv.first;
-                size_t pos                     = tensor_name.find(layer_tag);
-                if (pos == std::string::npos) {
-                    continue;
-                }
-                size_t start = pos + layer_tag.size();
-                size_t end   = tensor_name.find('.', start);
-                if (end == std::string::npos) {
-                    continue;
-                }
-                int64_t layer_id = atoll(tensor_name.substr(start, end - start).c_str());
-                num_layers       = std::max(num_layers, layer_id + 1);
-            }
-            if (num_layers <= 0) {
-                num_layers = 28;
-            }
-            LOG_INFO("anima net layers: %" PRId64, num_layers);
-
-            net = AnimaNet(num_layers);
+            : DiffusionModelRunner(backend, params_backend, prefix),
+              config(AnimaConfig::detect_from_weights(tensor_storage_map, prefix + ".net")) {
+            net = AnimaNet(config);
             net.init(params_ctx, tensor_storage_map, prefix + ".net");
         }
 
@@ -623,22 +637,22 @@ namespace Anima {
             GGML_ASSERT(x->ne[3] == 1);
             ggml_cgraph* gf = new_graph_custom(ANIMA_GRAPH_SIZE);
 
-            int64_t pad_h = (net.patch_size - x->ne[1] % net.patch_size) % net.patch_size;
-            int64_t pad_w = (net.patch_size - x->ne[0] % net.patch_size) % net.patch_size;
+            int64_t pad_h = (config.patch_size - x->ne[1] % config.patch_size) % config.patch_size;
+            int64_t pad_w = (config.patch_size - x->ne[0] % config.patch_size) % config.patch_size;
             int64_t h_pad = x->ne[1] + pad_h;
             int64_t w_pad = x->ne[0] + pad_w;
 
             image_pe_vec          = gen_anima_image_pe_vec(1,
                                                            static_cast<int>(h_pad),
                                                            static_cast<int>(w_pad),
-                                                           static_cast<int>(net.patch_size),
-                                                           net.theta,
-                                                           net.axes_dim,
+                                                           static_cast<int>(config.patch_size),
+                                                           config.theta,
+                                                           config.axes_dim,
                                                            4.0f,
                                                            4.0f,
                                                            1.0f);
-            int64_t image_pos_len = static_cast<int64_t>(image_pe_vec.size()) / (2 * 2 * (net.head_dim / 2));
-            auto image_pe         = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, net.head_dim / 2, image_pos_len);
+            int64_t image_pos_len = static_cast<int64_t>(image_pe_vec.size()) / (2 * 2 * (config.head_dim / 2));
+            auto image_pe         = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, image_pos_len);
             set_backend_tensor_data(image_pe, image_pe_vec.data());
 
             ggml_tensor* adapter_q_pe = nullptr;

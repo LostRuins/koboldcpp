@@ -13,6 +13,76 @@
 namespace ErnieImage {
     constexpr int ERNIE_IMAGE_GRAPH_SIZE = 40960;
 
+    struct ErnieImageConfig {
+        int64_t hidden_size       = 4096;
+        int64_t num_heads         = 32;
+        int64_t num_layers        = 36;
+        int64_t ffn_hidden_size   = 12288;
+        int64_t in_channels       = 128;
+        int64_t out_channels      = 128;
+        int patch_size            = 1;
+        int64_t text_in_dim       = 3072;
+        int theta                 = 256;
+        std::vector<int> axes_dim = {32, 48, 48};
+        int axes_dim_sum          = 128;
+        float eps                 = 1e-6f;
+
+        static ErnieImageConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            ErnieImageConfig config;
+            config.num_layers         = 0;
+            int64_t detected_head_dim = 0;
+            for (const auto& [name, tensor_storage] : tensor_storage_map) {
+                if (!starts_with(name, prefix)) {
+                    continue;
+                }
+                if (ends_with(name, "x_embedder.proj.weight") && tensor_storage.n_dims == 4) {
+                    config.patch_size  = static_cast<int>(tensor_storage.ne[0]);
+                    config.in_channels = tensor_storage.ne[2];
+                    config.hidden_size = tensor_storage.ne[3];
+                } else if (ends_with(name, "text_proj.weight") && tensor_storage.n_dims == 2) {
+                    config.text_in_dim = tensor_storage.ne[0];
+                } else if (ends_with(name, "layers.0.self_attention.norm_q.weight")) {
+                    detected_head_dim = tensor_storage.ne[0];
+                } else if (ends_with(name, "layers.0.mlp.gate_proj.weight") && tensor_storage.n_dims == 2) {
+                    config.ffn_hidden_size = tensor_storage.ne[1];
+                } else if (ends_with(name, "final_linear.weight") && tensor_storage.n_dims == 2) {
+                    int64_t out_dim     = tensor_storage.ne[1];
+                    int64_t patch_area  = config.patch_size * config.patch_size;
+                    config.out_channels = out_dim / patch_area;
+                }
+
+                size_t pos = name.find("layers.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index = atoi(items[1].c_str());
+                        if (block_index + 1 > config.num_layers) {
+                            config.num_layers = block_index + 1;
+                        }
+                    }
+                }
+            }
+            if (config.num_layers == 0) {
+                config.num_layers = 36;
+            }
+            if (detected_head_dim > 0) {
+                config.num_heads = config.hidden_size / detected_head_dim;
+            }
+            config.axes_dim_sum = 0;
+            for (int axis_dim : config.axes_dim) {
+                config.axes_dim_sum += axis_dim;
+            }
+            LOG_DEBUG("ernie_image: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", ffn_hidden_size = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                      config.num_layers,
+                      config.hidden_size,
+                      config.num_heads,
+                      config.ffn_hidden_size,
+                      config.in_channels,
+                      config.out_channels);
+            return config;
+        }
+    };
+
     __STATIC_INLINE__ ggml_tensor* timestep_embedding_sin_cos(ggml_context* ctx,
                                                               ggml_tensor* timesteps,
                                                               int dim,
@@ -208,51 +278,36 @@ namespace ErnieImage {
         }
     };
 
-    struct ErnieImageParams {
-        int64_t hidden_size       = 4096;
-        int64_t num_heads         = 32;
-        int64_t num_layers        = 36;
-        int64_t ffn_hidden_size   = 12288;
-        int64_t in_channels       = 128;
-        int64_t out_channels      = 128;
-        int patch_size            = 1;
-        int64_t text_in_dim       = 3072;
-        int theta                 = 256;
-        std::vector<int> axes_dim = {32, 48, 48};
-        int axes_dim_sum          = 128;
-        float eps                 = 1e-6f;
-    };
-
     class ErnieImageModel : public GGMLBlock {
     public:
-        ErnieImageParams params;
+        ErnieImageConfig config;
 
         ErnieImageModel() = default;
-        ErnieImageModel(ErnieImageParams params)
-            : params(params) {
-            blocks["x_embedder.proj"] = std::make_shared<Conv2d>(params.in_channels,
-                                                                 params.hidden_size,
-                                                                 std::pair<int, int>{params.patch_size, params.patch_size},
-                                                                 std::pair<int, int>{params.patch_size, params.patch_size},
+        ErnieImageModel(ErnieImageConfig config)
+            : config(config) {
+            blocks["x_embedder.proj"] = std::make_shared<Conv2d>(config.in_channels,
+                                                                 config.hidden_size,
+                                                                 std::pair<int, int>{config.patch_size, config.patch_size},
+                                                                 std::pair<int, int>{config.patch_size, config.patch_size},
                                                                  std::pair<int, int>{0, 0},
                                                                  std::pair<int, int>{1, 1},
                                                                  true);
-            if (params.text_in_dim != params.hidden_size) {
-                blocks["text_proj"] = std::make_shared<Linear>(params.text_in_dim, params.hidden_size, false);
+            if (config.text_in_dim != config.hidden_size) {
+                blocks["text_proj"] = std::make_shared<Linear>(config.text_in_dim, config.hidden_size, false);
             }
-            blocks["time_embedding"]     = std::make_shared<Qwen::TimestepEmbedding>(params.hidden_size, params.hidden_size);
-            blocks["adaLN_modulation.1"] = std::make_shared<Linear>(params.hidden_size, 6 * params.hidden_size, true);
+            blocks["time_embedding"]     = std::make_shared<Qwen::TimestepEmbedding>(config.hidden_size, config.hidden_size);
+            blocks["adaLN_modulation.1"] = std::make_shared<Linear>(config.hidden_size, 6 * config.hidden_size, true);
 
-            for (int i = 0; i < params.num_layers; i++) {
-                blocks["layers." + std::to_string(i)] = std::make_shared<ErnieImageSharedAdaLNBlock>(params.hidden_size,
-                                                                                                     params.num_heads,
-                                                                                                     params.ffn_hidden_size,
-                                                                                                     params.eps);
+            for (int i = 0; i < config.num_layers; i++) {
+                blocks["layers." + std::to_string(i)] = std::make_shared<ErnieImageSharedAdaLNBlock>(config.hidden_size,
+                                                                                                     config.num_heads,
+                                                                                                     config.ffn_hidden_size,
+                                                                                                     config.eps);
             }
 
-            blocks["final_norm"]   = std::make_shared<ErnieImageAdaLNContinuous>(params.hidden_size, params.eps);
-            blocks["final_linear"] = std::make_shared<Linear>(params.hidden_size,
-                                                              params.patch_size * params.patch_size * params.out_channels,
+            blocks["final_norm"]   = std::make_shared<ErnieImageAdaLNContinuous>(config.hidden_size, config.eps);
+            blocks["final_linear"] = std::make_shared<Linear>(config.hidden_size,
+                                                              config.patch_size * config.patch_size * config.out_channels,
                                                               true);
         }
 
@@ -265,12 +320,12 @@ namespace ErnieImage {
             // context: [N, text_tokens, 3072]
             // pe: [image_tokens + text_tokens, head_dim/2, 2, 2]
             GGML_ASSERT(context != nullptr);
-            GGML_ASSERT(x->ne[1] % params.patch_size == 0 && x->ne[0] % params.patch_size == 0);
+            GGML_ASSERT(x->ne[1] % config.patch_size == 0 && x->ne[0] % config.patch_size == 0);
 
             int64_t W     = x->ne[0];
             int64_t H     = x->ne[1];
-            int64_t Hp    = H / params.patch_size;
-            int64_t Wp    = W / params.patch_size;
+            int64_t Hp    = H / config.patch_size;
+            int64_t Wp    = W / config.patch_size;
             int64_t n_img = Hp * Wp;
             int64_t N     = x->ne[3];
 
@@ -292,7 +347,7 @@ namespace ErnieImage {
 
             auto hidden_states = ggml_concat(ctx->ggml_ctx, img, txt, 1);  // [N, image_tokens + text_tokens, hidden_size]
 
-            auto sample = timestep_embedding_sin_cos(ctx->ggml_ctx, timestep, static_cast<int>(params.hidden_size));
+            auto sample = timestep_embedding_sin_cos(ctx->ggml_ctx, timestep, static_cast<int>(config.hidden_size));
             auto c      = time_embedding->forward(ctx, sample);  // [N, hidden_size]
 
             auto mod_params = adaLN_mod->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, 6 * hidden_size]
@@ -305,7 +360,7 @@ namespace ErnieImage {
                 temb.push_back(ggml_reshape_3d(ctx->ggml_ctx, chunk, chunk->ne[0], 1, chunk->ne[1]));  // [N, 1, hidden_size]
             }
 
-            for (int i = 0; i < params.num_layers; i++) {
+            for (int i = 0; i < config.num_layers; i++) {
                 auto layer    = std::dynamic_pointer_cast<ErnieImageSharedAdaLNBlock>(blocks["layers." + std::to_string(i)]);
                 hidden_states = layer->forward(ctx, hidden_states, pe, temb);
                 sd::ggml_graph_cut::mark_graph_cut(hidden_states, "ernie_image.layers." + std::to_string(i), "hidden_states");
@@ -319,15 +374,15 @@ namespace ErnieImage {
                                        patches,
                                        Hp,
                                        Wp,
-                                       params.patch_size,
-                                       params.patch_size,
+                                       config.patch_size,
+                                       config.patch_size,
                                        false);  // [N, out_channels, H, W]
             return out;
         }
     };
 
     struct ErnieImageRunner : public DiffusionModelRunner {
-        ErnieImageParams ernie_params;
+        ErnieImageConfig config;
         ErnieImageModel ernie_image;
         std::vector<float> pe_vec;
 
@@ -335,58 +390,9 @@ namespace ErnieImage {
                          ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "")
-            : DiffusionModelRunner(backend, params_backend, prefix) {
-            ernie_params.num_layers = 0;
-            for (const auto& [name, tensor_storage] : tensor_storage_map) {
-                if (!starts_with(name, prefix)) {
-                    continue;
-                }
-                if (ends_with(name, "x_embedder.proj.weight") && tensor_storage.n_dims == 4) {
-                    ernie_params.patch_size  = static_cast<int>(tensor_storage.ne[0]);
-                    ernie_params.in_channels = tensor_storage.ne[2];
-                    ernie_params.hidden_size = tensor_storage.ne[3];
-                } else if (ends_with(name, "text_proj.weight") && tensor_storage.n_dims == 2) {
-                    ernie_params.text_in_dim = tensor_storage.ne[0];
-                } else if (ends_with(name, "layers.0.self_attention.norm_q.weight")) {
-                    int64_t head_dim       = tensor_storage.ne[0];
-                    ernie_params.num_heads = ernie_params.hidden_size / head_dim;
-                } else if (ends_with(name, "layers.0.mlp.gate_proj.weight") && tensor_storage.n_dims == 2) {
-                    ernie_params.ffn_hidden_size = tensor_storage.ne[1];
-                } else if (ends_with(name, "final_linear.weight") && tensor_storage.n_dims == 2) {
-                    int64_t out_dim           = tensor_storage.ne[1];
-                    ernie_params.out_channels = out_dim / ernie_params.patch_size / ernie_params.patch_size;
-                }
-
-                size_t pos = name.find("layers.");
-                if (pos != std::string::npos) {
-                    std::string layer_name = name.substr(pos);
-                    auto items             = split_string(layer_name, '.');
-                    if (items.size() > 1) {
-                        int block_index = atoi(items[1].c_str());
-                        if (block_index + 1 > ernie_params.num_layers) {
-                            ernie_params.num_layers = block_index + 1;
-                        }
-                    }
-                }
-            }
-            if (ernie_params.num_layers == 0) {
-                ernie_params.num_layers = 36;
-            }
-            ernie_params.axes_dim_sum = 0;
-            for (int axis_dim : ernie_params.axes_dim) {
-                ernie_params.axes_dim_sum += axis_dim;
-            }
-
-            LOG_INFO("ernie_image: layers = %" PRId64 ", hidden_size = %" PRId64 ", heads = %" PRId64
-                     ", ffn_hidden_size = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
-                     ernie_params.num_layers,
-                     ernie_params.hidden_size,
-                     ernie_params.num_heads,
-                     ernie_params.ffn_hidden_size,
-                     ernie_params.in_channels,
-                     ernie_params.out_channels);
-
-            ernie_image = ErnieImageModel(ernie_params);
+            : DiffusionModelRunner(backend, params_backend, prefix),
+              config(ErnieImageConfig::detect_from_weights(tensor_storage_map, prefix)) {
+            ernie_image = ErnieImageModel(config);
             ernie_image.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -410,15 +416,15 @@ namespace ErnieImage {
 
             pe_vec      = Rope::gen_ernie_image_pe(static_cast<int>(x->ne[1]),
                                                    static_cast<int>(x->ne[0]),
-                                                   ernie_params.patch_size,
+                                                   config.patch_size,
                                                    static_cast<int>(x->ne[3]),
                                                    static_cast<int>(context->ne[1]),
-                                                   ernie_params.theta,
+                                                   config.theta,
                                                    circular_y_enabled,
                                                    circular_x_enabled,
-                                                   ernie_params.axes_dim);
-            int pos_len = static_cast<int>(pe_vec.size() / ernie_params.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, ernie_params.axes_dim_sum, 1, pos_len, 2);
+                                                   config.axes_dim);
+            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, config.axes_dim_sum, 1, pos_len, 2);
             set_backend_tensor_data(pe, pe_vec.data());
 
             auto runner_ctx  = get_context();

@@ -72,6 +72,200 @@ namespace LTXV {
         return max_block + 1;
     }
 
+    struct LTXAVConfig {
+        int64_t in_channels                           = 128;
+        int64_t out_channels                          = 128;
+        int64_t hidden_size                           = 3840;
+        int64_t cross_attention_dim                   = 4096;
+        int64_t caption_channels                      = 3840;
+        int64_t num_attention_heads                   = 30;
+        int64_t attention_head_dim                    = 128;
+        int64_t num_layers                            = 28;
+        float positional_embedding_theta              = 10000.f;
+        std::vector<int> positional_embedding_max_pos = {20, 2048, 2048};
+        std::tuple<int, int, int> vae_scale_factors   = {8, 32, 32};
+        bool causal_temporal_positioning              = true;
+        float timestep_scale_multiplier               = 1000.f;
+
+        int64_t audio_in_channels                           = 128;
+        int64_t audio_out_channels                          = 128;
+        int64_t audio_hidden_size                           = 2048;
+        int64_t audio_cross_attention_dim                   = 2048;
+        int64_t audio_num_attention_heads                   = 32;
+        int64_t audio_attention_head_dim                    = 64;
+        std::vector<int> audio_positional_embedding_max_pos = {20};
+        float av_ca_timestep_scale_multiplier               = 1000.f;
+        int64_t num_audio_channels                          = 8;
+        int64_t audio_frequency_bins                        = 16;
+
+        bool use_connector                   = false;
+        int64_t connector_hidden_size        = 3840;
+        int64_t connector_num_heads          = 30;
+        int64_t connector_head_dim           = 128;
+        int64_t connector_num_layers         = 2;
+        int64_t connector_num_registers      = 128;
+        bool connector_rope_interleaved      = false;
+        bool connector_apply_gated_attention = false;
+
+        bool use_audio_connector                   = false;
+        int64_t audio_connector_hidden_size        = 2048;
+        int64_t audio_connector_num_heads          = 32;
+        int64_t audio_connector_head_dim           = 64;
+        int64_t audio_connector_num_layers         = 2;
+        int64_t audio_connector_num_registers      = 128;
+        bool audio_connector_rope_interleaved      = false;
+        bool audio_connector_apply_gated_attention = false;
+
+        bool video_rope_interleaved  = false;
+        bool use_middle_indices_grid = true;
+        bool cross_attention_adaln   = false;
+
+        bool use_caption_projection          = true;
+        bool use_audio_caption_projection    = true;
+        bool caption_proj_before_connector   = true;
+        bool caption_projection_first_linear = false;
+
+        bool self_attention_gated  = false;
+        bool cross_attention_gated = false;
+
+        static std::pair<int64_t, int64_t> infer_attention_layout(int64_t hidden_size,
+                                                                  int64_t preferred_heads = -1) {
+            if (preferred_heads > 0 && hidden_size % preferred_heads == 0) {
+                return {preferred_heads, hidden_size / preferred_heads};
+            }
+            const int candidates[] = {128, 96, 80, 64, 48, 40, 32};
+            for (int head_dim : candidates) {
+                if (hidden_size % head_dim == 0) {
+                    int64_t heads = hidden_size / head_dim;
+                    if (heads >= 8 && heads <= 64) {
+                        return {heads, head_dim};
+                    }
+                }
+            }
+            return {32, hidden_size / 32};
+        }
+
+        static int64_t infer_gate_heads(const String2TensorStorage& tensor_storage_map,
+                                        const std::string& bias_name,
+                                        int64_t fallback_heads) {
+            auto it = tensor_storage_map.find(bias_name);
+            if (it != tensor_storage_map.end()) {
+                return it->second.ne[0];
+            }
+            return fallback_heads;
+        }
+
+        static LTXAVConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            LTXAVConfig config;
+            auto patchify_proj_iter = tensor_storage_map.find(prefix + ".patchify_proj.weight");
+            if (patchify_proj_iter != tensor_storage_map.end()) {
+                config.in_channels         = patchify_proj_iter->second.ne[0];
+                config.hidden_size         = patchify_proj_iter->second.ne[1];
+                int64_t video_heads        = infer_gate_heads(tensor_storage_map, prefix + ".transformer_blocks.0.attn1.to_gate_logits.bias", 32);
+                auto attn_layout           = infer_attention_layout(config.hidden_size, video_heads);
+                config.num_attention_heads = attn_layout.first;
+                config.attention_head_dim  = attn_layout.second;
+            }
+
+            auto audio_patchify_proj_iter = tensor_storage_map.find(prefix + ".audio_patchify_proj.weight");
+            if (audio_patchify_proj_iter != tensor_storage_map.end()) {
+                config.audio_in_channels         = audio_patchify_proj_iter->second.ne[0];
+                config.audio_hidden_size         = audio_patchify_proj_iter->second.ne[1];
+                config.audio_out_channels        = config.audio_in_channels;
+                int64_t audio_heads              = infer_gate_heads(tensor_storage_map, prefix + ".transformer_blocks.0.audio_attn1.to_gate_logits.bias", 32);
+                auto audio_attn_layout           = infer_attention_layout(config.audio_hidden_size, audio_heads);
+                config.audio_num_attention_heads = audio_attn_layout.first;
+                config.audio_attention_head_dim  = audio_attn_layout.second;
+            }
+
+            auto proj_out_iter = tensor_storage_map.find(prefix + ".proj_out.weight");
+            if (proj_out_iter != tensor_storage_map.end()) {
+                config.out_channels = proj_out_iter->second.ne[1];
+            }
+            auto audio_proj_out_iter = tensor_storage_map.find(prefix + ".audio_proj_out.weight");
+            if (audio_proj_out_iter != tensor_storage_map.end()) {
+                config.audio_out_channels = audio_proj_out_iter->second.ne[1];
+            }
+
+            auto attn2_iter = tensor_storage_map.find(prefix + ".transformer_blocks.0.attn2.to_k.weight");
+            if (attn2_iter != tensor_storage_map.end()) {
+                config.cross_attention_dim = attn2_iter->second.ne[0];
+            }
+            auto audio_attn2_iter = tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_attn2.to_k.weight");
+            if (audio_attn2_iter != tensor_storage_map.end()) {
+                config.audio_cross_attention_dim = audio_attn2_iter->second.ne[0];
+            }
+            if (tensor_storage_map.find(prefix + ".transformer_blocks.0.prompt_scale_shift_table") != tensor_storage_map.end()) {
+                config.cross_attention_adaln = true;
+            }
+            if (tensor_storage_map.find(prefix + ".transformer_blocks.0.attn1.to_gate_logits.weight") != tensor_storage_map.end() ||
+                tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_attn1.to_gate_logits.weight") != tensor_storage_map.end()) {
+                config.self_attention_gated = true;
+            }
+            if (tensor_storage_map.find(prefix + ".transformer_blocks.0.attn2.to_gate_logits.weight") != tensor_storage_map.end() ||
+                tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_attn2.to_gate_logits.weight") != tensor_storage_map.end()) {
+                config.cross_attention_gated = true;
+            }
+            if (tensor_storage_map.find(prefix + ".caption_projection.linear_1.weight") == tensor_storage_map.end() &&
+                tensor_storage_map.find(prefix + ".caption_projection.linear_2.weight") == tensor_storage_map.end()) {
+                config.use_caption_projection = false;
+            }
+            if (tensor_storage_map.find(prefix + ".audio_caption_projection.linear_1.weight") == tensor_storage_map.end() &&
+                tensor_storage_map.find(prefix + ".audio_caption_projection.linear_2.weight") == tensor_storage_map.end()) {
+                config.use_audio_caption_projection = false;
+            }
+
+            config.num_layers = count_prefix_blocks(tensor_storage_map, prefix + ".", "transformer_blocks.");
+
+            auto connector_iter = tensor_storage_map.find(prefix + ".video_embeddings_connector.transformer_1d_blocks.0.attn1.to_q.weight");
+            if (connector_iter != tensor_storage_map.end()) {
+                config.use_connector         = true;
+                config.connector_hidden_size = connector_iter->second.ne[1];
+                int64_t connector_heads      = infer_gate_heads(tensor_storage_map,
+                                                                prefix + ".video_embeddings_connector.transformer_1d_blocks.0.attn1.to_gate_logits.bias",
+                                                                32);
+                auto connector_layout        = infer_attention_layout(config.connector_hidden_size, connector_heads);
+                config.connector_num_heads   = connector_layout.first;
+                config.connector_head_dim    = connector_layout.second;
+                config.connector_num_layers  = count_prefix_blocks(tensor_storage_map, prefix + ".video_embeddings_connector.", "transformer_1d_blocks.");
+                auto register_iter           = tensor_storage_map.find(prefix + ".video_embeddings_connector.learnable_registers");
+                if (register_iter != tensor_storage_map.end()) {
+                    config.connector_num_registers = register_iter->second.ne[1];
+                }
+                if (tensor_storage_map.find(prefix + ".video_embeddings_connector.transformer_1d_blocks.0.attn1.to_gate_logits.weight") != tensor_storage_map.end()) {
+                    config.connector_apply_gated_attention = true;
+                }
+            }
+
+            auto audio_connector_iter = tensor_storage_map.find(prefix + ".audio_embeddings_connector.transformer_1d_blocks.0.attn1.to_q.weight");
+            if (audio_connector_iter != tensor_storage_map.end()) {
+                config.use_audio_connector         = true;
+                config.audio_connector_hidden_size = audio_connector_iter->second.ne[1];
+                int64_t connector_heads            = infer_gate_heads(tensor_storage_map,
+                                                                      prefix + ".audio_embeddings_connector.transformer_1d_blocks.0.attn1.to_gate_logits.bias",
+                                                                      32);
+                auto connector_layout              = infer_attention_layout(config.audio_connector_hidden_size, connector_heads);
+                config.audio_connector_num_heads   = connector_layout.first;
+                config.audio_connector_head_dim    = connector_layout.second;
+                config.audio_connector_num_layers  = count_prefix_blocks(tensor_storage_map, prefix + ".audio_embeddings_connector.", "transformer_1d_blocks.");
+                auto register_iter                 = tensor_storage_map.find(prefix + ".audio_embeddings_connector.learnable_registers");
+                if (register_iter != tensor_storage_map.end()) {
+                    config.audio_connector_num_registers = register_iter->second.ne[1];
+                }
+                if (tensor_storage_map.find(prefix + ".audio_embeddings_connector.transformer_1d_blocks.0.attn1.to_gate_logits.weight") != tensor_storage_map.end()) {
+                    config.audio_connector_apply_gated_attention = true;
+                }
+            }
+            LOG_DEBUG("ltxav: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_attention_heads = %" PRId64 ", audio_hidden_size = %" PRId64 ", audio_num_attention_heads = %" PRId64,
+                      config.num_layers,
+                      config.hidden_size,
+                      config.num_attention_heads,
+                      config.audio_hidden_size,
+                      config.audio_num_attention_heads);
+            return config;
+        }
+    };
+
     __STATIC_INLINE__ std::vector<float> generate_freq_grid(float theta,
                                                             int positional_dims,
                                                             int dim) {
@@ -749,63 +943,6 @@ namespace LTXV {
         }
     };
 
-    struct LTXAVParams {
-        int64_t in_channels                           = 128;
-        int64_t out_channels                          = 128;
-        int64_t hidden_size                           = 3840;
-        int64_t cross_attention_dim                   = 4096;
-        int64_t caption_channels                      = 3840;
-        int64_t num_attention_heads                   = 30;
-        int64_t attention_head_dim                    = 128;
-        int64_t num_layers                            = 28;
-        float positional_embedding_theta              = 10000.f;
-        std::vector<int> positional_embedding_max_pos = {20, 2048, 2048};
-        std::tuple<int, int, int> vae_scale_factors   = {8, 32, 32};
-        bool causal_temporal_positioning              = true;
-        float timestep_scale_multiplier               = 1000.f;
-
-        int64_t audio_in_channels                           = 128;
-        int64_t audio_out_channels                          = 128;
-        int64_t audio_hidden_size                           = 2048;
-        int64_t audio_cross_attention_dim                   = 2048;
-        int64_t audio_num_attention_heads                   = 32;
-        int64_t audio_attention_head_dim                    = 64;
-        std::vector<int> audio_positional_embedding_max_pos = {20};
-        float av_ca_timestep_scale_multiplier               = 1000.f;
-        int64_t num_audio_channels                          = 8;
-        int64_t audio_frequency_bins                        = 16;
-
-        bool use_connector                   = false;
-        int64_t connector_hidden_size        = 3840;
-        int64_t connector_num_heads          = 30;
-        int64_t connector_head_dim           = 128;
-        int64_t connector_num_layers         = 2;
-        int64_t connector_num_registers      = 128;
-        bool connector_rope_interleaved      = false;
-        bool connector_apply_gated_attention = false;
-
-        bool use_audio_connector                   = false;
-        int64_t audio_connector_hidden_size        = 2048;
-        int64_t audio_connector_num_heads          = 32;
-        int64_t audio_connector_head_dim           = 64;
-        int64_t audio_connector_num_layers         = 2;
-        int64_t audio_connector_num_registers      = 128;
-        bool audio_connector_rope_interleaved      = false;
-        bool audio_connector_apply_gated_attention = false;
-
-        bool video_rope_interleaved  = false;
-        bool use_middle_indices_grid = true;
-        bool cross_attention_adaln   = false;
-
-        bool use_caption_projection          = true;
-        bool use_audio_caption_projection    = true;
-        bool caption_proj_before_connector   = true;
-        bool caption_projection_first_linear = false;
-
-        bool self_attention_gated  = false;
-        bool cross_attention_gated = false;
-    };
-
     __STATIC_INLINE__ std::pair<int64_t, int64_t> infer_attention_layout(int64_t hidden_size,
                                                                          int64_t preferred_heads = -1) {
         if (preferred_heads > 0 && hidden_size % preferred_heads == 0) {
@@ -1169,92 +1306,92 @@ namespace LTXV {
     };
 
     struct LTXAVModelBlock : public GGMLBlock {
-        LTXAVParams cfg;
+        LTXAVConfig config;
 
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "") override {
             params["scale_shift_table"]       = ggml_new_tensor_2d(ctx,
                                                                    get_type(prefix + "scale_shift_table", tensor_storage_map, GGML_TYPE_F32),
-                                                                   cfg.hidden_size,
+                                                                   config.hidden_size,
                                                                    2);
             params["audio_scale_shift_table"] = ggml_new_tensor_2d(ctx,
                                                                    get_type(prefix + "audio_scale_shift_table", tensor_storage_map, GGML_TYPE_F32),
-                                                                   cfg.audio_hidden_size,
+                                                                   config.audio_hidden_size,
                                                                    2);
         }
 
-        LTXAVModelBlock(const LTXAVParams& params)
-            : cfg(params) {
-            blocks["patchify_proj"]       = std::make_shared<Linear>(cfg.in_channels, cfg.hidden_size, true, true);
-            blocks["audio_patchify_proj"] = std::make_shared<Linear>(cfg.audio_in_channels, cfg.audio_hidden_size, true, true);
-            blocks["adaln_single"]        = std::make_shared<AdaLayerNormSingle>(cfg.hidden_size, cfg.cross_attention_adaln ? 9 : 6);
-            blocks["audio_adaln_single"]  = std::make_shared<AdaLayerNormSingle>(cfg.audio_hidden_size, cfg.cross_attention_adaln ? 9 : 6);
-            if (cfg.cross_attention_adaln) {
-                blocks["prompt_adaln_single"]       = std::make_shared<AdaLayerNormSingle>(cfg.hidden_size, 2);
-                blocks["audio_prompt_adaln_single"] = std::make_shared<AdaLayerNormSingle>(cfg.audio_hidden_size, 2);
+        LTXAVModelBlock(const LTXAVConfig& config)
+            : config(config) {
+            blocks["patchify_proj"]       = std::make_shared<Linear>(config.in_channels, config.hidden_size, true, true);
+            blocks["audio_patchify_proj"] = std::make_shared<Linear>(config.audio_in_channels, config.audio_hidden_size, true, true);
+            blocks["adaln_single"]        = std::make_shared<AdaLayerNormSingle>(config.hidden_size, config.cross_attention_adaln ? 9 : 6);
+            blocks["audio_adaln_single"]  = std::make_shared<AdaLayerNormSingle>(config.audio_hidden_size, config.cross_attention_adaln ? 9 : 6);
+            if (config.cross_attention_adaln) {
+                blocks["prompt_adaln_single"]       = std::make_shared<AdaLayerNormSingle>(config.hidden_size, 2);
+                blocks["audio_prompt_adaln_single"] = std::make_shared<AdaLayerNormSingle>(config.audio_hidden_size, 2);
             }
-            blocks["av_ca_video_scale_shift_adaln_single"] = std::make_shared<AdaLayerNormSingle>(cfg.hidden_size, 4);
-            blocks["av_ca_a2v_gate_adaln_single"]          = std::make_shared<AdaLayerNormSingle>(cfg.hidden_size, 1);
-            blocks["av_ca_audio_scale_shift_adaln_single"] = std::make_shared<AdaLayerNormSingle>(cfg.audio_hidden_size, 4);
-            blocks["av_ca_v2a_gate_adaln_single"]          = std::make_shared<AdaLayerNormSingle>(cfg.audio_hidden_size, 1);
+            blocks["av_ca_video_scale_shift_adaln_single"] = std::make_shared<AdaLayerNormSingle>(config.hidden_size, 4);
+            blocks["av_ca_a2v_gate_adaln_single"]          = std::make_shared<AdaLayerNormSingle>(config.hidden_size, 1);
+            blocks["av_ca_audio_scale_shift_adaln_single"] = std::make_shared<AdaLayerNormSingle>(config.audio_hidden_size, 4);
+            blocks["av_ca_v2a_gate_adaln_single"]          = std::make_shared<AdaLayerNormSingle>(config.audio_hidden_size, 1);
 
-            if (cfg.use_caption_projection) {
-                if (cfg.caption_proj_before_connector) {
-                    if (cfg.caption_projection_first_linear) {
-                        blocks["caption_projection"] = std::make_shared<NormSingleLinearTextProjection>(cfg.caption_channels, cfg.hidden_size);
+            if (config.use_caption_projection) {
+                if (config.caption_proj_before_connector) {
+                    if (config.caption_projection_first_linear) {
+                        blocks["caption_projection"] = std::make_shared<NormSingleLinearTextProjection>(config.caption_channels, config.hidden_size);
                     }
                 } else {
-                    blocks["caption_projection"] = std::make_shared<PixArtAlphaTextProjection>(cfg.caption_channels, cfg.hidden_size, cfg.hidden_size);
+                    blocks["caption_projection"] = std::make_shared<PixArtAlphaTextProjection>(config.caption_channels, config.hidden_size, config.hidden_size);
                 }
             }
-            if (cfg.use_audio_caption_projection) {
-                if (cfg.caption_proj_before_connector) {
-                    if (cfg.caption_projection_first_linear) {
-                        blocks["audio_caption_projection"] = std::make_shared<NormSingleLinearTextProjection>(cfg.caption_channels, cfg.audio_hidden_size);
+            if (config.use_audio_caption_projection) {
+                if (config.caption_proj_before_connector) {
+                    if (config.caption_projection_first_linear) {
+                        blocks["audio_caption_projection"] = std::make_shared<NormSingleLinearTextProjection>(config.caption_channels, config.audio_hidden_size);
                     }
                 } else {
-                    blocks["audio_caption_projection"] = std::make_shared<PixArtAlphaTextProjection>(cfg.caption_channels, cfg.audio_hidden_size, cfg.audio_hidden_size);
+                    blocks["audio_caption_projection"] = std::make_shared<PixArtAlphaTextProjection>(config.caption_channels, config.audio_hidden_size, config.audio_hidden_size);
                 }
             }
 
-            if (cfg.use_connector) {
-                blocks["video_embeddings_connector"] = std::make_shared<Embeddings1DConnector>(cfg.connector_hidden_size,
-                                                                                               cfg.connector_num_heads,
-                                                                                               cfg.connector_head_dim,
-                                                                                               cfg.connector_num_layers,
-                                                                                               cfg.connector_num_registers,
-                                                                                               cfg.connector_rope_interleaved,
-                                                                                               cfg.connector_apply_gated_attention);
+            if (config.use_connector) {
+                blocks["video_embeddings_connector"] = std::make_shared<Embeddings1DConnector>(config.connector_hidden_size,
+                                                                                               config.connector_num_heads,
+                                                                                               config.connector_head_dim,
+                                                                                               config.connector_num_layers,
+                                                                                               config.connector_num_registers,
+                                                                                               config.connector_rope_interleaved,
+                                                                                               config.connector_apply_gated_attention);
             }
-            if (cfg.use_audio_connector) {
-                blocks["audio_embeddings_connector"] = std::make_shared<Embeddings1DConnector>(cfg.audio_connector_hidden_size,
-                                                                                               cfg.audio_connector_num_heads,
-                                                                                               cfg.audio_connector_head_dim,
-                                                                                               cfg.audio_connector_num_layers,
-                                                                                               cfg.audio_connector_num_registers,
-                                                                                               cfg.audio_connector_rope_interleaved,
-                                                                                               cfg.audio_connector_apply_gated_attention);
-            }
-
-            for (int i = 0; i < cfg.num_layers; i++) {
-                blocks["transformer_blocks." + std::to_string(i)] = std::make_shared<BasicAVTransformerBlock>(cfg.hidden_size,
-                                                                                                              cfg.audio_hidden_size,
-                                                                                                              cfg.num_attention_heads,
-                                                                                                              cfg.audio_num_attention_heads,
-                                                                                                              cfg.attention_head_dim,
-                                                                                                              cfg.audio_attention_head_dim,
-                                                                                                              cfg.cross_attention_dim,
-                                                                                                              cfg.audio_cross_attention_dim,
-                                                                                                              cfg.self_attention_gated || cfg.cross_attention_gated,
-                                                                                                              cfg.cross_attention_adaln,
-                                                                                                              cfg.video_rope_interleaved);
+            if (config.use_audio_connector) {
+                blocks["audio_embeddings_connector"] = std::make_shared<Embeddings1DConnector>(config.audio_connector_hidden_size,
+                                                                                               config.audio_connector_num_heads,
+                                                                                               config.audio_connector_head_dim,
+                                                                                               config.audio_connector_num_layers,
+                                                                                               config.audio_connector_num_registers,
+                                                                                               config.audio_connector_rope_interleaved,
+                                                                                               config.audio_connector_apply_gated_attention);
             }
 
-            blocks["norm_out"]       = std::make_shared<LayerNorm>(cfg.hidden_size, 1e-6f, false);
-            blocks["proj_out"]       = std::make_shared<Linear>(cfg.hidden_size, cfg.out_channels, true, true);
-            blocks["audio_norm_out"] = std::make_shared<LayerNorm>(cfg.audio_hidden_size, 1e-6f, false);
-            blocks["audio_proj_out"] = std::make_shared<Linear>(cfg.audio_hidden_size, cfg.audio_out_channels, true, true);
+            for (int i = 0; i < config.num_layers; i++) {
+                blocks["transformer_blocks." + std::to_string(i)] = std::make_shared<BasicAVTransformerBlock>(config.hidden_size,
+                                                                                                              config.audio_hidden_size,
+                                                                                                              config.num_attention_heads,
+                                                                                                              config.audio_num_attention_heads,
+                                                                                                              config.attention_head_dim,
+                                                                                                              config.audio_attention_head_dim,
+                                                                                                              config.cross_attention_dim,
+                                                                                                              config.audio_cross_attention_dim,
+                                                                                                              config.self_attention_gated || config.cross_attention_gated,
+                                                                                                              config.cross_attention_adaln,
+                                                                                                              config.video_rope_interleaved);
+            }
+
+            blocks["norm_out"]       = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
+            blocks["proj_out"]       = std::make_shared<Linear>(config.hidden_size, config.out_channels, true, true);
+            blocks["audio_norm_out"] = std::make_shared<LayerNorm>(config.audio_hidden_size, 1e-6f, false);
+            blocks["audio_proj_out"] = std::make_shared<Linear>(config.audio_hidden_size, config.audio_out_channels, true, true);
         }
 
         ggml_tensor* patchify_video(GGMLRunnerContext* ctx, ggml_tensor* x, int64_t n) {
@@ -1293,8 +1430,8 @@ namespace LTXV {
             if (ax == nullptr) {
                 return nullptr;
             }
-            ax = ggml_reshape_4d(ctx->ggml_ctx, ax, cfg.audio_frequency_bins, cfg.num_audio_channels, audio_length, ax->ne[2]);  // [b, t, c, f]
-            ax = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, ax, 0, 2, 1, 3));                                // [b, c, t, f]
+            ax = ggml_reshape_4d(ctx->ggml_ctx, ax, config.audio_frequency_bins, config.num_audio_channels, audio_length, ax->ne[2]);  // [b, t, c, f]
+            ax = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, ax, 0, 2, 1, 3));                                      // [b, c, t, f]
             return ax;
         }
 
@@ -1308,17 +1445,17 @@ namespace LTXV {
             }
 
             bool is_fully_processed_context =
-                context->ne[0] == cfg.cross_attention_dim + cfg.audio_cross_attention_dim &&
+                context->ne[0] == config.cross_attention_dim + config.audio_cross_attention_dim &&
                 context->ne[1] >= 1024;
             bool is_unprocessed_dual_context =
-                context->ne[0] == cfg.cross_attention_dim + cfg.audio_cross_attention_dim &&
+                context->ne[0] == config.cross_attention_dim + config.audio_cross_attention_dim &&
                 context->ne[1] < 1024;
 
             if (is_fully_processed_context) {
-                auto v_context         = ggml_ext_slice(ctx->ggml_ctx, context, 0, 0, cfg.cross_attention_dim);
+                auto v_context         = ggml_ext_slice(ctx->ggml_ctx, context, 0, 0, config.cross_attention_dim);
                 ggml_tensor* a_context = nullptr;
                 if (process_audio_context) {
-                    a_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, cfg.cross_attention_dim, cfg.cross_attention_dim + cfg.audio_cross_attention_dim);
+                    a_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, config.cross_attention_dim, config.cross_attention_dim + config.audio_cross_attention_dim);
                 }
                 return {v_context, a_context};
             }
@@ -1326,32 +1463,32 @@ namespace LTXV {
             ggml_tensor* v_context = context;
             ggml_tensor* a_context = process_audio_context ? context : nullptr;
             if (is_unprocessed_dual_context) {
-                v_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, 0, cfg.cross_attention_dim);
+                v_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, 0, config.cross_attention_dim);
                 if (process_audio_context) {
-                    a_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, cfg.cross_attention_dim, cfg.cross_attention_dim + cfg.audio_cross_attention_dim);
+                    a_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, config.cross_attention_dim, config.cross_attention_dim + config.audio_cross_attention_dim);
                 }
-            } else if (context->ne[0] == cfg.caption_channels * 2) {
-                v_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, 0, cfg.caption_channels);
+            } else if (context->ne[0] == config.caption_channels * 2) {
+                v_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, 0, config.caption_channels);
                 if (process_audio_context) {
-                    a_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, cfg.caption_channels, cfg.caption_channels * 2);
+                    a_context = ggml_ext_slice(ctx->ggml_ctx, context, 0, config.caption_channels, config.caption_channels * 2);
                 }
             }
 
-            if (cfg.caption_proj_before_connector) {
-                if (cfg.use_caption_projection &&
+            if (config.caption_proj_before_connector) {
+                if (config.use_caption_projection &&
                     blocks.count("caption_projection") > 0 &&
                     v_context != nullptr &&
-                    v_context->ne[0] == cfg.caption_channels) {
+                    v_context->ne[0] == config.caption_channels) {
                     auto caption_projection = std::dynamic_pointer_cast<NormSingleLinearTextProjection>(blocks["caption_projection"]);
                     if (caption_projection != nullptr) {
                         v_context = caption_projection->forward(ctx, v_context);
                     }
                 }
                 if (process_audio_context &&
-                    cfg.use_audio_caption_projection &&
+                    config.use_audio_caption_projection &&
                     blocks.count("audio_caption_projection") > 0 &&
                     a_context != nullptr &&
-                    a_context->ne[0] == cfg.caption_channels) {
+                    a_context->ne[0] == config.caption_channels) {
                     auto caption_projection = std::dynamic_pointer_cast<NormSingleLinearTextProjection>(blocks["audio_caption_projection"]);
                     if (caption_projection != nullptr) {
                         a_context = caption_projection->forward(ctx, a_context);
@@ -1359,34 +1496,34 @@ namespace LTXV {
                 }
             }
 
-            if (cfg.use_connector && v_context != nullptr && v_context->ne[0] == cfg.connector_hidden_size) {
+            if (config.use_connector && v_context != nullptr && v_context->ne[0] == config.connector_hidden_size) {
                 auto connector = std::dynamic_pointer_cast<Embeddings1DConnector>(blocks["video_embeddings_connector"]);
                 v_context      = connector->forward(ctx, v_context, video_connector_pe);
             }
             if (process_audio_context &&
-                cfg.use_audio_connector &&
+                config.use_audio_connector &&
                 a_context != nullptr &&
-                a_context->ne[0] == cfg.audio_connector_hidden_size) {
+                a_context->ne[0] == config.audio_connector_hidden_size) {
                 auto connector = std::dynamic_pointer_cast<Embeddings1DConnector>(blocks["audio_embeddings_connector"]);
                 a_context      = connector->forward(ctx, a_context, audio_connector_pe);
             }
 
-            if (!cfg.caption_proj_before_connector &&
-                cfg.use_caption_projection &&
+            if (!config.caption_proj_before_connector &&
+                config.use_caption_projection &&
                 blocks.count("caption_projection") > 0 &&
                 v_context != nullptr &&
-                v_context->ne[0] == cfg.caption_channels) {
+                v_context->ne[0] == config.caption_channels) {
                 auto caption_projection = std::dynamic_pointer_cast<PixArtAlphaTextProjection>(blocks["caption_projection"]);
                 if (caption_projection != nullptr) {
                     v_context = caption_projection->forward(ctx, v_context);
                 }
             }
             if (process_audio_context &&
-                !cfg.caption_proj_before_connector &&
-                cfg.use_audio_caption_projection &&
+                !config.caption_proj_before_connector &&
+                config.use_audio_caption_projection &&
                 blocks.count("audio_caption_projection") > 0 &&
                 a_context != nullptr &&
-                a_context->ne[0] == cfg.caption_channels) {
+                a_context->ne[0] == config.caption_channels) {
                 auto caption_projection = std::dynamic_pointer_cast<PixArtAlphaTextProjection>(blocks["audio_caption_projection"]);
                 if (caption_projection != nullptr) {
                     a_context = caption_projection->forward(ctx, a_context);
@@ -1428,8 +1565,8 @@ namespace LTXV {
             auto audio_norm_out      = std::dynamic_pointer_cast<LayerNorm>(blocks["audio_norm_out"]);
             auto audio_proj_out      = std::dynamic_pointer_cast<Linear>(blocks["audio_proj_out"]);
 
-            GGML_ASSERT(vx->ne[3] % cfg.in_channels == 0);
-            int64_t n          = vx->ne[3] / cfg.in_channels;
+            GGML_ASSERT(vx->ne[3] % config.in_channels == 0);
+            int64_t n          = vx->ne[3] / config.in_channels;
             int64_t width      = vx->ne[0];
             int64_t height     = vx->ne[1];
             int64_t frames     = vx->ne[2];
@@ -1452,20 +1589,20 @@ namespace LTXV {
                 a_context = ggml_cont(ctx->ggml_ctx, a_context);
             }
 
-            auto v_timestep_scaled = ggml_ext_scale(ctx->ggml_ctx, timestep, cfg.timestep_scale_multiplier);
+            auto v_timestep_scaled = ggml_ext_scale(ctx->ggml_ctx, timestep, config.timestep_scale_multiplier);
             auto v_pair            = adaln_single->forward(ctx, v_timestep_scaled);
             auto v_timestep_mod    = v_pair.first;
             auto v_embedded_time   = v_pair.second;
 
             ggml_tensor* effective_audio_timestep = audio_timestep != nullptr ? audio_timestep : timestep;
-            auto a_timestep_scaled                = ggml_ext_scale(ctx->ggml_ctx, effective_audio_timestep, cfg.timestep_scale_multiplier);
+            auto a_timestep_scaled                = ggml_ext_scale(ctx->ggml_ctx, effective_audio_timestep, config.timestep_scale_multiplier);
             auto a_pair                           = audio_adaln_single->forward(ctx, a_timestep_scaled);
             auto a_timestep_mod                   = a_pair.first;
             auto a_embedded_time                  = a_pair.second;
 
             ggml_tensor* v_prompt_timestep_mod = nullptr;
             ggml_tensor* a_prompt_timestep_mod = nullptr;
-            if (cfg.cross_attention_adaln) {
+            if (config.cross_attention_adaln) {
                 auto prompt_adaln_single       = std::dynamic_pointer_cast<AdaLayerNormSingle>(blocks["prompt_adaln_single"]);
                 auto audio_prompt_adaln_single = std::dynamic_pointer_cast<AdaLayerNormSingle>(blocks["audio_prompt_adaln_single"]);
                 v_prompt_timestep_mod          = prompt_adaln_single->forward(ctx, a_timestep_scaled).first;
@@ -1474,7 +1611,7 @@ namespace LTXV {
 
             auto av_ca_video_timestep = repeat_scalar_timestep_like(ctx, effective_audio_timestep, timestep);
             auto av_ca_audio_timestep = effective_audio_timestep;
-            auto av_ca_factor         = cfg.av_ca_timestep_scale_multiplier / cfg.timestep_scale_multiplier;
+            auto av_ca_factor         = config.av_ca_timestep_scale_multiplier / config.timestep_scale_multiplier;
             auto av_ca_video_scale_shift_timestep =
                 std::dynamic_pointer_cast<AdaLayerNormSingle>(blocks["av_ca_video_scale_shift_adaln_single"])->forward(ctx, av_ca_video_timestep).first;
             auto av_ca_a2v_gate_noise_timestep =
@@ -1491,7 +1628,7 @@ namespace LTXV {
             sd::ggml_graph_cut::mark_graph_cut(vx, "ltxav.prelude", "vx");
             sd::ggml_graph_cut::mark_graph_cut(ax, "ltxav.prelude", "ax");
 
-            for (int i = 0; i < cfg.num_layers; i++) {
+            for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<BasicAVTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
                 auto out   = block->forward(ctx,
                                             vx,
@@ -1517,14 +1654,14 @@ namespace LTXV {
                 sd::ggml_graph_cut::mark_graph_cut(ax, "ltxav.transformer_blocks." + std::to_string(i), "ax");
             }
 
-            auto v_shift_scale = get_output_scale_shift(ctx, params["scale_shift_table"], v_embedded_time, cfg.hidden_size);
+            auto v_shift_scale = get_output_scale_shift(ctx, params["scale_shift_table"], v_embedded_time, config.hidden_size);
             vx                 = norm_out->forward(ctx, vx);
             vx                 = modulate(ctx->ggml_ctx, vx, v_shift_scale[0], v_shift_scale[1]);
             vx                 = proj_out->forward(ctx, vx);
             vx                 = unpatchify_video(ctx, vx, width, height, frames);
 
             if (ax != nullptr && audio_time > 0) {
-                auto a_shift_scale = get_output_scale_shift(ctx, params["audio_scale_shift_table"], a_embedded_time, cfg.audio_hidden_size);
+                auto a_shift_scale = get_output_scale_shift(ctx, params["audio_scale_shift_table"], a_embedded_time, config.audio_hidden_size);
                 ax                 = audio_norm_out->forward(ctx, ax);
                 ax                 = modulate(ctx->ggml_ctx, ax, a_shift_scale[0], a_shift_scale[1]);
                 ax                 = audio_proj_out->forward(ctx, ax);
@@ -1536,7 +1673,7 @@ namespace LTXV {
     };
 
     struct LTXAVRunner : public DiffusionModelRunner {
-        LTXAVParams params;
+        LTXAVConfig config;
         LTXAVModelBlock model;
         std::vector<float> video_pe_vec;
         std::vector<float> audio_pe_vec;
@@ -1547,124 +1684,13 @@ namespace LTXV {
         sd::Tensor<float> vx_input_cache;
         sd::Tensor<float> ax_input_cache;
 
-        static int64_t infer_gate_heads(const String2TensorStorage& tensor_storage_map,
-                                        const std::string& bias_name,
-                                        int64_t fallback_heads) {
-            auto it = tensor_storage_map.find(bias_name);
-            if (it != tensor_storage_map.end()) {
-                return it->second.ne[0];
-            }
-            return fallback_heads;
-        }
-
         LTXAVRunner(ggml_backend_t backend,
                     ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string& prefix                      = "model.diffusion_model")
             : DiffusionModelRunner(backend, params_backend, prefix),
-              params(),
-              model(params) {
-            auto patchify_proj_iter = tensor_storage_map.find(prefix + ".patchify_proj.weight");
-            if (patchify_proj_iter != tensor_storage_map.end()) {
-                params.in_channels         = patchify_proj_iter->second.ne[0];
-                params.hidden_size         = patchify_proj_iter->second.ne[1];
-                int64_t video_heads        = infer_gate_heads(tensor_storage_map, prefix + ".transformer_blocks.0.attn1.to_gate_logits.bias", 32);
-                auto attn_layout           = infer_attention_layout(params.hidden_size, video_heads);
-                params.num_attention_heads = attn_layout.first;
-                params.attention_head_dim  = attn_layout.second;
-            }
-
-            auto audio_patchify_proj_iter = tensor_storage_map.find(prefix + ".audio_patchify_proj.weight");
-            if (audio_patchify_proj_iter != tensor_storage_map.end()) {
-                params.audio_in_channels         = audio_patchify_proj_iter->second.ne[0];
-                params.audio_hidden_size         = audio_patchify_proj_iter->second.ne[1];
-                params.audio_out_channels        = params.audio_in_channels;
-                int64_t audio_heads              = infer_gate_heads(tensor_storage_map, prefix + ".transformer_blocks.0.audio_attn1.to_gate_logits.bias", 32);
-                auto audio_attn_layout           = infer_attention_layout(params.audio_hidden_size, audio_heads);
-                params.audio_num_attention_heads = audio_attn_layout.first;
-                params.audio_attention_head_dim  = audio_attn_layout.second;
-            }
-
-            auto proj_out_iter = tensor_storage_map.find(prefix + ".proj_out.weight");
-            if (proj_out_iter != tensor_storage_map.end()) {
-                params.out_channels = proj_out_iter->second.ne[1];
-            }
-            auto audio_proj_out_iter = tensor_storage_map.find(prefix + ".audio_proj_out.weight");
-            if (audio_proj_out_iter != tensor_storage_map.end()) {
-                params.audio_out_channels = audio_proj_out_iter->second.ne[1];
-            }
-
-            auto attn2_iter = tensor_storage_map.find(prefix + ".transformer_blocks.0.attn2.to_k.weight");
-            if (attn2_iter != tensor_storage_map.end()) {
-                params.cross_attention_dim = attn2_iter->second.ne[0];
-            }
-            auto audio_attn2_iter = tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_attn2.to_k.weight");
-            if (audio_attn2_iter != tensor_storage_map.end()) {
-                params.audio_cross_attention_dim = audio_attn2_iter->second.ne[0];
-            }
-            if (tensor_storage_map.find(prefix + ".transformer_blocks.0.prompt_scale_shift_table") != tensor_storage_map.end()) {
-                params.cross_attention_adaln = true;
-            }
-            if (tensor_storage_map.find(prefix + ".transformer_blocks.0.attn1.to_gate_logits.weight") != tensor_storage_map.end() ||
-                tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_attn1.to_gate_logits.weight") != tensor_storage_map.end()) {
-                params.self_attention_gated = true;
-            }
-            if (tensor_storage_map.find(prefix + ".transformer_blocks.0.attn2.to_gate_logits.weight") != tensor_storage_map.end() ||
-                tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_attn2.to_gate_logits.weight") != tensor_storage_map.end()) {
-                params.cross_attention_gated = true;
-            }
-            if (tensor_storage_map.find(prefix + ".caption_projection.linear_1.weight") == tensor_storage_map.end() &&
-                tensor_storage_map.find(prefix + ".caption_projection.linear_2.weight") == tensor_storage_map.end()) {
-                params.use_caption_projection = false;
-            }
-            if (tensor_storage_map.find(prefix + ".audio_caption_projection.linear_1.weight") == tensor_storage_map.end() &&
-                tensor_storage_map.find(prefix + ".audio_caption_projection.linear_2.weight") == tensor_storage_map.end()) {
-                params.use_audio_caption_projection = false;
-            }
-
-            params.num_layers = count_prefix_blocks(tensor_storage_map, prefix + ".", "transformer_blocks.");
-
-            auto connector_iter = tensor_storage_map.find(prefix + ".video_embeddings_connector.transformer_1d_blocks.0.attn1.to_q.weight");
-            if (connector_iter != tensor_storage_map.end()) {
-                params.use_connector         = true;
-                params.connector_hidden_size = connector_iter->second.ne[1];
-                int64_t connector_heads      = infer_gate_heads(tensor_storage_map,
-                                                                prefix + ".video_embeddings_connector.transformer_1d_blocks.0.attn1.to_gate_logits.bias",
-                                                                32);
-                auto connector_layout        = infer_attention_layout(params.connector_hidden_size, connector_heads);
-                params.connector_num_heads   = connector_layout.first;
-                params.connector_head_dim    = connector_layout.second;
-                params.connector_num_layers  = count_prefix_blocks(tensor_storage_map, prefix + ".video_embeddings_connector.", "transformer_1d_blocks.");
-                auto register_iter           = tensor_storage_map.find(prefix + ".video_embeddings_connector.learnable_registers");
-                if (register_iter != tensor_storage_map.end()) {
-                    params.connector_num_registers = register_iter->second.ne[1];
-                }
-                if (tensor_storage_map.find(prefix + ".video_embeddings_connector.transformer_1d_blocks.0.attn1.to_gate_logits.weight") != tensor_storage_map.end()) {
-                    params.connector_apply_gated_attention = true;
-                }
-            }
-
-            auto audio_connector_iter = tensor_storage_map.find(prefix + ".audio_embeddings_connector.transformer_1d_blocks.0.attn1.to_q.weight");
-            if (audio_connector_iter != tensor_storage_map.end()) {
-                params.use_audio_connector         = true;
-                params.audio_connector_hidden_size = audio_connector_iter->second.ne[1];
-                int64_t connector_heads            = infer_gate_heads(tensor_storage_map,
-                                                                      prefix + ".audio_embeddings_connector.transformer_1d_blocks.0.attn1.to_gate_logits.bias",
-                                                                      32);
-                auto connector_layout              = infer_attention_layout(params.audio_connector_hidden_size, connector_heads);
-                params.audio_connector_num_heads   = connector_layout.first;
-                params.audio_connector_head_dim    = connector_layout.second;
-                params.audio_connector_num_layers  = count_prefix_blocks(tensor_storage_map, prefix + ".audio_embeddings_connector.", "transformer_1d_blocks.");
-                auto register_iter                 = tensor_storage_map.find(prefix + ".audio_embeddings_connector.learnable_registers");
-                if (register_iter != tensor_storage_map.end()) {
-                    params.audio_connector_num_registers = register_iter->second.ne[1];
-                }
-                if (tensor_storage_map.find(prefix + ".audio_embeddings_connector.transformer_1d_blocks.0.attn1.to_gate_logits.weight") != tensor_storage_map.end()) {
-                    params.audio_connector_apply_gated_attention = true;
-                }
-            }
-
-            model = LTXAVModelBlock(params);
+              config(LTXAVConfig::detect_from_weights(tensor_storage_map, prefix)),
+              model(config) {
             model.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -1692,21 +1718,21 @@ namespace LTXV {
             int64_t total_channels = x_tensor.shape()[3];
             int64_t spatial_size   = width * height * frames;
 
-            GGML_ASSERT(total_channels >= params.in_channels);
+            GGML_ASSERT(total_channels >= config.in_channels);
 
-            sd::Tensor<float> vx({width, height, frames, params.in_channels});
-            size_t video_values = static_cast<size_t>(params.in_channels * spatial_size);
+            sd::Tensor<float> vx({width, height, frames, config.in_channels});
+            size_t video_values = static_cast<size_t>(config.in_channels * spatial_size);
             std::copy_n(x_tensor.data(), video_values, vx.data());
 
-            if (audio_length <= 0 || total_channels == params.in_channels) {
+            if (audio_length <= 0 || total_channels == config.in_channels) {
                 return {vx, {}};
             }
 
-            int64_t needed_audio_values = static_cast<int64_t>(audio_length) * params.num_audio_channels * params.audio_frequency_bins;
-            int64_t packed_audio_values = (total_channels - params.in_channels) * spatial_size;
+            int64_t needed_audio_values = static_cast<int64_t>(audio_length) * config.num_audio_channels * config.audio_frequency_bins;
+            int64_t packed_audio_values = (total_channels - config.in_channels) * spatial_size;
             GGML_ASSERT(packed_audio_values >= needed_audio_values);
 
-            sd::Tensor<float> ax({params.audio_frequency_bins, audio_length, params.num_audio_channels, 1});
+            sd::Tensor<float> ax({config.audio_frequency_bins, audio_length, config.num_audio_channels, 1});
             const float* audio_src = x_tensor.data() + video_values;
             std::copy_n(audio_src, static_cast<size_t>(needed_audio_values), ax.data());
             return {vx, ax};
@@ -1767,25 +1793,25 @@ namespace LTXV {
             if (has_video_positions) {
                 GGML_ASSERT(video_positions_tensor.shape()[2] == video_token_count);
                 video_pe_vec = build_video_rope_matrix_from_positions(video_positions_tensor,
-                                                                      static_cast<int>(params.hidden_size),
-                                                                      static_cast<int>(params.num_attention_heads),
-                                                                      params.positional_embedding_theta,
-                                                                      params.positional_embedding_max_pos,
-                                                                      params.use_middle_indices_grid);
+                                                                      static_cast<int>(config.hidden_size),
+                                                                      static_cast<int>(config.num_attention_heads),
+                                                                      config.positional_embedding_theta,
+                                                                      config.positional_embedding_max_pos,
+                                                                      config.use_middle_indices_grid);
             } else {
                 video_pe_vec = build_video_rope_matrix(vx->ne[0],
                                                        vx->ne[1],
                                                        vx->ne[2],
-                                                       static_cast<int>(params.hidden_size),
-                                                       static_cast<int>(params.num_attention_heads),
+                                                       static_cast<int>(config.hidden_size),
+                                                       static_cast<int>(config.num_attention_heads),
                                                        video_frame_rate,
-                                                       params.positional_embedding_theta,
-                                                       params.positional_embedding_max_pos,
-                                                       params.vae_scale_factors,
-                                                       params.causal_temporal_positioning,
-                                                       params.use_middle_indices_grid);
+                                                       config.positional_embedding_theta,
+                                                       config.positional_embedding_max_pos,
+                                                       config.vae_scale_factors,
+                                                       config.causal_temporal_positioning,
+                                                       config.use_middle_indices_grid);
             }
-            auto video_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.attention_head_dim / 2, video_token_count * params.num_attention_heads);
+            auto video_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.attention_head_dim / 2, video_token_count * config.num_attention_heads);
             ggml_set_name(video_pe, "ltxav_video_pe");
             set_backend_tensor_data(video_pe, video_pe_vec.data());
 
@@ -1794,66 +1820,66 @@ namespace LTXV {
             ggml_tensor* audio_cross_pe = nullptr;
             if (ax != nullptr && ggml_nelements(ax) > 0 && ax->ne[1] > 0) {
                 audio_pe_vec = build_audio_rope_matrix(ax->ne[1],
-                                                       static_cast<int>(params.audio_hidden_size),
-                                                       static_cast<int>(params.audio_num_attention_heads),
-                                                       params.positional_embedding_theta,
-                                                       params.audio_positional_embedding_max_pos[0],
-                                                       params.use_middle_indices_grid);
-                audio_pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.audio_attention_head_dim / 2, ax->ne[1] * params.audio_num_attention_heads);
+                                                       static_cast<int>(config.audio_hidden_size),
+                                                       static_cast<int>(config.audio_num_attention_heads),
+                                                       config.positional_embedding_theta,
+                                                       config.audio_positional_embedding_max_pos[0],
+                                                       config.use_middle_indices_grid);
+                audio_pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.audio_attention_head_dim / 2, ax->ne[1] * config.audio_num_attention_heads);
                 ggml_set_name(audio_pe, "ltxav_audio_pe");
                 set_backend_tensor_data(audio_pe, audio_pe_vec.data());
 
-                int temporal_max_pos = std::max(params.positional_embedding_max_pos[0], params.audio_positional_embedding_max_pos[0]);
+                int temporal_max_pos = std::max(config.positional_embedding_max_pos[0], config.audio_positional_embedding_max_pos[0]);
                 if (has_video_positions) {
                     video_cross_pe_vec = build_video_temporal_rope_matrix_from_positions(video_positions_tensor,
-                                                                                         static_cast<int>(params.audio_cross_attention_dim),
-                                                                                         static_cast<int>(params.audio_num_attention_heads),
-                                                                                         params.positional_embedding_theta,
+                                                                                         static_cast<int>(config.audio_cross_attention_dim),
+                                                                                         static_cast<int>(config.audio_num_attention_heads),
+                                                                                         config.positional_embedding_theta,
                                                                                          temporal_max_pos,
                                                                                          true);
                 } else {
                     video_cross_pe_vec = build_video_temporal_rope_matrix(vx->ne[0],
                                                                           vx->ne[1],
                                                                           vx->ne[2],
-                                                                          static_cast<int>(params.audio_cross_attention_dim),
-                                                                          static_cast<int>(params.audio_num_attention_heads),
+                                                                          static_cast<int>(config.audio_cross_attention_dim),
+                                                                          static_cast<int>(config.audio_num_attention_heads),
                                                                           video_frame_rate,
-                                                                          params.positional_embedding_theta,
+                                                                          config.positional_embedding_theta,
                                                                           temporal_max_pos,
-                                                                          std::get<0>(params.vae_scale_factors),
-                                                                          params.causal_temporal_positioning,
+                                                                          std::get<0>(config.vae_scale_factors),
+                                                                          config.causal_temporal_positioning,
                                                                           true);
                 }
-                video_cross_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.audio_attention_head_dim / 2, video_token_count * params.audio_num_attention_heads);
+                video_cross_pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.audio_attention_head_dim / 2, video_token_count * config.audio_num_attention_heads);
                 ggml_set_name(video_cross_pe, "ltxav_video_cross_pe");
                 set_backend_tensor_data(video_cross_pe, video_cross_pe_vec.data());
 
                 audio_cross_pe_vec = build_audio_rope_matrix(ax->ne[1],
-                                                             static_cast<int>(params.audio_cross_attention_dim),
-                                                             static_cast<int>(params.audio_num_attention_heads),
-                                                             params.positional_embedding_theta,
+                                                             static_cast<int>(config.audio_cross_attention_dim),
+                                                             static_cast<int>(config.audio_num_attention_heads),
+                                                             config.positional_embedding_theta,
                                                              temporal_max_pos,
                                                              true);
-                audio_cross_pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.audio_attention_head_dim / 2, ax->ne[1] * params.audio_num_attention_heads);
+                audio_cross_pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.audio_attention_head_dim / 2, ax->ne[1] * config.audio_num_attention_heads);
                 ggml_set_name(audio_cross_pe, "ltxav_audio_cross_pe");
                 set_backend_tensor_data(audio_cross_pe, audio_cross_pe_vec.data());
             }
 
             bool needs_video_connector_pe =
-                params.use_connector &&
+                config.use_connector &&
                 context != nullptr &&
-                (context->ne[0] == params.connector_hidden_size ||
-                 ((context->ne[0] == params.cross_attention_dim + params.audio_cross_attention_dim ||
-                   context->ne[0] == params.caption_channels * 2) &&
+                (context->ne[0] == config.connector_hidden_size ||
+                 ((context->ne[0] == config.cross_attention_dim + config.audio_cross_attention_dim ||
+                   context->ne[0] == config.caption_channels * 2) &&
                   context->ne[1] < 1024));
             ggml_tensor* video_connector_pe = nullptr;
             if (needs_video_connector_pe) {
                 int64_t seq_len      = context->ne[1];
                 int64_t target_len   = std::max<int64_t>(1024, seq_len);
-                int64_t duplications = (target_len + params.connector_num_registers - 1) / params.connector_num_registers;
-                int64_t full_len     = seq_len + duplications * params.connector_num_registers - seq_len;
-                connector_pe_vec     = build_1d_rope_matrix(full_len, static_cast<int>(params.connector_hidden_size), static_cast<int>(params.connector_num_heads), 10000.f, 4096.f, true);
-                video_connector_pe   = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.connector_head_dim / 2, full_len * params.connector_num_heads);
+                int64_t duplications = (target_len + config.connector_num_registers - 1) / config.connector_num_registers;
+                int64_t full_len     = seq_len + duplications * config.connector_num_registers - seq_len;
+                connector_pe_vec     = build_1d_rope_matrix(full_len, static_cast<int>(config.connector_hidden_size), static_cast<int>(config.connector_num_heads), 10000.f, 4096.f, true);
+                video_connector_pe   = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.connector_head_dim / 2, full_len * config.connector_num_heads);
                 ggml_set_name(video_connector_pe, "ltxav_video_connector_pe");
                 set_backend_tensor_data(video_connector_pe, connector_pe_vec.data());
             }
@@ -1864,20 +1890,20 @@ namespace LTXV {
                 ax->ne[1] > 0;
             bool needs_audio_connector_pe =
                 run_audio_context &&
-                params.use_audio_connector &&
+                config.use_audio_connector &&
                 context != nullptr &&
-                (context->ne[0] == params.audio_connector_hidden_size ||
-                 ((context->ne[0] == params.cross_attention_dim + params.audio_cross_attention_dim ||
-                   context->ne[0] == params.caption_channels * 2) &&
+                (context->ne[0] == config.audio_connector_hidden_size ||
+                 ((context->ne[0] == config.cross_attention_dim + config.audio_cross_attention_dim ||
+                   context->ne[0] == config.caption_channels * 2) &&
                   context->ne[1] < 1024));
             ggml_tensor* audio_connector_pe = nullptr;
             if (needs_audio_connector_pe) {
                 int64_t seq_len        = context->ne[1];
                 int64_t target_len     = std::max<int64_t>(1024, seq_len);
-                int64_t duplications   = (target_len + params.audio_connector_num_registers - 1) / params.audio_connector_num_registers;
-                int64_t full_len       = seq_len + duplications * params.audio_connector_num_registers - seq_len;
-                audio_connector_pe_vec = build_1d_rope_matrix(full_len, static_cast<int>(params.audio_connector_hidden_size), static_cast<int>(params.audio_connector_num_heads), 10000.f, 4096.f, true);
-                audio_connector_pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, params.audio_connector_head_dim / 2, full_len * params.audio_connector_num_heads);
+                int64_t duplications   = (target_len + config.audio_connector_num_registers - 1) / config.audio_connector_num_registers;
+                int64_t full_len       = seq_len + duplications * config.audio_connector_num_registers - seq_len;
+                audio_connector_pe_vec = build_1d_rope_matrix(full_len, static_cast<int>(config.audio_connector_hidden_size), static_cast<int>(config.audio_connector_num_heads), 10000.f, 4096.f, true);
+                audio_connector_pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.audio_connector_head_dim / 2, full_len * config.audio_connector_num_heads);
                 ggml_set_name(audio_connector_pe, "ltxav_audio_connector_pe");
                 set_backend_tensor_data(audio_connector_pe, audio_connector_pe_vec.data());
             }

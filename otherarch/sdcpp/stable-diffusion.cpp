@@ -41,6 +41,7 @@
 #include "upscaler.h"
 #include "vae.hpp"
 #include "wan.hpp"
+#include "wan_vae.hpp"
 #include "z_image.hpp"
 
 #include "latent-preview.h"
@@ -5957,7 +5958,7 @@ namespace kcpp_sd {
         if (ctx != nullptr && ctx->sd != nullptr) {
             auto maybe_flux = std::dynamic_pointer_cast<Flux::FluxRunner>(ctx->sd->diffusion_model);
             if (maybe_flux != nullptr) {
-                return maybe_flux->flux_params.is_chroma;
+                return maybe_flux->config.is_chroma;
             }
         }
         return false;

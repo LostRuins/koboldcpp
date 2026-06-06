@@ -20,6 +20,104 @@ namespace ZImage {
     constexpr int ADALN_EMBED_DIM    = 256;
     constexpr int SEQ_MULTI_OF       = 32;
 
+    struct ZImageConfig {
+        int patch_size             = 2;
+        int64_t hidden_size        = 3840;
+        int64_t in_channels        = 16;
+        int64_t out_channels       = 16;
+        int64_t num_layers         = 30;
+        int64_t num_refiner_layers = 2;
+        int64_t head_dim           = 128;
+        int64_t num_heads          = 30;
+        int64_t num_kv_heads       = 30;
+        int64_t multiple_of        = 256;
+        float ffn_dim_multiplier   = 8.0f / 3.0f;
+        float norm_eps             = 1e-5f;
+        bool qk_norm               = true;
+        int64_t cap_feat_dim       = 2560;
+        int theta                  = 256;
+        std::vector<int> axes_dim  = {32, 48, 48};
+        int64_t axes_dim_sum       = 128;
+
+        static ZImageConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            ZImageConfig config;
+            int64_t detected_layers          = 0;
+            int64_t detected_refiner_layers  = 0;
+            int64_t detected_context_refiner = 0;
+            int64_t detected_head_dim        = 0;
+            int64_t detected_qkv_dim         = 0;
+
+            for (const auto& [name, tensor_storage] : tensor_storage_map) {
+                if (!starts_with(name, prefix)) {
+                    continue;
+                }
+                if (ends_with(name, "x_embedder.weight") && tensor_storage.n_dims == 2) {
+                    int64_t patch_area = config.patch_size * config.patch_size;
+                    config.in_channels = tensor_storage.ne[0] / patch_area;
+                    config.hidden_size = tensor_storage.ne[1];
+                } else if (ends_with(name, "cap_embedder.1.weight") && tensor_storage.n_dims == 2) {
+                    config.cap_feat_dim = tensor_storage.ne[0];
+                    config.hidden_size  = tensor_storage.ne[1];
+                } else if (ends_with(name, "layers.0.attention.q_norm.weight") && tensor_storage.n_dims == 1) {
+                    detected_head_dim = tensor_storage.ne[0];
+                } else if (ends_with(name, "layers.0.attention.qkv.weight") && tensor_storage.n_dims == 2) {
+                    detected_qkv_dim = tensor_storage.ne[1];
+                } else if (ends_with(name, "final_layer.linear.weight") && tensor_storage.n_dims == 2) {
+                    int64_t patch_area  = config.patch_size * config.patch_size;
+                    config.out_channels = tensor_storage.ne[1] / patch_area;
+                }
+
+                size_t pos = name.find("layers.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index = atoi(items[1].c_str());
+                        detected_layers = std::max<int64_t>(detected_layers, block_index + 1);
+                    }
+                }
+                pos = name.find("noise_refiner.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index         = atoi(items[1].c_str());
+                        detected_refiner_layers = std::max<int64_t>(detected_refiner_layers, block_index + 1);
+                    }
+                }
+                pos = name.find("context_refiner.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index          = atoi(items[1].c_str());
+                        detected_context_refiner = std::max<int64_t>(detected_context_refiner, block_index + 1);
+                    }
+                }
+            }
+            if (detected_layers > 0) {
+                config.num_layers = detected_layers;
+            }
+            if (detected_refiner_layers > 0 || detected_context_refiner > 0) {
+                config.num_refiner_layers = std::max(detected_refiner_layers, detected_context_refiner);
+            }
+            if (detected_head_dim > 0) {
+                config.head_dim  = detected_head_dim;
+                config.num_heads = config.hidden_size / config.head_dim;
+                if (detected_qkv_dim > 0) {
+                    int64_t qkv_heads   = detected_qkv_dim / config.head_dim;
+                    config.num_kv_heads = std::max<int64_t>(1, (qkv_heads - config.num_heads) / 2);
+                }
+            }
+            LOG_DEBUG("z_image: num_layers = %" PRId64 ", num_refiner_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", num_kv_heads = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                      config.num_layers,
+                      config.num_refiner_layers,
+                      config.hidden_size,
+                      config.num_heads,
+                      config.num_kv_heads,
+                      config.in_channels,
+                      config.out_channels);
+            return config;
+        }
+    };
+
     struct JointAttention : public GGMLBlock {
     protected:
         int64_t head_dim;
@@ -263,90 +361,70 @@ namespace ZImage {
         }
     };
 
-    struct ZImageParams {
-        int patch_size             = 2;
-        int64_t hidden_size        = 3840;
-        int64_t in_channels        = 16;
-        int64_t out_channels       = 16;
-        int64_t num_layers         = 30;
-        int64_t num_refiner_layers = 2;
-        int64_t head_dim           = 128;
-        int64_t num_heads          = 30;
-        int64_t num_kv_heads       = 30;
-        int64_t multiple_of        = 256;
-        float ffn_dim_multiplier   = 8.0f / 3.0f;
-        float norm_eps             = 1e-5f;
-        bool qk_norm               = true;
-        int64_t cap_feat_dim       = 2560;
-        int theta                  = 256;
-        std::vector<int> axes_dim  = {32, 48, 48};
-        int64_t axes_dim_sum       = 128;
-    };
-
     class ZImageModel : public GGMLBlock {
     protected:
-        ZImageParams z_image_params;
+        ZImageConfig config;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
-            params["cap_pad_token"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, z_image_params.hidden_size);
-            params["x_pad_token"]   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, z_image_params.hidden_size);
+            params["cap_pad_token"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.hidden_size);
+            params["x_pad_token"]   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.hidden_size);
         }
 
     public:
         ZImageModel() = default;
-        ZImageModel(ZImageParams z_image_params)
-            : z_image_params(z_image_params) {
-            blocks["x_embedder"]     = std::make_shared<Linear>(z_image_params.patch_size * z_image_params.patch_size * z_image_params.in_channels, z_image_params.hidden_size);
-            blocks["t_embedder"]     = std::make_shared<TimestepEmbedder>(MIN(z_image_params.hidden_size, 1024), 256, 256);
-            blocks["cap_embedder.0"] = std::make_shared<RMSNorm>(z_image_params.cap_feat_dim, z_image_params.norm_eps);
-            blocks["cap_embedder.1"] = std::make_shared<Linear>(z_image_params.cap_feat_dim, z_image_params.hidden_size);
+        ZImageModel(ZImageConfig config)
+            : config(config) {
+            blocks["x_embedder"]     = std::make_shared<Linear>(config.patch_size * config.patch_size * config.in_channels, config.hidden_size);
+            blocks["t_embedder"]     = std::make_shared<TimestepEmbedder>(MIN(config.hidden_size, 1024), 256, 256);
+            blocks["cap_embedder.0"] = std::make_shared<RMSNorm>(config.cap_feat_dim, config.norm_eps);
+            blocks["cap_embedder.1"] = std::make_shared<Linear>(config.cap_feat_dim, config.hidden_size);
 
-            for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
+            for (int i = 0; i < config.num_refiner_layers; i++) {
                 auto block = std::make_shared<JointTransformerBlock>(i,
-                                                                     z_image_params.hidden_size,
-                                                                     z_image_params.head_dim,
-                                                                     z_image_params.num_heads,
-                                                                     z_image_params.num_kv_heads,
-                                                                     z_image_params.multiple_of,
-                                                                     z_image_params.ffn_dim_multiplier,
-                                                                     z_image_params.norm_eps,
-                                                                     z_image_params.qk_norm,
+                                                                     config.hidden_size,
+                                                                     config.head_dim,
+                                                                     config.num_heads,
+                                                                     config.num_kv_heads,
+                                                                     config.multiple_of,
+                                                                     config.ffn_dim_multiplier,
+                                                                     config.norm_eps,
+                                                                     config.qk_norm,
                                                                      true);
 
                 blocks["noise_refiner." + std::to_string(i)] = block;
             }
 
-            for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
+            for (int i = 0; i < config.num_refiner_layers; i++) {
                 auto block = std::make_shared<JointTransformerBlock>(i,
-                                                                     z_image_params.hidden_size,
-                                                                     z_image_params.head_dim,
-                                                                     z_image_params.num_heads,
-                                                                     z_image_params.num_kv_heads,
-                                                                     z_image_params.multiple_of,
-                                                                     z_image_params.ffn_dim_multiplier,
-                                                                     z_image_params.norm_eps,
-                                                                     z_image_params.qk_norm,
+                                                                     config.hidden_size,
+                                                                     config.head_dim,
+                                                                     config.num_heads,
+                                                                     config.num_kv_heads,
+                                                                     config.multiple_of,
+                                                                     config.ffn_dim_multiplier,
+                                                                     config.norm_eps,
+                                                                     config.qk_norm,
                                                                      false);
 
                 blocks["context_refiner." + std::to_string(i)] = block;
             }
 
-            for (int i = 0; i < z_image_params.num_layers; i++) {
+            for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::make_shared<JointTransformerBlock>(i,
-                                                                     z_image_params.hidden_size,
-                                                                     z_image_params.head_dim,
-                                                                     z_image_params.num_heads,
-                                                                     z_image_params.num_kv_heads,
-                                                                     z_image_params.multiple_of,
-                                                                     z_image_params.ffn_dim_multiplier,
-                                                                     z_image_params.norm_eps,
-                                                                     z_image_params.qk_norm,
+                                                                     config.hidden_size,
+                                                                     config.head_dim,
+                                                                     config.num_heads,
+                                                                     config.num_kv_heads,
+                                                                     config.multiple_of,
+                                                                     config.ffn_dim_multiplier,
+                                                                     config.norm_eps,
+                                                                     config.qk_norm,
                                                                      true);
 
                 blocks["layers." + std::to_string(i)] = block;
             }
 
-            blocks["final_layer"] = std::make_shared<FinalLayer>(z_image_params.hidden_size, z_image_params.patch_size, z_image_params.out_channels);
+            blocks["final_layer"] = std::make_shared<FinalLayer>(config.hidden_size, config.patch_size, config.out_channels);
         }
 
         ggml_tensor* forward_core(GGMLRunnerContext* ctx,
@@ -393,14 +471,14 @@ namespace ZImage {
             auto txt_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, 0, txt->ne[1]);
             auto img_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt->ne[1], pe->ne[3]);
 
-            for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
+            for (int i = 0; i < config.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["context_refiner." + std::to_string(i)]);
 
                 txt = block->forward(ctx, txt, txt_pe, nullptr, nullptr);
                 sd::ggml_graph_cut::mark_graph_cut(txt, "z_image.context_refiner." + std::to_string(i), "txt");
             }
 
-            for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
+            for (int i = 0; i < config.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["noise_refiner." + std::to_string(i)]);
 
                 img = block->forward(ctx, img, img_pe, nullptr, t_emb);
@@ -410,7 +488,7 @@ namespace ZImage {
             auto txt_img = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, hidden_size]
             sd::ggml_graph_cut::mark_graph_cut(txt_img, "z_image.prelude", "txt_img");
 
-            for (int i = 0; i < z_image_params.num_layers; i++) {
+            for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["layers." + std::to_string(i)]);
 
                 txt_img = block->forward(ctx, txt_img, pe, nullptr, t_emb);
@@ -442,7 +520,7 @@ namespace ZImage {
             int64_t C = x->ne[2];
             int64_t N = x->ne[3];
 
-            int patch_size = z_image_params.patch_size;
+            int patch_size = config.patch_size;
 
             auto img             = DiT::pad_and_patchify(ctx, x, patch_size, patch_size, false);
             uint64_t n_img_token = img->ne[1];
@@ -467,7 +545,7 @@ namespace ZImage {
 
     struct ZImageRunner : public DiffusionModelRunner {
     public:
-        ZImageParams z_image_params;
+        ZImageConfig config;
         ZImageModel z_image;
         std::vector<float> pe_vec;
         std::vector<float> timestep_vec;
@@ -478,8 +556,9 @@ namespace ZImage {
                      const String2TensorStorage& tensor_storage_map = {},
                      const std::string prefix                       = "",
                      SDVersion version                              = VERSION_Z_IMAGE)
-            : DiffusionModelRunner(backend, params_backend, prefix) {
-            z_image = ZImageModel(z_image_params);
+            : DiffusionModelRunner(backend, params_backend, prefix),
+              config(ZImageConfig::detect_from_weights(tensor_storage_map, prefix)) {
+            z_image = ZImageModel(config);
             z_image.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -510,19 +589,19 @@ namespace ZImage {
 
             pe_vec      = Rope::gen_z_image_pe(static_cast<int>(x->ne[1]),
                                                static_cast<int>(x->ne[0]),
-                                               z_image_params.patch_size,
+                                               config.patch_size,
                                                static_cast<int>(x->ne[3]),
                                                static_cast<int>(context->ne[1]),
                                                SEQ_MULTI_OF,
                                                ref_latents,
                                                increase_ref_index,
-                                               z_image_params.theta,
+                                               config.theta,
                                                circular_y_enabled,
                                                circular_x_enabled,
-                                               z_image_params.axes_dim);
-            int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
+                                               config.axes_dim);
+            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
+            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe, true, "pe");
             // pe->data = nullptr;

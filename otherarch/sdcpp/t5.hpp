@@ -14,6 +14,28 @@
 #include "model.h"
 #include "tokenizers/t5_unigram_tokenizer.h"
 
+struct T5Config {
+    int64_t num_layers      = 24;
+    int64_t model_dim       = 4096;
+    int64_t ff_dim          = 10240;
+    int64_t num_heads       = 64;
+    int64_t vocab_size      = 32128;
+    bool relative_attention = true;
+
+    static T5Config detect_from_weights(const String2TensorStorage& tensor_storage_map,
+                                        const std::string& prefix,
+                                        bool is_umt5 = false) {
+        (void)tensor_storage_map;
+        (void)prefix;
+        T5Config config;
+        if (is_umt5) {
+            config.vocab_size         = 256384;
+            config.relative_attention = false;
+        }
+        return config;
+    }
+};
+
 class T5LayerNorm : public UnaryBlock {
 protected:
     int64_t hidden_size;
@@ -272,30 +294,21 @@ public:
     }
 };
 
-struct T5Params {
-    int64_t num_layers      = 24;
-    int64_t model_dim       = 4096;
-    int64_t ff_dim          = 10240;
-    int64_t num_heads       = 64;
-    int64_t vocab_size      = 32128;
-    bool relative_attention = true;
-};
-
 struct T5 : public GGMLBlock {
-    T5Params params;
+    T5Config config;
 
 public:
     T5() {}
-    T5(T5Params params)
-        : params(params) {
-        blocks["encoder"] = std::shared_ptr<GGMLBlock>(new T5Stack(params.num_layers,
-                                                                   params.model_dim,
-                                                                   params.model_dim,
-                                                                   params.ff_dim,
-                                                                   params.num_heads,
-                                                                   params.relative_attention));
-        blocks["shared"]  = std::shared_ptr<GGMLBlock>(new Embedding(params.vocab_size,
-                                                                     params.model_dim));
+    T5(T5Config config)
+        : config(config) {
+        blocks["encoder"] = std::shared_ptr<GGMLBlock>(new T5Stack(config.num_layers,
+                                                                   config.model_dim,
+                                                                   config.model_dim,
+                                                                   config.ff_dim,
+                                                                   config.num_heads,
+                                                                   config.relative_attention));
+        blocks["shared"]  = std::shared_ptr<GGMLBlock>(new Embedding(config.vocab_size,
+                                                                     config.model_dim));
     }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -316,7 +329,7 @@ public:
 };
 
 struct T5Runner : public GGMLRunner {
-    T5Params params;
+    T5Config config;
     T5 model;
     std::vector<int> relative_position_bucket_vec;
 
@@ -325,12 +338,9 @@ struct T5Runner : public GGMLRunner {
              const String2TensorStorage& tensor_storage_map,
              const std::string prefix,
              bool is_umt5 = false)
-        : GGMLRunner(backend, params_backend) {
-        if (is_umt5) {
-            params.vocab_size         = 256384;
-            params.relative_attention = false;
-        }
-        model = T5(params);
+        : GGMLRunner(backend, params_backend),
+          config(T5Config::detect_from_weights(tensor_storage_map, prefix, is_umt5)) {
+        model = T5(config);
         model.init(params_ctx, tensor_storage_map, prefix);
     }
 

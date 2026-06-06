@@ -16,7 +16,7 @@ namespace Pid {
     constexpr int PID_GRAPH_SIZE = 196608;
     constexpr float PID_PI       = 3.14159265358979323846f;
 
-    struct PixelDiTParams {
+    struct PixelDiTConfig {
         int64_t in_channels            = 3;
         int64_t hidden_size            = 1536;
         int64_t num_groups             = 24;
@@ -38,6 +38,45 @@ namespace Pid {
         int64_t lq_latent_down_factor  = 8;
         int64_t rope_ref_grid_h        = 64;
         int64_t rope_ref_grid_w        = 64;
+
+        static PixelDiTConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            PixelDiTConfig config;
+            for (const auto& [name, tensor_storage] : tensor_storage_map) {
+                if (!starts_with(name, prefix)) {
+                    continue;
+                }
+                size_t pos = name.find("patch_blocks.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index    = atoi(items[1].c_str());
+                        config.patch_depth = std::max<int64_t>(config.patch_depth, block_index + 1);
+                    }
+                }
+                pos = name.find("pixel_blocks.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index    = atoi(items[1].c_str());
+                        config.pixel_depth = std::max<int64_t>(config.pixel_depth, block_index + 1);
+                    }
+                }
+                if (name.find("lq_proj.latent_proj.0.weight") != std::string::npos) {
+                    config.lq_latent_channels    = tensor_storage.ne[2];
+                    config.lq_latent_down_factor = config.lq_latent_channels >= 64 ? 16 : 8;
+                }
+                if (name.find("patch_blocks.0.mlp_x.w1.weight") != std::string::npos) {
+                    config.patch_mlp_hidden_dim = tensor_storage.ne[1];
+                }
+            }
+            LOG_DEBUG("pid: patch_depth = %" PRId64 ", pixel_depth = %" PRId64 ", patch_mlp_hidden_dim = %" PRId64 ", lq_latent_channels = %" PRId64 ", lq_latent_down_factor = %" PRId64,
+                      config.patch_depth,
+                      config.pixel_depth,
+                      config.patch_mlp_hidden_dim,
+                      config.lq_latent_channels,
+                      config.lq_latent_down_factor);
+            return config;
+        }
     };
 
     inline std::vector<float> make_rope_1d(int length,
@@ -466,29 +505,29 @@ namespace Pid {
     };
 
     struct LQProjection2D : public GGMLBlock {
-        PixelDiTParams params_cfg;
+        PixelDiTConfig config;
 
-        LQProjection2D(const PixelDiTParams& params_cfg)
-            : params_cfg(params_cfg) {
-            blocks["latent_proj.0"] = std::make_shared<Conv2d>(params_cfg.lq_latent_channels, params_cfg.lq_hidden_dim, std::pair<int, int>{3, 3}, std::pair<int, int>{1, 1}, std::pair<int, int>{1, 1});
-            blocks["latent_proj.2"] = std::make_shared<Conv2d>(params_cfg.lq_hidden_dim, params_cfg.lq_hidden_dim, std::pair<int, int>{3, 3}, std::pair<int, int>{1, 1}, std::pair<int, int>{1, 1});
-            for (int i = 0; i < params_cfg.lq_num_res_blocks; ++i) {
-                blocks["latent_proj." + std::to_string(3 + i)] = std::make_shared<PiDResBlock>(params_cfg.lq_hidden_dim);
+        LQProjection2D(const PixelDiTConfig& config)
+            : config(config) {
+            blocks["latent_proj.0"] = std::make_shared<Conv2d>(config.lq_latent_channels, config.lq_hidden_dim, std::pair<int, int>{3, 3}, std::pair<int, int>{1, 1}, std::pair<int, int>{1, 1});
+            blocks["latent_proj.2"] = std::make_shared<Conv2d>(config.lq_hidden_dim, config.lq_hidden_dim, std::pair<int, int>{3, 3}, std::pair<int, int>{1, 1}, std::pair<int, int>{1, 1});
+            for (int i = 0; i < config.lq_num_res_blocks; ++i) {
+                blocks["latent_proj." + std::to_string(3 + i)] = std::make_shared<PiDResBlock>(config.lq_hidden_dim);
             }
 
-            int num_outputs = static_cast<int>((params_cfg.patch_depth + params_cfg.lq_interval - 1) / params_cfg.lq_interval);
+            int num_outputs = static_cast<int>((config.patch_depth + config.lq_interval - 1) / config.lq_interval);
             for (int i = 0; i < num_outputs; ++i) {
-                blocks["output_heads." + std::to_string(i)] = std::make_shared<Linear>(params_cfg.lq_hidden_dim, params_cfg.hidden_size, true);
-                blocks["gate_modules." + std::to_string(i)] = std::make_shared<SigmaAwareGate>(params_cfg.hidden_size);
+                blocks["output_heads." + std::to_string(i)] = std::make_shared<Linear>(config.lq_hidden_dim, config.hidden_size, true);
+                blocks["gate_modules." + std::to_string(i)] = std::make_shared<SigmaAwareGate>(config.hidden_size);
             }
         }
 
         bool is_gate_active(int block_idx) const {
-            return block_idx % params_cfg.lq_interval == 0;
+            return block_idx % config.lq_interval == 0;
         }
 
         int get_output_index(int block_idx) const {
-            return block_idx / static_cast<int>(params_cfg.lq_interval);
+            return block_idx / static_cast<int>(config.lq_interval);
         }
 
         ggml_tensor* gate(GGMLRunnerContext* ctx,
@@ -506,8 +545,8 @@ namespace Pid {
                                           int64_t target_pW) {
             auto conv0             = std::dynamic_pointer_cast<Conv2d>(blocks["latent_proj.0"]);
             auto conv2             = std::dynamic_pointer_cast<Conv2d>(blocks["latent_proj.2"]);
-            float z_to_patch_ratio = static_cast<float>(params_cfg.lq_sr_scale * params_cfg.lq_latent_down_factor) /
-                                     static_cast<float>(params_cfg.patch_size);
+            float z_to_patch_ratio = static_cast<float>(config.lq_sr_scale * config.lq_latent_down_factor) /
+                                     static_cast<float>(config.patch_size);
             GGML_ASSERT(z_to_patch_ratio >= 1.0f);
             if (lq_latent->ne[0] != target_pW || lq_latent->ne[1] != target_pH) {
                 lq_latent = ggml_interpolate(ctx->ggml_ctx,
@@ -522,7 +561,7 @@ namespace Pid {
             auto feat = conv0->forward(ctx, lq_latent);
             feat      = ggml_silu_inplace(ctx->ggml_ctx, feat);
             feat      = conv2->forward(ctx, feat);
-            for (int i = 0; i < params_cfg.lq_num_res_blocks; ++i) {
+            for (int i = 0; i < config.lq_num_res_blocks; ++i) {
                 auto block = std::dynamic_pointer_cast<PiDResBlock>(blocks["latent_proj." + std::to_string(3 + i)]);
                 feat       = block->forward(ctx, feat);
             }
@@ -533,7 +572,7 @@ namespace Pid {
             auto tokens = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, feat, 2, 0, 1, 3));
             tokens      = ggml_reshape_3d(ctx->ggml_ctx, tokens, C, L, B);
 
-            int num_outputs = static_cast<int>((params_cfg.patch_depth + params_cfg.lq_interval - 1) / params_cfg.lq_interval);
+            int num_outputs = static_cast<int>((config.patch_depth + config.lq_interval - 1) / config.lq_interval);
             std::vector<ggml_tensor*> outputs;
             outputs.reserve(num_outputs);
             for (int i = 0; i < num_outputs; ++i) {
@@ -545,34 +584,34 @@ namespace Pid {
     };
 
     struct PixelDiT : public GGMLBlock {
-        PixelDiTParams params_cfg;
+        PixelDiTConfig config;
 
         PixelDiT() = default;
 
-        PixelDiT(const PixelDiTParams& params_cfg)
-            : params_cfg(params_cfg) {
-            blocks["pixel_embedder"] = std::make_shared<PixelTokenEmbedder>(params_cfg.in_channels, params_cfg.pixel_hidden_size);
-            blocks["s_embedder"]     = std::make_shared<PatchTokenEmbedder>(params_cfg.in_channels * params_cfg.patch_size * params_cfg.patch_size, params_cfg.hidden_size, false, true);
-            blocks["t_embedder"]     = std::make_shared<PixelDiTTimestepEmbedder>(params_cfg.hidden_size);
-            blocks["y_embedder"]     = std::make_shared<PatchTokenEmbedder>(params_cfg.txt_embed_dim, params_cfg.hidden_size, true, true);
-            for (int i = 0; i < params_cfg.patch_depth; ++i) {
-                blocks["patch_blocks." + std::to_string(i)] = std::make_shared<MMDiTBlockT2I>(params_cfg.hidden_size, params_cfg.num_groups, params_cfg.patch_mlp_hidden_dim);
+        PixelDiT(const PixelDiTConfig& config)
+            : config(config) {
+            blocks["pixel_embedder"] = std::make_shared<PixelTokenEmbedder>(config.in_channels, config.pixel_hidden_size);
+            blocks["s_embedder"]     = std::make_shared<PatchTokenEmbedder>(config.in_channels * config.patch_size * config.patch_size, config.hidden_size, false, true);
+            blocks["t_embedder"]     = std::make_shared<PixelDiTTimestepEmbedder>(config.hidden_size);
+            blocks["y_embedder"]     = std::make_shared<PatchTokenEmbedder>(config.txt_embed_dim, config.hidden_size, true, true);
+            for (int i = 0; i < config.patch_depth; ++i) {
+                blocks["patch_blocks." + std::to_string(i)] = std::make_shared<MMDiTBlockT2I>(config.hidden_size, config.num_groups, config.patch_mlp_hidden_dim);
             }
-            for (int i = 0; i < params_cfg.pixel_depth; ++i) {
-                blocks["pixel_blocks." + std::to_string(i)] = std::make_shared<PiTBlock>(params_cfg.pixel_hidden_size,
-                                                                                         params_cfg.hidden_size,
-                                                                                         params_cfg.patch_size,
-                                                                                         params_cfg.pixel_attn_hidden_size,
-                                                                                         params_cfg.pixel_num_groups);
+            for (int i = 0; i < config.pixel_depth; ++i) {
+                blocks["pixel_blocks." + std::to_string(i)] = std::make_shared<PiTBlock>(config.pixel_hidden_size,
+                                                                                         config.hidden_size,
+                                                                                         config.patch_size,
+                                                                                         config.pixel_attn_hidden_size,
+                                                                                         config.pixel_num_groups);
             }
-            blocks["final_layer"] = std::make_shared<FinalLayer>(params_cfg.pixel_hidden_size, params_cfg.in_channels);
-            blocks["lq_proj"]     = std::make_shared<LQProjection2D>(params_cfg);
+            blocks["final_layer"] = std::make_shared<FinalLayer>(config.pixel_hidden_size, config.in_channels);
+            blocks["lq_proj"]     = std::make_shared<LQProjection2D>(config);
         }
 
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map = {},
                          std::string prefix                             = "") override {
-            params["y_pos_embedding"] = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, params_cfg.hidden_size, params_cfg.txt_max_length, 1);
+            params["y_pos_embedding"] = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, config.hidden_size, config.txt_max_length, 1);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -594,21 +633,21 @@ namespace Pid {
 
             int64_t W_orig = x->ne[0];
             int64_t H_orig = x->ne[1];
-            x              = DiT::pad_to_patch_size(ctx, x, static_cast<int>(params_cfg.patch_size), static_cast<int>(params_cfg.patch_size));
+            x              = DiT::pad_to_patch_size(ctx, x, static_cast<int>(config.patch_size), static_cast<int>(config.patch_size));
             int64_t W      = x->ne[0];
             int64_t H      = x->ne[1];
             int64_t B      = x->ne[3];
-            int64_t Hs     = H / params_cfg.patch_size;
-            int64_t Ws     = W / params_cfg.patch_size;
+            int64_t Hs     = H / config.patch_size;
+            int64_t Ws     = W / config.patch_size;
             int64_t L      = Hs * Ws;
-            int64_t P2     = params_cfg.patch_size * params_cfg.patch_size;
+            int64_t P2     = config.patch_size * config.patch_size;
 
-            auto x_patches = DiT::patchify(ctx->ggml_ctx, x, static_cast<int>(params_cfg.patch_size), static_cast<int>(params_cfg.patch_size), true);
+            auto x_patches = DiT::patchify(ctx->ggml_ctx, x, static_cast<int>(config.patch_size), static_cast<int>(config.patch_size), true);
             auto t_emb     = t_embedder->forward(ctx, timesteps);
             auto condition = ggml_silu(ctx->ggml_ctx, t_emb);
 
             GGML_ASSERT(context != nullptr);
-            int64_t Ltxt = std::min<int64_t>(context->ne[1], params_cfg.txt_max_length);
+            int64_t Ltxt = std::min<int64_t>(context->ne[1], config.txt_max_length);
             auto y       = ggml_ext_slice(ctx->ggml_ctx, context, 1, 0, Ltxt);
             auto y_emb   = y_embedder->forward(ctx, y);
             auto y_pos   = ggml_ext_slice(ctx->ggml_ctx, params["y_pos_embedding"], 1, 0, Ltxt);
@@ -618,7 +657,7 @@ namespace Pid {
 
             auto s = s_embedder->forward(ctx, x_patches);
 
-            for (int i = 0; i < params_cfg.patch_depth; ++i) {
+            for (int i = 0; i < config.patch_depth; ++i) {
                 if (lq_proj->is_gate_active(i)) {
                     int out_idx = lq_proj->get_output_index(i);
                     if (out_idx < static_cast<int>(lq_features.size())) {
@@ -639,22 +678,22 @@ namespace Pid {
             }
             s = ggml_silu(ctx->ggml_ctx, ggml_add(ctx->ggml_ctx, s, t_emb));
 
-            auto s_cond = ggml_reshape_2d(ctx->ggml_ctx, s, params_cfg.hidden_size, L * B);
-            auto pixels = pixel_embedder->forward(ctx, x, params_cfg.patch_size, pixel_pos_full);
-            for (int i = 0; i < params_cfg.pixel_depth; ++i) {
+            auto s_cond = ggml_reshape_2d(ctx->ggml_ctx, s, config.hidden_size, L * B);
+            auto pixels = pixel_embedder->forward(ctx, x, config.patch_size, pixel_pos_full);
+            for (int i = 0; i < config.pixel_depth; ++i) {
                 auto block = std::dynamic_pointer_cast<PiTBlock>(blocks["pixel_blocks." + std::to_string(i)]);
                 pixels     = block->forward(ctx, pixels, s_cond, H, W, pixel_pos_comp);
                 sd::ggml_graph_cut::mark_graph_cut(pixels, "pid.pixel_blocks." + std::to_string(i), "pixels");
             }
 
             pixels   = final_layer->forward(ctx, pixels);
-            pixels   = ggml_reshape_3d(ctx->ggml_ctx, pixels, params_cfg.in_channels * P2, L, B);
+            pixels   = ggml_reshape_3d(ctx->ggml_ctx, pixels, config.in_channels * P2, L, B);
             auto out = DiT::unpatchify(ctx->ggml_ctx,
                                        pixels,
                                        Hs,
                                        Ws,
-                                       static_cast<int>(params_cfg.patch_size),
-                                       static_cast<int>(params_cfg.patch_size),
+                                       static_cast<int>(config.patch_size),
+                                       static_cast<int>(config.patch_size),
                                        false);
             out      = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H_orig);
             out      = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W_orig);
@@ -663,7 +702,7 @@ namespace Pid {
     };
 
     struct PiDRunner : public DiffusionModelRunner {
-        PixelDiTParams params_cfg;
+        PixelDiTConfig config;
         PixelDiT model;
         std::vector<float> pos_img_vec;
         std::vector<float> pos_txt_vec;
@@ -674,43 +713,9 @@ namespace Pid {
                   ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map,
                   const std::string prefix = "model.diffusion_model")
-            : DiffusionModelRunner(backend, params_backend, prefix) {
-            for (const auto& pair : tensor_storage_map) {
-                const std::string& tensor_name = pair.first;
-                if (tensor_name.find(prefix) == std::string::npos) {
-                    continue;
-                }
-                size_t pos = tensor_name.find("patch_blocks.");
-                if (pos != std::string::npos) {
-                    auto items = split_string(tensor_name.substr(pos), '.');
-                    if (items.size() > 1) {
-                        int block_index        = atoi(items[1].c_str());
-                        params_cfg.patch_depth = std::max<int64_t>(params_cfg.patch_depth, block_index + 1);
-                    }
-                }
-                pos = tensor_name.find("pixel_blocks.");
-                if (pos != std::string::npos) {
-                    auto items = split_string(tensor_name.substr(pos), '.');
-                    if (items.size() > 1) {
-                        int block_index        = atoi(items[1].c_str());
-                        params_cfg.pixel_depth = std::max<int64_t>(params_cfg.pixel_depth, block_index + 1);
-                    }
-                }
-                if (tensor_name.find("lq_proj.latent_proj.0.weight") != std::string::npos) {
-                    params_cfg.lq_latent_channels    = pair.second.ne[2];
-                    params_cfg.lq_latent_down_factor = params_cfg.lq_latent_channels >= 64 ? 16 : 8;
-                }
-                if (tensor_name.find("patch_blocks.0.mlp_x.w1.weight") != std::string::npos) {
-                    params_cfg.patch_mlp_hidden_dim = pair.second.ne[1];
-                }
-            }
-            LOG_INFO("PiD params: patch_depth=%" PRId64 ", pixel_depth=%" PRId64 ", patch_mlp_hidden_dim=%" PRId64 ", lq_latent_channels=%" PRId64 ", lq_latent_down_factor=%" PRId64,
-                     params_cfg.patch_depth,
-                     params_cfg.pixel_depth,
-                     params_cfg.patch_mlp_hidden_dim,
-                     params_cfg.lq_latent_channels,
-                     params_cfg.lq_latent_down_factor);
-            model = PixelDiT(params_cfg);
+            : DiffusionModelRunner(backend, params_backend, prefix),
+              config(PixelDiTConfig::detect_from_weights(tensor_storage_map, prefix)) {
+            model = PixelDiT(config);
             model.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -737,60 +742,60 @@ namespace Pid {
             int64_t W  = x->ne[0];
             int64_t H  = x->ne[1];
             int64_t B  = x->ne[3];
-            int64_t Wp = align_up(static_cast<int>(W), static_cast<int>(params_cfg.patch_size));
-            int64_t Hp = align_up(static_cast<int>(H), static_cast<int>(params_cfg.patch_size));
-            int64_t Hs = Hp / params_cfg.patch_size;
-            int64_t Ws = Wp / params_cfg.patch_size;
+            int64_t Wp = align_up(static_cast<int>(W), static_cast<int>(config.patch_size));
+            int64_t Hp = align_up(static_cast<int>(H), static_cast<int>(config.patch_size));
+            int64_t Hs = Hp / config.patch_size;
+            int64_t Ws = Wp / config.patch_size;
 
             pos_img_vec  = make_rope_2d(static_cast<int>(Hs),
                                         static_cast<int>(Ws),
-                                        static_cast<int>(params_cfg.hidden_size / params_cfg.num_groups),
+                                        static_cast<int>(config.hidden_size / config.num_groups),
                                         10000.f,
                                         16.f,
-                                        static_cast<int>(params_cfg.rope_ref_grid_h),
-                                        static_cast<int>(params_cfg.rope_ref_grid_w));
+                                        static_cast<int>(config.rope_ref_grid_h),
+                                        static_cast<int>(config.rope_ref_grid_w));
             auto pos_img = ggml_new_tensor_4d(compute_ctx,
                                               GGML_TYPE_F32,
                                               2,
                                               2,
-                                              params_cfg.hidden_size / params_cfg.num_groups / 2,
+                                              config.hidden_size / config.num_groups / 2,
                                               Hs * Ws);
             set_backend_tensor_data(pos_img, pos_img_vec.data());
 
-            int64_t Ltxt = std::min<int64_t>(context->ne[1], params_cfg.txt_max_length);
+            int64_t Ltxt = std::min<int64_t>(context->ne[1], config.txt_max_length);
             pos_txt_vec  = make_rope_1d(static_cast<int>(Ltxt),
-                                        static_cast<int>(params_cfg.hidden_size / params_cfg.num_groups),
-                                        params_cfg.text_rope_theta);
+                                        static_cast<int>(config.hidden_size / config.num_groups),
+                                        config.text_rope_theta);
             auto pos_txt = ggml_new_tensor_4d(compute_ctx,
                                               GGML_TYPE_F32,
                                               2,
                                               2,
-                                              params_cfg.hidden_size / params_cfg.num_groups / 2,
+                                              config.hidden_size / config.num_groups / 2,
                                               Ltxt);
             set_backend_tensor_data(pos_txt, pos_txt_vec.data());
 
             pixel_pos_vec  = make_pixel_abs_pos(static_cast<int>(Hp),
                                                 static_cast<int>(Wp),
-                                                static_cast<int>(params_cfg.pixel_hidden_size));
+                                                static_cast<int>(config.pixel_hidden_size));
             auto pixel_pos = ggml_new_tensor_3d(compute_ctx,
                                                 GGML_TYPE_F32,
-                                                params_cfg.pixel_hidden_size,
+                                                config.pixel_hidden_size,
                                                 Wp * Hp,
                                                 1);
             set_backend_tensor_data(pixel_pos, pixel_pos_vec.data());
 
             pixel_pos_comp_vec  = make_rope_2d(static_cast<int>(Hs),
                                                static_cast<int>(Ws),
-                                               static_cast<int>(params_cfg.pixel_attn_hidden_size / params_cfg.pixel_num_groups),
+                                               static_cast<int>(config.pixel_attn_hidden_size / config.pixel_num_groups),
                                                10000.f,
                                                16.f,
-                                               static_cast<int>(params_cfg.rope_ref_grid_h),
-                                               static_cast<int>(params_cfg.rope_ref_grid_w));
+                                               static_cast<int>(config.rope_ref_grid_h),
+                                               static_cast<int>(config.rope_ref_grid_w));
             auto pixel_pos_comp = ggml_new_tensor_4d(compute_ctx,
                                                      GGML_TYPE_F32,
                                                      2,
                                                      2,
-                                                     params_cfg.pixel_attn_hidden_size / params_cfg.pixel_num_groups / 2,
+                                                     config.pixel_attn_hidden_size / config.pixel_num_groups / 2,
                                                      Hs * Ws);
             set_backend_tensor_data(pixel_pos_comp, pixel_pos_comp_vec.data());
 

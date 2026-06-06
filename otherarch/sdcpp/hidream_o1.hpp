@@ -23,6 +23,39 @@ namespace HiDreamO1 {
     constexpr int IMAGE_TOKEN_ID        = 151655;
     constexpr int VISION_START_TOKEN_ID = 151652;
 
+    struct HiDreamO1Config {
+        LLM::LLMConfig llm;
+        int patch_size = PATCH_SIZE;
+
+        static HiDreamO1Config detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            (void)tensor_storage_map;
+            (void)prefix;
+            HiDreamO1Config config;
+            config.llm.arch                           = LLM::LLMArch::QWEN3_VL;
+            config.llm.hidden_size                    = 4096;
+            config.llm.intermediate_size              = 12288;
+            config.llm.num_layers                     = 36;
+            config.llm.num_heads                      = 32;
+            config.llm.num_kv_heads                   = 8;
+            config.llm.head_dim                       = 128;
+            config.llm.qkv_bias                       = false;
+            config.llm.qk_norm                        = true;
+            config.llm.vocab_size                     = 151936;
+            config.llm.rms_norm_eps                   = 1e-6f;
+            config.llm.vision.arch                    = LLM::LLMVisionArch::QWEN3_VL;
+            config.llm.vision.num_layers              = 27;
+            config.llm.vision.hidden_size             = 1152;
+            config.llm.vision.intermediate_size       = 4304;
+            config.llm.vision.num_heads               = 16;
+            config.llm.vision.out_hidden_size         = 4096;
+            config.llm.vision.patch_size              = 16;
+            config.llm.vision.spatial_merge_size      = 2;
+            config.llm.vision.temporal_patch_size     = 2;
+            config.llm.vision.num_position_embeddings = 2304;
+            return config;
+        }
+    };
+
     static inline std::string repeat_special_token(const std::string& token, int64_t count) {
         std::string out;
         out.reserve(static_cast<size_t>(count) * token.size());
@@ -205,50 +238,19 @@ namespace HiDreamO1 {
         }
     };
 
-    struct HiDreamO1Params {
-        LLM::LLMParams llm;
-        int patch_size = PATCH_SIZE;
-    };
-
-    static inline HiDreamO1Params make_hidream_o1_params() {
-        HiDreamO1Params params;
-        params.llm.arch                           = LLM::LLMArch::QWEN3_VL;
-        params.llm.hidden_size                    = 4096;
-        params.llm.intermediate_size              = 12288;
-        params.llm.num_layers                     = 36;
-        params.llm.num_heads                      = 32;
-        params.llm.num_kv_heads                   = 8;
-        params.llm.head_dim                       = 128;
-        params.llm.qkv_bias                       = false;
-        params.llm.qk_norm                        = true;
-        params.llm.vocab_size                     = 151936;
-        params.llm.rms_norm_eps                   = 1e-6f;
-        params.llm.vision.arch                    = LLM::LLMVisionArch::QWEN3_VL;
-        params.llm.vision.num_layers              = 27;
-        params.llm.vision.hidden_size             = 1152;
-        params.llm.vision.intermediate_size       = 4304;
-        params.llm.vision.num_heads               = 16;
-        params.llm.vision.out_hidden_size         = 4096;
-        params.llm.vision.patch_size              = 16;
-        params.llm.vision.spatial_merge_size      = 2;
-        params.llm.vision.temporal_patch_size     = 2;
-        params.llm.vision.num_position_embeddings = 2304;
-        return params;
-    }
-
     struct HiDreamO1Model : public GGMLBlock {
-        HiDreamO1Params params;
+        HiDreamO1Config config;
 
         HiDreamO1Model() = default;
-        explicit HiDreamO1Model(HiDreamO1Params params)
-            : params(std::move(params)) {
-            blocks["language_model"] = std::make_shared<LLM::TextModel>(this->params.llm);
-            blocks["t_embedder1"]    = std::make_shared<TimestepEmbedder>(this->params.llm.hidden_size);
-            blocks["x_embedder"]     = std::make_shared<BottleneckPatchEmbed>(this->params.patch_size * this->params.patch_size * 3,
-                                                                          this->params.llm.hidden_size / 4,
-                                                                          this->params.llm.hidden_size);
-            blocks["final_layer2"]   = std::make_shared<FinalLayer>(this->params.llm.hidden_size,
-                                                                  this->params.patch_size * this->params.patch_size * 3);
+        explicit HiDreamO1Model(HiDreamO1Config config)
+            : config(std::move(config)) {
+            blocks["language_model"] = std::make_shared<LLM::TextModel>(this->config.llm);
+            blocks["t_embedder1"]    = std::make_shared<TimestepEmbedder>(this->config.llm.hidden_size);
+            blocks["x_embedder"]     = std::make_shared<BottleneckPatchEmbed>(this->config.patch_size * this->config.patch_size * 3,
+                                                                          this->config.llm.hidden_size / 4,
+                                                                          this->config.llm.hidden_size);
+            blocks["final_layer2"]   = std::make_shared<FinalLayer>(this->config.llm.hidden_size,
+                                                                  this->config.patch_size * this->config.patch_size * 3);
         }
 
         std::shared_ptr<LLM::TextModel> text_model() {
@@ -269,7 +271,7 @@ namespace HiDreamO1 {
     };
 
     struct HiDreamO1VisionRunner : public GGMLRunner {
-        HiDreamO1Params params;
+        HiDreamO1Config config;
         std::shared_ptr<LLM::VisionModel> model;
 
         std::vector<int> window_index_vec;
@@ -284,8 +286,8 @@ namespace HiDreamO1 {
                               const String2TensorStorage& tensor_storage_map = {},
                               const std::string& prefix                      = "model.visual")
             : GGMLRunner(backend, params_backend),
-              params(make_hidream_o1_params()),
-              model(std::make_shared<LLM::VisionModel>(false, params.llm.vision)) {
+              config(HiDreamO1Config::detect_from_weights(tensor_storage_map, prefix)),
+              model(std::make_shared<LLM::VisionModel>(false, config.llm.vision)) {
             model->init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -302,7 +304,7 @@ namespace HiDreamO1 {
                                                        compute_ctx,
                                                        runner_ctx,
                                                        image,
-                                                       params.llm.vision,
+                                                       config.llm.vision,
                                                        model,
                                                        window_index_vec,
                                                        window_inverse_index_vec,
@@ -331,7 +333,7 @@ namespace HiDreamO1 {
     };
 
     struct HiDreamO1Runner : public DiffusionModelRunner {
-        HiDreamO1Params params;
+        HiDreamO1Config config;
         HiDreamO1Model model;
 
         std::vector<float> attention_mask_vec;
@@ -341,8 +343,8 @@ namespace HiDreamO1 {
                         const String2TensorStorage& tensor_storage_map = {},
                         const std::string& prefix                      = "model")
             : DiffusionModelRunner(backend, params_backend, prefix),
-              params(make_hidream_o1_params()) {
-            model = HiDreamO1Model(params);
+              config(HiDreamO1Config::detect_from_weights(tensor_storage_map, prefix)) {
+            model = HiDreamO1Model(config);
             model.init(params_ctx, tensor_storage_map, prefix);
         }
 

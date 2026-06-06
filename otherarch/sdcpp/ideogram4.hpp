@@ -38,6 +38,34 @@ namespace Ideogram4 {
         std::vector<int> mrope_section = {DEFAULT_MROPE_SECTION_T,
                                           DEFAULT_MROPE_SECTION_H,
                                           DEFAULT_MROPE_SECTION_W};
+
+        static Ideogram4Config detect_from_weights(const String2TensorStorage& tensor_storage_map,
+                                                   const std::string& prefix) {
+            Ideogram4Config config;
+            int64_t detected_layers  = 0;
+            std::string layer_prefix = prefix.empty() ? "layers." : prefix + ".layers.";
+            for (const auto& [name, _] : tensor_storage_map) {
+                if (name.find(layer_prefix) != 0) {
+                    continue;
+                }
+                std::string tail = name.substr(layer_prefix.size());
+                size_t dot       = tail.find('.');
+                if (dot == std::string::npos) {
+                    continue;
+                }
+                int layer_idx   = std::atoi(tail.substr(0, dot).c_str());
+                detected_layers = std::max<int64_t>(detected_layers, layer_idx + 1);
+            }
+            if (detected_layers > 0) {
+                config.num_layers = detected_layers;
+                LOG_DEBUG("ideogram4: num_layers = %" PRId64 ", emb_dim = %" PRId64 ", num_heads = %" PRId64 ", intermediate_size = %" PRId64,
+                          config.num_layers,
+                          config.emb_dim,
+                          config.num_heads,
+                          config.intermediate_size);
+            }
+            return config;
+        }
     };
 
     __STATIC_INLINE__ ggml_tensor* timestep_embedding_sin_cos(ggml_context* ctx,
@@ -380,26 +408,6 @@ namespace Ideogram4 {
 
     class Ideogram4Runner : public DiffusionModelRunner {
     protected:
-        static int64_t detect_num_layers(const String2TensorStorage& tensor_storage_map,
-                                         const std::string& prefix) {
-            int64_t detected_layers  = 0;
-            std::string layer_prefix = prefix.empty() ? "layers." : prefix + ".layers.";
-            for (const auto& pair : tensor_storage_map) {
-                const std::string& name = pair.first;
-                if (name.find(layer_prefix) != 0) {
-                    continue;
-                }
-                std::string tail = name.substr(layer_prefix.size());
-                size_t dot       = tail.find('.');
-                if (dot == std::string::npos) {
-                    continue;
-                }
-                int layer_idx   = std::atoi(tail.substr(0, dot).c_str());
-                detected_layers = std::max<int64_t>(detected_layers, layer_idx + 1);
-            }
-            return detected_layers;
-        }
-
         bool should_use_uncond_model(const DiffusionParams& diffusion_params) const {
             return has_uncond_model &&
                    diffusion_params.context == nullptr &&
@@ -421,12 +429,8 @@ namespace Ideogram4 {
                         const String2TensorStorage& tensor_storage_map = {},
                         const std::string prefix                       = "")
             : DiffusionModelRunner(backend, params_backend, prefix),
+              config(Ideogram4Config::detect_from_weights(tensor_storage_map, prefix)),
               uncond_prefix(prefix + ".uncond") {
-            int64_t detected_layers = detect_num_layers(tensor_storage_map, prefix);
-            if (detected_layers > 0) {
-                config.num_layers = detected_layers;
-            }
-
             model = Ideogram4Transformer(config);
             model.init(params_ctx, tensor_storage_map, prefix);
             for (const auto& pair : tensor_storage_map) {

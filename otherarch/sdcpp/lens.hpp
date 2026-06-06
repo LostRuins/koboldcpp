@@ -13,6 +13,71 @@
 namespace Lens {
     constexpr int LENS_GRAPH_SIZE = 40960;
 
+    struct LensConfig {
+        int patch_size              = 2;
+        int64_t in_channels         = 128;
+        int64_t out_channels        = 32;
+        int num_layers              = 48;
+        int64_t attention_head_dim  = 64;
+        int64_t num_attention_heads = 24;
+        int64_t joint_attention_dim = 2880;
+        int selected_layer_count    = 4;
+        int theta                   = 10000;
+        std::vector<int> axes_dim   = {8, 28, 28};
+        int axes_dim_sum            = 64;
+
+        static LensConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+            LensConfig config;
+            config.num_layers = 0;
+            for (const auto& [name, tensor_storage] : tensor_storage_map) {
+                if (!starts_with(name, prefix)) {
+                    continue;
+                }
+                if (ends_with(name, "img_in.weight") && tensor_storage.n_dims == 2) {
+                    config.in_channels = tensor_storage.ne[0];
+                    int64_t inner_dim  = tensor_storage.ne[1];
+                    if (config.attention_head_dim > 0) {
+                        config.num_attention_heads = inner_dim / config.attention_head_dim;
+                    }
+                } else if (ends_with(name, "txt_in.weight") && tensor_storage.n_dims == 2) {
+                    config.selected_layer_count = static_cast<int>(tensor_storage.ne[0] / config.joint_attention_dim);
+                } else if (ends_with(name, "proj_out.weight") && tensor_storage.n_dims == 2) {
+                    int64_t patch_area  = config.patch_size * config.patch_size;
+                    config.out_channels = tensor_storage.ne[1] / patch_area;
+                } else if (ends_with(name, "transformer_blocks.0.attn.norm_q.weight") && tensor_storage.n_dims == 1) {
+                    config.attention_head_dim = tensor_storage.ne[0];
+                }
+
+                size_t pos = name.find("transformer_blocks.");
+                if (pos != std::string::npos) {
+                    auto items = split_string(name.substr(pos), '.');
+                    if (items.size() > 1) {
+                        int block_index = atoi(items[1].c_str());
+                        if (block_index + 1 > config.num_layers) {
+                            config.num_layers = block_index + 1;
+                        }
+                    }
+                }
+            }
+            if (config.num_layers == 0) {
+                config.num_layers = 48;
+            }
+            config.axes_dim_sum = 0;
+            for (int axis_dim : config.axes_dim) {
+                config.axes_dim_sum += axis_dim;
+            }
+            LOG_DEBUG("lens: num_layers = %d, selected_layer_count = %d, hidden_size = %" PRId64 ", num_attention_heads = %" PRId64 ", attention_head_dim = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                      config.num_layers,
+                      config.selected_layer_count,
+                      config.num_attention_heads * config.attention_head_dim,
+                      config.num_attention_heads,
+                      config.attention_head_dim,
+                      config.in_channels,
+                      config.out_channels);
+            return config;
+        }
+    };
+
     struct LensTimestepProjEmbeddings : public GGMLBlock {
         LensTimestepProjEmbeddings(int64_t embedding_dim) {
             blocks["timestep_embedder"] = std::make_shared<Qwen::TimestepEmbedding>(256, embedding_dim);
@@ -209,41 +274,27 @@ namespace Lens {
         }
     };
 
-    struct LensParams {
-        int patch_size              = 2;
-        int64_t in_channels         = 128;
-        int64_t out_channels        = 32;
-        int num_layers              = 48;
-        int64_t attention_head_dim  = 64;
-        int64_t num_attention_heads = 24;
-        int64_t joint_attention_dim = 2880;
-        int selected_layer_count    = 4;
-        int theta                   = 10000;
-        std::vector<int> axes_dim   = {8, 28, 28};
-        int axes_dim_sum            = 64;
-    };
-
     class LensModel : public GGMLBlock {
     public:
-        LensParams params;
+        LensConfig config;
 
         LensModel() = default;
-        LensModel(LensParams params)
-            : params(params) {
-            int64_t inner_dim         = params.num_attention_heads * params.attention_head_dim;
+        LensModel(LensConfig config)
+            : config(config) {
+            int64_t inner_dim         = config.num_attention_heads * config.attention_head_dim;
             blocks["time_text_embed"] = std::make_shared<LensTimestepProjEmbeddings>(inner_dim);
-            blocks["img_in"]          = std::make_shared<Linear>(params.in_channels, inner_dim, true);
-            blocks["txt_in"]          = std::make_shared<Linear>(params.joint_attention_dim * params.selected_layer_count, inner_dim, true);
-            for (int i = 0; i < params.selected_layer_count; ++i) {
-                blocks["txt_norm." + std::to_string(i)] = std::make_shared<RMSNorm>(params.joint_attention_dim, 1e-5f);
+            blocks["img_in"]          = std::make_shared<Linear>(config.in_channels, inner_dim, true);
+            blocks["txt_in"]          = std::make_shared<Linear>(config.joint_attention_dim * config.selected_layer_count, inner_dim, true);
+            for (int i = 0; i < config.selected_layer_count; ++i) {
+                blocks["txt_norm." + std::to_string(i)] = std::make_shared<RMSNorm>(config.joint_attention_dim, 1e-5f);
             }
-            for (int i = 0; i < params.num_layers; ++i) {
+            for (int i = 0; i < config.num_layers; ++i) {
                 blocks["transformer_blocks." + std::to_string(i)] = std::make_shared<LensTransformerBlock>(inner_dim,
-                                                                                                           params.num_attention_heads,
-                                                                                                           params.attention_head_dim);
+                                                                                                           config.num_attention_heads,
+                                                                                                           config.attention_head_dim);
             }
             blocks["norm_out"] = std::make_shared<LensAdaLayerNormContinuous>(inner_dim, 1e-6f);
-            blocks["proj_out"] = std::make_shared<Linear>(inner_dim, params.patch_size * params.patch_size * params.out_channels, true);
+            blocks["proj_out"] = std::make_shared<Linear>(inner_dim, config.patch_size * config.patch_size * config.out_channels, true);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -269,9 +320,9 @@ namespace Lens {
             img      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, img, 1, 0, 2, 3));
             img      = img_in->forward(ctx, img);
 
-            std::vector<ggml_tensor*> txt_chunks = ggml_ext_chunk(ctx->ggml_ctx, context, params.selected_layer_count, 0);
+            std::vector<ggml_tensor*> txt_chunks = ggml_ext_chunk(ctx->ggml_ctx, context, config.selected_layer_count, 0);
             ggml_tensor* txt                     = nullptr;
-            for (int i = 0; i < params.selected_layer_count; ++i) {
+            for (int i = 0; i < config.selected_layer_count; ++i) {
                 auto txt_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["txt_norm." + std::to_string(i)]);
                 auto chunk    = txt_norm->forward(ctx, txt_chunks[i]);
                 txt           = txt == nullptr ? chunk : ggml_concat(ctx->ggml_ctx, txt, chunk, 0);
@@ -281,7 +332,7 @@ namespace Lens {
             sd::ggml_graph_cut::mark_graph_cut(img, "lens.prelude", "img");
             sd::ggml_graph_cut::mark_graph_cut(txt, "lens.prelude", "txt");
 
-            for (int i = 0; i < params.num_layers; ++i) {
+            for (int i = 0; i < config.num_layers; ++i) {
                 auto block = std::dynamic_pointer_cast<LensTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
                 auto out   = block->forward(ctx, img, txt, t_emb, pe);
                 img        = out.first;
@@ -294,13 +345,13 @@ namespace Lens {
             img = proj_out->forward(ctx, img);
 
             auto out = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, img, 1, 0, 2, 3));
-            out      = ggml_reshape_4d(ctx->ggml_ctx, out, W, H, params.patch_size * params.patch_size * params.out_channels, N);
+            out      = ggml_reshape_4d(ctx->ggml_ctx, out, W, H, config.patch_size * config.patch_size * config.out_channels, N);
             return out;
         }
     };
 
     struct LensRunner : public DiffusionModelRunner {
-        LensParams lens_params;
+        LensConfig config;
         LensModel lens;
         std::vector<float> pe_vec;
 
@@ -308,53 +359,9 @@ namespace Lens {
                    ggml_backend_t params_backend,
                    const String2TensorStorage& tensor_storage_map = {},
                    const std::string prefix                       = "")
-            : DiffusionModelRunner(backend, params_backend, prefix) {
-            lens_params.num_layers = 0;
-            for (const auto& [name, tensor_storage] : tensor_storage_map) {
-                if (!starts_with(name, prefix)) {
-                    continue;
-                }
-                if (ends_with(name, "img_in.weight") && tensor_storage.n_dims == 2) {
-                    lens_params.in_channels         = tensor_storage.ne[0];
-                    int64_t inner_dim               = tensor_storage.ne[1];
-                    lens_params.num_attention_heads = inner_dim / lens_params.attention_head_dim;
-                } else if (ends_with(name, "txt_in.weight") && tensor_storage.n_dims == 2) {
-                    lens_params.selected_layer_count = static_cast<int>(tensor_storage.ne[0] / lens_params.joint_attention_dim);
-                } else if (ends_with(name, "proj_out.weight") && tensor_storage.n_dims == 2) {
-                    lens_params.out_channels = tensor_storage.ne[1] / lens_params.patch_size / lens_params.patch_size;
-                } else if (ends_with(name, "transformer_blocks.0.attn.norm_q.weight") && tensor_storage.n_dims == 1) {
-                    lens_params.attention_head_dim = tensor_storage.ne[0];
-                }
-
-                size_t pos = name.find("transformer_blocks.");
-                if (pos != std::string::npos) {
-                    std::string layer_name = name.substr(pos);
-                    auto items             = split_string(layer_name, '.');
-                    if (items.size() > 1) {
-                        int block_index = atoi(items[1].c_str());
-                        if (block_index + 1 > lens_params.num_layers) {
-                            lens_params.num_layers = block_index + 1;
-                        }
-                    }
-                }
-            }
-            if (lens_params.num_layers == 0) {
-                lens_params.num_layers = 48;
-            }
-            lens_params.axes_dim_sum = 0;
-            for (int axis_dim : lens_params.axes_dim) {
-                lens_params.axes_dim_sum += axis_dim;
-            }
-
-            LOG_INFO("lens: layers = %d, in_channels = %" PRId64 ", out_channels = %" PRId64
-                     ", heads = %" PRId64 ", head_dim = %" PRId64,
-                     lens_params.num_layers,
-                     lens_params.in_channels,
-                     lens_params.out_channels,
-                     lens_params.num_attention_heads,
-                     lens_params.attention_head_dim);
-
-            lens = LensModel(lens_params);
+            : DiffusionModelRunner(backend, params_backend, prefix),
+              config(LensConfig::detect_from_weights(tensor_storage_map, prefix)) {
+            lens = LensModel(config);
             lens.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -380,12 +387,12 @@ namespace Lens {
                                             static_cast<int>(x->ne[0]),
                                             static_cast<int>(x->ne[3]),
                                             static_cast<int>(context->ne[1]),
-                                            lens_params.theta,
+                                            config.theta,
                                             circular_y_enabled,
                                             circular_x_enabled,
-                                            lens_params.axes_dim);
-            int pos_len = static_cast<int>(pe_vec.size() / lens_params.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, lens_params.axes_dim_sum / 2, pos_len);
+                                            config.axes_dim);
+            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());
 
             auto runner_ctx  = get_context();

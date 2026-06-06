@@ -11,7 +11,7 @@
 
 #include "ltxv.hpp"
 #include "vae.hpp"
-#include "wan.hpp"
+#include "wan_vae.hpp"
 
 namespace LTXVAE {
 

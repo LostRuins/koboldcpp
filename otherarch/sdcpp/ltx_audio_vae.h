@@ -58,11 +58,12 @@ namespace LTXV {
             return base_output_sample_rate();
         }
 
-        static LTXAudioVAEConfig detect_from_weights(const String2TensorStorage& tensor_storage_map) {
+        static LTXAudioVAEConfig detect_from_weights(const String2TensorStorage& tensor_storage_map, const std::string& prefix = "") {
             LTXAudioVAEConfig config;
 
             auto require = [&](const std::string& name) -> const TensorStorage* {
-                auto iter = tensor_storage_map.find(name);
+                std::string tensor_name = prefix.empty() ? name : prefix + "." + name;
+                auto iter               = tensor_storage_map.find(tensor_name);
                 if (iter == tensor_storage_map.end()) {
                     return nullptr;
                 }
@@ -168,6 +169,12 @@ namespace LTXV {
             if (config.audio_channels != 2 || config.latent_channels != 8 || config.mel_bins != 64) {
                 return config;
             }
+            LOG_DEBUG("ltx_audio_vae: sample_rate = %d, mel_bins = %d, latent_channels = %d, latent_frequency_bins = %d, has_bwe = %s",
+                      config.sample_rate,
+                      config.mel_bins,
+                      config.latent_channels,
+                      config.latent_frequency_bins,
+                      config.has_bwe ? "true" : "false");
             return config;
         }
     };

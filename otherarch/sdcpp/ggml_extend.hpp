@@ -1707,7 +1707,7 @@ protected:
     uint64_t resident_state_token = 0;
 
     size_t max_graph_vram_bytes           = 0;
-    bool   stream_layers_enabled          = false;
+    bool stream_layers_enabled            = false;
     size_t observed_max_effective_budget_ = 0;
 
     sd::layer_registry::LayerRegistry layer_registry_;
