@@ -1759,6 +1759,8 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::GPT_OSS_20B;
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
+        } else if (sd_version_is_ideogram4(version)) {
+            arch = LLM::LLMArch::QWEN3_VL;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
         }
@@ -2101,6 +2103,14 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "[/INST]";
+        } else if (sd_version_is_ideogram4(version)) {
+            prompt_template_encode_start_idx = 0;
+            out_layers                       = {1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 36};
+
+            prompt = "<|im_start|>user\n";
+            prompt += conditioner_params.text;
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
+            prompt_attn_range = {0, 0};
         } else if (sd_version_is_ernie_image(version)) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {25};  // -2

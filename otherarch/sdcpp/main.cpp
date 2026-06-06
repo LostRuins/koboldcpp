@@ -169,8 +169,9 @@ struct SDCliParams {
             return 1;
         };
 
-        auto on_help_arg = [&](int argc, const char** argv, int index) {
+        auto on_help_arg = [&](int argc, const char** argv, int index, bool& valid) {
             normal_exit = true;
+            valid       = true;
             return -1;
         };
 

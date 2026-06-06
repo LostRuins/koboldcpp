@@ -1460,13 +1460,18 @@ namespace LLM {
                 params.num_kv_heads = 8;
                 params.qkv_bias     = false;
                 params.rms_norm_eps = 1e-5f;
-            } else if (arch == LLMArch::QWEN3) {
+            } else if (arch == LLMArch::QWEN3 || arch == LLMArch::QWEN3_VL) {
                 params.head_dim     = 128;
                 params.num_heads    = 32;
                 params.num_kv_heads = 8;
                 params.qkv_bias     = false;
                 params.qk_norm      = true;
                 params.rms_norm_eps = 1e-6f;
+                if (arch == LLMArch::QWEN3_VL) {
+                    params.max_position_embeddings = 262144;
+                    params.rope_thetas             = {5000000.f};
+                    params.vision.arch             = LLMVisionArch::QWEN3_VL;
+                }
             } else if (arch == LLMArch::GEMMA3_12B) {
                 params.head_dim     = 256;
                 params.num_heads    = 16;

@@ -245,6 +245,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
         return false;
     };
 
+    bool valid = false;
     for (int i = 1; i < argc; i++) {
         arg            = argv[i];
         bool found_arg = false;
@@ -287,7 +288,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                 break;
 
             if (match_and_apply(options.manual_options, [&](auto& option) {
-                    int ret = option.cb(argc, argv, i);
+                    int ret = option.cb(argc, argv, i, valid);
                     if (ret < 0) {
                         invalid_arg = true;
                         return;
@@ -299,7 +300,9 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
         }
 
         if (invalid_arg) {
-            LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
+            if (!valid) {
+                LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
+            }
             return false;
         }
         if (!found_arg) {
@@ -356,6 +359,10 @@ ArgOptions SDContextParams::get_options() {
          "--high-noise-diffusion-model",
          "path to the standalone high noise diffusion model",
          &high_noise_diffusion_model_path},
+        {"",
+         "--uncond-diffusion-model",
+         "path to the standalone unconditional diffusion model, currently used by Ideogram4 CFG",
+         &uncond_diffusion_model_path},
         {"",
          "--embeddings-connectors",
          "path to LTXAV embeddings connectors",
@@ -706,6 +713,7 @@ std::string SDContextParams::to_string() const {
         << "  llm_vision_path: \"" << llm_vision_path << "\",\n"
         << "  diffusion_model_path: \"" << diffusion_model_path << "\",\n"
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
+        << "  uncond_diffusion_model_path: \"" << uncond_diffusion_model_path << "\",\n"
         << "  embeddings_connectors_path: \"" << embeddings_connectors_path << "\",\n"
         << "  vae_path: \"" << vae_path << "\",\n"
         << "  vae_format: \"" << vae_format << "\",\n"
@@ -769,6 +777,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         llm_vision_path.c_str(),
         diffusion_model_path.c_str(),
         high_noise_diffusion_model_path.c_str(),
+        uncond_diffusion_model_path.c_str(),
         embeddings_connectors_path.c_str(),
         vae_path.c_str(),
         audio_vae_path.c_str(),
@@ -2519,6 +2528,7 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
     set_json_basename_if_not_empty(models, "llm_vision", ctx_params.llm_vision_path);
     set_json_basename_if_not_empty(models, "diffusion_model", ctx_params.diffusion_model_path);
     set_json_basename_if_not_empty(models, "high_noise_diffusion_model", ctx_params.high_noise_diffusion_model_path);
+    set_json_basename_if_not_empty(models, "uncond_diffusion_model", ctx_params.uncond_diffusion_model_path);
     set_json_basename_if_not_empty(models, "vae", ctx_params.vae_path);
     set_json_basename_if_not_empty(models, "taesd", ctx_params.taesd_path);
     set_json_basename_if_not_empty(models, "control_net", ctx_params.control_net_path);
@@ -2685,6 +2695,9 @@ std::string get_image_params(const SDContextParams& ctx_params,
     }
     if (!ctx_params.diffusion_model_path.empty()) {
         parameter_string += "Unet: " + sd_basename(ctx_params.diffusion_model_path) + ", ";
+    }
+    if (!ctx_params.uncond_diffusion_model_path.empty()) {
+        parameter_string += "Uncond Unet: " + sd_basename(ctx_params.uncond_diffusion_model_path) + ", ";
     }
     if (!ctx_params.vae_path.empty()) {
         parameter_string += "VAE: " + sd_basename(ctx_params.vae_path) + ", ";

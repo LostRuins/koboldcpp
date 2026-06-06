@@ -1706,8 +1706,9 @@ protected:
     std::unordered_set<ggml_tensor*> resident_param_set;
     uint64_t resident_state_token = 0;
 
-    size_t max_graph_vram_bytes = 0;
-    bool stream_layers_enabled  = false;
+    size_t max_graph_vram_bytes           = 0;
+    bool   stream_layers_enabled          = false;
+    size_t observed_max_effective_budget_ = 0;
 
     sd::layer_registry::LayerRegistry layer_registry_;
 
@@ -2446,12 +2447,22 @@ protected:
                 constexpr size_t safety_margin = 512ull * 1024 * 1024;
                 size_t free_clamp              = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
                 if (free_clamp < effective_budget) {
-                    LOG_INFO("%s clamping streaming budget: actual free VRAM %.2f MB < user cap %.2f MB",
-                             get_desc().c_str(),
-                             free_clamp / (1024.0 * 1024.0),
-                             effective_budget / (1024.0 * 1024.0));
+                    LOG_DEBUG("%s clamping streaming budget: actual free VRAM %.2f MB < user cap %.2f MB",
+                              get_desc().c_str(),
+                              free_clamp / (1024.0 * 1024.0),
+                              effective_budget / (1024.0 * 1024.0));
                     effective_budget = free_clamp;
                 }
+            }
+        }
+
+        bool budget_increased = false;
+        if (stream_layers_enabled) {
+            if (effective_budget > observed_max_effective_budget_) {
+                observed_max_effective_budget_ = effective_budget;
+                budget_increased               = true;
+            } else {
+                effective_budget = observed_max_effective_budget_;
             }
         }
 
@@ -2466,9 +2477,15 @@ protected:
                                                      params_tensor_set_,
                                                      get_desc().c_str());
         if (stream_layers_enabled) {
-            LOG_INFO("%s streaming budget = %.2f MB",
-                     get_desc().c_str(),
-                     effective_budget / (1024.0 * 1024.0));
+            if (budget_increased) {
+                LOG_INFO("%s streaming budget = %.2f MB",
+                         get_desc().c_str(),
+                         effective_budget / (1024.0 * 1024.0));
+            } else {
+                LOG_DEBUG("%s streaming budget = %.2f MB",
+                          get_desc().c_str(),
+                          effective_budget / (1024.0 * 1024.0));
+            }
         }
         return true;
     }
@@ -3017,7 +3034,18 @@ public:
             LOG_DEBUG("%s skipping params allocation (no tensors)", get_desc().c_str());
             return true;
         }
-        params_buffer = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
+        // Pinned host buffer when CPU-offloaded for DMA-direct H2D.
+        ggml_backend_buffer_type_t params_buft = nullptr;
+        if (params_backend != runtime_backend) {
+            ggml_backend_dev_t runtime_dev = ggml_backend_get_device(runtime_backend);
+            if (runtime_dev != nullptr) {
+                params_buft = ggml_backend_dev_host_buffer_type(runtime_dev);
+            }
+        }
+        if (params_buft == nullptr) {
+            params_buft = ggml_backend_get_default_buffer_type(params_backend);
+        }
+        params_buffer = ggml_backend_alloc_ctx_tensors_from_buft(params_ctx, params_buft);
         if (params_buffer == nullptr) {
             LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
                       get_desc().c_str(),
@@ -3042,6 +3070,7 @@ public:
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;
         }
+        observed_max_effective_budget_ = 0;
     }
 
     size_t get_params_buffer_size() {
@@ -3318,11 +3347,14 @@ protected:
     bool bias;
     bool force_f32;
     bool force_prec_f32;
+    bool allow_weight_scale;
+    bool has_weight_scale = false;
     float scale;
     std::string prefix;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         this->prefix         = prefix;
+        has_weight_scale     = false;
         enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
         if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
@@ -3332,20 +3364,26 @@ protected:
             enum ggml_type wtype = GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_features);
         }
+        if (allow_weight_scale && tensor_storage_map.find(prefix + "weight_scale") != tensor_storage_map.end()) {
+            params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_features);
+            has_weight_scale       = true;
+        }
     }
 
 public:
     Linear(int64_t in_features,
            int64_t out_features,
-           bool bias           = true,
-           bool force_f32      = false,
-           bool force_prec_f32 = false,
-           float scale         = 1.f)
+           bool bias               = true,
+           bool force_f32          = false,
+           bool force_prec_f32     = false,
+           float scale             = 1.f,
+           bool allow_weight_scale = false)
         : in_features(in_features),
           out_features(out_features),
           bias(bias),
           force_f32(force_f32),
           force_prec_f32(force_prec_f32),
+          allow_weight_scale(allow_weight_scale),
           scale(scale) {}
 
     void set_scale(float scale_) {
@@ -3362,14 +3400,24 @@ public:
         if (bias) {
             b = params["bias"];
         }
+        ggml_tensor* linear_bias = has_weight_scale ? nullptr : b;
+        ggml_tensor* out         = nullptr;
         if (ctx->weight_adapter) {
             WeightAdapter::ForwardParams forward_params;
             forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
             forward_params.linear.force_prec_f32 = force_prec_f32;
             forward_params.linear.scale          = scale;
-            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
+            out                                  = ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, linear_bias, prefix, forward_params);
+        } else {
+            out = ggml_ext_linear(ctx->ggml_ctx, x, w, linear_bias, force_prec_f32, scale);
         }
-        return ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
+        if (has_weight_scale) {
+            out = ggml_mul(ctx->ggml_ctx, out, params["weight_scale"]);
+            if (b != nullptr) {
+                out = ggml_add_inplace(ctx->ggml_ctx, out, b);
+            }
+        }
+        return out;
     }
 };
 

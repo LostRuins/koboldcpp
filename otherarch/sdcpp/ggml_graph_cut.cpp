@@ -699,9 +699,9 @@ namespace sd::ggml_graph_cut {
         }
 
         if (log_desc != nullptr) {
-            LOG_INFO("%s graph cut max_vram budget merge took %lld ms",
-                     log_desc,
-                     ggml_time_ms() - t_budget_begin);
+            LOG_DEBUG("%s graph cut max_vram budget merge took %lld ms",
+                      log_desc,
+                      ggml_time_ms() - t_budget_begin);
         }
 
         return merged_plan;

@@ -186,6 +186,7 @@ typedef struct {
     const char* llm_vision_path;
     const char* diffusion_model_path;
     const char* high_noise_diffusion_model_path;
+    const char* uncond_diffusion_model_path;
     const char* embeddings_connectors_path;
     const char* vae_path;
     const char* audio_vae_path;
