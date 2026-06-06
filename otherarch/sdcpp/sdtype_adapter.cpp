@@ -580,20 +580,6 @@ static std::string friendly_model_name(std::filesystem::path model_path) {
     return model_path.filename().string();
 }
 
-std::string clean_input_prompt(const std::string& input) {
-    std::string result;
-    result.reserve(input.size());
-    for (char ch : input) {
-        // Check if the character is an ASCII or extended ASCII character
-        if (static_cast<unsigned char>(ch) <= 0x7F || (ch >= 0xC2 && ch <= 0xF4)) {
-            result.push_back(ch);
-        }
-    }
-    //limit to max 2048 chars
-    result = result.substr(0, 2048);
-    return result;
-}
-
 static std::string get_scheduler_name(scheduler_t scheduler, bool as_sampler_suffix = false)
 {
     if (scheduler == scheduler_t::SCHEDULER_COUNT) {
@@ -988,9 +974,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
     sd_image_t * results = nullptr;
 
-    //sanitize prompts, remove quotes and limit lengths
-    std::string cleanprompt = clean_input_prompt(inputs.prompt);
-    std::string cleannegprompt = clean_input_prompt(inputs.negative_prompt);
     std::string img2img_data = std::string(inputs.init_images);
     std::string img2img_mask = std::string(inputs.mask);
     std::vector<std::string> extra_image_data;
@@ -999,8 +982,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         extra_image_data.push_back(std::string(inputs.extra_images[i]));
     }
 
-    sd_params->prompt = cleanprompt;
-    sd_params->negative_prompt = cleannegprompt;
+    sd_params->prompt = inputs.prompt;
+    sd_params->negative_prompt = inputs.negative_prompt;
     sd_params->cfg_scale = inputs.cfg_scale;
     sd_params->distilled_guidance = inputs.distilled_guidance;
     sd_params->sample_steps = inputs.sample_steps;

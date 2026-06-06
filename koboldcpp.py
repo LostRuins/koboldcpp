@@ -2761,16 +2761,12 @@ def sd_generate(genparams):
 
     prompt = genparams.get("prompt", "high quality")
     negative_prompt = genparams.get("negative_prompt", "")
-    if forced_negprompt!="":
-        if negative_prompt!="":
-            negative_prompt += ", " + forced_negprompt
-        else:
-            negative_prompt = forced_negprompt
-    if forced_posprompt!="":
-        if prompt!="":
-            prompt += ", " + forced_posprompt
-        else:
-            prompt = forced_posprompt
+    def build_prompt(prompt, forced):
+        # truncate before the forced prompt to ensure it can't be "pushed away" by long inputs
+        prompt = prompt.encode('utf-8')[:2048].decode("UTF-8", errors='ignore')
+        return ", ".join([prompt, forced])
+    prompt = build_prompt(prompt, forced_posprompt)
+    negative_prompt = build_prompt(negative_prompt, forced_negprompt)
     init_images_arr = genparams.get("init_images", [])
     init_images = ("" if (not init_images_arr or len(init_images_arr)==0 or not init_images_arr[0]) else init_images_arr[0])
     init_images = strip_base64_prefix(init_images)
