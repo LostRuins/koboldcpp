@@ -17,9 +17,8 @@
 #include "otherarch/utils.h"
 #include "model_adapter.h"
 
-// #include "preprocessing.hpp"
 #include "stable-diffusion.h"
-#include "kcpp_sd_extensions.h"
+#include "src/kcpp_sd_extensions.h"
 #include "ggml-backend.h"
 
 using namespace kcpp_sd;

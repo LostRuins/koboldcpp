@@ -695,9 +695,9 @@ llama-impl.o: src/llama-impl.cpp src/llama-impl.h
 budget.o: common/reasoning-budget.cpp common/reasoning-budget.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-SDCPP_COMMON_BASENAMES := anima.hpp auto_encoder_kl.hpp avi_writer.h cache_dit.hpp clip.hpp common_block.hpp common_dit.hpp condition_cache_utils.hpp conditioner.hpp control.hpp convert.cpp denoiser.hpp diffusion_model.hpp easycache.hpp ernie_image.hpp esrgan.hpp flux.hpp ggml_extend.hpp ggml_extend_backend.cpp ggml_extend_backend.h ggml_graph_cut.cpp ggml_graph_cut.h gits_noise.inl guidance.cpp guidance.h hidream_o1.hpp image_metadata.cpp image_metadata.h kcpp_sd_extensions.h latent-preview.h layer_registry.cpp layer_registry.h llm.hpp lora.hpp ltx_audio_vae.h ltx_latent_upscaler.hpp ltx_vae.hpp ltxv.hpp mmdit.hpp model.cpp model.h model_io/binary_io.h model_io/gguf_io.cpp model_io/gguf_io.h model_io/gguf_reader_ext.h model_io/pickle_io.cpp model_io/pickle_io.h model_io/safetensors_io.cpp model_io/safetensors_io.h model_io/tensor_storage.h model_io/torch_legacy_io.cpp model_io/torch_legacy_io.h model_io/torch_zip_io.cpp model_io/torch_zip_io.h msf_gif.h name_conversion.cpp name_conversion.h ordered_map.hpp pmid.hpp preprocessing.hpp qwen_image.hpp rng.hpp rng_mt19937.hpp rng_philox.hpp rope.hpp sample-cache.cpp sample-cache.h spectrum.hpp stable-diffusion.cpp stable-diffusion.h t5.hpp tae.hpp tensor.hpp tensor_ggml.hpp thirdparty/LICENSE.darts_clone.txt thirdparty/darts.h thirdparty/miniz.h thirdparty/stb_image_resize.h thirdparty/stb_image_write.h thirdparty/zip.c thirdparty/zip.h tokenizers/bpe_tokenizer.cpp tokenizers/bpe_tokenizer.h tokenizers/clip_tokenizer.cpp tokenizers/clip_tokenizer.h tokenizers/gemma_tokenizer.cpp tokenizers/gemma_tokenizer.h tokenizers/gpt_oss_tokenizer.cpp tokenizers/gpt_oss_tokenizer.h tokenizers/mistral_tokenizer.cpp tokenizers/mistral_tokenizer.h tokenizers/qwen2_tokenizer.cpp tokenizers/qwen2_tokenizer.h tokenizers/t5_unigram_tokenizer.cpp tokenizers/t5_unigram_tokenizer.h tokenizers/tokenize_util.cpp tokenizers/tokenize_util.h tokenizers/tokenizer.cpp tokenizers/tokenizer.h tokenizers/vocab/vocab.h ucache.hpp unet.hpp upscaler.cpp upscaler.h util.cpp util.h vae.hpp wan.hpp z_image.hpp
+SDCPP_COMMON_BASENAMES := include/stable-diffusion.h src/conditioning/conditioner.hpp src/core/ggml_extend_backend.cpp src/core/ggml_extend_backend.h src/core/ggml_extend.hpp src/core/ggml_graph_cut.cpp src/core/ggml_graph_cut.h src/core/layer_registry.cpp src/core/layer_registry.h src/core/ordered_map.hpp src/core/rng.hpp src/core/rng_mt19937.hpp src/core/rng_philox.hpp src/core/tensor_ggml.hpp src/core/tensor.hpp src/core/util.cpp src/core/util.h src/kcpp_sd_extensions.h src/model/adapter/lora.hpp src/model/adapter/pmid.hpp src/model/common/block.hpp src/model/common/rope.hpp src/model.cpp src/model/diffusion/anima.hpp src/model/diffusion/control.hpp src/model/diffusion/dit.hpp src/model/diffusion/ernie_image.hpp src/model/diffusion/flux.hpp src/model/diffusion/hidream_o1.hpp src/model/diffusion/ideogram4.hpp src/model/diffusion/lens.hpp src/model/diffusion/ltxv.hpp src/model/diffusion/mmdit.hpp src/model/diffusion/model.hpp src/model/diffusion/pid.hpp src/model/diffusion/qwen_image.hpp src/model/diffusion/unet.hpp src/model/diffusion/wan.hpp src/model/diffusion/z_image.hpp src/model.h src/model_io/binary_io.h src/model_io/gguf_io.cpp src/model_io/gguf_io.h src/model_io/gguf_reader_ext.h src/model_io/pickle_io.cpp src/model_io/pickle_io.h src/model_io/safetensors_io.cpp src/model_io/safetensors_io.h src/model_io/tensor_storage.h src/model_io/torch_legacy_io.cpp src/model_io/torch_legacy_io.h src/model_io/torch_zip_io.cpp src/model_io/torch_zip_io.h src/model/te/clip.hpp src/model/te/llm.hpp src/model/te/t5.hpp src/model/upscaler/esrgan.hpp src/model/upscaler/ltx_latent_upscaler.hpp src/model/vae/auto_encoder_kl.hpp src/model/vae/ltx_audio_vae.hpp src/model/vae/ltx_vae.hpp src/model/vae/tae.hpp src/model/vae/vae.hpp src/model/vae/wan_vae.hpp src/name_conversion.cpp src/name_conversion.h src/runtime/cache_dit.hpp src/runtime/condition_cache_utils.hpp src/runtime/denoiser.hpp src/runtime/easycache.hpp src/runtime/gits_noise.inl src/runtime/guidance.cpp src/runtime/guidance.h src/runtime/latent-preview.h src/runtime/preprocessing.hpp src/runtime/sample-cache.cpp src/runtime/sample-cache.h src/runtime/spectrum.hpp src/runtime/ucache.hpp src/stable-diffusion.cpp src/tokenizers/bpe_tokenizer.cpp src/tokenizers/bpe_tokenizer.h src/tokenizers/clip_tokenizer.cpp src/tokenizers/clip_tokenizer.h src/tokenizers/gemma_tokenizer.cpp src/tokenizers/gemma_tokenizer.h src/tokenizers/gpt_oss_tokenizer.cpp src/tokenizers/gpt_oss_tokenizer.h src/tokenizers/mistral_tokenizer.cpp src/tokenizers/mistral_tokenizer.h src/tokenizers/qwen2_tokenizer.cpp src/tokenizers/qwen2_tokenizer.h src/tokenizers/t5_unigram_tokenizer.cpp src/tokenizers/t5_unigram_tokenizer.h src/tokenizers/tokenizer.cpp src/tokenizers/tokenizer.h src/tokenizers/tokenize_util.cpp src/tokenizers/tokenize_util.h src/tokenizers/vocab/vocab.h src/upscaler.cpp src/upscaler.h
 
-SDCPP_MAIN_BASENAMES := common/common.cpp common/common.h common/log.cpp common/log.h common/media_io.cpp common/media_io.cpp common/media_io.h common/resource_owners.hpp convert.cpp image_metadata.cpp main.cpp tokenizers/vocab/clip_merges.hpp tokenizers/vocab/gemma_merges.hpp tokenizers/vocab/gemma_vocab.hpp tokenizers/vocab/gpt_oss_merges.hpp tokenizers/vocab/gpt_oss_vocab.hpp tokenizers/vocab/mistral_merges.hpp tokenizers/vocab/mistral_vocab.hpp tokenizers/vocab/qwen_merges.hpp tokenizers/vocab/t5.hpp tokenizers/vocab/umt5.hpp tokenizers/vocab/vocab.cpp version.cpp
+SDCPP_MAIN_BASENAMES := examples/cli/image_metadata.cpp examples/cli/image_metadata.h examples/cli/main.cpp examples/cli/msf_gif.h examples/common/common.cpp examples/common/common.h examples/common/log.cpp examples/common/log.h examples/common/media_io.cpp examples/common/media_io.h examples/common/resource_owners.hpp src/tokenizers/vocab/clip_merges.hpp src/tokenizers/vocab/gemma2_merges.hpp src/tokenizers/vocab/gemma2_vocab.hpp src/tokenizers/vocab/gemma_merges.hpp src/tokenizers/vocab/gemma_vocab.hpp src/tokenizers/vocab/gpt_oss_merges.hpp src/tokenizers/vocab/gpt_oss_vocab.hpp src/tokenizers/vocab/mistral_merges.hpp src/tokenizers/vocab/mistral_vocab.hpp src/tokenizers/vocab/qwen_merges.hpp src/tokenizers/vocab/t5.hpp src/tokenizers/vocab/umt5.hpp src/tokenizers/vocab/vocab.cpp src/convert.cpp src/version.cpp
 
 
 SOURCES_SDCOMMON := $(foreach f,$(SDCPP_COMMON_BASENAMES),otherarch/sdcpp/$(f))
@@ -712,13 +712,17 @@ otherarch/sdcpp/%.o: $(HEADERS_SDCOMMON)
 
 $(OBJS_SDMAIN): $(HEADERS_SDMAIN)
 
-SDCPP_FLAGS := -I./vendor/nlohmann
+otherarch/sdcpp/src/%.o: otherarch/sdcpp/src/%.cpp
+	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
 
-otherarch/sdcpp/%.o: otherarch/sdcpp/%.cpp
-	$(CXX) $(CXXFLAGS) $(SDCPP_FLAGS) -c $< -o $@
+otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
+	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
+
+otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp
+	$(CXX) -I./otherarch/sdcpp/include $(CXXFLAGS) -c $< -o $@
 
 otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
-	$(CC) $(CFLAGS) $(SDCPP_FLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 OBJS_SDTYPE := otherarch/sdcpp/sdtype_adapter.o $(OBJS_SDCOMMON)
 
@@ -759,7 +763,7 @@ clean:
 	rm -vrf ggml/src/ggml-cuda/*.o
 	rm -vrf ggml/src/ggml-cuda/template-instances/*.o
 	rm -vrf llguidance
-	rm -vf otherarch/sdcpp/*.o otherarch/sdcpp/*/*.o otherarch/sdcpp/*/*/*.o
+	rm -vf otherarch/sdcpp/*.o otherarch/sdcpp/*/*.o otherarch/sdcpp/*/*/*.o otherarch/sdcpp/*/*/*/*.o
 
 # useful tools
 main: tools/completion/completion.cpp common/arg.cpp common/chat.cpp common/preset.cpp common/download.cpp build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o console.o llavaclip_default.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
@@ -769,7 +773,7 @@ mainvk: tools/completion/completion.cpp common/arg.cpp common/chat.cpp common/pr
 fitparams: tools/fit-params/main.cpp tools/fit-params/fit-params.cpp common/arg.cpp common/chat.cpp common/preset.cpp common/download.cpp build-info.h ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o console.o llavaclip_vulkan.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o ggml-repack.o $(OBJS_FULL) $(OBJS) lib/vulkan-1.lib
 	$(CXX) $(CXXFLAGS) -DGGML_USE_VULKAN -DSD_USE_VULKAN $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 sdmain: $(OBJS_SDCOMMON) $(OBJS_SDMAIN) build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o console.o llavaclip_default.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
-	$(CXX) $(CXXFLAGS) $(SDCPP_FLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 whispermain: otherarch/whispercpp/main.cpp otherarch/whispercpp/whisper.cpp build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o console.o llavaclip_default.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 ttsmain: tools/tts/tts.cpp common/arg.cpp common/chat.cpp common/preset.cpp common/download.cpp build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o llama.o console.o llavaclip_default.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
