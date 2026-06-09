@@ -9,6 +9,7 @@
 #include "model/te/clip.hpp"
 #include "model/te/llm.hpp"
 #include "model/te/t5.hpp"
+#include "model_loader.h"
 
 struct SDCondition {
     sd::Tensor<float> c_crossattn;
@@ -103,7 +104,6 @@ struct ConditionerParams {
     int width                                        = -1;
     int height                                       = -1;
     bool zero_out_masked                             = false;
-    int num_input_imgs                               = 0;        // for photomaker
     const std::vector<sd::Tensor<float>>* ref_images = nullptr;  // for qwen image edit
 };
 
@@ -121,25 +121,16 @@ public:
     virtual void set_stream_layers_enabled(bool enabled) {}
     virtual void set_flash_attention_enabled(bool enabled) = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
-    virtual std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(int n_threads,
-                                                                                          const ConditionerParams& conditioner_params) {
-        GGML_ABORT("Not implemented yet!");
-    }
-    virtual std::string remove_trigger_from_prompt(const std::string& prompt) {
-        GGML_ABORT("Not implemented yet!");
-    }
 };
 
 // ldm.modules.encoders.modules.FrozenCLIPEmbedder
 // Ref: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/cad87bf4e3e0b0a759afa94e933527c3123d59bc/modules/sd_hijack_clip.py#L283
 struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
-    SDVersion version    = VERSION_SD1;
-    PMVersion pm_version = PM_VERSION_1;
+    SDVersion version = VERSION_SD1;
     CLIPTokenizer tokenizer;
     std::shared_ptr<CLIPTextModelRunner> text_model;
     std::shared_ptr<CLIPTextModelRunner> text_model2;
 
-    std::string trigger_word = "img";  // should be user settable
     std::map<std::string, std::string> embedding_map;
     int32_t num_custom_embeddings   = 0;
     int32_t num_custom_embeddings_2 = 0;
@@ -150,9 +141,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       ggml_backend_t params_backend,
                                       const String2TensorStorage& tensor_storage_map,
                                       const std::map<std::string, std::string>& orig_embedding_map,
-                                      SDVersion version = VERSION_SD1,
-                                      PMVersion pv      = PM_VERSION_1)
-        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407) {
+                                      SDVersion version = VERSION_SD1)
+        : version(version), tokenizer(sd_version_is_sd2(version) ? 0 : 49407) {
         for (const auto& kv : orig_embedding_map) {
             std::string name = kv.first;
             std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -327,121 +317,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
     std::string decode(const std::vector<int>& tokens) {
         return tokenizer.decode(tokens);
-    }
-
-    std::tuple<std::vector<int>, std::vector<float>, std::vector<bool>>
-    tokenize_with_trigger_token(std::string text,
-                                int num_input_imgs,
-                                int32_t image_token) {
-        auto parsed_attention = parse_prompt_attention(text);
-
-        {
-            std::stringstream ss;
-            ss << "[";
-            for (const auto& item : parsed_attention) {
-                ss << "['" << item.first << "', " << item.second << "], ";
-            }
-            ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
-        }
-
-        auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            auto iter = embedding_map.find(str);
-            if (iter == embedding_map.end()) {
-                return false;
-            }
-            std::string embedding_path = iter->second;
-            if (load_embedding(str, embedding_path, bpe_tokens)) {
-                return true;
-            }
-            return false;
-        };
-
-        std::vector<int> tokens;
-        std::vector<float> weights;
-        std::vector<bool> class_token_mask;
-        int32_t class_idx = -1, tokens_acc = 0;
-        for (const auto& item : parsed_attention) {
-            std::vector<int> class_token_index;
-            std::vector<int> clean_input_ids;
-            const std::string& curr_text = item.first;
-            float curr_weight            = item.second;
-            // printf(" %s: %f \n", curr_text.c_str(), curr_weight);
-            int32_t clean_index = 0;
-            if (curr_text == "BREAK" && curr_weight == -1.0f) {
-                // Pad token array up to chunk size at this point.
-                // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
-                // Also, this is 75 instead of 77 to leave room for BOS and EOS tokens.
-                int padding_size = 75 - (tokens_acc % 75);
-                for (int j = 0; j < padding_size; j++) {
-                    clean_input_ids.push_back(tokenizer.EOS_TOKEN_ID);
-                    clean_index++;
-                }
-
-                // After padding, continue to the next iteration to process the following text as a new segment
-                tokens.insert(tokens.end(), clean_input_ids.begin(), clean_input_ids.end());
-                weights.insert(weights.end(), padding_size, curr_weight);
-                continue;
-            }
-
-            // Regular token, process normally
-            std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
-            for (uint32_t i = 0; i < curr_tokens.size(); i++) {
-                int token_id = curr_tokens[i];
-                if (token_id == image_token) {
-                    class_token_index.push_back(clean_index - 1);
-                } else {
-                    clean_input_ids.push_back(token_id);
-                    clean_index++;
-                }
-            }
-            // GGML_ASSERT(class_token_index.size() == 1); // PhotoMaker currently does not support multiple
-            //     trigger words in a single prompt.
-            if (class_token_index.size() == 1) {
-                // Expand the class word token and corresponding mask
-                int class_token = clean_input_ids[class_token_index[0]];
-                class_idx       = tokens_acc + class_token_index[0];
-                std::vector<int> clean_input_ids_tmp;
-                for (int i = 0; i < class_token_index[0]; i++)
-                    clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                for (int i = 0; i < (pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs); i++)
-                    clean_input_ids_tmp.push_back(class_token);
-                for (int i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
-                    clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                clean_input_ids.clear();
-                clean_input_ids = clean_input_ids_tmp;
-            }
-            tokens_acc += clean_index;
-            tokens.insert(tokens.end(), clean_input_ids.begin(), clean_input_ids.end());
-            weights.insert(weights.end(), clean_input_ids.size(), curr_weight);
-        }
-        // BUG!! double couting, pad_tokens will add BOS at the beginning
-        // tokens.insert(tokens.begin(), tokenizer.BOS_TOKEN_ID);
-        // weights.insert(weights.begin(), 1.0);
-
-        tokenizer.pad_tokens(tokens, &weights, nullptr, text_model->model.n_token, text_model->model.n_token, true);
-        int offset = pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs;
-        for (int i = 0; i < tokens.size(); i++) {
-            // if (class_idx + 1 <= i && i < class_idx + 1 + 2*num_input_imgs) // photomaker V2 has num_tokens(=2)*num_input_imgs
-            if (class_idx + 1 <= i && i < class_idx + 1 + offset)  // photomaker V2 has num_tokens(=2)*num_input_imgs
-                                                                   // hardcode for now
-                class_token_mask.push_back(true);
-            else
-                class_token_mask.push_back(false);
-        }
-
-        // printf("[");
-        // for (int i = 0; i < tokens.size(); i++) {
-        //     printf("%d, ", class_token_mask[i] ? 1 : 0);
-        // }
-        // printf("]\n");
-
-        // for (int i = 0; i < tokens.size(); i++) {
-        //     std::cout << tokens[i] << ":" << weights[i] << ", ";
-        // }
-        // std::cout << std::endl;
-
-        return std::make_tuple(tokens, weights, class_token_mask);
     }
 
     std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text,
@@ -629,49 +504,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             result.c_vector = std::move(vec);
         }
         return result;
-    }
-
-    std::tuple<SDCondition, std::vector<bool>>
-    get_learned_condition_with_trigger(int n_threads,
-                                       const ConditionerParams& conditioner_params) override {
-        auto image_tokens = convert_token_to_id(trigger_word);
-        // if(image_tokens.size() == 1){
-        //     printf(" image token id is: %d \n", image_tokens[0]);
-        // }
-        GGML_ASSERT(image_tokens.size() == 1);
-        auto tokens_and_weights     = tokenize_with_trigger_token(conditioner_params.text,
-                                                                  conditioner_params.num_input_imgs,
-                                                                  image_tokens[0]);
-        std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
-        std::vector<float>& weights = std::get<1>(tokens_and_weights);
-        std::vector<bool>& clsm     = std::get<2>(tokens_and_weights);
-        // printf("tokens: \n");
-        // for(int i = 0; i < tokens.size(); ++i)
-        //    printf("%d ", tokens[i]);
-        // printf("\n");
-        // printf("clsm: \n");
-        // for(int i = 0; i < clsm.size(); ++i)
-        //    printf("%d ", clsm[i]?1:0);
-        // printf("\n");
-        auto cond = get_learned_condition_common(n_threads,
-                                                 tokens,
-                                                 weights,
-                                                 conditioner_params.clip_skip,
-                                                 conditioner_params.width,
-                                                 conditioner_params.height,
-                                                 conditioner_params.zero_out_masked);
-        return std::make_tuple(cond, clsm);
-    }
-
-    std::string remove_trigger_from_prompt(const std::string& prompt) override {
-        auto image_tokens = convert_token_to_id(trigger_word);
-        GGML_ASSERT(image_tokens.size() == 1);
-        auto tokens_and_weights  = tokenize(prompt);
-        std::vector<int>& tokens = tokens_and_weights.first;
-        auto it                  = std::find(tokens.begin(), tokens.end(), image_tokens[0]);
-        GGML_ASSERT(it != tokens.end());  // prompt must have trigger word
-        tokens.erase(it);
-        return decode(tokens);
     }
 
     SDCondition get_learned_condition(int n_threads,

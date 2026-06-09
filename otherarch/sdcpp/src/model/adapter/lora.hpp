@@ -3,6 +3,7 @@
 
 #include <mutex>
 #include "core/ggml_extend.hpp"
+#include "model_loader.h"
 
 #define LORA_GRAPH_BASE_SIZE 10240
 

@@ -10,7 +10,7 @@
 
 #include "core/ggml_extend.hpp"
 #include "core/tensor.hpp"
-#include "runtime/gits_noise.inl"
+#include "runtime/gits_noise.h"
 #include "runtime/guidance.h"
 
 /*================================================= CompVisDenoiser ==================================================*/

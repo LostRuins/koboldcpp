@@ -12,6 +12,7 @@
 #include "model/diffusion/ltxv.hpp"
 #include "model/vae/vae.hpp"
 #include "model/vae/wan_vae.hpp"
+#include "model_loader.h"
 
 namespace LTXVAE {
 

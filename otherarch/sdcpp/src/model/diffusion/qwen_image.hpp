@@ -6,6 +6,7 @@
 #include "model/common/block.hpp"
 #include "model/diffusion/flux.hpp"
 #include "model/diffusion/model.hpp"
+#include "model_loader.h"
 
 namespace Qwen {
     constexpr int QWEN_IMAGE_GRAPH_SIZE = 20480;

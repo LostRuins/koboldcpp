@@ -1,8 +1,8 @@
 #ifndef __SD_MODEL_DIFFUSION_CONTROL_HPP__
 #define __SD_MODEL_DIFFUSION_CONTROL_HPP__
 
-#include "model.h"
 #include "model/common/block.hpp"
+#include "model_loader.h"
 
 #define CONTROL_NET_GRAPH_SIZE 1536
 

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/ggml_extend.hpp"
+#include "model_loader.h"
 
 namespace LTXV {
 

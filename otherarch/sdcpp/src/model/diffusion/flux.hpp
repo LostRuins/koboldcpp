@@ -4,10 +4,10 @@
 #include <memory>
 #include <vector>
 
-#include "model.h"
 #include "model/common/rope.hpp"
 #include "model/diffusion/dit.hpp"
 #include "model/diffusion/model.hpp"
+#include "model_loader.h"
 
 #define FLUX_GRAPH_SIZE 10240
 

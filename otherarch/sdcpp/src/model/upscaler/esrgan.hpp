@@ -2,7 +2,7 @@
 #define __SD_MODEL_UPSCALER_ESRGAN_HPP__
 
 #include "core/ggml_extend.hpp"
-#include "model.h"
+#include "model_loader.h"
 
 /*
     ===================================    ESRGAN  ===================================

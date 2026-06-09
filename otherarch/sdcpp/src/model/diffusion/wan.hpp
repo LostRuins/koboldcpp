@@ -9,6 +9,7 @@
 #include "model/common/rope.hpp"
 #include "model/diffusion/flux.hpp"
 #include "model/diffusion/model.hpp"
+#include "model_loader.h"
 
 namespace WAN {
 

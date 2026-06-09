@@ -11,7 +11,7 @@
 #include <unordered_map>
 
 #include "core/ggml_extend.hpp"
-#include "model.h"
+#include "model_loader.h"
 #include "tokenizers/t5_unigram_tokenizer.h"
 
 struct T5Config {

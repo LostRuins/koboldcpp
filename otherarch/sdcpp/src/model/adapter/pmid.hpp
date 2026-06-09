@@ -6,6 +6,7 @@
 #include "model/adapter/lora.hpp"
 #include "model/common/block.hpp"
 #include "model/te/clip.hpp"
+#include "model_loader.h"
 
 struct FuseBlock : public GGMLBlock {
     // network hparams

@@ -3,9 +3,9 @@
 #include <regex>
 #include <vector>
 
-#include "model.h"
 #include "model_io/gguf_io.h"
 #include "model_io/safetensors_io.h"
+#include "model_loader.h"
 #include "util.h"
 
 #include "ggml_extend_backend.h"

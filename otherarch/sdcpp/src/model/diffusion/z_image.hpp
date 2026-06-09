@@ -7,6 +7,7 @@
 #include "model/diffusion/flux.hpp"
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
+#include "model_loader.h"
 
 // Ref: https://github.com/Alpha-VLLM/Lumina-Image-2.0/blob/main/model/model.py
 // Ref: https://github.com/huggingface/diffusers/pull/12703

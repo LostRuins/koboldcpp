@@ -7,9 +7,9 @@
 #include <vector>
 
 #include "core/ggml_extend.hpp"
-#include "model.h"
 #include "model/common/block.hpp"
 #include "model/diffusion/model.hpp"
+#include "model_loader.h"
 
 #define MMDIT_GRAPH_SIZE 10240
 

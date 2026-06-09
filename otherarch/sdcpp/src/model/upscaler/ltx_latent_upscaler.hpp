@@ -14,8 +14,8 @@
 #include "core/ggml_extend.hpp"
 #include "core/ggml_graph_cut.h"
 #include "core/util.h"
-#include "model.h"
 #include "model/diffusion/dit.hpp"
+#include "model_loader.h"
 
 namespace LTXVUpsampler {
     constexpr int LTX_UPSAMPLER_GRAPH_SIZE = 10240;

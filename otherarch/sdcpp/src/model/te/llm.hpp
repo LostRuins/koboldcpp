@@ -21,6 +21,7 @@
 #include "core/ggml_extend.hpp"
 #include "json.hpp"
 #include "model/common/rope.hpp"
+#include "model_loader.h"
 #include "tokenizers/bpe_tokenizer.h"
 #include "tokenizers/gemma_tokenizer.h"
 #include "tokenizers/gpt_oss_tokenizer.h"

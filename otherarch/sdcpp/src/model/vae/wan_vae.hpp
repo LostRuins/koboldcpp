@@ -7,6 +7,7 @@
 
 #include "model/common/block.hpp"
 #include "model/vae/vae.hpp"
+#include "model_loader.h"
 
 namespace WAN {
 
