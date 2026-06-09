@@ -2470,10 +2470,26 @@ protected:
             *effective_budget_out = effective_budget;
         }
 
+        // When streaming and the model dwarfs the budget, cap the planner at
+        // a quarter so it builds smaller merged segments and chunk-K can fit
+        // alongside. Without streaming the cap only adds dispatch overhead.
+        size_t planner_budget = effective_budget;
+        if (stream_layers_enabled) {
+            size_t total_params_bytes = 0;
+            for (const ggml_tensor* t : params_tensor_set_) {
+                if (t != nullptr) {
+                    total_params_bytes += ggml_nbytes(t);
+                }
+            }
+            if (total_params_bytes * 4 > effective_budget * 3) {
+                planner_budget = effective_budget / 4;
+            }
+        }
+
         *plan_out = sd::ggml_graph_cut::resolve_plan(runtime_backend,
                                                      gf,
                                                      &graph_cut_plan_cache_,
-                                                     effective_budget,
+                                                     planner_budget,
                                                      params_tensor_set_,
                                                      get_desc().c_str());
         if (stream_layers_enabled) {
@@ -3311,6 +3327,7 @@ public:
         for (auto& pair : params) {
             ggml_tensor* param           = pair.second;
             tensors[prefix + pair.first] = pair.second;
+            ggml_set_name(param, (prefix + pair.first).c_str());
         }
     }
 

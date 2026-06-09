@@ -173,8 +173,9 @@ namespace sd::guidance {
         }
 
         float diff_norm = 0.0f;
+        const int standard_res = 2 * 1024 / 8; // Use SDXL as the standard resolution (1024x1024, 8x8 patches, 4=2x2 channels)
         if (params_.norm_threshold > 0.0f) {
-            diff_norm = std::sqrt((deltas * deltas).sum());
+            diff_norm = std::sqrt((deltas * deltas).sum()) * standard_res / std::sqrt(static_cast<float>(deltas.numel()));
         }
 
         float apg_scale_factor = 1.0f;
