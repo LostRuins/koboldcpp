@@ -483,6 +483,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
     params.max_vram = inputs.max_vram;
+    params.stream_layers = inputs.stream_layers;
     params.enable_mmap = inputs.use_mmap;
     // the _cpu flags are only used if the backend string is empty, but
     // we always set both for consistency
