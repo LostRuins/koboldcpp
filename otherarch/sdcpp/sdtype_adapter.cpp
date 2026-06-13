@@ -124,8 +124,6 @@ struct SDParams {
     bool diffusion_conv_direct    = false;
     bool vae_conv_direct          = false;
 
-    bool chroma_use_dit_mask     = true;
-
     LoraMap lora_map;
     bool lora_dynamic = false;
 
@@ -481,7 +479,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.diffusion_flash_attn = sd_params->diffusion_flash_attn;
     params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
     params.vae_conv_direct = sd_params->vae_conv_direct;
-    params.chroma_use_dit_mask = sd_params->chroma_use_dit_mask;
+    params.chroma_use_dit_mask = true;
     params.max_vram = inputs.max_vram;
     params.stream_layers = inputs.stream_layers;
     params.enable_mmap = inputs.use_mmap;
@@ -505,11 +503,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     // also switches flash attn for the vae and conditioner
     params.flash_attn = params.diffusion_flash_attn;
 
-    if (params.chroma_use_dit_mask && params.diffusion_flash_attn) {
-        // note we don't know yet if it's a Chroma model
-        params.chroma_use_dit_mask = false;
-    }
-
     if(inputs.debugmode==1)
     {
         char* buf = sd_ctx_params_to_str(&params);
@@ -528,14 +521,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     }
 
     auto info = get_model_info(sd_ctx);
-
-    if (!sd_is_quiet) {
-        if (info.is_chroma && sd_params->diffusion_flash_attn && sd_params->chroma_use_dit_mask)
-        {
-            printf("Chroma: flash attention is on, disabling DiT mask (this will lower image quality)\n");
-            // disabled before loading
-        }
-    }
 
     if (info.is_wan || info.is_ltx)
     {
