@@ -1239,7 +1239,7 @@ struct LTXVideoVAE : public VAE {
               patch_size,
               tensor_storage_map,
               prefix),
-          VAE(version, backend, params_backend) {
+          VAE(version, backend, params_backend, prefix) {
         vae.init(params_ctx, tensor_storage_map, prefix);
         decode_timestep_tensor.values()[0] = vae.decode_timestep;
     }
@@ -1271,8 +1271,8 @@ struct LTXVideoVAE : public VAE {
         }
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
-        vae.get_param_tensors(tensors, prefix);
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        vae.get_param_tensors(tensors, weight_prefix);
     }
 
     struct TemporalTilePlan {
@@ -1396,7 +1396,7 @@ struct LTXVideoVAE : public VAE {
                                                  static_cast<int>(start),
                                                  chunk_overlap);
             };
-            auto chunk = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true),
+            auto chunk = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
                                                          expected_dim);
             if (chunk.empty()) {
                 free_cache_ctx_and_buffer();
@@ -1452,7 +1452,7 @@ struct LTXVideoVAE : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input, decode_graph);
         };
-        auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), expected_dim);
+        auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), expected_dim);
         if (result.empty()) {
             return {};
         }
@@ -1465,7 +1465,7 @@ struct LTXVideoVAE : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_latent_statistics_graph(z, normalize);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false),
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false),
                                                static_cast<size_t>(z.dim()));
     }
 
@@ -1541,7 +1541,7 @@ struct LTXVideoVAE : public VAE {
         }
 
         std::map<std::string, ggml_tensor*> tensors;
-        vae->get_param_tensors(tensors, "first_stage_model");
+        vae->get_param_tensors(tensors);
 
         if (!model_loader.load_tensors(tensors)) {
             LOG_ERROR("load tensors from model loader failed");

@@ -34,7 +34,9 @@ protected:
     std::vector<ModelFileData> file_data;
     bool model_files_processed = false;
     String2TensorStorage tensor_storage_map;
+    int n_threads_;
 
+    size_t add_file_path(const std::string& file_path);
     void add_tensor_storage(const TensorStorage& tensor_storage);
 
     bool init_from_gguf_file(const std::string& file_path, const std::string& prefix = "");
@@ -44,6 +46,8 @@ protected:
     bool init_from_diffusers_file(const std::string& file_path, const std::string& prefix = "");
 
 public:
+    ModelLoader();
+
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     void convert_tensors_name();
     bool init_from_file_and_convert_name(const std::string& file_path,
@@ -55,16 +59,23 @@ public:
     std::map<ggml_type, uint32_t> get_diffusion_model_wtype_stat();
     std::map<ggml_type, uint32_t> get_vae_wtype_stat();
     String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
+    const String2TensorStorage& get_tensor_storage_map() const { return tensor_storage_map; }
+    void set_n_threads(int n_threads);
     void set_wtype_override(ggml_type wtype, std::string tensor_type_rules = "");
     void process_model_files(bool enable_mmap = false, bool writable_mmap = true);
     std::vector<MmapTensorStore> mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
                                               std::set<std::string> ignore_tensors = {},
                                               bool writable                        = true);
-    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0, bool use_mmap = false);
+    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
+                      bool use_mmap                                    = false,
+                      const std::set<std::string>* target_tensor_names = nullptr);
     bool load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},
-                      int n_threads                        = 0,
                       bool use_mmap                        = false);
+    bool load_float_tensor(const std::string& name,
+                           std::vector<float>& data,
+                           int n_threads = 0,
+                           bool use_mmap = false);
 
     std::vector<std::string> get_tensor_names() const {
         std::vector<std::string> names;

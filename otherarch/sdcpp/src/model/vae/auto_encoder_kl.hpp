@@ -670,7 +670,7 @@ struct AutoEncoderKL : public VAE {
                   bool decode_only       = false,
                   bool use_video_decoder = false,
                   SDVersion version      = VERSION_SD1)
-        : decode_only(decode_only), VAE(version, backend, params_backend) {
+        : VAE(version, backend, params_backend, prefix), decode_only(decode_only) {
         if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
             scale_factor = 0.18215f;
             shift_factor = 0.f;
@@ -718,8 +718,8 @@ struct AutoEncoderKL : public VAE {
         return "vae";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
-        ae.get_param_tensors(tensors, prefix);
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        ae.get_param_tensors(tensors, weight_prefix);
     }
 
     ggml_cgraph* build_graph(const sd::Tensor<float>& z_tensor, bool decode_graph) {
@@ -742,7 +742,7 @@ struct AutoEncoderKL : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z.dim());
     }
 
     sd::Tensor<float> gaussian_latent_sample(const sd::Tensor<float>& moments, std::shared_ptr<RNG> rng) {

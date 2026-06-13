@@ -1733,7 +1733,10 @@ namespace LLM {
                                   const sd::Tensor<float>& attention_mask,
                                   const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
                                   std::set<int> out_layers,
-                                  bool return_all_hidden_states = false) {
+                                  bool return_all_hidden_states = false,
+                                  bool auto_free                = true,
+                                  bool free_compute_buffer      = true,
+                                  bool free_compute_params      = true) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input_ids,
                                    attention_mask,
@@ -1741,7 +1744,7 @@ namespace LLM {
                                    out_layers,
                                    return_all_hidden_states);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true),
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params),
                                                    input_ids.dim() + 1);
         }
 
@@ -1802,11 +1805,14 @@ namespace LLM {
         }
 
         sd::Tensor<float> encode_image(const int n_threads,
-                                       const sd::Tensor<float>& image) {
+                                       const sd::Tensor<float>& image,
+                                       bool auto_free           = false,
+                                       bool free_compute_buffer = false,
+                                       bool free_compute_params = false) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, false));
+            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params));
         }
     };
 

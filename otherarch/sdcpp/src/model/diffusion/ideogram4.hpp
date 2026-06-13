@@ -189,11 +189,11 @@ namespace Ideogram4 {
         }
 
         return Rope::embed_interleaved_mrope(ids,
-                                            bs,
-                                            static_cast<float>(rope_theta),
-                                            head_dim,
-                                            mrope_section,
-                                            axis_wrap_dims);
+                                             bs,
+                                             static_cast<float>(rope_theta),
+                                             head_dim,
+                                             mrope_section,
+                                             axis_wrap_dims);
     }
 
     class Ideogram4Attention : public GGMLBlock {
@@ -505,16 +505,16 @@ namespace Ideogram4 {
             int64_t head_dim = config.emb_dim / config.num_heads;
 
             auto runner_ctx = get_context();
-            pe_vec  = gen_ideogram4_pe(static_cast<int>(grid_h),
-                                       static_cast<int>(grid_w),
-                                       static_cast<int>(x->ne[3]),
-                                       static_cast<int>(context_len),
-                                       static_cast<int>(head_dim),
-                                       static_cast<int>(config.rope_theta),
-                                       config.mrope_section,
-                                       runner_ctx.circular_x_enabled,
-                                       runner_ctx.circular_y_enabled);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
+            pe_vec          = gen_ideogram4_pe(static_cast<int>(grid_h),
+                                               static_cast<int>(grid_w),
+                                               static_cast<int>(x->ne[3]),
+                                               static_cast<int>(context_len),
+                                               static_cast<int>(head_dim),
+                                               static_cast<int>(config.rope_theta),
+                                               config.mrope_section,
+                                               runner_ctx.circular_x_enabled,
+                                               runner_ctx.circular_y_enabled);
+            auto pe         = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());
 
             image_indicator_vec.assign(static_cast<size_t>(pos_len), 1);
@@ -537,7 +537,7 @@ namespace Ideogram4 {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, use_uncond_model);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

@@ -558,7 +558,7 @@ public:
             return build_graph(id_pixel_values, prompt_embeds, class_tokens_mask, id_embeds);
         };
 
-        return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true));
+        return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true));
     }
 };
 
@@ -616,14 +616,15 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
             return true;
         };
 
-        model_loader->load_tensors(on_new_tensor_cb, n_threads);
+        model_loader->set_n_threads(n_threads);
+        model_loader->load_tensors(on_new_tensor_cb);
         if (!alloc_params_buffer()) {
             LOG_ERROR("PhotoMaker ID embeds buffer allocation failed");
             return false;
         }
 
         dry_run = false;
-        model_loader->load_tensors(on_new_tensor_cb, n_threads);
+        model_loader->load_tensors(on_new_tensor_cb);
 
         LOG_DEBUG("finished loading PhotoMaker ID Embeds ");
         return true;

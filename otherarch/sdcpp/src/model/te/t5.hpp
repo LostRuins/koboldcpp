@@ -394,11 +394,14 @@ struct T5Runner : public GGMLRunner {
 
     sd::Tensor<float> compute(const int n_threads,
                               const sd::Tensor<int32_t>& input_ids,
-                              const sd::Tensor<float>& attention_mask) {
+                              const sd::Tensor<float>& attention_mask,
+                              bool auto_free           = true,
+                              bool free_compute_buffer = true,
+                              bool free_compute_params = true) {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, attention_mask);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true), 3);
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params), 3);
     }
 
     static std::vector<int> _relative_position_bucket(const std::vector<int>& relative_position,

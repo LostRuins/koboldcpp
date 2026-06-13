@@ -7,7 +7,6 @@
 
 #include "core/tensor_ggml.hpp"
 #include "core/util.h"
-#include "model/adapter/lora.hpp"
 #include "model/adapter/pmid.hpp"
 
 static std::tuple<std::vector<int>, std::vector<float>, std::vector<bool>>
@@ -103,7 +102,6 @@ static std::string remove_photomaker_trigger_from_prompt(FrozenCLIPEmbedderWithC
 
 struct PhotoMakerExtension : public GenerationExtension {
     std::shared_ptr<PhotoMakerIDEncoder> pmid_model;
-    std::shared_ptr<LoraModel> pmid_lora;
     bool enabled = false;
     std::string model_path;
     std::string trigger_word = "img";
@@ -129,7 +127,13 @@ struct PhotoMakerExtension : public GenerationExtension {
         }
 
         PMVersion pm_version = std::strstr(model_path.c_str(), "v2") != nullptr ? PM_VERSION_2 : PM_VERSION_1;
-        pmid_model           = std::make_shared<PhotoMakerIDEncoder>(ctx.backend_for(SDBackendModule::PHOTOMAKER),
+        LOG_INFO("loading stacked ID embedding (PHOTOMAKER) model file from '%s'", model_path.c_str());
+        if (!ctx.model_loader.init_from_file_and_convert_name(model_path, "pmid.")) {
+            LOG_WARN("loading stacked ID embedding from '%s' failed", model_path.c_str());
+            return true;
+        }
+
+        pmid_model = std::make_shared<PhotoMakerIDEncoder>(ctx.backend_for(SDBackendModule::PHOTOMAKER),
                                                            ctx.params_backend_for(SDBackendModule::PHOTOMAKER),
                                                            ctx.tensor_storage_map,
                                                            "pmid",
@@ -139,44 +143,28 @@ struct PhotoMakerExtension : public GenerationExtension {
             LOG_INFO("using PhotoMaker Version 2");
         }
 
-        pmid_lora               = std::make_shared<LoraModel>("pmid",
-                                                ctx.backend_for(SDBackendModule::PHOTOMAKER),
-                                                ctx.params_backend_for(SDBackendModule::PHOTOMAKER),
-                                                model_path,
-                                                "",
-                                                ctx.version);
-        auto lora_tensor_filter = [&](const std::string& tensor_name) {
-            return starts_with(tensor_name, "lora.model");
-        };
-        if (!pmid_lora->load_from_file(ctx.n_threads, lora_tensor_filter)) {
-            LOG_WARN("load photomaker lora tensors from %s failed", model_path.c_str());
-            return false;
-        }
-
-        LOG_INFO("loading stacked ID embedding (PHOTOMAKER) model file from '%s'", model_path.c_str());
-        if (!ctx.model_loader.init_from_file_and_convert_name(model_path, "pmid.")) {
-            LOG_WARN("loading stacked ID embedding from '%s' failed", model_path.c_str());
-            return true;
-        }
-
         enabled = true;
         return true;
     }
 
-    void collect_param_tensors(GenerationExtensionTensorContext& ctx) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         if (!enabled || pmid_model == nullptr) {
             return;
         }
 
-        std::map<std::string, ggml_tensor*> temp;
-        pmid_model->get_param_tensors(temp, "pmid");
-        bool do_mmap = ctx.module_can_mmap(SDBackendModule::PHOTOMAKER);
-        for (const auto& [key, tensor] : temp) {
-            ctx.tensors[key] = tensor;
-            if (do_mmap) {
-                ctx.mmap_able_tensors[key] = tensor;
-            }
+        pmid_model->get_param_tensors(tensors, "pmid");
+    }
+
+    void collect_loras(std::vector<ModelManager::LoraSpec>& loras) override {
+        if (!enabled || model_path.empty()) {
+            return;
         }
+        ModelManager::LoraSpec lora;
+        lora.path                      = model_path;
+        lora.multiplier                = 1.0f;
+        lora.tensor_name_prefix_filter = "lora.model";
+        lora.required                  = true;
+        loras.push_back(std::move(lora));
     }
 
     void add_ignore_tensors(std::set<std::string>& ignore_tensors) const override {
@@ -186,18 +174,16 @@ struct PhotoMakerExtension : public GenerationExtension {
         ignore_tensors.insert("pmid.unet.");
     }
 
-    bool alloc_params_buffer() override {
-        if (!enabled || pmid_model == nullptr) {
-            return true;
+    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
+        if (pmid_model != nullptr) {
+            pmid_model->set_weight_manager(manager);
         }
-        return pmid_model->alloc_params_buffer();
     }
 
-    size_t get_params_buffer_size() const override {
-        if (!enabled || pmid_model == nullptr) {
-            return 0;
+    void runner_done() override {
+        if (pmid_model != nullptr) {
+            pmid_model->runner_done();
         }
-        return pmid_model->get_params_buffer_size();
     }
 
     void reset_runtime_condition() override {
@@ -207,19 +193,8 @@ struct PhotoMakerExtension : public GenerationExtension {
 
     bool prepare_condition(GenerationExtensionConditionContext& ctx) override {
         reset_runtime_condition();
-        if (!enabled || pmid_model == nullptr || pmid_lora == nullptr) {
+        if (!enabled || pmid_model == nullptr) {
             return false;
-        }
-
-        if (!pmid_lora->applied) {
-            int64_t t0 = ggml_time_ms();
-            pmid_lora->apply(ctx.tensors, ctx.version, ctx.n_threads);
-            int64_t t1         = ggml_time_ms();
-            pmid_lora->applied = true;
-            LOG_INFO("pmid_lora apply completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-            if (ctx.free_params_immediately) {
-                pmid_lora->free_params_buffer();
-            }
         }
 
         bool pmv2 = pmid_model->get_version() == PM_VERSION_2;
@@ -305,9 +280,6 @@ struct PhotoMakerExtension : public GenerationExtension {
         LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
         LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);
 
-        if (ctx.free_params_immediately) {
-            pmid_model->free_params_buffer();
-        }
         return true;
     }
 

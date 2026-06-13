@@ -1129,7 +1129,7 @@ namespace WAN {
                      const std::string prefix                       = "",
                      bool decode_only                               = false,
                      SDVersion version                              = VERSION_WAN2)
-            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(version, backend, params_backend) {
+            : VAE(version, backend, params_backend, prefix), decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V) {
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -1137,8 +1137,8 @@ namespace WAN {
             return "wan_vae";
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
-            ae.get_param_tensors(tensors, prefix);
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+            ae.get_param_tensors(tensors, weight_prefix);
         }
 
         sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
@@ -1255,7 +1255,7 @@ namespace WAN {
                         return build_graph(input, decode_graph);
                     }
                 };
-                auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true),
+                auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
                                                               input.empty() ? z.dim() : input.dim());
                 if (!result.empty() && z.dim() == 4) {
                     result.squeeze_(2);
@@ -1268,7 +1268,7 @@ namespace WAN {
                 auto get_graph = [&]() -> ggml_cgraph* {
                     return build_graph_partial(z, decode_graph, i);
                 };
-                auto out_opt = GGMLRunner::compute<float>(get_graph, n_threads, true);
+                auto out_opt = GGMLRunner::compute<float>(get_graph, n_threads, true, true, true);
                 if (!out_opt.has_value()) {
                     return {};
                 }
@@ -1281,7 +1281,7 @@ namespace WAN {
                 sd::Tensor<float> output = std::move(out);
 
                 for (i = 1; i < t; i++) {
-                    auto chunk_opt = GGMLRunner::compute<float>(get_graph, n_threads, true);
+                    auto chunk_opt = GGMLRunner::compute<float>(get_graph, n_threads, true, true, true);
                     if (!chunk_opt.has_value()) {
                         return {};
                     }
@@ -1327,7 +1327,7 @@ namespace WAN {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend            = sd_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, backend, String2TensorStorage{}, "", false, VERSION_WAN2_2_TI2V);
+            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, backend, String2TensorStorage{}, "first_stage_model", false, VERSION_WAN2_2_TI2V);
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -1336,7 +1336,7 @@ namespace WAN {
                     return;
                 }
                 std::map<std::string, ggml_tensor*> tensors;
-                vae->get_param_tensors(tensors, "first_stage_model");
+                vae->get_param_tensors(tensors);
 
                 ModelLoader model_loader;
                 if (!model_loader.init_from_file_and_convert_name(file_path, "vae.")) {

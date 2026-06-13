@@ -772,7 +772,7 @@ struct UNetModelRunner : public DiffusionModelRunner {
             return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
     }
 
     sd::Tensor<float> compute(int n_threads,

@@ -309,6 +309,7 @@ public:
 struct ControlNet : public GGMLRunner {
     SDVersion version = VERSION_SD1;
     ControlNetBlock control_net;
+    std::string weight_prefix;
 
     ggml_backend_buffer_t control_buffer = nullptr;
     ggml_context* control_ctx            = nullptr;
@@ -321,9 +322,10 @@ struct ControlNet : public GGMLRunner {
     ControlNet(ggml_backend_t backend,
                ggml_backend_t params_backend,
                const String2TensorStorage& tensor_storage_map = {},
-               SDVersion version                              = VERSION_SD1)
-        : GGMLRunner(backend, params_backend), control_net(version) {
-        control_net.init(params_ctx, tensor_storage_map, "");
+               SDVersion version                              = VERSION_SD1,
+               const std::string& prefix                      = "")
+        : GGMLRunner(backend, params_backend), version(version), control_net(version), weight_prefix(prefix) {
+        control_net.init(params_ctx, tensor_storage_map, prefix);
     }
 
     ~ControlNet() override {
@@ -374,8 +376,8 @@ struct ControlNet : public GGMLRunner {
         return "control_net";
     }
 
-    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
-        control_net.get_param_tensors(tensors, prefix);
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
+        control_net.get_param_tensors(tensors, weight_prefix);
     }
 
     ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
@@ -435,7 +437,7 @@ struct ControlNet : public GGMLRunner {
             return build_graph(x, hint, timesteps, context, y);
         };
 
-        auto compute_result = GGMLRunner::compute<float>(get_graph, n_threads, false);
+        auto compute_result = GGMLRunner::compute<float>(get_graph, n_threads, false, false, false);
         if (!compute_result.has_value()) {
             return std::nullopt;
         }
@@ -472,7 +474,8 @@ struct ControlNet : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads);
+        model_loader.set_n_threads(n_threads);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors);
 
         if (!success) {
             LOG_ERROR("load control net tensors from model loader failed");

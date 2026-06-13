@@ -71,7 +71,8 @@ struct LoraModel : public GGMLRunner {
             return true;
         };
 
-        model_loader.load_tensors(on_new_tensor_cb, n_threads);
+        model_loader.set_n_threads(n_threads);
+        model_loader.load_tensors(on_new_tensor_cb);
 
         if (tensors_to_create.empty()) {
             return true;
@@ -93,19 +94,39 @@ struct LoraModel : public GGMLRunner {
         }
 
         dry_run = false;
-        model_loader.load_tensors(on_new_tensor_cb, n_threads);
+        model_loader.load_tensors(on_new_tensor_cb);
 
         LOG_DEBUG("finished loaded lora");
         return true;
     }
 
-    void preprocess_lora_tensors(const std::map<std::string, ggml_tensor*>& model_tensors) {
+    void release_loaded_tensors() {
+        free_compute_buffer();
+        free_params_buffer();
+        free_params_ctx();
+        alloc_params_ctx();
+        lora_tensors.clear();
+        original_tensor_to_final_tensor.clear();
+        applied_lora_tensors.clear();
+        applied             = false;
+        tensor_preprocessed = false;
+    }
+
+    static std::set<std::string> tensor_names(const std::map<std::string, ggml_tensor*>& model_tensors) {
+        std::set<std::string> names;
+        for (const auto& item : model_tensors) {
+            names.insert(item.first);
+        }
+        return names;
+    }
+
+    void preprocess_lora_tensors(const std::set<std::string>& model_tensor_names) {
         if (tensor_preprocessed) {
             return;
         }
         tensor_preprocessed = true;
         // I really hate these hardcoded processes.
-        if (model_tensors.find("cond_stage_model.1.transformer.text_model.encoder.layers.0.self_attn.in_proj.weight") != model_tensors.end()) {
+        if (model_tensor_names.find("cond_stage_model.1.transformer.text_model.encoder.layers.0.self_attn.in_proj.weight") != model_tensor_names.end()) {
             std::unordered_map<std::string, ggml_tensor*> new_lora_tensors;
             for (auto& [old_name, tensor] : lora_tensors) {
                 std::string new_name = old_name;
@@ -753,11 +774,13 @@ struct LoraModel : public GGMLRunner {
         return out_diff;
     }
 
-    ggml_cgraph* build_lora_graph(const std::map<std::string, ggml_tensor*>& model_tensors, SDVersion version) {
+    ggml_cgraph* build_lora_graph(const std::map<std::string, ggml_tensor*>& model_tensors,
+                                  const std::set<std::string>& model_tensor_names,
+                                  SDVersion version) {
         size_t lora_graph_size = LORA_GRAPH_BASE_SIZE + lora_tensors.size() * 10;
         ggml_cgraph* gf        = ggml_new_graph_custom(compute_ctx, lora_graph_size, false);
 
-        preprocess_lora_tensors(model_tensors);
+        preprocess_lora_tensors(model_tensor_names);
 
         original_tensor_to_final_tensor.clear();
         applied_lora_tensors.clear();
@@ -794,12 +817,16 @@ struct LoraModel : public GGMLRunner {
         return gf;
     }
 
-    void apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads) {
+    void apply(std::map<std::string, ggml_tensor*> model_tensors,
+               const std::set<std::string>& model_tensor_names,
+               SDVersion version,
+               int n_threads,
+               bool warn_unused = true) {
         auto get_graph = [&]() -> ggml_cgraph* {
-            return build_lora_graph(model_tensors, version);
+            return build_lora_graph(model_tensors, model_tensor_names, version);
         };
-        GGMLRunner::compute<float>(get_graph, n_threads, false, true);
-        stat();
+        GGMLRunner::compute<float>(get_graph, n_threads, false, false, false, true);
+        stat(!warn_unused);
         for (auto item : original_tensor_to_final_tensor) {
             ggml_tensor* original_tensor = item.first;
             ggml_tensor* final_tensor    = item.second;
@@ -808,6 +835,10 @@ struct LoraModel : public GGMLRunner {
         }
         original_tensor_to_final_tensor.clear();
         GGMLRunner::free_compute_buffer();
+    }
+
+    void apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads, bool warn_unused = true) {
+        apply(model_tensors, tensor_names(model_tensors), version, n_threads, warn_unused);
     }
 
     void stat(bool at_runntime = false) {

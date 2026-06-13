@@ -25,7 +25,6 @@
 
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_graph_cut.h"
-#include "core/layer_registry.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -36,6 +35,7 @@
 #include "core/rng.hpp"
 #include "core/tensor_ggml.hpp"
 #include "core/util.h"
+#include "weight_manager.h"
 
 #define EPS 1e-05f
 
@@ -1655,6 +1655,7 @@ struct GGMLRunnerContext {
     std::vector<std::pair<ggml_tensor*, std::string>>* debug_tensors = nullptr;
     std::function<ggml_tensor*(const std::string&)> get_cache_tensor;
     std::function<void(const std::string&, ggml_tensor*)> cache_tensor;
+    std::function<void(ggml_tensor*, const void*)> set_backend_tensor_data;
 
     void capture_tensor(const std::string& name, ggml_tensor* tensor) {
         if (debug_tensors == nullptr || tensor == nullptr) {
@@ -1680,6 +1681,13 @@ struct GGMLRunnerContext {
         }
         cache_tensor(name, tensor);
     }
+
+    void bind_backend_tensor_data(ggml_tensor* tensor, const void* data) const {
+        if (!set_backend_tensor_data || tensor == nullptr || data == nullptr) {
+            return;
+        }
+        set_backend_tensor_data(tensor, data);
+    }
 };
 
 struct GGMLRunner {
@@ -1691,11 +1699,8 @@ protected:
     ggml_backend_t params_backend  = nullptr;
     ggml_backend_t runtime_backend = nullptr;
 
-    ggml_context* params_ctx                    = nullptr;
-    ggml_backend_buffer_t params_buffer         = nullptr;
-    ggml_context* offload_ctx                   = nullptr;
-    ggml_backend_buffer_t runtime_params_buffer = nullptr;
-    bool params_on_runtime_backend              = false;
+    ggml_context* params_ctx            = nullptr;
+    ggml_backend_buffer_t params_buffer = nullptr;
 
     ggml_context* cache_ctx            = nullptr;
     ggml_backend_buffer_t cache_buffer = nullptr;
@@ -1703,24 +1708,16 @@ protected:
     ggml_context* compute_ctx    = nullptr;
     ggml_gallocr* compute_allocr = nullptr;
 
-    ggml_context* partial_offload_ctx                   = nullptr;
-    ggml_backend_buffer_t partial_runtime_params_buffer = nullptr;
-    std::vector<std::pair<ggml_tensor*, ggml_tensor*>> partial_offload_pairs;
-
-    // Params kept on the runtime backend across streaming segments.
-    ggml_context* resident_offload_ctx = nullptr;
-    std::vector<std::pair<ggml_tensor*, ggml_tensor*>> resident_offload_pairs;
-    ggml_backend_buffer_t resident_runtime_params_buffer = nullptr;
-    std::unordered_set<ggml_tensor*> resident_param_set;
-    uint64_t resident_state_token = 0;
-
     size_t max_graph_vram_bytes           = 0;
     bool stream_layers_enabled            = false;
     size_t observed_max_effective_budget_ = 0;
 
-    sd::layer_registry::LayerRegistry layer_registry_;
-
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
+    std::weak_ptr<RunnerWeightManager> weight_manager;
+    std::unordered_set<const ggml_tensor*> kept_compute_param_tensor_set;
+    std::vector<ggml_tensor*> runner_param_tensors;
+    std::unordered_set<const ggml_tensor*> runner_param_tensor_set;
+    bool params_tensor_set_dirty_ = true;
 
     std::vector<float> one_vec = {1.f};
     ggml_tensor* one_tensor    = nullptr;
@@ -1776,10 +1773,7 @@ protected:
         params_ctx = ggml_init(params);
         GGML_ASSERT(params_ctx != nullptr);
         params_tensor_set_.clear();
-        if (params_backend != runtime_backend) {
-            offload_ctx = ggml_init(params);
-            GGML_ASSERT(offload_ctx != nullptr);
-        }
+        params_tensor_set_dirty_ = true;
     }
 
     void free_params_ctx() {
@@ -1788,14 +1782,7 @@ protected:
             params_ctx = nullptr;
         }
         params_tensor_set_.clear();
-        if (offload_ctx != nullptr) {
-            ggml_free(offload_ctx);
-            offload_ctx = nullptr;
-        }
-        if (partial_offload_ctx != nullptr) {
-            ggml_free(partial_offload_ctx);
-            partial_offload_ctx = nullptr;
-        }
+        params_tensor_set_dirty_ = true;
     }
 
     void alloc_cache_ctx() {
@@ -1835,12 +1822,105 @@ protected:
     }
 
     void rebuild_params_tensor_set() {
+        if (!params_tensor_set_dirty_) {
+            return;
+        }
         params_tensor_set_.clear();
         if (params_ctx == nullptr) {
             return;
         }
         for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t)) {
             params_tensor_set_.insert(t);
+        }
+        params_tensor_set_dirty_ = false;
+    }
+
+    std::vector<ggml_tensor*> collect_used_param_tensors(ggml_cgraph* gf) {
+        std::vector<ggml_tensor*> used_params;
+        rebuild_params_tensor_set();
+        if (gf == nullptr || params_tensor_set_.empty()) {
+            return used_params;
+        }
+
+        std::unordered_set<const ggml_tensor*> seen_params;
+        const int n_leafs = sd::ggml_graph_cut::leaf_count(gf);
+        seen_params.reserve(static_cast<size_t>(n_leafs));
+        for (int i = 0; i < n_leafs; ++i) {
+            ggml_tensor* leaf       = sd::ggml_graph_cut::leaf_tensor(gf, i);
+            ggml_tensor* param_leaf = leaf;
+            if (param_leaf != nullptr && params_tensor_set_.find(param_leaf) == params_tensor_set_.end()) {
+                param_leaf = param_leaf->view_src;
+            }
+            if (param_leaf != nullptr &&
+                params_tensor_set_.find(param_leaf) != params_tensor_set_.end() &&
+                seen_params.insert(param_leaf).second) {
+                used_params.push_back(param_leaf);
+            }
+        }
+        return used_params;
+    }
+
+    bool prepare_execute_graph_weights(ggml_cgraph* gf,
+                                       std::vector<ggml_tensor*>& graph_param_tensors,
+                                       std::vector<ggml_tensor*>& params_to_prepare,
+                                       bool keep_compute_params) {
+        graph_param_tensors = collect_used_param_tensors(gf);
+        params_to_prepare.clear();
+        params_to_prepare.reserve(graph_param_tensors.size());
+        for (ggml_tensor* param : graph_param_tensors) {
+            if (param == nullptr) {
+                continue;
+            }
+            if (keep_compute_params &&
+                kept_compute_param_tensor_set.find(param) != kept_compute_param_tensor_set.end()) {
+                continue;
+            }
+            params_to_prepare.push_back(param);
+        }
+        auto manager = weight_manager.lock();
+        if (manager == nullptr) {
+            if (!params_to_prepare.empty()) {
+                if (params_buffer != nullptr) {
+                    return true;
+                }
+                LOG_ERROR("%s weight manager is not set for graph params", get_desc().c_str());
+                return false;
+            }
+            return true;
+        }
+
+        if (!manager->prepare_params(params_to_prepare)) {
+            LOG_ERROR("%s prepare graph weights failed", get_desc().c_str());
+            return false;
+        }
+        for (ggml_tensor* param : params_to_prepare) {
+            if (param == nullptr) {
+                continue;
+            }
+            if (runner_param_tensor_set.insert(param).second) {
+                runner_param_tensors.push_back(param);
+            }
+        }
+        return true;
+    }
+
+    void free_compute_backend_param_tensors(const std::vector<ggml_tensor*>& tensors) {
+        if (tensors.empty()) {
+            return;
+        }
+        auto manager = weight_manager.lock();
+        if (manager != nullptr) {
+            manager->release_compute_backend_params(tensors);
+        }
+    }
+
+    void free_params_backend_param_tensors(const std::vector<ggml_tensor*>& tensors) {
+        if (tensors.empty()) {
+            return;
+        }
+        auto manager = weight_manager.lock();
+        if (manager != nullptr) {
+            manager->release_params_backend_params(tensors);
         }
     }
 
@@ -2109,316 +2189,6 @@ protected:
         }
     }
 
-    bool offload_all_params() {
-        restore_partial_params();
-        if (params_backend == runtime_backend) {
-            return true;
-        }
-        if (params_on_runtime_backend) {
-            return true;
-        }
-        GGML_ASSERT(runtime_params_buffer == nullptr);
-        int64_t t0         = ggml_time_ms();
-        size_t num_tensors = ggml_tensor_num(offload_ctx);
-        if (num_tensors == 0) {
-            for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t)) {
-                GGML_ASSERT(t->view_src == nullptr);
-                ggml_dup_tensor(offload_ctx, t);
-            }
-        }
-        num_tensors = ggml_tensor_num(offload_ctx);
-        GGML_ASSERT(num_tensors == ggml_tensor_num(params_ctx));
-
-        runtime_params_buffer = ggml_backend_alloc_ctx_tensors(offload_ctx, runtime_backend);
-
-        if (runtime_params_buffer == nullptr) {
-            LOG_ERROR("%s alloc runtime params backend buffer failed, num_tensors = %i",
-                      get_desc().c_str(),
-                      num_tensors);
-            return false;
-        }
-        ggml_backend_buffer_set_usage(runtime_params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-        ggml_tensor* t         = ggml_get_first_tensor(params_ctx);
-        ggml_tensor* offload_t = ggml_get_first_tensor(offload_ctx);
-
-        while (t != nullptr && offload_t != nullptr) {
-            ggml_backend_tensor_copy(t, offload_t);
-            std::swap(t->buffer, offload_t->buffer);
-            std::swap(t->data, offload_t->data);
-            std::swap(t->extra, offload_t->extra);
-
-            t         = ggml_get_next_tensor(params_ctx, t);
-            offload_t = ggml_get_next_tensor(offload_ctx, offload_t);
-        }
-
-        int64_t t1 = ggml_time_ms();
-
-        size_t params_buffer_size = ggml_backend_buffer_get_size(runtime_params_buffer);
-        LOG_INFO("%s offload params (%6.2f MB, %i tensors) to runtime backend (%s), taking %.2fs",
-                 get_desc().c_str(),
-                 params_buffer_size / (1024.f * 1024.f),
-                 num_tensors,
-                 ggml_backend_name(runtime_backend),
-                 (t1 - t0) * 1.0f / 1000);
-
-        params_on_runtime_backend = true;
-
-        return true;
-    }
-
-    bool offload_partial_params(const std::vector<ggml_tensor*>& tensors) {
-        restore_partial_params();
-        if (params_backend == runtime_backend) {
-            return true;
-        }
-        if (tensors.empty()) {
-            return true;
-        }
-        GGML_ASSERT(!params_on_runtime_backend);
-        GGML_ASSERT(partial_runtime_params_buffer == nullptr);
-
-        std::vector<ggml_tensor*> unique_tensors;
-        std::unordered_set<ggml_tensor*> seen_tensors;
-        unique_tensors.reserve(tensors.size());
-        seen_tensors.reserve(tensors.size());
-        for (ggml_tensor* tensor : tensors) {
-            if (tensor == nullptr) {
-                continue;
-            }
-            if (resident_param_set.find(tensor) != resident_param_set.end()) {
-                continue;
-            }
-            if (seen_tensors.insert(tensor).second) {
-                unique_tensors.push_back(tensor);
-            }
-        }
-        if (unique_tensors.empty()) {
-            return true;
-        }
-
-        ggml_init_params params;
-        params.mem_size   = std::max<size_t>(1, unique_tensors.size()) * ggml_tensor_overhead();
-        params.mem_buffer = nullptr;
-        params.no_alloc   = true;
-
-        partial_offload_ctx = ggml_init(params);
-        GGML_ASSERT(partial_offload_ctx != nullptr);
-
-        partial_offload_pairs.clear();
-        partial_offload_pairs.reserve(unique_tensors.size());
-
-        for (ggml_tensor* tensor : unique_tensors) {
-            GGML_ASSERT(tensor->view_src == nullptr);
-            ggml_tensor* offload_tensor = ggml_dup_tensor(partial_offload_ctx, tensor);
-            ggml_set_name(offload_tensor, tensor->name);
-            partial_offload_pairs.push_back({tensor, offload_tensor});
-        }
-
-        partial_runtime_params_buffer = ggml_backend_alloc_ctx_tensors(partial_offload_ctx, runtime_backend);
-        if (partial_runtime_params_buffer == nullptr) {
-            LOG_ERROR("%s alloc partial runtime params backend buffer failed, num_tensors = %zu",
-                      get_desc().c_str(),
-                      partial_offload_pairs.size());
-            ggml_free(partial_offload_ctx);
-            partial_offload_ctx = nullptr;
-            partial_offload_pairs.clear();
-            return false;
-        }
-        ggml_backend_buffer_set_usage(partial_runtime_params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-        for (auto& pair : partial_offload_pairs) {
-            ggml_tensor* tensor         = pair.first;
-            ggml_tensor* offload_tensor = pair.second;
-
-            ggml_backend_tensor_copy(tensor, offload_tensor);
-            std::swap(tensor->buffer, offload_tensor->buffer);
-            std::swap(tensor->data, offload_tensor->data);
-            std::swap(tensor->extra, offload_tensor->extra);
-        }
-
-        size_t params_buffer_size = ggml_backend_buffer_get_size(partial_runtime_params_buffer);
-        LOG_DEBUG("%s offload partial params (%6.2f MB, %zu tensors) to runtime backend (%s)",
-                  get_desc().c_str(),
-                  params_buffer_size / (1024.f * 1024.f),
-                  partial_offload_pairs.size(),
-                  ggml_backend_name(runtime_backend));
-
-        return true;
-    }
-
-    void restore_all_params() {
-        restore_partial_params();
-        if (!params_on_runtime_backend) {
-            return;
-        }
-        ggml_tensor* t         = ggml_get_first_tensor(params_ctx);
-        ggml_tensor* offload_t = ggml_get_first_tensor(offload_ctx);
-
-        while (t != nullptr && offload_t != nullptr) {
-            t->buffer         = offload_t->buffer;
-            t->data           = offload_t->data;
-            t->extra          = offload_t->extra;
-            offload_t->buffer = nullptr;
-            offload_t->data   = nullptr;
-            offload_t->extra  = nullptr;
-
-            t         = ggml_get_next_tensor(params_ctx, t);
-            offload_t = ggml_get_next_tensor(offload_ctx, offload_t);
-        }
-
-        if (runtime_params_buffer != nullptr) {
-            ggml_backend_buffer_free(runtime_params_buffer);
-            runtime_params_buffer = nullptr;
-        }
-        params_on_runtime_backend = false;
-    }
-
-    void restore_partial_params() {
-        if (partial_offload_pairs.empty()) {
-            if (partial_runtime_params_buffer != nullptr) {
-                ggml_backend_buffer_free(partial_runtime_params_buffer);
-                partial_runtime_params_buffer = nullptr;
-            }
-            if (partial_offload_ctx != nullptr) {
-                ggml_free(partial_offload_ctx);
-                partial_offload_ctx = nullptr;
-            }
-            return;
-        }
-
-        for (auto& pair : partial_offload_pairs) {
-            ggml_tensor* tensor         = pair.first;
-            ggml_tensor* offload_tensor = pair.second;
-
-            tensor->buffer         = offload_tensor->buffer;
-            tensor->data           = offload_tensor->data;
-            tensor->extra          = offload_tensor->extra;
-            offload_tensor->buffer = nullptr;
-            offload_tensor->data   = nullptr;
-            offload_tensor->extra  = nullptr;
-        }
-
-        if (partial_runtime_params_buffer != nullptr) {
-            ggml_backend_buffer_free(partial_runtime_params_buffer);
-            partial_runtime_params_buffer = nullptr;
-        }
-        partial_offload_pairs.clear();
-
-        if (partial_offload_ctx != nullptr) {
-            ggml_free(partial_offload_ctx);
-            partial_offload_ctx = nullptr;
-        }
-    }
-
-    bool offload_resident_params(const std::vector<ggml_tensor*>& tensors) {
-        if (params_backend == runtime_backend) {
-            return true;
-        }
-        if (tensors.empty()) {
-            return true;
-        }
-        GGML_ASSERT(resident_runtime_params_buffer == nullptr);
-        GGML_ASSERT(resident_offload_ctx == nullptr);
-        GGML_ASSERT(resident_offload_pairs.empty());
-        GGML_ASSERT(resident_param_set.empty());
-
-        std::vector<ggml_tensor*> unique_tensors;
-        std::unordered_set<ggml_tensor*> seen;
-        unique_tensors.reserve(tensors.size());
-        seen.reserve(tensors.size());
-        for (ggml_tensor* t : tensors) {
-            if (t == nullptr)
-                continue;
-            if (seen.insert(t).second)
-                unique_tensors.push_back(t);
-        }
-        if (unique_tensors.empty())
-            return true;
-
-        ggml_init_params init = {};
-        init.mem_size         = std::max<size_t>(1, unique_tensors.size()) * ggml_tensor_overhead();
-        init.mem_buffer       = nullptr;
-        init.no_alloc         = true;
-        resident_offload_ctx  = ggml_init(init);
-        GGML_ASSERT(resident_offload_ctx != nullptr);
-
-        resident_offload_pairs.reserve(unique_tensors.size());
-        for (ggml_tensor* t : unique_tensors) {
-            GGML_ASSERT(t->view_src == nullptr);
-            ggml_tensor* twin = ggml_dup_tensor(resident_offload_ctx, t);
-            ggml_set_name(twin, t->name);
-            resident_offload_pairs.push_back({t, twin});
-        }
-
-        resident_runtime_params_buffer = ggml_backend_alloc_ctx_tensors(resident_offload_ctx, runtime_backend);
-        if (resident_runtime_params_buffer == nullptr) {
-            LOG_ERROR("%s alloc resident runtime params backend buffer failed, num_tensors = %zu",
-                      get_desc().c_str(), resident_offload_pairs.size());
-            ggml_free(resident_offload_ctx);
-            resident_offload_ctx = nullptr;
-            resident_offload_pairs.clear();
-            return false;
-        }
-        ggml_backend_buffer_set_usage(resident_runtime_params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-        for (auto& pair : resident_offload_pairs) {
-            ggml_tensor* t    = pair.first;
-            ggml_tensor* twin = pair.second;
-            ggml_backend_tensor_copy(t, twin);
-            std::swap(t->buffer, twin->buffer);
-            std::swap(t->data, twin->data);
-            std::swap(t->extra, twin->extra);
-            resident_param_set.insert(t);
-        }
-        ggml_backend_synchronize(runtime_backend);
-
-        size_t sz = ggml_backend_buffer_get_size(resident_runtime_params_buffer);
-        LOG_INFO("%s offload resident params (%6.2f MB, %zu tensors) to runtime backend (%s)",
-                 get_desc().c_str(),
-                 sz / (1024.f * 1024.f),
-                 resident_offload_pairs.size(),
-                 ggml_backend_name(runtime_backend));
-        return true;
-    }
-
-    void restore_resident_params() {
-        if (resident_offload_pairs.empty()) {
-            if (resident_runtime_params_buffer != nullptr) {
-                ggml_backend_buffer_free(resident_runtime_params_buffer);
-                resident_runtime_params_buffer = nullptr;
-            }
-            if (resident_offload_ctx != nullptr) {
-                ggml_free(resident_offload_ctx);
-                resident_offload_ctx = nullptr;
-            }
-            resident_param_set.clear();
-            resident_state_token = 0;
-            return;
-        }
-        for (auto& pair : resident_offload_pairs) {
-            ggml_tensor* t    = pair.first;
-            ggml_tensor* twin = pair.second;
-            t->buffer         = twin->buffer;
-            t->data           = twin->data;
-            t->extra          = twin->extra;
-            twin->buffer      = nullptr;
-            twin->data        = nullptr;
-            twin->extra       = nullptr;
-        }
-        if (resident_runtime_params_buffer != nullptr) {
-            ggml_backend_buffer_free(resident_runtime_params_buffer);
-            resident_runtime_params_buffer = nullptr;
-        }
-        resident_offload_pairs.clear();
-        if (resident_offload_ctx != nullptr) {
-            ggml_free(resident_offload_ctx);
-            resident_offload_ctx = nullptr;
-        }
-        resident_param_set.clear();
-        resident_state_token = 0;
-    }
-
     bool should_use_graph_cut_segmented_compute(const GraphCutPlan& plan) {
         return plan.has_cuts &&
                plan.valid &&
@@ -2440,18 +2210,12 @@ protected:
         GGML_ASSERT(plan_out != nullptr);
         GGML_ASSERT(gf != nullptr);
 
-        // Keep the plan and resident params under the same live-VRAM cap.
-        // Add back our own resident buffer so we don't see chunk-K's
-        // allocation as "taken" VRAM and shrink the budget on every step.
         size_t effective_budget = max_graph_vram_bytes;
         if (stream_layers_enabled && max_graph_vram_bytes > 0 && runtime_backend != nullptr) {
             ggml_backend_dev_t dev = ggml_backend_get_device(runtime_backend);
             if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
                 size_t free_vram = 0, total_vram = 0;
                 ggml_backend_dev_memory(dev, &free_vram, &total_vram);
-                if (resident_runtime_params_buffer != nullptr) {
-                    free_vram += ggml_backend_buffer_get_size(resident_runtime_params_buffer);
-                }
                 constexpr size_t safety_margin = 512ull * 1024 * 1024;
                 size_t free_clamp              = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
                 if (free_clamp < effective_budget) {
@@ -2500,6 +2264,9 @@ protected:
                                                      planner_budget,
                                                      params_tensor_set_,
                                                      get_desc().c_str());
+        if (stream_layers_enabled) {
+            sd::ggml_graph_cut::annotate_residency(*plan_out, effective_budget);
+        }
         if (stream_layers_enabled) {
             if (budget_increased) {
                 LOG_INFO("%s streaming budget = %.2f MB",
@@ -2635,310 +2402,173 @@ protected:
     template <typename T>
     std::optional<sd::Tensor<T>> execute_graph(ggml_cgraph* gf,
                                                int n_threads,
-                                               bool free_compute_buffer_immediately,
-                                               const std::vector<ggml_tensor*>& runtime_param_tensors,
+                                               bool free_compute_buffer,
+                                               bool free_compute_params,
                                                bool preserve_backend_tensor_data_map,
                                                bool no_return                                          = false,
                                                const std::unordered_set<std::string>* cache_keep_names = nullptr) {
-        int64_t t_execute_begin              = ggml_time_ms();
-        const bool use_partial_param_offload = !runtime_param_tensors.empty();
-        int64_t t_offload_begin              = ggml_time_ms();
-        if (use_partial_param_offload) {
-            if (!offload_partial_params(runtime_param_tensors)) {
-                LOG_ERROR("%s offload partial params to runtime backend failed", get_desc().c_str());
-                return std::nullopt;
-            }
-        } else {
-            if (!offload_all_params()) {
-                LOG_ERROR("%s offload params to runtime backend failed", get_desc().c_str());
-                return std::nullopt;
-            }
-        }
-        int64_t t_offload_end = ggml_time_ms();
-
-        int64_t t_alloc_begin = ggml_time_ms();
-        if (!alloc_compute_buffer(gf)) {
-            LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
-            if (use_partial_param_offload) {
-                restore_partial_params();
-            }
+        std::vector<ggml_tensor*> graph_param_tensors;
+        std::vector<ggml_tensor*> params_to_prepare;
+        if (!prepare_execute_graph_weights(gf, graph_param_tensors, params_to_prepare, !free_compute_params)) {
             return std::nullopt;
         }
+        struct GraphWeightDoneGuard {
+            GraphWeightDoneGuard(GGMLRunner* runner, const std::vector<ggml_tensor*>* tensors)
+                : runner(runner),
+                  tensors(tensors) {}
+
+            GGMLRunner* runner                       = nullptr;
+            const std::vector<ggml_tensor*>* tensors = nullptr;
+            bool enabled                             = true;
+
+            ~GraphWeightDoneGuard() {
+                if (enabled && runner != nullptr && tensors != nullptr) {
+                    runner->free_compute_backend_param_tensors(*tensors);
+                }
+            }
+
+            void dismiss() { enabled = false; }
+
+            GraphWeightDoneGuard(const GraphWeightDoneGuard&)            = delete;
+            GraphWeightDoneGuard& operator=(const GraphWeightDoneGuard&) = delete;
+        };
+        GraphWeightDoneGuard graph_weight_done_guard(this, &params_to_prepare);
+
+        if (!alloc_compute_buffer(gf)) {
+            LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
+            return std::nullopt;
+        }
+        struct ComputeBufferGuard {
+            ComputeBufferGuard(GGMLRunner* runner, bool enabled)
+                : runner(runner),
+                  enabled(enabled) {}
+
+            GGMLRunner* runner = nullptr;
+            bool enabled       = false;
+
+            ~ComputeBufferGuard() {
+                if (enabled && runner != nullptr) {
+                    runner->free_compute_buffer();
+                }
+            }
+
+            ComputeBufferGuard(const ComputeBufferGuard&)            = delete;
+            ComputeBufferGuard& operator=(const ComputeBufferGuard&) = delete;
+        };
+        ComputeBufferGuard compute_buffer_guard(this, free_compute_buffer);
 
         if (!ggml_gallocr_alloc_graph(compute_allocr, gf)) {
             LOG_ERROR("%s alloc compute graph failed", get_desc().c_str());
-            if (free_compute_buffer_immediately) {
-                free_compute_buffer();
-            } else if (use_partial_param_offload) {
-                restore_partial_params();
-            }
             return std::nullopt;
         }
-        int64_t t_alloc_end = ggml_time_ms();
 
-        int64_t t_copy_begin = ggml_time_ms();
         copy_data_to_backend_tensor(gf, !preserve_backend_tensor_data_map);
-        int64_t t_copy_end = ggml_time_ms();
         if (sd_backend_is_cpu(runtime_backend)) {
             sd_backend_cpu_set_n_threads(runtime_backend, n_threads);
         }
 
-        int64_t t_compute_begin = ggml_time_ms();
-        ggml_status status      = ggml_backend_graph_compute(runtime_backend, gf);
-        int64_t t_compute_end   = ggml_time_ms();
+        ggml_status status = ggml_backend_graph_compute(runtime_backend, gf);
         if (status != GGML_STATUS_SUCCESS) {
             LOG_ERROR("%s compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));
-            if (free_compute_buffer_immediately) {
-                free_compute_buffer();
-            } else if (use_partial_param_offload) {
-                restore_partial_params();
-            }
             return std::nullopt;
         }
 
-        std::unordered_set<const ggml_tensor*> debug_graph_tensor_set;
-        const int n_debug_leafs = sd::ggml_graph_cut::leaf_count(gf);
-        const int n_debug_nodes = ggml_graph_n_nodes(gf);
-        debug_graph_tensor_set.reserve(static_cast<size_t>(n_debug_leafs + n_debug_nodes));
-        for (int i = 0; i < n_debug_leafs; ++i) {
-            debug_graph_tensor_set.insert(sd::ggml_graph_cut::leaf_tensor(gf, i));
-        }
-        for (int i = 0; i < n_debug_nodes; ++i) {
-            debug_graph_tensor_set.insert(ggml_graph_node(gf, i));
+        if (!debug_tensors.empty()) {
+            std::unordered_set<const ggml_tensor*> debug_graph_tensor_set;
+            const int n_debug_leafs = sd::ggml_graph_cut::leaf_count(gf);
+            const int n_debug_nodes = ggml_graph_n_nodes(gf);
+            debug_graph_tensor_set.reserve(static_cast<size_t>(n_debug_leafs + n_debug_nodes));
+            for (int i = 0; i < n_debug_leafs; ++i) {
+                debug_graph_tensor_set.insert(sd::ggml_graph_cut::leaf_tensor(gf, i));
+            }
+            for (int i = 0; i < n_debug_nodes; ++i) {
+                debug_graph_tensor_set.insert(ggml_graph_node(gf, i));
+            }
+
+            for (const auto& entry : debug_tensors) {
+                auto tensor = entry.first;
+                if (tensor == nullptr) {
+                    continue;
+                }
+                if (debug_graph_tensor_set.find(tensor) == debug_graph_tensor_set.end()) {
+                    continue;
+                }
+                ggml_backend_buffer_t tensor_buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+                if (tensor_buf == nullptr) {
+                    LOG_WARN("%s skip debug tensor '%s': tensor buffer not set",
+                             get_desc().c_str(),
+                             entry.second.c_str());
+                    continue;
+                }
+                if (tensor->type != GGML_TYPE_F32) {
+                    LOG_WARN("%s skip debug tensor '%s': only GGML_TYPE_F32 is supported, got %s",
+                             get_desc().c_str(),
+                             entry.second.c_str(),
+                             ggml_type_name(tensor->type));
+                    continue;
+                }
+                auto debug_tensor = sd::make_sd_tensor_from_ggml<float>(tensor);
+                print_sd_tensor(debug_tensor, false, entry.second.c_str());
+            }
         }
 
-        for (const auto& entry : debug_tensors) {
-            auto tensor = entry.first;
-            if (tensor == nullptr) {
-                continue;
-            }
-            if (debug_graph_tensor_set.find(tensor) == debug_graph_tensor_set.end()) {
-                continue;
-            }
-            ggml_backend_buffer_t tensor_buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
-            if (tensor_buf == nullptr) {
-                LOG_WARN("%s skip debug tensor '%s': tensor buffer not set",
-                         get_desc().c_str(),
-                         entry.second.c_str());
-                continue;
-            }
-            if (tensor->type != GGML_TYPE_F32) {
-                LOG_WARN("%s skip debug tensor '%s': only GGML_TYPE_F32 is supported, got %s",
-                         get_desc().c_str(),
-                         entry.second.c_str(),
-                         ggml_type_name(tensor->type));
-                continue;
-            }
-            auto debug_tensor = sd::make_sd_tensor_from_ggml<float>(tensor);
-            print_sd_tensor(debug_tensor, false, entry.second.c_str());
-        }
-
-        int64_t t_cache_begin = ggml_time_ms();
         if (!copy_cache_tensors_to_cache_buffer(cache_keep_names)) {
-            if (free_compute_buffer_immediately) {
-                free_compute_buffer();
-            } else if (use_partial_param_offload) {
-                restore_partial_params();
-            }
             return std::nullopt;
         }
-        int64_t t_cache_end = ggml_time_ms();
-        auto result         = ggml_get_tensor(compute_ctx, final_result_name.c_str());
+        auto result = ggml_get_tensor(compute_ctx, final_result_name.c_str());
         std::optional<sd::Tensor<T>> output;
         if (!no_return) {
             output = read_graph_tensor<T>(result, "output");
             if (!output.has_value()) {
-                if (free_compute_buffer_immediately) {
-                    free_compute_buffer();
-                } else if (use_partial_param_offload) {
-                    restore_partial_params();
-                }
                 return std::nullopt;
             }
         } else {
             output = sd::Tensor<T>();
         }
 
-        if (free_compute_buffer_immediately) {
-            free_compute_buffer();
-        } else if (use_partial_param_offload) {
-            restore_partial_params();
-        }
-        if (use_partial_param_offload) {
-            LOG_DEBUG("%s execute_graph timing: offload=%lld ms alloc=%lld ms copy_in=%lld ms compute=%lld ms cache=%lld ms total=%lld ms",
-                      get_desc().c_str(),
-                      t_offload_end - t_offload_begin,
-                      t_alloc_end - t_alloc_begin,
-                      t_copy_end - t_copy_begin,
-                      t_compute_end - t_compute_begin,
-                      t_cache_end - t_cache_begin,
-                      ggml_time_ms() - t_execute_begin);
-        }
-        return output;
-    }
-
-    template <typename T>
-    std::optional<sd::Tensor<T>> compute_with_graph_cuts(ggml_cgraph* gf,
-                                                         const GraphCutPlan& plan,
-                                                         int n_threads,
-                                                         bool free_compute_buffer_immediately,
-                                                         bool no_return = false) {
-        GGML_ASSERT(gf != nullptr);
-
-        free_compute_buffer();
-        free_cache_ctx_and_buffer();
-
-        std::unordered_map<ggml_tensor*, PersistentExternalBinding> persistent_externals;
-        snapshot_persistent_externals(plan, gf, persistent_externals);
-
-        std::optional<sd::Tensor<T>> output = sd::Tensor<T>();
-        for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
-            int64_t t_segment_begin = ggml_time_ms();
-            const auto& segment     = plan.segments[seg_idx];
-            auto future_cut_names   = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
-            LOG_DEBUG("%s graph cut executing segment %zu/%zu: %s",
-                      get_desc().c_str(),
-                      seg_idx + 1,
-                      plan.segments.size(),
-                      segment.group_name.c_str());
-
-            reset_segment_runtime_tensors(segment, gf, &persistent_externals);
-            if (!bind_segment_cached_inputs(gf, segment)) {
-                free_cache_ctx_and_buffer();
-                free_compute_buffer();
-                free_compute_ctx();
-                return std::nullopt;
-            }
-
-            const bool is_last_segment = seg_idx + 1 == plan.segments.size();
-            if (!is_last_segment) {
-                for (size_t output_idx = 0; output_idx < segment.output_node_indices.size(); ++output_idx) {
-                    ggml_tensor* output_tensor = sd::ggml_graph_cut::output_tensor(gf, segment, output_idx);
-                    if (output_tensor != nullptr &&
-                        sd::ggml_graph_cut::is_graph_cut_tensor(output_tensor) &&
-                        future_cut_names.find(output_tensor->name) != future_cut_names.end()) {
-                        cache(output_tensor->name, output_tensor);
-                    }
+        if (!free_compute_params) {
+            for (ggml_tensor* param : params_to_prepare) {
+                if (param == nullptr) {
+                    continue;
                 }
+                kept_compute_param_tensor_set.insert(param);
             }
-
-            ggml_context* segment_graph_ctx = nullptr;
-            ggml_cgraph* segment_graph      = sd::ggml_graph_cut::build_segment_graph(gf, segment, &segment_graph_ctx);
-            auto segment_output             = execute_graph<T>(segment_graph,
-                                                   n_threads,
-                                                   true,
-                                                   sd::ggml_graph_cut::runtime_param_tensors(gf, segment, get_desc().c_str()),
-                                                   true,
-                                                   !is_last_segment || no_return,
-                                                   &future_cut_names);
-            ggml_free(segment_graph_ctx);
-            if (!segment_output.has_value()) {
-                free_cache_ctx_and_buffer();
-                free_compute_buffer();
-                free_compute_ctx();
-                return std::nullopt;
-            }
-            output = std::move(segment_output);
+            graph_weight_done_guard.dismiss();
         }
-
-        backend_tensor_data_map.clear();
-        free_cache_ctx_and_buffer();
-        free_compute_ctx();
         return output;
     }
 
-public:
-    void release_streaming_residency() {
-        restore_resident_params();
-    }
-
     template <typename T>
-    std::optional<sd::Tensor<T>> compute_streaming_segments(ggml_cgraph* gf,
+    std::optional<sd::Tensor<T>> compute_graph_cut_segments(ggml_cgraph* gf,
                                                             const GraphCutPlan& plan,
-                                                            size_t residency_budget_bytes,
                                                             int n_threads,
-                                                            bool free_compute_buffer_immediately,
+                                                            bool log_residency,
                                                             bool no_return = false) {
         GGML_ASSERT(gf != nullptr);
 
-        // Runtime LoRA composes `weight + diff` in the compute graph via
-        // ggml_add; the resident weight tensor's data is never mutated, so
-        // chunk-K residency stays valid across sampling steps.
-        // Reserve room for the worst merged segment so chunk-K can't grow
-        // large enough to starve later partial-param allocations.
-        size_t worst_merged_segment_footprint = 0;
-        for (const auto& seg : plan.segments) {
-            const size_t fp = seg.input_param_bytes +
-                              seg.compute_buffer_size +
-                              seg.output_bytes +
-                              seg.input_previous_cut_bytes +
-                              seg.input_external_bytes;
-            if (fp > worst_merged_segment_footprint) {
-                worst_merged_segment_footprint = fp;
-            }
-        }
-        const size_t residency_budget_for_annotate =
-            residency_budget_bytes > worst_merged_segment_footprint
-                ? residency_budget_bytes - worst_merged_segment_footprint
-                : 0;
-
-        sd::ggml_graph_cut::Plan& base_plan = graph_cut_plan_cache_.graph_cut_plan;
-        if (base_plan.available) {
-            sd::ggml_graph_cut::annotate_residency(base_plan, residency_budget_for_annotate);
-
-            std::vector<ggml_tensor*> resident_params;
-            uint64_t token = 0;
-            for (const auto& segment : base_plan.segments) {
-                if (segment.residency != sd::ggml_graph_cut::SegmentResidency::RESIDENT) {
-                    continue;
-                }
-                auto seg_params = sd::ggml_graph_cut::param_tensors(gf, segment);
-                for (ggml_tensor* t : seg_params) {
-                    if (t == nullptr)
-                        continue;
-                    resident_params.push_back(t);
-                    token ^= reinterpret_cast<uintptr_t>(t) * 0x9E3779B97F4A7C15ull;
-                }
-            }
-            if (token != resident_state_token) {
-                restore_resident_params();
-                if (!resident_params.empty()) {
-                    if (offload_resident_params(resident_params)) {
-                        resident_state_token = token;
-                    } else {
-                        LOG_ERROR("%s chunk-K: resident offload failed; continuing with per-segment streaming",
-                                  get_desc().c_str());
-                        restore_resident_params();
-                    }
-                }
-            }
-        }
-
         free_compute_buffer();
         free_cache_ctx_and_buffer();
-
-        layer_registry_.move_layer_to_gpu("_global");
 
         std::unordered_map<ggml_tensor*, PersistentExternalBinding> persistent_externals;
         snapshot_persistent_externals(plan, gf, persistent_externals);
 
         std::optional<sd::Tensor<T>> output = sd::Tensor<T>();
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); ++seg_idx) {
-            int64_t t_segment_begin = ggml_time_ms();
-            const auto& segment     = plan.segments[seg_idx];
-            const bool is_last      = seg_idx + 1 == plan.segments.size();
-            auto future_cut_names   = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
-
-            LOG_DEBUG("%s streaming-cut executing segment %zu/%zu: %s (residency=%s)",
-                      get_desc().c_str(),
-                      seg_idx + 1,
-                      plan.segments.size(),
-                      segment.group_name.c_str(),
-                      segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT ? "RESIDENT" : "STREAMED");
-
-            if (!layer_registry_.move_layer_to_gpu(segment.group_name)) {
-                LOG_DEBUG("%s streaming: no registry entry for group '%s' (using upstream offload path)",
+            const auto& segment   = plan.segments[seg_idx];
+            const bool is_last    = seg_idx + 1 == plan.segments.size();
+            auto future_cut_names = sd::ggml_graph_cut::collect_future_input_names(gf, plan, seg_idx);
+            if (log_residency) {
+                LOG_DEBUG("%s graph cut executing segment %zu/%zu: %s (residency=%s)",
                           get_desc().c_str(),
+                          seg_idx + 1,
+                          plan.segments.size(),
+                          segment.group_name.c_str(),
+                          segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT ? "RESIDENT" : "STREAMED");
+            } else {
+                LOG_DEBUG("%s graph cut executing segment %zu/%zu: %s",
+                          get_desc().c_str(),
+                          seg_idx + 1,
+                          plan.segments.size(),
                           segment.group_name.c_str());
             }
 
@@ -2952,23 +2582,24 @@ public:
 
             if (!is_last) {
                 for (size_t output_idx = 0; output_idx < segment.output_node_indices.size(); ++output_idx) {
-                    ggml_tensor* out_tensor = sd::ggml_graph_cut::output_tensor(gf, segment, output_idx);
-                    if (out_tensor != nullptr &&
-                        sd::ggml_graph_cut::is_graph_cut_tensor(out_tensor) &&
-                        future_cut_names.find(out_tensor->name) != future_cut_names.end()) {
-                        cache(out_tensor->name, out_tensor);
+                    ggml_tensor* output_tensor = sd::ggml_graph_cut::output_tensor(gf, segment, output_idx);
+                    if (output_tensor != nullptr &&
+                        sd::ggml_graph_cut::is_graph_cut_tensor(output_tensor) &&
+                        future_cut_names.find(output_tensor->name) != future_cut_names.end()) {
+                        cache(output_tensor->name, output_tensor);
                     }
                 }
             }
 
             ggml_context* segment_graph_ctx = nullptr;
             ggml_cgraph* segment_graph      = sd::ggml_graph_cut::build_segment_graph(gf, segment, &segment_graph_ctx);
+            const bool keep_segment_params  = segment.residency == sd::ggml_graph_cut::SegmentResidency::RESIDENT;
             auto segment_output             = execute_graph<T>(segment_graph,
                                                    n_threads,
-                                                   /*free_compute_buffer_immediately=*/true,
-                                                   sd::ggml_graph_cut::runtime_param_tensors(gf, segment, get_desc().c_str()),
-                                                   /*preserve_backend_tensor_data_map=*/true,
-                                                   /*no_return=*/!is_last || no_return,
+                                                   true,
+                                                   !keep_segment_params,
+                                                   true,
+                                                   !is_last || no_return,
                                                    &future_cut_names);
             ggml_free(segment_graph_ctx);
             if (!segment_output.has_value()) {
@@ -2978,17 +2609,23 @@ public:
                 return std::nullopt;
             }
             output = std::move(segment_output);
-
-            if (segment.residency == sd::ggml_graph_cut::SegmentResidency::STREAMED) {
-                layer_registry_.move_layer_to_cpu(segment.group_name);
-            }
-            (void)t_segment_begin;
         }
 
         backend_tensor_data_map.clear();
         free_cache_ctx_and_buffer();
         free_compute_ctx();
         return output;
+    }
+
+public:
+    void runner_done() {
+        free_compute_buffer();
+        std::vector<ggml_tensor*> tensors_to_release = std::move(this->runner_param_tensors);
+        this->runner_param_tensors.clear();
+        runner_param_tensor_set.clear();
+        kept_compute_param_tensor_set.clear();
+        free_compute_backend_param_tensors(tensors_to_release);
+        free_params_backend_param_tensors(tensors_to_release);
     }
 
 public:
@@ -3000,11 +2637,9 @@ public:
         GGML_ASSERT(runtime_backend != nullptr);
         GGML_ASSERT(params_backend != nullptr);
         alloc_params_ctx();
-        layer_registry_.set_backends(runtime_backend, params_backend);
     }
 
     virtual ~GGMLRunner() {
-        restore_resident_params();
         free_params_buffer();
         free_compute_buffer();
         free_params_ctx();
@@ -3027,6 +2662,9 @@ public:
         };
         runner_ctx.cache_tensor = [this](const std::string& name, ggml_tensor* tensor) {
             this->cache(name, tensor);
+        };
+        runner_ctx.set_backend_tensor_data = [this](ggml_tensor* tensor, const void* data) {
+            this->set_backend_tensor_data(tensor, data);
         };
         return runner_ctx;
     }
@@ -3087,9 +2725,8 @@ public:
         return true;
     }
 
+protected:
     void free_params_buffer() {
-        // Restore swapped resident params before freeing their backing buffer.
-        restore_resident_params();
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;
@@ -3104,6 +2741,7 @@ public:
         return 0;
     }
 
+public:
     void free_cache_ctx_and_buffer() {
         free_cache_buffer();
         free_cache_ctx();
@@ -3114,8 +2752,6 @@ public:
             ggml_gallocr_free(compute_allocr);
             compute_allocr = nullptr;
         }
-        restore_partial_params();
-        restore_all_params();
     }
 
     // do copy after alloc graph
@@ -3180,47 +2816,57 @@ public:
     template <typename T>
     std::optional<sd::Tensor<T>> compute(get_graph_cb_t get_graph,
                                          int n_threads,
-                                         bool free_compute_buffer_immediately,
-                                         bool no_return = false) {
+                                         bool auto_free           = true,
+                                         bool free_compute_buffer = true,
+                                         bool free_compute_params = true,
+                                         bool no_return           = false) {
+        struct RunnerDoneGuard {
+            RunnerDoneGuard(GGMLRunner* runner, bool enabled)
+                : runner(runner),
+                  enabled(enabled) {}
+
+            ~RunnerDoneGuard() {
+                if (enabled && runner != nullptr) {
+                    runner->runner_done();
+                }
+            }
+
+            RunnerDoneGuard(const RunnerDoneGuard&)            = delete;
+            RunnerDoneGuard& operator=(const RunnerDoneGuard&) = delete;
+
+            GGMLRunner* runner = nullptr;
+            bool enabled       = false;
+        };
+        RunnerDoneGuard runner_done_guard(this, auto_free);
+
         ggml_cgraph* gf = nullptr;
         if (!prepare_compute_graph(get_graph, &gf)) {
             return std::nullopt;
         }
         GGML_ASSERT(gf != nullptr);
+        rebuild_params_tensor_set();
 
         if (can_attempt_graph_cut_segmented_compute()) {
             GraphCutPlan plan;
-            size_t effective_graph_vram_bytes = 0;
-            if (!resolve_graph_cut_plan(gf, &plan, &effective_graph_vram_bytes)) {
+            if (!resolve_graph_cut_plan(gf, &plan)) {
                 free_compute_ctx();
                 return std::nullopt;
             }
             if (should_use_graph_cut_segmented_compute(plan)) {
-                if (stream_layers_enabled) {
-                    return compute_streaming_segments<T>(gf,
-                                                         plan,
-                                                         effective_graph_vram_bytes,
-                                                         n_threads,
-                                                         free_compute_buffer_immediately,
-                                                         no_return);
-                }
-                return compute_with_graph_cuts<T>(gf,
-                                                  plan,
-                                                  n_threads,
-                                                  free_compute_buffer_immediately,
-                                                  no_return);
+                return compute_graph_cut_segments<T>(gf,
+                                                     plan,
+                                                     n_threads,
+                                                     stream_layers_enabled,
+                                                     no_return);
             }
-        }
-        if (!alloc_compute_buffer(gf)) {
-            LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
-            return std::nullopt;
         }
         return execute_graph<T>(gf,
                                 n_threads,
-                                free_compute_buffer_immediately,
-                                {},
+                                free_compute_buffer,
+                                free_compute_params,
                                 false,
-                                no_return);
+                                no_return,
+                                nullptr);
     }
 
     void set_flash_attention_enabled(bool enabled) {
@@ -3240,6 +2886,15 @@ public:
         weight_adapter = adapter;
     }
 
+    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) {
+        weight_manager = manager;
+    }
+
+    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager,
+                            const std::string&) {
+        set_weight_manager(manager);
+    }
+
     void set_max_graph_vram_bytes(size_t max_vram_bytes) {
         max_graph_vram_bytes = max_vram_bytes;
     }
@@ -3247,8 +2902,6 @@ public:
     void set_stream_layers_enabled(bool enabled) {
         stream_layers_enabled = enabled;
     }
-
-    sd::layer_registry::LayerRegistry& get_layer_registry() { return layer_registry_; }
 
     ggml_backend_t get_runtime_backend() {
         return runtime_backend;

@@ -990,7 +990,46 @@ bool is_first_stage_model_name(const std::string& name) {
     return false;
 }
 
+static std::string convert_esrgan_tensor_name(std::string name) {
+    static std::unordered_map<std::string, std::string> esrgan_name_map;
+
+    if (esrgan_name_map.empty()) {
+        esrgan_name_map["model.0."] = "conv_first.";
+
+        constexpr int max_num_blocks = 64;
+        for (int i = 0; i < max_num_blocks; i++) {
+            std::string block_prefix = "model.1.sub." + std::to_string(i) + ".";
+            for (int rdb = 1; rdb <= 3; rdb++) {
+                for (int conv = 1; conv <= 5; conv++) {
+                    esrgan_name_map[block_prefix + "RDB" + std::to_string(rdb) + ".conv" + std::to_string(conv) + ".0."] =
+                        "body." + std::to_string(i) + ".rdb" + std::to_string(rdb) + ".conv" + std::to_string(conv) + ".";
+                }
+            }
+            esrgan_name_map[block_prefix + "weight"] = "conv_body.weight";
+            esrgan_name_map[block_prefix + "bias"]   = "conv_body.bias";
+        }
+
+        // RealESRGAN stores only the learned layers in a Sequential. These indices
+        // cover the common x1, x2 and x4 layouts.
+        esrgan_name_map["model.2."]  = "conv_hr.";
+        esrgan_name_map["model.3."]  = "conv_up1.";
+        esrgan_name_map["model.4."]  = "conv_last.";
+        esrgan_name_map["model.5."]  = "conv_hr.";
+        esrgan_name_map["model.6."]  = "conv_up2.";
+        esrgan_name_map["model.7."]  = "conv_last.";
+        esrgan_name_map["model.8."]  = "conv_hr.";
+        esrgan_name_map["model.10."] = "conv_last.";
+    }
+
+    replace_with_prefix_map(name, esrgan_name_map);
+    return name;
+}
+
 std::string convert_tensor_name(std::string name, SDVersion version) {
+    if (version == VERSION_ESRGAN) {
+        return convert_esrgan_tensor_name(std::move(name));
+    }
+
     bool is_lora                             = false;
     bool is_lycoris_underline                = false;
     bool is_underline                        = false;

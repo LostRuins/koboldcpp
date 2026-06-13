@@ -935,7 +935,7 @@ struct MMDiTRunner : public DiffusionModelRunner {
             return build_graph(x, timesteps, context, y, skip_layers);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
     }
 
     sd::Tensor<float> compute(int n_threads,

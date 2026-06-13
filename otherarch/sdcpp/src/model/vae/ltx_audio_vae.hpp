@@ -997,6 +997,7 @@ namespace LTXV {
     struct LTXAudioVAERunner : public GGMLRunner {
         LTXAudioVAEConfig config;
         LTXAudioVAE model;
+        std::string weight_prefix;
         sd::Tensor<float> bwe_skip_filter_tensor;
 
         LTXAudioVAERunner(ggml_backend_t backend,
@@ -1004,6 +1005,7 @@ namespace LTXV {
                           const String2TensorStorage& tensor_storage_map,
                           const std::string& prefix = "")
             : GGMLRunner(backend, params_backend),
+              weight_prefix(prefix),
               config(LTXAudioVAEConfig::detect_from_weights(tensor_storage_map)),
               model(config) {
             model.init(params_ctx, tensor_storage_map, prefix);
@@ -1013,8 +1015,8 @@ namespace LTXV {
             }
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
-            model.get_param_tensors(tensors, prefix);
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
+            model.get_param_tensors(tensors, weight_prefix);
         }
 
         size_t get_params_buffer_size() {
@@ -1037,7 +1039,7 @@ namespace LTXV {
                 ggml_build_forward_expand(gf, waveform);
                 return gf;
             };
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), 4);
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), 4);
             int64_t t1  = ggml_time_ms();
             LOG_INFO("ltx audio vae decode completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
             return result;
@@ -1082,7 +1084,7 @@ namespace LTXV {
             }
 
             std::map<std::string, ggml_tensor*> tensors;
-            ltx_audio_vae->get_param_tensors(tensors, "");
+            ltx_audio_vae->get_param_tensors(tensors);
 
             if (!model_loader.load_tensors(tensors)) {
                 LOG_ERROR("load tensors from model loader failed");

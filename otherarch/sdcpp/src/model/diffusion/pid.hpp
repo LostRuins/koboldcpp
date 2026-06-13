@@ -823,7 +823,7 @@ namespace Pid {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, lq_latent, degrade_sigma);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

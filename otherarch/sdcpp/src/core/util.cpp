@@ -507,7 +507,7 @@ static int sdloglevel = 0; //-1 = hide all, 0 = normal, 1 = showall
 static bool sdquiet = false;
 // } kcpp
 
-static std::string build_progress_bar(int step, int steps) {
+static std::string build_progress_bar(int step, int steps, char progress_char = '=', bool show_head = true) {
     std::string progress = "  |";
     int max_progress     = 50;
     int32_t current      = 0;
@@ -517,21 +517,21 @@ static std::string build_progress_bar(int step, int steps) {
     for (int i = 0; i < 50; i++) {
         if (i > current) {
             progress += " ";
-        } else if (i == current && i != max_progress - 1) {
+        } else if (show_head && i == current && i != max_progress - 1) {
             progress += ">";
         } else {
-            progress += "=";
+            progress += progress_char;
         }
     }
     progress += "|";
     return progress;
 }
 
-static void print_progress_line(int step, int steps, const std::string& speed_text) {
+static void print_progress_line(int step, int steps, const std::string& speed_text, char progress_char = '=', bool show_head = true) {
     if (step == 0) {
         return;
     }
-    std::string progress = build_progress_bar(step, steps);
+    std::string progress = build_progress_bar(step, steps, progress_char, show_head);
     const char* lf       = (step == steps ? "\n" : "");
     printf("\r%s %i/%i - %s\033[K%s", progress.c_str(), step, steps, speed_text.c_str(), lf);
     fflush(stdout);  // for linux
@@ -574,9 +574,9 @@ void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float 
 
     double speed_mb = bytes_per_second / (1024.0 * 1024.0);
     if (speed_mb >= 1024.0) {
-        print_progress_line(step, steps, sd_format("%.2fGB/s", speed_mb / 1024.0));
+        print_progress_line(step, steps, sd_format("%.2fGB/s", speed_mb / 1024.0), '#', false);
     } else {
-        print_progress_line(step, steps, sd_format("%.2fMB/s", speed_mb));
+        print_progress_line(step, steps, sd_format("%.2fMB/s", speed_mb), '#', false);
     }
 }
 

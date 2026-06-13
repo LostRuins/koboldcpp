@@ -6,10 +6,12 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "conditioning/conditioner.hpp"
 #include "core/ggml_extend_backend.h"
 #include "model_loader.h"
+#include "model_manager.h"
 #include "stable-diffusion.h"
 
 struct GenerationExtensionInitContext {
@@ -23,21 +25,12 @@ struct GenerationExtensionInitContext {
     std::function<ggml_backend_t(SDBackendModule)> params_backend_for;
 };
 
-struct GenerationExtensionTensorContext {
-    std::map<std::string, ggml_tensor*>& tensors;
-    std::map<std::string, ggml_tensor*>& mmap_able_tensors;
-    std::function<bool(SDBackendModule)> module_can_mmap;
-};
-
 struct GenerationExtensionConditionContext {
     Conditioner* conditioner;
     ConditionerParams& condition_params;
     const sd_pm_params_t& pm_params;
-    std::map<std::string, ggml_tensor*>& tensors;
-    SDVersion version;
     int n_threads;
     int total_steps;
-    bool free_params_immediately;
 };
 
 struct GenerationExtension {
@@ -50,14 +43,11 @@ struct GenerationExtension {
     virtual bool init(const GenerationExtensionInitContext&) {
         return true;
     }
-    virtual void collect_param_tensors(GenerationExtensionTensorContext&) {}
+    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>&) {}
+    virtual void collect_loras(std::vector<ModelManager::LoraSpec>&) {}
     virtual void add_ignore_tensors(std::set<std::string>&) const {}
-    virtual bool alloc_params_buffer() {
-        return true;
-    }
-    virtual size_t get_params_buffer_size() const {
-        return 0;
-    }
+    virtual void set_weight_manager(const std::shared_ptr<RunnerWeightManager>&) {}
+    virtual void runner_done() {}
     virtual void reset_runtime_condition() {}
     virtual bool prepare_condition(GenerationExtensionConditionContext&) {
         return false;

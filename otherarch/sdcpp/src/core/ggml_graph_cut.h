@@ -80,7 +80,6 @@ namespace sd::ggml_graph_cut {
     ggml_tensor* output_tensor(ggml_cgraph* gf, const Segment& segment, size_t output_index);
     ggml_tensor* input_tensor(ggml_cgraph* gf, const Segment::InputRef& input_ref);
     std::vector<ggml_tensor*> param_tensors(ggml_cgraph* gf, const Segment& segment);
-    std::vector<ggml_tensor*> runtime_param_tensors(ggml_cgraph* gf, const Segment& segment, const char* log_desc);
     std::unordered_set<std::string> collect_future_input_names(ggml_cgraph* gf,
                                                                const Plan& plan,
                                                                size_t current_segment_index);
