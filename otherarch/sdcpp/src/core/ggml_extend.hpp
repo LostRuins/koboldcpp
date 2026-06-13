@@ -1346,10 +1346,18 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         v_in = ggml_cast(ctx, v_in, GGML_TYPE_F16);
 
         if (mask_in != nullptr) {
-            mask_in = ggml_transpose(ctx, mask_in);
-        }
-
-        if (mask_in != nullptr) {
+            // ggml_flash_attn_ext expects the mask as a contiguous F16 tensor shaped
+            // [n_kv, n_q, (heads), (batch)] (ne0 = key length, ne1 = query length) and,
+            // unlike the manual-attention path, does not broadcast the query dimension.
+            // Some callers (e.g. Chroma/T5) pass a per-key padding mask broadcast over
+            // queries ([n_kv, 1, ...]); materialize the query dimension to L_q so the
+            // kernel indexes it correctly. (A bare ggml_transpose here produced a
+            // [1, n_kv, ...] mask that the kernel silently misreads, yielding NaN/blank
+            // output for masked flash attention.)
+            if (mask_in->ne[1] != L_q) {
+                mask_in = ggml_repeat(ctx, mask_in,
+                                      ggml_new_tensor_4d(ctx, mask_in->type, mask_in->ne[0], L_q, mask_in->ne[2], mask_in->ne[3]));
+            }
             mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
         }
 

@@ -151,7 +151,9 @@ namespace Ideogram4 {
                                                           int context_len,
                                                           int head_dim,
                                                           int rope_theta,
-                                                          const std::vector<int>& mrope_section) {
+                                                          const std::vector<int>& mrope_section,
+                                                          bool circular_x = false,
+                                                          bool circular_y = false) {
         GGML_ASSERT(bs == 1);
         std::vector<std::vector<float>> ids(static_cast<size_t>(bs) * (context_len + grid_h * grid_w),
                                             std::vector<float>(3, 0.f));
@@ -169,7 +171,29 @@ namespace Ideogram4 {
             }
         }
 
-        return Rope::embed_interleaved_mrope(ids, bs, static_cast<float>(rope_theta), head_dim, mrope_section);
+        std::vector<std::vector<int>> axis_wrap_dims(3);
+        if (circular_y || circular_x) {
+            size_t total_len = static_cast<size_t>(bs) * (context_len + grid_h * grid_w);
+            axis_wrap_dims[1].assign(total_len, 0);
+            axis_wrap_dims[2].assign(total_len, 0);
+            if (circular_y) {
+                for (size_t idx = static_cast<size_t>(context_len); idx < total_len; ++idx) {
+                    axis_wrap_dims[1][idx] = grid_h;
+                }
+            }
+            if (circular_x) {
+                for (size_t idx = static_cast<size_t>(context_len); idx < total_len; ++idx) {
+                    axis_wrap_dims[2][idx] = grid_w;
+                }
+            }
+        }
+
+        return Rope::embed_interleaved_mrope(ids,
+                                            bs,
+                                            static_cast<float>(rope_theta),
+                                            head_dim,
+                                            mrope_section,
+                                            axis_wrap_dims);
     }
 
     class Ideogram4Attention : public GGMLBlock {
@@ -480,13 +504,16 @@ namespace Ideogram4 {
             int64_t pos_len  = context_len + grid_h * grid_w;
             int64_t head_dim = config.emb_dim / config.num_heads;
 
+            auto runner_ctx = get_context();
             pe_vec  = gen_ideogram4_pe(static_cast<int>(grid_h),
                                        static_cast<int>(grid_w),
                                        static_cast<int>(x->ne[3]),
                                        static_cast<int>(context_len),
                                        static_cast<int>(head_dim),
                                        static_cast<int>(config.rope_theta),
-                                       config.mrope_section);
+                                       config.mrope_section,
+                                       runner_ctx.circular_x_enabled,
+                                       runner_ctx.circular_y_enabled);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());
 
@@ -497,7 +524,6 @@ namespace Ideogram4 {
             auto indicator = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_I32, pos_len, x->ne[3]);
             set_backend_tensor_data(indicator, image_indicator_vec.data());
 
-            auto runner_ctx  = get_context();
             ggml_tensor* out = active_model.forward(&runner_ctx, x, timesteps, context, pe, indicator);
             ggml_build_forward_expand(gf, out);
             return gf;

@@ -491,6 +491,10 @@ SD_API bool preprocess_canny(sd_image_t image,
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
 
+// for C API, caller needs to call free_sd_images to free the memory after use
+// This helps avoid CRT problems on Windows when memory is allocated in the library but freed in the caller, which may use a different CRT.
+SD_API void free_sd_images(sd_image_t* result_images, int num_images);
+
 #ifdef __cplusplus
 }
 #endif

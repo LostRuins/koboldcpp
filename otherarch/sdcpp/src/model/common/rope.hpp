@@ -253,7 +253,8 @@ namespace Rope {
                                                                  int bs,
                                                                  float theta,
                                                                  int head_dim,
-                                                                 const std::vector<int>& mrope_section) {
+                                                                 const std::vector<int>& mrope_section,
+                                                                 const std::vector<std::vector<int>>& axis_wrap_dims = {}) {
         GGML_ASSERT(bs > 0);
         GGML_ASSERT(head_dim % 2 == 0);
         GGML_ASSERT(mrope_section.size() >= 3);
@@ -265,7 +266,11 @@ namespace Rope {
         std::vector<std::vector<std::vector<float>>> axis_embs;
         axis_embs.reserve(3);
         for (int axis = 0; axis < 3; ++axis) {
-            axis_embs.push_back(rope(trans_ids[axis], head_dim, theta));
+            std::vector<int> axis_wrap;
+            if (axis < static_cast<int>(axis_wrap_dims.size())) {
+                axis_wrap = axis_wrap_dims[axis];
+            }
+            axis_embs.push_back(rope(trans_ids[axis], head_dim, theta, axis_wrap));
         }
 
         std::vector<std::vector<float>> emb = axis_embs[0];
