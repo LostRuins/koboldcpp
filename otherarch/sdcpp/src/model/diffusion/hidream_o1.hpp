@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_DIFFUSION_HIDREAM_O1_HPP__
+﻿#ifndef __SD_MODEL_DIFFUSION_HIDREAM_O1_HPP__
 #define __SD_MODEL_DIFFUSION_HIDREAM_O1_HPP__
 
 #include <algorithm>
@@ -282,10 +282,10 @@ namespace HiDreamO1 {
         std::array<std::vector<float>, 4> pos_embed_weight_data_;
 
         HiDreamO1VisionRunner(ggml_backend_t backend,
-                              ggml_backend_t params_backend,
-                              const String2TensorStorage& tensor_storage_map = {},
-                              const std::string& prefix                      = "model.visual")
-            : GGMLRunner(backend, params_backend),
+                              const String2TensorStorage& tensor_storage_map      = {},
+                              const std::string& prefix                           = "model.visual",
+                              std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : GGMLRunner(backend, weight_manager),
               config(HiDreamO1Config::detect_from_weights(tensor_storage_map, prefix)),
               model(std::make_shared<LLM::VisionModel>(false, config.llm.vision)) {
             model->init(params_ctx, tensor_storage_map, prefix);
@@ -343,10 +343,10 @@ namespace HiDreamO1 {
         std::vector<float> attention_mask_vec;
 
         HiDreamO1Runner(ggml_backend_t backend,
-                        ggml_backend_t params_backend,
-                        const String2TensorStorage& tensor_storage_map = {},
-                        const std::string& prefix                      = "model")
-            : DiffusionModelRunner(backend, params_backend, prefix),
+                        const String2TensorStorage& tensor_storage_map      = {},
+                        const std::string& prefix                           = "model",
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : DiffusionModelRunner(backend, prefix, weight_manager),
               config(HiDreamO1Config::detect_from_weights(tensor_storage_map, prefix)) {
             model = HiDreamO1Model(config);
             model.init(params_ctx, tensor_storage_map, prefix);
@@ -490,9 +490,9 @@ namespace HiDreamO1 {
         std::shared_ptr<HiDreamO1VisionRunner> vision_runner;
 
         HiDreamO1Conditioner(ggml_backend_t backend,
-                             ggml_backend_t params_backend,
-                             const String2TensorStorage& tensor_storage_map = {})
-            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, params_backend, tensor_storage_map)) {}
+                             const String2TensorStorage& tensor_storage_map      = {},
+                             std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, tensor_storage_map, "model.visual", weight_manager)) {}
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
             vision_runner->get_param_tensors(tensors);
@@ -508,10 +508,6 @@ namespace HiDreamO1 {
 
         void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
             vision_runner->set_weight_adapter(adapter);
-        }
-
-        void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-            vision_runner->set_weight_manager(manager);
         }
 
         void runner_done() override {

@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_TE_T5_HPP__
+﻿#ifndef __SD_MODEL_TE_T5_HPP__
 #define __SD_MODEL_TE_T5_HPP__
 
 #include <cfloat>
@@ -12,6 +12,7 @@
 
 #include "core/ggml_extend.hpp"
 #include "model_loader.h"
+#include "model_manager.h"
 #include "tokenizers/t5_unigram_tokenizer.h"
 
 struct T5Config {
@@ -334,11 +335,11 @@ struct T5Runner : public GGMLRunner {
     std::vector<int> relative_position_bucket_vec;
 
     T5Runner(ggml_backend_t backend,
-             ggml_backend_t params_backend,
              const String2TensorStorage& tensor_storage_map,
              const std::string prefix,
-             bool is_umt5 = false)
-        : GGMLRunner(backend, params_backend),
+             bool is_umt5                                        = false,
+             std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager),
           config(T5Config::detect_from_weights(tensor_storage_map, prefix, is_umt5)) {
         model = T5(config);
         model.init(params_ctx, tensor_storage_map, prefix);
@@ -477,22 +478,15 @@ struct T5Embedder {
     T5Runner model;
 
     T5Embedder(ggml_backend_t backend,
-               ggml_backend_t params_backend,
-               const String2TensorStorage& tensor_storage_map = {},
-               const std::string prefix                       = "",
-               bool is_umt5                                   = false)
-        : model(backend, params_backend, tensor_storage_map, prefix, is_umt5), tokenizer(is_umt5) {
+               const String2TensorStorage& tensor_storage_map      = {},
+               const std::string prefix                            = "",
+               bool is_umt5                                        = false,
+               std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : model(backend, tensor_storage_map, prefix, is_umt5, weight_manager), tokenizer(is_umt5) {
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
         model.get_param_tensors(tensors, prefix);
-    }
-
-    bool alloc_params_buffer() {
-        if (!model.alloc_params_buffer()) {
-            return false;
-        }
-        return true;
     }
 
     std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
@@ -579,7 +573,8 @@ struct T5Embedder {
         ggml_backend_t backend    = sd_backend_cpu_init();
         ggml_type model_data_type = GGML_TYPE_F16;
 
-        ModelLoader model_loader;
+        auto model_manager        = std::make_shared<ModelManager>();
+        ModelLoader& model_loader = model_manager->loader();
         if (!model_loader.init_from_file_and_convert_name(file_path)) {
             LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
             return;
@@ -592,19 +587,16 @@ struct T5Embedder {
             }
         }
 
-        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, backend, tensor_storage_map, "", true);
+        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, tensor_storage_map, "", true, model_manager);
 
-        if (!t5->alloc_params_buffer()) {
-            LOG_ERROR("t5 params buffer allocation failed");
-            return;
-        }
-        std::map<std::string, ggml_tensor*> tensors;
-        t5->get_param_tensors(tensors, "");
-
-        bool success = model_loader.load_tensors(tensors);
-
-        if (!success) {
-            LOG_ERROR("load tensors from model loader failed");
+        if (!model_manager->register_runner_params("T5 test",
+                                                   *t5,
+                                                   "",
+                                                   ModelManager::ResidencyMode::Resident,
+                                                   backend,
+                                                   backend) ||
+            !model_manager->validate_registered_tensors()) {
+            LOG_ERROR("register t5 tensors with model manager failed");
             return;
         }
 

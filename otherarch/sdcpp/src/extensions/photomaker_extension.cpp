@@ -134,11 +134,12 @@ struct PhotoMakerExtension : public GenerationExtension {
         }
 
         pmid_model = std::make_shared<PhotoMakerIDEncoder>(ctx.backend_for(SDBackendModule::PHOTOMAKER),
-                                                           ctx.params_backend_for(SDBackendModule::PHOTOMAKER),
                                                            ctx.tensor_storage_map,
                                                            "pmid",
                                                            ctx.version,
-                                                           pm_version);
+                                                           pm_version,
+                                                           20.f,
+                                                           ctx.model_manager);
         if (pm_version == PM_VERSION_2) {
             LOG_INFO("using PhotoMaker Version 2");
         }
@@ -172,12 +173,6 @@ struct PhotoMakerExtension : public GenerationExtension {
             return;
         }
         ignore_tensors.insert("pmid.unet.");
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-        if (pmid_model != nullptr) {
-            pmid_model->set_weight_manager(manager);
-        }
     }
 
     void runner_done() override {

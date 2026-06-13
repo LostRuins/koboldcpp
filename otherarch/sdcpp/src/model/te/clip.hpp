@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_TE_CLIP_HPP__
+﻿#ifndef __SD_MODEL_TE_CLIP_HPP__
 #define __SD_MODEL_TE_CLIP_HPP__
 
 #include "core/ggml_extend.hpp"
@@ -469,13 +469,13 @@ struct CLIPTextModelRunner : public GGMLRunner {
     std::vector<float> attention_mask_vec;
 
     CLIPTextModelRunner(ggml_backend_t backend,
-                        ggml_backend_t params_backend,
                         const String2TensorStorage& tensor_storage_map,
                         const std::string prefix,
-                        CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                        bool with_final_ln  = true,
-                        bool force_clip_f32 = false)
-        : GGMLRunner(backend, params_backend) {
+                        CLIPVersion version                                 = OPENAI_CLIP_VIT_L_14,
+                        bool with_final_ln                                  = true,
+                        bool force_clip_f32                                 = false,
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager) {
         bool proj_in = false;
         for (const auto& [name, tensor_storage] : tensor_storage_map) {
             if (!starts_with(name, prefix)) {

@@ -19,6 +19,7 @@ struct GenerationExtensionInitContext {
     SDVersion version;
     const String2TensorStorage& tensor_storage_map;
     ModelLoader& model_loader;
+    std::shared_ptr<ModelManager> model_manager;
     int n_threads;
     std::function<bool(SDBackendModule)> ensure_backend_pair;
     std::function<ggml_backend_t(SDBackendModule)> backend_for;
@@ -46,7 +47,6 @@ struct GenerationExtension {
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>&) {}
     virtual void collect_loras(std::vector<ModelManager::LoraSpec>&) {}
     virtual void add_ignore_tensors(std::set<std::string>&) const {}
-    virtual void set_weight_manager(const std::shared_ptr<RunnerWeightManager>&) {}
     virtual void runner_done() {}
     virtual void reset_runtime_condition() {}
     virtual bool prepare_condition(GenerationExtensionConditionContext&) {

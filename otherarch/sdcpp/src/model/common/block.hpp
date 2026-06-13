@@ -560,11 +560,11 @@ protected:
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 
-    float get_alpha() {
+    ggml_tensor* get_alpha(GGMLRunnerContext* ctx) {
         // image_only_indicator is always tensor([0.]) and since mix_factor.shape is [1,]
         // so learned_with_images is same as learned
-        float alpha = ggml_ext_backend_tensor_get_f32(params["mix_factor"]);
-        return sigmoid(alpha);
+        auto mix_factor = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["mix_factor"]);
+        return ggml_sigmoid(ctx->ggml_ctx, mix_factor);
     }
 
 public:
@@ -578,11 +578,12 @@ public:
                          ggml_tensor* x_spatial,
                          ggml_tensor* x_temporal) {
         // image_only_indicator is always tensor([0.])
-        float alpha = get_alpha();
-        auto x      = ggml_add(ctx->ggml_ctx,
-                               ggml_ext_scale(ctx->ggml_ctx, x_spatial, alpha),
-                               ggml_ext_scale(ctx->ggml_ctx, x_temporal, 1.0f - alpha));
-        return x;
+        auto alpha = get_alpha(ctx);
+        return ggml_add(ctx->ggml_ctx,
+                        x_temporal,
+                        ggml_mul(ctx->ggml_ctx,
+                                 ggml_sub(ctx->ggml_ctx, x_spatial, x_temporal),
+                                 alpha));
     }
 };
 

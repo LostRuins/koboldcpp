@@ -1696,11 +1696,9 @@ protected:
     using GraphCutSegment = sd::ggml_graph_cut::Segment;
     using GraphCutPlan    = sd::ggml_graph_cut::Plan;
 
-    ggml_backend_t params_backend  = nullptr;
     ggml_backend_t runtime_backend = nullptr;
 
-    ggml_context* params_ctx            = nullptr;
-    ggml_backend_buffer_t params_buffer = nullptr;
+    ggml_context* params_ctx = nullptr;
 
     ggml_context* cache_ctx            = nullptr;
     ggml_backend_buffer_t cache_buffer = nullptr;
@@ -1880,9 +1878,6 @@ protected:
         auto manager = weight_manager.lock();
         if (manager == nullptr) {
             if (!params_to_prepare.empty()) {
-                if (params_buffer != nullptr) {
-                    return true;
-                }
                 LOG_ERROR("%s weight manager is not set for graph params", get_desc().c_str());
                 return false;
             }
@@ -2194,13 +2189,11 @@ protected:
                plan.valid &&
                max_graph_vram_bytes > 0 &&
                plan.segments.size() > 1 &&
-               params_backend != runtime_backend &&
                !sd_backend_is_cpu(runtime_backend);
     }
 
     bool can_attempt_graph_cut_segmented_compute() const {
         return max_graph_vram_bytes > 0 &&
-               params_backend != runtime_backend &&
                !sd_backend_is_cpu(runtime_backend);
     }
 
@@ -2631,16 +2624,15 @@ public:
 public:
     virtual std::string get_desc() = 0;
 
-    GGMLRunner(ggml_backend_t backend, ggml_backend_t params_backend)
-        : params_backend(params_backend),
-          runtime_backend(backend) {
+    GGMLRunner(ggml_backend_t backend,
+               std::shared_ptr<RunnerWeightManager> manager = nullptr)
+        : runtime_backend(backend),
+          weight_manager(manager) {
         GGML_ASSERT(runtime_backend != nullptr);
-        GGML_ASSERT(params_backend != nullptr);
         alloc_params_ctx();
     }
 
     virtual ~GGMLRunner() {
-        free_params_buffer();
         free_compute_buffer();
         free_params_ctx();
         free_compute_ctx();
@@ -2672,73 +2664,6 @@ public:
     void reset_compute_ctx() {
         free_compute_ctx();
         alloc_compute_ctx();
-    }
-
-    bool alloc_params_buffer() {
-        size_t num_tensors = ggml_tensor_num(params_ctx);
-        if (num_tensors > 0) {
-            // ggml_backend_alloc_ctx_tensors fails when all tensors are already allocated
-            // (typical for memory-mapped weights). See ggml-alloc.c n_buffers==0 branch.
-            bool all_have_data = true;
-            for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != nullptr; t = ggml_get_next_tensor(params_ctx, t)) {
-                if (t->data == nullptr) {
-                    all_have_data = false;
-                    break;
-                }
-            }
-            if (all_have_data) {
-                LOG_DEBUG("%s all params already mmap-allocated (no separate buffer needed)", get_desc().c_str());
-                params_buffer = nullptr;
-                rebuild_params_tensor_set();
-                return true;
-            }
-        } else {
-            LOG_DEBUG("%s skipping params allocation (no tensors)", get_desc().c_str());
-            return true;
-        }
-        // Pinned host buffer when CPU-offloaded for DMA-direct H2D.
-        ggml_backend_buffer_type_t params_buft = nullptr;
-        if (params_backend != runtime_backend) {
-            ggml_backend_dev_t runtime_dev = ggml_backend_get_device(runtime_backend);
-            if (runtime_dev != nullptr) {
-                params_buft = ggml_backend_dev_host_buffer_type(runtime_dev);
-            }
-        }
-        if (params_buft == nullptr) {
-            params_buft = ggml_backend_get_default_buffer_type(params_backend);
-        }
-        params_buffer = ggml_backend_alloc_ctx_tensors_from_buft(params_ctx, params_buft);
-        if (params_buffer == nullptr) {
-            LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
-                      get_desc().c_str(),
-                      num_tensors);
-            return false;
-        }
-        rebuild_params_tensor_set();
-        ggml_backend_buffer_set_usage(params_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-        size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
-        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)",
-                  get_desc().c_str(),
-                  params_buffer_size / (1024.f * 1024.f),
-                  sd_backend_is_cpu(params_backend) ? "RAM" : "VRAM",
-                  num_tensors);
-        return true;
-    }
-
-protected:
-    void free_params_buffer() {
-        if (params_buffer != nullptr) {
-            ggml_backend_buffer_free(params_buffer);
-            params_buffer = nullptr;
-        }
-        observed_max_effective_budget_ = 0;
-    }
-
-    size_t get_params_buffer_size() {
-        if (params_buffer != nullptr) {
-            return ggml_backend_buffer_get_size(params_buffer);
-        }
-        return 0;
     }
 
 public:
@@ -2886,29 +2811,12 @@ public:
         weight_adapter = adapter;
     }
 
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) {
-        weight_manager = manager;
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager,
-                            const std::string&) {
-        set_weight_manager(manager);
-    }
-
     void set_max_graph_vram_bytes(size_t max_vram_bytes) {
         max_graph_vram_bytes = max_vram_bytes;
     }
 
     void set_stream_layers_enabled(bool enabled) {
         stream_layers_enabled = enabled;
-    }
-
-    ggml_backend_t get_runtime_backend() {
-        return runtime_backend;
-    }
-
-    ggml_backend_t get_params_backend() {
-        return params_backend;
     }
 };
 

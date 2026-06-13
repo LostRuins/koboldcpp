@@ -213,9 +213,9 @@ protected:
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 
-    float get_alpha() {
-        float alpha = ggml_ext_backend_tensor_get_f32(params["mix_factor"]);
-        return sigmoid(alpha);
+    ggml_tensor* get_alpha(GGMLRunnerContext* ctx) {
+        auto mix_factor = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["mix_factor"]);
+        return ggml_sigmoid(ctx->ggml_ctx, mix_factor);
     }
 
 public:
@@ -250,10 +250,12 @@ public:
 
         x = time_stack->forward(ctx, x);  // b t c (h w)
 
-        float alpha = get_alpha();
-        x           = ggml_add(ctx->ggml_ctx,
-                               ggml_ext_scale(ctx->ggml_ctx, x, alpha),
-                               ggml_ext_scale(ctx->ggml_ctx, x_mix, 1.0f - alpha));
+        auto alpha = get_alpha(ctx);
+        x          = ggml_add(ctx->ggml_ctx,
+                              x_mix,
+                              ggml_mul(ctx->ggml_ctx,
+                                       ggml_sub(ctx->ggml_ctx, x, x_mix),
+                                       alpha));
 
         x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
         x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w
@@ -664,13 +666,13 @@ struct AutoEncoderKL : public VAE {
     AutoEncoderKLModel ae;
 
     AutoEncoderKL(ggml_backend_t backend,
-                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map,
                   const std::string prefix,
-                  bool decode_only       = false,
-                  bool use_video_decoder = false,
-                  SDVersion version      = VERSION_SD1)
-        : VAE(version, backend, params_backend, prefix), decode_only(decode_only) {
+                  bool decode_only                                    = false,
+                  bool use_video_decoder                              = false,
+                  SDVersion version                                   = VERSION_SD1,
+                  std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : VAE(version, backend, prefix, weight_manager), decode_only(decode_only) {
         if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
             scale_factor = 0.18215f;
             shift_factor = 0.f;

@@ -623,12 +623,12 @@ struct TinyImageAutoEncoder : public VAE {
     bool decode_only = false;
 
     TinyImageAutoEncoder(ggml_backend_t backend,
-                         ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map,
                          const std::string prefix,
-                         bool decoder_only = true,
-                         SDVersion version = VERSION_SD1)
-        : VAE(version, backend, params_backend, "tae"),
+                         bool decoder_only                                   = true,
+                         SDVersion version                                   = VERSION_SD1,
+                         std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : VAE(version, backend, "tae", weight_manager),
           decode_only(decoder_only),
           taesd(decoder_only, version) {
         scale_input = false;
@@ -686,12 +686,12 @@ struct TinyVideoAutoEncoder : public VAE {
     bool is_wide     = false;
 
     TinyVideoAutoEncoder(ggml_backend_t backend,
-                         ggml_backend_t params_backend,
                          const String2TensorStorage& tensor_storage_map,
                          const std::string prefix,
-                         bool decoder_only = true,
-                         SDVersion version = VERSION_WAN2)
-        : VAE(version, backend, params_backend, "tae"),
+                         bool decoder_only                                   = true,
+                         SDVersion version                                   = VERSION_WAN2,
+                         std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : VAE(version, backend, "tae", weight_manager),
           decode_only(decoder_only) {
         for (auto tensor_storage : tensor_storage_map) {
             if (tensor_storage.first.find(prefix + ".3.conv.6.weight") != std::string::npos) {

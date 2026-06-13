@@ -518,12 +518,12 @@ namespace Qwen {
         SDVersion version;
 
         QwenImageRunner(ggml_backend_t backend,
-                        ggml_backend_t params_backend,
-                        const String2TensorStorage& tensor_storage_map = {},
-                        const std::string prefix                       = "",
-                        SDVersion version                              = VERSION_QWEN_IMAGE,
-                        bool zero_cond_t                               = false)
-            : DiffusionModelRunner(backend, params_backend, prefix),
+                        const String2TensorStorage& tensor_storage_map      = {},
+                        const std::string prefix                            = "",
+                        SDVersion version                                   = VERSION_QWEN_IMAGE,
+                        bool zero_cond_t                                    = false,
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : DiffusionModelRunner(backend, prefix, weight_manager),
               config(QwenImageConfig::detect_from_weights(tensor_storage_map, prefix)) {
             config.zero_cond_t = config.zero_cond_t || zero_cond_t;
             qwen_image         = QwenImageModel(config);
@@ -691,7 +691,8 @@ namespace Qwen {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;
 
-            ModelLoader model_loader;
+            auto model_manager        = std::make_shared<ModelManager>();
+            ModelLoader& model_loader = model_manager->loader();
             if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -705,23 +706,20 @@ namespace Qwen {
             }
 
             std::shared_ptr<QwenImageRunner> qwen_image = std::make_shared<QwenImageRunner>(backend,
-                                                                                            backend,
                                                                                             tensor_storage_map,
                                                                                             "model.diffusion_model",
-                                                                                            VERSION_QWEN_IMAGE);
+                                                                                            VERSION_QWEN_IMAGE,
+                                                                                            false,
+                                                                                            model_manager);
 
-            if (!qwen_image->alloc_params_buffer()) {
-                LOG_ERROR("qwen_image buffer allocation failed");
-                return;
-            }
-
-            std::map<std::string, ggml_tensor*> tensors;
-            qwen_image->get_param_tensors(tensors, "model.diffusion_model");
-
-            bool success = model_loader.load_tensors(tensors);
-
-            if (!success) {
-                LOG_ERROR("load tensors from model loader failed");
+            if (!model_manager->register_runner_params("Qwen image test",
+                                                       *qwen_image,
+                                                       "model.diffusion_model",
+                                                       ModelManager::ResidencyMode::Resident,
+                                                       backend,
+                                                       backend) ||
+                !model_manager->validate_registered_tensors()) {
+                LOG_ERROR("register qwen_image tensors with model manager failed");
                 return;
             }
 

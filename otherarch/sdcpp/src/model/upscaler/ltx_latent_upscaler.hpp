@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_UPSCALER_LTX_LATENT_UPSCALER_HPP__
+﻿#ifndef __SD_MODEL_UPSCALER_LTX_LATENT_UPSCALER_HPP__
 #define __SD_MODEL_UPSCALER_LTX_LATENT_UPSCALER_HPP__
 
 #include <algorithm>
@@ -433,9 +433,9 @@ namespace LTXVUpsampler {
         std::unique_ptr<LatentUpsampler> model;
 
         LatentUpsamplerRunner(ggml_backend_t backend,
-                              ggml_backend_t params_backend,
-                              const String2TensorStorage& tensor_storage_map)
-            : GGMLRunner(backend, params_backend),
+                              const String2TensorStorage& tensor_storage_map,
+                              std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : GGMLRunner(backend, weight_manager),
               config(LatentUpsamplerConfig::detect_from_weights(tensor_storage_map)) {
             if (config.dims != 3 || (!config.spatial_upsample && !config.temporal_upsample) ||
                 config.spatial_up_num < 1 || config.spatial_down_den < 1 || config.temporal_up_factor < 1) {

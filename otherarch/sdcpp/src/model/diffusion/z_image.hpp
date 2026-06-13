@@ -553,11 +553,11 @@ namespace ZImage {
         SDVersion version;
 
         ZImageRunner(ggml_backend_t backend,
-                     ggml_backend_t params_backend,
-                     const String2TensorStorage& tensor_storage_map = {},
-                     const std::string prefix                       = "",
-                     SDVersion version                              = VERSION_Z_IMAGE)
-            : DiffusionModelRunner(backend, params_backend, prefix),
+                     const String2TensorStorage& tensor_storage_map      = {},
+                     const std::string prefix                            = "",
+                     SDVersion version                                   = VERSION_Z_IMAGE,
+                     std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : DiffusionModelRunner(backend, prefix, weight_manager),
               config(ZImageConfig::detect_from_weights(tensor_storage_map, prefix)) {
             z_image = ZImageModel(config);
             z_image.init(params_ctx, tensor_storage_map, prefix);
@@ -698,7 +698,8 @@ namespace ZImage {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;
 
-            ModelLoader model_loader;
+            auto model_manager        = std::make_shared<ModelManager>();
+            ModelLoader& model_loader = model_manager->loader();
             if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -714,22 +715,19 @@ namespace ZImage {
             }
 
             std::shared_ptr<ZImageRunner> z_image = std::make_shared<ZImageRunner>(backend,
-                                                                                   backend,
                                                                                    tensor_storage_map,
                                                                                    "model.diffusion_model",
-                                                                                   VERSION_QWEN_IMAGE);
+                                                                                   VERSION_QWEN_IMAGE,
+                                                                                   model_manager);
 
-            if (!z_image->alloc_params_buffer()) {
-                LOG_ERROR("z_image buffer allocation failed");
-                return;
-            }
-            std::map<std::string, ggml_tensor*> tensors;
-            z_image->get_param_tensors(tensors, "model.diffusion_model");
-
-            bool success = model_loader.load_tensors(tensors);
-
-            if (!success) {
-                LOG_ERROR("load tensors from model loader failed");
+            if (!model_manager->register_runner_params("ZImage test",
+                                                       *z_image,
+                                                       "model.diffusion_model",
+                                                       ModelManager::ResidencyMode::Resident,
+                                                       backend,
+                                                       backend) ||
+                !model_manager->validate_registered_tensors()) {
+                LOG_ERROR("register z_image tensors with model manager failed");
                 return;
             }
 

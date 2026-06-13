@@ -413,13 +413,13 @@ public:
 
 public:
     PhotoMakerIDEncoder(ggml_backend_t backend,
-                        ggml_backend_t params_backend,
                         const String2TensorStorage& tensor_storage_map,
                         const std::string prefix,
-                        SDVersion version = VERSION_SDXL,
-                        PMVersion pm_v    = PM_VERSION_1,
-                        float sty         = 20.f)
-        : GGMLRunner(backend, params_backend),
+                        SDVersion version                                   = VERSION_SDXL,
+                        PMVersion pm_v                                      = PM_VERSION_1,
+                        float sty                                           = 20.f,
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager),
           version(version),
           pm_version(pm_v),
           style_strength(sty) {
@@ -565,17 +565,18 @@ public:
 struct PhotoMakerIDEmbed : public GGMLRunner {
     std::map<std::string, ggml_tensor*> tensors;
     std::string file_path;
-    ModelLoader* model_loader;
-    bool load_failed = false;
-    bool applied     = false;
+    std::shared_ptr<ModelManager> model_manager;
+    ggml_backend_t params_backend = nullptr;
+    bool load_failed              = false;
+    bool applied                  = false;
 
     PhotoMakerIDEmbed(ggml_backend_t backend,
-                      ggml_backend_t params_backend,
-                      ModelLoader* ml,
-                      const std::string& file_path = "",
-                      const std::string& prefix    = "")
-        : file_path(file_path), GGMLRunner(backend, params_backend), model_loader(ml) {
-        if (!model_loader->init_from_file_and_convert_name(file_path, prefix)) {
+                      ggml_backend_t params_backend_,
+                      std::shared_ptr<ModelManager> manager = std::make_shared<ModelManager>(),
+                      const std::string& file_path          = "",
+                      const std::string& prefix             = "")
+        : GGMLRunner(backend, manager), file_path(file_path), model_manager(std::move(manager)), params_backend(params_backend_) {
+        if (model_manager == nullptr || !model_manager->loader().init_from_file_and_convert_name(file_path, prefix)) {
             load_failed = true;
         }
     }
@@ -616,15 +617,27 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
             return true;
         };
 
-        model_loader->set_n_threads(n_threads);
-        model_loader->load_tensors(on_new_tensor_cb);
-        if (!alloc_params_buffer()) {
-            LOG_ERROR("PhotoMaker ID embeds buffer allocation failed");
+        model_manager->set_n_threads(n_threads);
+        ModelLoader& model_loader = model_manager->loader();
+        model_loader.load_tensors(on_new_tensor_cb);
+        if (!model_manager->register_param_tensors("PhotoMaker ID embeds",
+                                                   tensors,
+                                                   ModelManager::ResidencyMode::Resident,
+                                                   runtime_backend,
+                                                   params_backend) ||
+            !model_manager->validate_registered_tensors()) {
+            LOG_ERROR("PhotoMaker ID embeds model manager registration failed");
             return false;
         }
-
-        dry_run = false;
-        model_loader->load_tensors(on_new_tensor_cb);
+        std::vector<ggml_tensor*> id_embed_params;
+        id_embed_params.reserve(tensors.size());
+        for (const auto& pair : tensors) {
+            id_embed_params.push_back(pair.second);
+        }
+        if (!model_manager->prepare_params(id_embed_params)) {
+            LOG_ERROR("PhotoMaker ID embeds model manager prepare params failed");
+            return false;
+        }
 
         LOG_DEBUG("finished loading PhotoMaker ID Embeds ");
         return true;

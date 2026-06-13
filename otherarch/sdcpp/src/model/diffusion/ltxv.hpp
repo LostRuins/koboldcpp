@@ -1686,10 +1686,10 @@ namespace LTXV {
         sd::Tensor<float> ax_input_cache;
 
         LTXAVRunner(ggml_backend_t backend,
-                    ggml_backend_t params_backend,
-                    const String2TensorStorage& tensor_storage_map = {},
-                    const std::string& prefix                      = "model.diffusion_model")
-            : DiffusionModelRunner(backend, params_backend, prefix),
+                    const String2TensorStorage& tensor_storage_map      = {},
+                    const std::string& prefix                           = "model.diffusion_model",
+                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : DiffusionModelRunner(backend, prefix, weight_manager),
               config(LTXAVConfig::detect_from_weights(tensor_storage_map, prefix)),
               model(config) {
             model.init(params_ctx, tensor_storage_map, prefix);
@@ -2025,7 +2025,8 @@ namespace LTXV {
             ggml_backend_t backend = sd_backend_cpu_init();
             LOG_INFO("loading ltxav from '%s'", model_path.c_str());
 
-            ModelLoader model_loader;
+            auto model_manager        = std::make_shared<ModelManager>();
+            ModelLoader& model_loader = model_manager->loader();
             if (!model_loader.init_from_file_and_convert_name(model_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
                 return;
@@ -2040,19 +2041,18 @@ namespace LTXV {
 
             auto& tensor_storage_map           = model_loader.get_tensor_storage_map();
             std::shared_ptr<LTXAVRunner> ltxav = std::make_shared<LTXAVRunner>(backend,
-                                                                               backend,
                                                                                tensor_storage_map,
-                                                                               "model.diffusion_model");
+                                                                               "model.diffusion_model",
+                                                                               model_manager);
 
-            if (!ltxav->alloc_params_buffer()) {
-                LOG_ERROR("ltxav buffer allocation failed");
-                return;
-            }
-            std::map<std::string, ggml_tensor*> tensors;
-            ltxav->get_param_tensors(tensors, "model.diffusion_model");
-
-            if (!model_loader.load_tensors(tensors)) {
-                LOG_ERROR("load tensors from model loader failed");
+            if (!model_manager->register_runner_params("LTXAV test",
+                                                       *ltxav,
+                                                       "model.diffusion_model",
+                                                       ModelManager::ResidencyMode::Resident,
+                                                       backend,
+                                                       backend) ||
+                !model_manager->validate_registered_tensors()) {
+                LOG_ERROR("register ltxav tensors with model manager failed");
                 return;
             }
 

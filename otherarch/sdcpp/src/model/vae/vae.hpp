@@ -1,8 +1,9 @@
-#ifndef __SD_MODEL_VAE_VAE_HPP__
+﻿#ifndef __SD_MODEL_VAE_VAE_HPP__
 #define __SD_MODEL_VAE_VAE_HPP__
 
 #include "core/tensor_ggml.hpp"
 #include "model/common/block.hpp"
+#include "model_manager.h"
 
 struct VAE : public GGMLRunner {
 protected:
@@ -63,8 +64,11 @@ protected:
     }
 
 public:
-    VAE(SDVersion version, ggml_backend_t backend, ggml_backend_t params_backend, const std::string& weight_prefix = "")
-        : version(version), weight_prefix(weight_prefix), GGMLRunner(backend, params_backend) {}
+    VAE(SDVersion version,
+        ggml_backend_t backend,
+        const std::string& weight_prefix                    = "",
+        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : version(version), weight_prefix(weight_prefix), GGMLRunner(backend, weight_manager) {}
 
     int get_scale_factor() {
         int scale_factor = 8;
@@ -224,8 +228,10 @@ public:
 };
 
 struct FakeVAE : public VAE {
-    FakeVAE(SDVersion version, ggml_backend_t backend, ggml_backend_t params_backend)
-        : VAE(version, backend, params_backend) {}
+    FakeVAE(SDVersion version,
+            ggml_backend_t backend,
+            std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : VAE(version, backend, "", weight_manager) {}
 
     int get_encoder_output_channels(int input_channels) {
         return input_channels;

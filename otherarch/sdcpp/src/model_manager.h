@@ -121,6 +121,42 @@ public:
                                 ggml_backend_t compute_backend,
                                 ggml_backend_t params_backend,
                                 size_t* registered_tensor_size = nullptr);
+
+    template <typename Runner>
+    bool register_runner_params(const std::string& desc,
+                                Runner& runner,
+                                ResidencyMode residency_mode,
+                                ggml_backend_t compute_backend,
+                                ggml_backend_t params_backend,
+                                size_t* registered_tensor_size = nullptr) {
+        std::map<std::string, ggml_tensor*> tensors;
+        runner.get_param_tensors(tensors);
+        return register_param_tensors(desc,
+                                      std::move(tensors),
+                                      residency_mode,
+                                      compute_backend,
+                                      params_backend,
+                                      registered_tensor_size);
+    }
+
+    template <typename Runner>
+    bool register_runner_params(const std::string& desc,
+                                Runner& runner,
+                                const std::string& prefix,
+                                ResidencyMode residency_mode,
+                                ggml_backend_t compute_backend,
+                                ggml_backend_t params_backend,
+                                size_t* registered_tensor_size = nullptr) {
+        std::map<std::string, ggml_tensor*> tensors;
+        runner.get_param_tensors(tensors, prefix);
+        return register_param_tensors(desc,
+                                      std::move(tensors),
+                                      residency_mode,
+                                      compute_backend,
+                                      params_backend,
+                                      registered_tensor_size);
+    }
+
     bool validate_registered_tensors();
 
     bool prepare_params(const std::vector<ggml_tensor*>& tensors) override;

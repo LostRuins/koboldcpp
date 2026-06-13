@@ -255,7 +255,6 @@ public:
         }
         std::map<std::string, ggml_tensor*> group_tensors;
         model->get_param_tensors(group_tensors);
-        model->set_weight_manager(model_manager);
         if (model_manager == nullptr) {
             return true;
         }
@@ -824,33 +823,35 @@ public:
 
             if (sd_version_is_sd3(version)) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(backend_for(SDBackendModule::TE),
-                                                                     params_backend_for(SDBackendModule::TE),
-                                                                     tensor_storage_map);
+                                                                     tensor_storage_map,
+                                                                     model_manager);
                 diffusion_model  = std::make_shared<MMDiTRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                params_backend_for(SDBackendModule::DIFFUSION),
                                                                 tensor_storage_map,
-                                                                "model.diffusion_model");
+                                                                "model.diffusion_model",
+                                                                model_manager);
             } else if (sd_version_is_pid(version)) {
                 vae_decode_only  = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                 params_backend_for(SDBackendModule::TE),
-                                                                 tensor_storage_map,
-                                                                 version);
-                diffusion_model  = std::make_shared<Pid::PiDRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                   params_backend_for(SDBackendModule::DIFFUSION),
-                                                                   tensor_storage_map,
-                                                                   "model.diffusion_model.net");
-            } else if (sd_version_is_ideogram4(version)) {
-                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                 params_backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
-                                                                 false);
+                                                                 false,
+                                                                 model_manager);
+                diffusion_model  = std::make_shared<Pid::PiDRunner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                   tensor_storage_map,
+                                                                   "model.diffusion_model.net",
+                                                                   model_manager);
+            } else if (sd_version_is_ideogram4(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
+                                                                 tensor_storage_map,
+                                                                 version,
+                                                                 "",
+                                                                 false,
+                                                                 model_manager);
                 diffusion_model  = std::make_shared<Ideogram4::Ideogram4Runner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                               params_backend_for(SDBackendModule::DIFFUSION),
                                                                                tensor_storage_map,
-                                                                               "model.diffusion_model");
+                                                                               "model.diffusion_model",
+                                                                               model_manager);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -861,66 +862,71 @@ public:
                 }
                 if (is_chroma) {
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(backend_for(SDBackendModule::TE),
-                                                                        params_backend_for(SDBackendModule::TE),
                                                                         tensor_storage_map,
                                                                         sd_ctx_params->chroma_use_t5_mask,
-                                                                        sd_ctx_params->chroma_t5_mask_pad);
+                                                                        sd_ctx_params->chroma_t5_mask_pad,
+                                                                        false,
+                                                                        model_manager);
                 } else if (version == VERSION_OVIS_IMAGE) {
                     cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                     params_backend_for(SDBackendModule::TE),
                                                                      tensor_storage_map,
                                                                      version,
                                                                      "",
-                                                                     false);
+                                                                     false,
+                                                                     model_manager);
                 } else {
                     cond_stage_model = std::make_shared<FluxCLIPEmbedder>(backend_for(SDBackendModule::TE),
-                                                                          params_backend_for(SDBackendModule::TE),
-                                                                          tensor_storage_map);
+                                                                          tensor_storage_map,
+                                                                          model_manager);
                 }
                 diffusion_model = std::make_shared<Flux::FluxRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                     params_backend_for(SDBackendModule::DIFFUSION),
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask);
+                                                                     sd_ctx_params->chroma_use_dit_mask,
+                                                                     model_manager);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                 params_backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
-                                                                 version);
+                                                                 version,
+                                                                 "",
+                                                                 false,
+                                                                 model_manager);
                 diffusion_model  = std::make_shared<Flux::FluxRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                     params_backend_for(SDBackendModule::DIFFUSION),
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask);
+                                                                     sd_ctx_params->chroma_use_dit_mask,
+                                                                     model_manager);
             } else if (sd_version_is_ltxav(version)) {
                 cond_stage_model = std::make_shared<LTXAVEmbedder>(backend_for(SDBackendModule::TE),
-                                                                   params_backend_for(SDBackendModule::TE),
-                                                                   tensor_storage_map);
+                                                                   tensor_storage_map,
+                                                                   "text_encoders.llm",
+                                                                   "text_embedding_projection",
+                                                                   model_manager);
                 diffusion_model  = std::make_shared<LTXV::LTXAVRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                      params_backend_for(SDBackendModule::DIFFUSION),
                                                                       tensor_storage_map,
-                                                                      "model.diffusion_model");
+                                                                      "model.diffusion_model",
+                                                                      model_manager);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(backend_for(SDBackendModule::TE),
-                                                                    params_backend_for(SDBackendModule::TE),
                                                                     tensor_storage_map,
                                                                     true,
                                                                     0,
-                                                                    true);
+                                                                    true,
+                                                                    model_manager);
                 diffusion_model  = std::make_shared<WAN::WanRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                   params_backend_for(SDBackendModule::DIFFUSION),
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
-                                                                   version);
+                                                                   version,
+                                                                   model_manager);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WAN::WanRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                                  params_backend_for(SDBackendModule::DIFFUSION),
                                                                                   tensor_storage_map,
                                                                                   "model.high_noise_diffusion_model",
-                                                                                  version);
+                                                                                  version,
+                                                                                  model_manager);
                 }
                 if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
@@ -929,8 +935,8 @@ public:
                         return false;
                     }
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend_for(SDBackendModule::CLIP_VISION),
-                                                                             params_backend_for(SDBackendModule::CLIP_VISION),
-                                                                             tensor_storage_map);
+                                                                             tensor_storage_map,
+                                                                             model_manager);
                     clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes);
                     if (!register_runner_params("CLIP vision",
                                                 clip_vision,
@@ -944,93 +950,99 @@ public:
                     enable_vision = true;
                 }
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                 params_backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
-                                                                 enable_vision);
+                                                                 enable_vision,
+                                                                 model_manager);
                 diffusion_model  = std::make_shared<Qwen::QwenImageRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                          params_backend_for(SDBackendModule::DIFFUSION),
                                                                           tensor_storage_map,
                                                                           "model.diffusion_model",
                                                                           version,
-                                                                          sd_ctx_params->qwen_image_zero_cond_t);
+                                                                          sd_ctx_params->qwen_image_zero_cond_t,
+                                                                          model_manager);
             } else if (sd_version_is_longcat(version)) {
                 bool enable_vision = false;
                 if (!vae_decode_only) {
                     enable_vision = true;
                 }
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                 params_backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
-                                                                 enable_vision);
+                                                                 enable_vision,
+                                                                 model_manager);
                 diffusion_model  = std::make_shared<Flux::FluxRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                     params_backend_for(SDBackendModule::DIFFUSION),
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask);
+                                                                     sd_ctx_params->chroma_use_dit_mask,
+                                                                     model_manager);
             } else if (version == VERSION_HIDREAM_O1) {
                 cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(backend_for(SDBackendModule::TE),
-                                                                                     params_backend_for(SDBackendModule::TE),
-                                                                                     tensor_storage_map);
+                                                                                     tensor_storage_map,
+                                                                                     model_manager);
                 diffusion_model  = std::make_shared<HiDreamO1::HiDreamO1Runner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                               params_backend_for(SDBackendModule::DIFFUSION),
                                                                                tensor_storage_map,
-                                                                               "model");
+                                                                               "model",
+                                                                               model_manager);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(backend_for(SDBackendModule::TE),
-                                                                      params_backend_for(SDBackendModule::TE),
-                                                                      tensor_storage_map);
+                                                                      tensor_storage_map,
+                                                                      model_manager);
                 diffusion_model  = std::make_shared<Anima::AnimaRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                       params_backend_for(SDBackendModule::DIFFUSION),
                                                                        tensor_storage_map,
-                                                                       "model.diffusion_model");
+                                                                       "model.diffusion_model",
+                                                                       model_manager);
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                 params_backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
-                                                                 version);
+                                                                 version,
+                                                                 "",
+                                                                 false,
+                                                                 model_manager);
                 diffusion_model  = std::make_shared<ZImage::ZImageRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                         params_backend_for(SDBackendModule::DIFFUSION),
                                                                          tensor_storage_map,
                                                                          "model.diffusion_model",
-                                                                         version);
+                                                                         version,
+                                                                         model_manager);
             } else if (sd_version_is_ernie_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                 params_backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
-                                                                 version);
+                                                                 version,
+                                                                 "",
+                                                                 false,
+                                                                 model_manager);
                 diffusion_model  = std::make_shared<ErnieImage::ErnieImageRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                                 params_backend_for(SDBackendModule::DIFFUSION),
                                                                                  tensor_storage_map,
-                                                                                 "model.diffusion_model");
+                                                                                 "model.diffusion_model",
+                                                                                 model_manager);
             } else if (sd_version_is_lens(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
-                                                                 params_backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
-                                                                 version);
+                                                                 version,
+                                                                 "",
+                                                                 false,
+                                                                 model_manager);
                 diffusion_model  = std::make_shared<Lens::LensRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                     params_backend_for(SDBackendModule::DIFFUSION),
                                                                      tensor_storage_map,
-                                                                     "model.diffusion_model");
+                                                                     "model.diffusion_model",
+                                                                     model_manager);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
                     embbeding_map.emplace(SAFE_STR(sd_ctx_params->embeddings[i].name), SAFE_STR(sd_ctx_params->embeddings[i].path));
                 }
                 cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(backend_for(SDBackendModule::TE),
-                                                                                       params_backend_for(SDBackendModule::TE),
                                                                                        tensor_storage_map,
                                                                                        embbeding_map,
-                                                                                       version);
+                                                                                       version,
+                                                                                       model_manager);
                 diffusion_model  = std::make_shared<UNetModelRunner>(backend_for(SDBackendModule::DIFFUSION),
-                                                                    params_backend_for(SDBackendModule::DIFFUSION),
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model",
-                                                                    version);
+                                                                    version,
+                                                                    model_manager);
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the diffusion model");
                     diffusion_model->set_conv2d_direct_enabled(true);
@@ -1079,19 +1091,19 @@ public:
                     sd_version_is_anima(version) ||
                     sd_version_is_ltxav(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(backend_for(SDBackendModule::VAE),
-                                                                  params_backend_for(SDBackendModule::VAE),
                                                                   tensor_storage_map,
                                                                   "decoder",
                                                                   vae_decode_only,
-                                                                  version);
+                                                                  version,
+                                                                  model_manager);
 
                 } else {
                     auto model = std::make_shared<TinyImageAutoEncoder>(backend_for(SDBackendModule::VAE),
-                                                                        params_backend_for(SDBackendModule::VAE),
                                                                         tensor_storage_map,
                                                                         "decoder.layers",
                                                                         vae_decode_only,
-                                                                        version);
+                                                                        version,
+                                                                        model_manager);
                     return model;
                 }
             };
@@ -1109,28 +1121,28 @@ public:
             auto create_vae = [&]() -> std::shared_ptr<VAE> {
                 if (sd_version_is_ltxav(version)) {
                     return std::make_shared<LTXVideoVAE>(backend_for(SDBackendModule::VAE),
-                                                         params_backend_for(SDBackendModule::VAE),
                                                          tensor_storage_map,
                                                          "first_stage_model",
                                                          vae_decode_only,
-                                                         version);
+                                                         version,
+                                                         model_manager);
                 } else if (sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
                            sd_version_is_anima(version)) {
                     return std::make_shared<WAN::WanVAERunner>(backend_for(SDBackendModule::VAE),
-                                                               params_backend_for(SDBackendModule::VAE),
                                                                tensor_storage_map,
                                                                "first_stage_model",
                                                                vae_decode_only,
-                                                               version);
+                                                               version,
+                                                               model_manager);
                 } else {
                     auto model = std::make_shared<AutoEncoderKL>(backend_for(SDBackendModule::VAE),
-                                                                 params_backend_for(SDBackendModule::VAE),
                                                                  tensor_storage_map,
                                                                  "first_stage_model",
                                                                  vae_decode_only,
                                                                  false,
-                                                                 vae_version);
+                                                                 vae_version,
+                                                                 model_manager);
                     if (sd_version_is_sdxl(version) &&
                         (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale || external_vae_is_invalid)) {
                         float vae_conv_2d_scale = 1.f / 32.f;
@@ -1148,7 +1160,7 @@ public:
                 LOG_INFO("using FakeVAE");
                 first_stage_model = std::make_shared<FakeVAE>(version,
                                                               backend_for(SDBackendModule::VAE),
-                                                              params_backend_for(SDBackendModule::VAE));
+                                                              model_manager);
                 if (!register_runner_params("VAE",
                                             first_stage_model,
                                             SDBackendModule::VAE,
@@ -1190,8 +1202,9 @@ public:
 
             if (use_audio_vae) {
                 audio_vae_model = std::make_shared<LTXV::LTXAudioVAERunner>(backend_for(SDBackendModule::VAE),
-                                                                            params_backend_for(SDBackendModule::VAE),
-                                                                            tensor_storage_map);
+                                                                            tensor_storage_map,
+                                                                            "",
+                                                                            model_manager);
                 if (!register_runner_params("LTX audio VAE",
                                             audio_vae_model,
                                             SDBackendModule::VAE,
@@ -1215,7 +1228,9 @@ public:
                 control_net = std::make_shared<ControlNet>(backend_for(SDBackendModule::CONTROL_NET),
                                                            params_backend_for(SDBackendModule::CONTROL_NET),
                                                            model_loader.get_tensor_storage_map(),
-                                                           version);
+                                                           version,
+                                                           "",
+                                                           model_manager);
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the control net");
                     control_net->set_conv2d_direct_enabled(true);
@@ -1236,6 +1251,7 @@ public:
                     version,
                     tensor_storage_map,
                     model_loader,
+                    model_manager,
                     n_threads,
                     [this](SDBackendModule module) { return ensure_backend_pair(module); },
                     [this](SDBackendModule module) { return backend_for(module); },
@@ -5285,8 +5301,8 @@ static sd::Tensor<float> upscale_ltx_spatial_video_latent(sd_ctx_t* sd_ctx,
 
     std::unique_ptr<LTXVUpsampler::LatentUpsamplerRunner> upsampler =
         std::make_unique<LTXVUpsampler::LatentUpsamplerRunner>(sd_ctx->sd->backend_for(SDBackendModule::UPSCALER),
-                                                               sd_ctx->sd->params_backend_for(SDBackendModule::UPSCALER),
-                                                               model_loader.get_tensor_storage_map());
+                                                               model_loader.get_tensor_storage_map(),
+                                                               upsampler_manager);
     const size_t max_graph_vram_bytes = sd::ggml_graph_cut::max_vram_gib_to_bytes(sd_ctx->sd->max_vram);
     upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
     if (upsampler->model == nullptr) {
@@ -5296,7 +5312,6 @@ static sd::Tensor<float> upscale_ltx_spatial_video_latent(sd_ctx_t* sd_ctx,
 
     std::map<std::string, ggml_tensor*> tensors;
     upsampler->get_param_tensors(tensors);
-    upsampler->set_weight_manager(upsampler_manager);
     if (!upsampler_manager->register_param_tensors("LTX latent upsampler",
                                                    std::move(tensors),
                                                    ModelManager::ResidencyMode::Resident,

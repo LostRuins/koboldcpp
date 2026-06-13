@@ -1124,12 +1124,12 @@ namespace WAN {
         WanVAE ae;
 
         WanVAERunner(ggml_backend_t backend,
-                     ggml_backend_t params_backend,
-                     const String2TensorStorage& tensor_storage_map = {},
-                     const std::string prefix                       = "",
-                     bool decode_only                               = false,
-                     SDVersion version                              = VERSION_WAN2)
-            : VAE(version, backend, params_backend, prefix), decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V) {
+                     const String2TensorStorage& tensor_storage_map      = {},
+                     const std::string prefix                            = "",
+                     bool decode_only                                    = false,
+                     SDVersion version                                   = VERSION_WAN2,
+                     std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : VAE(version, backend, prefix, weight_manager), decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V) {
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -1327,27 +1327,24 @@ namespace WAN {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend            = sd_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, backend, String2TensorStorage{}, "first_stage_model", false, VERSION_WAN2_2_TI2V);
+            auto model_manager                = std::make_shared<ModelManager>();
+            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, String2TensorStorage{}, "first_stage_model", false, VERSION_WAN2_2_TI2V, model_manager);
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
-                if (!vae->alloc_params_buffer()) {
-                    LOG_ERROR("vae buffer allocation failed");
-                    return;
-                }
-                std::map<std::string, ggml_tensor*> tensors;
-                vae->get_param_tensors(tensors);
-
-                ModelLoader model_loader;
+                ModelLoader& model_loader = model_manager->loader();
                 if (!model_loader.init_from_file_and_convert_name(file_path, "vae.")) {
                     LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                     return;
                 }
 
-                bool success = model_loader.load_tensors(tensors);
-
-                if (!success) {
-                    LOG_ERROR("load tensors from model loader failed");
+                if (!model_manager->register_runner_params("Wan VAE test",
+                                                           *vae,
+                                                           ModelManager::ResidencyMode::Resident,
+                                                           backend,
+                                                           backend) ||
+                    !model_manager->validate_registered_tensors()) {
+                    LOG_ERROR("register wan vae tensors with model manager failed");
                     return;
                 }
 

@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_TE_LLM_HPP__
+﻿#ifndef __SD_MODEL_TE_LLM_HPP__
 #define __SD_MODEL_TE_LLM_HPP__
 
 #include <algorithm>
@@ -22,6 +22,7 @@
 #include "json.hpp"
 #include "model/common/rope.hpp"
 #include "model_loader.h"
+#include "model_manager.h"
 #include "tokenizers/bpe_tokenizer.h"
 #include "tokenizers/gemma_tokenizer.h"
 #include "tokenizers/gpt_oss_tokenizer.h"
@@ -1571,11 +1572,11 @@ namespace LLM {
     public:
         LLMRunner(LLMArch arch,
                   ggml_backend_t backend,
-                  ggml_backend_t params_backend,
                   const String2TensorStorage& tensor_storage_map,
                   const std::string prefix,
-                  bool enable_vision_ = false)
-            : GGMLRunner(backend, params_backend),
+                  bool enable_vision_                                 = false,
+                  std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : GGMLRunner(backend, weight_manager),
               config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch)),
               enable_vision(enable_vision_) {
             if (enable_vision && !config.have_vision_weight) {
@@ -1822,11 +1823,11 @@ namespace LLM {
 
         LLMEmbedder(LLMArch arch,
                     ggml_backend_t backend,
-                    ggml_backend_t params_backend,
-                    const String2TensorStorage& tensor_storage_map = {},
-                    const std::string prefix                       = "",
-                    bool enable_vision                             = false)
-            : model(arch, backend, params_backend, tensor_storage_map, prefix, enable_vision) {
+                    const String2TensorStorage& tensor_storage_map      = {},
+                    const std::string prefix                            = "",
+                    bool enable_vision                                  = false,
+                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+            : model(arch, backend, tensor_storage_map, prefix, enable_vision, weight_manager) {
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                 tokenizer = std::make_shared<MistralTokenizer>();
             } else if (arch == LLMArch::GPT_OSS_20B) {
@@ -1838,13 +1839,6 @@ namespace LLM {
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             model.get_param_tensors(tensors, prefix);
-        }
-
-        bool alloc_params_buffer() {
-            if (!model.alloc_params_buffer()) {
-                return false;
-            }
-            return true;
         }
 
         std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,
@@ -2062,7 +2056,8 @@ namespace LLM {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
-            ModelLoader model_loader;
+            auto model_manager        = std::make_shared<ModelManager>();
+            ModelLoader& model_loader = model_manager->loader();
             if (!model_loader.init_from_file_and_convert_name(file_path, "text_encoders.llm.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -2081,23 +2076,19 @@ namespace LLM {
 
             std::shared_ptr<LLMEmbedder> llm = std::make_shared<LLMEmbedder>(arch,
                                                                              backend,
-                                                                             backend,
                                                                              tensor_storage_map,
                                                                              "text_encoders.llm",
-                                                                             true);
+                                                                             true,
+                                                                             model_manager);
 
-            if (!llm->alloc_params_buffer()) {
-                LOG_ERROR("llm model allocation failed");
-                return;
-            }
-
-            std::map<std::string, ggml_tensor*> tensors;
-            llm->get_param_tensors(tensors, "text_encoders.llm");
-
-            bool success = model_loader.load_tensors(tensors);
-
-            if (!success) {
-                LOG_ERROR("load tensors from model loader failed");
+            if (!model_manager->register_runner_params("LLM test",
+                                                       *llm,
+                                                       "text_encoders.llm",
+                                                       ModelManager::ResidencyMode::Resident,
+                                                       backend,
+                                                       backend) ||
+                !model_manager->validate_registered_tensors()) {
+                LOG_ERROR("register llm tensors with model manager failed");
                 return;
             }
 

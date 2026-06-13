@@ -1,8 +1,9 @@
-#ifndef __SD_MODEL_DIFFUSION_CONTROL_HPP__
+﻿#ifndef __SD_MODEL_DIFFUSION_CONTROL_HPP__
 #define __SD_MODEL_DIFFUSION_CONTROL_HPP__
 
 #include "model/common/block.hpp"
 #include "model_loader.h"
+#include "model_manager.h"
 
 #define CONTROL_NET_GRAPH_SIZE 1536
 
@@ -318,13 +319,16 @@ struct ControlNet : public GGMLRunner {
     std::vector<sd::Tensor<float>> controls;
     sd::Tensor<float> guided_hint;
     bool guided_hint_cached = false;
+    std::shared_ptr<ModelManager> owned_model_manager;
+    ggml_backend_t params_backend = nullptr;
 
     ControlNet(ggml_backend_t backend,
-               ggml_backend_t params_backend,
-               const String2TensorStorage& tensor_storage_map = {},
-               SDVersion version                              = VERSION_SD1,
-               const std::string& prefix                      = "")
-        : GGMLRunner(backend, params_backend), version(version), control_net(version), weight_prefix(prefix) {
+               ggml_backend_t params_backend_,
+               const String2TensorStorage& tensor_storage_map      = {},
+               SDVersion version                                   = VERSION_SD1,
+               const std::string& prefix                           = "",
+               std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager), version(version), control_net(version), weight_prefix(prefix), params_backend(params_backend_) {
         control_net.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -459,31 +463,35 @@ struct ControlNet : public GGMLRunner {
 
     bool load_from_file(const std::string& file_path, int n_threads) {
         LOG_INFO("loading control net from '%s'", file_path.c_str());
-        if (!alloc_params_buffer()) {
-            LOG_ERROR("control net model buffer allocation failed");
-            return false;
-        }
-
         std::map<std::string, ggml_tensor*> tensors;
         control_net.get_param_tensors(tensors);
-        std::set<std::string> ignore_tensors;
 
-        ModelLoader model_loader;
+        auto manager = std::dynamic_pointer_cast<ModelManager>(weight_manager.lock());
+        if (manager == nullptr) {
+            owned_model_manager = std::make_shared<ModelManager>();
+            weight_manager      = owned_model_manager;
+            manager             = owned_model_manager;
+        }
+
+        ModelLoader& model_loader = manager->loader();
         if (!model_loader.init_from_file_and_convert_name(file_path)) {
             LOG_ERROR("init control net model loader from file failed: '%s'", file_path.c_str());
             return false;
         }
 
-        model_loader.set_n_threads(n_threads);
-        bool success = model_loader.load_tensors(tensors, ignore_tensors);
-
-        if (!success) {
-            LOG_ERROR("load control net tensors from model loader failed");
+        manager->set_n_threads(n_threads);
+        if (!manager->register_param_tensors("ControlNet",
+                                             std::move(tensors),
+                                             ModelManager::ResidencyMode::Resident,
+                                             runtime_backend,
+                                             params_backend) ||
+            !manager->validate_registered_tensors()) {
+            LOG_ERROR("register control net tensors with model manager failed");
             return false;
         }
 
         LOG_INFO("control net model loaded");
-        return success;
+        return true;
     }
 };
 

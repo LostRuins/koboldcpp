@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_UPSCALER_ESRGAN_HPP__
+﻿#ifndef __SD_MODEL_UPSCALER_ESRGAN_HPP__
 #define __SD_MODEL_UPSCALER_ESRGAN_HPP__
 
 #include <algorithm>
@@ -229,9 +229,9 @@ struct ESRGAN : public GGMLRunner {
     std::unique_ptr<RRDBNet> rrdb_net;
 
     ESRGAN(ggml_backend_t backend,
-           ggml_backend_t params_backend,
-           const String2TensorStorage& tensor_storage_map = {})
-        : GGMLRunner(backend, params_backend),
+           const String2TensorStorage& tensor_storage_map      = {},
+           std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager),
           config(ESRGANConfig::detect_from_weights(tensor_storage_map)),
           rrdb_net(std::make_unique<RRDBNet>(config)) {
         rrdb_net->init(params_ctx, tensor_storage_map, "");

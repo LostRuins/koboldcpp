@@ -957,8 +957,8 @@ namespace LTXVAE {
 
             ggml_tensor* scaled_timestep = timestep;
             if (timestep_conditioning) {
-                auto multiplier = ggml_ext_backend_tensor_get_f32(params["timestep_scale_multiplier"]);
-                scaled_timestep = ggml_ext_scale(ctx->ggml_ctx, timestep, multiplier);
+                auto multiplier = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["timestep_scale_multiplier"]);
+                scaled_timestep = ggml_mul(ctx->ggml_ctx, timestep, multiplier);
             }
 
             x = conv_in->forward(ctx, x, causal_decoder);
@@ -1008,8 +1008,8 @@ namespace LTXVAE {
 
             ggml_tensor* scaled_timestep = timestep;
             if (timestep_conditioning && timestep != nullptr) {
-                auto multiplier = ggml_ext_backend_tensor_get_f32(params["timestep_scale_multiplier"]);
-                scaled_timestep = ggml_ext_scale(ctx->ggml_ctx, timestep, multiplier);
+                auto multiplier = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["timestep_scale_multiplier"]);
+                scaled_timestep = ggml_mul(ctx->ggml_ctx, timestep, multiplier);
             }
 
             // conv_in with feat_map for left temporal context
@@ -1223,11 +1223,11 @@ struct LTXVideoVAE : public VAE {
     LTXVAE::VideoVAE vae;
 
     LTXVideoVAE(ggml_backend_t backend,
-                ggml_backend_t params_backend,
                 const String2TensorStorage& tensor_storage_map,
                 const std::string& prefix,
-                bool decode_only  = true,
-                SDVersion version = VERSION_LTXAV)
+                bool decode_only                                    = true,
+                SDVersion version                                   = VERSION_LTXAV,
+                std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
         : decode_only(decode_only),
           ltx_vae_version(LTXVAE::detect_ltx_vae_version(tensor_storage_map, prefix)),
           timestep_conditioning(LTXVAE::detect_ltx_vae_timestep_conditioning(tensor_storage_map, prefix)),
@@ -1239,7 +1239,7 @@ struct LTXVideoVAE : public VAE {
               patch_size,
               tensor_storage_map,
               prefix),
-          VAE(version, backend, params_backend, prefix) {
+          VAE(version, backend, prefix, weight_manager) {
         vae.init(params_ctx, tensor_storage_map, prefix);
         decode_timestep_tensor.values()[0] = vae.decode_timestep;
     }
@@ -1521,7 +1521,8 @@ struct LTXVideoVAE : public VAE {
         ggml_backend_t backend = sd_backend_cpu_init();
         LOG_INFO("loading ltx vae from '%s'", model_path.c_str());
 
-        ModelLoader model_loader;
+        auto model_manager        = std::make_shared<ModelManager>();
+        ModelLoader& model_loader = model_manager->loader();
         if (!model_loader.init_from_file_and_convert_name(model_path, "vae.")) {
             LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
             return;
@@ -1529,22 +1530,19 @@ struct LTXVideoVAE : public VAE {
 
         auto& tensor_storage_map         = model_loader.get_tensor_storage_map();
         std::shared_ptr<LTXVideoVAE> vae = std::make_shared<LTXVideoVAE>(backend,
-                                                                         backend,
                                                                          tensor_storage_map,
                                                                          "first_stage_model",
                                                                          true,
-                                                                         VERSION_LTXAV);
+                                                                         VERSION_LTXAV,
+                                                                         model_manager);
 
-        if (!vae->alloc_params_buffer()) {
-            LOG_ERROR("vae buffer allocation failed");
-            return;
-        }
-
-        std::map<std::string, ggml_tensor*> tensors;
-        vae->get_param_tensors(tensors);
-
-        if (!model_loader.load_tensors(tensors)) {
-            LOG_ERROR("load tensors from model loader failed");
+        if (!model_manager->register_runner_params("LTX VAE test",
+                                                   *vae,
+                                                   ModelManager::ResidencyMode::Resident,
+                                                   backend,
+                                                   backend) ||
+            !model_manager->validate_registered_tensors()) {
+            LOG_ERROR("register ltx vae tensors with model manager failed");
             return;
         }
 

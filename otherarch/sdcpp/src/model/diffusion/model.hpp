@@ -1,4 +1,4 @@
-#ifndef __SD_MODEL_DIFFUSION_MODEL_HPP__
+﻿#ifndef __SD_MODEL_DIFFUSION_MODEL_HPP__
 #define __SD_MODEL_DIFFUSION_MODEL_HPP__
 
 #include <string>
@@ -7,6 +7,7 @@
 
 #include "core/ggml_extend.hpp"
 #include "core/tensor_ggml.hpp"
+#include "model_manager.h"
 
 struct UNetDiffusionExtra {
     int num_video_frames                           = -1;
@@ -88,9 +89,9 @@ protected:
 
 public:
     DiffusionModelRunner(ggml_backend_t backend,
-                         ggml_backend_t params_backend,
-                         const std::string& prefix)
-        : GGMLRunner(backend, params_backend),
+                         const std::string& prefix,
+                         std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager),
           prefix(prefix) {}
 
     virtual sd::Tensor<float> compute(int n_threads,

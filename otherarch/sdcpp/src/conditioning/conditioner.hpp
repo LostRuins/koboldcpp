@@ -1,4 +1,4 @@
-#ifndef __SD_CONDITIONING_CONDITIONER_HPP__
+﻿#ifndef __SD_CONDITIONING_CONDITIONER_HPP__
 #define __SD_CONDITIONING_CONDITIONER_HPP__
 
 #include <cmath>
@@ -118,7 +118,6 @@ public:
     virtual void set_stream_layers_enabled(bool enabled) {}
     virtual void set_flash_attention_enabled(bool enabled) = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
-    virtual void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) {}
     virtual void runner_done() {}
 };
 
@@ -137,10 +136,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::map<std::string, std::pair<int, int>> embedding_pos_map;
 
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
-                                      ggml_backend_t params_backend,
                                       const String2TensorStorage& tensor_storage_map,
                                       const std::map<std::string, std::string>& orig_embedding_map,
-                                      SDVersion version = VERSION_SD1)
+                                      SDVersion version                                   = VERSION_SD1,
+                                      std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
         : version(version), tokenizer(sd_version_is_sd2(version) ? 0 : 49407) {
         for (const auto& kv : orig_embedding_map) {
             std::string name = kv.first;
@@ -150,12 +149,12 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
         bool force_clip_f32 = !embedding_map.empty();
         if (sd_version_is_sd1(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, params_backend, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
+            text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32, weight_manager);
         } else if (sd_version_is_sd2(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, params_backend, tensor_storage_map, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, true, force_clip_f32);
+            text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_storage_map, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, true, force_clip_f32, weight_manager);
         } else if (sd_version_is_sdxl(version)) {
-            text_model  = std::make_shared<CLIPTextModelRunner>(backend, params_backend, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, force_clip_f32);
-            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, params_backend, tensor_storage_map, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, force_clip_f32);
+            text_model  = std::make_shared<CLIPTextModelRunner>(backend, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, force_clip_f32, weight_manager);
+            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, tensor_storage_map, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, force_clip_f32, weight_manager);
         }
     }
 
@@ -191,13 +190,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         text_model->set_weight_adapter(adapter);
         if (sd_version_is_sdxl(version)) {
             text_model2->set_weight_adapter(adapter);
-        }
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-        text_model->set_weight_manager(manager);
-        if (sd_version_is_sdxl(version)) {
-            text_model2->set_weight_manager(manager);
         }
     }
 
@@ -522,9 +514,9 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
     std::string weight_prefix = "cond_stage_model.transformer";
 
     FrozenCLIPVisionEmbedder(ggml_backend_t backend,
-                             ggml_backend_t params_backend,
-                             const String2TensorStorage& tensor_storage_map = {})
-        : GGMLRunner(backend, params_backend) {
+                             const String2TensorStorage& tensor_storage_map      = {},
+                             std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager) {
         bool proj_in = false;
         for (const auto& [name, tensor_storage] : tensor_storage_map) {
             if (!starts_with(name, weight_prefix)) {
@@ -580,8 +572,8 @@ struct SD3CLIPEmbedder : public Conditioner {
     std::shared_ptr<T5Runner> t5;
 
     SD3CLIPEmbedder(ggml_backend_t backend,
-                    ggml_backend_t params_backend,
-                    const String2TensorStorage& tensor_storage_map = {})
+                    const String2TensorStorage& tensor_storage_map      = {},
+                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
         : clip_g_tokenizer(0) {
         bool use_clip_l = false;
         bool use_clip_g = false;
@@ -600,13 +592,13 @@ struct SD3CLIPEmbedder : public Conditioner {
             return;
         }
         if (use_clip_l) {
-            clip_l = std::make_shared<CLIPTextModelRunner>(backend, params_backend, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
+            clip_l = std::make_shared<CLIPTextModelRunner>(backend, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, false, weight_manager);
         }
         if (use_clip_g) {
-            clip_g = std::make_shared<CLIPTextModelRunner>(backend, params_backend, tensor_storage_map, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
+            clip_g = std::make_shared<CLIPTextModelRunner>(backend, tensor_storage_map, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, false, weight_manager);
         }
         if (use_t5) {
-            t5 = std::make_shared<T5Runner>(backend, params_backend, tensor_storage_map, "text_encoders.t5xxl.transformer");
+            t5 = std::make_shared<T5Runner>(backend, tensor_storage_map, "text_encoders.t5xxl.transformer", false, weight_manager);
         }
     }
 
@@ -667,18 +659,6 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
         if (t5) {
             t5->set_weight_adapter(adapter);
-        }
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-        if (clip_l) {
-            clip_l->set_weight_manager(manager);
-        }
-        if (clip_g) {
-            clip_g->set_weight_manager(manager);
-        }
-        if (t5) {
-            t5->set_weight_manager(manager);
         }
     }
 
@@ -961,8 +941,8 @@ struct FluxCLIPEmbedder : public Conditioner {
     size_t chunk_len = 256;
 
     FluxCLIPEmbedder(ggml_backend_t backend,
-                     ggml_backend_t params_backend,
-                     const String2TensorStorage& tensor_storage_map = {}) {
+                     const String2TensorStorage& tensor_storage_map      = {},
+                     std::shared_ptr<RunnerWeightManager> weight_manager = nullptr) {
         bool use_clip_l = false;
         bool use_t5     = false;
         for (auto pair : tensor_storage_map) {
@@ -979,12 +959,12 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
 
         if (use_clip_l) {
-            clip_l = std::make_shared<CLIPTextModelRunner>(backend, params_backend, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
+            clip_l = std::make_shared<CLIPTextModelRunner>(backend, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, false, weight_manager);
         } else {
             LOG_WARN("clip_l text encoder not found! Prompt adherence might be degraded.");
         }
         if (use_t5) {
-            t5 = std::make_shared<T5Runner>(backend, params_backend, tensor_storage_map, "text_encoders.t5xxl.transformer");
+            t5 = std::make_shared<T5Runner>(backend, tensor_storage_map, "text_encoders.t5xxl.transformer", false, weight_manager);
         } else {
             LOG_WARN("t5xxl text encoder not found! Prompt adherence might be degraded.");
         }
@@ -1032,15 +1012,6 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
         if (t5) {
             t5->set_weight_adapter(adapter);
-        }
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-        if (clip_l) {
-            clip_l->set_weight_manager(manager);
-        }
-        if (t5) {
-            t5->set_weight_manager(manager);
         }
     }
 
@@ -1219,11 +1190,11 @@ struct T5CLIPEmbedder : public Conditioner {
     bool is_umt5     = false;
 
     T5CLIPEmbedder(ggml_backend_t backend,
-                   ggml_backend_t params_backend,
-                   const String2TensorStorage& tensor_storage_map = {},
-                   bool use_mask                                  = false,
-                   int mask_pad                                   = 0,
-                   bool is_umt5                                   = false)
+                   const String2TensorStorage& tensor_storage_map      = {},
+                   bool use_mask                                       = false,
+                   int mask_pad                                        = 0,
+                   bool is_umt5                                        = false,
+                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
         : use_mask(use_mask), mask_pad(mask_pad), t5_tokenizer(is_umt5) {
         bool use_t5 = false;
         for (auto pair : tensor_storage_map) {
@@ -1236,7 +1207,7 @@ struct T5CLIPEmbedder : public Conditioner {
             LOG_WARN("IMPORTANT NOTICE: No text encoders provided, cannot process prompts!");
             return;
         } else {
-            t5 = std::make_shared<T5Runner>(backend, params_backend, tensor_storage_map, "text_encoders.t5xxl.transformer", is_umt5);
+            t5 = std::make_shared<T5Runner>(backend, tensor_storage_map, "text_encoders.t5xxl.transformer", is_umt5, weight_manager);
         }
     }
 
@@ -1267,12 +1238,6 @@ struct T5CLIPEmbedder : public Conditioner {
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (t5) {
             t5->set_weight_adapter(adapter);
-        }
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-        if (t5) {
-            t5->set_weight_manager(manager);
         }
     }
 
@@ -1422,15 +1387,15 @@ struct AnimaConditioner : public Conditioner {
     std::shared_ptr<LLM::LLMRunner> llm;
 
     AnimaConditioner(ggml_backend_t backend,
-                     ggml_backend_t params_backend,
-                     const String2TensorStorage& tensor_storage_map = {}) {
+                     const String2TensorStorage& tensor_storage_map      = {},
+                     std::shared_ptr<RunnerWeightManager> weight_manager = nullptr) {
         qwen_tokenizer = std::make_shared<Qwen2Tokenizer>();
         llm            = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::QWEN3,
                                                backend,
-                                               params_backend,
                                                tensor_storage_map,
                                                "text_encoders.llm",
-                                               false);
+                                               false,
+                                               weight_manager);
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
@@ -1451,10 +1416,6 @@ struct AnimaConditioner : public Conditioner {
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         llm->set_weight_adapter(adapter);
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-        llm->set_weight_manager(manager);
     }
 
     void runner_done() override {
@@ -1545,11 +1506,11 @@ struct LLMEmbedder : public Conditioner {
     std::shared_ptr<LLM::LLMRunner> llm;
 
     LLMEmbedder(ggml_backend_t backend,
-                ggml_backend_t params_backend,
-                const String2TensorStorage& tensor_storage_map = {},
-                SDVersion version                              = VERSION_QWEN_IMAGE,
-                const std::string prefix                       = "",
-                bool enable_vision                             = false)
+                const String2TensorStorage& tensor_storage_map      = {},
+                SDVersion version                                   = VERSION_QWEN_IMAGE,
+                const std::string prefix                            = "",
+                bool enable_vision                                  = false,
+                std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
         : version(version) {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (version == VERSION_FLUX2) {
@@ -1576,10 +1537,10 @@ struct LLMEmbedder : public Conditioner {
         }
         llm = std::make_shared<LLM::LLMRunner>(arch,
                                                backend,
-                                               params_backend,
                                                tensor_storage_map,
                                                "text_encoders.llm",
-                                               enable_vision);
+                                               enable_vision,
+                                               weight_manager);
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
@@ -1601,12 +1562,6 @@ struct LLMEmbedder : public Conditioner {
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (llm) {
             llm->set_weight_adapter(adapter);
-        }
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-        if (llm) {
-            llm->set_weight_manager(manager);
         }
     }
 
@@ -2106,10 +2061,10 @@ struct LTXAVTextProjectionRunner : public GGMLRunner {
     LTXAVTextProjection model;
 
     LTXAVTextProjectionRunner(ggml_backend_t backend,
-                              ggml_backend_t params_backend,
-                              const String2TensorStorage& tensor_storage_map = {},
-                              const std::string& prefix                      = "")
-        : GGMLRunner(backend, params_backend),
+                              const String2TensorStorage& tensor_storage_map      = {},
+                              const std::string& prefix                           = "",
+                              std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : GGMLRunner(backend, weight_manager),
           model(tensor_storage_map.find(prefix + ".video_aggregate_embed.weight") != tensor_storage_map.end()) {
         model.init(params_ctx, tensor_storage_map, prefix);
     }
@@ -2154,22 +2109,22 @@ struct LTXAVEmbedder : public Conditioner {
     bool dual_projection = false;
 
     LTXAVEmbedder(ggml_backend_t backend,
-                  ggml_backend_t params_backend,
-                  const String2TensorStorage& tensor_storage_map = {},
-                  const std::string& llm_prefix                  = "text_encoders.llm",
-                  const std::string& projector_prefix            = "text_embedding_projection") {
+                  const String2TensorStorage& tensor_storage_map      = {},
+                  const std::string& llm_prefix                       = "text_encoders.llm",
+                  const std::string& projector_prefix                 = "text_embedding_projection",
+                  std::shared_ptr<RunnerWeightManager> weight_manager = nullptr) {
         tokenizer       = std::make_shared<GemmaTokenizer>();
         llm             = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::GEMMA3_12B,
                                                backend,
-                                               params_backend,
                                                tensor_storage_map,
                                                llm_prefix,
-                                               false);
+                                               false,
+                                               weight_manager);
         dual_projection = tensor_storage_map.find(projector_prefix + ".video_aggregate_embed.weight") != tensor_storage_map.end();
         projector       = std::make_shared<LTXAVTextProjectionRunner>(backend,
-                                                                params_backend,
                                                                 tensor_storage_map,
-                                                                projector_prefix);
+                                                                projector_prefix,
+                                                                weight_manager);
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
@@ -2190,11 +2145,6 @@ struct LTXAVEmbedder : public Conditioner {
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         llm->set_weight_adapter(adapter);
         projector->set_weight_adapter(adapter);
-    }
-
-    void set_weight_manager(const std::shared_ptr<RunnerWeightManager>& manager) override {
-        llm->set_weight_manager(manager);
-        projector->set_weight_manager(manager);
     }
 
     void runner_done() override {

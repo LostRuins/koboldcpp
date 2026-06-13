@@ -694,11 +694,11 @@ struct UNetModelRunner : public DiffusionModelRunner {
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
-                    ggml_backend_t params_backend,
                     const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
-                    SDVersion version = VERSION_SD1)
-        : DiffusionModelRunner(backend, params_backend, prefix),
+                    SDVersion version                                   = VERSION_SD1,
+                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : DiffusionModelRunner(backend, prefix, weight_manager),
           config(UNetConfig::detect_from_weights(tensor_storage_map, prefix, version)),
           unet(config) {
         unet.init(params_ctx, tensor_storage_map, prefix);

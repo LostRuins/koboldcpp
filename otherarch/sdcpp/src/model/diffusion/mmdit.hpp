@@ -879,10 +879,10 @@ struct MMDiTRunner : public DiffusionModelRunner {
     MMDiT mmdit;
 
     MMDiTRunner(ggml_backend_t backend,
-                ggml_backend_t params_backend,
-                const String2TensorStorage& tensor_storage_map = {},
-                const std::string prefix                       = "")
-        : DiffusionModelRunner(backend, params_backend, prefix),
+                const String2TensorStorage& tensor_storage_map      = {},
+                const std::string prefix                            = "",
+                std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : DiffusionModelRunner(backend, prefix, weight_manager),
           config(MMDiTConfig::detect_from_weights(tensor_storage_map, prefix)),
           mmdit(config) {
         mmdit.init(params_ctx, tensor_storage_map, prefix);
@@ -1001,28 +1001,25 @@ struct MMDiTRunner : public DiffusionModelRunner {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend             = sd_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
-        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, backend);
+        auto model_manager                 = std::make_shared<ModelManager>();
+        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, String2TensorStorage{}, "", model_manager);
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
-            if (!mmdit->alloc_params_buffer()) {
-                LOG_ERROR("mmdit embeds buffer allocation failed");
-                return;
-            }
-
-            std::map<std::string, ggml_tensor*> tensors;
-            mmdit->get_param_tensors(tensors, "model.diffusion_model");
-
-            ModelLoader model_loader;
+            ModelLoader& model_loader = model_manager->loader();
             if (!model_loader.init_from_file_and_convert_name(file_path)) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }
 
-            bool success = model_loader.load_tensors(tensors);
-
-            if (!success) {
-                LOG_ERROR("load tensors from model loader failed");
+            if (!model_manager->register_runner_params("MMDiT test",
+                                                       *mmdit,
+                                                       "model.diffusion_model",
+                                                       ModelManager::ResidencyMode::Resident,
+                                                       backend,
+                                                       backend) ||
+                !model_manager->validate_registered_tensors()) {
+                LOG_ERROR("register mmdit tensors with model manager failed");
                 return;
             }
 

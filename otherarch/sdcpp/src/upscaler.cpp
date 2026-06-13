@@ -90,8 +90,8 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
     model_loader.set_wtype_override(model_data_type);
     LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
     esrgan_upscaler = std::make_shared<ESRGAN>(backend_for(SDBackendModule::UPSCALER),
-                                               params_backend_for(SDBackendModule::UPSCALER),
-                                               model_loader.get_tensor_storage_map());
+                                               model_loader.get_tensor_storage_map(),
+                                               model_manager);
     if (esrgan_upscaler == nullptr || esrgan_upscaler->rrdb_net == nullptr) {
         LOG_ERROR("init esrgan model from metadata failed: '%s'", esrgan_path.c_str());
         return false;
@@ -104,7 +104,6 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
 
     std::map<std::string, ggml_tensor*> tensors;
     esrgan_upscaler->get_param_tensors(tensors);
-    esrgan_upscaler->set_weight_manager(model_manager);
     if (!model_manager->register_param_tensors("ESRGAN",
                                                std::move(tensors),
                                                ModelManager::ResidencyMode::Resident,
