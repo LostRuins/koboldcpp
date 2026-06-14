@@ -73,4 +73,5 @@ ggml_backend_t sd_backend_cpu_init();
 bool sd_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads);
 const char* sd_backend_module_name(SDBackendModule module);
 void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value);
+bool add_rpc_devices(const std::string& servers);
 #endif  // __SD_CORE_GGML_EXTEND_BACKEND_H__

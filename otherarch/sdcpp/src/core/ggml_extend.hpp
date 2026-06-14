@@ -2007,6 +2007,10 @@ protected:
     }
 
     bool copy_cache_tensors_to_cache_buffer(const std::unordered_set<std::string>* cache_keep_names = nullptr) {
+        if (cache_tensor_map.empty() && cache_keep_names == nullptr) {
+            return true;
+        }
+
         ggml_context* old_cache_ctx            = cache_ctx;
         ggml_backend_buffer_t old_cache_buffer = cache_buffer;
         cache_ctx                              = nullptr;

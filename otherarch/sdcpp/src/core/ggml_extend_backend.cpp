@@ -204,6 +204,36 @@ void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value
     }
 }
 
+bool add_rpc_devices(const std::string& servers) {
+    const std::string in = trim_copy(servers);
+    if (in.empty()) {
+        return true;
+    }
+    auto rpc_servers = split_copy(in, ',');
+    if (rpc_servers.empty()) {
+        LOG_ERROR("invalid RPC servers specification: '%s'", servers.c_str());
+        return false;
+    }
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (!rpc_reg) {
+        LOG_ERROR("RPC backend not found, cannot add RPC servers");
+        return false;
+    }
+    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char* endpoint);
+    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t)ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (!ggml_backend_rpc_add_server_fn) {
+        LOG_ERROR("RPC backend does not have ggml_backend_rpc_add_server function, cannot add RPC servers");
+        return false;
+    }
+    for (const auto& server : rpc_servers) {
+        LOG_INFO("Adding RPC server: %s", server.c_str());
+        auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+        // no return value to check for success but should print errors from the RPC backend if it fails to add the server
+        ggml_backend_register(reg);
+    }
+    return true;
+}
+
 static void ggml_backend_load_all_once() {
     // If the registry already has devices and the CPU backend is present,
     // assume either static registration or explicit host-side preloading has

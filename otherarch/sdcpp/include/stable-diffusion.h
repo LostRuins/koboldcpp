@@ -220,6 +220,7 @@ typedef struct {
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
     const char* backend;
     const char* params_backend;
+    const char* rpc_servers;
 } sd_ctx_params_t;
 
 typedef struct {

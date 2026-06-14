@@ -148,6 +148,7 @@ struct SDContextParams {
     bool stream_layers          = false;
     std::string backend;
     std::string params_backend;
+    std::string rpc_servers;
     std::string effective_backend;
     std::string effective_params_backend;
     bool enable_mmap           = false;

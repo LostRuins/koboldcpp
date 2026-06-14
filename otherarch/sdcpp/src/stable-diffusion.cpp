@@ -335,6 +335,10 @@ public:
         stream_layers       = sd_ctx_params->stream_layers;
         backend_spec        = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
+
+        std::string rpc_servers_spec = SAFE_STR(sd_ctx_params->rpc_servers);
+        add_rpc_devices(rpc_servers_spec);
+
         if (stream_layers && max_vram == 0.f) {
             LOG_WARN("--stream-layers has no effect without --max-vram set; ignoring");
             stream_layers = false;
