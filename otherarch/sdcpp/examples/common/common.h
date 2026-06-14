@@ -148,6 +148,8 @@ struct SDContextParams {
     bool stream_layers          = false;
     std::string backend;
     std::string params_backend;
+    std::string effective_backend;
+    std::string effective_params_backend;
     bool enable_mmap           = false;
     bool control_net_cpu       = false;
     bool clip_on_cpu           = false;
@@ -175,11 +177,12 @@ struct SDContextParams {
     float flow_shift = INFINITY;
     ArgOptions get_options();
     void build_embedding_map();
+    void prepare_backend_assignments();
     bool resolve(SDMode mode);
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
-    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview);
+    sd_ctx_params_t to_sd_ctx_params_t(bool taesd_preview);
 };
 
 struct SDGenerationParams {

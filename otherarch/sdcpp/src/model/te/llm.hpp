@@ -2084,7 +2084,7 @@ namespace LLM {
             if (!model_manager->register_runner_params("LLM test",
                                                        *llm,
                                                        "text_encoders.llm",
-                                                       ModelManager::ResidencyMode::Resident,
+                                                       ModelManager::ResidencyMode::ParamBackend,
                                                        backend,
                                                        backend) ||
                 !model_manager->validate_registered_tensors()) {

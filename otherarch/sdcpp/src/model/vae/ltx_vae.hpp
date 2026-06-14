@@ -1426,7 +1426,7 @@ struct LTXVideoVAE : public VAE {
                                const sd::Tensor<float>& z,
                                bool decode_graph) override {
         if (!decode_graph && decode_only) {
-            LOG_ERROR("LTX video VAE encode requires encoder weights; create the context with vae_decode_only=false");
+            LOG_ERROR("LTX video VAE encode requires encoder weights");
             return {};
         }
         sd::Tensor<float> input = z;
@@ -1538,7 +1538,7 @@ struct LTXVideoVAE : public VAE {
 
         if (!model_manager->register_runner_params("LTX VAE test",
                                                    *vae,
-                                                   ModelManager::ResidencyMode::Resident,
+                                                   ModelManager::ResidencyMode::ParamBackend,
                                                    backend,
                                                    backend) ||
             !model_manager->validate_registered_tensors()) {

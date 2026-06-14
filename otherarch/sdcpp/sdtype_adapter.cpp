@@ -470,8 +470,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.taesd_path = sd_params->taesd_path.c_str();
     params.photo_maker_path = sd_params->stacked_id_embeddings_path.c_str();
 
-    params.vae_decode_only = false;
-    params.free_params_immediately = false;
     params.rng_type = CUDA_RNG;
 
     params.n_threads = sd_params->n_threads;
@@ -539,7 +537,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if (upscaler_filename!="") {
         const int upscale_tile_size = 128;
         upscaler_ctx = new_upscaler_ctx(upscaler_filename.c_str(),
-                                        inputs.offload_cpu,
                                         params.diffusion_conv_direct,
                                         params.n_threads,
                                         upscale_tile_size,

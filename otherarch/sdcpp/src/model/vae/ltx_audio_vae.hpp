@@ -1082,7 +1082,7 @@ namespace LTXV {
 
             if (!model_manager->register_runner_params("LTX audio VAE test",
                                                        *ltx_audio_vae,
-                                                       ModelManager::ResidencyMode::Resident,
+                                                       ModelManager::ResidencyMode::ParamBackend,
                                                        backend,
                                                        backend) ||
                 !model_manager->validate_registered_tensors()) {

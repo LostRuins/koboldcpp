@@ -622,7 +622,7 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
         model_loader.load_tensors(on_new_tensor_cb);
         if (!model_manager->register_param_tensors("PhotoMaker ID embeds",
                                                    tensors,
-                                                   ModelManager::ResidencyMode::Resident,
+                                                   ModelManager::ResidencyMode::ParamBackend,
                                                    runtime_backend,
                                                    params_backend) ||
             !model_manager->validate_registered_tensors()) {

@@ -101,7 +101,7 @@ struct LoraModel : public GGMLRunner {
         if (model_manager == nullptr ||
             !model_manager->register_param_tensors("LoRA",
                                                    std::move(tensors),
-                                                   ModelManager::ResidencyMode::Resident,
+                                                   ModelManager::ResidencyMode::ParamBackend,
                                                    runtime_backend,
                                                    params_backend) ||
             !model_manager->validate_registered_tensors()) {

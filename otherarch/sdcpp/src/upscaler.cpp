@@ -39,17 +39,12 @@ void UpscalerGGML::set_stream_layers_enabled(bool enabled) {
 }
 
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
-                                  bool offload_params_to_cpu,
                                   int n_threads) {
     ggml_log_set(ggml_log_callback_default, nullptr);
 
     std::string error;
     if (!backend_manager.init(backend_spec.c_str(),
                               params_backend_spec.c_str(),
-                              offload_params_to_cpu,
-                              false,
-                              false,
-                              false,
                               &error)) {
         LOG_ERROR("upscaler backend config failed: %s", error.c_str());
         return false;
@@ -106,7 +101,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
     esrgan_upscaler->get_param_tensors(tensors);
     if (!model_manager->register_param_tensors("ESRGAN",
                                                std::move(tensors),
-                                               ModelManager::ResidencyMode::Resident,
+                                               backend_manager.params_backend_is_disk(SDBackendModule::UPSCALER) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
                                                backend_for(SDBackendModule::UPSCALER),
                                                params_backend_for(SDBackendModule::UPSCALER)) ||
         !model_manager->validate_registered_tensors()) {
@@ -178,7 +173,6 @@ struct upscaler_ctx_t {
 };
 
 upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
-                                 bool offload_params_to_cpu,
                                  bool direct,
                                  int n_threads,
                                  int tile_size,
@@ -195,7 +189,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return nullptr;
     }
 
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu, n_threads)) {
+    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, n_threads)) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = nullptr;
         free(upscaler_ctx);

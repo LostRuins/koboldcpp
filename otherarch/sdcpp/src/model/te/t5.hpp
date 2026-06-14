@@ -592,7 +592,7 @@ struct T5Embedder {
         if (!model_manager->register_runner_params("T5 test",
                                                    *t5,
                                                    "",
-                                                   ModelManager::ResidencyMode::Resident,
+                                                   ModelManager::ResidencyMode::ParamBackend,
                                                    backend,
                                                    backend) ||
             !model_manager->validate_registered_tensors()) {

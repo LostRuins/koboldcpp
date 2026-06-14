@@ -492,7 +492,7 @@ bool ModelManager::mmap_params(const std::vector<TensorState*>& states,
 }
 
 bool ModelManager::can_mmap_storage(const TensorState& state) const {
-    if (!enable_mmap_ || state.residency_mode != ResidencyMode::Resident) {
+    if (!enable_mmap_ || state.residency_mode != ResidencyMode::ParamBackend) {
         return false;
     }
     if (state.compute_backend == nullptr || state.params_backend == nullptr) {

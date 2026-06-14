@@ -1040,7 +1040,7 @@ namespace WAN {
             if (!model_manager->register_runner_params("Wan test",
                                                        *wan,
                                                        "model.diffusion_model",
-                                                       ModelManager::ResidencyMode::Resident,
+                                                       ModelManager::ResidencyMode::ParamBackend,
                                                        backend,
                                                        backend) ||
                 !model_manager->validate_registered_tensors()) {

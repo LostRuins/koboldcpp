@@ -196,19 +196,13 @@ typedef struct {
     uint32_t embedding_count;
     const char* photo_maker_path;
     const char* tensor_type_rules;
-    bool vae_decode_only;
-    bool free_params_immediately;
     int n_threads;
     enum sd_type_t wtype;
     enum rng_type_t rng_type;
     enum rng_type_t sampler_rng_type;
     enum prediction_t prediction;
     enum lora_apply_mode_t lora_apply_mode;
-    bool offload_params_to_cpu;
     bool enable_mmap;
-    bool keep_clip_on_cpu;
-    bool keep_control_net_on_cpu;
-    bool keep_vae_on_cpu;
     bool flash_attn;
     bool diffusion_flash_attn;
     bool tae_preview_only;
@@ -460,7 +454,6 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
-                                        bool offload_params_to_cpu,
                                         bool direct,
                                         int n_threads,
                                         int tile_size,

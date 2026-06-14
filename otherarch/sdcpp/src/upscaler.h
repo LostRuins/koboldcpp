@@ -32,7 +32,6 @@ struct UpscalerGGML {
     ~UpscalerGGML();
 
     bool load_from_file(const std::string& esrgan_path,
-                        bool offload_params_to_cpu,
                         int n_threads);
     void set_max_graph_vram_bytes(size_t max_vram_bytes);
     void set_stream_layers_enabled(bool enabled);

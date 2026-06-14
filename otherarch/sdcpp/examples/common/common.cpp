@@ -51,6 +51,10 @@ static sd_vae_format_t str_to_vae_format(const std::string& value) {
     return SD_VAE_FORMAT_COUNT;
 }
 
+static void prepend_backend_assignment(std::string& spec, const char* assignment) {
+    spec = spec.empty() ? assignment : std::string(assignment) + "," + spec;
+}
+
 #if defined(_WIN32)
 static std::string utf16_to_utf8(const std::wstring& wstr) {
     if (wstr.empty())
@@ -421,7 +425,7 @@ ArgOptions SDContextParams::get_options() {
          &backend},
         {"",
          "--params-backend",
-         "parameter backend assignment, e.g. cpu or diffusion=cpu,clip=cpu",
+         "parameter backend assignment, e.g. disk, cpu, or diffusion=disk,clip=cpu",
          &params_backend},
     };
 
@@ -463,15 +467,15 @@ ArgOptions SDContextParams::get_options() {
          true, &enable_mmap},
         {"",
          "--control-net-cpu",
-         "keep controlnet in cpu (for low vram)",
+         "deprecated; use --backend controlnet=cpu",
          true, &control_net_cpu},
         {"",
          "--clip-on-cpu",
-         "keep clip in cpu (for low vram)",
+         "deprecated; use --backend te=cpu",
          true, &clip_on_cpu},
         {"",
          "--vae-on-cpu",
-         "keep vae in cpu (for low vram)",
+         "deprecated; use --backend vae=cpu",
          true, &vae_on_cpu},
         {"",
          "--fa",
@@ -688,6 +692,25 @@ bool SDContextParams::resolve_and_validate(SDMode mode) {
     return true;
 }
 
+void SDContextParams::prepare_backend_assignments() {
+    effective_backend        = backend;
+    effective_params_backend = params_backend;
+
+    if (offload_params_to_cpu) {
+        prepend_backend_assignment(effective_params_backend, "*=cpu");
+    }
+
+    if (clip_on_cpu) {
+        prepend_backend_assignment(effective_backend, "te=cpu");
+    }
+    if (vae_on_cpu) {
+        prepend_backend_assignment(effective_backend, "vae=cpu");
+    }
+    if (control_net_cpu) {
+        prepend_backend_assignment(effective_backend, "controlnet=cpu");
+    }
+}
+
 std::string SDContextParams::to_string() const {
     std::ostringstream emb_ss;
     emb_ss << "{\n";
@@ -757,7 +780,8 @@ std::string SDContextParams::to_string() const {
     return oss.str();
 }
 
-sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview) {
+sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
+    prepare_backend_assignments();
     embedding_vec.clear();
     embedding_vec.reserve(embedding_map.size());
     for (const auto& kv : embedding_map) {
@@ -767,57 +791,51 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool vae_decode_only, bool f
         embedding_vec.emplace_back(item);
     }
 
-    sd_ctx_params_t sd_ctx_params = {
-        model_path.c_str(),
-        clip_l_path.c_str(),
-        clip_g_path.c_str(),
-        clip_vision_path.c_str(),
-        t5xxl_path.c_str(),
-        llm_path.c_str(),
-        llm_vision_path.c_str(),
-        diffusion_model_path.c_str(),
-        high_noise_diffusion_model_path.c_str(),
-        uncond_diffusion_model_path.c_str(),
-        embeddings_connectors_path.c_str(),
-        vae_path.c_str(),
-        audio_vae_path.c_str(),
-        taesd_path.c_str(),
-        control_net_path.c_str(),
-        embedding_vec.data(),
-        static_cast<uint32_t>(embedding_vec.size()),
-        photo_maker_path.c_str(),
-        tensor_type_rules.c_str(),
-        vae_decode_only,
-        free_params_immediately,
-        n_threads,
-        wtype,
-        rng_type,
-        sampler_rng_type,
-        prediction,
-        lora_apply_mode,
-        offload_params_to_cpu,
-        enable_mmap,
-        clip_on_cpu,
-        control_net_cpu,
-        vae_on_cpu,
-        flash_attn,
-        diffusion_flash_attn,
-        taesd_preview,
-        diffusion_conv_direct,
-        vae_conv_direct,
-        circular || circular_x,
-        circular || circular_y,
-        force_sdxl_vae_conv_scale,
-        chroma_use_dit_mask,
-        chroma_use_t5_mask,
-        chroma_t5_mask_pad,
-        qwen_image_zero_cond_t,
-        str_to_vae_format(vae_format),
-        max_vram,
-        stream_layers,
-        backend.c_str(),
-        params_backend.c_str(),
-    };
+    sd_ctx_params_t sd_ctx_params;
+    sd_ctx_params_init(&sd_ctx_params);
+    sd_ctx_params.model_path                      = model_path.c_str();
+    sd_ctx_params.clip_l_path                     = clip_l_path.c_str();
+    sd_ctx_params.clip_g_path                     = clip_g_path.c_str();
+    sd_ctx_params.clip_vision_path                = clip_vision_path.c_str();
+    sd_ctx_params.t5xxl_path                      = t5xxl_path.c_str();
+    sd_ctx_params.llm_path                        = llm_path.c_str();
+    sd_ctx_params.llm_vision_path                 = llm_vision_path.c_str();
+    sd_ctx_params.diffusion_model_path            = diffusion_model_path.c_str();
+    sd_ctx_params.high_noise_diffusion_model_path = high_noise_diffusion_model_path.c_str();
+    sd_ctx_params.uncond_diffusion_model_path     = uncond_diffusion_model_path.c_str();
+    sd_ctx_params.embeddings_connectors_path      = embeddings_connectors_path.c_str();
+    sd_ctx_params.vae_path                        = vae_path.c_str();
+    sd_ctx_params.audio_vae_path                  = audio_vae_path.c_str();
+    sd_ctx_params.taesd_path                      = taesd_path.c_str();
+    sd_ctx_params.control_net_path                = control_net_path.c_str();
+    sd_ctx_params.embeddings                      = embedding_vec.data();
+    sd_ctx_params.embedding_count                 = static_cast<uint32_t>(embedding_vec.size());
+    sd_ctx_params.photo_maker_path                = photo_maker_path.c_str();
+    sd_ctx_params.tensor_type_rules               = tensor_type_rules.c_str();
+    sd_ctx_params.n_threads                       = n_threads;
+    sd_ctx_params.wtype                           = wtype;
+    sd_ctx_params.rng_type                        = rng_type;
+    sd_ctx_params.sampler_rng_type                = sampler_rng_type;
+    sd_ctx_params.prediction                      = prediction;
+    sd_ctx_params.lora_apply_mode                 = lora_apply_mode;
+    sd_ctx_params.enable_mmap                     = enable_mmap;
+    sd_ctx_params.flash_attn                      = flash_attn;
+    sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.tae_preview_only                = taesd_preview;
+    sd_ctx_params.diffusion_conv_direct           = diffusion_conv_direct;
+    sd_ctx_params.vae_conv_direct                 = vae_conv_direct;
+    sd_ctx_params.circular_x                      = circular || circular_x;
+    sd_ctx_params.circular_y                      = circular || circular_y;
+    sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
+    sd_ctx_params.chroma_use_dit_mask             = chroma_use_dit_mask;
+    sd_ctx_params.chroma_use_t5_mask              = chroma_use_t5_mask;
+    sd_ctx_params.chroma_t5_mask_pad              = chroma_t5_mask_pad;
+    sd_ctx_params.qwen_image_zero_cond_t          = qwen_image_zero_cond_t;
+    sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
+    sd_ctx_params.max_vram                        = max_vram;
+    sd_ctx_params.stream_layers                   = stream_layers;
+    sd_ctx_params.backend                         = effective_backend.c_str();
+    sd_ctx_params.params_backend                  = effective_params_backend.c_str();
     return sd_ctx_params;
 }
 

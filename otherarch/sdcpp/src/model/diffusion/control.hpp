@@ -482,7 +482,7 @@ struct ControlNet : public GGMLRunner {
         manager->set_n_threads(n_threads);
         if (!manager->register_param_tensors("ControlNet",
                                              std::move(tensors),
-                                             ModelManager::ResidencyMode::Resident,
+                                             ModelManager::ResidencyMode::ParamBackend,
                                              runtime_backend,
                                              params_backend) ||
             !manager->validate_registered_tensors()) {

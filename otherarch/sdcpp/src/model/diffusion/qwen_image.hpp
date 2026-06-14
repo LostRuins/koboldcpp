@@ -715,7 +715,7 @@ namespace Qwen {
             if (!model_manager->register_runner_params("Qwen image test",
                                                        *qwen_image,
                                                        "model.diffusion_model",
-                                                       ModelManager::ResidencyMode::Resident,
+                                                       ModelManager::ResidencyMode::ParamBackend,
                                                        backend,
                                                        backend) ||
                 !model_manager->validate_registered_tensors()) {

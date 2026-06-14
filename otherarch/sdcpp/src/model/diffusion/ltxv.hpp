@@ -2048,7 +2048,7 @@ namespace LTXV {
             if (!model_manager->register_runner_params("LTXAV test",
                                                        *ltxav,
                                                        "model.diffusion_model",
-                                                       ModelManager::ResidencyMode::Resident,
+                                                       ModelManager::ResidencyMode::ParamBackend,
                                                        backend,
                                                        backend) ||
                 !model_manager->validate_registered_tensors()) {

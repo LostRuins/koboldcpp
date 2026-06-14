@@ -16,7 +16,7 @@ class ModelManager : public RunnerWeightManager {
 public:
     enum class ResidencyMode {
         Disk,
-        Resident,
+        ParamBackend,
     };
 
     struct LoraSpec {
@@ -33,7 +33,7 @@ private:
         ggml_tensor* tensor = nullptr;
         std::string desc;
 
-        ResidencyMode residency_mode   = ResidencyMode::Resident;
+        ResidencyMode residency_mode   = ResidencyMode::ParamBackend;
         ggml_backend_t compute_backend = nullptr;
         ggml_backend_t params_backend  = nullptr;
         bool metadata_validated        = false;
