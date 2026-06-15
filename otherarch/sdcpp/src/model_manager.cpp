@@ -577,13 +577,8 @@ bool ModelManager::alloc_params_buffers(const std::vector<TensorState*>& states,
         for (TensorState* state : states) {
             ggml_tensor* tensor = state->tensor;
             size_t tensor_size  = GGML_PAD(ggml_backend_buft_get_alloc_size(params_buft, tensor), alignment);
-            if (max_size > 0 && tensor_size > max_size) {
-                LOG_ERROR("model manager tensor '%s' is too large for params buffer: %zu > %zu",
-                          ggml_get_name(tensor),
-                          tensor_size,
-                          max_size);
-                return false;
-            }
+            // Some backends, e.g. Vulkan, report a preferred chunk size here rather than a
+            // hard per-tensor allocation limit. Oversized tensors are allocated alone.
             if (!chunk.empty() && max_size > 0 && chunk_size + tensor_size > max_size) {
                 if (!alloc_chunk(chunk, chunk_size)) {
                     return false;

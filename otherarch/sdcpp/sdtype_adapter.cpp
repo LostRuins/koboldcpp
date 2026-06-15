@@ -412,8 +412,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     } else if (inputs.use_mmap) {
         printf("Using mmap for I/O\n");
     }
+    std::string max_vram;
     if(inputs.max_vram != 0.f) {
         printf("Using max VRAM = %0.2f GB\n", inputs.max_vram);
+        max_vram = std::to_string(inputs.max_vram);
     }
     if(inputs.quant > 0)
     {
@@ -478,7 +480,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.chroma_use_dit_mask = true;
-    params.max_vram = inputs.max_vram;
+    params.max_vram = max_vram.c_str();
     params.stream_layers = inputs.stream_layers;
     params.enable_mmap = inputs.use_mmap;
     params.params_backend = inputs.offload_cpu ? "CPU" : "";

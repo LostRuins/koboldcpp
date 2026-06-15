@@ -1,6 +1,8 @@
 #include "core/ggml_graph_cut.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <set>
@@ -8,6 +10,7 @@
 #include <stack>
 #include <unordered_map>
 
+#include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -81,6 +84,157 @@ namespace sd::ggml_graph_cut {
                segment.input_param_bytes +
                segment.input_previous_cut_bytes +
                segment.output_bytes;
+    }
+
+    static std::string lower_ascii_copy(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return value;
+    }
+
+    static std::string normalize_backend_budget_key(const std::string& value) {
+        return lower_ascii_copy(trim(value));
+    }
+
+    static bool is_default_max_vram_key(const std::string& key) {
+        std::string normalized = normalize_backend_budget_key(key);
+        return normalized == "all" || normalized == "default" || normalized == "*";
+    }
+
+    static bool parse_max_vram_budget_value(const std::string& text, float* value, std::string* error) {
+        float parsed = 0.f;
+        if (!parse_strict_float(text, parsed) || !std::isfinite(parsed)) {
+            if (error != nullptr) {
+                *error = "invalid --max-vram value '" + text + "'";
+            }
+            return false;
+        }
+        *value = parsed;
+        return true;
+    }
+
+    static std::vector<std::string> backend_budget_keys(ggml_backend_t backend) {
+        std::vector<std::string> keys;
+        if (backend == nullptr) {
+            return keys;
+        }
+
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        if (dev != nullptr) {
+            keys.push_back(normalize_backend_budget_key(ggml_backend_dev_name(dev)));
+        }
+        const char* backend_name = ggml_backend_name(backend);
+        if (backend_name != nullptr) {
+            keys.push_back(normalize_backend_budget_key(backend_name));
+        }
+        return keys;
+    }
+
+    void MaxVramAssignment::reset(float fallback_gib) {
+        default_gib = fallback_gib;
+        backend_gib.clear();
+        resolved_backend_bytes.clear();
+    }
+
+    bool MaxVramAssignment::parse(const std::string& raw_spec, std::string* error) {
+        const std::string in = trim(raw_spec);
+        if (in.empty()) {
+            return true;
+        }
+
+        for (const std::string& raw_part : split_string(in, ',')) {
+            const std::string part = trim(raw_part);
+            if (part.empty()) {
+                continue;
+            }
+
+            const size_t eq = part.find('=');
+            if (eq == std::string::npos) {
+                float value = 0.f;
+                if (!parse_max_vram_budget_value(part, &value, error)) {
+                    return false;
+                }
+                default_gib = value;
+                continue;
+            }
+
+            const std::string key        = trim(part.substr(0, eq));
+            const std::string value_text = trim(part.substr(eq + 1));
+            if (key.empty() || value_text.empty()) {
+                if (error != nullptr) {
+                    *error = "invalid --max-vram assignment '" + part + "'";
+                }
+                return false;
+            }
+
+            float value = 0.f;
+            if (!parse_max_vram_budget_value(value_text, &value, error)) {
+                return false;
+            }
+
+            if (is_default_max_vram_key(key)) {
+                default_gib = value;
+                continue;
+            }
+
+            const std::string backend_key = trim(key);
+            if (backend_key.empty()) {
+                if (error != nullptr) {
+                    *error = "invalid --max-vram backend key in '" + part + "'";
+                }
+                return false;
+            }
+            backend_gib[backend_key] = value;
+        }
+        resolved_backend_bytes.clear();
+        return true;
+    }
+
+    bool MaxVramAssignment::canonicalize_backend_keys(std::string* error) {
+        if (backend_gib.empty()) {
+            return true;
+        }
+
+        std::unordered_map<std::string, float> normalized;
+        for (const auto& kv : backend_gib) {
+            std::string resolved = sd_backend_resolve_name(kv.first);
+            if (resolved.empty()) {
+                if (error != nullptr) {
+                    *error = "unknown --max-vram backend '" + kv.first + "'";
+                }
+                return false;
+            }
+            normalized[normalize_backend_budget_key(resolved)] = kv.second;
+        }
+        backend_gib = std::move(normalized);
+        resolved_backend_bytes.clear();
+        return true;
+    }
+
+    size_t MaxVramAssignment::bytes_for_backend(ggml_backend_t backend) {
+        std::vector<std::string> keys = backend_budget_keys(backend);
+        const std::string cache_key   = keys.empty() ? std::string("<none>") : keys.front();
+        auto cached                   = resolved_backend_bytes.find(cache_key);
+        if (cached != resolved_backend_bytes.end()) {
+            return cached->second;
+        }
+
+        float budget_gib = default_gib;
+        if (!backend_gib.empty()) {
+            for (const std::string& key : keys) {
+                auto backend_it = backend_gib.find(key);
+                if (backend_it != backend_gib.end()) {
+                    budget_gib = backend_it->second;
+                    break;
+                }
+            }
+        }
+
+        const float resolved_gib          = resolve_max_vram_gib(budget_gib, backend);
+        const size_t bytes                = max_vram_gib_to_bytes(resolved_gib);
+        resolved_backend_bytes[cache_key] = bytes;
+        return bytes;
     }
 
     size_t max_vram_gib_to_bytes(float max_vram) {

@@ -216,7 +216,7 @@ typedef struct {
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
     enum sd_vae_format_t vae_format;
-    float max_vram;  // GiB budget for graph-cut segmented param offload (0 = disabled, -1 = auto free VRAM minus 1 GiB)
+    const char* max_vram;  // GiB budget or backend assignment spec for graph-cut segmented param offload (0 = disabled, -1 = auto)
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
     const char* backend;
     const char* params_backend;

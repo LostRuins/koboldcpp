@@ -280,7 +280,7 @@ static std::string get_default_backend_name() {
     return resolve_first_device_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
 }
 
-static std::string sd_resolve_backend_name(const std::string& name) {
+std::string sd_backend_resolve_name(const std::string& name) {
     ggml_backend_load_all_once();
     std::string requested = trim_copy(name);
     std::string lower     = lower_copy(requested);
@@ -318,7 +318,7 @@ static std::string sd_resolve_backend_name(const std::string& name) {
 }
 
 static bool backend_name_exists(const std::string& name) {
-    return !sd_resolve_backend_name(name).empty();
+    return !sd_backend_resolve_name(name).empty();
 }
 
 static ggml_backend_t init_named_backend(const std::string& name) {
@@ -328,7 +328,7 @@ static ggml_backend_t init_named_backend(const std::string& name) {
         return ggml_backend_init_best();
     }
 
-    std::string resolved = sd_resolve_backend_name(name);
+    std::string resolved = sd_backend_resolve_name(name);
     if (resolved.empty()) {
         return nullptr;
     }
@@ -599,7 +599,7 @@ bool SDBackendManager::validate(std::string* error) const {
             }
             return false;
         }
-        if (!sd_resolve_backend_name(name).empty()) {
+        if (!sd_backend_resolve_name(name).empty()) {
             return true;
         }
         if (error != nullptr) {
@@ -632,7 +632,7 @@ bool SDBackendManager::validate(std::string* error) const {
 }
 
 ggml_backend_t SDBackendManager::init_cached_backend(const std::string& name) {
-    std::string resolved   = sd_resolve_backend_name(name);
+    std::string resolved   = sd_backend_resolve_name(name);
     std::string key        = lower_copy(resolved);
     ggml_backend_t backend = nullptr;
 
