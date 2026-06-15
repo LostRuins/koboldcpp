@@ -22,6 +22,8 @@ struct SkipLayerDiffusionExtra {
 struct FluxDiffusionExtra {
     const sd::Tensor<float>* guidance   = nullptr;
     const std::vector<int>* skip_layers = nullptr;
+    const sd::Tensor<float>* pulid_id   = nullptr;
+    float pulid_id_weight               = 1.0f;
 };
 
 struct AnimaDiffusionExtra {

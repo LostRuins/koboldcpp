@@ -10,6 +10,7 @@
 
 #include "conditioning/conditioner.hpp"
 #include "core/ggml_extend_backend.h"
+#include "model/diffusion/model.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
 #include "stable-diffusion.h"
@@ -30,6 +31,7 @@ struct GenerationExtensionConditionContext {
     Conditioner* conditioner;
     ConditionerParams& condition_params;
     const sd_pm_params_t& pm_params;
+    const sd_pulid_params_t& pulid_params;
     int n_threads;
     int total_steps;
 };
@@ -56,8 +58,20 @@ struct GenerationExtension {
                                                 const SDCondition& condition) const {
         return condition;
     }
+
+    // Called in the denoise loop for each enabled extension, after the per-step
+    // DiffusionParams (including its version-specific `extra`) has been built,
+    // but before diffusion_model->compute(). Lets an extension feed data into
+    // the diffusion forward that the conditioning-side hooks can't reach -- it
+    // can set/override fields on `params` (typically the architecture-specific
+    // `params.extra`, e.g. a guidance tensor, control payload, or an identity
+    // embedding for an adapter that injects inside the model's blocks). The
+    // extension targets whichever `extra` variant matches the active model.
+    // Mutates `params` only, never the extension. Default no-op.
+    virtual void before_diffusion(DiffusionParams& /*params*/, int /*step*/) const {}
 };
 
 std::shared_ptr<GenerationExtension> create_photomaker_extension();
+std::shared_ptr<GenerationExtension> create_pulid_extension();
 
 #endif

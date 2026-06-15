@@ -416,6 +416,10 @@ ArgOptions SDContextParams::get_options() {
          "path to PHOTOMAKER model",
          &photo_maker_path},
         {"",
+         "--pulid-weights",
+         "path to PuLID Flux weights",
+         &pulid_weights_path},
+        {"",
          "--upscale-model",
          "path to esrgan model.",
          &esrgan_path},
@@ -812,6 +816,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.embeddings                      = embedding_vec.data();
     sd_ctx_params.embedding_count                 = static_cast<uint32_t>(embedding_vec.size());
     sd_ctx_params.photo_maker_path                = photo_maker_path.c_str();
+    sd_ctx_params.pulid_weights_path              = pulid_weights_path.c_str();
     sd_ctx_params.tensor_type_rules               = tensor_type_rules.c_str();
     sd_ctx_params.n_threads                       = n_threads;
     sd_ctx_params.wtype                           = wtype;
@@ -887,6 +892,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--pm-id-embed-path",
          "path to PHOTOMAKER v2 id embed",
          &pm_id_embed_path},
+        {"",
+         "--pulid-id-embedding",
+         "path to PuLID id embedding",
+         &pulid_id_embedding_path},
         {"",
          "--hires-upscaler",
          "highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent (nearest-exact), "
@@ -1037,6 +1046,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--pm-style-strength",
          "",
          &pm_style_strength},
+        {"",
+         "--pulid-id-weight",
+         "strength of PuLID identity injection",
+         &pulid_id_weight},
         {"",
          "--control-strength",
          "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image",
@@ -2269,6 +2282,11 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
         pm_style_strength,
     };
 
+    sd_pulid_params_t pulid_params = {
+        pulid_id_embedding_path.empty() ? nullptr : pulid_id_embedding_path.c_str(),
+        pulid_id_weight,
+    };
+
     params.loras                 = lora_vec.empty() ? nullptr : lora_vec.data();
     params.lora_count            = static_cast<uint32_t>(lora_vec.size());
     params.prompt                = prompt.c_str();
@@ -2289,6 +2307,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.control_image         = control_image.get();
     params.control_strength      = control_strength;
     params.pm_params             = pm_params;
+    params.pulid_params          = pulid_params;
     params.vae_tiling_params     = vae_tiling_params;
     params.cache                 = cache_params;
 

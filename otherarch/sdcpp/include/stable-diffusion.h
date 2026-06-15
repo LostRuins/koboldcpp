@@ -195,6 +195,7 @@ typedef struct {
     const sd_embedding_t* embeddings;
     uint32_t embedding_count;
     const char* photo_maker_path;
+    const char* pulid_weights_path;
     const char* tensor_type_rules;
     int n_threads;
     enum sd_type_t wtype;
@@ -271,6 +272,11 @@ typedef struct {
     const char* id_embed_path;
     float style_strength;
 } sd_pm_params_t;  // photo maker
+
+typedef struct {
+    const char* id_embedding_path;
+    float id_weight;
+} sd_pulid_params_t;
 
 enum sd_cache_mode_t {
     SD_CACHE_DISABLED = 0,
@@ -364,6 +370,7 @@ typedef struct {
     sd_image_t control_image;
     float control_strength;
     sd_pm_params_t pm_params;
+    sd_pulid_params_t pulid_params;
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
     sd_hires_params_t hires;
@@ -444,6 +451,17 @@ SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sa
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
+
+enum sd_cancel_mode_t {
+    // Stop the current generation as soon as possible.
+    SD_CANCEL_ALL,
+    // Finish the current image sample, then skip additional batch latents and return completed images.
+    SD_CANCEL_NEW_LATENTS,
+    // Clear a pending cancellation request.
+    SD_CANCEL_RESET
+};
+
+SD_API void sd_cancel_generation(sd_ctx_t* sd_ctx, enum sd_cancel_mode_t mode);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
