@@ -483,13 +483,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.max_vram = inputs.max_vram;
     params.stream_layers = inputs.stream_layers;
     params.enable_mmap = inputs.use_mmap;
-    // the _cpu flags are only used if the backend string is empty, but
-    // we always set both for consistency
-    params.offload_params_to_cpu = inputs.offload_cpu;
     params.params_backend = inputs.offload_cpu ? "CPU" : "";
-    params.keep_vae_on_cpu = (inputs.kcpp_vae_device <= -2);
     backends += get_device_override(inputs.kcpp_vae_device, "VAE");
-    params.keep_clip_on_cpu = (inputs.kcpp_clip_device <= -2);
     backends += get_device_override(inputs.kcpp_clip_device, "CLIP");
     if (backends.rfind(",", 0) == 0) {
         backends = "auto" + backends;
@@ -544,7 +539,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if (upscaler_filename!="") {
         const int upscale_tile_size = 128;
         upscaler_ctx = new_upscaler_ctx(upscaler_filename.c_str(),
-                                        params.offload_params_to_cpu,
+                                        inputs.offload_cpu,
                                         params.diffusion_conv_direct,
                                         params.n_threads,
                                         upscale_tile_size,
