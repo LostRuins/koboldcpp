@@ -47,11 +47,11 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		if (toolsStore.toolGroups.length > 0) return null;
 		// Tools endpoint is unreachable (404) — server started without --tools
 		if (toolsStore.isToolsEndpointUnreachable) {
-			return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
+			return `The KoboldCpp MCP bridge may accessible on the same URL with /mcp at the end but must be added manually.`;
 		}
 		// Other errors — return null so UI shows "Failed to load tools"
 		if (toolsStore.error) return null;
-		return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
+		return `The KoboldCpp MCP bridge may accessible on the same URL with /mcp at the end but must be added manually`;
 	});
 
 	function isGroupChecked(group: ToolGroup): boolean {

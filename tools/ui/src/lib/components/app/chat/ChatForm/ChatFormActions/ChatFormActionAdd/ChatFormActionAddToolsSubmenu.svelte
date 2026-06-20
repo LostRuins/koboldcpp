@@ -34,16 +34,6 @@
 						<Info class="mt-0.5 h-4 w-4 shrink-0" />
 
 						<span>
-							Run llama-server with <code>{CLI_FLAGS.TOOLS}</code> flag to enable
-
-							<strong>Built-in Tools</strong>.
-						</span>
-					</span>
-
-					<span class="flex gap-2">
-						<Info class="mt-0.5 h-4 w-4 shrink-0" />
-
-						<span>
 							{hasMcpServersAvailable ? 'Enable' : 'Add'} MCP Server(s) to access
 
 							<strong>MCP Tools</strong>.

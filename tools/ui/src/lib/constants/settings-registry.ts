@@ -132,10 +132,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 				label: 'Enable "Continue" button',
 				help: 'Enable "Continue" button for assistant messages, including reasoning models.',
-				defaultValue: false,
+				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				isExperimental: true,
+				isExperimental: false,
 				sync: {
 					serverKey: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 					paramType: SyncableParameterType.BOOLEAN
@@ -181,7 +181,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
 				label: 'Use LLM to generate conversation title',
 				help: 'Use the LLM to automatically generate conversation titles based on the first message exchange.',
-				defaultValue: false,
+				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
 				isExperimental: true
@@ -249,7 +249,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
 				label: 'Keep stats visible after generation',
 				help: 'Keep processing statistics visible after generation finishes.',
-				defaultValue: false,
+				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
@@ -261,7 +261,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 				label: 'Show microphone on empty input',
 				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
-				defaultValue: false,
+				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				isExperimental: true,
@@ -322,7 +322,7 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,
 				label: 'Always show sidebar on desktop',
 				help: 'Always keep the sidebar visible on desktop instead of auto-hiding it.',
-				defaultValue: false,
+				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
