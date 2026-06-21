@@ -491,7 +491,9 @@ public:
         bool is_lens = sd_version_is_lens(tempver);
         bool is_ltx = sd_version_is_ltxav(tempver);
         bool is_ideogram = sd_version_is_ideogram4(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram);
+        bool is_boogu = sd_version_is_boogu_image(tempver);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu);
+        bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
         if(conditioner_is_llm && t5_path_fixed!="")
@@ -542,7 +544,7 @@ public:
                 clip_vision_fixed = clipg_path_fixed;
                 clipg_path_fixed = "";
             }
-            else if(is_qwenimg && llm_vision_path_fixed=="")
+            else if(has_llm_vision && llm_vision_path_fixed=="")
             {
                 llm_vision_path_fixed = clipg_path_fixed;
                 clipg_path_fixed = "";
@@ -584,7 +586,7 @@ public:
             {
                 to_replace = "taesd_xl.embd";
             }
-            else if(sd_version_is_flux(tempver)||sd_version_is_z_image(tempver)||tempver == VERSION_OVIS_IMAGE||is_longcat)
+            else if(sd_version_is_flux(tempver)||sd_version_is_z_image(tempver)||tempver == VERSION_OVIS_IMAGE||is_longcat||is_boogu)
             {
                 to_replace = "taesd_f.embd";
             }
