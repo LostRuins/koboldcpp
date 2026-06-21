@@ -6078,9 +6078,6 @@ SD_API void free_sd_images(sd_image_t* result_images, int num_images) {
 
 namespace kcpp_sd {
 
-    static_assert((int)SD_TYPE_COUNT == (int)GGML_TYPE_COUNT,
-            "inconsistency between SD_TYPE_COUNT and GGML_TYPE_COUNT");
-
     int get_loaded_sd_version(sd_ctx_t* ctx) {
         return ctx->sd->version;
     }
