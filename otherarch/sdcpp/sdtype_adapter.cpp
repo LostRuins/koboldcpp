@@ -972,7 +972,7 @@ static sd_audio_t load_audio_from_b64(const std::string& b64audio) {
 
 bool supports_reference_images(kcpp_sd::model_info info)
 {
-    bool supported = (info.is_wan || info.is_ltx || info.is_qwenimg || info.is_flux2 || info.is_kontext || photomaker_enabled);
+    bool supported = (info.is_wan || info.is_ltx || info.supports_ref_image || info.is_kontext || photomaker_enabled);
     return supported;
 }
 
@@ -1161,7 +1161,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                         wan_imgs.push_back(extraimage_reference);
                     }
                 }
-                else if(info.is_qwenimg || info.is_flux2)
+                else if(info.supports_ref_image)
                 {
                     uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2);
                     if(loaded)
