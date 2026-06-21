@@ -83,6 +83,8 @@ void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float 
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 
+ggml_type sd_type_to_ggml_type(sd_type_t sdtype);
+
 std::string trim(const std::string& s);
 
 std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::string& text);

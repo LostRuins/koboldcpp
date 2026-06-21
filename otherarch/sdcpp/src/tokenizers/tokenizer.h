@@ -12,9 +12,10 @@ using on_new_token_cb_t = std::function<bool(std::string&, std::vector<int32_t>&
 class Tokenizer {
 protected:
     std::vector<std::string> special_tokens;
-    bool add_bos_token = false;
-    bool add_eos_token = false;
-    bool pad_left      = false;
+    bool add_bos_token          = false;
+    bool add_eos_token          = false;
+    bool pad_left               = false;
+    bool normalize_before_split = false;
     std::string end_of_word_suffix;
 
     virtual std::string decode_token(int token_id) const = 0;

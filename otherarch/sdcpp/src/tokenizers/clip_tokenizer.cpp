@@ -22,9 +22,10 @@ CLIPTokenizer::CLIPTokenizer(int pad_token_id, const std::string& merges_utf8_st
     EOS_TOKEN_ID = 49407;
     PAD_TOKEN_ID = pad_token_id;
 
-    end_of_word_suffix = "</w>";
-    add_bos_token      = true;
-    add_eos_token      = true;
+    end_of_word_suffix     = "</w>";
+    add_bos_token          = true;
+    add_eos_token          = true;
+    normalize_before_split = true;
 
     if (merges_utf8_str.size() > 0) {
         load_from_merges(merges_utf8_str);

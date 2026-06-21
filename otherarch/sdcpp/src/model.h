@@ -42,6 +42,7 @@ enum SDVersion {
     VERSION_LTXAV,
     VERSION_HIDREAM_O1,
     VERSION_Z_IMAGE,
+    VERSION_BOOGU_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
     VERSION_LENS,
@@ -143,6 +144,13 @@ static inline bool sd_version_is_z_image(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_boogu_image(SDVersion version) {
+    if (version == VERSION_BOOGU_IMAGE) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_longcat(SDVersion version) {
     if (version == VERSION_LONGCAT) {
         return true;
@@ -206,6 +214,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
+        sd_version_is_boogu_image(version) ||
         sd_version_is_ernie_image(version) ||
         sd_version_is_lens(version) ||
         sd_version_is_longcat(version) ||

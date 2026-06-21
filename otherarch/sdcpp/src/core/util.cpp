@@ -420,6 +420,15 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
     return result;
 }
 
+ggml_type sd_type_to_ggml_type(sd_type_t sdtype) {
+    const int type_value = static_cast<int>(sdtype);
+    if (type_value < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
+        return static_cast<ggml_type>(type_value);
+    } else {
+        return GGML_TYPE_COUNT;
+    }
+}
+
 KeyValueArgs parse_key_value_args(const char* args, const char* context) {
     KeyValueArgs pairs;
 

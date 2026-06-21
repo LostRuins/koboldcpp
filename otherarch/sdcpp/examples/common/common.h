@@ -31,6 +31,7 @@ struct StringOption {
     std::string short_name;
     std::string long_name;
     std::string desc;
+    int concat;
     std::string* target;
 };
 

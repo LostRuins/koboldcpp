@@ -99,7 +99,7 @@ bool convert(const char* input_path,
         model_loader.convert_tensors_name();
     }
 
-    ggml_type type             = (ggml_type)output_type;
+    ggml_type type             = sd_type_to_ggml_type(output_type);
     bool output_is_safetensors = ends_with(output_path, ".safetensors");
     TensorTypeRules type_rules = parse_tensor_type_rules(tensor_type_rules);
 

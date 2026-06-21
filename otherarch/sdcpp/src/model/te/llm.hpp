@@ -79,6 +79,7 @@ namespace LLM {
         int window_size                     = 112;
         int num_position_embeddings         = 0;
         std::set<int> fullatt_block_indexes = {7, 15, 23, 31};
+        bool split_patch_embed              = false;
     };
 
     struct LLMConfig {
@@ -179,7 +180,8 @@ namespace LLM {
                 config.num_experts_per_tok     = 4;
             }
 
-            config.num_layers = 0;
+            config.num_layers          = 0;
+            int detected_vision_layers = 0;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {
                     continue;
@@ -189,6 +191,38 @@ namespace LLM {
                     config.have_vision_weight = true;
                     if (contains(name, "attn.q_proj")) {
                         config.llama_cpp_style = true;
+                    }
+                    if (contains(name, "visual.patch_embed.proj.1.weight")) {
+                        config.vision.split_patch_embed = true;
+                    }
+                    if (contains(name, "visual.patch_embed.proj.0.weight")) {
+                        config.vision.patch_size  = static_cast<int>(tensor_storage.ne[0]);
+                        config.vision.in_channels = tensor_storage.ne[2];
+                        config.vision.hidden_size = tensor_storage.ne[3];
+                    }
+                    if (contains(name, "visual.patch_embed.bias")) {
+                        config.vision.hidden_size = tensor_storage.ne[0];
+                    }
+                    if (contains(name, "visual.pos_embed.weight")) {
+                        config.vision.hidden_size             = tensor_storage.ne[0];
+                        config.vision.num_position_embeddings = static_cast<int>(tensor_storage.ne[1]);
+                    }
+                    if (contains(name, "visual.blocks.")) {
+                        auto items = split_string(name.substr(pos), '.');
+                        if (items.size() > 2) {
+                            int block_index = atoi(items[2].c_str());
+                            if (block_index + 1 > detected_vision_layers) {
+                                detected_vision_layers = block_index + 1;
+                            }
+                        }
+                    }
+                    if (contains(name, "visual.blocks.0.mlp.linear_fc1.weight") ||
+                        contains(name, "visual.blocks.0.mlp.gate_proj.weight")) {
+                        config.vision.intermediate_size = tensor_storage.ne[1];
+                    }
+                    if (contains(name, "visual.merger.linear_fc2.weight") ||
+                        contains(name, "visual.merger.mlp.2.weight")) {
+                        config.vision.out_hidden_size = tensor_storage.ne[1];
                     }
                     continue;
                 }
@@ -218,6 +252,9 @@ namespace LLM {
             }
             if (arch == LLMArch::QWEN3 && config.num_layers == 28) {
                 config.num_heads = 16;
+            }
+            if (detected_vision_layers > 0) {
+                config.vision.num_layers = detected_vision_layers;
             }
             LOG_DEBUG("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
                       config.num_layers,
@@ -539,40 +576,51 @@ namespace LLM {
 
     struct VisionPatchEmbed : public GGMLBlock {
     protected:
-        bool llama_cpp_style;
+        bool split_patch_embed;
+        bool bias;
         int patch_size;
         int temporal_patch_size;
         int64_t in_channels;
         int64_t embed_dim;
 
+        void init_params(ggml_context* ctx,
+                         const String2TensorStorage& tensor_storage_map = {},
+                         const std::string prefix                       = "") override {
+            GGML_UNUSED(tensor_storage_map);
+            GGML_UNUSED(prefix);
+            if (split_patch_embed && bias) {
+                params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, embed_dim);
+            }
+        }
+
     public:
-        VisionPatchEmbed(bool llama_cpp_style,
+        VisionPatchEmbed(bool split_patch_embed,
                          LLMVisionArch arch,
                          int patch_size          = 14,
                          int temporal_patch_size = 2,
                          int64_t in_channels     = 3,
                          int64_t embed_dim       = 1152)
-            : llama_cpp_style(llama_cpp_style),
+            : split_patch_embed(split_patch_embed),
+              bias(arch == LLMVisionArch::QWEN3_VL),
               patch_size(patch_size),
               temporal_patch_size(temporal_patch_size),
               in_channels(in_channels),
               embed_dim(embed_dim) {
-            bool bias = arch == LLMVisionArch::QWEN3_VL;
-            if (llama_cpp_style) {
+            if (split_patch_embed) {
                 blocks["proj.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels,
                                                                          embed_dim,
                                                                          {patch_size, patch_size},
                                                                          {patch_size, patch_size},
                                                                          {0, 0},
                                                                          {1, 1},
-                                                                         bias));
+                                                                         false));
                 blocks["proj.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels,
                                                                          embed_dim,
                                                                          {patch_size, patch_size},
                                                                          {patch_size, patch_size},
                                                                          {0, 0},
                                                                          {1, 1},
-                                                                         bias));
+                                                                         false));
             } else {
                 std::tuple<int, int, int> kernel_size = {(int)temporal_patch_size, (int)patch_size, (int)patch_size};
                 blocks["proj"]                        = std::shared_ptr<GGMLBlock>(new Conv3d(in_channels,
@@ -593,7 +641,7 @@ namespace LLM {
                                 temporal_patch_size,
                                 ggml_nelements(x) / (temporal_patch_size * patch_size * patch_size));
 
-            if (llama_cpp_style) {
+            if (split_patch_embed) {
                 auto proj_0 = std::dynamic_pointer_cast<Conv2d>(blocks["proj.0"]);
                 auto proj_1 = std::dynamic_pointer_cast<Conv2d>(blocks["proj.1"]);
 
@@ -606,6 +654,10 @@ namespace LLM {
                 x1      = proj_1->forward(ctx, x1);
 
                 x = ggml_add(ctx->ggml_ctx, x0, x1);
+                if (bias) {
+                    auto b = ggml_reshape_4d(ctx->ggml_ctx, params["bias"], 1, 1, embed_dim, 1);
+                    x      = ggml_add_inplace(ctx->ggml_ctx, x, b);
+                }
             } else {
                 auto proj = std::dynamic_pointer_cast<Conv3d>(blocks["proj"]);
 
@@ -798,7 +850,7 @@ namespace LLM {
               spatial_merge_size(vision_params.spatial_merge_size),
               num_grid_per_side(vision_params.num_position_embeddings > 0 ? static_cast<int>(std::sqrt(vision_params.num_position_embeddings)) : 0),
               fullatt_block_indexes(vision_params.fullatt_block_indexes) {
-            blocks["patch_embed"] = std::shared_ptr<GGMLBlock>(new VisionPatchEmbed(llama_cpp_style,
+            blocks["patch_embed"] = std::shared_ptr<GGMLBlock>(new VisionPatchEmbed(vision_params.split_patch_embed,
                                                                                     arch_,
                                                                                     vision_params.patch_size,
                                                                                     vision_params.temporal_patch_size,

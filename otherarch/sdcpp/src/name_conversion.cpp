@@ -184,6 +184,27 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
     return name;
 }
 
+std::string convert_qwen3_vl_vision_name(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> qwen3_vl_vision_name_map{
+        {"mm.0.", "merger.linear_fc1."},
+        {"mm.2.", "merger.linear_fc2."},
+        {"v.post_ln.", "merger.norm."},
+        {"v.position_embd.weight", "pos_embed.weight"},
+        {"v.patch_embd.weight.1", "patch_embed.proj.1.weight"},
+        {"v.patch_embd.weight", "patch_embed.proj.0.weight"},
+        {"v.patch_embd.bias", "patch_embed.bias"},
+        {"v.blk.", "blocks."},
+        {"attn_qkv.", "attn.qkv."},
+        {"attn_out.", "attn.proj."},
+        {"ffn_up.", "mlp.linear_fc1."},
+        {"ffn_down.", "mlp.linear_fc2."},
+        {"ln1.", "norm1."},
+        {"ln2.", "norm2."},
+    };
+    replace_with_name_map(name, qwen3_vl_vision_name_map);
+    return name;
+}
+
 // ref: https://github.com/huggingface/diffusers/blob/main/scripts/convert_diffusers_to_original_stable_diffusion.py
 std::string convert_diffusers_unet_to_original_sd1(std::string name) {
     // (stable-diffusion, HF Diffusers)
@@ -1153,6 +1174,10 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
     }
 
     replace_with_prefix_map(name, prefix_map);
+
+    if (sd_version_is_boogu_image(version) && starts_with(name, "text_encoders.llm.visual.")) {
+        name = convert_qwen3_vl_vision_name(std::move(name));
+    }
 
     // diffusion model
     {
