@@ -69,6 +69,7 @@ private:
     uint64_t current_lora_epoch_ = 0;
     int n_threads_               = 0;
     bool enable_mmap_            = false;
+    bool writable_mmap_          = false;
 
     void finish_compute_backend_usage(const std::vector<TensorState*>& states);
     void release_all();
@@ -110,6 +111,7 @@ public:
         model_loader_.set_n_threads(n_threads);
     }
     void set_enable_mmap(bool enable_mmap) { enable_mmap_ = enable_mmap; }
+    void set_writable_mmap(bool writable_mmap) { writable_mmap_ = writable_mmap; }
     void set_common_ignore_tensors(std::set<std::string> ignore_tensors);
     void set_loras(std::vector<LoraSpec> loras, SDVersion version);
 
@@ -158,6 +160,7 @@ public:
     }
 
     bool validate_registered_tensors();
+    bool load_all_params_eagerly();
 
     bool prepare_params(const std::vector<ggml_tensor*>& tensors) override;
     void release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) override;

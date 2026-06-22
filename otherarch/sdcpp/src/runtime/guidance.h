@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "core/tensor.hpp"
@@ -27,6 +28,7 @@ namespace sd::guidance {
     AdaptiveProjectedGuidanceParams parse_adaptive_projected_guidance_args(const char* extra_sample_args);
     bool is_adaptive_projected_guidance_enabled(const AdaptiveProjectedGuidanceParams& params);
     bool parse_skip_layer_guidance_uncond_arg(const char* extra_sample_args);
+    std::vector<float> parse_guidance_schedule(const char* extra_sample_args);
 
     struct GuidanceInput {
         int step                                 = 0;
@@ -40,9 +42,10 @@ namespace sd::guidance {
 
     class BaseGuidance {
     public:
-        virtual ~BaseGuidance()                                   = default;
+        virtual ~BaseGuidance()                                                                = default;
         virtual GuiderOutput forward(const GuidanceInput& input,
-                                     GuiderOutput previous) const = 0;
+                                     GuiderOutput previous,
+                                     std::optional<float> scale_override = std::nullopt) const = 0;
     };
 
     class ClassifierFreeGuidance : public BaseGuidance {
@@ -54,7 +57,8 @@ namespace sd::guidance {
                                float image_guidance_scale);
 
         GuiderOutput forward(const GuidanceInput& input,
-                             GuiderOutput previous) const override;
+                             GuiderOutput previous,
+                             std::optional<float> scale_override = std::nullopt) const override;
     };
 
     class AdaptiveProjectedGuidance : public BaseGuidance {
@@ -69,7 +73,8 @@ namespace sd::guidance {
                                   AdaptiveProjectedGuidanceParams params);
 
         GuiderOutput forward(const GuidanceInput& input,
-                             GuiderOutput previous) const override;
+                             GuiderOutput previous,
+                             std::optional<float> scale_override = std::nullopt) const override;
     };
 
     class SkipLayerGuidance : public BaseGuidance {
@@ -88,7 +93,8 @@ namespace sd::guidance {
         const std::vector<int>& layers() const;
 
         GuiderOutput forward(const GuidanceInput& input,
-                             GuiderOutput previous) const override;
+                             GuiderOutput previous,
+                             std::optional<float> scale_override = std::nullopt) const override;
     };
 
 }  // namespace sd::guidance

@@ -148,6 +148,7 @@ struct SDContextParams {
     bool offload_params_to_cpu  = false;
     std::string max_vram        = "0";
     bool stream_layers          = false;
+    bool eager_load             = false;
     std::string backend;
     std::string params_backend;
     std::string rpc_servers;

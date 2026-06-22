@@ -203,6 +203,7 @@ public:
     bool enable_mmap                     = false;
     sd::ggml_graph_cut::MaxVramAssignment max_vram_assignment;
     bool stream_layers = false;
+    bool eager_load    = false;
     std::string backend_spec;
     std::string params_backend_spec;
 
@@ -349,6 +350,7 @@ public:
         n_threads           = sd_ctx_params->n_threads;
         enable_mmap         = sd_ctx_params->enable_mmap;
         stream_layers       = sd_ctx_params->stream_layers;
+        eager_load          = sd_ctx_params->eager_load;
         backend_spec        = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
         max_vram_assignment.reset(0.f);
@@ -586,7 +588,7 @@ public:
             {
                 to_replace = "taesd_xl.embd";
             }
-            else if(sd_version_is_flux(tempver)||sd_version_is_z_image(tempver)||tempver == VERSION_OVIS_IMAGE||is_longcat||is_boogu)
+            else if(sd_version_uses_flux_vae(tempver))
             {
                 to_replace = "taesd_f.embd";
             }
@@ -777,7 +779,6 @@ public:
         if (wtype != GGML_TYPE_COUNT || tensor_type_rules.size() > 0) {
             model_loader.set_wtype_override(wtype, tensor_type_rules);
         }
-        model_loader.process_model_files(enable_mmap, true);
 
         std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();
         std::map<ggml_type, uint32_t> conditioner_wtype_stat     = model_loader.get_conditioner_wtype_stat();
@@ -831,9 +832,12 @@ public:
             apply_lora_immediately = false;
         }
 
+        bool needs_writable_mmap = enable_mmap && apply_lora_immediately;
+        model_manager->set_writable_mmap(needs_writable_mmap);
         if (enable_mmap && apply_lora_immediately) {
             LOG_WARN("in mode 'immediately', LoRAs will cause extra memory usage with mmap");
         }
+        model_loader.process_model_files(enable_mmap, needs_writable_mmap);
         load_alphas_cumprod(model_loader);
 
         size_t text_encoder_params_mem_size = 0;
@@ -1400,7 +1404,15 @@ public:
             return false;
         }
 
-        LOG_DEBUG("model metadata validated; weights will be prepared lazily");
+        if (eager_load) {
+            if (!model_manager->load_all_params_eagerly()) {
+                LOG_ERROR("model params eager load failed");
+                return false;
+            }
+            LOG_DEBUG("model metadata validated; weights pre-loaded to params backend");
+        } else {
+            LOG_DEBUG("model metadata validated; weights will be prepared lazily");
+        }
 
         {
             size_t total_params_ram_size  = 0;
@@ -1975,7 +1987,7 @@ public:
                 if (sd_version_is_sd3(version)) {
                     latent_rgb_proj = sd3_latent_rgb_proj;
                     latent_rgb_bias = sd3_latent_rgb_bias;
-                } else if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_boogu_image(version) || sd_version_is_longcat(version)) {
+                } else if (sd_version_uses_flux_vae(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
                 } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
@@ -2197,6 +2209,32 @@ public:
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
         bool slg_uncond     = sd::guidance::parse_skip_layer_guidance_uncond_arg(extra_sample_args);
+
+        std::vector<float> guidance_schedule = sd::guidance::parse_guidance_schedule(extra_sample_args);
+        if (!guidance_schedule.empty() && guidance_schedule.size() != sigmas.size() - 1) {
+            if (guidance_schedule.size() > sigmas.size()) {
+                LOG_WARN("guidance_schedule length (%zu) is greater than number of steps (%zu)", guidance_schedule.size(), sigmas.size() - 1);
+                LOG_WARN("truncating guidance_schedule to match step count");
+                guidance_schedule.resize(sigmas.size() - 1);
+            } else {
+                LOG_INFO("padding guidance_schedule with cfg_scale");
+                while (guidance_schedule.size() < sigmas.size() - 1) {
+                    guidance_schedule.push_back(cfg_scale);
+                }
+            }
+        }
+
+        if (!guidance_schedule.empty()) {
+            std::string schedule_str = "[";
+            for (size_t i = 0; i < guidance_schedule.size(); ++i) {
+                schedule_str += std::to_string(guidance_schedule[i]);
+                if (i < guidance_schedule.size() - 1) {
+                    schedule_str += ", ";
+                }
+            }
+            schedule_str += "]";
+            LOG_DEBUG("using guidance schedule: %s", schedule_str.c_str());
+        }
 
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
                                                                                            cache_params,
@@ -2438,7 +2476,7 @@ public:
             guidance_input.pred_uncond     = uncond_out.empty() ? nullptr : &uncond_out;
             guidance_input.pred_img_uncond = img_uncond_out.empty() ? nullptr : &img_uncond_out;
 
-            sd::guidance::GuiderOutput guided = primary_guidance.forward(guidance_input, {});
+            sd::guidance::GuiderOutput guided = guidance_schedule.empty() ? primary_guidance.forward(guidance_input, {}) : primary_guidance.forward(guidance_input, {}, guidance_schedule[guidance_schedule.size() - 1 - step]);
             if (guided.pred.empty()) {
                 return {};
             }
@@ -2979,6 +3017,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->lora_apply_mode      = LORA_APPLY_AUTO;
     sd_ctx_params->max_vram             = nullptr;
     sd_ctx_params->stream_layers        = false;
+    sd_ctx_params->eager_load           = false;
     sd_ctx_params->enable_mmap          = false;
     sd_ctx_params->diffusion_flash_attn = false;
     sd_ctx_params->circular_x           = false;
@@ -3025,6 +3064,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "prediction: %s\n"
              "max_vram: %s\n"
              "stream_layers: %s\n"
+             "eager_load: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
              "flash_attn: %s\n"
@@ -3060,6 +3100,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_prediction_name(sd_ctx_params->prediction),
              SAFE_STR(sd_ctx_params->max_vram),
              BOOL_STR(sd_ctx_params->stream_layers),
+             BOOL_STR(sd_ctx_params->eager_load),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              BOOL_STR(sd_ctx_params->flash_attn),

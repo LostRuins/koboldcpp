@@ -147,6 +147,17 @@ bool ModelManager::register_param_tensors(const std::string& desc,
     return true;
 }
 
+bool ModelManager::load_all_params_eagerly() {
+    std::vector<TensorState*> all_states;
+    all_states.reserve(tensor_states_.size());
+    for (const auto& s : tensor_states_) {
+        if (s != nullptr) {
+            all_states.push_back(s.get());
+        }
+    }
+    return load_tensors_to_params_backend(all_states);
+}
+
 bool ModelManager::validate_registered_tensors() {
     bool ok = true;
     for (const auto& state : tensor_states_) {
@@ -469,7 +480,7 @@ bool ModelManager::mmap_params(const std::vector<TensorState*>& states,
         return true;
     }
 
-    auto mmap_store = model_loader_.mmap_tensors(mmap_candidates, {}, true);
+    auto mmap_store = model_loader_.mmap_tensors(mmap_candidates, {}, writable_mmap_);
     if (mmap_store.empty()) {
         return true;
     }

@@ -219,6 +219,7 @@ typedef struct {
     enum sd_vae_format_t vae_format;
     const char* max_vram;  // GiB budget or backend assignment spec for graph-cut segmented param offload (0 = disabled, -1 = auto)
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
+    bool eager_load;  // Load all params into the params backend at model-load time instead of lazily on first use
     const char* backend;
     const char* params_backend;
     const char* rpc_servers;

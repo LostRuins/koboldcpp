@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <regex>
@@ -260,15 +261,15 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    if(option.concat && !option.target->empty()){
-                        if(option.concat > 0 && option.concat <= 0xff){
+                    if (option.concat && !option.target->empty()) {
+                        if (option.concat > 0 && option.concat <= 0xff) {
                             *option.target += static_cast<char>(option.concat);
                         }
                         *option.target += argv_to_utf8(i, argv);
                     } else {
                         *option.target = argv_to_utf8(i, argv);
                     }
-                    found_arg      = true;
+                    found_arg = true;
                 }))
                 break;
 
@@ -496,6 +497,10 @@ ArgOptions SDContextParams::get_options() {
          "--stream-layers",
          "enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram; defaults to false)",
          true, &stream_layers},
+        {"",
+         "--eager-load",
+         "load all params into the params backend at model-load time instead of lazily on first use (defaults to false)",
+         true, &eager_load},
         {"",
          "--force-sdxl-vae-conv-scale",
          "force use of conv scale on sdxl vae",
@@ -799,6 +804,7 @@ std::string SDContextParams::to_string() const {
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: \"" << max_vram << "\",\n"
         << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
+        << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
@@ -878,6 +884,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
     sd_ctx_params.max_vram                        = max_vram.c_str();
     sd_ctx_params.stream_layers                   = stream_layers;
+    sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();
     sd_ctx_params.rpc_servers                     = rpc_servers.c_str();
@@ -953,7 +960,7 @@ ArgOptions SDGenerationParams::get_options() {
          &hires_upscaler},
         {"",
          "--extra-sample-args",
-         "extra sampler/scheduler/guidance args, key=value list. APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma",
+         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma;",
          (int)',',
          &extra_sample_args},
         {"",
@@ -1415,6 +1422,42 @@ ArgOptions SDGenerationParams::get_options() {
         return 1;
     };
 
+    auto on_prompt_file_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg = argv[index];
+        std::ifstream f(arg, std::ios::binary);
+        try {
+            prompt = std::string(std::istreambuf_iterator<char>{f}, {});
+        } catch (const std::ios_base::failure&) {
+            f.setstate(std::ios_base::failbit);
+        }
+        if (f.fail()) {
+            LOG_ERROR("error: failed to read prompt file '%s'\n", arg);
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_negative_prompt_file_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg = argv[index];
+        std::ifstream f(arg, std::ios::binary);
+        try {
+            negative_prompt = std::string(std::istreambuf_iterator<char>{f}, {});
+        } catch (const std::ios_base::failure&) {
+            f.setstate(std::ios_base::failbit);
+        }
+        if (f.fail()) {
+            LOG_ERROR("error: failed to read negative prompt file '%s'\n", arg);
+            return -1;
+        }
+        return 1;
+    };
+
     options.manual_options = {
         {"-s",
          "--seed",
@@ -1478,6 +1521,14 @@ ArgOptions SDGenerationParams::get_options() {
          "--vae-relative-tile-size",
          "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
          on_relative_tile_size_arg},
+        {"",
+         "--prompt-file",
+         "path to the file containing the prompt to render",
+         on_prompt_file_arg},
+        {"",
+         "--negative-prompt-file",
+         "path to the file containing the negative prompt",
+         on_negative_prompt_file_arg},
 
     };
 
