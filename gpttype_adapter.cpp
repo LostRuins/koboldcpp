@@ -597,6 +597,7 @@ static size_t estimate_draft_autofit_tax_mb(
     {
         draft_ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
         draft_ctx_params.n_rs_seq = speculative_chunk_amt;
+        draft_ctx_params.n_outputs_max = base_ctx_params.n_seq_max; //match the real MTP draft context (see speculative_decoding_setup) so the autofit tax doesn't over-reserve the draft compute buffer at n_batch*n_vocab (~2GB on large-vocab models like Gemma)
         measure_model_bytes = has_draft_model;
     }
 
@@ -950,6 +951,7 @@ static void speculative_decoding_setup(std::string spec_model_filename, llama_co
         draft_ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
         draft_ctx_params.ctx_other = main_ctx;
         draft_ctx_params.n_rs_seq = speculative_chunk_amt;
+        draft_ctx_params.n_outputs_max = base_ctx_params.n_seq_max; //draft-mtp generates tokens autoregressively (1 output per sequence per decode, looped up to n_max); cap outputs at n_seq instead of letting it default to n_batch, which sized the draft sampling buffer at n_batch*n_vocab (~2GB on large-vocab models like Gemma)
     }
     draft_ctx = llama_init_from_model(draftmodel, draft_ctx_params);
     if(draft_ctx == NULL)
