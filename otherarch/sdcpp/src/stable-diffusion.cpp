@@ -28,6 +28,7 @@
 #include "model/diffusion/flux.hpp"
 #include "model/diffusion/hidream_o1.hpp"
 #include "model/diffusion/ideogram4.hpp"
+#include "model/diffusion/krea2.hpp"
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/ltxv.hpp"
 #include "model/diffusion/mmdit.hpp"
@@ -97,6 +98,7 @@ const char* model_version_to_str[] = {
     "Longcat-Image",
     "PiD",
     "Ideogram 4",
+    "Krea2",
     "ESRGAN",
 };
 
@@ -494,7 +496,8 @@ public:
         bool is_ltx = sd_version_is_ltxav(tempver);
         bool is_ideogram = sd_version_is_ideogram4(tempver);
         bool is_boogu = sd_version_is_boogu_image(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu);
+        bool is_krea2 = sd_version_is_krea2(tempver);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2);
         bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
@@ -600,7 +603,7 @@ public:
             {
                 to_replace = "taesd_f2.embd";
             }
-            else if(is_wan21||is_qwenimg||sd_version_is_anima(tempver))
+            else if(is_wan21||is_qwenimg||is_anima||is_krea2)
             {
                 to_replace = "taesd_w21.embd";
             }
@@ -892,6 +895,17 @@ public:
                                                                                tensor_storage_map,
                                                                                "model.diffusion_model",
                                                                                model_manager);
+            } else if (sd_version_is_krea2(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
+                                                                 tensor_storage_map,
+                                                                 version,
+                                                                 "",
+                                                                 false,
+                                                                 model_manager);
+                diffusion_model  = std::make_shared<Krea2::Krea2Runner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                       tensor_storage_map,
+                                                                       "model.diffusion_model",
+                                                                       model_manager);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -1128,6 +1142,7 @@ public:
             auto create_tae = [&](bool decode_only) -> std::shared_ptr<VAE> {
                 if (sd_version_is_wan(version) ||
                     sd_version_is_qwen_image(version) ||
+                    sd_version_is_krea2(version) ||
                     sd_version_is_anima(version) ||
                     sd_version_is_ltxav(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(backend_for(SDBackendModule::VAE),
@@ -1168,6 +1183,7 @@ public:
                                                          model_manager);
                 } else if (sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
+                           sd_version_is_krea2(version) ||
                            sd_version_is_anima(version)) {
                     return std::make_shared<WAN::WanVAERunner>(backend_for(SDBackendModule::VAE),
                                                                tensor_storage_map,
@@ -1514,7 +1530,8 @@ public:
                 } else if (sd_version_is_flux(version) ||
                            sd_version_is_longcat(version) ||
                            sd_version_is_lens(version) ||
-                           sd_version_is_ltxav(version)) {
+                           sd_version_is_ltxav(version) ||
+                           sd_version_is_krea2(version)) {
                     pred_type = FLUX_FLOW_PRED;
 
                     default_flow_shift = 1.0f;  // TODO: validate
@@ -1530,6 +1547,8 @@ public:
                         default_flow_shift = 1.83f;
                     } else if (sd_version_is_ltxav(version)) {
                         default_flow_shift = 2.37f;
+                    } else if (sd_version_is_krea2(version)) {
+                        default_flow_shift = 1.15f;
                     }
                 } else if (sd_version_is_flux2(version)) {
                     pred_type = FLUX2_FLOW_PRED;
@@ -1990,7 +2009,7 @@ public:
                 } else if (sd_version_uses_flux_vae(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
-                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
+                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version) || sd_version_is_krea2(version)) {
                     latent_rgb_proj = wan_21_latent_rgb_proj;
                     latent_rgb_bias = wan_21_latent_rgb_bias;
                 } else {
@@ -2818,6 +2837,7 @@ const char* scheduler_to_str[] = {
     "lcm",
     "bong_tangent",
     "ltx2",
+    "logit_normal",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {
@@ -3492,6 +3512,8 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
         return SIMPLE_SCHEDULER;
     } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ltxav(sd_ctx->sd->version)) {
         return LTX2_SCHEDULER;
+    } else if(sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ideogram4(sd_ctx->sd->version)) {
+        return LOGIT_NORMAL_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
 }

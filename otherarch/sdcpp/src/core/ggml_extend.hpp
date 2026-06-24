@@ -1382,7 +1382,16 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
             if (!ggml_backend_supports_op(backend, kqv)) {
                 kqv = nullptr;
             } else {
-                kqv = ggml_view_3d(ctx, kqv, d_head, n_head, L_q, kqv->nb[1], kqv->nb[2], 0);
+                kqv = ggml_view_4d(ctx,
+                                   kqv,
+                                   d_head,
+                                   n_head,
+                                   L_q,
+                                   N,
+                                   kqv->nb[1],
+                                   kqv->nb[2],
+                                   kqv->nb[1] * n_head,
+                                   0);
             }
         }
     }

@@ -704,6 +704,38 @@ std::string convert_other_dit_to_original_anima(std::string name) {
     return name;
 }
 
+std::string convert_diffusers_dit_to_original_krea2(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> prefix_map = {
+        {"img_in.", "first."},
+        {"time_embed.linear_1.", "tmlp.0."},
+        {"time_embed.linear_2.", "tmlp.2."},
+        {"time_mod_proj.", "tproj.1."},
+        {"txt_in.linear_1.", "txtmlp.1."},
+        {"txt_in.linear_2.", "txtmlp.3."},
+        {"text_fusion.", "txtfusion."},
+        {"transformer_blocks.", "blocks."},
+        {"final_layer.", "last."},
+    };
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {"attn.to_out.0.", "attn.wo."},
+        {"attn.to_out.", "attn.wo."},
+        {"attn.to_gate.", "attn.gate."},
+        {"attn.to_q.", "attn.wq."},
+        {"attn.to_k.", "attn.wk."},
+        {"attn.to_v.", "attn.wv."},
+        {"ff.gate.", "mlp.gate."},
+        {"ff.up.", "mlp.up."},
+        {"ff.down.", "mlp.down."},
+        {"txt_in.norm.", "txtmlp.0."},
+        {"last.norm.weight", "last.norm.scale"},
+        {"last.modulation.weight", "last.modulation.lin"},
+    };
+
+    replace_with_prefix_map(name, prefix_map);
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
 std::string convert_diffusion_model_name(std::string name, std::string prefix, SDVersion version) {
     if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
         name = convert_diffusers_unet_to_original_sd1(name);
@@ -717,6 +749,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_lumina2(name);
     } else if (sd_version_is_anima(version)) {
         name = convert_other_dit_to_original_anima(name);
+    } else if (sd_version_is_krea2(version)) {
+        name = convert_diffusers_dit_to_original_krea2(name);
     }
     return name;
 }
@@ -1175,7 +1209,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     replace_with_prefix_map(name, prefix_map);
 
-    if (sd_version_is_boogu_image(version) && starts_with(name, "text_encoders.llm.visual.")) {
+    if ((sd_version_is_boogu_image(version) || sd_version_is_krea2(version)) && starts_with(name, "text_encoders.llm.visual.")) {
         name = convert_qwen3_vl_vision_name(std::move(name));
     }
 

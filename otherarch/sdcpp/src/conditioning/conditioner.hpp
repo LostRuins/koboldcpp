@@ -1518,7 +1518,7 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::GPT_OSS_20B;
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
-        } else if (sd_version_is_ideogram4(version) || sd_version_is_boogu_image(version)) {
+        } else if (sd_version_is_ideogram4(version) || sd_version_is_boogu_image(version) || sd_version_is_krea2(version)) {
             arch = LLM::LLMArch::QWEN3_VL;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
@@ -1837,6 +1837,17 @@ struct LLMEmbedder : public Conditioner {
                 prompt_attn_range.second = static_cast<int>(prompt.size());
                 prompt += "<|im_end|>\n";
             }
+        } else if (sd_version_is_krea2(version)) {
+            prompt_template_encode_start_idx = 34;
+            out_layers                       = {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35};
+
+            prompt = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (sd_version_is_longcat(version)) {
             spell_quotes = true;
 
