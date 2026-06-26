@@ -1772,12 +1772,17 @@ void sample_top_p(llama_token_data_array * cur_p, float p, size_t min_keep) {
     cur_p->size = last_idx;
 }
 
-void sample_min_p(llama_token_data_array * cur_p, float p, size_t min_keep) {
+void sample_min_p(llama_token_data_array * cur_p, float p, size_t min_keep, bool * norm_minp) {
     if (p <= 0.0f || !cur_p->size) {
         return;
     }
 
     bool min_p_applied = false;
+
+    if (norm_minp) {
+        sample_softmax(cur_p);
+        *norm_minp = false;
+    }
 
     // if the cur_p aren't sorted, try the unsorted implementation first
     if (!cur_p->sorted) {
@@ -1959,11 +1964,9 @@ void sample_top_n_sigma(llama_token_data_array * cur_p, float nsigma) {
     auto last   = std::remove_if(cur_p->data, cur_p->data + cur_p->size,
                                  [&](auto & tk) { return tk.logit < nsigmax - (nsigma * nsigstd); });
     cur_p->size = last - cur_p->data;
-
-    sample_softmax(cur_p);
 }
 
-void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val, float smoothing_factor, float smoothing_curve) {
+void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_temp, float exponent_val, float smoothing_factor, float smoothing_curve, bool * norm_minp) {
     // no need to do anything if there is only one (or zero) candidates
     if (cur_p->size <= 1) {
         return;
@@ -1983,30 +1986,7 @@ void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_te
         }
     }
 
-    // Normalize the entropy (max_entropy cannot be 0 here because we checked cur_p->size != 1 above)
-    float normalized_entropy = entropy / max_entropy;
-
-    // Map the normalized entropy to the desired temperature range using the power function
-    float dyn_temp = min_temp + (max_temp - min_temp) * powf(normalized_entropy, exponent_val);
-
-    // Apply the dynamically calculated temperature scaling
-    for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].logit /= dyn_temp;
-    }
-
-    // Re-compute softmax probabilities after scaling logits with dynamic temperature
-    const double max_l_double = cur_p->data[0].logit;
-
-    double cum_sum_double = 0.0;
-    for (size_t i = 0; i < cur_p->size; ++i) {
-        double p = exp(cur_p->data[i].logit - max_l_double);
-        cur_p->data[i].p = p; // Store the scaled probability
-        cum_sum_double += p;
-    }
-
-    for (size_t i = 0; i < cur_p->size; ++i) {
-        cur_p->data[i].p /= cum_sum_double; // Re-normalize the probabilities
-    }
+    *norm_minp = true;
 
     // Only apply smoothing if smoothing_factor is > 0. Do not change base implementation otherwise.
     if (smoothing_factor > 0 && cur_p->size > 1) {
@@ -2019,12 +1999,11 @@ void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_te
             float s = (smoothing_curve - 1) / 2;
             cur_p->data[i].logit = -(k * smoothing_factor * logit_shifted * logit_shifted) + (s * smoothing_factor * logit_shifted * logit_shifted * logit_shifted) + h;
         }
-        sample_softmax(cur_p);
     }
 
 }
 
-void sample_temperature(llama_token_data_array * candidates_p, float temp, float smoothing_factor, float smoothing_curve)
+void sample_temperature(llama_token_data_array * candidates_p, float temp, float smoothing_factor, float smoothing_curve, bool * norm_minp)
 {
     if (temp <= 0)
     {
@@ -2046,7 +2025,8 @@ void sample_temperature(llama_token_data_array * candidates_p, float temp, float
             float s = (smoothing_curve - 1) / 2;
             candidates_p->data[i].logit = -(k * smoothing_factor * logit_shifted * logit_shifted) + (s * smoothing_factor * logit_shifted * logit_shifted * logit_shifted) + h;
         }
-        sample_softmax(candidates_p);
+
+        *norm_minp = true;
     }
 }
 
@@ -2231,12 +2211,14 @@ const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq
         }
     }
 
+    bool norm_minp = false;
+
     if (mirostat == 1 || mirostat == 2)
     {
         static float mirostat_mu = 2.0f * mirostat_tau;
         const int mirostat_m = 100;
         sample_rep_pen(n_ctx, rep_pen_range, rep_pen, rep_pen_slope, presence_penalty, &candidates_p);
-        sample_temperature(&candidates_p, temp, smoothing_factor, smoothing_curve);
+        sample_temperature(&candidates_p, temp, smoothing_factor, smoothing_curve, &norm_minp);
         if (mirostat == 1)
         {
             id = sample_token_mirostat(n_vocab, &candidates_p, rng, mirostat_tau, mirostat_eta, mirostat_m, &mirostat_mu);
@@ -2260,7 +2242,7 @@ const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq
                     break;
                 case KCPP_SAMPLER_TOP_P:
                     sample_top_p(&candidates_p, top_p, 1);
-                    sample_min_p(&candidates_p, min_p, 1);
+                    sample_min_p(&candidates_p, min_p, 1, &norm_minp);
                     break;
                 case KCPP_SAMPLER_TFS:
                     sample_tail_free(&candidates_p, tfs, 1);
@@ -2277,11 +2259,11 @@ const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq
                         dynatemp_min = dynatemp_min<0?0:dynatemp_min;
                         dynatemp_max = dynatemp_max<0?0:dynatemp_max;
                         dynatemp_exponent = dynatemp_exponent<0?0:dynatemp_exponent;
-                        sample_entropy(&candidates_p, dynatemp_min, dynatemp_max, dynatemp_exponent, smoothing_factor, smoothing_curve);
+                        sample_entropy(&candidates_p, dynatemp_min, dynatemp_max, dynatemp_exponent, smoothing_factor, smoothing_curve, &norm_minp);
                     }
                     else
                     {
-                        sample_temperature(&candidates_p, temp, smoothing_factor, smoothing_curve);
+                        sample_temperature(&candidates_p, temp, smoothing_factor, smoothing_curve, &norm_minp);
                     }
                     if (nsigma > 0.0f)
                     {
