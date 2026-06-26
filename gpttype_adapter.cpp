@@ -1986,6 +1986,17 @@ void sample_entropy(llama_token_data_array * cur_p, float min_temp, float max_te
         }
     }
 
+    // Normalize the entropy (max_entropy cannot be 0 here because we checked cur_p->size != 1 above)
+    float normalized_entropy = entropy / max_entropy;
+
+    // Map the normalized entropy to the desired temperature range using the power function
+    float dyn_temp = min_temp + (max_temp - min_temp) * powf(normalized_entropy, exponent_val);
+
+    // Apply the dynamically calculated temperature scaling
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        cur_p->data[i].logit /= dyn_temp;
+    }
+
     *norm_minp = true;
 
     // Only apply smoothing if smoothing_factor is > 0. Do not change base implementation otherwise.
