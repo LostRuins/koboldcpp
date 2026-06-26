@@ -6099,6 +6099,24 @@ Change Mode<br>
                 modelNameToReturn = textName
 
             mlist = [{"id":modelNameToReturn,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"}]
+
+            if autoswapmode:
+                if imageName is not None:
+                    mlist.append({"id":imageName,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"})
+                if embedName is not None:
+                    mlist.append({"id":embedName,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"})
+                if sttName is not None:
+                    mlist.append({"id":sttName,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"})
+                if ttsName is not None:
+                    mlist.append({"id":ttsName,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"})
+                if musicName is not None:
+                    mlist.append({"id":musicName,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"})
+            else:
+                if (friendlysdmodelname!="inactive" and fullsdmodelpath!="") and friendlysdmodelname != modelNameToReturn:
+                    mlist.append({"id":friendlysdmodelname,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"})
+                if (friendlyembeddingsmodelname!="inactive" and embeddingsmodelpath!="") and friendlyembeddingsmodelname != modelNameToReturn:
+                    mlist.append({"id":friendlyembeddingsmodelname,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","permission":[],"root":"koboldcpp"})
+
             if args.routermode:
                 alist = get_current_admindir_list()
                 for itm in alist:
