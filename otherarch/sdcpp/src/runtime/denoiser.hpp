@@ -616,7 +616,6 @@ struct LogitNormalScheduler : SigmaScheduler {
         one_minus_t_min = sigmoid(0.5f * logsnr_max);
         // t_max = 1.0f / (1.0f + std::exp(0.5f * logsnr_min));
         one_minus_t_max = sigmoid(0.5f * logsnr_min);
-
     }
 
     LogitNormalScheduler(int image_seq_len = 0, const char* extra_sample_args = nullptr) {

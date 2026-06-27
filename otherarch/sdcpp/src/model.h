@@ -208,6 +208,13 @@ static inline bool sd_version_uses_flux2_vae(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_uses_wan_vae(SDVersion version) {
+    if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_krea2(version) || sd_version_is_anima(version)) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_inpaint(SDVersion version) {
     if (version == VERSION_SD1_INPAINT ||
         version == VERSION_SD2_INPAINT ||

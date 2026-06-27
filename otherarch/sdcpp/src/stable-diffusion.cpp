@@ -1140,11 +1140,7 @@ public:
             }
 
             auto create_tae = [&](bool decode_only) -> std::shared_ptr<VAE> {
-                if (sd_version_is_wan(version) ||
-                    sd_version_is_qwen_image(version) ||
-                    sd_version_is_krea2(version) ||
-                    sd_version_is_anima(version) ||
-                    sd_version_is_ltxav(version)) {
+                if (sd_version_uses_wan_vae(version) || sd_version_is_ltxav(version)) {
                     return std::make_shared<TinyVideoAutoEncoder>(backend_for(SDBackendModule::VAE),
                                                                   tensor_storage_map,
                                                                   "decoder",
@@ -1181,10 +1177,7 @@ public:
                                                          false,
                                                          version,
                                                          model_manager);
-                } else if (sd_version_is_wan(version) ||
-                           sd_version_is_qwen_image(version) ||
-                           sd_version_is_krea2(version) ||
-                           sd_version_is_anima(version)) {
+                } else if (sd_version_uses_wan_vae(version)) {
                     return std::make_shared<WAN::WanVAERunner>(backend_for(SDBackendModule::VAE),
                                                                tensor_storage_map,
                                                                "first_stage_model",
@@ -2009,7 +2002,7 @@ public:
                 } else if (sd_version_uses_flux_vae(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
-                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version) || sd_version_is_krea2(version)) {
+                } else if (sd_version_uses_wan_vae(version)) {
                     latent_rgb_proj = wan_21_latent_rgb_proj;
                     latent_rgb_bias = wan_21_latent_rgb_bias;
                 } else {
@@ -3512,7 +3505,7 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
         return SIMPLE_SCHEDULER;
     } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ltxav(sd_ctx->sd->version)) {
         return LTX2_SCHEDULER;
-    } else if(sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ideogram4(sd_ctx->sd->version)) {
+    } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ideogram4(sd_ctx->sd->version)) {
         return LOGIT_NORMAL_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
