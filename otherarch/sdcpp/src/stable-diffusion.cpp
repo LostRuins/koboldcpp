@@ -603,7 +603,7 @@ public:
             {
                 to_replace = "taesd_f2.embd";
             }
-            else if(is_wan21||is_qwenimg||is_anima||is_krea2)
+            else if(sd_version_uses_wan_vae(tempver))
             {
                 to_replace = "taesd_w21.embd";
             }
