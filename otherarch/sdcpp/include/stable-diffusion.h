@@ -81,6 +81,7 @@ enum prediction_t {
     FLOW_PRED,
     FLUX_FLOW_PRED,
     FLUX2_FLOW_PRED,
+    SEFI_FLOW_PRED,
     PREDICTION_COUNT
 };
 

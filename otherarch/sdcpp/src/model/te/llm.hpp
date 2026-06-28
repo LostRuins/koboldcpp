@@ -250,7 +250,7 @@ namespace LLM {
                     config.intermediate_size = tensor_storage.ne[1];
                 }
             }
-            if (arch == LLMArch::QWEN3 && config.num_layers == 28) {
+            if ((arch == LLMArch::QWEN3 || arch == LLMArch::QWEN3_VL) && config.num_layers == 28) {
                 config.num_heads = 16;
             }
             if (detected_vision_layers > 0) {

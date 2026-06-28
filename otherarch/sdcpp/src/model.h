@@ -49,6 +49,7 @@ enum SDVersion {
     VERSION_LONGCAT,
     VERSION_PID,
     VERSION_IDEOGRAM4,
+    VERSION_SEFI_IMAGE,
     VERSION_KREA2,
     VERSION_ESRGAN,
     VERSION_COUNT,
@@ -187,6 +188,13 @@ static inline bool sd_version_is_ideogram4(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_sefi_image(SDVersion version) {
+    if (version == VERSION_SEFI_IMAGE) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_krea2(SDVersion version) {
     if (version == VERSION_KREA2) {
         return true;
@@ -202,7 +210,7 @@ static inline bool sd_version_uses_flux_vae(SDVersion version) {
 }
 
 static inline bool sd_version_uses_flux2_vae(SDVersion version) {
-    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version) || sd_version_is_ideogram4(version)) {
+    if (sd_version_is_flux2(version) || sd_version_is_ernie_image(version) || sd_version_is_lens(version) || sd_version_is_ideogram4(version) || sd_version_is_sefi_image(version)) {
         return true;
     }
     return false;
@@ -242,6 +250,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_longcat(version) ||
         sd_version_is_pid(version) ||
         sd_version_is_ideogram4(version) ||
+        sd_version_is_sefi_image(version) ||
         sd_version_is_krea2(version)) {
         return true;
     }

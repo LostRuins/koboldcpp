@@ -98,6 +98,7 @@ const char* model_version_to_str[] = {
     "Longcat-Image",
     "PiD",
     "Ideogram 4",
+    "SeFi-Image",
     "Krea2",
     "ESRGAN",
 };
@@ -497,7 +498,8 @@ public:
         bool is_ideogram = sd_version_is_ideogram4(tempver);
         bool is_boogu = sd_version_is_boogu_image(tempver);
         bool is_krea2 = sd_version_is_krea2(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2);
+        bool is_sefi = sd_version_is_sefi_image(tempver);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi);
         bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
@@ -939,7 +941,7 @@ public:
                                                                      version,
                                                                      sd_ctx_params->chroma_use_dit_mask,
                                                                      model_manager);
-            } else if (sd_version_is_flux2(version)) {
+            } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
@@ -1543,6 +1545,8 @@ public:
                     } else if (sd_version_is_krea2(version)) {
                         default_flow_shift = 1.15f;
                     }
+                } else if (sd_version_is_sefi_image(version)) {
+                    pred_type = SEFI_FLOW_PRED;
                 } else if (sd_version_is_flux2(version)) {
                     pred_type = FLUX2_FLOW_PRED;
                 } else {
@@ -1580,6 +1584,11 @@ public:
                 case FLUX2_FLOW_PRED: {
                     LOG_INFO("running in Flux2 FLOW mode");
                     denoiser = std::make_shared<Flux2FlowDenoiser>();
+                    break;
+                }
+                case SEFI_FLOW_PRED: {
+                    LOG_INFO("running in SeFi-Image dual-time FLOW mode");
+                    denoiser = std::make_shared<SefiFlowDenoiser>();
                     break;
                 }
                 default: {
@@ -1906,7 +1915,16 @@ public:
 
     std::vector<float> process_timesteps(const std::vector<float>& timesteps,
                                          const sd::Tensor<float>& init_latent,
-                                         const sd::Tensor<float>& denoise_mask) {
+                                         const sd::Tensor<float>& denoise_mask,
+                                         int step) {
+        if (auto sefi_denoiser = std::dynamic_pointer_cast<SefiFlowDenoiser>(denoiser)) {
+            int sched_idx = step > 0 ? step - 1 : 0;
+            if (sched_idx >= static_cast<int>(sefi_denoiser->tex_timesteps.size())) {
+                sched_idx = static_cast<int>(sefi_denoiser->tex_timesteps.size()) - 1;
+            }
+            return {sefi_denoiser->sem_timesteps[sched_idx],
+                    sefi_denoiser->tex_timesteps[sched_idx]};
+        }
         if (diffusion_model->get_desc() == "Wan2.2-TI2V-5B") {
             int64_t frame_count = init_latent.shape()[2];
             auto new_timesteps  = std::vector<float>(static_cast<size_t>(frame_count), timesteps[0]);
@@ -2318,7 +2336,7 @@ public:
                 timesteps_vec          = process_ltxav_video_timesteps(base_timesteps_vec, init_latent, denoise_mask);
                 audio_timesteps_tensor = sd::Tensor<float>({static_cast<int64_t>(base_timesteps_vec.size())}, base_timesteps_vec);
             } else {
-                timesteps_vec = process_timesteps(timesteps_vec, init_latent, denoise_mask);
+                timesteps_vec = process_timesteps(timesteps_vec, init_latent, denoise_mask, step);
             }
             const std::vector<float>& scaling_timesteps_vec = (sd_version_is_ltxav(version) && !denoise_mask.empty())
                                                                   ? base_timesteps_vec
@@ -2388,7 +2406,7 @@ public:
                     diffusion_params.extra = UNetDiffusionExtra{-1, &controls, control_strength};
                 } else if (sd_version_is_sd3(version)) {
                     diffusion_params.extra = SkipLayerDiffusionExtra{local_skip_layers};
-                } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version)) {
+                } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version) || sd_version_is_sefi_image(version)) {
                     diffusion_params.extra = FluxDiffusionExtra{&guidance_tensor,
                                                                 local_skip_layers};
                 } else if (sd_version_is_anima(version)) {
@@ -2532,7 +2550,7 @@ public:
             return output;
         };
 
-        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args);
+        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser, extra_sample_args, denoiser);
         if (x0_opt.empty()) {
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
@@ -2593,6 +2611,8 @@ public:
                 latent_channel = 3;
             } else if (sd_version_is_pid(version)) {
                 latent_channel = 3;
+            } else if (sd_version_is_sefi_image(version)) {
+                latent_channel = 144;
             } else if (sd_version_uses_flux2_vae(version)) {
                 latent_channel = 128;
             } else {

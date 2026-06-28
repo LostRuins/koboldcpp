@@ -66,7 +66,6 @@ const char* unused_tensors[] = {
     // "v_pred", // Used to detect SDXL vpred models
     "text_encoders.llm.output.weight",
     "text_encoders.llm.lm_head.",
-    "first_stage_model.bn.",
 };
 
 bool is_unused_tensor(const std::string& name) {
@@ -507,6 +506,9 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
             is_flux2 = true;
+        }
+        if (tensor_storage.name.find("dual_time_embed.semantic_embedder.linear_1.weight") != std::string::npos) {
+            return VERSION_SEFI_IMAGE;
         }
         if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {
             has_single_block_47 = true;

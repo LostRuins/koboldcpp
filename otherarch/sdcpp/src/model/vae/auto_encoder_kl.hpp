@@ -816,12 +816,13 @@ struct AutoEncoderKL : public VAE {
     }
 
     sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
+        auto latents_ = sd_version_is_sefi_image(version) ? sd::ops::slice(latents, 2, 16, 144) : latents;
         if (sd_version_uses_flux2_vae(version)) {
             int channel_dim                = 2;
-            auto [mean_tensor, std_tensor] = get_latents_mean_std(latents, channel_dim);
-            return (latents * std_tensor) / scale_factor + mean_tensor;
+            auto [mean_tensor, std_tensor] = get_latents_mean_std(latents_, channel_dim);
+            return (latents_ * std_tensor) / scale_factor + mean_tensor;
         }
-        return (latents / scale_factor) + shift_factor;
+        return (latents_ / scale_factor) + shift_factor;
     }
 
     sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override {
