@@ -1119,6 +1119,10 @@ namespace WAN {
             GGML_ASSERT(b == 1);
             GGML_ASSERT(decode_only == false);
 
+            if (x->ne[2] > 1 && is_2D) {
+                LOG_WARN("Using 2D VAE to encode video, expect poor results");
+            }
+
             clear_cache();
 
             if (wan2_2) {
@@ -1138,7 +1142,8 @@ namespace WAN {
                     auto in = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);  // [b*c, 1, h, w]
                     out     = encoder->forward(ctx, in, b, _enc_feat_map, _enc_conv_idx, i);
                 } else {
-                    auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, 1 + 4 * (i - 1), 1 + 4 * i);  // [b*c, 4, h, w]
+                    // if is_2D, drop 3 out of 4 frames
+                    auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, 1 + 4 * (i - 1), (is_2D ? 1 - 3 : 1) + 4 * i);  // [b*c, 4, h, w]
                     auto out_ = encoder->forward(ctx, in, b, _enc_feat_map, _enc_conv_idx, i);
                     out       = ggml_concat(ctx->ggml_ctx, out, out_, 2);
                 }
@@ -1160,6 +1165,10 @@ namespace WAN {
                             int64_t b = 1) {
             // z: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
+
+            if (z->ne[2] > 1 && is_2D) {
+                LOG_WARN("Using 2D VAE to decode video, expect poor results");
+            }
 
             clear_cache();
 
@@ -1185,6 +1194,12 @@ namespace WAN {
                     auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
                     auto out_ = decoder->forward(ctx, in, b, _feat_map, _conv_idx, i);
                     out       = ggml_concat(ctx->ggml_ctx, out, out_, 2);
+                    if (is_2D) {
+                        // repeat frames to avoid mismatch
+                        for (int j = 0; j < 4 - 1; j++) {
+                            out = ggml_concat(ctx->ggml_ctx, out, out_, 2);
+                        }
+                    }
                 }
             }
             if (wan2_2) {

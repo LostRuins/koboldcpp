@@ -1523,6 +1523,7 @@ public:
                         default_flow_shift = 3.f;
                     }
                 } else if (sd_version_is_flux(version) ||
+                           sd_version_is_flux2(version) ||
                            sd_version_is_longcat(version) ||
                            sd_version_is_lens(version) ||
                            sd_version_is_ltxav(version) ||
@@ -1547,8 +1548,6 @@ public:
                     }
                 } else if (sd_version_is_sefi_image(version)) {
                     pred_type = SEFI_FLOW_PRED;
-                } else if (sd_version_is_flux2(version)) {
-                    pred_type = FLUX2_FLOW_PRED;
                 } else {
                     pred_type = EPS_PRED;
                 }
@@ -1579,11 +1578,6 @@ public:
                 case FLUX_FLOW_PRED: {
                     LOG_INFO("running in Flux FLOW mode");
                     denoiser = std::make_shared<FluxFlowDenoiser>();
-                    break;
-                }
-                case FLUX2_FLOW_PRED: {
-                    LOG_INFO("running in Flux2 FLOW mode");
-                    denoiser = std::make_shared<Flux2FlowDenoiser>();
                     break;
                 }
                 case SEFI_FLOW_PRED: {
@@ -2851,6 +2845,8 @@ const char* scheduler_to_str[] = {
     "bong_tangent",
     "ltx2",
     "logit_normal",
+    "flux2",
+    "flux",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {
@@ -2861,6 +2857,9 @@ const char* sd_scheduler_name(enum scheduler_t scheduler) {
 }
 
 enum scheduler_t str_to_scheduler(const char* str) {
+    if (!strcmp(str, "normal")) {
+        return DISCRETE_SCHEDULER;
+    }
     for (int i = 0; i < SCHEDULER_COUNT; i++) {
         if (!strcmp(str, scheduler_to_str[i])) {
             return (enum scheduler_t)i;
@@ -2875,7 +2874,7 @@ const char* prediction_to_str[] = {
     "edm_v",
     "sd3_flow",
     "flux_flow",
-    "flux2_flow",
+    "sefi_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -3523,6 +3522,10 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
         return LCM_SCHEDULER;
     } else if (sample_method == DDIM_TRAILING_SAMPLE_METHOD) {
         return SIMPLE_SCHEDULER;
+    } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_flux(sd_ctx->sd->version)) {
+        return FLUX_SCHEDULER;
+    } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_flux2(sd_ctx->sd->version)) {
+        return FLUX2_SCHEDULER;
     } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ltxav(sd_ctx->sd->version)) {
         return LTX2_SCHEDULER;
     } else if (sd_ctx != nullptr && sd_ctx->sd != nullptr && sd_version_is_ideogram4(sd_ctx->sd->version)) {
