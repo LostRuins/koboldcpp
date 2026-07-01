@@ -1,4 +1,4 @@
-﻿#ifndef __SD_MODEL_DIFFUSION_MODEL_HPP__
+#ifndef __SD_MODEL_DIFFUSION_MODEL_HPP__
 #define __SD_MODEL_DIFFUSION_MODEL_HPP__
 
 #include <string>

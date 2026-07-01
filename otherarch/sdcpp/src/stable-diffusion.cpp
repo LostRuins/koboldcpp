@@ -2847,6 +2847,7 @@ const char* scheduler_to_str[] = {
     "logit_normal",
     "flux2",
     "flux",
+    "beta",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {
@@ -4636,7 +4637,8 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
 
 static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
                                         const GenerationRequest& request,
-                                        const std::vector<sd::Tensor<float>>& final_latents) {
+                                        const std::vector<sd::Tensor<float>>& final_latents,
+                                        int* num_images_out) {
     if (final_latents.empty()) {
         LOG_ERROR("no latent images to decode");
         return nullptr;
@@ -4678,11 +4680,14 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
         return nullptr;
     }
 
-    sd_image_t* result_images = (sd_image_t*)calloc(request.batch_count, sizeof(sd_image_t));
+    int image_count           = static_cast<int>(decoded_images.size());
+    sd_image_t* result_images = (sd_image_t*)calloc(image_count, sizeof(sd_image_t));
     if (result_images == nullptr) {
         return nullptr;
     }
-    memset(result_images, 0, request.batch_count * sizeof(sd_image_t));
+    if (num_images_out != nullptr) {
+        *num_images_out = image_count;
+    }
 
     for (size_t i = 0; i < decoded_images.size(); i++) {
         result_images[i] = tensor_to_sd_image(decoded_images[i]);
@@ -4875,9 +4880,18 @@ static std::vector<float> make_hires_sigma_schedule(sd_ctx_t* sd_ctx,
                               sigmas.end());
 }
 
-SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
+SD_API bool generate_image(sd_ctx_t* sd_ctx,
+                           const sd_img_gen_params_t* sd_img_gen_params,
+                           sd_image_t** images_out,
+                           int* num_images_out) {
+    if (images_out != nullptr) {
+        *images_out = nullptr;
+    }
+    if (num_images_out != nullptr) {
+        *num_images_out = 0;
+    }
     if (sd_ctx == nullptr || sd_img_gen_params == nullptr) {
-        return nullptr;
+        return false;
     }
 
     sd_ctx->sd->reset_cancel_flag();
@@ -4900,7 +4914,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                         &request,
                                                         &plan);
     if (!latents_opt.has_value()) {
-        return nullptr;
+        return false;
     }
     ImageGenerationLatents latents = std::move(*latents_opt);
 
@@ -4910,7 +4924,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                       &plan,
                                                       &latents);
     if (!embeds_opt.has_value()) {
-        return nullptr;
+        return false;
     }
     ImageGenerationEmbeds embeds = std::move(*embeds_opt);
 
@@ -4920,7 +4934,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         sd_cancel_mode_t cancel = sd_ctx->sd->get_cancel_flag();
         if (cancel == SD_CANCEL_ALL) {
             LOG_ERROR("cancelling generation");
-            return nullptr;
+            return false;
         }
         if (cancel == SD_CANCEL_NEW_LATENTS) {
             LOG_INFO("cancelling new latent generation, returning %zu/%d completed latents",
@@ -4972,7 +4986,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                   b + 1,
                   request.batch_count,
                   (sampling_end - sampling_start) * 1.0f / 1000);
-        return nullptr;
+        return false;
     }
     int64_t denoise_end = ggml_time_ms();
     LOG_INFO("generating %zu latent images completed, taking %.2fs",
@@ -4980,13 +4994,13 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
              (denoise_end - denoise_start) * 1.0f / 1000);
     if (final_latents.empty()) {
         LOG_ERROR("no latent images generated");
-        return nullptr;
+        return false;
     }
 
     if (request.hires.enabled && request.hires.target_width > 0) {
         if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
             LOG_ERROR("cancelling generation before hires fix");
-            return nullptr;
+            return false;
         }
         LOG_INFO("hires fix: upscaling to %dx%d", request.hires.target_width, request.hires.target_height);
 
@@ -4994,7 +5008,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
             if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
                 LOG_ERROR("cancelling generation before hires model load");
-                return nullptr;
+                return false;
             }
             LOG_INFO("hires fix: loading model upscaler from '%s'", request.hires.model_path);
             hires_upscaler                    = std::make_unique<UpscalerGGML>(sd_ctx->sd->n_threads,
@@ -5007,7 +5021,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
             if (!hires_upscaler->load_from_file(request.hires.model_path,
                                                 sd_ctx->sd->n_threads)) {
                 LOG_ERROR("load hires model upscaler failed");
-                return nullptr;
+                return false;
             }
         }
 
@@ -5031,7 +5045,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         for (int b = 0; b < (int)final_latents.size(); b++) {
             if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
                 LOG_ERROR("cancelling generation during hires fix");
-                return nullptr;
+                return false;
             }
             int64_t cur_seed = request.seed + b;
             sd_ctx->sd->rng->manual_seed(cur_seed);
@@ -5042,7 +5056,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                               request,
                                                               hires_upscaler.get());
             if (upscaled.empty()) {
-                return nullptr;
+                return false;
             }
 
             sd::Tensor<float> noise = sd::randn_like<float>(upscaled, sd_ctx->sd->rng);
@@ -5096,7 +5110,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                       b + 1,
                       (int)final_latents.size(),
                       (hires_sample_end - hires_sample_start) * 1.0f / 1000);
-            return nullptr;
+            return false;
         }
         int64_t hires_denoise_end = ggml_time_ms();
         LOG_INFO("hires fix completed, taking %.2fs", (hires_denoise_end - hires_denoise_start) * 1.0f / 1000);
@@ -5104,16 +5118,25 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
         final_latents = std::move(hires_final_latents);
     }
 
-    auto result = decode_image_outputs(sd_ctx, request, final_latents);
+    int num_images = 0;
+    auto result    = decode_image_outputs(sd_ctx, request, final_latents, &num_images);
     if (result == nullptr) {
-        return nullptr;
+        return false;
     }
 
     sd_ctx->sd->lora_stat();
 
     int64_t t1 = ggml_time_ms();
     LOG_INFO("generate_image completed in %.2fs", (t1 - t0) * 1.0f / 1000);
-    return result;
+    if (num_images_out != nullptr) {
+        *num_images_out = num_images;
+    }
+    if (images_out != nullptr) {
+        *images_out = result;
+    } else {
+        free_sd_images(result, num_images);
+    }
+    return true;
 }
 
 static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd_ctx_t* sd_ctx,

@@ -1475,7 +1475,7 @@ ArgOptions SDGenerationParams::get_options() {
          on_high_noise_sample_method_arg},
         {"",
          "--scheduler",
-         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2, logit_normal, flux2, flux], alias: normal=discrete, default: model-specific",
+         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2, logit_normal, flux2, flux, beta], alias: normal=discrete, default: model-specific",
          on_scheduler_arg},
         {"",
          "--sigmas",

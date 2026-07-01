@@ -1,4 +1,4 @@
-﻿#ifndef __SD_MODEL_VAE_VAE_HPP__
+#ifndef __SD_MODEL_VAE_VAE_HPP__
 #define __SD_MODEL_VAE_VAE_HPP__
 
 #include "core/tensor_ggml.hpp"

@@ -73,6 +73,7 @@ enum scheduler_t {
     LOGIT_NORMAL_SCHEDULER,
     FLUX2_SCHEDULER,
     FLUX_SCHEDULER,
+    BETA_SCHEDULER,
     SCHEDULER_COUNT
 };
 
@@ -455,7 +456,10 @@ SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sa
 
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
-SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
+SD_API bool generate_image(sd_ctx_t* sd_ctx,
+                           const sd_img_gen_params_t* sd_img_gen_params,
+                           sd_image_t** images_out,
+                           int* num_images_out);
 
 enum sd_cancel_mode_t {
     // Stop the current generation as soon as possible.
@@ -485,9 +489,11 @@ SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         const char* params_backend);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
-SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
-                          sd_image_t input_image,
-                          uint32_t upscale_factor);
+SD_API bool upscale(upscaler_ctx_t* upscaler_ctx,
+                    sd_image_t input_image,
+                    uint32_t upscale_factor,
+                    sd_image_t** images_out,
+                    int* num_images_out);
 
 SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
 

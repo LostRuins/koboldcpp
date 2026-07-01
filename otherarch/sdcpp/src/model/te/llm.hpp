@@ -1,4 +1,4 @@
-﻿#ifndef __SD_MODEL_TE_LLM_HPP__
+#ifndef __SD_MODEL_TE_LLM_HPP__
 #define __SD_MODEL_TE_LLM_HPP__
 
 #include <algorithm>

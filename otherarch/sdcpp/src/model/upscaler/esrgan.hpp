@@ -1,4 +1,4 @@
-﻿#ifndef __SD_MODEL_UPSCALER_ESRGAN_HPP__
+#ifndef __SD_MODEL_UPSCALER_ESRGAN_HPP__
 #define __SD_MODEL_UPSCALER_ESRGAN_HPP__
 
 #include <algorithm>

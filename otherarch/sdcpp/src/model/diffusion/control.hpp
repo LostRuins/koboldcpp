@@ -1,4 +1,4 @@
-﻿#ifndef __SD_MODEL_DIFFUSION_CONTROL_HPP__
+#ifndef __SD_MODEL_DIFFUSION_CONTROL_HPP__
 #define __SD_MODEL_DIFFUSION_CONTROL_HPP__
 
 #include "model/common/block.hpp"

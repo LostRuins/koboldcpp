@@ -4,6 +4,7 @@
 #include "model_loader.h"
 #include "stable-diffusion.h"
 
+#include <cstdlib>
 #include <utility>
 
 UpscalerGGML::UpscalerGGML(int n_threads,
@@ -198,8 +199,41 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
     return upscaler_ctx;
 }
 
-sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor) {
-    return upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
+bool upscale(upscaler_ctx_t* upscaler_ctx,
+             sd_image_t input_image,
+             uint32_t upscale_factor,
+             sd_image_t** images_out,
+             int* num_images_out) {
+    if (images_out != nullptr) {
+        *images_out = nullptr;
+    }
+    if (num_images_out != nullptr) {
+        *num_images_out = 0;
+    }
+    if (upscaler_ctx == nullptr || upscaler_ctx->upscaler == nullptr) {
+        return false;
+    }
+
+    sd_image_t* result_images = (sd_image_t*)calloc(1, sizeof(sd_image_t));
+    if (result_images == nullptr) {
+        return false;
+    }
+
+    result_images[0] = upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
+    if (result_images[0].data == nullptr) {
+        free(result_images);
+        return false;
+    }
+
+    if (num_images_out != nullptr) {
+        *num_images_out = 1;
+    }
+    if (images_out != nullptr) {
+        *images_out = result_images;
+    } else {
+        free_sd_images(result_images, 1);
+    }
+    return true;
 }
 
 int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {

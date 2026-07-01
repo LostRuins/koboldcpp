@@ -766,8 +766,12 @@ int main(int argc, const char* argv[]) {
         if (cli_params.mode == IMG_GEN) {
             sd_img_gen_params_t img_gen_params = gen_params.to_sd_img_gen_params_t();
 
-            num_results = gen_params.batch_count;
-            results.adopt(generate_image(sd_ctx.get(), &img_gen_params), num_results);
+            sd_image_t* generated_images = nullptr;
+            if (!generate_image(sd_ctx.get(), &img_gen_params, &generated_images, &num_results)) {
+                generated_images = nullptr;
+                num_results      = 0;
+            }
+            results.adopt(generated_images, num_results);
         } else if (cli_params.mode == VID_GEN) {
             sd_vid_gen_params_t vid_gen_params = gen_params.to_sd_vid_gen_params_t();
             sd_image_t* generated_video        = nullptr;
@@ -802,12 +806,22 @@ int main(int argc, const char* argv[]) {
                 SDImageOwner current_image(results[i]);
                 results[i] = {0, 0, 0, nullptr};
                 for (int u = 0; u < gen_params.upscale_repeats; ++u) {
-                    SDImageOwner upscaled_image(upscale(upscaler_ctx.get(), current_image.get(), upscale_factor));
-                    if (upscaled_image.get().data == nullptr) {
+                    sd_image_t* upscaled_images = nullptr;
+                    int upscaled_count          = 0;
+                    bool upscale_ok             = upscale(upscaler_ctx.get(),
+                                                          current_image.get(),
+                                                          upscale_factor,
+                                                          &upscaled_images,
+                                                          &upscaled_count);
+                    if (!upscale_ok || upscaled_count <= 0 || upscaled_images[0].data == nullptr) {
+                        free_sd_images(upscaled_images, upscaled_count);
                         LOG_ERROR("upscale failed");
                         break;
                     }
-                    current_image = std::move(upscaled_image);
+                    sd_image_t upscaled_image = upscaled_images[0];
+                    upscaled_images[0]        = {0, 0, 0, nullptr};
+                    free_sd_images(upscaled_images, upscaled_count);
+                    current_image.reset(upscaled_image);
                 }
                 results[i] = current_image.release();  // Set the final upscaled image as the result
             }
