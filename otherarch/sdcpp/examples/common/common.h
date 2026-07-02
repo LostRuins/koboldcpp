@@ -197,6 +197,7 @@ struct SDGenerationParams {
     int width                  = -1;
     int height                 = -1;
     int batch_count            = 1;
+    int qwen_image_layers      = 3;
     int64_t seed               = 42;
     float strength             = 0.75f;
     float control_strength     = 0.9f;

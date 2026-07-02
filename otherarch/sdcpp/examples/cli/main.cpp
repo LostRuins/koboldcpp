@@ -481,7 +481,8 @@ bool save_results(const SDCliParams& cli_params,
         if (!img.data)
             return false;
 
-        const int64_t metadata_seed = cli_params.mode == VID_GEN ? gen_params.seed : gen_params.seed + idx;
+        int images_per_batch        = gen_params.batch_count > 0 ? std::max(1, num_results / gen_params.batch_count) : 1;
+        const int64_t metadata_seed = cli_params.mode == VID_GEN ? gen_params.seed : gen_params.seed + idx / images_per_batch;
         std::string params          = gen_params.embed_image_metadata
                                           ? get_image_params(ctx_params, gen_params, metadata_seed, cli_params.mode)
                                           : "";

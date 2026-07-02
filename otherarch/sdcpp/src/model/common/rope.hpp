@@ -12,6 +12,16 @@ namespace Rope {
         ErnieImage,
     };
 
+    enum class RefIndexMode {
+        FIXED,
+        INCREASE,
+        DECREASE,
+    };
+
+    __STATIC_INLINE__ RefIndexMode ref_index_mode_from_bool(bool increase_ref_index) {
+        return increase_ref_index ? RefIndexMode::INCREASE : RefIndexMode::FIXED;
+    }
+
     template <class T>
     __STATIC_INLINE__ std::vector<T> linspace(T start, T end, int num) {
         std::vector<T> result(num);
@@ -346,7 +356,7 @@ namespace Rope {
                                                                    int axes_dim_num,
                                                                    int start_index,
                                                                    const std::vector<ggml_tensor*>& ref_latents,
-                                                                   bool increase_ref_index,
+                                                                   RefIndexMode ref_index_mode,
                                                                    float ref_index_scale,
                                                                    bool scale_rope,
                                                                    int base_offset = 0) {
@@ -357,13 +367,15 @@ namespace Rope {
         for (ggml_tensor* ref : ref_latents) {
             int h_offset = 0;
             int w_offset = 0;
-            if (!increase_ref_index) {
+            if (ref_index_mode == RefIndexMode::FIXED) {
                 if (ref->ne[1] + curr_h_offset > ref->ne[0] + curr_w_offset) {
                     w_offset = curr_w_offset;
                 } else {
                     h_offset = curr_h_offset;
                 }
                 scale_rope = false;
+            } else if (ref_index_mode == RefIndexMode::DECREASE) {
+                index--;
             }
 
             auto ref_ids = gen_flux_img_ids(static_cast<int>(ref->ne[1]),
@@ -377,7 +389,7 @@ namespace Rope {
                                             scale_rope);
             ids          = concat_ids(ids, ref_ids, bs);
 
-            if (increase_ref_index) {
+            if (ref_index_mode == RefIndexMode::INCREASE) {
                 index++;
             }
 
@@ -395,7 +407,7 @@ namespace Rope {
                                                                    int context_len,
                                                                    std::set<int> txt_arange_dims,
                                                                    const std::vector<ggml_tensor*>& ref_latents,
-                                                                   bool increase_ref_index,
+                                                                   RefIndexMode ref_index_mode,
                                                                    float ref_index_scale,
                                                                    bool is_longcat) {
         int x_index = is_longcat ? 1 : 0;
@@ -406,7 +418,7 @@ namespace Rope {
 
         auto ids = concat_ids(txt_ids, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, x_index + 1, ref_latents, increase_ref_index, ref_index_scale, false, offset);
+            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, x_index + 1, ref_latents, ref_index_mode, ref_index_scale, false, offset);
             ids           = concat_ids(ids, refs_ids, bs);
         }
         return ids;
@@ -420,7 +432,7 @@ namespace Rope {
                                                      int context_len,
                                                      std::set<int> txt_arange_dims,
                                                      const std::vector<ggml_tensor*>& ref_latents,
-                                                     bool increase_ref_index,
+                                                     RefIndexMode ref_index_mode,
                                                      float ref_index_scale,
                                                      int theta,
                                                      bool circular_h,
@@ -435,7 +447,7 @@ namespace Rope {
                                                            context_len,
                                                            txt_arange_dims,
                                                            ref_latents,
-                                                           increase_ref_index,
+                                                           ref_index_mode,
                                                            ref_index_scale,
                                                            is_longcat);
         std::vector<std::vector<int>> wrap_dims;
@@ -481,17 +493,64 @@ namespace Rope {
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int h,
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_vid_ids(int t,
+                                                                  int h,
+                                                                  int w,
+                                                                  int pt,
+                                                                  int ph,
+                                                                  int pw,
+                                                                  int bs,
+                                                                  int t_offset    = 0,
+                                                                  int h_offset    = 0,
+                                                                  int w_offset    = 0,
+                                                                  bool scale_rope = false) {
+        int t_len = (t + (pt / 2)) / pt;
+        int h_len = (h + (ph / 2)) / ph;
+        int w_len = (w + (pw / 2)) / pw;
+
+        std::vector<std::vector<float>> vid_ids(t_len * h_len * w_len, std::vector<float>(3, 0.0));
+
+        if (scale_rope) {
+            h_offset -= h_len / 2;
+            w_offset -= w_len / 2;
+        }
+
+        std::vector<float> t_ids = linspace<float>(1.f * t_offset, 1.f * t_len - 1 + t_offset, t_len);
+        std::vector<float> h_ids = linspace<float>(1.f * h_offset, 1.f * h_len - 1 + h_offset, h_len);
+        std::vector<float> w_ids = linspace<float>(1.f * w_offset, 1.f * w_len - 1 + w_offset, w_len);
+
+        for (int i = 0; i < t_len; ++i) {
+            for (int j = 0; j < h_len; ++j) {
+                for (int k = 0; k < w_len; ++k) {
+                    int idx         = i * h_len * w_len + j * w_len + k;
+                    vid_ids[idx][0] = t_ids[i];
+                    vid_ids[idx][1] = h_ids[j];
+                    vid_ids[idx][2] = w_ids[k];
+                }
+            }
+        }
+
+        std::vector<std::vector<float>> vid_ids_repeated(bs * vid_ids.size(), std::vector<float>(3));
+        for (int i = 0; i < bs; ++i) {
+            for (int j = 0; j < vid_ids.size(); ++j) {
+                vid_ids_repeated[i * vid_ids.size() + j] = vid_ids[j];
+            }
+        }
+        return vid_ids_repeated;
+    }
+
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int t,
+                                                                         int h,
                                                                          int w,
                                                                          int patch_size,
                                                                          int bs,
                                                                          int context_len,
                                                                          const std::vector<ggml_tensor*>& ref_latents,
-                                                                         bool increase_ref_index) {
+                                                                         RefIndexMode ref_index_mode) {
         int h_len        = (h + (patch_size / 2)) / patch_size;
         int w_len        = (w + (patch_size / 2)) / patch_size;
-        int txt_id_start = std::max(h_len, w_len);
-        auto txt_ids     = linspace<float>(1.f * txt_id_start, 1.f * context_len + txt_id_start, context_len);
+        int txt_id_start = std::max(h_len, w_len) / 2;
+        auto txt_ids     = linspace<float>(1.f * txt_id_start, 1.f * txt_id_start + context_len - 1, context_len);
         std::vector<std::vector<float>> txt_ids_repeated(bs * context_len, std::vector<float>(3));
         for (int i = 0; i < bs; ++i) {
             for (int j = 0; j < txt_ids.size(); ++j) {
@@ -499,28 +558,30 @@ namespace Rope {
             }
         }
         int axes_dim_num = 3;
-        auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, 0, 0, 0, true);
+        auto img_ids     = gen_vid_ids(t, h, w, 1, patch_size, patch_size, bs, 0, 0, 0, true);
         auto ids         = concat_ids(txt_ids_repeated, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, 1, ref_latents, increase_ref_index, 1.f, true);
-            ids           = concat_ids(ids, refs_ids, bs);
+            int ref_start_index = ref_index_mode == RefIndexMode::DECREASE ? 0 : 1;
+            auto refs_ids       = gen_refs_ids(patch_size, bs, axes_dim_num, ref_start_index, ref_latents, ref_index_mode, 1.f, true);
+            ids                 = concat_ids(ids, refs_ids, bs);
         }
         return ids;
     }
 
     // Generate qwen_image positional embeddings
-    __STATIC_INLINE__ std::vector<float> gen_qwen_image_pe(int h,
+    __STATIC_INLINE__ std::vector<float> gen_qwen_image_pe(int t,
+                                                           int h,
                                                            int w,
                                                            int patch_size,
                                                            int bs,
                                                            int context_len,
                                                            const std::vector<ggml_tensor*>& ref_latents,
-                                                           bool increase_ref_index,
+                                                           RefIndexMode ref_index_mode,
                                                            int theta,
                                                            bool circular_h,
                                                            bool circular_w,
                                                            const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_qwen_image_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
+        std::vector<std::vector<float>> ids = gen_qwen_image_ids(t, h, w, patch_size, bs, context_len, ref_latents, ref_index_mode);
         std::vector<std::vector<int>> wrap_dims;
         // This logic simply stores the (pad and patch_adjusted) sizes of images so we can make sure rope correctly tiles
         if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
@@ -533,7 +594,7 @@ namespace Rope {
                 // Track per-token wrap lengths for the row/column axes so only spatial tokens become periodic.
                 wrap_dims.assign(axes_dim.size(), std::vector<int>(total_tokens / bs, 0));
                 size_t cursor           = context_len;  // ignore text tokens
-                const size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+                const size_t img_tokens = static_cast<size_t>(t) * static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
                 for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
                     if (circular_h) {
                         wrap_dims[1][cursor + token_i] = h_len;
@@ -684,46 +745,6 @@ namespace Rope {
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims, EmbedNDLayout::ErnieImage);
     }
 
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_vid_ids(int t,
-                                                                  int h,
-                                                                  int w,
-                                                                  int pt,
-                                                                  int ph,
-                                                                  int pw,
-                                                                  int bs,
-                                                                  int t_offset = 0,
-                                                                  int h_offset = 0,
-                                                                  int w_offset = 0) {
-        int t_len = (t + (pt / 2)) / pt;
-        int h_len = (h + (ph / 2)) / ph;
-        int w_len = (w + (pw / 2)) / pw;
-
-        std::vector<std::vector<float>> vid_ids(t_len * h_len * w_len, std::vector<float>(3, 0.0));
-
-        std::vector<float> t_ids = linspace<float>(1.f * t_offset, 1.f * t_len - 1 + t_offset, t_len);
-        std::vector<float> h_ids = linspace<float>(1.f * h_offset, 1.f * h_len - 1 + h_offset, h_len);
-        std::vector<float> w_ids = linspace<float>(1.f * w_offset, 1.f * w_len - 1 + w_offset, w_len);
-
-        for (int i = 0; i < t_len; ++i) {
-            for (int j = 0; j < h_len; ++j) {
-                for (int k = 0; k < w_len; ++k) {
-                    int idx         = i * h_len * w_len + j * w_len + k;
-                    vid_ids[idx][0] = t_ids[i];
-                    vid_ids[idx][1] = h_ids[j];
-                    vid_ids[idx][2] = w_ids[k];
-                }
-            }
-        }
-
-        std::vector<std::vector<float>> vid_ids_repeated(bs * vid_ids.size(), std::vector<float>(3));
-        for (int i = 0; i < bs; ++i) {
-            for (int j = 0; j < vid_ids.size(); ++j) {
-                vid_ids_repeated[i * vid_ids.size() + j] = vid_ids[j];
-            }
-        }
-        return vid_ids_repeated;
-    }
-
     // Generate wan positional embeddings
     __STATIC_INLINE__ std::vector<float> gen_wan_pe(int t,
                                                     int h,
@@ -785,7 +806,8 @@ namespace Rope {
                                                                       int context_len,
                                                                       int seq_multi_of,
                                                                       const std::vector<ggml_tensor*>& ref_latents,
-                                                                      bool increase_ref_index) {
+                                                                      RefIndexMode ref_index_mode) {
+        SD_UNUSED(ref_index_mode);
         int padded_context_len = context_len + bound_mod(context_len, seq_multi_of);
         auto txt_ids           = std::vector<std::vector<float>>(bs * padded_context_len, std::vector<float>(3, 0.0f));
         for (int i = 0; i < bs * padded_context_len; i++) {
@@ -816,12 +838,12 @@ namespace Rope {
                                                         int context_len,
                                                         int seq_multi_of,
                                                         const std::vector<ggml_tensor*>& ref_latents,
-                                                        bool increase_ref_index,
+                                                        RefIndexMode ref_index_mode,
                                                         int theta,
                                                         bool circular_h,
                                                         bool circular_w,
                                                         const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_z_image_ids(h, w, patch_size, bs, context_len, seq_multi_of, ref_latents, increase_ref_index);
+        std::vector<std::vector<float>> ids = gen_z_image_ids(h, w, patch_size, bs, context_len, seq_multi_of, ref_latents, ref_index_mode);
         std::vector<std::vector<int>> wrap_dims;
         if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
             int pad_h = (patch_size - (h % patch_size)) % patch_size;

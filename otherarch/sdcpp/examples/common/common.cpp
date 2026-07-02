@@ -1008,6 +1008,10 @@ ArgOptions SDGenerationParams::get_options() {
          "batch count",
          &batch_count},
         {"",
+         "--qwen-image-layers",
+         "number of Qwen Image Layered layers; latent/output count is layers + 1 (default: 3)",
+         &qwen_image_layers},
+        {"",
          "--video-frames",
          "video frames (default: 1)",
          &video_frames},
@@ -1827,6 +1831,7 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("width", width);
     load_if_exists("height", height);
     load_if_exists("batch_count", batch_count);
+    load_if_exists("qwen_image_layers", qwen_image_layers);
     load_if_exists("video_frames", video_frames);
     load_if_exists("fps", fps);
     load_if_exists("upscale_repeats", upscale_repeats);
@@ -2251,6 +2256,11 @@ bool SDGenerationParams::validate(SDMode mode) {
         return false;
     }
 
+    if (qwen_image_layers < 0) {
+        LOG_ERROR("error: qwen_image_layers must be non-negative");
+        return false;
+    }
+
     if (sample_params.sample_steps <= 0) {
         LOG_ERROR("error: the sample_steps must be greater than 0\n");
         return false;
@@ -2417,6 +2427,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.strength              = strength;
     params.seed                  = seed;
     params.batch_count           = batch_count;
+    params.qwen_image_layers     = qwen_image_layers;
     params.control_image         = control_image.get();
     params.control_strength      = control_strength;
     params.pm_params             = pm_params;
@@ -2542,6 +2553,7 @@ std::string SDGenerationParams::to_string() const {
         << "  width: " << width << ",\n"
         << "  height: " << height << ",\n"
         << "  batch_count: " << batch_count << ",\n"
+        << "  qwen_image_layers: " << qwen_image_layers << ",\n"
         << "  init_image_path: \"" << init_image_path << "\",\n"
         << "  end_image_path: \"" << end_image_path << "\",\n"
         << "  mask_image_path: \"" << mask_image_path << "\",\n"

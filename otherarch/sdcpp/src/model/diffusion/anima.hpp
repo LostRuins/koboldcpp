@@ -612,7 +612,7 @@ namespace Anima {
                                           0,
                                           {},
                                           empty_ref_latents,
-                                          false,
+                                          Rope::RefIndexMode::FIXED,
                                           1.0f,
                                           false);
 

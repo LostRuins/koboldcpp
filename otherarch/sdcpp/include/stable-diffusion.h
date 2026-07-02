@@ -380,6 +380,7 @@ typedef struct {
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
     sd_hires_params_t hires;
+    int qwen_image_layers;
 } sd_img_gen_params_t;
 
 typedef struct {

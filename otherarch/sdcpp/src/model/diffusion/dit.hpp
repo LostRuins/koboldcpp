@@ -135,23 +135,23 @@ namespace DiT {
         return x;
     }
 
-    inline ggml_tensor* unpatchify(ggml_context* ctx,
-                                   ggml_tensor* x,
-                                   int64_t t_len,
-                                   int64_t h_len,
-                                   int64_t w_len,
-                                   int pt,
-                                   int ph,
-                                   int pw) {
-        // x: [N, t_len*h_len*w_len, pt*ph*pw*C]
+    inline ggml_tensor* unpatchify_3d(ggml_context* ctx,
+                                      ggml_tensor* x,
+                                      int64_t t_len,
+                                      int64_t h_len,
+                                      int64_t w_len,
+                                      int pt,
+                                      int ph,
+                                      int pw) {
+        // x: [N, t_len*h_len*w_len, C*pt*ph*pw]
         // return: [N*C, t_len*pt, h_len*ph, w_len*pw]
-        int64_t N = x->ne[3];
+        int64_t N = x->ne[2];
         int64_t C = x->ne[0] / pt / ph / pw;
 
         GGML_ASSERT(C * pt * ph * pw == x->ne[0]);
 
-        x = ggml_reshape_4d(ctx, x, C, pw * ph * pt, w_len * h_len * t_len, N);  // [N, t_len*h_len*w_len, pt*ph*pw, C]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));      // [N, C, t_len*h_len*w_len, pt*ph*pw]
+        x = ggml_reshape_4d(ctx, x, pw * ph * pt, C, w_len * h_len * t_len, N);  // [N, t_len*h_len*w_len, C, pt*ph*pw]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N, C, t_len*h_len*w_len, pt*ph*pw]
         x = ggml_reshape_4d(ctx, x, pw, ph * pt, w_len, h_len * t_len * C * N);  // [N*C*t_len*h_len, w_len, pt*ph, pw]
         x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, pt*ph, w_len, pw]
         x = ggml_reshape_4d(ctx, x, pw * w_len, ph, pt, h_len * t_len * C * N);  // [N*C*t_len*h_len, pt, ph, w_len*pw]

@@ -72,8 +72,8 @@ namespace WAN {
                 lp2 -= (int)cache_x->ne[2];
             }
 
-            x = ggml_ext_pad_ext(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
-            return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
+            x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+            return ggml_ext_conv_3d(ctx->ggml_ctx, ctx->backend, x, w, b, in_channels,
                                     std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                     0, 0, 0,
                                     std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation));
@@ -195,7 +195,7 @@ namespace WAN {
                                                   2);
                         }
                         if (chunk_idx == 1 && cache_x->ne[2] < 2) {  // Rep
-                            cache_x = ggml_pad_ext(ctx->ggml_ctx, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
+                            cache_x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
                             // aka cache_x = torch.cat([torch.zeros_like(cache_x).to(cache_x.device),cache_x],dim=2)
                         }
                         if (chunk_idx == 1) {
@@ -283,7 +283,7 @@ namespace WAN {
 
             int pad_t = (factor_t - T % factor_t) % factor_t;
 
-            x = ggml_pad_ext(ctx->ggml_ctx, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
+            x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
             T = x->ne[2];
 
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, factor_t, T / factor_t, C);                                                  // [C, T/factor_t, factor_t, H*W]
@@ -631,6 +631,7 @@ namespace WAN {
     class Encoder3d : public GGMLBlock {
     protected:
         bool wan2_2;
+        int64_t in_channels;
         int64_t dim;
         int64_t z_dim;
         std::vector<int> dim_mult;
@@ -641,12 +642,14 @@ namespace WAN {
     public:
         Encoder3d(int64_t dim                           = 128,
                   int64_t z_dim                         = 4,
+                  int64_t in_channels                   = 3,
                   std::vector<int> dim_mult             = {1, 2, 4, 4},
                   int num_res_blocks                    = 2,
                   std::vector<bool> temperal_downsample = {false, true, true},
                   bool wan2_2                           = false,
                   bool is_2D                            = false)
-            : dim(dim),
+            : in_channels(in_channels),
+              dim(dim),
               z_dim(z_dim),
               dim_mult(dim_mult),
               num_res_blocks(num_res_blocks),
@@ -659,11 +662,10 @@ namespace WAN {
                 dims.push_back(dim * u);
             }
 
-            int64_t input_dim = wan2_2 ? 12 : 3;
             if (is_2D) {
-                blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2dBut3d(input_dim, dims[0], {3, 3}, {1, 1}, {1, 1}));
+                blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2dBut3d(in_channels, dims[0], {3, 3}, {1, 1}, {1, 1}));
             } else {
-                blocks["conv1"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(input_dim, dims[0], {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
+                blocks["conv1"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(in_channels, dims[0], {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
             }
 
             int index = 0;
@@ -812,6 +814,7 @@ namespace WAN {
     class Decoder3d : public GGMLBlock {
     protected:
         bool wan2_2;
+        int64_t out_channels;
         int64_t dim;
         int64_t z_dim;
         std::vector<int> dim_mult;
@@ -822,12 +825,14 @@ namespace WAN {
     public:
         Decoder3d(int64_t dim                         = 128,
                   int64_t z_dim                       = 4,
+                  int64_t out_channels                = 3,
                   std::vector<int> dim_mult           = {1, 2, 4, 4},
                   int num_res_blocks                  = 2,
                   std::vector<bool> temperal_upsample = {true, true, false},
                   bool wan2_2                         = false,
                   bool is_2D                          = false)
-            : dim(dim),
+            : out_channels(out_channels),
+              dim(dim),
               z_dim(z_dim),
               dim_mult(dim_mult),
               num_res_blocks(num_res_blocks),
@@ -889,7 +894,7 @@ namespace WAN {
 
             // output blocks
             blocks["head.0"]  = std::shared_ptr<GGMLBlock>(new RMS_norm(out_dim));
-            int64_t final_dim = wan2_2 ? 12 : 3;
+            int64_t final_dim = out_channels;
             // head.1 is nn.SiLU()
             if (is_2D) {
                 blocks["head.2"] = std::shared_ptr<GGMLBlock>(new Conv2dBut3d(out_dim, final_dim, {3, 3}, {1, 1}, {1, 1}));
@@ -1002,6 +1007,8 @@ namespace WAN {
     public:
         bool wan2_2                           = false;
         bool decode_only                      = true;
+        int64_t input_channels                = 3;
+        int patch_size                        = 1;
         int64_t dim                           = 96;
         int64_t dec_dim                       = 96;
         int64_t z_dim                         = 16;
@@ -1026,16 +1033,22 @@ namespace WAN {
         }
 
     public:
-        WanVAE(bool decode_only = true, bool wan2_2 = false, bool is_2D = false)
-            : decode_only(decode_only), wan2_2(wan2_2), is_2D(is_2D) {
+        WanVAE(bool decode_only = true, SDVersion version = VERSION_WAN2, bool is_2D = false)
+            : decode_only(decode_only),
+              wan2_2(version == VERSION_WAN2_2_TI2V),
+              is_2D(is_2D) {
             // attn_scales is always []
             if (wan2_2) {
-                dim     = 160;
-                dec_dim = 256;
-                z_dim   = 48;
+                dim            = 160;
+                dec_dim        = 256;
+                z_dim          = 48;
+                input_channels = 12;
+                patch_size     = 2;
 
                 _conv_num     = 34;
                 _enc_conv_num = 26;
+            } else if (version == VERSION_QWEN_IMAGE_LAYERED) {
+                input_channels = 4;
             }
 
             if (is_2D) {
@@ -1044,14 +1057,14 @@ namespace WAN {
             }
 
             if (!decode_only) {
-                blocks["encoder"] = std::shared_ptr<GGMLBlock>(new Encoder3d(dim, z_dim * 2, dim_mult, num_res_blocks, temperal_downsample, wan2_2, is_2D));
+                blocks["encoder"] = std::shared_ptr<GGMLBlock>(new Encoder3d(dim, z_dim * 2, input_channels, dim_mult, num_res_blocks, temperal_downsample, wan2_2, is_2D));
                 if (is_2D) {
                     blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2dBut3d(z_dim * 2, z_dim * 2, {1, 1}));
                 } else {
                     blocks["conv1"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(z_dim * 2, z_dim * 2, {1, 1, 1}));
                 }
             }
-            blocks["decoder"] = std::shared_ptr<GGMLBlock>(new Decoder3d(dec_dim, z_dim, dim_mult, num_res_blocks, temperal_upsample, wan2_2, is_2D));
+            blocks["decoder"] = std::shared_ptr<GGMLBlock>(new Decoder3d(dec_dim, z_dim, input_channels, dim_mult, num_res_blocks, temperal_upsample, wan2_2, is_2D));
             if (is_2D) {
                 blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2dBut3d(z_dim, z_dim, {1, 1}));
             } else {
@@ -1125,9 +1138,7 @@ namespace WAN {
 
             clear_cache();
 
-            if (wan2_2) {
-                x = patchify(ctx->ggml_ctx, x, 2, b);
-            }
+            x = patchify(ctx->ggml_ctx, x, patch_size, b);
             // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encode.prelude", "x");
 
             auto encoder = std::dynamic_pointer_cast<Encoder3d>(blocks["encoder"]);
@@ -1202,9 +1213,7 @@ namespace WAN {
                     }
                 }
             }
-            if (wan2_2) {
-                out = unpatchify(ctx->ggml_ctx, out, 2, b);
-            }
+            out = unpatchify(ctx->ggml_ctx, out, patch_size, b);
             // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode.final", "out");
             clear_cache();
             return out;
@@ -1225,9 +1234,7 @@ namespace WAN {
             auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
             _conv_idx = 0;
             auto out  = decoder->forward(ctx, in, b, _feat_map, _conv_idx, i);
-            if (wan2_2) {
-                out = unpatchify(ctx->ggml_ctx, out, 2, b);
-            }
+            out       = unpatchify(ctx->ggml_ctx, out, patch_size, b);
             // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode_partial.final", "out");
             return out;
         }
@@ -1257,7 +1264,7 @@ namespace WAN {
             if (is_2D) {
                 LOG_DEBUG("USING 2D VAE");
             }
-            ae = WanVAE(decode_only, version == VERSION_WAN2_2_TI2V, is_2D);
+            ae = WanVAE(decode_only, version, is_2D);
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 

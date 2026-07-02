@@ -7,6 +7,7 @@
 
 #include "core/ggml_extend.hpp"
 #include "core/tensor_ggml.hpp"
+#include "model/common/rope.hpp"
 #include "model_manager.h"
 
 struct UNetDiffusionExtra {
@@ -73,7 +74,7 @@ struct DiffusionParams {
     const sd::Tensor<float>* c_concat                 = nullptr;
     const sd::Tensor<float>* y                        = nullptr;
     const std::vector<sd::Tensor<float>>* ref_latents = nullptr;
-    bool increase_ref_index                           = false;
+    Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED;
     DiffusionExtraParams extra                        = std::monostate{};
 };
 

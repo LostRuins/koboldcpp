@@ -86,6 +86,7 @@ const char* model_version_to_str[] = {
     "Wan 2.2 I2V",
     "Wan 2.2 TI2V",
     "Qwen Image",
+    "Qwen Image Layered",
     "Anima",
     "Flux.2",
     "Flux.2 klein",
@@ -1003,13 +1004,14 @@ public:
                     }
                 }
             } else if (sd_version_is_qwen_image(version)) {
-                cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
+                bool enable_vision = version != VERSION_QWEN_IMAGE_LAYERED;
+                cond_stage_model   = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
-                                                                 true,
+                                                                 enable_vision,
                                                                  model_manager);
-                diffusion_model  = std::make_shared<Qwen::QwenImageRunner>(backend_for(SDBackendModule::DIFFUSION),
+                diffusion_model    = std::make_shared<Qwen::QwenImageRunner>(backend_for(SDBackendModule::DIFFUSION),
                                                                           tensor_storage_map,
                                                                           "model.diffusion_model",
                                                                           version,
@@ -2386,9 +2388,9 @@ public:
             sd_sample::SampleStepCacheDispatcher step_cache(cache_runtime, step, sigma);
             std::vector<sd::Tensor<float>> controls;
             DiffusionParams diffusion_params;
-            diffusion_params.x                  = &noised_input;
-            diffusion_params.timesteps          = &timesteps_tensor;
-            diffusion_params.increase_ref_index = increase_ref_index;
+            diffusion_params.x              = &noised_input;
+            diffusion_params.timesteps      = &timesteps_tensor;
+            diffusion_params.ref_index_mode = Rope::ref_index_mode_from_bool(increase_ref_index);
             sd::guidance::GuidanceInput step_guidance_input;
             step_guidance_input.step          = step;
             step_guidance_input.schedule_size = sigmas.size();
@@ -2637,6 +2639,10 @@ public:
             }
         }
         return latent_channel;
+    }
+
+    int get_image_channels() const {
+        return version == VERSION_QWEN_IMAGE_LAYERED ? 4 : 3;
     }
 
     int get_image_seq_len(int h, int w) {
@@ -3243,6 +3249,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->seed              = -1;
     sd_img_gen_params->batch_count       = 1;
     sd_img_gen_params->control_strength  = 0.9f;
+    sd_img_gen_params->qwen_image_layers = 3;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
     sd_img_gen_params->pulid_params      = {nullptr, 1.0f};
     sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
@@ -3269,6 +3276,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "seed: %" PRId64
              "\n"
              "batch_count: %d\n"
+             "qwen_image_layers: %d\n"
              "ref_images_count: %d\n"
              "auto_resize_ref_image: %s\n"
              "increase_ref_index: %s\n"
@@ -3285,6 +3293,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->strength,
              sd_img_gen_params->seed,
              sd_img_gen_params->batch_count,
+             sd_img_gen_params->qwen_image_layers,
              sd_img_gen_params->ref_images_count,
              BOOL_STR(sd_img_gen_params->auto_resize_ref_image),
              BOOL_STR(sd_img_gen_params->increase_ref_index),
@@ -3624,6 +3633,7 @@ struct GenerationRequest {
     bool has_ref_images                      = false;
     const sd_cache_params_t* cache_params    = nullptr;
     int batch_count                          = 1;
+    int qwen_image_layers                    = 3;
     int shifted_timestep                     = 0;
     float strength                           = 1.f;
     float control_strength                   = 0.f;
@@ -3649,6 +3659,7 @@ struct GenerationRequest {
         diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
         seed                        = sd_img_gen_params->seed;
         batch_count                 = sd_img_gen_params->batch_count;
+        qwen_image_layers           = std::max(0, sd_img_gen_params->qwen_image_layers);
         clip_skip                   = sd_img_gen_params->clip_skip;
         shifted_timestep            = sd_img_gen_params->sample_params.shifted_timestep;
         strength                    = sd_img_gen_params->strength;
@@ -4354,6 +4365,34 @@ public:
     ImageVaeAxesGuard& operator=(const ImageVaeAxesGuard&) = delete;
 };
 
+static sd::Tensor<float> ensure_image_tensor_channels(sd::Tensor<float> image, int channels) {
+    if (image.empty()) {
+        return image;
+    }
+    GGML_ASSERT(image.dim() == 4);
+    int64_t current_channels = image.shape()[2];
+    if (current_channels == channels) {
+        return image;
+    }
+    if (channels == 4) {
+        sd::Tensor<float> alpha = sd::full<float>({image.shape()[0], image.shape()[1], 1, image.shape()[3]}, 1.f);
+        if (current_channels == 3) {
+            return sd::ops::concat(image, alpha, 2);
+        }
+        if (current_channels == 1) {
+            sd::Tensor<float> rgb = sd::ops::concat(image, image, 2);
+            rgb                   = sd::ops::concat(rgb, image, 2);
+            return sd::ops::concat(rgb, alpha, 2);
+        }
+    }
+    if (channels == 3 && current_channels >= 3) {
+        return sd::ops::slice(image, 2, 0, 3);
+    }
+    GGML_ABORT("cannot convert image tensor from %lld to %d channels",
+               (long long)current_channels,
+               channels);
+}
+
 static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd_ctx_t* sd_ctx,
                                                                               const sd_img_gen_params_t* sd_img_gen_params,
                                                                               GenerationRequest* request,
@@ -4363,6 +4402,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
     sd::Tensor<float> init_image_tensor;
     sd::Tensor<float> control_image_tensor;
     sd::Tensor<float> mask_image_tensor;
+    int image_channels = sd_ctx->sd->get_image_channels();
 
     if (sd_img_gen_params->init_image.data != nullptr) {
         LOG_INFO("IMG2IMG");
@@ -4379,7 +4419,8 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
             plan->sample_steps = static_cast<int>(plan->sigmas.size() - 1);
         }
 
-        init_image_tensor = sd_image_to_tensor(sd_img_gen_params->init_image, request->width, request->height);
+        init_image_tensor = ensure_image_tensor_channels(sd_image_to_tensor(sd_img_gen_params->init_image, request->width, request->height),
+                                                         image_channels);
     }
 
     if (sd_img_gen_params->mask_image.data != nullptr) {
@@ -4411,7 +4452,11 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
     sd::Tensor<float> init_latent;
     sd::Tensor<float> control_latent;
     if (init_image_tensor.empty()) {
-        init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height);
+        if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
+            init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height, request->qwen_image_layers + 1, true);
+        } else {
+            init_latent = sd_ctx->sd->generate_init_latent(request->width, request->height);
+        }
     } else {
         init_latent = sd_ctx->sd->encode_first_stage(init_image_tensor);
         if (init_latent.empty()) {
@@ -4430,12 +4475,13 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
 
     std::vector<sd::Tensor<float>> ref_images;
     for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
-        ref_images.push_back(sd_image_to_tensor(sd_img_gen_params->ref_images[i]));
+        ref_images.push_back(ensure_image_tensor_channels(sd_image_to_tensor(sd_img_gen_params->ref_images[i]),
+                                                          image_channels));
     }
 
     if (ref_images.empty() && sd_version_is_unet_edit(sd_ctx->sd->version)) {
         LOG_WARN("This model needs at least one reference image; using an empty reference");
-        ref_images.push_back(sd::zeros<float>({request->width, request->height, 3, 1}));
+        ref_images.push_back(sd::zeros<float>({request->width, request->height, image_channels, 1}));
         request->guidance.img_cfg = request->guidance.txt_cfg;
         request->use_img_uncond   = false;
     }
@@ -4461,7 +4507,10 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
             vae_width  = round(vae_width / factor) * factor;
 
             auto resized_ref_img = sd::ops::interpolate(ref_images[i],
-                                                        {static_cast<int>(vae_width), static_cast<int>(vae_height), 3, 1});
+                                                        {static_cast<int>(vae_width),
+                                                         static_cast<int>(vae_height),
+                                                         ref_images[i].shape()[2],
+                                                         ref_images[i].shape()[3]});
 
             LOG_DEBUG("resize vae ref image %d from %" PRId64 "x%" PRId64 " to %" PRId64 "x%" PRId64,
                       static_cast<int>(i),
@@ -4691,13 +4740,41 @@ static sd_image_t* decode_image_outputs(sd_ctx_t* sd_ctx,
             cancelled = true;
             break;
         }
-        int64_t t1              = ggml_time_ms();
-        sd::Tensor<float> image = sd_ctx->sd->decode_first_stage(final_latents[i]);
-        if (image.empty()) {
-            LOG_ERROR("decode_first_stage failed for latent %" PRId64, i + 1);
-            return nullptr;
+        int64_t t1 = ggml_time_ms();
+        if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
+            int qwen_image_latent_layers = request.qwen_image_layers + 1;
+            if (final_latents[i].dim() < 5 || final_latents[i].shape()[2] < qwen_image_latent_layers) {
+                LOG_ERROR("qwen image layered expected at least %d latent layers, got shape dim=%d",
+                          qwen_image_latent_layers,
+                          final_latents[i].dim());
+                return nullptr;
+            }
+            for (int layer_index = 0; layer_index < qwen_image_latent_layers; layer_index++) {
+                if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
+                    LOG_ERROR("cancelling latent decodings");
+                    cancelled = true;
+                    break;
+                }
+                sd::Tensor<float> layer_latent = sd::ops::slice(final_latents[i], 2, layer_index, layer_index + 1);
+                layer_latent.squeeze_(2);
+                sd::Tensor<float> image = sd_ctx->sd->decode_first_stage(layer_latent);
+                if (image.empty()) {
+                    LOG_ERROR("decode_first_stage failed for latent %zu layer %d", i + 1, layer_index + 1);
+                    return nullptr;
+                }
+                decoded_images.push_back(std::move(image));
+            }
+            if (cancelled) {
+                break;
+            }
+        } else {
+            sd::Tensor<float> image = sd_ctx->sd->decode_first_stage(final_latents[i]);
+            if (image.empty()) {
+                LOG_ERROR("decode_first_stage failed for latent %" PRId64, i + 1);
+                return nullptr;
+            }
+            decoded_images.push_back(std::move(image));
         }
-        decoded_images.push_back(std::move(image));
         int64_t t2 = ggml_time_ms();
         LOG_INFO("latent %zu decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
     }
