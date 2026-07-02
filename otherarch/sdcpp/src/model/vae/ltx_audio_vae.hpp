@@ -604,6 +604,7 @@ namespace LTXV {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
             x         = ggml_ext_pad_ext(ctx->ggml_ctx,
+                                         ctx->backend,
                                          x,
                                          0,
                                          1,
