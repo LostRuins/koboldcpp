@@ -101,6 +101,9 @@ int sd_get_preview_interval();
 bool sd_should_preview_denoised();
 bool sd_should_preview_noisy();
 
+sd_graph_eval_callback_t sd_get_backend_eval_callback();
+void* sd_get_backend_eval_callback_data();
+
 // test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
 bool sd_backend_is(ggml_backend_t backend, const std::string& name);
 

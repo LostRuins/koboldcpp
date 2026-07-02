@@ -360,6 +360,9 @@ int sd_preview_interval              = 1;
 bool sd_preview_denoised             = true;
 bool sd_preview_noisy                = false;
 
+static sd_graph_eval_callback_t sd_backend_eval_cb = nullptr;
+static void* sd_backend_eval_cb_data               = nullptr;
+
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
     return converter.from_bytes(utf8_str);
@@ -662,6 +665,11 @@ void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, b
     sd_preview_noisy    = noisy;
 }
 
+void sd_set_backend_eval_callback(sd_graph_eval_callback_t cb, void* data) {
+    sd_backend_eval_cb      = cb;
+    sd_backend_eval_cb_data = data;
+}
+
 sd_preview_cb_t sd_get_preview_callback() {
     return sd_preview_cb;
 }
@@ -680,6 +688,14 @@ bool sd_should_preview_denoised() {
 }
 bool sd_should_preview_noisy() {
     return sd_preview_noisy;
+}
+
+sd_graph_eval_callback_t sd_get_backend_eval_callback() {
+    return sd_backend_eval_cb;
+}
+
+void* sd_get_backend_eval_callback_data() {
+    return sd_backend_eval_cb_data;
 }
 
 sd_progress_cb_t sd_get_progress_callback() {

@@ -78,7 +78,7 @@ public:
             scale_factor = 16;
         } else if (sd_version_uses_flux2_vae(version)) {
             scale_factor = 16;
-        } else if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1) {
+        } else if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version)) {
             scale_factor = 1;
         }
         return scale_factor;

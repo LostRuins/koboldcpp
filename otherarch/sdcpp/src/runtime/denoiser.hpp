@@ -1338,6 +1338,68 @@ struct SefiFlowDenoiser : public FluxFlowDenoiser {
     }
 };
 
+// MiniT2I predicts x0 directly and integrates a linear flow ODE:
+//   x_{t+dt} = x_t + (x0 - x_t)/(1 - t) * dt,  t in [0, 1), x0 = start = noise * 2.
+// Mapping sigma = 1 - t makes the generic Euler update
+//   x += (x - denoised)/sigma * (sigma_next - sigma)
+// exactly reproduce that step when denoised == x0. To make the generic
+// `denoised = pred * c_out + x * c_skip` yield x0 from the model's raw x0
+// prediction we use c_skip = 0, c_out = 1, c_in = 1. Sigmas run linearly 1 -> 0.
+struct MiniT2IFlowDenoiser : public Denoiser {
+    float sigma_min() override {
+        return 0.0f;
+    }
+
+    float sigma_max() override {
+        return 1.0f;
+    }
+
+    float sigma_to_t(float sigma) override {
+        return 1.0f - sigma;
+    }
+
+    float t_to_sigma(float t) override {
+        return 1.0f - t;
+    }
+
+    std::vector<float> get_scalings(float sigma) override {
+        SD_UNUSED(sigma);
+        float c_skip = 0.0f;
+        float c_out  = 1.0f;
+        float c_in   = 1.0f;
+        return {c_skip, c_out, c_in};
+    }
+
+    sd::Tensor<float> noise_scaling(float sigma,
+                                    const sd::Tensor<float>& noise,
+                                    const sd::Tensor<float>& latent) override {
+        SD_UNUSED(sigma);
+        SD_UNUSED(latent);
+        // Sampling starts from x0_init = noise * 2 (see MiniT2I reference).
+        return noise * 2.0f;
+    }
+
+    sd::Tensor<float> inverse_noise_scaling(float sigma, const sd::Tensor<float>& latent) override {
+        SD_UNUSED(sigma);
+        return latent;
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) override {
+        SD_UNUSED(image_seq_len);
+        SD_UNUSED(scheduler_type);
+        SD_UNUSED(version);
+        SD_UNUSED(extra_sample_args);
+        // Uniform t schedule 0 -> 1 => sigma 1 -> 0, matching the reference loop.
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+        for (uint32_t i = 0; i < n; ++i) {
+            sigmas.push_back(1.0f - static_cast<float>(i) / static_cast<float>(n));
+        }
+        sigmas.push_back(0.0f);
+        return sigmas;
+    }
+};
+
 typedef std::function<sd::guidance::GuiderOutput(const sd::Tensor<float>&, float, int)> denoise_cb_t;
 
 static std::pair<float, float> get_ancestral_step(float sigma_from,

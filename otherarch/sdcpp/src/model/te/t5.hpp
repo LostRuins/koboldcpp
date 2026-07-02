@@ -26,12 +26,65 @@ struct T5Config {
     static T5Config detect_from_weights(const String2TensorStorage& tensor_storage_map,
                                         const std::string& prefix,
                                         bool is_umt5 = false) {
-        (void)tensor_storage_map;
-        (void)prefix;
         T5Config config;
         if (is_umt5) {
             config.vocab_size         = 256384;
             config.relative_attention = false;
+        }
+        auto find_tensor = [&](const std::string& suffix) -> const TensorStorage* {
+            auto it = tensor_storage_map.find(prefix + "." + suffix);
+            if (it != tensor_storage_map.end()) {
+                return &it->second;
+            }
+            it = tensor_storage_map.find(prefix + suffix);
+            if (it != tensor_storage_map.end()) {
+                return &it->second;
+            }
+            return nullptr;
+        };
+
+        if (const TensorStorage* shared = find_tensor("shared.weight")) {
+            if (shared->n_dims == 2) {
+                config.vocab_size = shared->ne[1];
+                config.model_dim  = shared->ne[0];
+            }
+        }
+        if (const TensorStorage* q = find_tensor("encoder.block.0.layer.0.SelfAttention.q.weight")) {
+            if (q->n_dims == 2) {
+                config.model_dim  = q->ne[0];
+                int64_t inner_dim = q->ne[1];
+                // Flan-T5/T5 uses d_kv=64 for common sizes.
+                if (inner_dim % 64 == 0) {
+                    config.num_heads = inner_dim / 64;
+                }
+            }
+        }
+        if (const TensorStorage* wi = find_tensor("encoder.block.0.layer.1.DenseReluDense.wi_0.weight")) {
+            if (wi->n_dims == 2) {
+                config.model_dim = wi->ne[0];
+                config.ff_dim    = wi->ne[1];
+            }
+        }
+        int64_t detected_layers = 0;
+        for (const auto& [name, _] : tensor_storage_map) {
+            std::string base = prefix;
+            if (!base.empty() && base.back() != '.') {
+                base += ".";
+            }
+            std::string layer_prefix = base + "encoder.block.";
+            if (!starts_with(name, layer_prefix)) {
+                continue;
+            }
+            size_t pos = layer_prefix.size();
+            size_t dot = name.find('.', pos);
+            if (dot == std::string::npos) {
+                continue;
+            }
+            int64_t layer   = atoi(name.substr(pos, dot - pos).c_str());
+            detected_layers = std::max(detected_layers, layer + 1);
+        }
+        if (detected_layers > 0) {
+            config.num_layers = detected_layers;
         }
         return config;
     }

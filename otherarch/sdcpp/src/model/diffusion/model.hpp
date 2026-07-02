@@ -52,6 +52,10 @@ struct LTXAVDiffusionExtra {
     const sd::Tensor<float>* video_positions = nullptr;
 };
 
+struct MiniT2IDiffusionExtra {
+    const sd::Tensor<float>* mask = nullptr;
+};
+
 using DiffusionExtraParams = std::variant<std::monostate,
                                           UNetDiffusionExtra,
                                           SkipLayerDiffusionExtra,
@@ -59,7 +63,8 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           AnimaDiffusionExtra,
                                           WanDiffusionExtra,
                                           HiDreamO1DiffusionExtra,
-                                          LTXAVDiffusionExtra>;
+                                          LTXAVDiffusionExtra,
+                                          MiniT2IDiffusionExtra>;
 
 struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;

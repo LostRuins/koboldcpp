@@ -1378,6 +1378,101 @@ struct T5CLIPEmbedder : public Conditioner {
     }
 };
 
+struct MiniT2IConditioner : public Conditioner {
+    T5UniGramTokenizer tokenizer;
+    std::shared_ptr<T5Runner> t5;
+    size_t prompt_length = 256;
+
+    MiniT2IConditioner(ggml_backend_t backend,
+                       const String2TensorStorage& tensor_storage_map      = {},
+                       std::shared_ptr<RunnerWeightManager> weight_manager = nullptr) {
+        bool use_t5 = false;
+        for (const auto& pair : tensor_storage_map) {
+            if (pair.first.find("text_encoders.t5xxl") != std::string::npos) {
+                use_t5 = true;
+                break;
+            }
+        }
+        if (!use_t5) {
+            LOG_WARN("IMPORTANT NOTICE: No MiniT2I T5 text encoder provided, cannot process prompts!");
+            return;
+        }
+        t5 = std::make_shared<T5Runner>(backend, tensor_storage_map, "text_encoders.t5xxl.transformer", false, weight_manager);
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        if (t5) {
+            t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        }
+    }
+
+    void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
+        if (t5) {
+            t5->set_max_graph_vram_bytes(max_vram_bytes);
+        }
+    }
+
+    void set_stream_layers_enabled(bool enabled) override {
+        if (t5) {
+            t5->set_stream_layers_enabled(enabled);
+        }
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        if (t5) {
+            t5->set_flash_attention_enabled(enabled);
+        }
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        if (t5) {
+            t5->set_weight_adapter(adapter);
+        }
+    }
+
+    void runner_done() override {
+        if (t5) {
+            t5->runner_done();
+        }
+    }
+
+    SDCondition get_learned_condition(int n_threads,
+                                      const ConditionerParams& conditioner_params) override {
+        SDCondition result;
+        if (!t5) {
+            result.c_crossattn = sd::Tensor<float>::zeros({1024, static_cast<int64_t>(prompt_length)});
+            result.c_vector    = sd::Tensor<float>::zeros({static_cast<int64_t>(prompt_length)});
+            return result;
+        }
+
+        std::vector<int> tokens = tokenizer.encode(conditioner_params.text);
+        if (tokens.size() > prompt_length) {
+            tokens.resize(prompt_length);
+        }
+        std::vector<float> mask(tokens.size(), 1.0f);
+        while (tokens.size() < prompt_length) {
+            tokens.push_back(tokenizer.PAD_TOKEN_ID);
+            mask.push_back(0.0f);
+        }
+
+        sd::Tensor<int32_t> input_ids({static_cast<int64_t>(tokens.size())}, tokens);
+        std::vector<float> t5_mask(mask.size(), 0.0f);
+        for (size_t i = 0; i < mask.size(); ++i) {
+            t5_mask[i] = mask[i] > 0.0f ? 0.0f : -HUGE_VALF;
+        }
+        sd::Tensor<float> hidden_states = t5->compute(n_threads,
+                                                      input_ids,
+                                                      sd::Tensor<float>::from_vector(t5_mask),
+                                                      false,
+                                                      true,
+                                                      true);
+        GGML_ASSERT(!hidden_states.empty());
+        result.c_crossattn = std::move(hidden_states);
+        result.c_vector    = sd::Tensor<float>::from_vector(mask);
+        return result;
+    }
+};
+
 struct AnimaConditioner : public Conditioner {
     std::shared_ptr<BPETokenizer> qwen_tokenizer;
     T5UniGramTokenizer t5_tokenizer;

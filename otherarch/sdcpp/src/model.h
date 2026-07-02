@@ -46,6 +46,7 @@ enum SDVersion {
     VERSION_OVIS_IMAGE,
     VERSION_ERNIE_IMAGE,
     VERSION_LENS,
+    VERSION_MINIT2I,
     VERSION_LONGCAT,
     VERSION_PID,
     VERSION_IDEOGRAM4,
@@ -174,6 +175,13 @@ static inline bool sd_version_is_lens(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_minit2i(SDVersion version) {
+    if (version == VERSION_MINIT2I) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_pid(SDVersion version) {
     if (version == VERSION_PID) {
         return true;
@@ -247,6 +255,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_boogu_image(version) ||
         sd_version_is_ernie_image(version) ||
         sd_version_is_lens(version) ||
+        sd_version_is_minit2i(version) ||
         sd_version_is_longcat(version) ||
         sd_version_is_pid(version) ||
         sd_version_is_ideogram4(version) ||

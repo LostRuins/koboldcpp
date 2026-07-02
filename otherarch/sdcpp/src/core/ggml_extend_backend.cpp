@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/util.h"
+#include "ggml/src/ggml-impl.h"
 #include "stable-diffusion.h"
 
 static std::string trim_copy(const std::string& value) {
@@ -110,7 +111,67 @@ static std::string resolve_first_device_by_type(enum ggml_backend_dev_type type)
     if (dev == nullptr) {
         return "";
     }
-    return ggml_backend_dev_name(dev);
+    const char* dev_name = ggml_backend_dev_name(dev);
+    if (dev_name != nullptr && dev_name[0] != '\0') {
+        return dev_name;
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    const char* reg_name   = reg != nullptr ? ggml_backend_reg_name(reg) : nullptr;
+    return reg_name != nullptr ? reg_name : "";
+}
+
+static ggml_backend_dev_t resolve_first_device_by_registry_name(const std::string& name) {
+    std::string lower = lower_copy(trim_copy(name));
+    if (lower == "metal") {
+        lower = "mtl";
+    }
+    if (lower.empty()) {
+        return nullptr;
+    }
+
+    const size_t device_count = ggml_backend_dev_count();
+    for (size_t i = 0; i < device_count; ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        if (reg == nullptr) {
+            continue;
+        }
+        const char* reg_name = ggml_backend_reg_name(reg);
+        if (reg_name != nullptr && lower_copy(reg_name) == lower) {
+            return dev;
+        }
+    }
+    return nullptr;
+}
+
+static ggml_backend_dev_t resolve_device_by_name(const std::string& name) {
+    const std::string lower = lower_copy(trim_copy(name));
+    if (lower.empty()) {
+        return nullptr;
+    }
+
+    const size_t device_count = ggml_backend_dev_count();
+    for (size_t i = 0; i < device_count; ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        const char* dev_name   = ggml_backend_dev_name(dev);
+        if (dev_name != nullptr && lower_copy(dev_name) == lower) {
+            return dev;
+        }
+    }
+    return nullptr;
+}
+
+static std::string backend_device_name(ggml_backend_dev_t dev) {
+    if (dev == nullptr) {
+        return "";
+    }
+    const char* name = ggml_backend_dev_name(dev);
+    if (name != nullptr && name[0] != '\0') {
+        return name;
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    const char* reg_name   = reg != nullptr ? ggml_backend_reg_name(reg) : nullptr;
+    return reg_name != nullptr ? reg_name : "";
 }
 
 static ggml_backend_buffer_t ggml_backend_tensor_buffer(const struct ggml_tensor* tensor) {
@@ -296,6 +357,10 @@ std::string sd_backend_resolve_name(const std::string& name) {
         return resolve_first_device_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
     }
 
+    if (ggml_backend_dev_t dev = resolve_first_device_by_registry_name(requested)) {
+        return backend_device_name(dev);
+    }
+
     const size_t device_count = ggml_backend_dev_count();
     for (size_t i = 0; i < device_count; ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -328,7 +393,20 @@ static ggml_backend_t init_named_backend(const std::string& name) {
         return ggml_backend_init_best();
     }
 
+    if (ggml_backend_dev_t dev = resolve_device_by_name(name)) {
+        return ggml_backend_dev_init(dev, nullptr);
+    }
+    if (ggml_backend_dev_t dev = resolve_first_device_by_registry_name(name)) {
+        return ggml_backend_dev_init(dev, nullptr);
+    }
+
     std::string resolved = sd_backend_resolve_name(name);
+    if (ggml_backend_dev_t dev = resolve_device_by_name(resolved)) {
+        return ggml_backend_dev_init(dev, nullptr);
+    }
+    if (ggml_backend_dev_t dev = resolve_first_device_by_registry_name(resolved)) {
+        return ggml_backend_dev_init(dev, nullptr);
+    }
     if (resolved.empty()) {
         return nullptr;
     }
@@ -362,6 +440,68 @@ bool sd_backend_cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
         }
     }
     return false;
+}
+
+static ggml_cgraph sd_ggml_graph_view(ggml_cgraph* cgraph0, int i0, int i1) {
+    ggml_cgraph cgraph = {
+        /*.size             =*/0,
+        /*.n_nodes          =*/i1 - i0,
+        /*.n_leafs          =*/0,
+        /*.nodes            =*/cgraph0->nodes + i0,
+        /*.grads            =*/nullptr,
+        /*.grad_accs        =*/nullptr,
+        /*.leafs            =*/nullptr,
+        /*.use_counts       =*/cgraph0->use_counts,
+        /*.visited_hash_set =*/cgraph0->visited_hash_set,
+        /*.order            =*/cgraph0->order,
+        /*.uid              =*/0,
+    };
+    return cgraph;
+}
+
+ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
+                                                        ggml_cgraph* gf,
+                                                        sd_graph_eval_callback_t callback_eval,
+                                                        void* callback_eval_user_data) {
+    if (callback_eval == nullptr) {
+        return ggml_backend_graph_compute(backend, gf);
+    }
+
+    ggml_status status = GGML_STATUS_SUCCESS;
+    const int n_nodes  = ggml_graph_n_nodes(gf);
+    bool stopped       = false;
+
+    for (int j0 = 0; j0 < n_nodes; ++j0) {
+        ggml_tensor* t = ggml_graph_node(gf, j0);
+        bool need      = callback_eval(t, true, callback_eval_user_data);
+        int j1         = j0;
+
+        while (!need && j1 < n_nodes - 1) {
+            t    = ggml_graph_node(gf, ++j1);
+            need = callback_eval(t, true, callback_eval_user_data);
+        }
+
+        ggml_cgraph gv = sd_ggml_graph_view(gf, j0, j1 + 1);
+        status         = ggml_backend_graph_compute_async(backend, &gv);
+        if (status != GGML_STATUS_SUCCESS) {
+            break;
+        }
+
+        ggml_backend_synchronize(backend);
+
+        if (need && !callback_eval(t, false, callback_eval_user_data)) {
+            stopped = true;
+            break;
+        }
+
+        j0 = j1;
+    }
+
+    ggml_backend_synchronize(backend);
+    if (stopped && status == GGML_STATUS_SUCCESS) {
+        status = GGML_STATUS_ABORTED;
+    }
+    return status;
 }
 
 const char* sd_get_system_info() {
@@ -599,7 +739,7 @@ bool SDBackendManager::validate(std::string* error) const {
             }
             return false;
         }
-        if (!sd_backend_resolve_name(name).empty()) {
+        if (!sd_backend_resolve_name(name).empty() || resolve_first_device_by_registry_name(name) != nullptr) {
             return true;
         }
         if (error != nullptr) {

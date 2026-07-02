@@ -710,7 +710,18 @@ bool SDContextParams::resolve(SDMode mode) {
 }
 
 bool SDContextParams::validate(SDMode mode) {
-    if (mode != UPSCALE && mode != METADATA && model_path.length() == 0 && diffusion_model_path.length() == 0) {
+    if (mode == CONVERT) {
+        const bool has_convert_input = model_path.length() != 0 ||
+                                       clip_l_path.length() != 0 ||
+                                       clip_g_path.length() != 0 ||
+                                       t5xxl_path.length() != 0 ||
+                                       diffusion_model_path.length() != 0 ||
+                                       vae_path.length() != 0;
+        if (!has_convert_input) {
+            LOG_ERROR("error: convert mode needs at least one model input path\n");
+            return false;
+        }
+    } else if (mode != UPSCALE && mode != METADATA && model_path.length() == 0 && diffusion_model_path.length() == 0) {
         LOG_ERROR("error: the following arguments are required: model_path/diffusion_model\n");
         return false;
     }

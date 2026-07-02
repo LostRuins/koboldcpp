@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <functional>
@@ -53,6 +54,9 @@ struct SDCliParams {
     bool metadata_brief      = false;
     bool metadata_all        = false;
 
+    std::string imatrix_out;
+    std::vector<std::string> imatrix_in;
+
     bool normal_exit = false;
 
     ArgOptions get_options() {
@@ -79,6 +83,11 @@ struct SDCliParams {
              "path to write preview image to (default: ./preview.png). Multi-frame previews support .avi, .webm, and animated .webp",
              0,
              &preview_path},
+            {"",
+             "--imat-out",
+             "compute the imatrix for this run and save it to the provided path",
+             0,
+             &imatrix_out},
         };
 
         options.int_options = {
@@ -179,6 +188,14 @@ struct SDCliParams {
             return -1;
         };
 
+        auto on_imatrix_in_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            imatrix_in.push_back(argv[index]);
+            return 1;
+        };
+
         options.manual_options = {
             {"-M",
              "--mode",
@@ -192,6 +209,10 @@ struct SDCliParams {
              "--help",
              "show this help message and exit",
              on_help_arg},
+            {"",
+             "--imat-in",
+             "load an imatrix file for quantization or continued collection; can be specified multiple times",
+             on_imatrix_in_arg},
         };
 
         return options;
@@ -253,6 +274,7 @@ struct SDCliParams {
             << "  preview_fps: " << preview_fps << ",\n"
             << "  taesd_preview: " << (taesd_preview ? "true" : "false") << ",\n"
             << "  preview_noisy: " << (preview_noisy ? "true" : "false") << ",\n"
+            << "  imatrix_out: \"" << imatrix_out << "\",\n"
             << "  metadata_raw: " << (metadata_raw ? "true" : "false") << ",\n"
             << "  metadata_brief: " << (metadata_brief ? "true" : "false") << ",\n"
             << "  metadata_all: " << (metadata_all ? "true" : "false") << "\n"
@@ -605,13 +627,32 @@ int main(int argc, const char* argv[]) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", gen_params.to_string().c_str());
 
+    if (!cli_params.imatrix_out.empty()) {
+        if (fs::exists(cli_params.imatrix_out) &&
+            std::find(cli_params.imatrix_in.begin(), cli_params.imatrix_in.end(), cli_params.imatrix_out) == cli_params.imatrix_in.end()) {
+            LOG_WARN("imatrix file '%s' already exists and will be overwritten", cli_params.imatrix_out.c_str());
+        }
+        enable_imatrix_collection();
+    }
+
+    for (const auto& in_file : cli_params.imatrix_in) {
+        LOG_INFO("loading imatrix from '%s'", in_file.c_str());
+        if (!load_imatrix(in_file.c_str())) {
+            LOG_WARN("failed to load imatrix from '%s'", in_file.c_str());
+        }
+    }
+
     if (cli_params.mode == CONVERT) {
-        bool success = convert(ctx_params.model_path.c_str(),
-                               ctx_params.vae_path.c_str(),
-                               cli_params.output_path.c_str(),
-                               ctx_params.wtype,
-                               ctx_params.tensor_type_rules.c_str(),
-                               cli_params.convert_name);
+        bool success = convert_with_components(ctx_params.model_path.c_str(),
+                                               ctx_params.clip_l_path.c_str(),
+                                               ctx_params.clip_g_path.c_str(),
+                                               ctx_params.t5xxl_path.c_str(),
+                                               ctx_params.diffusion_model_path.c_str(),
+                                               ctx_params.vae_path.c_str(),
+                                               cli_params.output_path.c_str(),
+                                               ctx_params.wtype,
+                                               ctx_params.tensor_type_rules.c_str(),
+                                               cli_params.convert_name);
         if (!success) {
             LOG_ERROR("convert '%s'/'%s' to '%s' failed",
                       ctx_params.model_path.c_str(),
@@ -831,6 +872,11 @@ int main(int argc, const char* argv[]) {
     if (!save_results(cli_params, ctx_params, gen_params, results.data(), num_results, generated_audio)) {
         free_sd_audio(generated_audio);
         return 1;
+    }
+
+    if (!cli_params.imatrix_out.empty()) {
+        LOG_INFO("saving imatrix to '%s'", cli_params.imatrix_out.c_str());
+        save_imatrix(cli_params.imatrix_out.c_str());
     }
 
     free_sd_audio(generated_audio);

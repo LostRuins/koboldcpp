@@ -76,29 +76,22 @@ static bool load_tensors_for_export(ModelLoader& model_loader,
     return success;
 }
 
-bool convert(const char* input_path,
-             const char* vae_path,
-             const char* output_path,
-             sd_type_t output_type,
-             const char* tensor_type_rules,
-             bool convert_name) {
-    ModelLoader model_loader;
-
-    if (!model_loader.init_from_file(input_path)) {
-        LOG_ERROR("init model loader from file failed: '%s'", input_path);
+static bool init_convert_path(ModelLoader& model_loader, const char* path, const char* prefix, bool& loaded_any) {
+    if (path == nullptr || strlen(path) == 0) {
+        return true;
+    }
+    if (!model_loader.init_from_file(path, prefix)) {
+        LOG_ERROR("init model loader from file failed: '%s'", path);
         return false;
     }
+    loaded_any = true;
+    return true;
+}
 
-    if (vae_path != nullptr && strlen(vae_path) > 0) {
-        if (!model_loader.init_from_file(vae_path, "vae.")) {
-            LOG_ERROR("init model loader from file failed: '%s'", vae_path);
-            return false;
-        }
-    }
-    if (convert_name) {
-        model_loader.convert_tensors_name();
-    }
-
+static bool export_loaded_model(ModelLoader& model_loader,
+                                const char* output_path,
+                                sd_type_t output_type,
+                                const char* tensor_type_rules) {
     ggml_type type             = sd_type_to_ggml_type(output_type);
     bool output_is_safetensors = ends_with(output_path, ".safetensors");
     TensorTypeRules type_rules = parse_tensor_type_rules(tensor_type_rules);
@@ -135,4 +128,56 @@ bool convert(const char* input_path,
 
     ggml_free(ggml_ctx);
     return success;
+}
+
+bool convert_with_components(const char* model_path,
+                             const char* clip_l_path,
+                             const char* clip_g_path,
+                             const char* t5xxl_path,
+                             const char* diffusion_model_path,
+                             const char* vae_path,
+                             const char* output_path,
+                             sd_type_t output_type,
+                             const char* tensor_type_rules,
+                             bool convert_name) {
+    ModelLoader model_loader;
+    bool loaded_any = false;
+
+    if (!init_convert_path(model_loader, model_path, "", loaded_any) ||
+        !init_convert_path(model_loader, clip_l_path, "text_encoders.clip_l.transformer.", loaded_any) ||
+        !init_convert_path(model_loader, clip_g_path, "text_encoders.clip_g.transformer.", loaded_any) ||
+        !init_convert_path(model_loader, t5xxl_path, "text_encoders.t5xxl.transformer.", loaded_any) ||
+        !init_convert_path(model_loader, diffusion_model_path, "model.diffusion_model.", loaded_any) ||
+        !init_convert_path(model_loader, vae_path, "vae.", loaded_any)) {
+        return false;
+    }
+
+    if (!loaded_any) {
+        LOG_ERROR("no input model path provided for convert");
+        return false;
+    }
+
+    if (convert_name) {
+        model_loader.convert_tensors_name();
+    }
+
+    return export_loaded_model(model_loader, output_path, output_type, tensor_type_rules);
+}
+
+bool convert(const char* input_path,
+             const char* vae_path,
+             const char* output_path,
+             sd_type_t output_type,
+             const char* tensor_type_rules,
+             bool convert_name) {
+    return convert_with_components(input_path,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   vae_path,
+                                   output_path,
+                                   output_type,
+                                   tensor_type_rules,
+                                   convert_name);
 }

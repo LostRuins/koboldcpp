@@ -2473,7 +2473,10 @@ protected:
             sd_backend_cpu_set_n_threads(runtime_backend, n_threads);
         }
 
-        ggml_status status = ggml_backend_graph_compute(runtime_backend, gf);
+        ggml_status status = sd_backend_graph_compute_with_eval_callback(runtime_backend,
+                                                                         gf,
+                                                                         sd_get_backend_eval_callback(),
+                                                                         sd_get_backend_eval_callback_data());
         if (status != GGML_STATUS_SUCCESS) {
             LOG_ERROR("%s compute failed: %s", get_desc().c_str(), ggml_status_to_string(status));
             return std::nullopt;
