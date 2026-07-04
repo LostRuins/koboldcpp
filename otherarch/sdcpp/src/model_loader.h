@@ -27,6 +27,8 @@ struct MmapTensorStore {
     std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
 };
 
+bool is_unused_tensor(const std::string& name);
+
 class ModelLoader {
 protected:
     SDVersion version_ = VERSION_COUNT;

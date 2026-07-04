@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "ggml-backend.h"
 #include "ggml.h"
@@ -37,10 +38,16 @@ struct SDBackendHandleDeleter {
 
 using SDBackendHandle = std::unique_ptr<struct ggml_backend, SDBackendHandleDeleter>;
 
+enum class SDSplitMode {
+    LAYER,
+    ROW,
+};
+
 class SDBackendManager {
 private:
     SDBackendAssignment runtime_assignment_;
     SDBackendAssignment params_assignment_;
+    SDBackendAssignment split_mode_assignment_;
     std::unordered_map<std::string, SDBackendHandle> backends_;
 
 public:
@@ -52,15 +59,23 @@ public:
 
     bool init(const char* backend_spec,
               const char* params_backend_spec,
+              const char* split_mode_spec,
               std::string* error);
     void reset();
 
     ggml_backend_t runtime_backend(SDBackendModule module);
     ggml_backend_t params_backend(SDBackendModule module);
 
+    std::vector<ggml_backend_t> runtime_backends(SDBackendModule module);
+
+    SDSplitMode split_mode(SDBackendModule module) const;
+    ggml_backend_buffer_type_t split_buffer_type(ggml_backend_t backend,
+                                                 const std::vector<float>& tensor_split);
+
     bool runtime_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_cpu(SDBackendModule module);
     bool params_backend_is_disk(SDBackendModule module) const;
+    bool params_backend_follows_runtime(SDBackendModule module) const;
     bool runtime_backend_supports_host_buffer(SDBackendModule module);
 
 private:

@@ -100,12 +100,41 @@ size_t estimate_tensors_size(const std::map<std::string, ggml_tensor*>& tensors)
     return size;
 }
 
+void ModelManager::set_split_buffer_type(ggml_backend_t compute_backend, ggml_backend_buffer_type_t split_buft) {
+    if (compute_backend == nullptr) {
+        return;
+    }
+    if (split_buft == nullptr) {
+        split_buffer_types_.erase(compute_backend);
+        return;
+    }
+    split_buffer_types_[compute_backend] = split_buft;
+}
+
+bool ModelManager::tensor_shape_supports_split_buffer(const ggml_tensor* tensor) {
+    return tensor != nullptr &&
+           tensor->view_src == nullptr &&
+           ggml_is_contiguous(tensor) &&
+           ggml_n_dims(tensor) == 2 &&
+           tensor->ne[0] >= 256 &&
+           tensor->ne[1] >= 256;
+}
+
+ggml_backend_buffer_type_t ModelManager::split_buffer_type_for(const TensorState& state) const {
+    if (!state.allow_split_buffer || !tensor_shape_supports_split_buffer(state.tensor)) {
+        return nullptr;
+    }
+    auto it = split_buffer_types_.find(state.compute_backend);
+    return it != split_buffer_types_.end() ? it->second : nullptr;
+}
+
 bool ModelManager::register_param_tensors(const std::string& desc,
                                           std::map<std::string, ggml_tensor*> tensors,
                                           ResidencyMode residency_mode,
                                           ggml_backend_t compute_backend,
                                           ggml_backend_t params_backend,
-                                          size_t* registered_tensor_size) {
+                                          size_t* registered_tensor_size,
+                                          bool allow_split_buffer) {
     if (desc.empty()) {
         LOG_ERROR("model manager tensor desc is empty");
         return false;
@@ -129,13 +158,14 @@ bool ModelManager::register_param_tensors(const std::string& desc,
         }
         ggml_set_name(tensor, name.c_str());
 
-        auto state             = std::make_unique<TensorState>();
-        state->name            = name;
-        state->tensor          = tensor;
-        state->desc            = desc;
-        state->residency_mode  = residency_mode;
-        state->compute_backend = compute_backend;
-        state->params_backend  = params_backend;
+        auto state                = std::make_unique<TensorState>();
+        state->name               = name;
+        state->tensor             = tensor;
+        state->desc               = desc;
+        state->residency_mode     = residency_mode;
+        state->compute_backend    = compute_backend;
+        state->params_backend     = params_backend;
+        state->allow_split_buffer = allow_split_buffer;
         new_states.push_back(std::move(state));
     }
 
@@ -237,7 +267,7 @@ bool ModelManager::load_tensors_to_params_backend(const std::vector<TensorState*
 }
 
 bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorState*>& states) {
-    std::map<ggml_backend_t, std::vector<TensorState*>> states_by_compute_backend;
+    std::map<std::pair<ggml_backend_t, ggml_backend_buffer_type_t>, std::vector<TensorState*>> states_by_staging_target;
     for (TensorState* state : states) {
         if (state == nullptr || should_ignore(*state) || is_optional_missing_tensor(state->name)) {
             continue;
@@ -257,11 +287,16 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
             LOG_ERROR("model manager tensor '%s' is not loaded to params backend", state->name.c_str());
             return false;
         }
-        states_by_compute_backend[state->compute_backend].push_back(state);
+        ggml_backend_buffer_type_t staging_buft = split_buffer_type_for(*state);
+        if (staging_buft == nullptr) {
+            staging_buft = ggml_backend_get_default_buffer_type(state->compute_backend);
+        }
+        states_by_staging_target[{state->compute_backend, staging_buft}].push_back(state);
     }
 
-    for (const auto& pair : states_by_compute_backend) {
-        ggml_backend_t compute_backend          = pair.first;
+    for (const auto& pair : states_by_staging_target) {
+        ggml_backend_t compute_backend          = pair.first.first;
+        ggml_backend_buffer_type_t staging_buft = pair.first.second;
         const std::vector<TensorState*>& states = pair.second;
         if (states.empty()) {
             continue;
@@ -285,7 +320,7 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
             staged_tensors.push_back({state, staging_tensor});
         }
 
-        ggml_backend_buffer_t compute_buffer = ggml_backend_alloc_ctx_tensors(staging_ctx, compute_backend);
+        ggml_backend_buffer_t compute_buffer = ggml_backend_alloc_ctx_tensors_from_buft(staging_ctx, staging_buft);
         if (compute_buffer == nullptr) {
             LOG_ERROR("model manager alloc compute params backend buffer failed, num_tensors = %zu",
                       staged_tensors.size());
@@ -349,6 +384,17 @@ bool ModelManager::apply_loras_to_params(const std::vector<TensorState*>& states
         if (state->compute_backend == nullptr) {
             LOG_ERROR("model manager compute backend is null for lora target tensor '%s'", state->name.c_str());
             return false;
+        }
+        if (state->tensor->buffer != nullptr &&
+            ggml_backend_buffer_get_type(state->tensor->buffer) == split_buffer_type_for(*state)) {
+            if (!warned_split_lora_skip_) {
+                LOG_WARN(
+                    "model manager skipping direct lora application to row-split tensors "
+                    "(use --lora-apply-mode at_runtime with row split)");
+                warned_split_lora_skip_ = true;
+            }
+            state->applied_lora_epoch = current_lora_epoch_;
+            continue;
         }
         if (state->tensor->data == nullptr) {
             LOG_ERROR("model manager lora target tensor '%s' is not prepared", state->name.c_str());
@@ -694,6 +740,8 @@ ggml_backend_buffer_type_t ModelManager::params_buffer_type_for(const TensorStat
         if (compute_dev != nullptr) {
             params_buft = ggml_backend_dev_host_buffer_type(compute_dev);
         }
+    } else if (state.params_backend == state.compute_backend) {
+        params_buft = split_buffer_type_for(state);
     }
     if (params_buft == nullptr) {
         params_buft = ggml_backend_get_default_buffer_type(state.params_backend);

@@ -151,6 +151,8 @@ struct SDContextParams {
     bool eager_load             = false;
     std::string backend;
     std::string params_backend;
+    std::string split_mode;
+    bool auto_fit = false;
     std::string rpc_servers;
     std::string effective_backend;
     std::string effective_params_backend;

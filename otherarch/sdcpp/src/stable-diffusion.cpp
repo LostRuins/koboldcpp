@@ -4,11 +4,14 @@
 #include <filesystem>
 #include <limits>
 #include <set>
+#include <type_traits>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "core/ggml_extend.hpp"
 #include "core/ggml_graph_cut.h"
+#include "core/layer_split_partition.h"
 
 #include "core/rng.hpp"
 #include "core/rng_mt19937.hpp"
@@ -19,6 +22,7 @@
 #include "stable-diffusion.h"
 
 #include "conditioning/conditioner.hpp"
+#include "core/backend_fit.h"
 #include "extensions/generation_extension.h"
 #include "model/adapter/lora.hpp"
 #include "model/diffusion/anima.hpp"
@@ -172,6 +176,13 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
 
 /*=============================================== StableDiffusionGGML ================================================*/
 
+template <typename T, typename = void>
+struct has_set_runtime_backends : std::false_type {};
+template <typename T>
+struct has_set_runtime_backends<T,
+                                std::void_t<decltype(std::declval<T&>().set_runtime_backends(
+                                    std::declval<const std::vector<ggml_backend_t>&>()))>> : std::true_type {};
+
 static_assert(std::atomic<sd_cancel_mode_t>::is_always_lock_free,
               "sd_cancel_mode_t must be lock-free");
 
@@ -212,6 +223,8 @@ public:
     bool eager_load    = false;
     std::string backend_spec;
     std::string params_backend_spec;
+    std::string split_mode_spec;
+    bool auto_fit_enabled = false;
 
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
@@ -279,23 +292,245 @@ public:
         if (model_manager == nullptr) {
             return true;
         }
+        ModelManager::ResidencyMode residency_mode =
+            backend_manager.params_backend_is_disk(module) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend;
+
+        std::vector<ggml_backend_t> module_backends = backend_manager.runtime_backends(module);
+        if (module_backends.size() > 1) {
+            if constexpr (has_set_runtime_backends<T>::value) {
+                if (module == SDBackendModule::DIFFUSION || module == SDBackendModule::TE) {
+                    if (backend_manager.split_mode(module) == SDSplitMode::ROW) {
+                        return register_row_split_runner_params(desc,
+                                                                model,
+                                                                module,
+                                                                module_backends,
+                                                                std::move(group_tensors),
+                                                                residency_mode,
+                                                                params_mem_size);
+                    }
+                    return register_layer_split_runner_params(desc,
+                                                              model,
+                                                              module,
+                                                              module_backends,
+                                                              std::move(group_tensors),
+                                                              residency_mode,
+                                                              params_mem_size);
+                }
+            }
+            LOG_WARN("%s module does not support multiple runtime backends; using %s",
+                     sd_backend_module_name(module),
+                     sd::layer_split_backend_device_display_name(module_backends[0]).c_str());
+        }
         return model_manager->register_param_tensors(desc,
                                                      std::move(group_tensors),
-                                                     backend_manager.params_backend_is_disk(module) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
+                                                     residency_mode,
                                                      backend_for(module),
                                                      params_backend_for(module),
                                                      params_mem_size);
+    }
+
+    template <typename T>
+    bool register_row_split_runner_params(const std::string& desc,
+                                          const std::shared_ptr<T>& model,
+                                          SDBackendModule module,
+                                          const std::vector<ggml_backend_t>& module_backends,
+                                          std::map<std::string, ggml_tensor*> group_tensors,
+                                          ModelManager::ResidencyMode residency_mode,
+                                          size_t* params_mem_size) {
+        ggml_backend_t main_backend = module_backends[0];
+
+        auto fall_back_to_layer_split = [&](const char* reason) {
+            LOG_WARN("%s: row split unavailable (%s); falling back to layer split", desc.c_str(), reason);
+            return register_layer_split_runner_params(desc,
+                                                      model,
+                                                      module,
+                                                      module_backends,
+                                                      std::move(group_tensors),
+                                                      residency_mode,
+                                                      params_mem_size);
+        };
+
+        ggml_backend_dev_t main_dev = ggml_backend_get_device(main_backend);
+        ggml_backend_reg_t reg      = main_dev != nullptr ? ggml_backend_dev_backend_reg(main_dev) : nullptr;
+        if (reg == nullptr) {
+            return fall_back_to_layer_split("no backend registry");
+        }
+        const size_t reg_dev_count = ggml_backend_reg_dev_count(reg);
+        std::vector<float> tensor_split(reg_dev_count, 0.0f);
+        constexpr int64_t compute_headroom_bytes = 2ll * 1024 * 1024 * 1024;
+        for (ggml_backend_t backend : module_backends) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+            int reg_index          = -1;
+            for (size_t i = 0; i < reg_dev_count; i++) {
+                if (ggml_backend_reg_dev_get(reg, i) == dev) {
+                    reg_index = (int)i;
+                    break;
+                }
+            }
+            if (reg_index < 0) {
+                return fall_back_to_layer_split("devices span different backend registries");
+            }
+            size_t free_bytes = 0, total_bytes = 0;
+            ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
+            int64_t usable_bytes    = std::max<int64_t>((int64_t)free_bytes - compute_headroom_bytes,
+                                                     (int64_t)free_bytes / 8);
+            tensor_split[reg_index] = usable_bytes > 0 ? (float)((double)usable_bytes / (1024.0 * 1024.0)) : 1.0f;
+        }
+
+        ggml_backend_buffer_type_t split_buft = backend_manager.split_buffer_type(main_backend, tensor_split);
+        if (split_buft == nullptr) {
+            return fall_back_to_layer_split("backend has no split buffer type");
+        }
+        model_manager->set_split_buffer_type(main_backend, split_buft);
+
+        std::map<std::string, ggml_tensor*> split_tensors;
+        if constexpr (std::is_base_of_v<Conditioner, T>) {
+            model->get_layer_split_param_tensors(split_tensors);
+        } else {
+            split_tensors = group_tensors;
+        }
+
+        std::map<std::string, ggml_tensor*> row_split_map;
+        std::map<std::string, ggml_tensor*> regular_map;
+        size_t row_split_bytes = 0;
+        for (const auto& kv : group_tensors) {
+            if (split_tensors.count(kv.first) != 0 &&
+                sd::layer_split_tensor_block_index(kv.first) >= 0 &&
+                ModelManager::tensor_shape_supports_split_buffer(kv.second)) {
+                row_split_map[kv.first] = kv.second;
+                row_split_bytes += ggml_nbytes(kv.second);
+            } else {
+                regular_map[kv.first] = kv.second;
+            }
+        }
+        if (row_split_map.empty()) {
+            return fall_back_to_layer_split("no row-splittable transformer block weights found");
+        }
+
+        LOG_INFO("%s row split: %zu tensors (%.1f MB) split across %zu devices (main %s)",
+                 desc.c_str(),
+                 row_split_map.size(),
+                 row_split_bytes / (1024.f * 1024.f),
+                 module_backends.size(),
+                 sd::layer_split_backend_device_display_name(main_backend).c_str());
+
+        if (!model_manager->register_param_tensors(desc,
+                                                   std::move(row_split_map),
+                                                   residency_mode,
+                                                   main_backend,
+                                                   params_backend_for(module),
+                                                   params_mem_size,
+                                                   /*allow_split_buffer=*/true)) {
+            return false;
+        }
+        return model_manager->register_param_tensors(desc,
+                                                     std::move(regular_map),
+                                                     residency_mode,
+                                                     main_backend,
+                                                     params_backend_for(module),
+                                                     params_mem_size);
+    }
+
+    // Register each layer-split partition with its compute backend; the
+    // ModelManager handles allocation, staging, and LoRA by backend.
+    template <typename T>
+    bool register_layer_split_runner_params(const std::string& desc,
+                                            const std::shared_ptr<T>& model,
+                                            SDBackendModule module,
+                                            const std::vector<ggml_backend_t>& module_backends,
+                                            std::map<std::string, ggml_tensor*> group_tensors,
+                                            ModelManager::ResidencyMode residency_mode,
+                                            size_t* params_mem_size) {
+        bool has_cpu_device = false;
+        for (ggml_backend_t backend : module_backends) {
+            has_cpu_device = has_cpu_device || sd_backend_is_cpu(backend);
+        }
+        if (has_cpu_device) {
+            // The scheduler reserves the CPU slot for its fallback backend, and
+            // CPU weight participation is what --params-backend <module>=cpu is
+            // for; a CPU device in a split list is almost certainly a mistake.
+            LOG_WARN(
+                "%s: layer split across a CPU device is not supported; using %s "
+                "(use --params-backend %s=cpu to keep weights in RAM)",
+                desc.c_str(),
+                sd::layer_split_backend_device_display_name(module_backends[0]).c_str(),
+                sd_backend_module_name(module));
+            return model_manager->register_param_tensors(desc,
+                                                         std::move(group_tensors),
+                                                         residency_mode,
+                                                         module_backends[0],
+                                                         params_backend_for(module),
+                                                         params_mem_size);
+        }
+
+        std::map<std::string, ggml_tensor*> split_tensors;
+        if constexpr (std::is_base_of_v<Conditioner, T>) {
+            model->get_layer_split_param_tensors(split_tensors);
+        } else {
+            split_tensors = group_tensors;
+        }
+
+        auto partitions = sd::partition_layer_split_tensors(desc, group_tensors, split_tensors, module_backends);
+        bool is_split   = false;
+        for (size_t i = 1; i < partitions.size(); i++) {
+            if (!partitions[i].empty()) {
+                is_split = true;
+                break;
+            }
+        }
+        if (!is_split) {
+            return model_manager->register_param_tensors(desc,
+                                                         std::move(group_tensors),
+                                                         residency_mode,
+                                                         module_backends[0],
+                                                         params_backend_for(module),
+                                                         params_mem_size);
+        }
+
+        model->set_runtime_backends(module_backends);
+        const bool params_follow_runtime = backend_manager.params_backend_follows_runtime(module) ||
+                                           backend_manager.params_backend_is_disk(module);
+        for (size_t i = 0; i < module_backends.size(); i++) {
+            if (partitions[i].empty()) {
+                continue;
+            }
+            ggml_backend_t partition_params_backend =
+                params_follow_runtime ? module_backends[i] : params_backend_for(module);
+            if (partition_params_backend == nullptr) {
+                return false;
+            }
+            if (!model_manager->register_param_tensors(desc,
+                                                       std::move(partitions[i]),
+                                                       residency_mode,
+                                                       module_backends[i],
+                                                       partition_params_backend,
+                                                       params_mem_size)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     bool init_backend() {
         std::string error;
         if (!backend_manager.init(backend_spec.c_str(),
                                   params_backend_spec.c_str(),
+                                  split_mode_spec.c_str(),
                                   &error)) {
             LOG_ERROR("backend config failed: %s", error.c_str());
             return false;
         }
         return ensure_backend_pair(SDBackendModule::DIFFUSION);
+    }
+
+    bool row_split_active() {
+        for (SDBackendModule module : {SDBackendModule::DIFFUSION, SDBackendModule::TE}) {
+            if (backend_manager.split_mode(module) == SDSplitMode::ROW &&
+                backend_manager.runtime_backends(module).size() > 1) {
+                return true;
+            }
+        }
+        return false;
     }
 
     std::shared_ptr<RNG> get_rng(rng_type_t rng_type) {
@@ -359,6 +594,8 @@ public:
         eager_load          = sd_ctx_params->eager_load;
         backend_spec        = SAFE_STR(sd_ctx_params->backend);
         params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
+        split_mode_spec     = SAFE_STR(sd_ctx_params->split_mode);
+        auto_fit_enabled    = sd_ctx_params->auto_fit;
         max_vram_assignment.reset(0.f);
         {
             std::string error;
@@ -383,21 +620,6 @@ public:
         }
 
         ggml_log_set(ggml_log_callback_default, nullptr);
-
-        if (!init_backend()) {
-            return false;
-        }
-        {
-            std::string error;
-            if (!max_vram_assignment.canonicalize_backend_keys(&error)) {
-                LOG_ERROR("%s", error.c_str());
-                return false;
-            }
-        }
-        if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
-            LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
-            stream_layers = false;
-        }
 
         std::string clip_vision_fixed     = SAFE_STR(sd_ctx_params->clip_vision_path);
         std::string clipg_path_fixed      = SAFE_STR(sd_ctx_params->clip_g_path);
@@ -788,6 +1010,31 @@ public:
             model_loader.set_wtype_override(wtype, tensor_type_rules);
         }
 
+        if (auto_fit_enabled) {
+            if (!sd::backend_fit::derive_backend_specs(model_loader,
+                                                       wtype,
+                                                       max_vram_assignment,
+                                                       backend_spec,
+                                                       params_backend_spec)) {
+                return false;
+            }
+        }
+
+        if (!init_backend()) {
+            return false;
+        }
+        {
+            std::string error;
+            if (!max_vram_assignment.canonicalize_backend_keys(&error)) {
+                LOG_ERROR("%s", error.c_str());
+                return false;
+            }
+        }
+        if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
+            LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
+            stream_layers = false;
+        }
+
         std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();
         std::map<ggml_type, uint32_t> conditioner_wtype_stat     = model_loader.get_conditioner_wtype_stat();
         std::map<ggml_type, uint32_t> diffusion_model_wtype_stat = model_loader.get_diffusion_model_wtype_stat();
@@ -829,12 +1076,17 @@ public:
             // Avoid full-model LoRA merge buffers on constrained setups.
             const bool params_offloaded      = params_backend_for(SDBackendModule::DIFFUSION) != backend_for(SDBackendModule::DIFFUSION);
             const bool streaming_constrained = stream_layers || params_offloaded;
-            if (have_quantized_weight || streaming_constrained) {
+            if (have_quantized_weight || streaming_constrained || row_split_active()) {
                 apply_lora_immediately = false;
             } else {
                 apply_lora_immediately = true;
             }
         } else if (sd_ctx_params->lora_apply_mode == LORA_APPLY_IMMEDIATELY) {
+            if (row_split_active()) {
+                LOG_WARN(
+                    "row-split tensors do not support the immediately LoRA apply mode; "
+                    "LoRAs will not be applied to them (use --lora-apply-mode at_runtime)");
+            }
             apply_lora_immediately = true;
         } else {
             apply_lora_immediately = false;
@@ -2718,7 +2970,16 @@ public:
         }
         auto latents = first_stage_model->diffusion_to_vae_latents(x);
         first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
-        return first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+        auto decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+        if (decoded.empty() && auto_fit_enabled) {
+            bool prefer_temporal_tiling = decode_video && std::dynamic_pointer_cast<LTXVideoVAE>(first_stage_model) != nullptr;
+            if (sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
+                first_stage_model->free_compute_buffer();
+                first_stage_model->set_temporal_tiling_enabled(vae_tiling_params.temporal_tiling);
+                decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+            }
+        }
+        return decoded;
     }
 
     sd::Tensor<float> normalize_ltx_video_latents(const sd::Tensor<float>& x) {
@@ -3091,6 +3352,8 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->vae_format           = SD_VAE_FORMAT_AUTO;
     sd_ctx_params->backend              = nullptr;
     sd_ctx_params->params_backend       = nullptr;
+    sd_ctx_params->split_mode           = nullptr;
+    sd_ctx_params->auto_fit             = false;
     sd_ctx_params->rpc_servers          = nullptr;
     sd_ctx_params->pulid_weights_path   = nullptr;
 }
@@ -3130,6 +3393,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "eager_load: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
+             "split_mode: %s\n"
+             "auto_fit: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
@@ -3166,6 +3431,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->eager_load),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
+             SAFE_STR(sd_ctx_params->split_mode),
+             BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),
