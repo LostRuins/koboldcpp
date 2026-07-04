@@ -33,10 +33,7 @@
 
 #include "utils.h"
 #include "llmutils.h"
-
-#ifdef GGML_USE_CUDA
-#  include "ggml-cuda.h"
-#endif
+#include "kcpp_backend.h"
 
 #include "llama_v2.cpp"
 #include "llama_v3.cpp"
@@ -68,11 +65,6 @@
 #include "llama-model.h"
 #include "llama-vocab.h"
 #include "nlohmann/json.hpp"
-
-#if defined(GGML_USE_HIP)
-// for rocblas_initialize()
-#include "rocblas/rocblas.h"
-#endif
 
 //const
 const int extra_context_handle_fragmentation = 128;
@@ -202,14 +194,6 @@ extern bool kcpp_pipeline_parallelism;
 extern bool OldBPETokenizerMode;
 extern int kcpp_extra_swa_padding;
 extern int kcpp_active_swa_size;
-
-inline int kcpp_cpu_has_blas(void) {
-#if defined(GGML_USE_BLAS) || defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN) || defined(GGML_USE_SYCL)
-    return 1;
-#else
-    return 0;
-#endif
-}
 
 inline bool IsNanCheck(float f)
 {
@@ -539,6 +523,18 @@ std::string get_fitted_params_str(const llama_model_params & mparams, const llam
     return out.str();
 }
 
+static bool has_tensor_split(const float* ratios, int num_ratios, ggml_backend_t backend = nullptr)
+{
+    if(kcpp_backend_check(KCPP_BACKENDS_TENSOR_SPLIT, backend)) {
+        for (int i = 0; i < tensor_split_max; ++i) {
+            if (ratios[i] != 0.0f) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static size_t estimate_draft_autofit_tax_mb(
     const std::string & main_model_filename,
     const std::string & spec_model_filename,
@@ -577,19 +573,9 @@ static size_t estimate_draft_autofit_tax_mb(
     draft_ctx_params.swa_full = base_ctx_params.swa_full;
     draft_ctx_params.n_rs_seq = 0;
 
-    #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
-    bool ts_all_zero = true;
-    for (int i = 0; i < tensor_split_max; ++i) {
-        if (draft_gpusplit[i] != 0.0f) {
-            ts_all_zero = false;
-            break;
-        }
-    }
-    if(!ts_all_zero)
-    {
+    if(has_tensor_split(draft_gpusplit, tensor_split_max)) {
         draft_model_params.tensor_split = draft_gpusplit;
     }
-    #endif
 
     const char * estimate_model_path = has_draft_model ? spec_model_filename.c_str() : main_model_filename.c_str();
     bool measure_model_bytes = true;
@@ -988,20 +974,11 @@ static void speculative_decoding_setup(std::string spec_model_filename, llama_co
     draft_model_params.main_gpu = base_model_params.main_gpu;
     draft_model_params.split_mode = llama_split_mode::LLAMA_SPLIT_MODE_LAYER;
     draft_ctx_params.kv_unified = base_ctx_params.kv_unified;
-    #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
-    bool ts_all_zero = true;
-    for (int i = 0; i < tensor_split_max; ++i) {
-        if (draft_gpusplit[i] != 0.0f) {
-            ts_all_zero = false;
-            break;
-        }
-    }
-    if(!ts_all_zero)
-    {
+
+    if(has_tensor_split(draft_gpusplit, tensor_split_max)) {
         printf("\nApplying Draft GPU Split...\n");
         draft_model_params.tensor_split = draft_gpusplit;
     }
-    #endif
     draft_ctx_params.n_batch = base_ctx_params.n_batch;
     draft_ctx_params.n_ubatch = base_ctx_params.n_ubatch;
     draft_ctx_params.n_threads = base_ctx_params.n_threads;
@@ -3002,20 +2979,20 @@ static void connect_rpc_servers(const std::string & servers) {
 
 mtmd_context_params init_mtmd_ctx_params(bool mmproj_cpu, bool dryrun)
 {
-    #if defined(GGML_USE_METAL)
-    if(file_format_meta.model_architecture == llm_arch::LLM_ARCH_QWEN2VL || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GEMMA3)
-    {
-        mmproj_cpu = true;
-        if(!dryrun)
+    if(kcpp_backend_check("mtl")) {
+        if(file_format_meta.model_architecture == llm_arch::LLM_ARCH_QWEN2VL || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GEMMA3)
         {
-            printf("MTMD will use CPU for this model!\n");
+            mmproj_cpu = true;
+            if(!dryrun)
+            {
+                printf("MTMD will use CPU for this model!\n");
+            }
         }
     }
-    #endif
     llama_flash_attn_type mtmd_fa = (kcpp_data->flash_attn?LLAMA_FLASH_ATTN_TYPE_ENABLED:LLAMA_FLASH_ATTN_TYPE_DISABLED);
-    #if defined(GGML_USE_CUDA)
-    mtmd_fa = LLAMA_FLASH_ATTN_TYPE_DISABLED; //kcpp: disabled in 1.102.2 as some headsizes break on turing
-    #endif
+    if(kcpp_backend_check("cuda")) {
+        mtmd_fa = LLAMA_FLASH_ATTN_TYPE_DISABLED; //kcpp: disabled in 1.102.2 as some headsizes break on turing
+    }
     if(mmproj_cpu)
     {
         if(!dryrun)
@@ -3156,17 +3133,14 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     int kcpp_parseinfo_maindevice = inputs.kcpp_main_gpu<=0?0:inputs.kcpp_main_gpu;
 
     printf("System Info: %s\n", kcpp_print_system_info());
-    #if defined(GGML_USE_CUDA)
     if(file_format!=FileFormat::GGUF_GENERIC)
     {
         if(ggml_v3_cpu_has_gpublas() && kcpp_parseinfo_maindevice>0)
         {
-            printf("CUBLAS v3: Set main device to %d\n",kcpp_parseinfo_maindevice);
-            ggml_v3_cuda_set_main_device(kcpp_parseinfo_maindevice);
+            kcpp_backend_cuda_ggmlv3_set_main_device(kcpp_parseinfo_maindevice);
         }
     }
 
-    #endif
     SetQuantsUnshuffled(false);
     if(file_format == FileFormat::GGML || file_format == FileFormat::GGHF || file_format == FileFormat::GGJT || file_format == FileFormat::GGJT_2)
     {
@@ -3230,20 +3204,10 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         llama_ctx_params.rope_freq_scale = rope_freq_scale;
         llama_ctx_params.n_batch = kcpp_data->n_batch;
 
-        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
-        bool ts_all_zero = true;
-        for (int i = 0; i < tensor_split_max; ++i) {
-            if (inputs.tensor_split[i] != 0.0f) {
-                ts_all_zero = false;
-                break;
-            }
-        }
-        if(!ts_all_zero)
-        {
+        if(has_tensor_split(inputs.tensor_split, tensor_split_max)) {
             printf("\nApplying Tensor Split...\n");
             llama_ctx_params.tensor_split = inputs.tensor_split;
         }
-        #endif
 
         llama_ctx_v3 = llama_v3_init_from_file(kcpp_data->model_filename.c_str(), llama_ctx_params);
 
@@ -3335,11 +3299,11 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             printf("Main GPU device: Try set to %d\n",kcpp_parseinfo_maindevice);
         }
 
-        #if defined(GGML_USE_CUDA)
-        printf("CUDA MMQ: %s\n",(inputs.use_mmq?"True":"False"));
-        printf("---\nInitializing CUDA/HIP, please wait, the following step may take a few minutes (only for first launch)...\n---\n");
-        ggml_cuda_set_mul_mat_q(inputs.use_mmq);
-        #endif
+        if(kcpp_backend_check(KCPP_BACKENDS_USE_CUDA)) {
+            printf("CUDA MMQ: %s\n",(inputs.use_mmq?"True":"False"));
+            printf("---\nInitializing CUDA/HIP, please wait, the following step may take a few minutes (only for first launch)...\n---\n");
+            kcpp_backend_cuda_set_mul_mat_q(inputs.use_mmq);
+        }
 
         model_params.main_gpu = kcpp_parseinfo_maindevice;
         model_params.split_mode = (inputs.splitmode>0?((llama_split_mode)(inputs.splitmode)):llama_split_mode::LLAMA_SPLIT_MODE_LAYER);
@@ -3353,20 +3317,10 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         llama_ctx_params.n_threads = kcpp_data->n_threads;
         llama_ctx_params.n_threads_batch = kcpp_data->n_blasthreads;
 
-        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
-        bool ts_all_zero = true;
-        for (int i = 0; i < tensor_split_max; ++i) {
-            if (inputs.tensor_split[i] != 0.0f) {
-                ts_all_zero = false;
-                break;
-            }
-        }
-        if(!ts_all_zero)
-        {
+        if(has_tensor_split(inputs.tensor_split, tensor_split_max)) {
             printf("\nApplying Tensor Split...\n");
             model_params.tensor_split = inputs.tensor_split;
         }
-        #endif
 
         //compat for old falcon
         if(file_format_meta.fileversion==1)
@@ -3492,9 +3446,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(),1024*1024*1024);
         if(inputs.autofit)
         {
-            #if defined(GGML_USE_HIP)
-            rocblas_initialize();
-            #endif // defined(GGML_USE_HIP)
+            kcpp_backend_hip_initialize();
 
             size_t totalmmprojtax = 0;
             if(mmproj_filename != "" && file_format==FileFormat::GGUF_GENERIC && !inputs.mmproj_cpu)
@@ -5315,11 +5267,10 @@ int GetThreadsToUse(bool blasmode)
 {
     if (blasmode)
     {
-        #if defined(GGML_USE_CUDA) || defined(GGML_USE_VULKAN)
+        if(kcpp_backend_check(KCPP_BACKENDS_USE_CUDA "|vulkan"))
             return kcpp_data->n_blasthreads;
-        #else
+        else
             return std::min(kcpp_data->n_blasthreads, 4);
-        #endif
     }
     return kcpp_data->n_threads;
 }
@@ -6469,7 +6420,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         }
     }
 
-    bool blasmode = (embd_inp.size() >= 32 && kcpp_cpu_has_blas() && kcpp_data->n_batch>=32);
+    bool blasmode = (embd_inp.size() >= 32 && kcpp_backend_check(KCPP_BACKENDS_BLAS) && kcpp_data->n_batch>=32);
 
     if(current_context_tokens.size()>n_past)
     {
