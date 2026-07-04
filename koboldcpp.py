@@ -6293,8 +6293,6 @@ Change Mode<br>
                 response_body = (json.dumps([{"name":name,"label":name} for name in cached_sd_info.get('available_schedulers', [])]).encode())
         elif clean_path.endswith('/sdapi/v1/latent-upscale-modes'):
            response_body = (json.dumps([]).encode())
-        elif clean_path.endswith('/sdapi/v1/upscalers'):
-           response_body = (json.dumps([]).encode())
 
         #vits compatible
         elif clean_path=='/voice/check':
