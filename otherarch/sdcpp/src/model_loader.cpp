@@ -971,7 +971,8 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                                bool enable_mmap,
-                               const std::set<std::string>* target_tensor_names) {
+                               const std::set<std::string>* target_tensor_names,
+                               bool log_progress) {
     process_model_files(enable_mmap, false);
 
     std::atomic<int64_t> read_time_ms(0);
@@ -1240,7 +1241,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
             }
             size_t curr_num       = total_tensors_processed + current_idx;
             float elapsed_seconds = (ggml_time_ms() - t_start) / 1000.0f;
-            if (total_tensors_to_process > 0) {
+            if (log_progress && total_tensors_to_process > 0) {
                 pretty_bytes_progress(static_cast<int>(curr_num),
                                       static_cast<int>(total_tensors_to_process),
                                       bytes_processed.load(),
@@ -1258,25 +1259,79 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
             break;
         }
         total_tensors_processed += tensors_to_process.size();
-        if (total_tensors_to_process > 0) {
+        if (log_progress && total_tensors_to_process > 0) {
             pretty_bytes_progress(static_cast<int>(total_tensors_processed),
                                   static_cast<int>(total_tensors_to_process),
                                   bytes_processed.load(),
                                   (ggml_time_ms() - t_start) / 1000.0f);
         }
-        if (total_tensors_processed < total_tensors_to_process && total_tensors_to_process > 0) {
+        if (log_progress && total_tensors_processed < total_tensors_to_process && total_tensors_to_process > 0) {
             printf("\n");
         }
     }
 
     int64_t end_time = ggml_time_ms();
-    LOG_INFO("loading tensors completed, taking %.2fs (read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
-             (end_time - start_time) / 1000.f,
-             (read_time_ms.load() / (float)last_n_threads) / 1000.f,
-             (memcpy_time_ms.load() / (float)last_n_threads) / 1000.f,
-             (convert_time_ms.load() / (float)last_n_threads) / 1000.f,
-             (copy_to_backend_time_ms.load() / (float)last_n_threads) / 1000.f);
+    if (log_progress) {
+        LOG_INFO("loading tensors completed, taking %.2fs (read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
+                 (end_time - start_time) / 1000.f,
+                 (read_time_ms.load() / (float)last_n_threads) / 1000.f,
+                 (memcpy_time_ms.load() / (float)last_n_threads) / 1000.f,
+                 (convert_time_ms.load() / (float)last_n_threads) / 1000.f,
+                 (copy_to_backend_time_ms.load() / (float)last_n_threads) / 1000.f);
+    }
     return success;
+}
+
+bool ModelLoader::load_tensor(const TensorStorage& tensor_storage, ggml_tensor* dst_tensor) {
+    if (dst_tensor == nullptr || dst_tensor->data == nullptr) {
+        LOG_ERROR("load tensor failed: null destination for '%s'", tensor_storage.name.c_str());
+        return false;
+    }
+
+    bool loaded = false;
+    std::set<std::string> target_tensor_names{tensor_storage.name};
+    auto on_new_tensor_cb = [&](const TensorStorage& current_tensor_storage, ggml_tensor** out_tensor) -> bool {
+        *out_tensor = nullptr;
+        if (current_tensor_storage.name != tensor_storage.name) {
+            return true;
+        }
+
+        if (current_tensor_storage.file_index != tensor_storage.file_index ||
+            current_tensor_storage.offset != tensor_storage.offset ||
+            current_tensor_storage.index_in_zip != tensor_storage.index_in_zip) {
+            LOG_ERROR("load tensor failed: storage mismatch for '%s'", tensor_storage.name.c_str());
+            return false;
+        }
+
+        if (current_tensor_storage.n_dims != tensor_storage.n_dims ||
+            current_tensor_storage.nelements() != tensor_storage.nelements()) {
+            LOG_ERROR("load tensor failed: metadata changed for '%s'", tensor_storage.name.c_str());
+            return false;
+        }
+
+        for (int i = 0; i < current_tensor_storage.n_dims; i++) {
+            if (current_tensor_storage.ne[i] != dst_tensor->ne[i]) {
+                LOG_ERROR("load tensor failed: shape mismatch for '%s'", tensor_storage.name.c_str());
+                return false;
+            }
+        }
+
+        *out_tensor = dst_tensor;
+        loaded      = true;
+        return true;
+    };
+
+    if (!load_tensors(on_new_tensor_cb, false, &target_tensor_names, false)) {
+        LOG_ERROR("load tensor failed: '%s'", tensor_storage.name.c_str());
+        return false;
+    }
+
+    if (!loaded) {
+        LOG_ERROR("load tensor failed: tensor '%s' not found", tensor_storage.name.c_str());
+        return false;
+    }
+
+    return true;
 }
 
 bool ModelLoader::load_float_tensor(const std::string& name,

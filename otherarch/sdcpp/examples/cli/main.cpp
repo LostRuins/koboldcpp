@@ -653,7 +653,8 @@ int main(int argc, const char* argv[]) {
                                                cli_params.output_path.c_str(),
                                                ctx_params.wtype,
                                                ctx_params.tensor_type_rules.c_str(),
-                                               cli_params.convert_name);
+                                               cli_params.convert_name,
+                                               ctx_params.n_threads);
         if (!success) {
             LOG_ERROR("convert '%s'/'%s' to '%s' failed",
                       ctx_params.model_path.c_str(),

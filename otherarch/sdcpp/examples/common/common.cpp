@@ -1106,7 +1106,7 @@ ArgOptions SDGenerationParams::get_options() {
          &sample_params.guidance.slg.layer_end},
         {"",
          "--eta",
-         "noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde and dpm++2s_a)",
+         "noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde, dpm++2s_a, dpm++2m_sde and dpm++2m_sde_bt)",
          &sample_params.eta},
         {"",
          "--flow-shift",
@@ -1138,7 +1138,7 @@ ArgOptions SDGenerationParams::get_options() {
          &high_noise_sample_params.guidance.slg.layer_end},
         {"",
          "--high-noise-eta",
-         "(high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde and dpm++2s_a)",
+         "(high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde, dpm++2s_a, dpm++2m_sde and dpm++2m_sde_bt)",
          &high_noise_sample_params.eta},
         {"",
          "--strength",
@@ -1509,12 +1509,12 @@ ArgOptions SDGenerationParams::get_options() {
          on_seed_arg},
         {"",
          "--sampling-method",
-         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
+         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, dpm++2m_sde, dpm++2m_sde_bt, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
          "(default: euler for Flux/SD3/Wan, euler_a otherwise)",
          on_sample_method_arg},
         {"",
          "--high-noise-sampling-method",
-         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
+         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, dpm++2m_sde, dpm++2m_sde_bt, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp]"
          " default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_high_noise_sample_method_arg},
         {"",

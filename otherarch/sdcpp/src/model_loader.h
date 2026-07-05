@@ -70,7 +70,8 @@ public:
                                               bool writable                        = true);
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                       bool use_mmap                                    = false,
-                      const std::set<std::string>* target_tensor_names = nullptr);
+                      const std::set<std::string>* target_tensor_names = nullptr,
+                      bool log_progress                                = true);
     bool load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},
                       bool use_mmap                        = false);
@@ -78,6 +79,7 @@ public:
                            std::vector<float>& data,
                            int n_threads = 0,
                            bool use_mmap = false);
+    bool load_tensor(const TensorStorage& tensor_storage, ggml_tensor* dst_tensor);
 
     std::vector<std::string> get_tensor_names() const {
         std::vector<std::string> names;

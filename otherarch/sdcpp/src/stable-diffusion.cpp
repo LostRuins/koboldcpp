@@ -3103,6 +3103,8 @@ const char* sample_method_to_str[] = {
     "euler_cfg_pp",
     "euler_a_cfg_pp",
     "euler_ge",
+    "dpm++2m_sde",
+    "dpm++2m_sde_bt",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -3876,6 +3878,8 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
             case DPMPP2S_A_SAMPLE_METHOD:
             case ER_SDE_SAMPLE_METHOD:
             case EULER_A_CFG_PP_SAMPLE_METHOD:
+            case DPMPP2M_SDE_SAMPLE_METHOD:
+            case DPMPP2M_SDE_BT_SAMPLE_METHOD:
                 return 1.0f;
             default:;
         }
@@ -4675,13 +4679,56 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         LOG_INFO("IMG2IMG");
 
         if (request->strength < 1.f) {
-            size_t t_enc = static_cast<size_t>(plan->sample_steps * request->strength);
-            if (t_enc == static_cast<size_t>(plan->sample_steps)) {
-                t_enc--;
+            bool strength_as_noise_level = false;
+            bool force_first_sigma       = false;
+            for (const auto& [key, value] : parse_key_value_args(sd_img_gen_params->sample_params.extra_sample_args, "img2img arg")) {
+                if (key == "strength_as_noise_level") {
+                    if (!parse_strict_bool(value, strength_as_noise_level)) {
+                        LOG_WARN("ignoring invalid img2img sample arg '%s=%s'", key.c_str(), value.c_str());
+                    }
+                } else if (key == "force_first_sigma") {
+                    if (!parse_strict_bool(value, force_first_sigma)) {
+                        LOG_WARN("ignoring invalid img2img sample arg '%s=%s'", key.c_str(), value.c_str());
+                    }
+                }
+            }
+
+            size_t t_enc;
+            float target_sigma = -1;
+            if (!strength_as_noise_level) {
+                t_enc = static_cast<size_t>(plan->sample_steps * request->strength);
+                if (t_enc == static_cast<size_t>(plan->sample_steps)) {
+                    t_enc--;
+                }
+            } else {
+                LOG_DEBUG("Interpreting denoise strength as relative noise level");
+                // assume x_noised = K * (x * (1-noise_level) + noise * noise_level) = K * lerp(x, noise, noise_level)
+                // K = 1, noise_level = sigma for flow models
+                // K = 1+sigma, noise_level=sigma/(1+sigma) for diffusion models
+                float target_noise_level = request->strength;
+                target_sigma             = sd_ctx->sd->denoiser->noise_level_to_sigma(target_noise_level);
+                size_t start_index       = 0;
+                for (size_t i = 0; i < plan->sigmas.size(); ++i) {
+                    if (plan->sigmas[i] <= target_sigma) {
+                        start_index = i;
+                        break;
+                    }
+                }
+
+                if (start_index >= plan->sigmas.size() - 1) {
+                    start_index = plan->sigmas.size() - 2;  // Leave at least 1 step
+                }
+                t_enc = plan->sample_steps - start_index - 1;
             }
             LOG_INFO("target t_enc is %zu steps", t_enc);
             std::vector<float> sigma_sched;
             sigma_sched.assign(plan->sigmas.begin() + plan->sample_steps - t_enc - 1, plan->sigmas.end());
+
+            if (target_sigma > 0 && force_first_sigma && strength_as_noise_level) {
+                LOG_DEBUG("force_first_sigma to %.4f (from %.4f)", target_sigma, sigma_sched[0]);
+                sigma_sched[0] = target_sigma;
+            }
+
             plan->sigmas       = std::move(sigma_sched);
             plan->sample_steps = static_cast<int>(plan->sigmas.size() - 1);
         }

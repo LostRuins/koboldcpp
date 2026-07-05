@@ -9,21 +9,48 @@
 
 namespace sd {
 
+    static bool layer_split_path_segment_starts_at(const std::string& name, size_t pos) {
+        return pos == 0 || name[pos - 1] == '.';
+    }
+
+    static bool layer_split_has_path_segment(const std::string& name, const char* segment) {
+        size_t pos = name.find(segment);
+        while (pos != std::string::npos) {
+            if (layer_split_path_segment_starts_at(name, pos)) {
+                return true;
+            }
+            pos = name.find(segment, pos + 1);
+        }
+        return false;
+    }
+
     int layer_split_tensor_block_index(const std::string& name) {
+        static const char* unet_block_segments[] = {"input_blocks.", "output_blocks.", "middle_block.",
+                                                    "down_blocks.", "up_blocks.", "mid_block."};
+        for (const char* segment : unet_block_segments) {
+            if (layer_split_has_path_segment(name, segment)) {
+                return -1;
+            }
+        }
+
         static const char* block_keywords[] = {"transformer_blocks.", "joint_blocks.", "double_blocks.",
                                                "single_blocks.", "blocks.", "block.", "layers."};
         for (const char* keyword : block_keywords) {
             size_t pos = name.find(keyword);
-            if (pos == std::string::npos) {
-                continue;
-            }
-            pos += std::strlen(keyword);
-            size_t end = pos;
-            while (end < name.size() && name[end] >= '0' && name[end] <= '9') {
-                end++;
-            }
-            if (end > pos && (end == name.size() || name[end] == '.')) {
-                return std::atoi(name.substr(pos, end - pos).c_str());
+            while (pos != std::string::npos) {
+                if (!layer_split_path_segment_starts_at(name, pos)) {
+                    pos = name.find(keyword, pos + 1);
+                    continue;
+                }
+                pos += std::strlen(keyword);
+                size_t end = pos;
+                while (end < name.size() && name[end] >= '0' && name[end] <= '9') {
+                    end++;
+                }
+                if (end > pos && (end == name.size() || name[end] == '.')) {
+                    return std::atoi(name.substr(pos, end - pos).c_str());
+                }
+                break;
             }
         }
         return -1;

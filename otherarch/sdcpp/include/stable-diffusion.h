@@ -54,6 +54,8 @@ enum sample_method_t {
     EULER_CFG_PP_SAMPLE_METHOD,
     EULER_A_CFG_PP_SAMPLE_METHOD,
     EULER_GE_SAMPLE_METHOD,
+    DPMPP2M_SDE_SAMPLE_METHOD,
+    DPMPP2M_SDE_BT_SAMPLE_METHOD,
     SAMPLE_METHOD_COUNT
 };
 
@@ -520,7 +522,8 @@ SD_API bool convert_with_components(const char* model_path,
                                     const char* output_path,
                                     enum sd_type_t output_type,
                                     const char* tensor_type_rules,
-                                    bool convert_name);
+                                    bool convert_name,
+                                    int n_threads);
 
 SD_API bool preprocess_canny(sd_image_t image,
                              float high_threshold,

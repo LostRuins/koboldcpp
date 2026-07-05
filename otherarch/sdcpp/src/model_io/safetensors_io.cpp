@@ -1,8 +1,10 @@
 #include "safetensors_io.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <fstream>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -313,4 +315,103 @@ bool write_safetensors_file(const std::string& file_path,
     }
 
     return true;
+}
+
+bool SafetensorsStreamingWriter::write_metadata(const std::string& file_path,
+                                                const std::vector<TensorWritePlan>& tensors,
+                                                std::string* error) {
+    file_path_ = file_path;
+    tensors_   = tensors;
+    tensor_offsets_.clear();
+    data_start_ = 0;
+    file_size_  = 0;
+
+    nlohmann::ordered_json header = nlohmann::ordered_json::object();
+    uint64_t data_offset          = 0;
+    tensor_offsets_.resize(tensors.size());
+    for (size_t i = 0; i < tensors.size(); i++) {
+        const TensorWritePlan& plan = tensors[i];
+        std::string dtype;
+        if (!ggml_type_to_safetensors_dtype(plan.type, &dtype)) {
+            set_error(error,
+                      "unsupported safetensors dtype '" + std::string(ggml_type_name(plan.type)) +
+                          "' for tensor '" + plan.name + "'");
+            return false;
+        }
+
+        nlohmann::ordered_json json_tensor_info = nlohmann::ordered_json::object();
+        json_tensor_info["dtype"]               = dtype;
+
+        nlohmann::ordered_json shape = nlohmann::ordered_json::array();
+        for (int j = 0; j < plan.n_dims; ++j) {
+            shape.push_back(plan.ne[plan.n_dims - 1 - j]);
+        }
+        json_tensor_info["shape"] = shape;
+
+        nlohmann::ordered_json data_offsets = nlohmann::ordered_json::array();
+        data_offsets.push_back(data_offset);
+        data_offsets.push_back(data_offset + plan.nbytes());
+        json_tensor_info["data_offsets"] = data_offsets;
+
+        header[plan.name]  = json_tensor_info;
+        tensor_offsets_[i] = data_offset;
+        data_offset += plan.nbytes();
+    }
+
+    const std::string header_str = header.dump();
+    data_start_                  = ST_HEADER_SIZE_LEN + header_str.size();
+
+    LOG_INFO("trying to save tensors to %s", file_path.c_str());
+    std::ofstream file(file_path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        set_error(error, "failed to open '" + file_path + "' for writing");
+        return false;
+    }
+
+    uint8_t header_size[ST_HEADER_SIZE_LEN];
+    for (int i = 0; i < static_cast<int>(ST_HEADER_SIZE_LEN); ++i) {
+        header_size[i] = static_cast<uint8_t>((header_str.size() >> (8 * i)) & 0xFF);
+    }
+    file.write(reinterpret_cast<const char*>(header_size), sizeof(header_size));
+    file.write(header_str.data(), static_cast<std::streamsize>(header_str.size()));
+    if (!file) {
+        set_error(error, "failed to write safetensors header to '" + file_path + "'");
+        return false;
+    }
+
+    file_size_ = data_start_ + data_offset;
+    return true;
+}
+
+bool SafetensorsStreamingWriter::write_tensor(std::ostream& output,
+                                              size_t tensor_index,
+                                              const uint8_t* data,
+                                              size_t size,
+                                              std::string* error) const {
+    if (tensor_index >= tensors_.size() || tensor_index >= tensor_offsets_.size()) {
+        set_error(error, "invalid safetensors tensor index");
+        return false;
+    }
+    const TensorWritePlan& plan = tensors_[tensor_index];
+    if (size != plan.nbytes()) {
+        set_error(error, "size mismatch while writing tensor '" + plan.name + "'");
+        return false;
+    }
+    output.seekp(static_cast<std::streamoff>(data_start_ + tensor_offsets_[tensor_index]), std::ios::beg);
+    if (!output) {
+        set_error(error, "failed to seek output for tensor '" + plan.name + "'");
+        return false;
+    }
+    if (size > 0) {
+        output.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+    }
+    if (!output) {
+        set_error(error, "failed to write tensor '" + plan.name + "' to '" + file_path_ + "'");
+        return false;
+    }
+    return true;
+}
+
+uint64_t SafetensorsStreamingWriter::file_size() const {
+    return file_size_;
 }

@@ -127,6 +127,25 @@ struct TensorWriteInfo {
     ggml_tensor* tensor     = nullptr;
 };
 
+struct TensorWritePlan {
+    std::string name;
+    ggml_type type          = GGML_TYPE_F32;
+    int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
+    int n_dims              = 0;
+
+    int64_t nelements() const {
+        int64_t n = 1;
+        for (int i = 0; i < SD_MAX_DIMS; i++) {
+            n *= ne[i];
+        }
+        return n;
+    }
+
+    uint64_t nbytes() const {
+        return nelements() * ggml_type_size(type) / ggml_blck_size(type);
+    }
+};
+
 typedef std::function<bool(const TensorStorage&, ggml_tensor**)> on_new_tensor_cb_t;
 
 #endif  // __SD_TENSOR_STORAGE_H__
