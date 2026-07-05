@@ -378,14 +378,12 @@ class generation_outputs(ctypes.Structure):
 class sd_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
-                ("kcpp_main_device", ctypes.c_int),
+                ("backend", ctypes.c_char_p),
                 ("threads", ctypes.c_int),
                 ("quant", ctypes.c_int),
                 ("flash_attention", ctypes.c_bool),
-                ("offload_cpu", ctypes.c_bool),
+                ("params_backend", ctypes.c_char_p),
                 ("use_mmap", ctypes.c_bool),
-                ("kcpp_vae_device", ctypes.c_int),
-                ("kcpp_clip_device", ctypes.c_int),
                 ("diffusion_conv_direct", ctypes.c_bool),
                 ("vae_conv_direct", ctypes.c_bool),
                 ("taesd", ctypes.c_bool),
@@ -403,7 +401,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("upscaler_filename", ctypes.c_char_p),
                 ("img_hard_limit", ctypes.c_int),
                 ("img_soft_limit", ctypes.c_int),
-                ("max_vram", ctypes.c_float),
+                ("max_vram", ctypes.c_char_p),
                 ("stream_layers", ctypes.c_bool),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
@@ -2487,6 +2485,21 @@ def sd_resolve_device(name, default_=-1):
         name = str(max(name, -2))
     return sd_get_device_number(name)
 
+def sd_get_device_override(deviceid, module=''):
+    '''formats a device id and a module name in sd.cpp --backend syntax'''
+    global cached_sd_info
+    devices = cached_sd_info.get('devices', [])
+    device_name = ''
+    if deviceid <= -2:
+        device_name = "CPU"
+    elif deviceid >= 0 and deviceid < len(devices):
+        device_name = devices[deviceid]['name']
+    if device_name and module:
+        result = module + '=' + device_name
+    else:
+        result = device_name
+    return result;
+
 def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename):
     global args
     inputs = sd_load_model_inputs()
@@ -2501,10 +2514,14 @@ def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip
     inputs.threads = thds
     inputs.quant = args.sdquant
     inputs.flash_attention = args.sdflashattention
-    inputs.offload_cpu = args.sdoffloadcpu
+    inputs.params_backend = b'CPU' if args.sdoffloadcpu else b''
     inputs.use_mmap = args.usemmap
-    inputs.kcpp_vae_device = sd_resolve_device(args.sdvaedevice, default_sdvaedevice)
-    inputs.kcpp_clip_device = sd_resolve_device(args.sdclipdevice, default_sdclipdevice)
+    backends = [
+        sd_get_device_override(sd_resolve_device(args.sdmaingpu, 'main')),
+        sd_get_device_override(sd_resolve_device(args.sdclipdevice, default_sdclipdevice), 'CLIP'),
+        sd_get_device_override(sd_resolve_device(args.sdvaedevice, default_sdvaedevice), 'VAE'),
+    ]
+    inputs.backend = ','.join([b for b in backends if b]).encode("UTF-8")
     sdconvdirect = sd_convdirect_option(args.sdconvdirect)
     inputs.diffusion_conv_direct = sdconvdirect == 'full'
     inputs.vae_conv_direct = sdconvdirect in ['vaeonly', 'full']
@@ -2517,7 +2534,7 @@ def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip
     inputs.clip2_filename = clip2_filename.encode("UTF-8")
     inputs.photomaker_filename = photomaker_filename.encode("UTF-8")
     inputs.upscaler_filename = upscaler_filename.encode("UTF-8")
-    inputs.max_vram = (args.sdvramlimit/1024.0) if args.sdvramlimit > 0 else 0
+    inputs.max_vram = str((args.sdvramlimit/1024.0) if args.sdvramlimit > 0 else '').encode('UTF-8')
     inputs.stream_layers = False
 
     lora_filenames, lora_multipliers = prepare_initial_lora_multipliers()
@@ -2535,7 +2552,6 @@ def sd_load_model(model_filename,vae_filename,t5xxl_filename,clip1_filename,clip
     inputs.img_hard_limit = args.sdclamped
     inputs.img_soft_limit = args.sdclampedsoft
     inputs = set_backend_props(inputs)
-    inputs.kcpp_main_device = sd_resolve_device(args.sdmaingpu, 'main')
     ret = handle.sd_load_model(inputs)
     return ret
 
@@ -11865,8 +11881,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             friendlysdmodelname = os.path.basename(imgmodel)
             friendlysdmodelname = os.path.splitext(friendlysdmodelname)[0]
             friendlysdmodelname = sanitize_string(friendlysdmodelname)
-            loadok = sd_load_model(imgmodel,imgvae,imgt5xxl,imgclip1,imgclip2,imgphotomaker,imgupscaler,imgaudiovae)
             cached_sd_info = sd_get_info()
+            loadok = sd_load_model(imgmodel,imgvae,imgt5xxl,imgclip1,imgclip2,imgphotomaker,imgupscaler,imgaudiovae)
             print("Load Image Model OK: " + str(loadok))
             if not loadok:
                 exitcounter = 999

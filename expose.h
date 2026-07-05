@@ -186,14 +186,12 @@ struct sd_load_model_inputs
 {
     const char * model_filename = nullptr;
     const char * executable_path = nullptr;
-    const int kcpp_main_device = -1;
+    const char * backend = nullptr;
     const int threads = 0;
     const int quant = 0;
     const bool flash_attention = false;
-    const bool offload_cpu = false;
+    const char * params_backend = nullptr;
     const bool use_mmap = false;
-    const int kcpp_vae_device = -1;
-    const int kcpp_clip_device = -1;
     const bool diffusion_conv_direct = false;
     const bool vae_conv_direct = false;
     const bool taesd = false;
@@ -211,7 +209,7 @@ struct sd_load_model_inputs
     const char * upscaler_filename = nullptr;
     const int img_hard_limit = 0;
     const int img_soft_limit = 0;
-    const float max_vram = 0.f;
+    const char * max_vram = nullptr;
     const bool stream_layers = false;
     const char * devices_override = nullptr;
     const bool quiet = false;
