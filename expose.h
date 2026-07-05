@@ -210,7 +210,9 @@ struct sd_load_model_inputs
     const int img_hard_limit = 0;
     const int img_soft_limit = 0;
     const char * max_vram = nullptr;
+    const char * split_mode = nullptr;
     const bool stream_layers = false;
+    const bool auto_fit = false;
     const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;

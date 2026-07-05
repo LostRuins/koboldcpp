@@ -402,7 +402,9 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("img_hard_limit", ctypes.c_int),
                 ("img_soft_limit", ctypes.c_int),
                 ("max_vram", ctypes.c_char_p),
+                ("split_mode", ctypes.c_char_p),
                 ("stream_layers", ctypes.c_bool),
+                ("auto_fit", ctypes.c_bool),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
                 ("debugmode", ctypes.c_int)]

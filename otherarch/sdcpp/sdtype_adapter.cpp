@@ -296,6 +296,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     std::string backend = inputs.backend ? inputs.backend : "";
     std::string params_backend = inputs.params_backend ? inputs.params_backend : "";
+    std::string split_mode = inputs.split_mode ? inputs.split_mode : "";
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
@@ -388,8 +389,14 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     } else if (inputs.use_mmap) {
         printf("Using mmap for I/O\n");
     }
+    if(inputs.auto_fit) {
+        printf("Using auto-fit");
+    }
     if(params_backend != "" && params_backend != "CPU") {
         printf("Parameters backend assignment: \"%s\"\n", params_backend.c_str());
+    }
+    if(split_mode != "") {
+        printf("Using split mode: \"%s\"\n", split_mode.c_str());
     }
     std::string max_vram;
     if(inputs.max_vram && *inputs.max_vram) {
@@ -465,6 +472,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.enable_mmap = inputs.use_mmap;
     params.backend = backend.c_str();
     params.params_backend = params_backend.c_str();
+    params.split_mode = split_mode.c_str();
+    params.auto_fit = inputs.auto_fit;
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
 
     // also switches flash attn for the vae and conditioner
