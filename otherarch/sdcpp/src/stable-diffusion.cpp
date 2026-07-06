@@ -59,10 +59,10 @@
 #include "name_conversion.h"
 #include "runtime/latent-preview.h"
 
+#include <atomic>
+
 const char* sd_vae_format_name(enum sd_vae_format_t format);
 static SDVersion sd_vae_format_to_version(enum sd_vae_format_t format, SDVersion fallback);
-
-#include <atomic>
 
 const char* model_version_to_str[] = {
     "SD 1.x",
@@ -1112,10 +1112,6 @@ public:
             use_tae          = true;
         }
 
-        if (sd_ctx_params->circular_x || sd_ctx_params->circular_y) {
-            LOG_INFO("Using circular padding for convolutions");
-        }
-
         {
             if (!ensure_backend_pair(SDBackendModule::TE) ||
                 !ensure_backend_pair(SDBackendModule::DIFFUSION)) {
@@ -1174,10 +1170,11 @@ public:
                 if (is_chroma) {
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(backend_for(SDBackendModule::TE),
                                                                         tensor_storage_map,
-                                                                        sd_ctx_params->chroma_use_t5_mask,
-                                                                        sd_ctx_params->chroma_t5_mask_pad,
                                                                         false,
-                                                                        model_manager);
+                                                                        1,
+                                                                        false,
+                                                                        model_manager,
+                                                                        sd_ctx_params->model_args);
                 } else if (version == VERSION_OVIS_IMAGE) {
                     cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                      tensor_storage_map,
@@ -1194,8 +1191,8 @@ public:
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask,
-                                                                     model_manager);
+                                                                     model_manager,
+                                                                     sd_ctx_params->model_args);
             } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
@@ -1208,8 +1205,8 @@ public:
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask,
-                                                                     model_manager);
+                                                                     model_manager,
+                                                                     sd_ctx_params->model_args);
             } else if (sd_version_is_ltxav(version)) {
                 cond_stage_model = std::make_shared<LTXAVEmbedder>(backend_for(SDBackendModule::TE),
                                                                    tensor_storage_map,
@@ -1267,8 +1264,8 @@ public:
                                                                           tensor_storage_map,
                                                                           "model.diffusion_model",
                                                                           version,
-                                                                          sd_ctx_params->qwen_image_zero_cond_t,
-                                                                          model_manager);
+                                                                          model_manager,
+                                                                          sd_ctx_params->model_args);
             } else if (sd_version_is_longcat(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(backend_for(SDBackendModule::TE),
                                                                  tensor_storage_map,
@@ -1280,8 +1277,8 @@ public:
                                                                      tensor_storage_map,
                                                                      "model.diffusion_model",
                                                                      version,
-                                                                     sd_ctx_params->chroma_use_dit_mask,
-                                                                     model_manager);
+                                                                     model_manager,
+                                                                     sd_ctx_params->model_args);
             } else if (version == VERSION_HIDREAM_O1) {
                 cond_stage_model = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(backend_for(SDBackendModule::TE),
                                                                                      tensor_storage_map,
@@ -1620,16 +1617,6 @@ public:
                     high_noise_diffusion_model->set_flash_attention_enabled(true);
                 }
             }
-
-            diffusion_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
-            if (high_noise_diffusion_model) {
-                high_noise_diffusion_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
-            }
-            if (control_net) {
-                control_net->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
-            }
-            circular_x = sd_ctx_params->circular_x;
-            circular_y = sd_ctx_params->circular_y;
         }
 
         LOG_DEBUG("validating model metadata");
@@ -3023,22 +3010,6 @@ public:
         return !!flow_denoiser;
     }
 
-    //added for kcpp
-    void SetCircularAxesAll(bool circular_x, bool circular_y)
-    {
-        diffusion_model->set_circular_axes(circular_x, circular_y);
-        if (high_noise_diffusion_model) {
-            high_noise_diffusion_model->set_circular_axes(circular_x, circular_y);
-        }
-        if (control_net) {
-            control_net->set_circular_axes(circular_x, circular_y);
-        }
-        if (first_stage_model) {
-            first_stage_model->set_circular_axes(circular_x, circular_y);
-        }
-    }
-    //end added for kcpp
-
 };
 
 /*================================================= SD API ==================================================*/
@@ -3346,17 +3317,13 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->eager_load           = false;
     sd_ctx_params->enable_mmap          = false;
     sd_ctx_params->diffusion_flash_attn = false;
-    sd_ctx_params->circular_x           = false;
-    sd_ctx_params->circular_y           = false;
-    sd_ctx_params->chroma_use_dit_mask  = true;
-    sd_ctx_params->chroma_use_t5_mask   = false;
-    sd_ctx_params->chroma_t5_mask_pad   = 1;
     sd_ctx_params->vae_format           = SD_VAE_FORMAT_AUTO;
     sd_ctx_params->backend              = nullptr;
     sd_ctx_params->params_backend       = nullptr;
     sd_ctx_params->split_mode           = nullptr;
     sd_ctx_params->auto_fit             = false;
     sd_ctx_params->rpc_servers          = nullptr;
+    sd_ctx_params->model_args           = nullptr;
     sd_ctx_params->pulid_weights_path   = nullptr;
 }
 
@@ -3396,14 +3363,10 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "backend: %s\n"
              "params_backend: %s\n"
              "split_mode: %s\n"
+             "model_args: %s\n"
              "auto_fit: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
-             "circular_x: %s\n"
-             "circular_y: %s\n"
-             "chroma_use_dit_mask: %s\n"
-             "chroma_use_t5_mask: %s\n"
-             "chroma_t5_mask_pad: %d\n"
              "vae_format: %s\n",
              SAFE_STR(sd_ctx_params->model_path),
              SAFE_STR(sd_ctx_params->clip_l_path),
@@ -3434,14 +3397,10 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
              SAFE_STR(sd_ctx_params->split_mode),
+             SAFE_STR(sd_ctx_params->model_args),
              BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
-             BOOL_STR(sd_ctx_params->circular_x),
-             BOOL_STR(sd_ctx_params->circular_y),
-             BOOL_STR(sd_ctx_params->chroma_use_dit_mask),
-             BOOL_STR(sd_ctx_params->chroma_use_t5_mask),
-             sd_ctx_params->chroma_t5_mask_pad,
              sd_vae_format_name(sd_ctx_params->vae_format));
 
     return buf;
@@ -3519,6 +3478,8 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->batch_count       = 1;
     sd_img_gen_params->control_strength  = 0.9f;
     sd_img_gen_params->qwen_image_layers = 3;
+    sd_img_gen_params->circular_x        = false;
+    sd_img_gen_params->circular_y        = false;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
     sd_img_gen_params->pulid_params      = {nullptr, 1.0f};
     sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
@@ -3552,6 +3513,8 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "control_strength: %.2f\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
              "VAE tiling: %s (temporal=%s, extra_tiling_args=%s)\n"
+             "circular_x: %s\n"
+             "circular_y: %s\n"
              "hires: {enabled=%s, upscaler=%s, model_path=%s, scale=%.2f, target=%dx%d, steps=%d, denoising_strength=%.2f}\n",
              SAFE_STR(sd_img_gen_params->prompt),
              SAFE_STR(sd_img_gen_params->negative_prompt),
@@ -3573,6 +3536,8 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              BOOL_STR(sd_img_gen_params->vae_tiling_params.enabled),
              BOOL_STR(sd_img_gen_params->vae_tiling_params.temporal_tiling),
              SAFE_STR(sd_img_gen_params->vae_tiling_params.extra_tiling_args),
+             BOOL_STR(sd_img_gen_params->circular_x),
+             BOOL_STR(sd_img_gen_params->circular_y),
              BOOL_STR(sd_img_gen_params->hires.enabled),
              sd_hires_upscaler_name(sd_img_gen_params->hires.upscaler),
              SAFE_STR(sd_img_gen_params->hires.model_path),
@@ -3622,6 +3587,8 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->hires.upscale_tile_size               = 128;
     sd_vid_gen_params->hires.custom_sigmas                   = nullptr;
     sd_vid_gen_params->hires.custom_sigmas_count             = 0;
+    sd_vid_gen_params->circular_x                            = false;
+    sd_vid_gen_params->circular_y                            = false;
     sd_cache_params_init(&sd_vid_gen_params->cache);
 }
 
@@ -4569,6 +4536,25 @@ struct CircularAxesState {
     bool circular_y = false;
 };
 
+static void apply_circular_axes_to_diffusion(sd_ctx_t* sd_ctx, bool circular_x, bool circular_y) {
+    sd_ctx->sd->circular_x = circular_x;
+    sd_ctx->sd->circular_y = circular_y;
+    if (sd_ctx->sd->diffusion_model) {
+        sd_ctx->sd->diffusion_model->set_circular_axes(circular_x, circular_y);
+    }
+    if (sd_ctx->sd->high_noise_diffusion_model) {
+        sd_ctx->sd->high_noise_diffusion_model->set_circular_axes(circular_x, circular_y);
+    }
+    if (sd_ctx->sd->control_net) {
+        sd_ctx->sd->control_net->set_circular_axes(circular_x, circular_y);
+    }
+    if (circular_x || circular_y) {
+        LOG_INFO("Using circular padding for convolutions (x=%s, y=%s)",
+                 circular_x ? "true" : "false",
+                 circular_y ? "true" : "false");
+    }
+}
+
 static CircularAxesState configure_image_vae_axes(sd_ctx_t* sd_ctx,
                                                   const sd_img_gen_params_t* sd_img_gen_params,
                                                   const GenerationRequest& request) {
@@ -5325,6 +5311,7 @@ SD_API bool generate_image(sd_ctx_t* sd_ctx,
     sd_ctx->sd->sampler_rng->manual_seed(request.seed);
     sd_ctx->sd->set_flow_shift(sd_img_gen_params->sample_params.flow_shift);
     sd_ctx->sd->apply_loras(sd_img_gen_params->loras, sd_img_gen_params->lora_count);
+    apply_circular_axes_to_diffusion(sd_ctx, sd_img_gen_params->circular_x, sd_img_gen_params->circular_y);
 
     ImageVaeAxesGuard axes_guard(sd_ctx, sd_img_gen_params, request);
 
@@ -6214,6 +6201,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     }
     int64_t t0                    = ggml_time_ms();
     sd_ctx->sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
+    apply_circular_axes_to_diffusion(sd_ctx, sd_vid_gen_params->circular_x, sd_vid_gen_params->circular_y);
     GenerationRequest request(sd_ctx, sd_vid_gen_params);
     bool has_input_audio = sd_vid_gen_params->input_audio != nullptr &&
                            sd_vid_gen_params->input_audio->data != nullptr &&
@@ -6639,10 +6627,6 @@ namespace kcpp_sd {
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
         res.spatial_multiple = get_spatial_multiple(ctx);
         return res;
-    }
-
-    void SetCircularAxesAll(sd_ctx_t* ctx, bool circular_x, bool circular_y) {
-        ctx->sd->SetCircularAxesAll(circular_x, circular_y);
     }
 
     void set_lora_cache(sd_ctx_t *ctx, bool enable) {

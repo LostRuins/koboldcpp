@@ -43,7 +43,7 @@ bool is_safetensors_file(const std::string& file_path) {
     }
 
     size_t header_size_ = model_io::read_u64(header_size_buf);
-    if (header_size_ >= file_size_ || header_size_ <= 2) {
+    if (header_size_ > file_size_ - ST_HEADER_SIZE_LEN || header_size_ <= 2) {
         return false;
     }
 
@@ -114,10 +114,11 @@ bool read_safetensors_file(const std::string& file_path,
     }
 
     size_t header_size_ = model_io::read_u64(header_size_buf);
-    if (header_size_ >= file_size_) {
+    if (header_size_ > file_size_ - ST_HEADER_SIZE_LEN) {
         set_error(error, "invalid safetensor file '" + file_path + "'");
         return false;
     }
+    const size_t data_start = ST_HEADER_SIZE_LEN + header_size_;
 
     // read header
     std::vector<char> header_buf;
@@ -156,6 +157,10 @@ bool read_safetensors_file(const std::string& file_path,
 
         size_t begin = tensor_info["data_offsets"][0].get<size_t>();
         size_t end   = tensor_info["data_offsets"][1].get<size_t>();
+        if (begin > end || end > file_size_ - data_start) {
+            set_error(error, "data offsets out of bounds for tensor '" + name + "'");
+            return false;
+        }
 
         ggml_type type = safetensors_dtype_to_ggml_type(dtype);
         if (type == GGML_TYPE_COUNT) {
@@ -187,7 +192,7 @@ bool read_safetensors_file(const std::string& file_path,
             n_dims = 1;
         }
 
-        TensorStorage tensor_storage(name, type, ne, n_dims, 0, ST_HEADER_SIZE_LEN + header_size_ + begin);
+        TensorStorage tensor_storage(name, type, ne, n_dims, 0, data_start + begin);
         tensor_storage.reverse_ne();
 
         size_t tensor_data_size = end - begin;

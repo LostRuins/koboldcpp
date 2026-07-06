@@ -444,6 +444,12 @@ ArgOptions SDContextParams::get_options() {
          (int)',',
          &tensor_type_rules},
         {"",
+         "--model-args",
+         "extra model args, key=value list. Supports chroma_use_dit_mask, chroma_use_t5_mask, "
+         "chroma_t5_mask_pad, qwen_image_zero_cond_t",
+         (int)',',
+         &model_args},
+        {"",
          "--photo-maker",
          "path to PHOTOMAKER model",
          0,
@@ -493,10 +499,6 @@ ArgOptions SDContextParams::get_options() {
          "number of threads to use during computation (default: -1). "
          "If threads <= 0, then threads will be set to the number of CPU physical cores",
          &n_threads},
-        {"",
-         "--chroma-t5-mask-pad",
-         "t5 mask pad size of chroma",
-         &chroma_t5_mask_pad},
     };
 
     options.bool_options = {
@@ -554,30 +556,6 @@ ArgOptions SDContextParams::get_options() {
          "--vae-conv-direct",
          "use ggml_conv2d_direct in the vae model",
          true, &vae_conv_direct},
-        {"",
-         "--circular",
-         "enable circular padding for convolutions",
-         true, &circular},
-        {"",
-         "--circularx",
-         "enable circular RoPE wrapping on x-axis (width) only",
-         true, &circular_x},
-        {"",
-         "--circulary",
-         "enable circular RoPE wrapping on y-axis (height) only",
-         true, &circular_y},
-        {"",
-         "--chroma-disable-dit-mask",
-         "disable dit mask for chroma",
-         false, &chroma_use_dit_mask},
-        {"",
-         "--qwen-image-zero-cond-t",
-         "enable zero_cond_t for qwen image",
-         true, &qwen_image_zero_cond_t},
-        {"",
-         "--chroma-enable-t5-mask",
-         "enable t5 mask for chroma",
-         true, &chroma_use_t5_mask},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -844,6 +822,7 @@ std::string SDContextParams::to_string() const {
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  split_mode: \"" << split_mode << "\",\n"
+        << "  model_args: \"" << model_args << "\",\n"
         << "  auto_fit: " << (auto_fit ? "true" : "false") << ",\n"
         << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
@@ -853,13 +832,6 @@ std::string SDContextParams::to_string() const {
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
         << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
-        << "  circular: " << (circular ? "true" : "false") << ",\n"
-        << "  circular_x: " << (circular_x ? "true" : "false") << ",\n"
-        << "  circular_y: " << (circular_y ? "true" : "false") << ",\n"
-        << "  chroma_use_dit_mask: " << (chroma_use_dit_mask ? "true" : "false") << ",\n"
-        << "  qwen_image_zero_cond_t: " << (qwen_image_zero_cond_t ? "true" : "false") << ",\n"
-        << "  chroma_use_t5_mask: " << (chroma_use_t5_mask ? "true" : "false") << ",\n"
-        << "  chroma_t5_mask_pad: " << chroma_t5_mask_pad << ",\n"
         << "  prediction: " << sd_prediction_name(prediction) << ",\n"
         << "  lora_apply_mode: " << sd_lora_apply_mode_name(lora_apply_mode) << ",\n"
         << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << "\n"
@@ -912,13 +884,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.tae_preview_only                = taesd_preview;
     sd_ctx_params.diffusion_conv_direct           = diffusion_conv_direct;
     sd_ctx_params.vae_conv_direct                 = vae_conv_direct;
-    sd_ctx_params.circular_x                      = circular || circular_x;
-    sd_ctx_params.circular_y                      = circular || circular_y;
     sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
-    sd_ctx_params.chroma_use_dit_mask             = chroma_use_dit_mask;
-    sd_ctx_params.chroma_use_t5_mask              = chroma_use_t5_mask;
-    sd_ctx_params.chroma_t5_mask_pad              = chroma_t5_mask_pad;
-    sd_ctx_params.qwen_image_zero_cond_t          = qwen_image_zero_cond_t;
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
     sd_ctx_params.max_vram                        = max_vram.c_str();
     sd_ctx_params.stream_layers                   = stream_layers;
@@ -928,6 +894,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.split_mode                      = split_mode.c_str();
     sd_ctx_params.auto_fit                        = auto_fit;
     sd_ctx_params.rpc_servers                     = rpc_servers.c_str();
+    sd_ctx_params.model_args                      = model_args.empty() ? nullptr : model_args.c_str();
     return sd_ctx_params;
 }
 
@@ -1189,6 +1156,18 @@ ArgOptions SDGenerationParams::get_options() {
          "disable auto resize of ref images",
          false,
          &auto_resize_ref_image},
+        {"",
+         "--circular",
+         "enable circular padding on both axes for tileable output",
+         true, &circular},
+        {"",
+         "--circularx",
+         "enable circular padding on x-axis (width) only",
+         true, &circular_x},
+        {"",
+         "--circulary",
+         "enable circular padding on y-axis (height) only",
+         true, &circular_y},
         {"",
          "--disable-image-metadata",
          "do not embed generation metadata on image files",
@@ -2475,6 +2454,8 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.hires.upscale_tile_size   = hires_upscale_tile_size;
     params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
     params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
+    params.circular_x                = circular || circular_x;
+    params.circular_y                = circular || circular_y;
     return params;
 }
 
@@ -2540,6 +2521,8 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.hires.upscale_tile_size   = hires_upscale_tile_size;
     params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
     params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
+    params.circular_x                = circular || circular_x;
+    params.circular_y                = circular || circular_y;
     return params;
 }
 

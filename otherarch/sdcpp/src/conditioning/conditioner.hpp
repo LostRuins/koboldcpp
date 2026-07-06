@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "core/tensor_ggml.hpp"
+#include "core/util.h"
 #include "model/te/clip.hpp"
 #include "model/te/llm.hpp"
 #include "model/te/t5.hpp"
@@ -1217,8 +1218,27 @@ struct T5CLIPEmbedder : public Conditioner {
                    bool use_mask                                       = false,
                    int mask_pad                                        = 0,
                    bool is_umt5                                        = false,
-                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                   const char* model_args                              = nullptr)
         : use_mask(use_mask), mask_pad(mask_pad), t5_tokenizer(is_umt5) {
+        for (const auto& [key, value] : parse_key_value_args(model_args, "model arg")) {
+            if (key == "chroma_use_t5_mask") {
+                bool parsed = false;
+                if (parse_strict_bool(value, parsed)) {
+                    this->use_mask = parsed;
+                } else {
+                    LOG_WARN("ignoring invalid Chroma T5 model arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            } else if (key == "chroma_t5_mask_pad") {
+                int parsed = 0;
+                if (parse_strict_int(value, parsed)) {
+                    this->mask_pad = parsed;
+                } else {
+                    LOG_WARN("ignoring invalid Chroma T5 model arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            }
+        }
+
         bool use_t5 = false;
         for (auto pair : tensor_storage_map) {
             if (pair.first.find("text_encoders.t5xxl") != std::string::npos) {

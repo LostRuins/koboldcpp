@@ -287,6 +287,10 @@ bool IMatrixCollector::load_imatrix(const char* fname) {
         if (e.values.empty()) {
             e.values.resize(nval, 0);
             e.counts.resize(nval, 0);
+        } else if (e.values.size() != (size_t)nval) {
+            LOG_ERROR("inconsistent size for a repeated entry (%d vs %d)\n", (int)e.values.size(), nval);
+            stats_ = {};
+            return false;
         }
 
         std::vector<float> tmp(nval);

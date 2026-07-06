@@ -216,13 +216,7 @@ typedef struct {
     bool tae_preview_only;
     bool diffusion_conv_direct;
     bool vae_conv_direct;
-    bool circular_x;
-    bool circular_y;
     bool force_sdxl_vae_conv_scale;
-    bool chroma_use_dit_mask;
-    bool chroma_use_t5_mask;
-    int chroma_t5_mask_pad;
-    bool qwen_image_zero_cond_t;
     enum sd_vae_format_t vae_format;
     const char* max_vram;  // GiB budget or backend assignment spec for graph-cut segmented param offload (0 = disabled, -1 = auto)
     bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
@@ -232,6 +226,7 @@ typedef struct {
     const char* split_mode;  // weight distribution for multi-device modules: layer (default) or row, or per-module assignments e.g. "diffusion=row"
     bool auto_fit;
     const char* rpc_servers;
+    const char* model_args;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -385,6 +380,8 @@ typedef struct {
     sd_cache_params_t cache;
     sd_hires_params_t hires;
     int qwen_image_layers;
+    bool circular_x;
+    bool circular_y;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -411,6 +408,8 @@ typedef struct {
     sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
     sd_hires_params_t hires;
+    bool circular_x;
+    bool circular_y;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;

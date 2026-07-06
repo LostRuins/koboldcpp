@@ -27,8 +27,6 @@ namespace kcpp_sd {
 
     model_info get_model_info(sd_ctx_t* ctx);
 
-    void SetCircularAxesAll(sd_ctx_t* ctx, bool circular_x, bool circular_y);
-
     void set_lora_cache(sd_ctx_t *ctx, bool enable);
 
     void apply_loras(sd_ctx_t *ctx, const std::vector<sd_lora_t>& lora_specs);

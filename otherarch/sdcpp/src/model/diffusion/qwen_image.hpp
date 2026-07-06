@@ -3,6 +3,7 @@
 
 #include <memory>
 
+#include "core/util.h"
 #include "model/common/block.hpp"
 #include "model/diffusion/dit.hpp"
 #include "model/diffusion/flux.hpp"
@@ -566,12 +567,21 @@ namespace Qwen {
                         const String2TensorStorage& tensor_storage_map      = {},
                         const std::string prefix                            = "",
                         SDVersion version                                   = VERSION_QWEN_IMAGE,
-                        bool zero_cond_t                                    = false,
-                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                        const char* model_args                              = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(QwenImageConfig::detect_from_weights(tensor_storage_map, prefix)),
               version(version) {
-            config.zero_cond_t = config.zero_cond_t || zero_cond_t;
+            for (const auto& [key, value] : parse_key_value_args(model_args, "model arg")) {
+                if (key == "qwen_image_zero_cond_t") {
+                    bool parsed = false;
+                    if (parse_strict_bool(value, parsed)) {
+                        config.zero_cond_t = config.zero_cond_t || parsed;
+                    } else {
+                        LOG_WARN("ignoring invalid Qwen Image model arg '%s=%s'", key.c_str(), value.c_str());
+                    }
+                }
+            }
             if (version == VERSION_QWEN_IMAGE_LAYERED) {
                 config.use_additional_t_cond = true;
             }
@@ -775,7 +785,6 @@ namespace Qwen {
                                                                                             tensor_storage_map,
                                                                                             "model.diffusion_model",
                                                                                             VERSION_QWEN_IMAGE,
-                                                                                            false,
                                                                                             model_manager);
 
             if (!model_manager->register_runner_params("Qwen image test",

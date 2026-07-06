@@ -1897,10 +1897,10 @@ public:
     }
 
     sd::Tensor<float> operator()(double sigma_a, double sigma_b) {
-        double a          = clamp(std::min(sigma_a, sigma_b));
-        double b          = clamp(std::max(sigma_a, sigma_b));
-        auto dW           = w(b) - w(a);
-        float span        = static_cast<float>(std::max(std::abs(sigma_b - sigma_a), 1e-12));
+        double a   = clamp(std::min(sigma_a, sigma_b));
+        double b   = clamp(std::max(sigma_a, sigma_b));
+        auto dW    = w(b) - w(a);
+        float span = static_cast<float>(std::max(std::abs(sigma_b - sigma_a), 1e-12));
         return dW * (1.0f / std::sqrt(span));
     }
 

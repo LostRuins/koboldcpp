@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include "core/util.h"
 #include "model/adapter/pulid.hpp"
 #include "model/common/rope.hpp"
 #include "model/diffusion/dit.hpp"
@@ -1400,18 +1401,28 @@ namespace Flux {
         std::vector<float> dct_vec;
         sd::Tensor<float> guidance_tensor;
         SDVersion version;
-        bool use_mask = false;
+        bool use_mask = true;
 
         FluxRunner(ggml_backend_t backend,
                    const String2TensorStorage& tensor_storage_map      = {},
                    const std::string prefix                            = "",
                    SDVersion version                                   = VERSION_FLUX,
-                   bool use_mask                                       = false,
-                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                   const char* model_args                              = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(FluxConfig::detect_from_weights(tensor_storage_map, prefix, version)),
-              version(version),
-              use_mask(use_mask) {
+              version(version) {
+            for (const auto& [key, value] : parse_key_value_args(model_args, "model arg")) {
+                if (key == "chroma_use_dit_mask") {
+                    bool parsed = true;
+                    if (parse_strict_bool(value, parsed)) {
+                        use_mask = parsed;
+                    } else {
+                        LOG_WARN("ignoring invalid Chroma DiT model arg '%s=%s'", key.c_str(), value.c_str());
+                    }
+                }
+            }
+
             if (config.is_chroma) {
                 LOG_INFO("Using pruned modulation (Chroma)");
             }
@@ -1718,7 +1729,6 @@ namespace Flux {
                                                                             tensor_storage_map,
                                                                             "model.diffusion_model",
                                                                             VERSION_FLUX2,
-                                                                            false,
                                                                             model_manager);
 
             if (!model_manager->register_runner_params("Flux test",

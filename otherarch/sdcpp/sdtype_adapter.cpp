@@ -465,7 +465,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.diffusion_flash_attn = sd_params->diffusion_flash_attn;
     params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
     params.vae_conv_direct = sd_params->vae_conv_direct;
-    params.chroma_use_dit_mask = true;
+    params.model_args = "chroma_use_dit_mask=true";
     params.max_vram = max_vram.c_str();
     params.stream_layers = inputs.stream_layers;
     params.eager_load = true; //kcpp should preload everything
@@ -1010,8 +1010,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         sd_params->sample_method = sd_get_default_sample_method(sd_ctx);
     }
 
-    SetCircularAxesAll(sd_ctx, inputs.circular_x, inputs.circular_y);
-
     sd_params->cache_mode    = inputs.cache_mode ? inputs.cache_mode : "";
     sd_params->cache_options = inputs.cache_options ? inputs.cache_options : "";
 
@@ -1269,6 +1267,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         params.vae_tiling_params.temporal_tiling = true;
     }
     parse_cache_options(params.cache, sd_params->cache_mode, sd_params->cache_options);
+    params.circular_x = inputs.circular_x;
+    params.circular_y = inputs.circular_y;
 
     LoraMap lora_map = sd_params->lora_map;
     if (sd_params->lora_dynamic) {

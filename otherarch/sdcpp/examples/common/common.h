@@ -152,6 +152,7 @@ struct SDContextParams {
     std::string backend;
     std::string params_backend;
     std::string split_mode;
+    std::string model_args;
     bool auto_fit = false;
     std::string rpc_servers;
     std::string effective_backend;
@@ -164,16 +165,6 @@ struct SDContextParams {
     bool diffusion_flash_attn  = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
-
-    bool circular   = false;
-    bool circular_x = false;
-    bool circular_y = false;
-
-    bool chroma_use_dit_mask = true;
-    bool chroma_use_t5_mask  = false;
-    int chroma_t5_mask_pad   = 1;
-
-    bool qwen_image_zero_cond_t = false;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
@@ -245,6 +236,10 @@ struct SDGenerationParams {
 
     int upscale_repeats   = 1;
     int upscale_tile_size = 128;
+
+    bool circular   = false;
+    bool circular_x = false;
+    bool circular_y = false;
 
     bool hires_enabled         = false;
     std::string hires_upscaler = "Latent";
