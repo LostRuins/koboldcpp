@@ -272,6 +272,15 @@ public:
         return max_vram_assignment.bytes_for_backend(backend_for(module));
     }
 
+    std::vector<size_t> layer_split_vram_limits_for_backends(const std::vector<ggml_backend_t>& backends) {
+        std::vector<size_t> limits;
+        limits.reserve(backends.size());
+        for (ggml_backend_t backend : backends) {
+            limits.push_back(max_vram_assignment.bytes_for_backend(backend));
+        }
+        return limits;
+    }
+
     bool ensure_backend_pair(SDBackendModule module) {
         if (backend_for(module) == nullptr) {
             return false;
@@ -431,8 +440,9 @@ public:
                                                      params_mem_size);
     }
 
-    // Register each layer-split partition with its compute backend; the
-    // ModelManager handles allocation, staging, and LoRA by backend.
+    // Register graph-cut layer-split tensors on the primary backend first.
+    // The first real graph assigns each param tensor to a runtime backend
+    // before weights are loaded or staged.
     template <typename T>
     bool register_layer_split_runner_params(const std::string& desc,
                                             const std::shared_ptr<T>& model,
@@ -463,52 +473,29 @@ public:
                                                          params_mem_size);
         }
 
-        std::map<std::string, ggml_tensor*> split_tensors;
-        if constexpr (std::is_base_of_v<Conditioner, T>) {
-            model->get_layer_split_param_tensors(split_tensors);
-        } else {
-            split_tensors = group_tensors;
-        }
-
-        auto partitions = sd::partition_layer_split_tensors(desc, group_tensors, split_tensors, module_backends);
-        bool is_split   = false;
-        for (size_t i = 1; i < partitions.size(); i++) {
-            if (!partitions[i].empty()) {
-                is_split = true;
-                break;
-            }
-        }
-        if (!is_split) {
-            return model_manager->register_param_tensors(desc,
-                                                         std::move(group_tensors),
-                                                         residency_mode,
-                                                         module_backends[0],
-                                                         params_backend_for(module),
-                                                         params_mem_size);
-        }
-
         model->set_runtime_backends(module_backends);
+        model->set_graph_cut_layer_split_backend_vram_limits(layer_split_vram_limits_for_backends(module_backends));
+        model->set_graph_cut_layer_split_enabled(true);
         const bool params_follow_runtime = backend_manager.params_backend_follows_runtime(module) ||
                                            backend_manager.params_backend_is_disk(module);
-        for (size_t i = 0; i < module_backends.size(); i++) {
-            if (partitions[i].empty()) {
-                continue;
-            }
-            ggml_backend_t partition_params_backend =
-                params_follow_runtime ? module_backends[i] : params_backend_for(module);
-            if (partition_params_backend == nullptr) {
-                return false;
-            }
-            if (!model_manager->register_param_tensors(desc,
-                                                       std::move(partitions[i]),
-                                                       residency_mode,
-                                                       module_backends[i],
-                                                       partition_params_backend,
-                                                       params_mem_size)) {
-                return false;
-            }
+        ggml_backend_t initial_params_backend = params_follow_runtime ? module_backends[0] : params_backend_for(module);
+        if (initial_params_backend == nullptr) {
+            return false;
         }
-        return true;
+
+        LOG_INFO("%s graph-cut layer split: deferring %zu tensors across %zu runtime backends until first graph",
+                 desc.c_str(),
+                 group_tensors.size(),
+                 module_backends.size());
+
+        return model_manager->register_param_tensors(desc,
+                                                     std::move(group_tensors),
+                                                     residency_mode,
+                                                     module_backends[0],
+                                                     initial_params_backend,
+                                                     params_mem_size,
+                                                     false,
+                                                     params_follow_runtime);
     }
 
     bool init_backend() {
@@ -526,6 +513,16 @@ public:
     bool row_split_active() {
         for (SDBackendModule module : {SDBackendModule::DIFFUSION, SDBackendModule::TE}) {
             if (backend_manager.split_mode(module) == SDSplitMode::ROW &&
+                backend_manager.runtime_backends(module).size() > 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool graph_cut_layer_split_active() {
+        for (SDBackendModule module : {SDBackendModule::DIFFUSION, SDBackendModule::TE}) {
+            if (backend_manager.split_mode(module) == SDSplitMode::LAYER &&
                 backend_manager.runtime_backends(module).size() > 1) {
                 return true;
             }
@@ -1033,6 +1030,10 @@ public:
         if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
             LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
             stream_layers = false;
+        }
+        if (eager_load && graph_cut_layer_split_active()) {
+            LOG_WARN("--eager-load is not supported with graph-cut layer split; weights will be prepared lazily");
+            eager_load = false;
         }
 
         std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();

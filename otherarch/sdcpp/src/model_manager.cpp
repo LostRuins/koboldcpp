@@ -134,7 +134,8 @@ bool ModelManager::register_param_tensors(const std::string& desc,
                                           ggml_backend_t compute_backend,
                                           ggml_backend_t params_backend,
                                           size_t* registered_tensor_size,
-                                          bool allow_split_buffer) {
+                                          bool allow_split_buffer,
+                                          bool params_follow_compute_backend) {
     if (desc.empty()) {
         LOG_ERROR("model manager tensor desc is empty");
         return false;
@@ -158,14 +159,15 @@ bool ModelManager::register_param_tensors(const std::string& desc,
         }
         ggml_set_name(tensor, name.c_str());
 
-        auto state                = std::make_unique<TensorState>();
-        state->name               = name;
-        state->tensor             = tensor;
-        state->desc               = desc;
-        state->residency_mode     = residency_mode;
-        state->compute_backend    = compute_backend;
-        state->params_backend     = params_backend;
-        state->allow_split_buffer = allow_split_buffer;
+        auto state                           = std::make_unique<TensorState>();
+        state->name                          = name;
+        state->tensor                        = tensor;
+        state->desc                          = desc;
+        state->residency_mode                = residency_mode;
+        state->compute_backend               = compute_backend;
+        state->params_backend                = params_backend;
+        state->allow_split_buffer            = allow_split_buffer;
+        state->params_follow_compute_backend = params_follow_compute_backend;
         new_states.push_back(std::move(state));
     }
 
@@ -916,6 +918,54 @@ bool ModelManager::resolve_required_tensor_states(const std::vector<ggml_tensor*
             required_states.push_back(state);
         }
     }
+    return true;
+}
+
+bool ModelManager::assign_compute_backend(const std::vector<ggml_tensor*>& tensors,
+                                          ggml_backend_t compute_backend) {
+    if (tensors.empty()) {
+        return true;
+    }
+    if (compute_backend == nullptr) {
+        LOG_ERROR("model manager cannot assign tensors to a null compute backend");
+        return false;
+    }
+
+    std::vector<TensorState*> required_states;
+    if (!resolve_required_tensor_states(tensors, required_states)) {
+        return false;
+    }
+
+    for (TensorState* state : required_states) {
+        if (state == nullptr || state->tensor == nullptr) {
+            continue;
+        }
+
+        const bool params_follow_compute = state->params_follow_compute_backend ||
+                                           state->residency_mode == ResidencyMode::Disk;
+        const bool compute_changes = state->compute_backend != compute_backend;
+        const bool params_changes  = params_follow_compute && state->params_backend != compute_backend;
+        if (!compute_changes && !params_changes) {
+            continue;
+        }
+
+        if (state->active_prepare_count > 0 || state->staged_to_compute_backend) {
+            LOG_ERROR("model manager cannot move active tensor '%s' to another compute backend",
+                      state->name.c_str());
+            return false;
+        }
+        if (params_changes && state->loaded_to_params_backend) {
+            LOG_ERROR("model manager cannot move loaded tensor '%s' to another params backend",
+                      state->name.c_str());
+            return false;
+        }
+
+        state->compute_backend = compute_backend;
+        if (params_follow_compute) {
+            state->params_backend = compute_backend;
+        }
+    }
+
     return true;
 }
 
