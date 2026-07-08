@@ -3003,6 +3003,15 @@ def tts_generate(genparams):
     oai_voicemap = ["alloy","onyx","echo","nova","shimmer"] # map to kcpp defaults
     voice_mapping = voicelist
     normalized_voice = voicestr.strip().lower() if voicestr else ""
+    # Backwards compatibility aliases for KoboldCpp default names (mapping to their true speaker timbres)
+    voice_aliases = {
+        "kobo": "aiden",
+        "cheery": "serena",
+        "sleepy": "ono_anna",
+        "shouty": "ryan",
+        "chatty": "sohee"
+    }
+    normalized_voice = voice_aliases.get(normalized_voice, normalized_voice)
     if normalized_voice.endswith(".wav"):
         normalized_voice = normalized_voice[:-4]
     if normalized_voice in voice_mapping:
@@ -11961,6 +11970,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             except Exception:
                 print("Could not find Embedded Qwen3TTS voices.")
 
+            # Re-define voicelist to map official Qwen3-TTS CustomVoice speakers in the correct C++ seed order.
+            # This maps index 0..8 perfectly to seeds 1..9 in the C++ speakermap.
+            voicelist = ["aiden", "serena", "ono_anna", "ryan", "sohee", "eric", "dylan", "vivian", "uncle_fu"]
             voicelist.append("random")
             voicebank["random"] = ""
             voicelist.append("instruct")
