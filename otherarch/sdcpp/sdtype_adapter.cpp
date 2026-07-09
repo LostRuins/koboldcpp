@@ -972,6 +972,10 @@ static std::string upscale_image_to_png_base64(upscaler_ctx_t* upscaler_ctx, con
     return gen_data;
 }
 
+void sdtype_abort_generation() {
+    sd_cancel_generation(sd_ctx, SD_CANCEL_ALL);
+}
+
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
     if(sd_ctx == nullptr || sd_params == nullptr)

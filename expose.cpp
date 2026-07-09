@@ -213,6 +213,10 @@ extern "C"
     {
         return sdtype_get_info();
     }
+    void sd_abort_generation()
+    {
+        sdtype_abort_generation();
+    }
 
     bool whisper_load_model(const whisper_load_model_inputs inputs)
     {

@@ -992,6 +992,8 @@ def init_library():
     handle.sd_upscale.restype = sd_generation_outputs
     handle.sd_get_info.argtypes = []
     handle.sd_get_info.restype = sd_info_outputs
+    handle.sd_abort_generation.argtypes = []
+    handle.sd_abort_generation.restype = None
     handle.whisper_load_model.argtypes = [whisper_load_model_inputs]
     handle.whisper_load_model.restype = ctypes.c_bool
     handle.whisper_generate.argtypes = [whisper_generation_inputs]
@@ -5859,7 +5861,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.close_connection = True
         await asyncio.sleep(0.05)
 
-    async def monitor_connection(self): #Poll the socket to detect client disconnection during prompt processing
+    async def monitor_connection(self, cancel_fn): #Poll the socket to detect client disconnection
         import select
         loop = asyncio.get_event_loop()
         def check_connection_closed():
@@ -5882,7 +5884,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 if disconnected:
                     if args.debugmode:
                         print("\nClient disconnected unexpectedly, aborting...")
-                    handle.abort_generate()
+                    cancel_fn()
                     return
             except Exception:
                 return
@@ -5897,7 +5899,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             generate_task = asyncio.create_task(self.generate_text(genparams, api_format, stream_flag))
             tasks.append(generate_task)
             if stream_flag:
-                monitor_task = asyncio.create_task(self.monitor_connection())
+                monitor_task = asyncio.create_task(self.monitor_connection(handle.abort_generate))
             await asyncio.gather(*tasks)
             generate_result = generate_task.result()
             return generate_result
@@ -5905,6 +5907,27 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             print("An ongoing connection was aborted or interrupted!")
             print(cae)
             handle.abort_generate()
+            await asyncio.sleep(0.1) #short delay
+        except Exception as e:
+            print(e)
+        finally:
+            if monitor_task and not monitor_task.done():
+                monitor_task.cancel()
+                try:
+                    await monitor_task
+                except asyncio.CancelledError:
+                    pass
+
+    async def handle_image_request(self, generate_fn, param, cancel_fn):
+        monitor_task = None
+        try:
+            monitor_task = asyncio.create_task(self.monitor_connection(cancel_fn))
+            result = await asyncio.to_thread(generate_fn, param)
+            return result
+        except (BrokenPipeError, ConnectionAbortedError) as cae: # attempt to abort if connection lost
+            print("An ongoing connection was aborted or interrupted!")
+            print(cae)
+            cancel_fn()
             await asyncio.sleep(0.1) #short delay
         except Exception as e:
             print(e)
@@ -7487,7 +7510,7 @@ Change Mode<br>
                             if loras:
                                 genparams['prompt'] = prompt
                                 genparams['lora'] = lora_map_name_to_path(loras)
-                        gen = sd_generate(genparams)
+                        gen = asyncio.run(self.handle_image_request(sd_generate, genparams, handle.sd_abort_generation))
                         gendat = gen["data"]
                         genanim = gen["animated"]
                         gendatextra = gen["data_extra"]
