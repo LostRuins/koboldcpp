@@ -5381,7 +5381,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     float pt2 = (gen_time*1000.0/(real_n_generated<=0?1:real_n_generated));
     float generated_tps = (pt2>0?(1000.0/pt2):0);
     float total_time = (init_time + process_time + gen_time);
-    printf("\n[%s] CtxLimit:%d/%d, Init:%.2fs, Processed:%d in %.2fs (%.2fT/s), Generated:%d/%d in %.2fs (%.2fT/s), Total:%.2fs",
+    printf("\n[%s] CtxLimit:%d/%d, Init:%.2fs, Processed:%d in %.2fs (%.2fT/s), Generated:%d/%d in %.2fs (%.2fT/s), Total:%.2fs\n",
     get_timestamp_str().c_str(),(int)current_context_tokens.size(),(int)nctx, init_time, real_n_processed, process_time, processed_tps, real_n_generated, kcpp_data->n_predict, gen_time, generated_tps, total_time);
 
     if(debugmode==1 && !is_quiet && (draft_successes+draft_failures)>0)
