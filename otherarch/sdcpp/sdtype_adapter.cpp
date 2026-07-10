@@ -117,6 +117,7 @@ struct SDParams {
     float distilled_guidance      = -1.0f;
     float shifted_timestep        = 0;
     float flow_shift              = -1.0f;
+    std::string extra_sample_args = "";
     float eta                     = -1.0f;
     float strength                = 0.75f;
     int64_t seed                  = 42;
@@ -1001,6 +1002,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->sample_steps = inputs.sample_steps;
     sd_params->shifted_timestep = inputs.shifted_timestep;
     sd_params->flow_shift = inputs.flow_shift;
+    sd_params->extra_sample_args = inputs.extra_sample_args ? inputs.extra_sample_args : "";
     sd_params->eta = inputs.eta;
     sd_params->seed = inputs.seed;
     sd_params->width = inputs.width;
@@ -1259,6 +1261,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     if (sd_params->flow_shift > 0.f && sd_params->flow_shift != INFINITY) {
         params.sample_params.flow_shift = sd_params->flow_shift;
     }
+    params.sample_params.extra_sample_args = sd_params->extra_sample_args.c_str();
     params.seed = sd_params->seed;
     params.strength = sd_params->strength;
     params.vae_tiling_params.enabled = dotile;

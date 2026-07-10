@@ -431,6 +431,7 @@ class sd_generation_inputs(ctypes.Structure):
                 ("sample_method", ctypes.c_char_p),
                 ("scheduler", ctypes.c_char_p),
                 ("eta", ctypes.c_float),
+                ("extra_sample_args", ctypes.c_char_p),
                 ("clip_skip", ctypes.c_int),
                 ("vid_req_frames", ctypes.c_int),
                 ("vid_fps", ctypes.c_int),
@@ -2677,6 +2678,7 @@ def gendefaults_parse_meta_field(value):
         # match sd.cpp flag
         'cache-option': 'cache_options',
         'cache_option': 'cache_options',
+        'extra-sample-args': 'extra_sample_args',
     }
     parsed = parse_json_object(value, 'gendefaults') or {}
     result = {}
@@ -2845,6 +2847,7 @@ def sd_generate(genparams):
         seed = random.randint(100000, 999999)
     sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
+    extra_sample_args = str(genparams.get("extra_sample_args") or "")
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
     eta = tryparsefloat(genparams.get("eta", None), None)
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
@@ -2910,6 +2913,7 @@ def sd_generate(genparams):
     inputs.sample_method = sd_sampler_canonical_name(sample_method).encode("UTF-8")
     inputs.scheduler = scheduler.encode("UTF-8")
     inputs.eta = -1.0 if eta is None else eta
+    inputs.extra_sample_args = extra_sample_args.encode("UTF-8")
     inputs.clip_skip = clip_skip
     inputs.vid_req_frames = vid_req_frames
     inputs.vid_fps = vid_fps
