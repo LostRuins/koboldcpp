@@ -11,6 +11,9 @@ bool is_safetensors_file(const std::string& file_path);
 bool read_safetensors_file(const std::string& file_path,
                            std::vector<TensorStorage>& tensor_storages,
                            std::string* error = nullptr);
+bool read_safetensors_index_file(const std::string& file_path,
+                                 std::vector<std::string>& shard_paths,
+                                 std::string* error = nullptr);
 bool write_safetensors_file(const std::string& file_path,
                             const std::vector<TensorWriteInfo>& tensors,
                             std::string* error = nullptr);

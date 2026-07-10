@@ -267,7 +267,7 @@ namespace Krea2 {
             auto knorm = std::dynamic_pointer_cast<KreaRMSNorm>(blocks["qknorm.knorm"]);
             auto wo    = std::dynamic_pointer_cast<Linear>(blocks["wo"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan")) {
+            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
                 wo->set_force_prec_f32(true);
             }
 

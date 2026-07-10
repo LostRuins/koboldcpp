@@ -199,7 +199,7 @@ namespace Boogu {
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["linear_2"]);
             auto linear_3 = std::dynamic_pointer_cast<Linear>(blocks["linear_3"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan")) {
+            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
                 linear_2->set_force_prec_f32(true);
             }
 
@@ -259,7 +259,7 @@ namespace Boogu {
             auto norm_k   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"]);
             auto to_out_0 = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan")) {
+            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
                 to_out_0->set_force_prec_f32(true);
             }
 
@@ -383,7 +383,7 @@ namespace Boogu {
             auto instruct_out  = std::dynamic_pointer_cast<Linear>(blocks["processor.instruct_out"]);
             auto img_out       = std::dynamic_pointer_cast<Linear>(blocks["processor.img_out"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan")) {
+            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
                 to_out_0->set_force_prec_f32(true);
             }
 

@@ -226,8 +226,12 @@ public:
     std::string split_mode_spec;
     bool auto_fit_enabled = false;
 
+    bool diffusion_conv_direct = false;
+
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
+
+    size_t control_net_params_mem_size = 0;
 
     std::shared_ptr<ModelManager> model_manager;
 
@@ -496,6 +500,76 @@ public:
                                                      params_mem_size,
                                                      false,
                                                      params_follow_runtime);
+    }
+
+    bool unload_control_net() {
+        if (control_net == nullptr) {
+            return true;
+        }
+        if (model_manager != nullptr) {
+            if (!model_manager->unregister_param_tensors("ControlNet", &control_net_params_mem_size)) {
+                return false;
+            }
+        }
+        control_net.reset();
+        control_net_params_mem_size = 0;
+        return true;
+    }
+
+    bool load_control_net_from_file(const std::string& path) {
+        if (path.empty()) {
+            LOG_ERROR("sd_ctx_load_control_net: empty path");
+            return false;
+        }
+        if (model_manager == nullptr) {
+            LOG_ERROR("sd_ctx_load_control_net: model_manager not initialized");
+            return false;
+        }
+
+        if (!unload_control_net()) {
+            return false;
+        }
+
+        ModelLoader& shared_loader = model_manager->loader();
+        if (!shared_loader.init_from_file(path)) {
+            LOG_ERROR("sd_ctx_load_control_net: failed to load '%s'", path.c_str());
+            return false;
+        }
+        shared_loader.convert_tensors_name();
+
+        if (!ensure_backend_pair(SDBackendModule::CONTROL_NET)) {
+            LOG_ERROR("sd_ctx_load_control_net: control_net backend unavailable");
+            return false;
+        }
+
+        control_net = std::make_shared<ControlNet>(backend_for(SDBackendModule::CONTROL_NET),
+                                                   params_backend_for(SDBackendModule::CONTROL_NET),
+                                                   shared_loader.get_tensor_storage_map(),
+                                                   version,
+                                                   "",
+                                                   model_manager);
+        if (diffusion_conv_direct) {
+            LOG_INFO("Using Conv2d direct in the control net");
+            control_net->set_conv2d_direct_enabled(true);
+        }
+        if (!register_runner_params("ControlNet",
+                                    control_net,
+                                    SDBackendModule::CONTROL_NET,
+                                    &control_net_params_mem_size)) {
+            LOG_ERROR("sd_ctx_load_control_net: register_runner_params failed");
+            control_net.reset();
+            control_net_params_mem_size = 0;
+            return false;
+        }
+        if (!model_manager->validate_registered_tensors()) {
+            LOG_ERROR("sd_ctx_load_control_net: registered tensors validation failed");
+            unload_control_net();
+            return false;
+        }
+        LOG_INFO("sd_ctx_load_control_net: loaded '%s' (%.2f MB)",
+                 path.c_str(),
+                 control_net_params_mem_size / 1024.0 / 1024.0);
+        return true;
     }
 
     bool init_backend() {
@@ -1101,10 +1175,12 @@ public:
         model_loader.process_model_files(enable_mmap, needs_writable_mmap);
         load_alphas_cumprod(model_loader);
 
+        diffusion_conv_direct = sd_ctx_params->diffusion_conv_direct;
+
         size_t text_encoder_params_mem_size = 0;
         size_t unet_params_mem_size         = 0;
         size_t vae_params_mem_size          = 0;
-        size_t control_net_params_mem_size  = 0;
+        control_net_params_mem_size         = 0;
         size_t extension_params_mem_size    = 0;
 
         bool tae_preview_only = sd_ctx_params->tae_preview_only;
@@ -3768,6 +3844,27 @@ SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
         return false;
     }
     return sd_version_supports_video_generation(sd_ctx->sd->version);
+}
+
+SD_API bool sd_ctx_load_control_net(sd_ctx_t* sd_ctx, const char* path) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || path == nullptr) {
+        return false;
+    }
+    return sd_ctx->sd->load_control_net_from_file(path);
+}
+
+SD_API bool sd_ctx_unload_control_net(sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return false;
+    }
+    return sd_ctx->sd->unload_control_net();
+}
+
+SD_API bool sd_ctx_has_control_net(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return false;
+    }
+    return sd_ctx->sd->control_net != nullptr;
 }
 
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {

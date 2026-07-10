@@ -134,6 +134,9 @@ public:
                                 bool allow_split_buffer            = false,
                                 bool params_follow_compute_backend = false);
 
+    bool unregister_param_tensors(const std::string& desc,
+                                  size_t* registered_tensor_size = nullptr);
+
     template <typename Runner>
     bool register_runner_params(const std::string& desc,
                                 Runner& runner,

@@ -294,7 +294,7 @@ public:
 
         auto net_0 = std::dynamic_pointer_cast<UnaryBlock>(blocks["net.0"]);
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
-        if (sd_backend_is(ctx->backend, "Vulkan")) {
+        if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
             net_2->set_force_prec_f32(true);
         }
 

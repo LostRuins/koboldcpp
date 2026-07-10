@@ -3,14 +3,18 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <ostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "binary_io.h"
 #include "core/util.h"
 #include "json.hpp"
+
+namespace fs = std::filesystem;
 
 static constexpr size_t ST_HEADER_SIZE_LEN = 8;
 
@@ -18,6 +22,14 @@ static void set_error(std::string* error, const std::string& message) {
     if (error != nullptr) {
         *error = message;
     }
+}
+
+static std::string resolve_index_shard_path(const std::string& index_path, const std::string& shard_path) {
+    fs::path shard_fs_path(shard_path);
+    if (shard_fs_path.is_absolute()) {
+        return shard_fs_path.lexically_normal().string();
+    }
+    return (fs::path(index_path).parent_path() / shard_fs_path).lexically_normal().string();
 }
 
 bool is_safetensors_file(const std::string& file_path) {
@@ -225,6 +237,52 @@ bool read_safetensors_file(const std::string& file_path,
         tensor_storages.push_back(tensor_storage);
 
         // LOG_DEBUG("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
+    }
+
+    return true;
+}
+
+bool read_safetensors_index_file(const std::string& file_path,
+                                 std::vector<std::string>& shard_paths,
+                                 std::string* error) {
+    shard_paths.clear();
+
+    std::ifstream file(file_path);
+    if (!file.is_open()) {
+        set_error(error, "failed to open '" + file_path + "'");
+        return false;
+    }
+
+    nlohmann::json index;
+    try {
+        index = nlohmann::json::parse(file);
+    } catch (const std::exception&) {
+        set_error(error, "parsing safetensors index failed: '" + file_path + "'");
+        return false;
+    }
+
+    if (!index.is_object() || !index.contains("weight_map") || !index["weight_map"].is_object()) {
+        set_error(error, "invalid safetensors index '" + file_path + "'");
+        return false;
+    }
+
+    std::unordered_set<std::string> seen_shard_paths;
+    for (const auto& item : index["weight_map"].items()) {
+        if (!item.value().is_string()) {
+            set_error(error, "invalid shard path for tensor '" + item.key() + "'");
+            return false;
+        }
+
+        std::string shard_path = resolve_index_shard_path(file_path,
+                                                          item.value().get<std::string>());
+        if (seen_shard_paths.insert(shard_path).second) {
+            shard_paths.push_back(std::move(shard_path));
+        }
+    }
+
+    if (shard_paths.empty()) {
+        set_error(error, "safetensors index has no tensors: '" + file_path + "'");
+        return false;
     }
 
     return true;

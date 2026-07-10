@@ -179,6 +179,102 @@ bool ModelManager::register_param_tensors(const std::string& desc,
     return true;
 }
 
+bool ModelManager::unregister_param_tensors(const std::string& desc, size_t* registered_tensor_size) {
+    if (desc.empty()) {
+        return true;
+    }
+
+    std::unordered_set<TensorState*> target_states;
+    size_t released_size = 0;
+    for (auto& state : tensor_states_) {
+        if (state == nullptr || state->desc != desc) {
+            continue;
+        }
+        if (state->active_prepare_count > 0) {
+            LOG_ERROR("model manager cannot unregister active %s tensor '%s'",
+                      desc.c_str(),
+                      state->name.c_str());
+            return false;
+        }
+        target_states.insert(state.get());
+        if (state->tensor != nullptr) {
+            released_size += ggml_nbytes(state->tensor);
+        }
+    }
+
+    if (target_states.empty()) {
+        return true;
+    }
+
+    release_compute_staging_blocks(false);
+
+    std::vector<ParamsStorageBlock*> storage_blocks_to_release;
+    std::unordered_set<TensorState*> affected_storage_states;
+    for (const auto& block : params_storage_blocks_) {
+        if (block == nullptr) {
+            continue;
+        }
+        bool has_target_state = false;
+        for (TensorState* state : block->states) {
+            if (state != nullptr && target_states.count(state) > 0) {
+                has_target_state = true;
+                break;
+            }
+        }
+        if (!has_target_state) {
+            continue;
+        }
+        storage_blocks_to_release.push_back(block.get());
+        for (TensorState* state : block->states) {
+            if (state != nullptr) {
+                affected_storage_states.insert(state);
+            }
+        }
+    }
+
+    for (TensorState* state : affected_storage_states) {
+        if (state == nullptr) {
+            continue;
+        }
+        if (state->active_prepare_count > 0 || state->staged_to_compute_backend) {
+            LOG_ERROR("model manager cannot unregister %s while tensor '%s' is active",
+                      desc.c_str(),
+                      state->name.c_str());
+            return false;
+        }
+    }
+
+    for (ParamsStorageBlock* block : storage_blocks_to_release) {
+        if (block != nullptr) {
+            free_params_storage_block(*block);
+            erase_params_storage_block(block);
+        }
+    }
+
+    for (auto it = tensor_states_by_name_.begin(); it != tensor_states_by_name_.end();) {
+        if (target_states.count(it->second) > 0) {
+            it = tensor_states_by_name_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    tensor_states_.erase(std::remove_if(tensor_states_.begin(),
+                                        tensor_states_.end(),
+                                        [&](const std::unique_ptr<TensorState>& s) {
+                                            return s == nullptr || target_states.count(s.get()) > 0;
+                                        }),
+                         tensor_states_.end());
+
+    if (registered_tensor_size != nullptr) {
+        if (released_size > *registered_tensor_size) {
+            *registered_tensor_size = 0;
+        } else {
+            *registered_tensor_size -= released_size;
+        }
+    }
+    return true;
+}
+
 bool ModelManager::load_all_params_eagerly() {
     std::vector<TensorState*> all_states;
     all_states.reserve(tensor_states_.size());
