@@ -421,29 +421,88 @@ namespace Krea2 {
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* vec,
-                             ggml_tensor* pe) {
+                             ggml_tensor* pe,
+                             ggml_tensor* vec_refs = nullptr,
+                             int64_t ref_start     = -1) {
             auto mod      = std::dynamic_pointer_cast<KreaDoubleSharedModulation>(blocks["mod"]);
             auto prenorm  = std::dynamic_pointer_cast<KreaRMSNorm>(blocks["prenorm"]);
             auto postnorm = std::dynamic_pointer_cast<KreaRMSNorm>(blocks["postnorm"]);
             auto attn     = std::dynamic_pointer_cast<KreaAttention>(blocks["attn"]);
             auto mlp      = std::dynamic_pointer_cast<KreaSwiGLU>(blocks["mlp"]);
 
-            auto mods       = mod->forward(ctx, vec);
-            auto attn_input = Flux::modulate(ctx->ggml_ctx,
-                                             prenorm->forward(ctx, x),
-                                             mods[1],
-                                             mods[0],
-                                             true);
-            auto attn_out   = attn->forward(ctx, attn_input, pe);
-            x               = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, mods[2]));
+            if (ref_start >= 0 && vec_refs) {
+                // same as normal, but since vec is different for refs and the rest, needs a lot of views and concats
+                auto mods_main = mod->forward(ctx, vec);
+                auto mods_refs = mod->forward(ctx, vec_refs);
 
-            auto mlp_input = Flux::modulate(ctx->ggml_ctx,
-                                            postnorm->forward(ctx, x),
-                                            mods[4],
-                                            mods[3],
-                                            true);
-            auto mlp_out   = mlp->forward(ctx, mlp_input);
-            x              = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, mlp_out, mods[5]));
+                int64_t D  = x->ne[0];
+                int64_t N  = x->ne[1];
+                int64_t B  = x->ne[2];
+                size_t nb1 = x->nb[1];
+                size_t nb2 = x->nb[2];
+
+                int64_t len_main = ref_start;
+                int64_t len_refs = N - ref_start;
+
+                auto pre_x = prenorm->forward(ctx, x);
+
+                auto pre_x_main = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_main, B, nb1, nb2, 0);
+                auto pre_x_refs = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_refs, B, nb1, nb2, len_main * nb1);
+
+                auto attn_in_main = Flux::modulate(ctx->ggml_ctx, pre_x_main, mods_main[1], mods_main[0], true);
+                auto attn_in_refs = Flux::modulate(ctx->ggml_ctx, pre_x_refs, mods_refs[1], mods_refs[0], true);
+
+                auto attn_input = ggml_concat(ctx->ggml_ctx, attn_in_main, attn_in_refs, 1);
+
+                auto attn_out = attn->forward(ctx, attn_input, pe);
+
+                auto attn_out_main = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_main, B, attn_out->nb[1], attn_out->nb[2], 0);
+                auto attn_out_refs = ggml_view_3d(ctx->ggml_ctx, attn_out, D, len_refs, B, attn_out->nb[1], attn_out->nb[2], len_main * attn_out->nb[1]);
+
+                auto res_main = ggml_mul(ctx->ggml_ctx, attn_out_main, mods_main[2]);
+                auto res_refs = ggml_mul(ctx->ggml_ctx, attn_out_refs, mods_refs[2]);
+
+                auto attn_res = ggml_concat(ctx->ggml_ctx, res_main, res_refs, 1);
+
+                x = ggml_add(ctx->ggml_ctx, x, attn_res);
+
+                auto post_x = postnorm->forward(ctx, x);
+
+                auto post_x_main = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_main, B, post_x->nb[1], post_x->nb[2], 0);
+                auto post_x_refs = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_refs, B, post_x->nb[1], post_x->nb[2], len_main * post_x->nb[1]);
+
+                auto mlp_in_main = Flux::modulate(ctx->ggml_ctx, post_x_main, mods_main[4], mods_main[3], true);
+                auto mlp_in_refs = Flux::modulate(ctx->ggml_ctx, post_x_refs, mods_refs[4], mods_refs[3], true);
+
+                auto mlp_input = ggml_concat(ctx->ggml_ctx, mlp_in_main, mlp_in_refs, 1);
+                auto mlp_out   = mlp->forward(ctx, mlp_input);
+
+                auto mlp_out_main = ggml_view_3d(ctx->ggml_ctx, mlp_out, D, len_main, B, mlp_out->nb[1], mlp_out->nb[2], 0);
+                auto mlp_out_refs = ggml_view_3d(ctx->ggml_ctx, mlp_out, D, len_refs, B, mlp_out->nb[1], mlp_out->nb[2], len_main * mlp_out->nb[1]);
+
+                auto mlp_res_main = ggml_mul(ctx->ggml_ctx, mlp_out_main, mods_main[5]);
+                auto mlp_res_refs = ggml_mul(ctx->ggml_ctx, mlp_out_refs, mods_refs[5]);
+
+                auto mlp_res = ggml_concat(ctx->ggml_ctx, mlp_res_main, mlp_res_refs, 1);
+                x            = ggml_add(ctx->ggml_ctx, x, mlp_res);
+            } else {
+                auto mods       = mod->forward(ctx, vec);
+                auto attn_input = Flux::modulate(ctx->ggml_ctx,
+                                                 prenorm->forward(ctx, x),
+                                                 mods[1],
+                                                 mods[0],
+                                                 true);
+                auto attn_out   = attn->forward(ctx, attn_input, pe);
+                x               = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, mods[2]));
+
+                auto mlp_input = Flux::modulate(ctx->ggml_ctx,
+                                                postnorm->forward(ctx, x),
+                                                mods[4],
+                                                mods[3],
+                                                true);
+                auto mlp_out   = mlp->forward(ctx, mlp_input);
+                x              = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, mlp_out, mods[5]));
+            }
             return x;
         }
 
@@ -555,7 +614,8 @@ namespace Krea2 {
                              ggml_tensor* x,
                              ggml_tensor* timestep,
                              ggml_tensor* context,
-                             ggml_tensor* pe) {
+                             ggml_tensor* pe,
+                             std::vector<ggml_tensor*> ref_latents = {}) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
             int64_t N = x->ne[3];
@@ -570,6 +630,13 @@ namespace Krea2 {
 
             auto img        = DiT::pad_and_patchify(ctx, x, config.patch_size, config.patch_size, true);
             int64_t img_len = img->ne[1];
+            if (ref_latents.size() > 0) {
+                for (ggml_tensor* ref : ref_latents) {
+                    ref = DiT::pad_and_patchify(ctx, ref, config.patch_size, config.patch_size, true);
+                    img = ggml_concat(ctx->ggml_ctx, img, ref, 1);
+                }
+            }
+            int64_t ref_len = img->ne[1] - img_len;
             img             = first->forward(ctx, img);
 
             auto t    = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(config.timestep_dim), 10000, 1000.f);
@@ -577,19 +644,30 @@ namespace Krea2 {
             t         = ggml_reshape_3d(ctx->ggml_ctx, t, t->ne[0], 1, t->ne[1]);
             auto tvec = tproj->forward(ctx, t);
 
+            ggml_tensor* tvec_0 = nullptr;
+            if (ref_latents.size() > 0) {
+                // "index_timestep_zero" mode: use timestep = 0 for ref latents
+                auto timestep_0 = ggml_scale(ctx->ggml_ctx, timestep, 0.0f);
+                auto t_0        = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep_0, static_cast<int>(config.timestep_dim), 10000, 1000.f);
+                t_0             = tmlp->forward(ctx, t_0);
+                t_0             = ggml_reshape_3d(ctx->ggml_ctx, t_0, t_0->ne[0], 1, t_0->ne[1]);
+                tvec_0          = tproj->forward(ctx, t_0);
+            }
+
             auto txt        = txtfusion->forward(ctx, context);
             txt             = txtmlp->forward(ctx, txt);
             int64_t txt_len = txt->ne[1];
 
             auto hidden_states = ggml_concat(ctx->ggml_ctx, txt, img, 1);
+            int64_t ref_start  = hidden_states->ne[1] - ref_len;
             for (int i = 0; i < config.layers; ++i) {
                 auto block    = std::dynamic_pointer_cast<KreaSingleStreamBlock>(blocks["blocks." + std::to_string(i)]);
-                hidden_states = block->forward(ctx, hidden_states, tvec, pe);
+                hidden_states = block->forward(ctx, hidden_states, tvec, pe, tvec_0, ref_start);
                 sd::ggml_graph_cut::mark_graph_cut(hidden_states, "krea2.blocks." + std::to_string(i), "hidden_states");
             }
 
-            hidden_states = last->forward(ctx, hidden_states, t);
             hidden_states = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, txt_len, txt_len + img_len);
+            hidden_states = last->forward(ctx, hidden_states, t);
             hidden_states = DiT::unpatchify_and_crop(ctx->ggml_ctx, hidden_states, H, W, config.patch_size, config.patch_size, true);
             return hidden_states;
         }
@@ -601,10 +679,16 @@ namespace Krea2 {
                                                       int bs,
                                                       int context_len,
                                                       float theta,
-                                                      const std::vector<int>& axes_dim) {
+                                                      const std::vector<int>& axes_dim,
+                                                      const std::vector<ggml_tensor*>& ref_latents,
+                                                      Rope::RefIndexMode ref_index_mode) {
         auto txt_ids = Rope::gen_flux_txt_ids(bs, context_len, 3, {});
         auto img_ids = Rope::gen_flux_img_ids(h, w, patch_size, bs, 3, 0, 0, 0, false);
         auto ids     = Rope::concat_ids(txt_ids, img_ids, bs);
+        if (ref_latents.size() > 0) {
+            auto refs_ids = Rope::gen_refs_ids(patch_size, bs, 3, 1, ref_latents, ref_index_mode, 1.0f, false, 0);
+            ids           = Rope::concat_ids(ids, refs_ids, bs);
+        }
         return Rope::embed_nd(ids, bs, theta, axes_dim);
     }
 
@@ -633,7 +717,9 @@ namespace Krea2 {
 
         ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
                                  const sd::Tensor<float>& timesteps_tensor,
-                                 const sd::Tensor<float>& context_tensor) {
+                                 const sd::Tensor<float>& context_tensor,
+                                 const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
+                                 Rope::RefIndexMode ref_index_mode                        = Rope::RefIndexMode::FIXED) {
             ggml_cgraph* gf        = new_graph_custom(KREA2_GRAPH_SIZE);
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
@@ -641,19 +727,27 @@ namespace Krea2 {
             GGML_ASSERT(!context_tensor.empty());
             ggml_tensor* context = make_input(context_tensor);
 
+            std::vector<ggml_tensor*> ref_latents;
+            ref_latents.reserve(ref_latents_tensor.size());
+            for (const auto& ref_latent_tensor : ref_latents_tensor) {
+                ref_latents.push_back(make_input(ref_latent_tensor));
+            }
+
             pe_vec      = gen_krea2_pe(static_cast<int>(x->ne[1]),
                                        static_cast<int>(x->ne[0]),
                                        config.patch_size,
                                        static_cast<int>(x->ne[3]),
                                        static_cast<int>(context->ne[1]),
                                        config.theta,
-                                       config.axes_dim);
+                                       config.axes_dim,
+                                       ref_latents,
+                                       ref_index_mode);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());
 
             auto runner_ctx  = get_context();
-            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe);
+            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents);
             ggml_build_forward_expand(gf, out);
             return gf;
         }
@@ -661,9 +755,11 @@ namespace Krea2 {
         sd::Tensor<float> compute(int n_threads,
                                   const sd::Tensor<float>& x,
                                   const sd::Tensor<float>& timesteps,
-                                  const sd::Tensor<float>& context) {
+                                  const sd::Tensor<float>& context,
+                                  const std::vector<sd::Tensor<float>>& ref_latents = {},
+                                  Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context);
+                return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
         }
@@ -672,10 +768,13 @@ namespace Krea2 {
                                   const DiffusionParams& diffusion_params) override {
             GGML_ASSERT(diffusion_params.x != nullptr);
             GGML_ASSERT(diffusion_params.timesteps != nullptr);
+            static const std::vector<sd::Tensor<float>> empty_ref_latents;
             return compute(n_threads,
                            *diffusion_params.x,
                            *diffusion_params.timesteps,
-                           tensor_or_empty(diffusion_params.context));
+                           tensor_or_empty(diffusion_params.context),
+                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_index_mode);
         }
     };
 }  // namespace Krea2

@@ -35,6 +35,7 @@ enum SDVersion {
     VERSION_WAN2,
     VERSION_WAN2_2_I2V,
     VERSION_WAN2_2_TI2V,
+    VERSION_LINGBOT_VIDEO,
     VERSION_QWEN_IMAGE,
     VERSION_QWEN_IMAGE_LAYERED,
     VERSION_ANIMA,
@@ -122,6 +123,13 @@ static inline bool sd_version_is_ltxav(SDVersion version) {
 
 static inline bool sd_version_is_wan(SDVersion version) {
     if (version == VERSION_WAN2 || version == VERSION_WAN2_2_I2V || version == VERSION_WAN2_2_TI2V) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_lingbot_video(SDVersion version) {
+    if (version == VERSION_LINGBOT_VIDEO) {
         return true;
     }
     return false;
@@ -226,7 +234,7 @@ static inline bool sd_version_uses_flux2_vae(SDVersion version) {
 }
 
 static inline bool sd_version_uses_wan_vae(SDVersion version) {
-    if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_krea2(version) || sd_version_is_anima(version)) {
+    if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_qwen_image(version) || sd_version_is_krea2(version) || sd_version_is_anima(version)) {
         return true;
     }
     return false;
@@ -249,6 +257,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_ltxav(version) ||
         sd_version_is_sd3(version) ||
         sd_version_is_wan(version) ||
+        sd_version_is_lingbot_video(version) ||
         sd_version_is_qwen_image(version) ||
         version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||

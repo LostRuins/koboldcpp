@@ -759,6 +759,40 @@ namespace Rope {
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
     }
 
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_lingbot_video_ids(int t,
+                                                                            int h,
+                                                                            int w,
+                                                                            int pt,
+                                                                            int ph,
+                                                                            int pw,
+                                                                            int bs,
+                                                                            int context_len) {
+        auto vid_ids_repeated = gen_vid_ids(t, h, w, pt, ph, pw, bs, context_len + 1);
+
+        std::vector<std::vector<float>> txt_ids(bs * context_len, std::vector<float>(3, 0.0f));
+        for (int i = 0; i < bs; ++i) {
+            for (int j = 0; j < context_len; ++j) {
+                txt_ids[i * context_len + j][0] = static_cast<float>(j + 1);
+            }
+        }
+
+        return concat_ids(vid_ids_repeated, txt_ids, bs);
+    }
+
+    __STATIC_INLINE__ std::vector<float> gen_lingbot_video_pe(int t,
+                                                              int h,
+                                                              int w,
+                                                              int pt,
+                                                              int ph,
+                                                              int pw,
+                                                              int bs,
+                                                              int context_len,
+                                                              int theta,
+                                                              const std::vector<int>& axes_dim) {
+        std::vector<std::vector<float>> ids = gen_lingbot_video_ids(t, h, w, pt, ph, pw, bs, context_len);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
+    }
+
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen2vl_ids(int grid_h,
                                                                       int grid_w,
                                                                       int merge_size,

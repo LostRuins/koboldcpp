@@ -517,7 +517,7 @@ namespace Qwen {
                 if (input->ne[3] == 1) {
                     input = ggml_reshape_4d(ctx->ggml_ctx, input, input->ne[0], input->ne[1], 1, input->ne[2]);
                 }
-                return DiT::patchify(ctx->ggml_ctx, input, 1, config.patch_size, config.patch_size, N);
+                return DiT::patchify_3d(ctx->ggml_ctx, input, 1, config.patch_size, config.patch_size, N);
             };
 
             auto img           = patchify_input(x);
