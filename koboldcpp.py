@@ -7510,7 +7510,11 @@ Change Mode<br>
                             if loras:
                                 genparams['prompt'] = prompt
                                 genparams['lora'] = lora_map_name_to_path(loras)
-                        gen = asyncio.run(self.handle_image_request(sd_generate, genparams, handle.sd_abort_generation))
+                        abort_gen = handle.sd_abort_generation
+                        override_abort_gen = genparams.get('kcpp_extra_args', {}).get('keep_image_gen_on_disconnect', gendefaults.get('keep_image_gen_on_disconnect'))
+                        if override_abort_gen is not None and not tryparseint(override_abort_gen, 1):
+                            abort_gen = None
+                        gen = asyncio.run(self.handle_image_request(sd_generate, genparams, abort_gen))
                         gendat = gen["data"]
                         genanim = gen["animated"]
                         gendatextra = gen["data_extra"]
