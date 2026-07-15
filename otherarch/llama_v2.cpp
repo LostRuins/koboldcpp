@@ -10,13 +10,7 @@
 
 #include "ggml_v2.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml_v2-cuda.h"
-#endif
-#if defined(GGML_USE_CLBLAST)
-#include "ggml_v2-opencl.h"
-#endif
-
+#include "kcpp_backend.h"
 
 #include <array>
 #include <ctime>
@@ -1068,7 +1062,7 @@ static void llama_v2_model_load_internal(
     ml->load_all_data(progress_callback, progress_callback_user_data, use_mlock ? &lctx.model.mlock_mmap : NULL);
 
     model.mapping = std::move(ml->mapping);
-#if defined(GGML_USE_CUDA)
+    if (kcpp_backend_check(KCPP_BACKENDS_USE_CUDA))
     {
         const int n_gpu = std::min(n_gpu_layers, int(hparams.n_layer));
         if(GetQuantsUnshuffled())
@@ -1081,17 +1075,17 @@ static void llama_v2_model_load_internal(
         for (int i = 0; i < n_gpu; ++i) {
             const auto & layer = model.layers[i];
 
-            ggml_v2_cuda_transform_tensor(layer.wq); vram_total += ggml_v2_nbytes(layer.wq);
-            ggml_v2_cuda_transform_tensor(layer.wk); vram_total += ggml_v2_nbytes(layer.wk);
-            ggml_v2_cuda_transform_tensor(layer.wv); vram_total += ggml_v2_nbytes(layer.wv);
-            ggml_v2_cuda_transform_tensor(layer.wo); vram_total += ggml_v2_nbytes(layer.wo);
-            ggml_v2_cuda_transform_tensor(layer.w1); vram_total += ggml_v2_nbytes(layer.w1);
-            ggml_v2_cuda_transform_tensor(layer.w2); vram_total += ggml_v2_nbytes(layer.w2);
-            ggml_v2_cuda_transform_tensor(layer.w3); vram_total += ggml_v2_nbytes(layer.w3);
+            kcpp_backend_cuda_ggmlv2_transform_tensor(layer.wq); vram_total += ggml_v2_nbytes(layer.wq);
+            kcpp_backend_cuda_ggmlv2_transform_tensor(layer.wk); vram_total += ggml_v2_nbytes(layer.wk);
+            kcpp_backend_cuda_ggmlv2_transform_tensor(layer.wv); vram_total += ggml_v2_nbytes(layer.wv);
+            kcpp_backend_cuda_ggmlv2_transform_tensor(layer.wo); vram_total += ggml_v2_nbytes(layer.wo);
+            kcpp_backend_cuda_ggmlv2_transform_tensor(layer.w1); vram_total += ggml_v2_nbytes(layer.w1);
+            kcpp_backend_cuda_ggmlv2_transform_tensor(layer.w2); vram_total += ggml_v2_nbytes(layer.w2);
+            kcpp_backend_cuda_ggmlv2_transform_tensor(layer.w3); vram_total += ggml_v2_nbytes(layer.w3);
         }
         if (n_gpu_layers > (int) hparams.n_layer) {
             fprintf(stderr, "%s: [old cublas] offloading output layer to GPU\n", __func__);
-            ggml_v2_cuda_transform_tensor(model.output); vram_total += ggml_v2_nbytes(model.output);
+            kcpp_backend_cuda_ggmlv2_transform_tensor(model.output); vram_total += ggml_v2_nbytes(model.output);
         }
 
         fprintf(stderr, "%s: [old cublas] total VRAM used: %zu MB\n", __func__, vram_total / 1024 / 1024);
@@ -1104,45 +1098,6 @@ static void llama_v2_model_load_internal(
             }
         }
     }
-#elif defined(GGML_USE_CLBLAST)
-    {
-        const int n_gpu = std::min(n_gpu_layers, int(hparams.n_layer));
-        if(GetQuantsUnshuffled())
-        {
-
-        fprintf(stderr, "%s: [opencl] offloading %d layers to GPU\n", __func__, n_gpu);
-
-        size_t vram_total = 0;
-
-        for (int i = 0; i < n_gpu; ++i) {
-            const auto & layer = model.layers[i];
-
-            ggml_v2_cl_transform_tensor(layer.wq); vram_total += ggml_v2_nbytes(layer.wq);
-            ggml_v2_cl_transform_tensor(layer.wk); vram_total += ggml_v2_nbytes(layer.wk);
-            ggml_v2_cl_transform_tensor(layer.wv); vram_total += ggml_v2_nbytes(layer.wv);
-            ggml_v2_cl_transform_tensor(layer.wo); vram_total += ggml_v2_nbytes(layer.wo);
-            ggml_v2_cl_transform_tensor(layer.w1); vram_total += ggml_v2_nbytes(layer.w1);
-            ggml_v2_cl_transform_tensor(layer.w2); vram_total += ggml_v2_nbytes(layer.w2);
-            ggml_v2_cl_transform_tensor(layer.w3); vram_total += ggml_v2_nbytes(layer.w3);
-        }
-        if (n_gpu_layers > (int) hparams.n_layer) {
-            fprintf(stderr, "%s: [opencl] offloading output layer to GPU\n", __func__);
-            ggml_v2_cl_transform_tensor(model.output); vram_total += ggml_v2_nbytes(model.output);
-        }
-
-        fprintf(stderr, "%s: [opencl] total VRAM used: %zu MB\n", __func__, vram_total / 1024 / 1024);
-        }
-        else
-        {
-            if(n_gpu>0)
-            {
-                printf("\n[WARNING: Old format does not support GPU offloading! It will be deactivated!]\n");
-            }
-        }
-    }
-#else
-    (void) n_gpu_layers;
-#endif
 
     // loading time will be recalculate after the first eval, so
     // we take page faults deferred by mmap() into consideration

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml-backend.h"
+#include "ggml_v2.h"
 #include "ggml_v3.h"
 
 // backends with GGML_USE_CUDA
@@ -17,6 +18,8 @@ int kcpp_backend_check(const char* name_list, ggml_backend_t backend = nullptr);
 
 
 // per-backend aux functions
+
+void kcpp_backend_cuda_ggmlv2_transform_tensor(ggml_v2_tensor * tensor);
 
 void kcpp_backend_cuda_ggmlv3_set_main_device(int device);
 void kcpp_backend_cuda_ggmlv3_transform_tensor(void * data, struct ggml_v3_tensor * tensor);

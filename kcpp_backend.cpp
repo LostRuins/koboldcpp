@@ -7,6 +7,7 @@
 
 #ifdef GGML_USE_CUDA
 #  include "ggml-cuda.h"
+#  include "ggml_v2-cuda.h"
 #  include "ggml_v3-cuda.h"
 #endif
 
@@ -102,6 +103,13 @@ int kcpp_backend_check(const char* name, ggml_backend_t backend)
     }
     std::string lo_dev_name = to_lowercase(ggml_backend_dev_name(dev));
     return has_any_prefix(lo_dev_name, name, '|');
+}
+
+void kcpp_backend_cuda_ggmlv2_transform_tensor(ggml_v2_tensor * tensor)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v2_cuda_transform_tensor(tensor);
+    #endif
 }
 
 void kcpp_backend_cuda_ggmlv3_set_main_device(int device)
