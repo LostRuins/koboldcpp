@@ -21,7 +21,15 @@ int kcpp_backend_check(const char* name_list, ggml_backend_t backend = nullptr);
 
 void kcpp_backend_cuda_ggmlv2_transform_tensor(ggml_v2_tensor * tensor);
 
+void kcpp_backend_cuda_ggmlv3_assign_buffers(struct ggml_v3_tensor * tensor);
+void kcpp_backend_cuda_ggmlv3_assign_buffers_force_inplace(struct ggml_v3_tensor * tensor);
+void kcpp_backend_cuda_ggmlv3_assign_buffers_no_scratch(struct ggml_v3_tensor * tensor);
+void kcpp_backend_cuda_ggmlv3_free_data(struct ggml_v3_tensor * tensor);
+void kcpp_backend_cuda_ggmlv3_free_scratch(void);
 void kcpp_backend_cuda_ggmlv3_set_main_device(int device);
+void kcpp_backend_cuda_ggmlv3_set_mul_mat_q(bool mul_mat_q);
+void kcpp_backend_cuda_ggmlv3_set_scratch_size(size_t scratch_size);
+void kcpp_backend_cuda_ggmlv3_set_tensor_split(const float * tensor_split);
 void kcpp_backend_cuda_ggmlv3_transform_tensor(void * data, struct ggml_v3_tensor * tensor);
 
 void kcpp_backend_cuda_set_mul_mat_q(int use_mmq);

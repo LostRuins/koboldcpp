@@ -119,10 +119,66 @@ void kcpp_backend_cuda_ggmlv3_set_main_device(int device)
     #endif
 }
 
+void kcpp_backend_cuda_ggmlv3_set_tensor_split(const float * tensor_split)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v3_cuda_set_tensor_split(tensor_split);
+    #endif
+}
+
 void kcpp_backend_cuda_ggmlv3_transform_tensor(void * data, struct ggml_v3_tensor * tensor)
 {
     #if defined(GGML_USE_CUDA)
     ggml_v3_cuda_transform_tensor(tensor->data, tensor);
+    #endif
+}
+
+void kcpp_backend_cuda_ggmlv3_free_data(struct ggml_v3_tensor * tensor)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v3_cuda_free_data(tensor);
+    #endif
+}
+
+void kcpp_backend_cuda_ggmlv3_free_scratch(void)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v3_cuda_free_scratch();
+    #endif
+}
+
+void kcpp_backend_cuda_ggmlv3_assign_buffers(struct ggml_v3_tensor * tensor)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v3_cuda_assign_buffers(tensor);
+    #endif
+}
+
+void kcpp_backend_cuda_ggmlv3_assign_buffers_force_inplace(struct ggml_v3_tensor * tensor)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v3_cuda_assign_buffers_force_inplace(tensor);
+    #endif
+}
+
+void kcpp_backend_cuda_ggmlv3_assign_buffers_no_scratch(struct ggml_v3_tensor * tensor)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v3_cuda_assign_buffers_no_scratch(tensor);
+    #endif
+}
+
+void kcpp_backend_cuda_ggmlv3_set_mul_mat_q(bool mul_mat_q)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v3_cuda_set_mul_mat_q(mul_mat_q);
+    #endif
+}
+
+void kcpp_backend_cuda_ggmlv3_set_scratch_size(size_t scratch_size)
+{
+    #if defined(GGML_USE_CUDA)
+    ggml_v3_cuda_set_scratch_size(scratch_size);
     #endif
 }
 
