@@ -15,13 +15,7 @@
 #include <algorithm>
 
 #include "model_adapter.h"
-
-#ifdef GGML_USE_CUDA
-#include "ggml_v3-cuda.h"
-#endif
-#if defined(GGML_USE_CLBLAST)
-#include "ggml_v3-opencl.h"
-#endif
+#include "kcpp_backend.h"
 
 // load the model's weights from a file
 ModelLoadResult gptj_model_load(const std::string & fname, gptj_model & model, gpt_vocab & vocab, int gpulayers) {
@@ -347,17 +341,13 @@ ModelLoadResult gptj_model_load(const std::string & fname, gptj_model & model, g
     fin.close();
 
     //gpu offload
-    #if defined(GGML_USE_CLBLAST) || defined(GGML_USE_CUDA)
+    if (kcpp_backend_check(KCPP_BACKENDS_USE_CUDA)) {
     if(gpulayers>0)
     {
         const auto & hparams = model.hparams;
         size_t vram_total = 0;
         const int n_gpu = std::min(gpulayers, int(hparams.n_layer));
-        #if defined(GGML_USE_CLBLAST)
-        fprintf(stderr, "%s: [opencl] offloading %d layers to GPU\n", __func__, n_gpu);
-        #else
         fprintf(stderr, "%s: [CUDA] offloading %d layers to GPU\n", __func__, n_gpu);
-        #endif
         for (int i = 0; i < n_gpu; ++i) {
             const auto & layer = model.layers[i];
             layer.c_attn_q_proj_w->backend = GGML_V3_BACKEND_GPU;
@@ -366,29 +356,16 @@ ModelLoadResult gptj_model_load(const std::string & fname, gptj_model & model, g
             layer.c_attn_proj_w->backend = GGML_V3_BACKEND_GPU;
             layer.c_mlp_fc_w->backend = GGML_V3_BACKEND_GPU;
             layer.c_mlp_proj_w->backend = GGML_V3_BACKEND_GPU;
-            #if defined(GGML_USE_CLBLAST)
-            ggml_v3_cl_transform_tensor(layer.c_attn_q_proj_w->data,layer.c_attn_q_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_q_proj_w);
-            ggml_v3_cl_transform_tensor(layer.c_attn_k_proj_w->data,layer.c_attn_k_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_k_proj_w);
-            ggml_v3_cl_transform_tensor(layer.c_attn_v_proj_w->data,layer.c_attn_v_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_v_proj_w);
-            ggml_v3_cl_transform_tensor(layer.c_attn_proj_w->data,layer.c_attn_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_proj_w);
-            ggml_v3_cl_transform_tensor(layer.c_mlp_fc_w->data,layer.c_mlp_fc_w); vram_total += ggml_v3_nbytes(layer.c_mlp_fc_w);
-            ggml_v3_cl_transform_tensor(layer.c_mlp_proj_w->data,layer.c_mlp_proj_w); vram_total += ggml_v3_nbytes(layer.c_mlp_proj_w);
-            #else
-            ggml_v3_cuda_transform_tensor(layer.c_attn_q_proj_w->data,layer.c_attn_q_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_q_proj_w);
-            ggml_v3_cuda_transform_tensor(layer.c_attn_k_proj_w->data,layer.c_attn_k_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_k_proj_w);
-            ggml_v3_cuda_transform_tensor(layer.c_attn_v_proj_w->data,layer.c_attn_v_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_v_proj_w);
-            ggml_v3_cuda_transform_tensor(layer.c_attn_proj_w->data,layer.c_attn_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_proj_w);
-            ggml_v3_cuda_transform_tensor(layer.c_mlp_fc_w->data,layer.c_mlp_fc_w); vram_total += ggml_v3_nbytes(layer.c_mlp_fc_w);
-            ggml_v3_cuda_transform_tensor(layer.c_mlp_proj_w->data,layer.c_mlp_proj_w); vram_total += ggml_v3_nbytes(layer.c_mlp_proj_w);
-            #endif
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.c_attn_q_proj_w->data,layer.c_attn_q_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_q_proj_w);
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.c_attn_k_proj_w->data,layer.c_attn_k_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_k_proj_w);
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.c_attn_v_proj_w->data,layer.c_attn_v_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_v_proj_w);
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.c_attn_proj_w->data,layer.c_attn_proj_w); vram_total += ggml_v3_nbytes(layer.c_attn_proj_w);
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.c_mlp_fc_w->data,layer.c_mlp_fc_w); vram_total += ggml_v3_nbytes(layer.c_mlp_fc_w);
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.c_mlp_proj_w->data,layer.c_mlp_proj_w); vram_total += ggml_v3_nbytes(layer.c_mlp_proj_w);
         }
-        #if defined(GGML_USE_CLBLAST)
-            fprintf(stderr, "%s: [opencl] total VRAM used: %zu MB\n", __func__, vram_total / 1024 / 1024);
-        #else
-            fprintf(stderr, "%s: [CUDA] total VRAM used: %zu MB\n", __func__, vram_total / 1024 / 1024);
-        #endif
+        fprintf(stderr, "%s: [CUDA] total VRAM used: %zu MB\n", __func__, vram_total / 1024 / 1024);
     }
-    #endif
+    }
 
     return ModelLoadResult::SUCCESS;
 }
