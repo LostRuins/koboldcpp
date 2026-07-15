@@ -15,13 +15,7 @@
 #include <algorithm>
 
 #include "model_adapter.h"
-
-#ifdef GGML_USE_CUDA
-#include "ggml_v3-cuda.h"
-#endif
-#if defined(GGML_USE_CLBLAST)
-#include "ggml_v3-opencl.h"
-#endif
+#include "kcpp_backend.h"
 
 // load the model's weights from a file
 bool mpt_model_load(const std::string & fname, mpt_model & model, gpt_vocab & vocab, int gpulayers) {
@@ -300,42 +294,27 @@ bool mpt_model_load(const std::string & fname, mpt_model & model, gpt_vocab & vo
     fin.close();
 
     //gpu offload
-    #if defined(GGML_USE_CLBLAST) || defined(GGML_USE_CUDA)
+    if (kcpp_backend_check(KCPP_BACKENDS_USE_CUDA)) {
     if(gpulayers>0)
     {
         const auto & hparams = model.hparams;
         size_t vram_total = 0;
         const int n_gpu = std::min(gpulayers, int(hparams.n_layers));
-        #if defined(GGML_USE_CLBLAST)
-        fprintf(stderr, "%s: [opencl] offloading %d layers to GPU\n", __func__, n_gpu);
-        #else
         fprintf(stderr, "%s: [CUDA] offloading %d layers to GPU\n", __func__, n_gpu);
-        #endif
         for (int i = 0; i < n_gpu; ++i) {
             const auto & layer = model.layers[i];
             layer.ffn_up_proj->backend = GGML_V3_BACKEND_GPU;
             layer.ffn_down_proj->backend = GGML_V3_BACKEND_GPU;
             layer.c_attn_wqkv_weight->backend = GGML_V3_BACKEND_GPU;
             layer.c_attn_out_proj_weight->backend = GGML_V3_BACKEND_GPU;
-            #if defined(GGML_USE_CLBLAST)
-            ggml_v3_cl_transform_tensor(layer.ffn_up_proj->data,layer.ffn_up_proj); vram_total += ggml_v3_nbytes(layer.ffn_up_proj);
-            ggml_v3_cl_transform_tensor(layer.ffn_down_proj->data,layer.ffn_down_proj); vram_total += ggml_v3_nbytes(layer.ffn_down_proj);
-            ggml_v3_cl_transform_tensor(layer.c_attn_wqkv_weight->data,layer.c_attn_wqkv_weight); vram_total += ggml_v3_nbytes(layer.c_attn_wqkv_weight);
-            ggml_v3_cl_transform_tensor(layer.c_attn_out_proj_weight->data,layer.c_attn_out_proj_weight); vram_total += ggml_v3_nbytes(layer.c_attn_out_proj_weight);
-            #else
-            ggml_v3_cuda_transform_tensor(layer.ffn_up_proj->data,layer.ffn_up_proj); vram_total += ggml_v3_nbytes(layer.ffn_up_proj);
-            ggml_v3_cuda_transform_tensor(layer.ffn_down_proj->data,layer.ffn_down_proj); vram_total += ggml_v3_nbytes(layer.ffn_down_proj);
-            ggml_v3_cuda_transform_tensor(layer.c_attn_wqkv_weight->data,layer.c_attn_wqkv_weight); vram_total += ggml_v3_nbytes(layer.c_attn_wqkv_weight);
-            ggml_v3_cuda_transform_tensor(layer.c_attn_out_proj_weight->data,layer.c_attn_out_proj_weight); vram_total += ggml_v3_nbytes(layer.c_attn_out_proj_weight);
-            #endif
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.ffn_up_proj->data,layer.ffn_up_proj); vram_total += ggml_v3_nbytes(layer.ffn_up_proj);
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.ffn_down_proj->data,layer.ffn_down_proj); vram_total += ggml_v3_nbytes(layer.ffn_down_proj);
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.c_attn_wqkv_weight->data,layer.c_attn_wqkv_weight); vram_total += ggml_v3_nbytes(layer.c_attn_wqkv_weight);
+            kcpp_backend_cuda_ggmlv3_transform_tensor(layer.c_attn_out_proj_weight->data,layer.c_attn_out_proj_weight); vram_total += ggml_v3_nbytes(layer.c_attn_out_proj_weight);
         }
-        #if defined(GGML_USE_CLBLAST)
-            fprintf(stderr, "%s: [opencl] total VRAM used: %zu MB\n", __func__, vram_total / 1024 / 1024);
-        #else
-            fprintf(stderr, "%s: [CUDA] total VRAM used: %zu MB\n", __func__, vram_total / 1024 / 1024);
-        #endif
+        fprintf(stderr, "%s: [CUDA] total VRAM used: %zu MB\n", __func__, vram_total / 1024 / 1024);
     }
-    #endif
+    }
 
     return true;
 }
