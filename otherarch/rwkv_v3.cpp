@@ -6,13 +6,6 @@
 #include "rwkv_v3.h"
 #include "ggml_v3.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml_v3-cuda.h"
-#endif
-#if defined(GGML_USE_CLBLAST)
-#include "ggml_v3-opencl.h"
-#endif
-
 #include "utils.h"
 
 #include <string>
@@ -1076,11 +1069,11 @@ struct rwkv_future_tensor rwkv_future_graph_work(struct rwkv_future_ctx & ctx,
     const size_t n_threads,
     const size_t sequence_len = 1
 ) {
-#if defined(GGML_USE_CLBLAST) || defined(GGML_USE_CUDA)
-    enum ggml_v3_type mul_mat_type = type == GGML_V3_TYPE_F32 ? GGML_V3_TYPE_F32 : GGML_V3_TYPE_F16;
-#else
-    enum ggml_v3_type mul_mat_type = ggml_v3_is_quantized(type) ? GGML_V3_TYPE_Q8_1 : type;
-#endif
+    enum ggml_v3_type mul_mat_type;
+    if(kcpp_backend_check(KCPP_BACKENDS_USE_CUDA))
+        mul_mat_type = type == GGML_V3_TYPE_F32 ? GGML_V3_TYPE_F32 : GGML_V3_TYPE_F16;
+    else
+        mul_mat_type = ggml_v3_is_quantized(type) ? GGML_V3_TYPE_Q8_1 : type;
     return ctx.alloc(GGML_V3_TYPE_I8, rwkv_future_tensor::size(mul_mat_type, ffn_key_height, sequence_len) * n_threads + 64 * (n_threads - 1));
 }
 
@@ -1566,16 +1559,13 @@ struct rwkv_context * rwkv_clone_context(struct rwkv_context * ctx, const uint32
 }
 
 bool rwkv_gpu_offload_layers(struct rwkv_context * ctx, const uint32_t n_layers) {
-#if defined(GGML_USE_CLBLAST) || defined(GGML_USE_CUDA)
+    if (!kcpp_backend_check(KCPP_BACKENDS_USE_CUDA))
+        return false;
     printf("\nOffloading %u (or fewer) layers...",n_layers);
     const auto offload = [&](struct ggml_v3_tensor * tensor) {
         // TODO support multi-GPU
         tensor->backend = GGML_V3_BACKEND_GPU;
-        #if defined(GGML_USE_CLBLAST)
-        ggml_v3_cl_transform_tensor(tensor->data, tensor);
-        #else
-        ggml_v3_cuda_transform_tensor(tensor->data, tensor);
-        #endif
+        kcpp_backend_cuda_ggmlv3_transform_tensor(tensor->data, tensor);
     };
 
     const size_t n_gpu = std::min(n_layers, ctx->instance->model.header.n_layer);
@@ -1597,7 +1587,6 @@ bool rwkv_gpu_offload_layers(struct rwkv_context * ctx, const uint32_t n_layers)
 
         return true;
     }
-#endif
     return false;
 }
 
