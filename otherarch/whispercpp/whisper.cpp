@@ -4,21 +4,7 @@
 #include "coreml/whisper-encoder.h"
 #endif
 
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
-
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef GGML_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
-#ifdef GGML_USE_SYCL
-#include "ggml-sycl.h"
-#endif
+#include "kcpp_backend.h"
 
 #ifdef WHISPER_USE_OPENVINO
 #include "openvino/whisper-openvino-encoder.h"
@@ -209,7 +195,8 @@ static bool ggml_graph_compute_helper(
 // and X_1 and Y_1 are the remaining views. X_1 and Y_1 end up being small matrices that can be processed with more
 // general-purpose kernels
 //
-static struct ggml_tensor * ggml_mul_mat_pad(struct ggml_context * ctx, struct ggml_tensor * x, struct ggml_tensor * y, int pad = 32) {
+static struct ggml_tensor * ggml_mul_mat_pad(struct ggml_context * ctx, struct ggml_tensor * x, struct ggml_tensor * y) {
+    const int pad = 32;
     // use padding only if dimension 0 is at least 8 times larger than the padding
     // else we won't get much benefit from the optimization
     const int n_pad_req = 8;
@@ -229,11 +216,12 @@ static struct ggml_tensor * ggml_mul_mat_pad(struct ggml_context * ctx, struct g
             ggml_mul_mat(ctx, x_1, y_1));
 }
 
+static struct ggml_tensor * ggml_mul_mat_original(struct ggml_context * ctx, struct ggml_tensor * x, struct ggml_tensor * y) {
+    return ggml_mul_mat(ctx, x, y);
+}
+
 // TODO: check if other platforms can benefit from this optimization
 // TODO: CUDA is currently broken - seems ggml_mul_mat does not handle views correctly
-#if defined(GGML_USE_METAL)
-#define ggml_mul_mat ggml_mul_mat_pad
-#endif
 
 // available whisper models
 enum e_model {
@@ -1082,17 +1070,13 @@ static uint32_t whisper_kv_cache_get_padding(const struct whisper_context & wctx
         return 1u;
     }
 
-#ifdef GGML_USE_METAL
-    if (ggml_backend_is_metal(wctx.backend)) {
+    if (kcpp_backend_check("mtl", wctx.backend)) {
         return 32u;
     }
-#endif
 
-#ifdef GGML_USE_CUDA
-    if (ggml_backend_is_cuda(wctx.backend)) {
+    if (kcpp_backend_check(KCPP_BACKENDS_USE_CUDA, wctx.backend)) {
         return 256u;
     }
-#endif
 
     return 1u;
 }
@@ -1231,50 +1215,24 @@ static size_t aheads_masks_nbytes(struct whisper_aheads_masks & aheads_masks) {
 static ggml_backend_t whisper_backend_init(const whisper_context_params & params) {
     ggml_backend_t backend_gpu = NULL;
 
-    // initialize the backends
-#ifdef GGML_USE_CUDA
     if (params.use_gpu) {
-        WHISPER_LOG_INFO("%s: using CUDA backend\n", __func__);
-        backend_gpu = ggml_backend_cuda_init(params.gpu_device);
-        if (!backend_gpu) {
-            WHISPER_LOG_ERROR("%s: ggml_backend_cuda_init() failed\n", __func__);
+        auto device = kcpp_backend_get_device(params.gpu_device);
+        if (!device) {
+            WHISPER_LOG_ERROR("%s: couldn't get device %d\n", __func__, params.gpu_device);
+        } else {
+            WHISPER_LOG_INFO("%s: using backend %s\n", __func__, ggml_backend_dev_name(device));
+            backend_gpu = ggml_backend_dev_init(device, nullptr);
+            if (!backend_gpu) {
+                WHISPER_LOG_ERROR("%s: ggml_backend_dev_init() failed\n", __func__);
+            } else {
+                if (kcpp_backend_check("mtl", backend_gpu) && !kcpp_backend_metal_supports_family(backend_gpu, 7)) {
+                    WHISPER_LOG_ERROR("%s: Metal GPU does not support family 7 - falling back to CPU\n", __func__);
+                    ggml_backend_free(backend_gpu);
+                    backend_gpu = NULL;
+                }
+            }
         }
     }
-#endif
-
-#ifdef GGML_USE_METAL
-    if (params.use_gpu) {
-        WHISPER_LOG_INFO("%s: using Metal backend\n", __func__);
-        backend_gpu = ggml_backend_metal_init();
-        if (!backend_gpu) {
-            WHISPER_LOG_ERROR("%s: ggml_backend_metal_init() failed\n", __func__);
-        } else if (!ggml_backend_metal_supports_family(backend_gpu, 7)) {
-            WHISPER_LOG_ERROR("%s: Metal GPU does not support family 7 - falling back to CPU\n", __func__);
-            ggml_backend_free(backend_gpu);
-            backend_gpu = NULL;
-        }
-    }
-#endif
-
-#ifdef GGML_USE_SYCL
-    if (params.use_gpu) {
-        WHISPER_LOG_INFO("%s: using SYCL backend\n", __func__);
-        backend_gpu = ggml_backend_sycl_init(params.gpu_device);
-        if (!backend_gpu) {
-            WHISPER_LOG_ERROR("%s: ggml_backend_sycl_init() failed\n", __func__);
-        }
-    }
-#endif
-
-#ifdef GGML_USE_VULKAN
-    if (params.use_gpu) {
-        WHISPER_LOG_INFO("%s: using Vulkan backend\n", __func__);
-        backend_gpu = ggml_backend_vk_init(params.gpu_device);
-        if (!backend_gpu) {
-            WHISPER_LOG_ERROR("%s: ggml_backend_vk_init() failed\n", __func__);
-        }
-    }
-#endif
 
     if (backend_gpu) {
         return backend_gpu;
@@ -1902,6 +1860,11 @@ static struct ggml_cgraph * whisper_build_graph_conv(
 static struct ggml_cgraph * whisper_build_graph_encoder(
         whisper_context & wctx,
           whisper_state & wstate) {
+
+    auto ggml_mul_mat = kcpp_backend_check("mtl", wctx.backend)
+                        ? ggml_mul_mat_pad
+                        : ggml_mul_mat_original;
+
     const auto & model   = wctx.model;
     const auto & hparams = model.hparams;
 
@@ -2147,6 +2110,11 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
 static struct ggml_cgraph * whisper_build_graph_cross(
         whisper_context & wctx,
           whisper_state & wstate) {
+
+    auto ggml_mul_mat = kcpp_backend_check("mtl", wctx.backend)
+                        ? ggml_mul_mat_pad
+                        : ggml_mul_mat_original;
+
     const auto & model   = wctx.model;
     const auto & hparams = model.hparams;
 
@@ -2334,6 +2302,11 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
      const whisper_batch & batch,
                     bool   save_alignment_heads_QKs,
                     bool   worst_case) {
+
+    auto ggml_mul_mat = kcpp_backend_check("mtl", wctx.backend)
+                        ? ggml_mul_mat_pad
+                        : ggml_mul_mat_original;
+
     const auto & model   = wctx.model;
     const auto & hparams = model.hparams;
 
@@ -6591,6 +6564,11 @@ WHISPER_API int whisper_bench_ggml_mul_mat(int n_threads) {
 }
 
 WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
+
+    auto ggml_mul_mat = kcpp_backend_check("mtl")
+                        ? ggml_mul_mat_pad
+                        : ggml_mul_mat_original;
+
     static std::string s;
     s = "";
     char strbuf[256];

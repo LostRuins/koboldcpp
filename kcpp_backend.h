@@ -16,6 +16,7 @@
 // checks if the provided backend (or the first one) matches a |-separated name list
 int kcpp_backend_check(const char* name_list, ggml_backend_t backend = nullptr);
 
+ggml_backend_dev_t kcpp_backend_get_device(int index);
 
 // per-backend aux functions
 
@@ -35,4 +36,6 @@ void kcpp_backend_cuda_ggmlv3_transform_tensor(void * data, struct ggml_v3_tenso
 void kcpp_backend_cuda_set_mul_mat_q(int use_mmq);
 
 void kcpp_backend_hip_initialize();
+
+bool kcpp_backend_metal_supports_family(ggml_backend_t backend, int family);
 
