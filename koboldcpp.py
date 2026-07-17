@@ -2048,7 +2048,11 @@ def generate(genparams, stream_flag=False):
     logit_biases = genparams.get('logit_bias', {})
     render_special = genparams.get('render_special', False)
     banned_strings = genparams.get('banned_strings', []) # SillyTavern uses that name
+    if isinstance(banned_strings, str): # a bare string gets iterated character by character, banning individual letters
+        banned_strings = [banned_strings] if banned_strings else []
     banned_tokens = genparams.get('banned_tokens', banned_strings)
+    if isinstance(banned_tokens, str):
+        banned_tokens = [banned_tokens] if banned_tokens else []
     bypass_eos_token = genparams.get('bypass_eos', False)
     tool_call_fix = genparams.get('using_openai_tools', False)
     custom_token_bans = genparams.get('custom_token_bans', '')
