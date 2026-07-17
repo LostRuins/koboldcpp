@@ -1983,6 +1983,23 @@ def load_model(model_filename):
     ret = handle.load_model(inputs)
     return ret
 
+def coerce_ban_list(value):
+    # banned tokens/strings are consumed as a list of substrings. A bare string satisfies
+    # every operation there, but iterates character by character, banning single letters.
+    if not value:
+        return []
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if stripped.startswith('[') and stripped.endswith(']'): # a JSON array sent as a string, e.g. through gendefaults
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except json.JSONDecodeError:
+            pass
+    return [value]
+
 def generate(genparams, stream_flag=False):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey
     default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
@@ -2047,12 +2064,8 @@ def generate(genparams, stream_flag=False):
         min_p = 0.002
     logit_biases = genparams.get('logit_bias', {})
     render_special = genparams.get('render_special', False)
-    banned_strings = genparams.get('banned_strings', []) # SillyTavern uses that name
-    if isinstance(banned_strings, str): # a bare string gets iterated character by character, banning individual letters
-        banned_strings = [banned_strings] if banned_strings else []
-    banned_tokens = genparams.get('banned_tokens', banned_strings)
-    if isinstance(banned_tokens, str):
-        banned_tokens = [banned_tokens] if banned_tokens else []
+    banned_strings = coerce_ban_list(genparams.get('banned_strings', [])) # SillyTavern uses that name
+    banned_tokens = coerce_ban_list(genparams.get('banned_tokens', banned_strings))
     bypass_eos_token = genparams.get('bypass_eos', False)
     tool_call_fix = genparams.get('using_openai_tools', False)
     custom_token_bans = genparams.get('custom_token_bans', '')
