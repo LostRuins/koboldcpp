@@ -47,7 +47,7 @@ jobs:
             -w /workspace \
             -e KCPP_CUDA="rocm" \
             -e BRANCH_NAME="${{ github.head_ref || github.ref_name }}" \
-            rocm/dev-ubuntu-22.04:7.1-complete \
+            rocm/dev-ubuntu-22.04:7.14-full \
             bash -c "
               apt update &&
               DEBIAN_FRONTEND=noninteractive apt install -y git curl bzip2 python3-tk tcl tk &&
