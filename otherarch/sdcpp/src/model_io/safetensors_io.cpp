@@ -103,7 +103,8 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
 // https://huggingface.co/docs/safetensors/index
 bool read_safetensors_file(const std::string& file_path,
                            std::vector<TensorStorage>& tensor_storages,
-                           std::string* error) {
+                           std::string* error,
+                           std::map<std::string, std::string>* metadata) {
     std::ifstream file(file_path, std::ios::binary);
     if (!file.is_open()) {
         set_error(error, "failed to open '" + file_path + "'");
@@ -151,6 +152,18 @@ bool read_safetensors_file(const std::string& file_path,
     } catch (const std::exception&) {
         set_error(error, "parsing safetensors header failed: '" + file_path + "'");
         return false;
+    }
+
+    if (metadata != nullptr) {
+        metadata->clear();
+        auto metadata_item = header_.find("__metadata__");
+        if (metadata_item != header_.end() && metadata_item->is_object()) {
+            for (const auto& item : metadata_item->items()) {
+                if (item.value().is_string()) {
+                    metadata->emplace(item.key(), item.value().get<std::string>());
+                }
+            }
+        }
     }
 
     tensor_storages.clear();

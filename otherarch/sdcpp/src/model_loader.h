@@ -36,6 +36,7 @@ protected:
     std::vector<ModelFileData> file_data;
     bool model_files_processed = false;
     String2TensorStorage tensor_storage_map;
+    std::map<std::string, std::string> metadata_;
     int n_threads_;
 
     size_t add_file_path(const std::string& file_path);
@@ -63,6 +64,7 @@ public:
     std::map<ggml_type, uint32_t> get_vae_wtype_stat();
     String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
     const String2TensorStorage& get_tensor_storage_map() const { return tensor_storage_map; }
+    const std::map<std::string, std::string>& get_metadata() const { return metadata_; }
     void set_n_threads(int n_threads);
     void set_wtype_override(ggml_type wtype, std::string tensor_type_rules = "");
     void process_model_files(bool enable_mmap = false, bool writable_mmap = true);

@@ -18,10 +18,6 @@ namespace Rope {
         DECREASE,
     };
 
-    __STATIC_INLINE__ RefIndexMode ref_index_mode_from_bool(bool increase_ref_index) {
-        return increase_ref_index ? RefIndexMode::INCREASE : RefIndexMode::FIXED;
-    }
-
     template <class T>
     __STATIC_INLINE__ std::vector<T> linspace(T start, T end, int num) {
         std::vector<T> result(num);

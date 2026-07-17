@@ -304,6 +304,12 @@ std::string convert_diffusers_unet_to_original_sd1(std::string name) {
         }
     }
 
+    static const std::vector<std::pair<std::string, std::string>> name_map{
+        {"to_out.weight", "to_out.0.weight"},
+        {"to_out.bias", "to_out.0.bias"},
+    };
+    replace_with_name_map(result, name_map);
+
     return result;
 }
 
@@ -1102,6 +1108,8 @@ std::string convert_sep_to_dot(std::string name) {
         "norm1_context",
         "ff_context",
         "x_embedder",
+        "cross_attn",
+        "output_proj",
     };
 
     // record the positions of underscores that should NOT be replaced
@@ -1341,11 +1349,23 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     // diffusion model
     {
+        bool matched = false;
         for (const auto& prefix : diffuison_model_prefix_vec) {
             if (starts_with(name, prefix)) {
-                name = convert_diffusion_model_name(name.substr(prefix.size()), prefix, version);
-                name = prefix + name;
+                name    = convert_diffusion_model_name(name.substr(prefix.size()), prefix, version);
+                name    = prefix + name;
+                matched = true;
                 break;
+            }
+        }
+        if (is_lora && !matched && !diffuison_model_prefix_vec.empty()) {
+            if (starts_with(name, "down_blocks.") || starts_with(name, "up_blocks.") ||
+                starts_with(name, "mid_block.") || starts_with(name, "conv_in.") ||
+                starts_with(name, "conv_out.") || starts_with(name, "time_embedding.") ||
+                starts_with(name, "conv_norm_out.")) {
+                const std::string& canonical_prefix = diffuison_model_prefix_vec.front();
+                name                                = convert_diffusion_model_name(name, canonical_prefix, version);
+                name                                = canonical_prefix + name;
             }
         }
     }

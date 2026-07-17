@@ -1238,10 +1238,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
+    std::string ref_image_args;
+    ref_image_args += "resize_before_vae=on"; // auto_resize_ref_image = true
+
     sd_img_gen_params_t params = {};
     sd_img_gen_params_init (&params);
     params.batch_count = 1;
-    params.auto_resize_ref_image = true;
+    params.ref_image_args = ref_image_args.c_str();
     params.prompt = sd_params->prompt.c_str();
     params.negative_prompt = sd_params->negative_prompt.c_str();
     params.clip_skip = sd_params->clip_skip;

@@ -6,6 +6,7 @@
 
 #include "model.h"
 #include "model/common/block.hpp"
+#include "model/diffusion/animatediff.hpp"
 #include "model/diffusion/model.hpp"
 
 /*==================================================== UnetModel =====================================================*/
@@ -29,6 +30,8 @@ struct UNetConfig {
     bool tiny_unet                         = false;
     int model_channels                     = 320;
     int adm_in_channels                    = 2816;  // only for VERSION_SDXL/SVD
+    bool enable_animatediff                = false;
+    bool animatediff_has_mid_block         = false;
 
     static UNetConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
                                           const std::string& prefix,
@@ -83,6 +86,13 @@ struct UNetConfig {
             }
             return &it->second;
         };
+
+        if (find_weight("motion_module.down_blocks.0.motion_modules.0.temporal_transformer.proj_in.weight") != nullptr) {
+            config.enable_animatediff = true;
+            if (find_weight("motion_module.mid_block.motion_modules.0.temporal_transformer.proj_in.weight") != nullptr) {
+                config.animatediff_has_mid_block = true;
+            }
+        }
 
         if (const TensorStorage* input = find_weight("input_blocks.0.0.weight")) {
             if (input->n_dims == 4) {
@@ -473,6 +483,12 @@ public:
         blocks["out.0"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(ch));  // ch == model_channels
         // out_1 is nn.SiLU()
         blocks["out.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(model_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
+
+        if (this->config.enable_animatediff) {
+            AnimateDiff::MotionModuleConfig mm_cfg;
+            mm_cfg.enable_mid_block = this->config.animatediff_has_mid_block;
+            blocks["motion_module"] = std::make_shared<AnimateDiff::AnimateDiffModel>(mm_cfg);
+        }
     }
 
     ggml_tensor* resblock_forward(std::string name,
@@ -583,6 +599,42 @@ public:
 
         ggml_set_name(h, "bench-start");
         hs.push_back(h);
+
+        auto motion_root        = config.enable_animatediff && num_video_frames > 1
+                                      ? std::dynamic_pointer_cast<AnimateDiff::AnimateDiffModel>(blocks["motion_module"])
+                                      : nullptr;
+        auto apply_motion_input = [&](int input_block_idx, ggml_tensor* h_in) -> ggml_tensor* {
+            if (!motion_root)
+                return h_in;
+            int di = (input_block_idx - 1) / 3;
+            int mj = (input_block_idx - 1) % 3;
+            if (di < 0 || di >= (int)channel_mult.size() || mj < 0 || mj >= num_res_blocks)
+                return h_in;
+            auto mm = motion_root->motion("down_blocks." + std::to_string(di) + ".motion_modules." + std::to_string(mj));
+            if (!mm)
+                return h_in;
+            return mm->forward(ctx, h_in, num_video_frames);
+        };
+        auto apply_motion_output = [&](int output_block_idx, ggml_tensor* h_in) -> ggml_tensor* {
+            if (!motion_root)
+                return h_in;
+            int ui = output_block_idx / 3;
+            int mj = output_block_idx % 3;
+            if (ui < 0 || ui >= (int)channel_mult.size() || mj < 0 || mj > num_res_blocks)
+                return h_in;
+            auto mm = motion_root->motion("up_blocks." + std::to_string(ui) + ".motion_modules." + std::to_string(mj));
+            if (!mm)
+                return h_in;
+            return mm->forward(ctx, h_in, num_video_frames);
+        };
+        auto apply_motion_mid = [&](ggml_tensor* h_in) -> ggml_tensor* {
+            if (!motion_root)
+                return h_in;
+            auto mm = motion_root->motion("mid_block.motion_modules.0");
+            if (!mm)
+                return h_in;
+            return mm->forward(ctx, h_in, num_video_frames);
+        };
         // input block 1-11
         size_t len_mults    = channel_mult.size();
         int input_block_idx = 0;
@@ -597,6 +649,7 @@ public:
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
                     h                = attention_layer_forward(name, ctx, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
                 }
+                h = apply_motion_input(input_block_idx, h);
                 sd::ggml_graph_cut::mark_graph_cut(h, "unet.input_blocks." + std::to_string(input_block_idx), "h");
                 hs.push_back(h);
             }
@@ -624,6 +677,7 @@ public:
                 h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
                 h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
             }
+            h = apply_motion_mid(h);
         }
         sd::ggml_graph_cut::mark_graph_cut(h, "unet.middle_block", "h");
         if (controls.size() > 0) {
@@ -659,6 +713,8 @@ public:
 
                     up_sample_idx++;
                 }
+
+                h = apply_motion_output(output_block_idx, h);
 
                 if (i > 0 && j == num_res_blocks) {
                     if (tiny_unet) {

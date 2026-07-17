@@ -334,7 +334,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
     std::vector<TensorStorage> tensor_storages;
     std::string error;
-    if (!read_safetensors_file(file_path, tensor_storages, &error)) {
+    if (!read_safetensors_file(file_path, tensor_storages, &error, &metadata_)) {
         LOG_ERROR("%s", error.c_str());
         return false;
     }

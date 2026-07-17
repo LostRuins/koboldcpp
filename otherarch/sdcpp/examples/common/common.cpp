@@ -30,6 +30,7 @@ namespace fs = std::filesystem;
 
 const char* const modes_str[] = {
     "img_gen",
+    "adetailer",
     "vid_gen",
     "convert",
     "upscale",
@@ -48,6 +49,9 @@ static sd_vae_format_t str_to_vae_format(const std::string& value) {
     }
     if (value == "flux2") {
         return SD_VAE_FORMAT_FLUX2;
+    }
+    if (value == "wan") {
+        return SD_VAE_FORMAT_WAN;
     }
     return SD_VAE_FORMAT_COUNT;
 }
@@ -400,7 +404,7 @@ ArgOptions SDContextParams::get_options() {
          &vae_path},
         {"",
          "--vae-format",
-         "VAE latent format override: auto, flux, sd3, or flux2 (default: auto)",
+         "VAE latent format override: auto, flux, sd3, flux2, or wan (default: auto)",
          0,
          &vae_format},
         {"",
@@ -423,6 +427,11 @@ ArgOptions SDContextParams::get_options() {
          "path to control net model",
          0,
          &control_net_path},
+        {"",
+         "--motion-module",
+         "path to AnimateDiff motion module (SD 1.5); enables video generation on --video-frames > 1",
+         0,
+         &motion_module_path},
         {"",
          "--embd-dir",
          "embeddings directory",
@@ -672,7 +681,7 @@ ArgOptions SDContextParams::get_options() {
 }
 
 void SDContextParams::build_embedding_map() {
-    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
+    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
 
     if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
         return;
@@ -737,7 +746,7 @@ bool SDContextParams::validate(SDMode mode) {
     }
 
     if (str_to_vae_format(vae_format) == SD_VAE_FORMAT_COUNT) {
-        LOG_ERROR("error: vae_format must be 'auto', 'flux', 'sd3', or 'flux2'");
+        LOG_ERROR("error: vae_format must be 'auto', 'flux', 'sd3', 'flux2', or 'wan'");
         return false;
     }
 
@@ -867,6 +876,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.audio_vae_path                  = audio_vae_path.c_str();
     sd_ctx_params.taesd_path                      = taesd_path.c_str();
     sd_ctx_params.control_net_path                = control_net_path.c_str();
+    sd_ctx_params.motion_module_path              = motion_module_path.c_str();
     sd_ctx_params.embeddings                      = embedding_vec.data();
     sd_ctx_params.embedding_count                 = static_cast<uint32_t>(embedding_vec.size());
     sd_ctx_params.photo_maker_path                = photo_maker_path.c_str();
@@ -916,6 +926,26 @@ ArgOptions SDGenerationParams::get_options() {
          "the negative prompt (default: \"\")",
          0,
          &negative_prompt},
+        {"",
+         "--ad-model",
+         "path to a converted YOLOv8 detection model for ADetailer",
+         0,
+         &ad_model_path},
+        {"",
+         "--ad-prompt",
+         "ADetailer prompt; empty inherits the main prompt, supports [PROMPT], [SEP], and [SKIP]",
+         0,
+         &ad_prompt},
+        {"",
+         "--ad-negative-prompt",
+         "ADetailer negative prompt; empty inherits the main negative prompt, supports [PROMPT] and [SEP]",
+         0,
+         &ad_negative_prompt},
+        {"",
+         "--extra-ad-args",
+         "extra ADetailer args, key=value list. Supports input_size, confidence, nms, max_detections, mask_k_largest, mask_min_ratio, mask_max_ratio, dilate_erode, x_offset, y_offset, mask_mode, merge_masks, invert_mask, mask_blur, inpaint_padding, inpaint_width, inpaint_height, denoising_strength, steps, cfg_scale, sample_method, scheduler, sort_by",
+         (int)',',
+         &extra_ad_args},
         {"-i",
          "--init-img",
          "path to the init image",
@@ -975,6 +1005,11 @@ ArgOptions SDGenerationParams::get_options() {
          "extra VAE tiling args, key=value list. LTX video VAE supports temporal_tile_frames (default: 4), temporal_tile_overlap (default: 1)",
          (int)',',
          &extra_tiling_args},
+        {"",
+         "--ref-image-args",
+         "Key-value list to set up the way the reference images are processed (empty = auto-detect from model weigths)",
+         (int)',',
+         &ref_image_args},
     };
 
     options.int_options = {
@@ -1831,6 +1866,10 @@ bool SDGenerationParams::from_json_str(
 
     load_if_exists("prompt", prompt);
     load_if_exists("negative_prompt", negative_prompt);
+    load_if_exists("ad_model", ad_model_path);
+    load_if_exists("ad_prompt", ad_prompt);
+    load_if_exists("ad_negative_prompt", ad_negative_prompt);
+    load_if_exists("extra_ad_args", extra_ad_args);
     load_if_exists("cache_mode", cache_mode);
     load_if_exists("cache_option", cache_option);
     load_if_exists("scm_mask", scm_mask);
@@ -2027,7 +2066,7 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
         return;
     }
     static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
-    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
+    static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
     std::smatch m;
 
     std::string tmp = prompt;
@@ -2347,11 +2386,17 @@ bool SDGenerationParams::validate(SDMode mode) {
         }
     }
 
-    if (mode == UPSCALE) {
+    if (mode == UPSCALE || mode == ADETAILER) {
         if (init_image_path.length() == 0) {
-            LOG_ERROR("error: upscale mode needs an init image (--init-img)\n");
+            LOG_ERROR("error: %s mode needs an init image (--init-img)\n",
+                      mode == UPSCALE ? "upscale" : "adetailer");
             return false;
         }
+    }
+
+    if (mode == ADETAILER && ad_model_path.empty()) {
+        LOG_ERROR("error: adetailer mode needs a detector model (--ad-model)\n");
+        return false;
     }
 
     return true;
@@ -2418,30 +2463,45 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
         pulid_id_weight,
     };
 
-    params.loras                 = lora_vec.empty() ? nullptr : lora_vec.data();
-    params.lora_count            = static_cast<uint32_t>(lora_vec.size());
-    params.prompt                = prompt.c_str();
-    params.negative_prompt       = negative_prompt.c_str();
-    params.clip_skip             = clip_skip;
-    params.init_image            = init_image.get();
-    params.ref_images            = ref_image_views.empty() ? nullptr : ref_image_views.data();
-    params.ref_images_count      = static_cast<int>(ref_image_views.size());
-    params.auto_resize_ref_image = auto_resize_ref_image;
-    params.increase_ref_index    = increase_ref_index;
-    params.mask_image            = mask_image.get();
-    params.width                 = get_resolved_width();
-    params.height                = get_resolved_height();
-    params.sample_params         = sample_params;
-    params.strength              = strength;
-    params.seed                  = seed;
-    params.batch_count           = batch_count;
-    params.qwen_image_layers     = qwen_image_layers;
-    params.control_image         = control_image.get();
-    params.control_strength      = control_strength;
-    params.pm_params             = pm_params;
-    params.pulid_params          = pulid_params;
-    params.vae_tiling_params     = vae_tiling_params;
-    params.cache                 = cache_params;
+    if (!auto_resize_ref_image) {
+        if (!ref_image_args.empty()) {
+            ref_image_args += ",";
+        }
+        ref_image_args += "resize_before_vae=0";
+        LOG_WARN("Notice: --disable-auto-resize-ref-image is deprecated. Use --ref-image-args \"resize_before_vae=off\" instead.");
+    }
+
+    if (increase_ref_index) {
+        if (!ref_image_args.empty()) {
+            ref_image_args += ",";
+        }
+        ref_image_args += "ref_index_mode=increase";
+        LOG_WARN("Notice: --increase-ref-index is deprecated. Use --ref-image-args \"ref_index_mode=increase\" instead.");
+    }
+
+    params.loras             = lora_vec.empty() ? nullptr : lora_vec.data();
+    params.lora_count        = static_cast<uint32_t>(lora_vec.size());
+    params.prompt            = prompt.c_str();
+    params.negative_prompt   = negative_prompt.c_str();
+    params.clip_skip         = clip_skip;
+    params.init_image        = init_image.get();
+    params.ref_images        = ref_image_views.empty() ? nullptr : ref_image_views.data();
+    params.ref_images_count  = static_cast<int>(ref_image_views.size());
+    params.ref_image_args    = ref_image_args.c_str();
+    params.mask_image        = mask_image.get();
+    params.width             = get_resolved_width();
+    params.height            = get_resolved_height();
+    params.sample_params     = sample_params;
+    params.strength          = strength;
+    params.seed              = seed;
+    params.batch_count       = batch_count;
+    params.qwen_image_layers = qwen_image_layers;
+    params.control_image     = control_image.get();
+    params.control_strength  = control_strength;
+    params.pm_params         = pm_params;
+    params.pulid_params      = pulid_params;
+    params.vae_tiling_params = vae_tiling_params;
+    params.cache             = cache_params;
 
     params.hires.enabled             = hires_enabled;
     params.hires.upscaler            = resolved_hires_upscaler;
@@ -2561,6 +2621,10 @@ std::string SDGenerationParams::to_string() const {
         << "  high_noise_loras: \"" << high_noise_loras_str << "\",\n"
         << "  prompt: \"" << prompt << "\",\n"
         << "  negative_prompt: \"" << negative_prompt << "\",\n"
+        << "  ad_model_path: \"" << ad_model_path << "\",\n"
+        << "  ad_prompt: \"" << ad_prompt << "\",\n"
+        << "  ad_negative_prompt: \"" << ad_negative_prompt << "\",\n"
+        << "  extra_ad_args: \"" << extra_ad_args << "\",\n"
         << "  clip_skip: " << clip_skip << ",\n"
         << "  width: " << width << ",\n"
         << "  height: " << height << ",\n"
@@ -2675,8 +2739,13 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
                                             int64_t seed,
                                             SDMode mode) {
     json root;
-    root["schema"]    = "sdcpp.image.params/v1";
-    root["mode"]      = mode == VID_GEN ? "vid_gen" : "img_gen";
+    root["schema"] = "sdcpp.image.params/v1";
+    root["mode"]   = "img_gen";
+    if (mode == VID_GEN) {
+        root["mode"] = "vid_gen";
+    } else if (mode == ADETAILER) {
+        root["mode"] = "adetailer";
+    }
     root["generator"] = {
         {"name", "stable-diffusion.cpp"},
         {"version", safe_json_string(sd_version())},
@@ -2690,6 +2759,14 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
         {"positive", gen_params.prompt},
         {"negative", gen_params.negative_prompt},
     };
+    if (!gen_params.ad_model_path.empty()) {
+        root["adetailer"] = {
+            {"model", sd_basename(gen_params.ad_model_path)},
+            {"prompt", gen_params.ad_prompt},
+            {"negative_prompt", gen_params.ad_negative_prompt},
+            {"extra_args", gen_params.extra_ad_args},
+        };
+    }
     root["sampling"] = build_sampling_metadata_json(gen_params.sample_params,
                                                     gen_params.skip_layers,
                                                     &gen_params.custom_sigmas);
@@ -2843,6 +2920,18 @@ std::string get_image_params(const SDContextParams& ctx_params,
     parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
     if (!gen_params.extra_sample_args.empty()) {
         parameter_string += "Extra sample args: " + gen_params.extra_sample_args + ", ";
+    }
+    if (!gen_params.ad_model_path.empty()) {
+        parameter_string += "ADetailer model: " + sd_basename(gen_params.ad_model_path) + ", ";
+        if (!gen_params.ad_prompt.empty()) {
+            parameter_string += "ADetailer prompt: " + gen_params.ad_prompt + ", ";
+        }
+        if (!gen_params.ad_negative_prompt.empty()) {
+            parameter_string += "ADetailer negative prompt: " + gen_params.ad_negative_prompt + ", ";
+        }
+        if (!gen_params.extra_ad_args.empty()) {
+            parameter_string += "ADetailer args: " + gen_params.extra_ad_args + ", ";
+        }
     }
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";

@@ -20,6 +20,7 @@ enum class SDBackendModule {
     CONTROL_NET,
     PHOTOMAKER,
     UPSCALER,
+    DETECTOR,
 };
 
 struct SDBackendAssignment {

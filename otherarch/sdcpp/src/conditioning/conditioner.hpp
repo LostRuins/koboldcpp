@@ -7,6 +7,7 @@
 
 #include "core/tensor_ggml.hpp"
 #include "core/util.h"
+#include "model/diffusion/model.hpp"
 #include "model/te/clip.hpp"
 #include "model/te/llm.hpp"
 #include "model/te/t5.hpp"
@@ -106,6 +107,7 @@ struct ConditionerParams {
     int height                                       = -1;
     bool zero_out_masked                             = false;
     const std::vector<sd::Tensor<float>>* ref_images = nullptr;  // for qwen image edit
+    RefImageParams ref_image_params;
 };
 
 struct Conditioner {
@@ -1993,6 +1995,54 @@ struct LLMEmbedder : public Conditioner {
         return new_hidden_states;
     }
 
+    void resize_image_dims(int height, int width, int& h_bar, int& w_bar, int factor, int min_size, int max_size, RefImageResizeMode mode) {
+        if (min_size > 0 && min_size == max_size) {
+            if (mode == RefImageResizeMode::AREA) {
+                double beta = std::sqrt(static_cast<double>(min_size) / (static_cast<double>(height) * width));
+                h_bar       = std::max(static_cast<int>(factor),
+                                       static_cast<int>(std::round(height * beta / factor)) * static_cast<int>(factor));
+                w_bar       = std::max(static_cast<int>(factor),
+                                       static_cast<int>(std::round(width * beta / factor)) * static_cast<int>(factor));
+            } else if (mode == RefImageResizeMode::LONGEST_SIDE) {
+                int current_max_side = std::max(height, width);
+                double beta          = static_cast<double>(min_size) / current_max_side;
+                h_bar                = std::max(static_cast<int>(factor),
+                                                static_cast<int>(std::round(height * beta / factor)) * static_cast<int>(factor));
+                w_bar                = std::max(static_cast<int>(factor),
+                                                static_cast<int>(std::round(width * beta / factor)) * static_cast<int>(factor));
+            }
+            return;
+        }
+
+        if (mode == RefImageResizeMode::AREA) {
+            double current_area = static_cast<double>(h_bar) * w_bar;
+            if (max_size > 0 && current_area > max_size) {
+                double beta = std::sqrt((static_cast<double>(height) * width) / static_cast<double>(max_size));
+                h_bar       = std::max(static_cast<int>(factor),
+                                       static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                w_bar       = std::max(static_cast<int>(factor),
+                                       static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+            } else if (min_size > 0 && current_area < min_size) {
+                double beta = std::sqrt(static_cast<double>(min_size) / (static_cast<double>(height) * width));
+                h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+            }
+        } else if (mode == RefImageResizeMode::LONGEST_SIDE) {
+            int current_max_side = std::max(height, width);
+            if (max_size > 0 && current_max_side > max_size) {
+                double beta = static_cast<double>(max_size) / current_max_side;
+                h_bar       = std::max(static_cast<int>(factor),
+                                       static_cast<int>(std::floor(height * beta / factor)) * static_cast<int>(factor));
+                w_bar       = std::max(static_cast<int>(factor),
+                                       static_cast<int>(std::floor(width * beta / factor)) * static_cast<int>(factor));
+            } else if (min_size > 0 && current_max_side < min_size) {
+                double beta = static_cast<double>(min_size) / current_max_side;
+                h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+            }
+        }
+    }
+
     SDCondition get_learned_condition(int n_threads,
                                       const ConditionerParams& conditioner_params) override {
         std::string prompt;
@@ -2007,7 +2057,8 @@ struct LLMEmbedder : public Conditioner {
         bool spell_quotes                    = false;
         std::set<int> out_layers;
 
-        int64_t t0 = ggml_time_ms();
+        int64_t t0                     = ggml_time_ms();
+        RefImageResizeMode resize_mode = conditioner_params.ref_image_params.vlm_resize_mode;
 
         if (sd_version_is_lingbot_video(version)) {
             const int pad_token = 151643;
@@ -2040,28 +2091,35 @@ struct LLMEmbedder : public Conditioner {
 
                 for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
                     const auto& image = (*conditioner_params.ref_images)[i];
-                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                    const int factor  = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
-                    int min_pixels    = static_cast<int>(4 * factor * factor);
-                    int max_pixels    = static_cast<int>(16384 * factor * factor);
-                    int h_bar         = std::max(static_cast<int>(factor), static_cast<int>(std::round(height / factor) * factor));
-                    int w_bar         = std::max(static_cast<int>(factor), static_cast<int>(std::round(width / factor) * factor));
+
+                    int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
+                    if (min_pixels <= 0) {
+                        if (resize_mode == RefImageResizeMode::AREA) {
+                            min_pixels = static_cast<int>(4 * factor * factor);
+                        } else {
+                            min_pixels = static_cast<int>(2 * factor);
+                        }
+                    }
+                    int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
+                    if (max_pixels <= 0) {
+                        if (resize_mode == RefImageResizeMode::AREA) {
+                            max_pixels = static_cast<int>(16384 * factor * factor);
+                        } else {
+                            max_pixels = static_cast<int>(128 * factor);
+                        }
+                    }
+
+                    int h_bar = std::max(factor, static_cast<int>(std::round(static_cast<double>(height) / factor) * factor));
+                    int w_bar = std::max(factor, static_cast<int>(std::round(static_cast<double>(width) / factor) * factor));
 
                     if (std::max(height, width) > 200 * std::min(height, width)) {
                         LOG_WARN("LingBotVideo image aspect ratio is very large: %dx%d", width, height);
                     }
-                    if (h_bar * w_bar > max_pixels) {
-                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
-                        h_bar       = std::max(static_cast<int>(factor),
-                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
-                        w_bar       = std::max(static_cast<int>(factor),
-                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
-                    } else if (h_bar * w_bar < min_pixels) {
-                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
-                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
-                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
-                    }
+
+                    resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
                     LOG_DEBUG("resize LingBotVideo ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
                     auto resized_image = clip_preprocess(image, w_bar, h_bar);
@@ -2092,30 +2150,33 @@ struct LLMEmbedder : public Conditioner {
                 prompt_template_encode_start_idx = 64;
                 int image_embed_idx              = 64 + 6;
 
-                int min_pixels          = 384 * 384;
-                int max_pixels          = 560 * 560;
+                int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
+                if (min_pixels <= 0) {
+                    min_pixels = 384;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        min_pixels *= min_pixels;
+                    }
+                }
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
+                if (max_pixels <= 0) {
+                    max_pixels = 560;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        max_pixels *= max_pixels;
+                    }
+                }
+
                 std::string placeholder = "<|image_pad|>";
                 std::string img_prompt;
 
                 for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
                     const auto& image = (*conditioner_params.ref_images)[i];
-                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                    const int factor  = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
-                    int h_bar         = static_cast<int>(std::round(height / factor) * factor);
-                    int w_bar         = static_cast<int>(std::round(width / factor) * factor);
+                    int h_bar         = static_cast<int>(std::round(static_cast<double>(height) / factor) * factor);
+                    int w_bar         = static_cast<int>(std::round(static_cast<double>(width) / factor) * factor);
 
-                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
-                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
-                        h_bar       = std::max(static_cast<int>(factor),
-                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
-                        w_bar       = std::max(static_cast<int>(factor),
-                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
-                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
-                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
-                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
-                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
-                    }
+                    resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
                     LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 
@@ -2170,16 +2231,33 @@ struct LLMEmbedder : public Conditioner {
                 std::string img_prompt;
                 const std::string placeholder = "<|image_pad|>";
 
+                int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
+                if (min_pixels <= 0) {
+                    min_pixels = 384;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        min_pixels *= min_pixels;
+                    }
+                }
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
+                if (max_pixels <= 0) {
+                    max_pixels = 384;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        max_pixels *= max_pixels;
+                    }
+                }
+
                 for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
                     const auto& image = (*conditioner_params.ref_images)[i];
-                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                    const int factor  = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
-                    double beta       = std::sqrt((384.0 * 384.0) / (static_cast<double>(height) * static_cast<double>(width)));
-                    int h_bar         = std::max(static_cast<int>(factor),
-                                                 static_cast<int>(std::round(height * beta / factor)) * static_cast<int>(factor));
-                    int w_bar         = std::max(static_cast<int>(factor),
-                                                 static_cast<int>(std::round(width * beta / factor)) * static_cast<int>(factor));
+
+                    int h_bar = std::max(factor,
+                                         static_cast<int>(std::round(static_cast<double>(height) / factor)) * factor);
+                    int w_bar = std::max(factor,
+                                         static_cast<int>(std::round(static_cast<double>(width) / factor)) * factor);
+
+                    resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
                     LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 
@@ -2221,17 +2299,33 @@ struct LLMEmbedder : public Conditioner {
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
                 std::string img_prompt        = "";
                 const std::string placeholder = "<|image_pad|>";
+                int min_pixels                = conditioner_params.ref_image_params.vlm_min_size;
+                if (min_pixels <= 0) {
+                    min_pixels = 384;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        min_pixels *= min_pixels;
+                    }
+                }
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
+                if (max_pixels <= 0) {
+                    max_pixels = 1024;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        max_pixels *= max_pixels;
+                    }
+                }
 
                 for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
                     const auto& image = (*conditioner_params.ref_images)[i];
-                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                    const int factor  = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
-                    double beta       = std::sqrt((384.0 * 384.0) / (static_cast<double>(height) * static_cast<double>(width)));
-                    int h_bar         = std::max(static_cast<int>(factor),
-                                                 static_cast<int>(std::round(height * beta / factor)) * static_cast<int>(factor));
-                    int w_bar         = std::max(static_cast<int>(factor),
-                                                 static_cast<int>(std::round(width * beta / factor)) * static_cast<int>(factor));
+
+                    int h_bar = std::max(factor,
+                                         static_cast<int>(std::round(static_cast<double>(height) / factor)) * factor);
+                    int w_bar = std::max(factor,
+                                         static_cast<int>(std::round(static_cast<double>(width) / factor)) * factor);
+
+                    resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
                     LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 
@@ -2268,30 +2362,33 @@ struct LLMEmbedder : public Conditioner {
                 min_length                       = 512 + prompt_template_encode_start_idx;
                 int image_embed_idx              = 36 + 6;
 
-                int min_pixels          = 384 * 384;
-                int max_pixels          = 560 * 560;
+                int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
+                if (min_pixels <= 0) {
+                    min_pixels = 384;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        min_pixels *= min_pixels;
+                    }
+                }
+                int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
+                if (max_pixels <= 0) {
+                    max_pixels = 560;
+                    if (resize_mode == RefImageResizeMode::AREA) {
+                        max_pixels *= max_pixels;
+                    }
+                }
+
                 std::string placeholder = "<|image_pad|>";
                 std::string img_prompt;
 
                 for (int i = 0; i < conditioner_params.ref_images->size(); i++) {
                     const auto& image = (*conditioner_params.ref_images)[i];
-                    double factor     = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
+                    const int factor  = llm->config.vision.patch_size * llm->config.vision.spatial_merge_size;
                     int height        = static_cast<int>(image.shape()[1]);
                     int width         = static_cast<int>(image.shape()[0]);
-                    int h_bar         = static_cast<int>(std::round(height / factor) * factor);
-                    int w_bar         = static_cast<int>(std::round(width / factor) * factor);
+                    int h_bar         = static_cast<int>(std::round(static_cast<double>(height) / factor) * factor);
+                    int w_bar         = static_cast<int>(std::round(static_cast<double>(width) / factor) * factor);
 
-                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
-                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
-                        h_bar       = std::max(static_cast<int>(factor),
-                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
-                        w_bar       = std::max(static_cast<int>(factor),
-                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
-                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
-                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
-                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
-                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
-                    }
+                    resize_image_dims(height, width, h_bar, w_bar, factor, min_pixels, max_pixels, resize_mode);
 
                     LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, height, width, h_bar, w_bar);
 

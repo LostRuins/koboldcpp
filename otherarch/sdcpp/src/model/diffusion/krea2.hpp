@@ -615,7 +615,8 @@ namespace Krea2 {
                              ggml_tensor* timestep,
                              ggml_tensor* context,
                              ggml_tensor* pe,
-                             std::vector<ggml_tensor*> ref_latents = {}) {
+                             std::vector<ggml_tensor*> ref_latents = {},
+                             bool zero_timestep_refs               = false) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
             int64_t N = x->ne[3];
@@ -645,7 +646,7 @@ namespace Krea2 {
             auto tvec = tproj->forward(ctx, t);
 
             ggml_tensor* tvec_0 = nullptr;
-            if (ref_latents.size() > 0) {
+            if (ref_latents.size() > 0 && zero_timestep_refs) {
                 // "index_timestep_zero" mode: use timestep = 0 for ref latents
                 auto timestep_0 = ggml_scale(ctx->ggml_ctx, timestep, 0.0f);
                 auto t_0        = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep_0, static_cast<int>(config.timestep_dim), 10000, 1000.f);
@@ -719,7 +720,7 @@ namespace Krea2 {
                                  const sd::Tensor<float>& timesteps_tensor,
                                  const sd::Tensor<float>& context_tensor,
                                  const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
-                                 Rope::RefIndexMode ref_index_mode                        = Rope::RefIndexMode::FIXED) {
+                                 const RefImageParams& ref_image_params                   = REF_IMAGE_PRESETS.at("krea2_ostris_edit")) {
             ggml_cgraph* gf        = new_graph_custom(KREA2_GRAPH_SIZE);
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
@@ -741,13 +742,13 @@ namespace Krea2 {
                                        config.theta,
                                        config.axes_dim,
                                        ref_latents,
-                                       ref_index_mode);
+                                       ref_image_params.ref_index_mode);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());
 
             auto runner_ctx  = get_context();
-            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents);
+            ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents, ref_image_params.force_ref_timestep_zero);
             ggml_build_forward_expand(gf, out);
             return gf;
         }
@@ -757,9 +758,9 @@ namespace Krea2 {
                                   const sd::Tensor<float>& timesteps,
                                   const sd::Tensor<float>& context,
                                   const std::vector<sd::Tensor<float>>& ref_latents = {},
-                                  Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED) {
+                                  const RefImageParams& ref_image_params            = REF_IMAGE_PRESETS.at("krea2_ostris_edit")) {
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
+                return build_graph(x, timesteps, context, ref_latents, ref_image_params);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
         }
@@ -773,8 +774,8 @@ namespace Krea2 {
                            *diffusion_params.x,
                            *diffusion_params.timesteps,
                            tensor_or_empty(diffusion_params.context),
-                           diffusion_params.ref_latents ? *diffusion_params.ref_latents : empty_ref_latents,
-                           diffusion_params.ref_index_mode);
+                           diffusion_params.ref_latents && diffusion_params.ref_image_params.pass_to_dit ? *diffusion_params.ref_latents : empty_ref_latents,
+                           diffusion_params.ref_image_params);
         }
     };
 }  // namespace Krea2
