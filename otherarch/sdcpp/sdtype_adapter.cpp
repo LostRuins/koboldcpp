@@ -35,6 +35,15 @@ using namespace kcpp_sd;
 
 #include "avi_writer.h"
 
+static std::string get_u8path(const std::string& file_path)
+{
+    #ifdef _WIN32
+    return std::filesystem::u8path(file_path).string();
+    #else
+    return std::filesystem::path(file_path).string();
+    #endif
+}
+
 struct LoraMap {
     std::vector<std::pair<std::string, float>> items;
     std::unordered_map<std::string, std::size_t> index;
@@ -274,7 +283,7 @@ std::string load_gpt_oss_vocab_json()
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
-    executable_path = inputs.executable_path;
+    executable_path = get_u8path(inputs.executable_path);
     std::string taesdpath = "";
     LoraMap lora_map;
     for(int i=0;i<inputs.lora_len;++i)
