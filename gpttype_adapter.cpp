@@ -4218,6 +4218,23 @@ void AppendDedicatedMemoryAndNegativePrompt(std::vector<int> & embd_inp, const s
 
 //alpin's batching stuff
 
+using batch_clock = std::chrono::steady_clock;
+using batch_time_point = batch_clock::time_point;
+
+static bool batch_time_is_set(const batch_time_point & time)
+{
+    return time != batch_time_point{};
+}
+
+static double batch_elapsed_seconds(const batch_time_point & start, const batch_time_point & end)
+{
+    if(!batch_time_is_set(start) || !batch_time_is_set(end) || end < start)
+    {
+        return 0.0;
+    }
+    return std::chrono::duration<double>(end - start).count();
+}
+
 enum class BatchState
 {
     WAITING,
@@ -4232,6 +4249,10 @@ struct BatchGenerateRequest
 {
     int id = 0;
     int slot = -1;
+    int assigned_slot = -1;
+    int active_at_enqueue = 0;
+    int waiting_ahead_at_enqueue = 0;
+    int active_at_admit = 0;
     BatchState state = BatchState::WAITING;
     std::string prompt;
     std::string prompt_added_memory;
@@ -4263,7 +4284,13 @@ struct BatchGenerateRequest
     std::string output;
     int prompt_token_count = 0;
     int completion_token_count = 0;
-    std::chrono::steady_clock::time_point start_time;
+    batch_time_point submitted_at {};
+    batch_time_point admitted_at {};
+    batch_time_point ready_at {};
+    batch_time_point prefill_finished_at {};
+    batch_time_point first_sample_at {};
+    batch_time_point last_sample_at {};
+    batch_time_point finished_at {};
     stop_reason finish_reason = stop_reason::INVALID;
     bool abort_requested = false;
     generation_outputs result;
@@ -4278,7 +4305,29 @@ struct BatchGenerateRequest
     }
 };
 
+struct BatchFinishSnapshot
+{
+    int id = 0;
+    int assigned_slot = -1;
+    int active_at_enqueue = 0;
+    int waiting_ahead_at_enqueue = 0;
+    int active_at_admit = 0;
+    int prompt_tokens = 0;
+    int sampled_tokens = 0;
+    int max_length = 0;
+    size_t output_pieces = 0;
+    stop_reason reason = stop_reason::INVALID;
+    batch_time_point submitted_at {};
+    batch_time_point admitted_at {};
+    batch_time_point ready_at {};
+    batch_time_point prefill_finished_at {};
+    batch_time_point first_sample_at {};
+    batch_time_point last_sample_at {};
+    batch_time_point finished_at {};
+};
+
 static std::mutex batch_mutex;
+static std::mutex batch_log_mutex;
 static std::condition_variable batch_cv;
 static std::deque<int> batch_waiting;
 static std::vector<std::unique_ptr<BatchGenerateRequest>> batch_requests;
@@ -4306,6 +4355,19 @@ static BatchGenerateRequest * batch_find_request_locked(int request_id)
 static bool batch_is_live_state(BatchState state)
 {
     return state == BatchState::WAITING || state == BatchState::PREFILL || state == BatchState::GENERATING;
+}
+
+static int batch_count_active_locked()
+{
+    int active = 0;
+    for(const auto & req : batch_requests)
+    {
+        if(req && (req->state == BatchState::PREFILL || req->state == BatchState::GENERATING))
+        {
+            active++;
+        }
+    }
+    return active;
 }
 
 static bool batch_has_live_locked()
@@ -4594,11 +4656,23 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     return chain;
 }
 
+static const char * batch_stop_reason_name(stop_reason reason)
+{
+    switch(reason)
+    {
+        case stop_reason::ERROR_ENCOUNTERED: return "error";
+        case stop_reason::INVALID: return "aborted";
+        case stop_reason::OUT_OF_TOKENS: return "length";
+        case stop_reason::EOS_TOKEN_HIT: return "eos";
+        case stop_reason::CUSTOM_STOPPER: return "stop";
+        default: return "unknown";
+    }
+}
+
+static BatchFinishSnapshot batch_finish_snapshot_locked(const BatchGenerateRequest & req);
+
 static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason reason)
 {
-    auto finish_time = std::chrono::steady_clock::now();
-    float total_time = req.start_time.time_since_epoch().count() == 0 ? 0.0f : std::chrono::duration<float>(finish_time - req.start_time).count();
-    float generated_tps = total_time > 0.0f ? (float) req.completion_token_count / total_time : 0.0f;
     req.finish_reason = reason;
     req.result.status = (reason == stop_reason::ERROR_ENCOUNTERED) ? 0 : 1;
     req.result.stopreason = reason;
@@ -4611,10 +4685,92 @@ static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason 
         llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), req.slot, -1, -1);
     }
     req.slot = -1;
-    printf("\n[%s] BatchRequest:%d, Prompt:%d, Generated:%d/%d in %.2fs (%.2fT/s), Stop:%d",
-        get_timestamp_str().c_str(), req.id, req.prompt_token_count, req.completion_token_count, req.max_length, total_time, generated_tps, (int) reason);
-    fflush(stdout);
+    req.finished_at = batch_clock::now();
     batch_cv.notify_all();
+}
+
+static BatchFinishSnapshot batch_finish_snapshot_locked(const BatchGenerateRequest & req)
+{
+    BatchFinishSnapshot snapshot;
+    snapshot.id = req.id;
+    snapshot.assigned_slot = req.assigned_slot;
+    snapshot.active_at_enqueue = req.active_at_enqueue;
+    snapshot.waiting_ahead_at_enqueue = req.waiting_ahead_at_enqueue;
+    snapshot.active_at_admit = req.active_at_admit;
+    snapshot.prompt_tokens = req.prompt_token_count;
+    snapshot.sampled_tokens = req.completion_token_count;
+    snapshot.max_length = req.max_length;
+    snapshot.output_pieces = req.generated_pieces.size();
+    snapshot.reason = req.finish_reason;
+    snapshot.submitted_at = req.submitted_at;
+    snapshot.admitted_at = req.admitted_at;
+    snapshot.ready_at = req.ready_at;
+    snapshot.prefill_finished_at = req.prefill_finished_at;
+    snapshot.first_sample_at = req.first_sample_at;
+    snapshot.last_sample_at = req.last_sample_at;
+    snapshot.finished_at = req.finished_at;
+    return snapshot;
+}
+
+static void batch_print_finish_snapshot(const BatchFinishSnapshot & snapshot)
+{
+    const double queue_s = batch_elapsed_seconds(snapshot.submitted_at, snapshot.admitted_at);
+    const double setup_s = batch_elapsed_seconds(snapshot.admitted_at, snapshot.ready_at);
+    const double prompt_s = batch_elapsed_seconds(snapshot.ready_at, snapshot.prefill_finished_at);
+    const double first_sample_s = batch_elapsed_seconds(snapshot.submitted_at, snapshot.first_sample_at);
+    const double steady_s = batch_elapsed_seconds(snapshot.first_sample_at, snapshot.last_sample_at);
+    const double total_s = batch_elapsed_seconds(snapshot.submitted_at, snapshot.finished_at);
+    const int steady_tokens = std::max(0, snapshot.sampled_tokens - 1);
+
+    char prompt_perf[128];
+    char first_sample_perf[64];
+    char steady_perf[128];
+    char total_perf[128];
+    if(prompt_s > 0.0)
+    {
+        snprintf(prompt_perf, sizeof(prompt_perf), "PromptWall:%d in %.3fs (%.2f effective T/s)",
+            snapshot.prompt_tokens, prompt_s, (double) snapshot.prompt_tokens / prompt_s);
+    }
+    else
+    {
+        snprintf(prompt_perf, sizeof(prompt_perf), "PromptWall:%d in n/a", snapshot.prompt_tokens);
+    }
+    if(first_sample_s > 0.0)
+    {
+        snprintf(first_sample_perf, sizeof(first_sample_perf), "FirstSample:%.3fs", first_sample_s);
+    }
+    else
+    {
+        snprintf(first_sample_perf, sizeof(first_sample_perf), "FirstSample:n/a");
+    }
+    if(steady_tokens > 0 && steady_s > 0.0)
+    {
+        snprintf(steady_perf, sizeof(steady_perf), "Steady:%d in %.3fs (%.2f T/s)",
+            steady_tokens, steady_s, (double) steady_tokens / steady_s);
+    }
+    else
+    {
+        snprintf(steady_perf, sizeof(steady_perf), "Steady:%d in n/a", steady_tokens);
+    }
+    if(total_s > 0.0)
+    {
+        snprintf(total_perf, sizeof(total_perf), "E2ESampled:%.3fs (%.2f T/s)",
+            total_s, (double) snapshot.sampled_tokens / total_s);
+    }
+    else
+    {
+        snprintf(total_perf, sizeof(total_perf), "E2ESampled:n/a");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(batch_log_mutex);
+        printf("\n[%s] BatchRequest:%d, Slot:%d, Enqueue:%d active/%d queued, Admit:%d active, BatchQueue:%.3fs, Setup:%.3fs, %s, %s, Generated:%d/%d sampled, %zu output pieces, %s, %s, Stop:%s(%d)",
+            get_timestamp_str().c_str(), snapshot.id, snapshot.assigned_slot, snapshot.active_at_enqueue,
+            snapshot.waiting_ahead_at_enqueue, snapshot.active_at_admit, queue_s, setup_s, prompt_perf,
+            first_sample_perf, snapshot.sampled_tokens, snapshot.max_length, snapshot.output_pieces,
+            steady_perf, total_perf, batch_stop_reason_name(snapshot.reason), (int) snapshot.reason);
+        fflush(stdout);
+    }
 }
 
 static bool batch_output_hit_stop(const BatchGenerateRequest & req)
@@ -4655,7 +4811,10 @@ static bool batch_claim_waiting_locked()
             continue;
         }
         req->slot = slot;
+        req->assigned_slot = slot;
         req->state = BatchState::PREFILL;
+        req->admitted_at = batch_clock::now();
+        req->active_at_admit = batch_count_active_locked();
         batch_touched_since_legacy = true;
 
         ApplyPromptFormatAdjustments(req->prompt_added_memory, req->prompt);
@@ -4701,8 +4860,8 @@ static bool batch_claim_waiting_locked()
         req->n_past = 0;
         req->has_pending = false;
         req->i_batch = -1;
-        req->start_time = std::chrono::steady_clock::now();
         llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), slot, -1, -1);
+        req->ready_at = batch_clock::now();
         claimed = true;
     }
     return claimed;
@@ -4783,6 +4942,7 @@ static void batch_worker_loop()
         }
 
         int decode_status = llama_decode(llama_ctx_v4, batch);
+        const batch_time_point decode_finished_at = batch_clock::now();
 
         std::lock_guard<std::mutex> lock(batch_mutex);
         if(decode_status != 0)
@@ -4798,8 +4958,9 @@ static void batch_worker_loop()
             continue;
         }
 
-        const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(llama_ctx_v4));
         const std::vector<llama_token> eog_tokens = GetEogIDs(file_format,n_vocab);
+        std::vector<std::pair<int, stop_reason>> requests_to_finish;
+        requests_to_finish.reserve(decode_ids.size());
         for(int request_id : decode_ids)
         {
             BatchGenerateRequest * req = batch_find_request_locked(request_id);
@@ -4807,12 +4968,22 @@ static void batch_worker_loop()
             {
                 continue;
             }
+            if(!batch_time_is_set(req->prefill_finished_at))
+            {
+                req->prefill_finished_at = decode_finished_at;
+            }
             llama_token sampled = llama_sampler_sample(req->sampler, llama_ctx_v4, req->i_batch);
+            const batch_time_point sample_time = batch_clock::now();
+            if(!batch_time_is_set(req->first_sample_at))
+            {
+                req->first_sample_at = sample_time;
+            }
+            req->last_sample_at = sample_time;
             req->completion_token_count++;
             bool is_eog = std::find(eog_tokens.begin(), eog_tokens.end(), sampled) != eog_tokens.end();
             if(is_eog && !req->bypass_eos_token)
             {
-                batch_finish_request_locked(*req, stop_reason::EOS_TOKEN_HIT);
+                requests_to_finish.emplace_back(request_id, stop_reason::EOS_TOKEN_HIT);
                 continue;
             }
             std::string piece = FileFormatTokenizeID(sampled, file_format, req->render_special);
@@ -4820,17 +4991,25 @@ static void batch_worker_loop()
             req->output += piece;
             if(batch_output_hit_stop(*req))
             {
-                batch_finish_request_locked(*req, stop_reason::CUSTOM_STOPPER);
+                requests_to_finish.emplace_back(request_id, stop_reason::CUSTOM_STOPPER);
                 continue;
             }
             if(req->max_length > 0 && req->completion_token_count >= req->max_length)
             {
-                batch_finish_request_locked(*req, stop_reason::OUT_OF_TOKENS);
+                requests_to_finish.emplace_back(request_id, stop_reason::OUT_OF_TOKENS);
                 continue;
             }
             req->pending_token = sampled;
             req->has_pending = true;
             req->i_batch = -1;
+        }
+        for(const auto & finished : requests_to_finish)
+        {
+            BatchGenerateRequest * req = batch_find_request_locked(finished.first);
+            if(req && batch_is_live_state(req->state))
+            {
+                batch_finish_request_locked(*req, finished.second);
+            }
         }
     }
     llama_batch_free(batch);
@@ -4859,6 +5038,7 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     {
         return -1;
     }
+    const batch_time_point submitted_at = batch_clock::now();
     std::lock_guard<std::mutex> lock(batch_mutex);
     if(batch_legacy_active || batch_legacy_waiting > 0)
     {
@@ -4866,6 +5046,9 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     }
     auto req = std::make_unique<BatchGenerateRequest>();
     req->id = batch_next_request_id++;
+    req->submitted_at = submitted_at;
+    req->active_at_enqueue = batch_count_active_locked();
+    req->waiting_ahead_at_enqueue = (int) batch_waiting.size();
     req->prompt = inputs.prompt ? inputs.prompt : "";
     req->prompt_added_memory = inputs.memory ? inputs.memory : "";
     req->max_context_length = inputs.max_context_length;
@@ -4989,11 +5172,25 @@ bool gpttype_batch_generate_abort(int request_id)
 
 void gpttype_batch_generate_release(int request_id)
 {
-    std::lock_guard<std::mutex> lock(batch_mutex);
-    batch_requests.erase(std::remove_if(batch_requests.begin(), batch_requests.end(), [request_id](const std::unique_ptr<BatchGenerateRequest> & req){
-        return req && req->id == request_id && !batch_is_live_state(req->state);
-    }), batch_requests.end());
-    batch_cv.notify_all();
+    BatchFinishSnapshot finish_snapshot;
+    bool print_finish_log = false;
+    {
+        std::lock_guard<std::mutex> lock(batch_mutex);
+        auto it = std::find_if(batch_requests.begin(), batch_requests.end(), [request_id](const std::unique_ptr<BatchGenerateRequest> & req){
+            return req && req->id == request_id && !batch_is_live_state(req->state);
+        });
+        if(it != batch_requests.end())
+        {
+            finish_snapshot = batch_finish_snapshot_locked(**it);
+            batch_requests.erase(it);
+            print_finish_log = true;
+        }
+        batch_cv.notify_all();
+    }
+    if(print_finish_log)
+    {
+        batch_print_finish_snapshot(finish_snapshot);
+    }
 }
 
 std::string gpttype_get_chat_template()
