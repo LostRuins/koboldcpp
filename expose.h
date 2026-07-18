@@ -241,6 +241,7 @@ struct sd_generation_inputs
     const char * scheduler = nullptr;
     const float eta = -1.0f;
     const char * extra_sample_args = nullptr;
+    const char * ref_image_args = nullptr;
     const int clip_skip = -1;
     const int vid_req_frames = 1;
     const int vid_fps = 16;

@@ -125,6 +125,7 @@ struct SDParams {
     bool diffusion_flash_attn     = false;
     bool diffusion_conv_direct    = false;
     bool vae_conv_direct          = false;
+    std::string ref_image_args    = "";
 
     LoraMap lora_map;
     bool lora_dynamic = false;
@@ -995,7 +996,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     {
         extra_image_data.push_back(std::string(inputs.extra_images[i]));
     }
-
     sd_params->prompt = inputs.prompt;
     sd_params->negative_prompt = inputs.negative_prompt;
     sd_params->cfg_scale = inputs.cfg_scale;
@@ -1004,6 +1004,18 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_params->shifted_timestep = inputs.shifted_timestep;
     sd_params->flow_shift = inputs.flow_shift;
     sd_params->extra_sample_args = inputs.extra_sample_args ? inputs.extra_sample_args : "";
+    bool force_image_edit = false;
+    sd_params->ref_image_args = "resize_before_vae=on"; // auto_resize_ref_image = true;
+    if (inputs.ref_image_args && *inputs.ref_image_args) {
+        sd_params->ref_image_args += ",";
+        sd_params->ref_image_args += inputs.ref_image_args;
+        if (sd_params->ref_image_args.find("preset") != std::string::npos) {
+            force_image_edit = true;
+            if(!sd_is_quiet && sddebugmode==1) {
+                printf("ref_image_args=\"%s\", forcing edit mode", inputs.ref_image_args);
+            }
+        }
+    }
     sd_params->eta = inputs.eta;
     sd_params->seed = inputs.seed;
     sd_params->width = inputs.width;
@@ -1060,11 +1072,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     //if a single extra image is provided, mask is NOT provided, and img2img image is NOT provided
     //and it's a (SD1.5, SDXL) model that doesn't support extra images (see extra_image_data later)
     //swap extra image data into img2img instead (graceful fallback)
-    if(!supports_reference_images(info) && extra_image_data.size()==1 && !is_img2img && img2img_mask=="")
+    if(!supports_reference_images(info) && !force_image_edit && extra_image_data.size()==1 && !is_img2img && img2img_mask=="")
     {
         is_img2img = true;
         img2img_data = extra_image_data[0];
         extra_image_data.clear();
+        if (!sd_is_quiet && sddebugmode == 1) {
+            printf("Switching reference image to img2img\n");
+        }
     }
 
     if ((info.is_wan || info.is_ltx) && extra_image_data.size() == 0 && is_img2img)
@@ -1147,7 +1162,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         {
             int nx2, ny2, nc2;
             int desiredchannels = 3;
-            if(supports_reference_images(info))
+            if(supports_reference_images(info)||force_image_edit)
             {
                 if(info.is_wan || info.is_ltx)
                 {
@@ -1163,7 +1178,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                         wan_imgs.push_back(extraimage_reference);
                     }
                 }
-                else if(info.supports_ref_image)
+                else if(info.supports_ref_image||force_image_edit)
                 {
                     uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2);
                     if(loaded)
@@ -1238,13 +1253,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    std::string ref_image_args;
-    ref_image_args += "resize_before_vae=on"; // auto_resize_ref_image = true
-
     sd_img_gen_params_t params = {};
     sd_img_gen_params_init (&params);
     params.batch_count = 1;
-    params.ref_image_args = ref_image_args.c_str();
+    params.ref_image_args = sd_params->ref_image_args.c_str();
     params.prompt = sd_params->prompt.c_str();
     params.negative_prompt = sd_params->negative_prompt.c_str();
     params.clip_skip = sd_params->clip_skip;

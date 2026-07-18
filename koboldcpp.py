@@ -433,6 +433,7 @@ class sd_generation_inputs(ctypes.Structure):
                 ("scheduler", ctypes.c_char_p),
                 ("eta", ctypes.c_float),
                 ("extra_sample_args", ctypes.c_char_p),
+                ("ref_image_args", ctypes.c_char_p),
                 ("clip_skip", ctypes.c_int),
                 ("vid_req_frames", ctypes.c_int),
                 ("vid_fps", ctypes.c_int),
@@ -2698,6 +2699,7 @@ def gendefaults_parse_meta_field(value):
         'cache-option': 'cache_options',
         'cache_option': 'cache_options',
         'extra-sample-args': 'extra_sample_args',
+        'ref-image-args': 'ref_image_args',
     }
     parsed = parse_json_object(value, 'gendefaults') or {}
     result = {}
@@ -2867,6 +2869,7 @@ def sd_generate(genparams):
     sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
     extra_sample_args = str(genparams.get("extra_sample_args") or "")
+    ref_image_args = str(genparams.get("ref_image_args") or "").strip()
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
     eta = tryparsefloat(genparams.get("eta", None), None)
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
@@ -2938,6 +2941,7 @@ def sd_generate(genparams):
     inputs.vid_fps = vid_fps
     inputs.video_output_type = video_output_type
     inputs.remove_limits = allow_remove_limits
+    inputs.ref_image_args = ref_image_args.encode("UTF-8")
     inputs.circular_x = tryparseint(adapter_obj.get("circular_x", genparams.get("circular_x",0)),0)
     inputs.circular_y = tryparseint(adapter_obj.get("circular_y", genparams.get("circular_y",0)),0)
     inputs.cache_mode = cache_mode.encode("UTF-8")
