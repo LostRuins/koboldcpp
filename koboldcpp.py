@@ -7724,6 +7724,15 @@ Change Mode<br>
             self.send_header('content-type', content_type)
         return super(KcppServerRequestHandler, self).end_headers()
 
+def _get_listener_thread_sockets(ipv4_sock, ipv6_sock, threads_per_listener):
+    return [
+        server_socket
+        for server_socket in (ipv4_sock, ipv6_sock)
+        if server_socket is not None
+        for _ in range(threads_per_listener)
+    ]
+
+
 def RunServerMultiThreaded(addr, port, server_handler):
     global exitcounter, sslvalid, global_memory
     if is_port_in_use(port):
@@ -7764,9 +7773,9 @@ def RunServerMultiThreaded(addr, port, server_handler):
             print("IPv6 Socket Failed to Bind. IPv6 will be unavailable.")
 
     class Thread(threading.Thread):
-        def __init__(self, i):
+        def __init__(self, server_socket):
             threading.Thread.__init__(self)
-            self.i = i
+            self.server_socket = server_socket
             self.daemon = True
             self.start()
 
@@ -7775,15 +7784,7 @@ def RunServerMultiThreaded(addr, port, server_handler):
             handler = server_handler(addr, port)
             with http.server.HTTPServer((addr, port), handler, False) as self.httpd:
                 try:
-                    if ipv4_sock and ipv6_sock:
-                        self.httpd.socket = ipv4_sock if self.i < 16 else ipv6_sock
-                    elif ipv6_sock:
-                        self.httpd.socket = ipv6_sock
-                    elif ipv4_sock:
-                        self.httpd.socket = ipv4_sock
-                    else:
-                        print("ERROR: Both IPv4 and IPv6 cannot bind. Server features will not work.")
-                        return
+                    self.httpd.socket = self.server_socket
 
                     self.httpd.server_bind = self.server_close = lambda self: None
                     self.httpd.serve_forever()
@@ -7801,17 +7802,20 @@ def RunServerMultiThreaded(addr, port, server_handler):
             self.httpd.server_close()
 
     threadArr = []
-    for i in range(numThreads):
-        threadArr.append(Thread(i))
+    listener_thread_sockets = _get_listener_thread_sockets(ipv4_sock, ipv6_sock, numThreads)
+    if not listener_thread_sockets:
+        print("ERROR: Both IPv4 and IPv6 cannot bind. Server features will not work.")
+    for server_socket in listener_thread_sockets:
+        threadArr.append(Thread(server_socket))
     while 1:
         try:
             time.sleep(10)
         except (KeyboardInterrupt,SystemExit):
             global exitcounter
             exitcounter = 999
-            for i in range(numThreads):
+            for thread in threadArr:
                 try:
-                    threadArr[i].stop()
+                    thread.stop()
                 except Exception:
                     continue
             sys.exit(0)
