@@ -86,6 +86,15 @@ global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "
 using_gui_launcher = False
 
 handle = None
+_BATCH_BENCHMARK_SENTINEL = object()
+BATCH_BENCHMARK_STATUS_NAMES = {
+    1: "success",
+    -1: "continuous_batching_unavailable",
+    -2: "invalid_configuration",
+    -3: "scheduler_busy",
+    -4: "request_missing",
+    -5: "request_failed",
+}
 friendlymodelname = "inactive"
 friendlysdmodelname = "inactive"
 friendlyembeddingsmodelname = "inactive"
@@ -375,6 +384,27 @@ class generation_outputs(ctypes.Structure):
                 ("prompt_tokens", ctypes.c_int),
                 ("completion_tokens", ctypes.c_int),
                 ("text", ctypes.c_char_p)]
+
+class batch_benchmark_outputs(ctypes.Structure):
+    _fields_ = [("status", ctypes.c_int),
+                ("jobs", ctypes.c_int),
+                ("slots", ctypes.c_int),
+                ("successes", ctypes.c_int),
+                ("failures", ctypes.c_int),
+                ("engine_context", ctypes.c_int),
+                ("prompt_tokens_min", ctypes.c_int),
+                ("prompt_tokens_max", ctypes.c_int),
+                ("first_failure_request", ctypes.c_int),
+                ("first_failure_stopreason", ctypes.c_int),
+                ("total_prompt_tokens", ctypes.c_int64),
+                ("total_generated_tokens", ctypes.c_int64),
+                ("wall_seconds", ctypes.c_double),
+                ("cohort_e2e_generated_tps", ctypes.c_double),
+                ("requests_per_second", ctypes.c_double),
+                ("jobs_per_hour", ctypes.c_double),
+                ("latency_p50_ms", ctypes.c_double),
+                ("latency_p95_ms", ctypes.c_double),
+                ("latency_max_ms", ctypes.c_double)]
 
 class sd_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
@@ -954,6 +984,8 @@ def init_library():
     handle.batch_generate_abort.restype = ctypes.c_bool
     handle.batch_generate_release.argtypes = [ctypes.c_int]
     handle.batch_generate_release.restype = None
+    handle.batch_benchmark.argtypes = [generation_inputs, ctypes.c_int]
+    handle.batch_benchmark.restype = batch_benchmark_outputs
     handle.has_audio_support.restype = ctypes.c_bool
     handle.has_vision_support.restype = ctypes.c_bool
     handle.get_last_eval_time.restype = ctypes.c_float
@@ -2095,6 +2127,151 @@ def coerce_ban_list(value):
             pass
     return [value]
 
+def batch_benchmark_output_to_dict(output):
+    return {name: getattr(output, name) for name, _ in batch_benchmark_outputs._fields_}
+
+def resolve_batched_benchmark_workload(engine_context, slots, jobs, context_per_job, output_tokens):
+    engine_context = int(engine_context)
+    slots = int(slots)
+    jobs = slots if int(jobs) <= 0 else int(jobs)
+    context_per_job = int(context_per_job)
+    output_tokens = int(output_tokens)
+
+    if engine_context <= 0:
+        raise ValueError("The loaded context size must be positive.")
+    if slots < 2:
+        raise ValueError("Batched benchmark requires --parallelrequests of at least 2.")
+    if jobs < 1 or jobs > 128:
+        raise ValueError("Batched benchmark jobs must be within [1, 128].")
+
+    active_jobs = min(jobs, slots)
+    if context_per_job <= 0:
+        context_per_job = engine_context // active_jobs
+    if context_per_job <= 0:
+        raise ValueError("Per-job benchmark context must be positive.")
+    if context_per_job * active_jobs > engine_context:
+        raise ValueError(
+            f"{active_jobs} active jobs at {context_per_job} tokens require "
+            f"{context_per_job * active_jobs} shared context tokens; only {engine_context} are loaded.")
+    if output_tokens < 2:
+        raise ValueError("Batched benchmark output must be at least 2 tokens.")
+
+    minimum_prompt_tokens = max(min(context_per_job - 4, 16), int(context_per_job * 0.2))
+    maximum_exact_output = context_per_job - minimum_prompt_tokens - 1
+    if output_tokens > maximum_exact_output:
+        raise ValueError(
+            f"Batched benchmark output {output_tokens} is too large for the "
+            f"{context_per_job}-token per-job context (maximum {maximum_exact_output}).")
+
+    return {
+        "engine_context": engine_context,
+        "slots": slots,
+        "jobs": jobs,
+        "active_jobs": active_jobs,
+        "context_per_job": context_per_job,
+        "output_tokens": output_tokens,
+    }
+
+def build_batched_benchmark_prompt(minimum_tokens):
+    repetitions = max(1, int(minimum_tokens)) + 128
+    for _ in range(6):
+        prompt = (" 1" * repetitions) + "\nKCPP_BATCH_BENCHMARK_PROMPT_END\n"
+        if len(tokenize_ids(prompt, False)) > minimum_tokens:
+            return prompt
+        repetitions *= 2
+    raise RuntimeError(f"Could not construct a prompt longer than {minimum_tokens} tokens.")
+
+def run_batched_benchmark(workload):
+    genparams = {
+        "prompt": build_batched_benchmark_prompt(workload["context_per_job"]),
+        "max_length": workload["output_tokens"],
+        "max_context_length": workload["context_per_job"],
+        "temperature": 0.0,
+        "top_k": 0,
+        "top_a": 0.0,
+        "top_p": 1.0,
+        "min_p": 0.0,
+        "typical": 1.0,
+        "tfs": 1.0,
+        "nsigma": 0.0,
+        "rep_pen": 1.0,
+        "rep_pen_range": 0,
+        "presence_penalty": 0.0,
+        "mirostat": 0,
+        "xtc_probability": 0.0,
+        "dynatemp_range": 0.0,
+        "smoothing_factor": 0.0,
+        "adaptive_target": -1.0,
+        "dry_multiplier": 0.0,
+        "sampler_order": [],
+        "stop_sequence": [],
+        "ban_eos_token": True,
+        "bypass_eos": False,
+        "grammar": "",
+        "trim_stop": False,
+        "_batch_benchmark": {
+            "_sentinel": _BATCH_BENCHMARK_SENTINEL,
+            "jobs": workload["jobs"],
+        },
+    }
+    result = generate(genparams=genparams)
+    if "_batch_benchmark" not in result:
+        raise RuntimeError("Native batched benchmark did not return a result.")
+    return result["_batch_benchmark"]
+
+def batched_benchmark_config_snapshot(launch_args, engine_context):
+    return {
+        "batch_size": launch_args.batchsize,
+        "blas_threads": launch_args.blasthreads,
+        "context_size": int(engine_context),
+        "device_override": launch_args.device,
+        "flash_attention": not launch_args.noflashattention,
+        "gpu_layers": "autofit" if launch_args.autofit else launch_args.gpulayers,
+        "main_gpu": launch_args.maingpu,
+        "mmap": launch_args.usemmap,
+        "mlock": launch_args.usemlock,
+        "mmq": not launch_args.nommq,
+        "parallel_requests": launch_args.parallelrequests,
+        "pipeline_parallel": not launch_args.nopipelineparallel,
+        "quant_kv": launch_args.quantkv,
+        "split_mode": launch_args.splitmode,
+        "tensor_split": list(launch_args.tensor_split or []),
+        "threads": launch_args.threads,
+    }
+
+def format_batched_benchmark_lines(summary, workload):
+    status = int(summary["status"])
+    status_name = BATCH_BENCHMARK_STATUS_NAMES.get(status, "unknown_error")
+    reported_slots = max(1, int(summary["slots"] or workload["slots"]))
+    lines = [
+        f"[BATCHBENCH] status={'PASS' if status == 1 else 'FAIL'} code={status} reason={status_name}",
+        (f"[BATCHBENCH] jobs={summary['jobs']} slots={summary['slots']} "
+         f"active_limit={workload['active_jobs']} "
+         f"overflow_jobs={max(0, summary['jobs'] - reported_slots)} "
+         f"minimum_waves={math.ceil(summary['jobs'] / reported_slots)}"),
+        (f"[BATCHBENCH] engine_context={summary['engine_context']} "
+         f"context_per_job={workload['context_per_job']} "
+         f"output_tokens_per_job={workload['output_tokens']}"),
+        (f"[BATCHBENCH] successes={summary['successes']} failures={summary['failures']} "
+         f"prompt_tokens_min={summary['prompt_tokens_min']} prompt_tokens_max={summary['prompt_tokens_max']} "
+         f"total_prompt_tokens={summary['total_prompt_tokens']} "
+         f"total_generated_tokens={summary['total_generated_tokens']}"),
+        (f"[BATCHBENCH] wall_seconds={summary['wall_seconds']:.3f} "
+         f"cohort_e2e_generated_tps={summary['cohort_e2e_generated_tps']:.2f} "
+         f"requests_per_second={summary['requests_per_second']:.4f} "
+         f"jobs_per_hour={summary['jobs_per_hour']:.2f}"),
+        (f"[BATCHBENCH] latency_p50_ms={summary['latency_p50_ms']:.2f} "
+         f"latency_p95_ms={summary['latency_p95_ms']:.2f} "
+         f"latency_max_ms={summary['latency_max_ms']:.2f}"),
+        "[BATCHBENCH] pp_tg_source=BatchRequest_lines native_per_request_queue_included=false cohort_latency_queue_included=true",
+        "[BATCHBENCH] scope=native_scheduler excludes=http_sse_horde_network",
+    ]
+    if status != 1:
+        lines.append(
+            f"[BATCHBENCH] first_failure_request={summary['first_failure_request']} "
+            f"first_failure_stopreason={summary['first_failure_stopreason']}")
+    return lines
+
 def generate(genparams, stream_flag=False):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey
     default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
@@ -2330,6 +2507,20 @@ def generate(genparams, stream_flag=False):
         inputs.banned_tokens[n] = tok.encode("UTF-8")
 
     inputs.reasoning_budget = reasoning_budget
+
+    benchmark_config = genparams.get("_batch_benchmark")
+    if (isinstance(benchmark_config, dict)
+            and benchmark_config.get("_sentinel") is _BATCH_BENCHMARK_SENTINEL):
+        benchmark_output = handle.batch_benchmark(inputs, int(benchmark_config["jobs"]))
+        benchmark_result = batch_benchmark_output_to_dict(benchmark_output)
+        return {
+            "text": "",
+            "status": benchmark_result["status"],
+            "stopreason": benchmark_result["first_failure_stopreason"],
+            "prompt_tokens": benchmark_result["prompt_tokens_max"],
+            "completion_tokens": 0,
+            "_batch_benchmark": benchmark_result,
+        }
 
     currentusergenkey = genkey
     totalgens += 1
@@ -11067,6 +11258,27 @@ def main(launch_args, default_args):
         if dlfile:
             args.model_param = dlfile
         load_config_cli(args.model_param)
+        args = convert_invalid_args(args)
+
+    if args.benchmark_batched is not None:
+        if args.benchmark is None:
+            exit_with_error(1, "Error: --benchmark-batched must be combined with --benchmark")
+        if args.benchmark != "stdout":
+            exit_with_error(1, "Error: native batched benchmark currently writes to the console only; omit the benchmark filename")
+        if args.parallelrequests < 2:
+            exit_with_error(1, "Error: --benchmark-batched requires --parallelrequests of at least 2")
+        if args.prompt:
+            exit_with_error(1, "Error: --prompt cannot be combined with --benchmark-batched; the benchmark builds an exact synthetic prompt")
+        incompatible = [name for name, enabled in (
+            ("--smartcache", args.smartcache), ("--smartcontext", args.smartcontext),
+            ("--draftmodel", args.draftmodel), ("--usemtp", args.usemtp),
+            ("--enableguidance", args.enableguidance)) if enabled]
+        if incompatible:
+            exit_with_error(1, f"Error: --benchmark-batched is incompatible with {', '.join(incompatible)}")
+    elif args.benchmark_context:
+        exit_with_error(1, "Error: --benchmark-context requires --benchmark-batched")
+    elif args.benchmark and args.parallelrequests > 1:
+        exit_with_error(1, "Error: legacy --benchmark timing is not valid with --parallelrequests; add --benchmark-batched or use --parallelrequests 1")
 
     if args.exportconfig:
         save_config_cli(args.exportconfig,False)
@@ -12301,6 +12513,41 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 else:
                     print("(No Response Received)\n", flush=True)
         else:
+            if args.benchmark_batched is not None:
+                benchlen = args.genlimit if args.genlimit > 0 else 100
+                try:
+                    workload = resolve_batched_benchmark_workload(
+                        maxctx, args.parallelrequests, args.benchmark_batched,
+                        args.benchmark_context, benchlen)
+                except ValueError as ex:
+                    exit_with_error(1, f"Error: {ex}")
+                if not handle.batch_generate_enabled():
+                    exit_with_error(1, "Error: the loaded backend does not support continuous batching")
+
+                benchmodel = sanitize_string(os.path.splitext(os.path.basename(modelname))[0])
+                print(f"\nRunning native batched benchmark - v{KcppVersion}...")
+                print(f"Backend: {libname}")
+                print(f"Layers: {args.gpulayers if not args.autofit else 'Autofit'}")
+                print(f"Model: {benchmodel}")
+                print(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+                print("RequestedConfig: " + json.dumps(
+                    batched_benchmark_config_snapshot(args, maxctx),
+                    sort_keys=True, separators=(",", ":")))
+                print("Per-request PP/TG timings will appear in the native BatchRequest lines.")
+                try:
+                    summary = run_batched_benchmark(workload)
+                except RuntimeError as ex:
+                    exit_with_error(1, f"Native batched benchmark could not start: {ex}")
+                print("\nNative Batched Benchmark Completed\n======")
+                for line in format_batched_benchmark_lines(summary, workload):
+                    print(line)
+                if int(summary["status"]) != 1:
+                    exit_with_error(1, "Native batched benchmark failed; see the status and failure lines above.")
+                if global_memory and using_gui_launcher:
+                    global_memory["input_to_exit"] = True
+                    time.sleep(1)
+                return
+
             save_to_file = (args.benchmark and args.benchmark!="stdout" and args.benchmark!="")
             benchmaxctx = maxctx
             benchlen = args.genlimit if args.genlimit > 0 else 100
@@ -12431,6 +12678,8 @@ if __name__ == '__main__':
     advparser.add_argument("--autofitpadding", metavar=('[padding in MB]'), help="How much spare allowance in MB should autofit reserve? If it's too little, the load might fail.", type=int, default=default_autofit_padding)
     advparser.add_argument("--batchsize","--blasbatchsize","--batch-size","-b", help="Sets the batch size used in batched processing (default 512). Setting it to -1 disables batched mode, but keeps other benefits like GPU offload.", type=int,choices=[-1,16,32,64,128,256,512,1024,2048,4096], default=512)
     advparser.add_argument("--benchmark", help="Do not start server, instead run benchmarks. If filename is provided, appends results to provided file.", metavar=('[filename]'), nargs='?', const="stdout", type=str, default=None)
+    advparser.add_argument("--benchmark-batched", help="Run --benchmark as one native continuous-batching cohort. Optionally sets the number of jobs; defaults to --parallelrequests. Jobs above the slot count test native queue overflow.", metavar=('[jobs]'), nargs='?', const=0, type=check_range(int,1,128), default=None)
+    advparser.add_argument("--benchmark-context", help="Total context per batched benchmark job. Defaults to loaded context divided across active jobs.", metavar=('[tokens]'), type=check_range(int,1,524288), default=0)
     advparser.add_argument("--blasthreads","--batchthreads","--threadsbatch","--threads-batch", help="Use a different number of threads during batching if specified. Otherwise, has the same value as --threads",metavar=('[threads]'), type=int, default=0)
     advparser.add_argument("--chatcompletionsadapter", metavar=('[filename]'), help="Select an optional ChatCompletions Adapter JSON file to force custom instruct tags.", default="AutoGuess")
     advparser.add_argument("--cli", help="Does not launch KoboldCpp HTTP server. Instead, enables KoboldCpp from the command line, accepting interactive console input and displaying responses to the terminal.", action='store_true')
