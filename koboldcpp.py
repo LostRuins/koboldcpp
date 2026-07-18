@@ -2981,13 +2981,13 @@ def websearch(query):
         return []
     query = query[:300] # only search first 300 chars, due to search engine limits
     if query==websearch_lastquery:
-        print("Returning cached websearch...")
+        print("\nReturning cached websearch...")
         return websearch_lastresponse
     import difflib
     from html.parser import HTMLParser
     num_results = 3
     searchresults = []
-    utfprint("Performing new websearch...",1)
+    utfprint("\nPerforming new websearch...",1)
 
     def fetch_searched_webpage(url, random_agent=False):
         from urllib.parse import quote, urlsplit, urlunsplit
