@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "core/tensor.hpp"
+#include "tensor.hpp"
 #include "ggml-backend.h"
 #include "stable-diffusion.h"
 
