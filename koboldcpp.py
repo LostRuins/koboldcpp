@@ -7245,8 +7245,13 @@ def show_gui():
         resizing = False
         resizing_id1 = None
     def actually_resize(windowwidth,windowheight,lastpos,smallratio):
+        nonlocal gtooltip_box, gtooltip_label
         root.geometry(str(windowwidth) + "x" + str(windowheight) + str(lastpos))
         ctk.set_widget_scaling(smallratio)
+        if gtooltip_box:
+            gtooltip_box.destroy()
+            gtooltip_box = None
+            gtooltip_label = None
         changerunmode(1,1,1)
         togglerope(1,1,1)
         toggleflashattn(1,1,1)
