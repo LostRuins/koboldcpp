@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#include "rng.hpp"
+#include "core/rng.hpp"
 
 namespace sd {
 
