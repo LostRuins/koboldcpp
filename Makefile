@@ -727,7 +727,7 @@ otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
 
 otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp
-	$(CXX) -I./otherarch/sdcpp/include $(CXXFLAGS) -c $< -o $@
+	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src $(CXXFLAGS) -c $< -o $@
 
 otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
 	$(CC) $(CFLAGS) -c $< -o $@
