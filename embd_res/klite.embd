@@ -19685,7 +19685,7 @@ Current version indicated by LITEVER below.
 	}
 	function submit_generation_button(aesthetic_ui)
 	{
-		if(localsettings.voice_typing_mode==0) //only when voice is off
+		if(localsettings.voice_typing_mode==0 || !is_using_kcpp_with_whisper()) //normal submit when voice off, or when whisper is unavailable (e.g. stale saved setting) so the button still works
 		{
 			if(aesthetic_ui)
 			{
