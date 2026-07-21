@@ -50,7 +50,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 // we can treat "Input message" as sum of "Item-Input message" and "Item-Output message"
                 item["content"] = json::array({
                     json {
-                        {"text", item.at("content")},
+                        {"text", item.at("content").is_string() ? item.at("content") : item.at("content").dump()},
                         {"type", "input_text"}
                     }
                 });
