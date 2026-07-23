@@ -2396,7 +2396,7 @@ def continuous_batching_python_eligible(genparams, api_format):
     if not getattr(args, "noshift", False) or getattr(args, "smartcontext", False) or getattr(args, "draftmodel", "") or getattr(args, "usemtp", False) or getattr(args, "enableguidance", False):
         utfprint("Batching disabled due to loaded settings",2)
         return False
-    if genparams.get("negative_prompt") or genparams.get("images") or genparams.get("audio"):
+    if genparams.get("negative_prompt") or genparams.get("images") or genparams.get("audio") or genparams.get("videos"):
         utfprint("Batching disabled due to media",2)
         return False
     if genparams.get("grammar") or genparams.get("grammar_retain_state") or genparams.get("banned_tokens") or genparams.get("banned_strings"):
@@ -3848,6 +3848,9 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
                     elif item.get("type")=="input_audio":
                         turn_text += f"\n(Attached Audio {mediacount})\n"
                         mediacount += 1
+                    elif item.get("type")=="video_url" or item.get("type")=="input_video":
+                        turn_text += f"\n(Attached Video {mediacount})\n"
+                        mediacount += 1
                     else:
                         normalized.append(item)
                 if turn_text:
@@ -4121,9 +4124,10 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
     images_added = [] #sometimes images are needed to make a decision too
     audio_added = []
+    videos_added = []
 
     if messages:
-        images_added, audio_added = sweep_media_from_messages(messages)
+        images_added, audio_added, videos_added = sweep_media_from_messages(messages)
         reversed_messages = list(reversed(messages))
         for message in reversed_messages:
             if message["role"] == "user":
@@ -4181,6 +4185,8 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 temp_poll["images"] = images_added
             if len(audio_added)>0:
                 temp_poll["audio"] = audio_added
+            if len(videos_added)>0:
+                temp_poll["videos"] = videos_added
             temp_poll_result = generate(genparams=temp_poll)
             temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
             temp_poll_data_arr = extract_json_from_string(temp_poll_text)
@@ -4240,6 +4246,7 @@ def compress_tools_array(tools_array):
 def sweep_media_from_messages(messages_array):
     images = []
     audio = []
+    videos = []
     for message in messages_array:
         curr_content = message.get("content", None)
         if isinstance(curr_content, list):
@@ -4252,6 +4259,14 @@ def sweep_media_from_messages(messages_array):
                     data = item.get("input_audio", {}).get("data")
                     if data:
                         audio.append(data)
+                elif item.get("type") == "video_url":
+                    url = item.get("video_url", {}).get("url", "")
+                    if url.startswith("data:video"):
+                        videos.append(url.split(",", 1)[1])
+                elif item.get("type") == "input_video":
+                    data = item.get("input_video", {}).get("data")
+                    if data:
+                        videos.append(data)
         elif message.get("role", "")=="tool" and isinstance(curr_content, str): #handle mcp returned images
             try:
                 mcp_pl = json.loads(curr_content)
@@ -4265,7 +4280,7 @@ def sweep_media_from_messages(messages_array):
         if imgs_ollama:
             for img in imgs_ollama:
                 images.append(img)
-    return images, audio
+    return images, audio, videos
 
 
 def transform_genparams(genparams, api_format, use_jinja):
@@ -4357,6 +4372,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             tools_message_end = adapter_obj.get("tools_end", "")
             images_added = []
             audio_added = []
+            videos_added = []
             continue_assistant_turn = genparams.get('continue_assistant_turn', True)
             latest_turn_was_assistant = False
             latest_turn_was_tool = False
@@ -4390,6 +4406,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             message_index = 0
             attachedimgid = 0
             attachedaudid = 0
+            attachedvidid = 0
             jinja_output = None
             jinjatools = genparams.get('tools', [])
             if use_jinja and cached_chat_template:
@@ -4412,7 +4429,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 if jinjatools and len(jinjatools)>0:
                     genparams["using_openai_tools"] = True
                 # handle media
-                images_added, audio_added = sweep_media_from_messages(messages_array)
+                images_added, audio_added, videos_added = sweep_media_from_messages(messages_array)
             else:
                 if jinjatools:
                     # inject the tools list at the top of the context window, even if context has shifted
@@ -4481,6 +4498,16 @@ ws ::= | " " | "\n" [ \t]{0,20}
                                         audio_added.append(item['input_audio']['data'])
                                         attachedaudid += 1
                                         messages_string += f"\n(Attached Audio {attachedaudid})\n"
+                                elif item['type']=="video_url":
+                                    if 'video_url' in item and item['video_url'] and item['video_url']['url'] and item['video_url']['url'].startswith("data:video"):
+                                        videos_added.append(item['video_url']['url'].split(",", 1)[1])
+                                        attachedvidid += 1
+                                        messages_string += f"\n(Attached Video {attachedvidid})\n"
+                                elif item['type']=="input_video":
+                                    if 'input_video' in item and item['input_video'] and item['input_video']['data']:
+                                        videos_added.append(item['input_video']['data'])
+                                        attachedvidid += 1
+                                        messages_string += f"\n(Attached Video {attachedvidid})\n"
                             elif isinstance(item, str):
                                 messages_string += item # If item is just a string, append it directly
 
@@ -4534,6 +4561,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 genparams["images"] = images_added
             if len(audio_added)>0:
                 genparams["audio"] = audio_added
+            if len(videos_added)>0:
+                genparams["videos"] = videos_added
             if len(genparams.get('stop_sequence', []))==0: #only set stop seq if it wont overwrite existing
                 genparams["stop_sequence"] = [user_message_start.strip(),assistant_message_start.strip()]
             else:
@@ -4610,6 +4639,9 @@ ws ::= | " " | "\n" [ \t]{0,20}
                             elif part.get("type") == "input_image":
                                 img = part.get("image_url", part.get("source", {}))
                                 parts.append({"type": "image_url", "image_url": {"url": img}})
+                            elif part.get("type") == "input_video":
+                                vid = part.get("video_url", part.get("source", {}))
+                                parts.append({"type": "video_url", "video_url": {"url": vid}})
                         content = parts
                     converted.append({"role": role, "content": content})
                 elif isinstance(item, str):
@@ -4672,6 +4704,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     return [{"type": "text", "text": doc_text}]
                 else:
                     return [{"type": "text", "text": "(Attached Unknown Document)"}]
+            # Anthropic Messages API has no video content block type, so video is intentionally unsupported here.
             else:
                 return [item]  # pass through unknown types (including tool_use, tool_result - handled below)
 
