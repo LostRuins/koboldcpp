@@ -259,6 +259,19 @@ static inline void log_callback_off(ggml_log_level level, const char* text, void
     return;
 }
 
+//vendored mtmd/mtmd-helper emit their ffmpeg probe/decode progress ("probe: launching", "start_ffmpeg",
+//"read_next: proc_alive=", per-batch decode timings, etc.) at DEBUG/INFO via a global logger whose default
+//callback prints every level unconditionally - ignoring kcpp's --quiet. route it through our verbosity gate:
+//only surface that spam in full --debugmode, but always let warnings and errors through.
+static inline void mtmd_log_filter(ggml_log_level level, const char* text, void*) {
+    bool showall = (debugmode==1 && !is_quiet);
+    if(!showall && level < GGML_LOG_LEVEL_WARN) {
+        return;
+    }
+    fputs(text, stderr);
+    fflush(stderr);
+}
+
 static inline void string_trim_whitespace(std::string & s) {
     auto nul = std::find(s.begin(), s.end(), '\0'); //remove everything after the first NUL
     if (nul != s.end()) {
@@ -3704,6 +3717,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 fprintf(stderr, "%s: error: failed to load mmproj model!\n", __func__);
                 return ModelLoadResult::FAIL;
             }
+            //gate vendored mtmd/mtmd-helper logging through our verbosity filter (also sets mtmd_log_set internally)
+            mtmd_helper_log_set(mtmd_log_filter, nullptr);
             vision_multimodal_supported = mtmd_support_vision(mtmd_ctx);
             audio_multimodal_supported = mtmd_support_audio(mtmd_ctx);
             video_multimodal_supported = mtmd_helper_support_video(mtmd_ctx);
@@ -5602,7 +5617,10 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         //video makes the first AND last sampled frame land inside the budget, instead of the
                         //(max/duration) rate that emits max+1 frames and drops the frame nearest the end.
                         float adjusted_fps = (video_max_frames > 1) ? ((float)(video_max_frames - 1) / duration_sec) : (1.0f / duration_sec);
-                        printf("\nvideo: ~%d frames (%.1fs) at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration\n", (int)(est_frames + 0.5f), duration_sec, video_fps, video_max_frames, adjusted_fps);
+                        if(!is_quiet && debugmode!=-1)
+                        {
+                            printf("\nvideo: ~%d frames (%.1fs) at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration\n", (int)(est_frames + 0.5f), duration_sec, video_fps, video_max_frames, adjusted_fps);
+                        }
                         vparams.fps_target = adjusted_fps;
                         vctx.reset(mtmd_helper_video_init(mtmd_ctx, video_temp_path.c_str(), vparams));
                         if(!vctx)
@@ -5758,7 +5776,10 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 {
                     if(downsampled)
                     {
-                        printf("\nNote: video %d produced trailing frame(s) beyond the %d-frame budget from fps rounding; dropped.", i, video_max_frames);
+                        if(!is_quiet && debugmode!=-1)
+                        {
+                            printf("\nNote: video %d produced trailing frame(s) beyond the %d-frame budget from fps rounding; dropped.", i, video_max_frames);
+                        }
                     }
                     else
                     {
