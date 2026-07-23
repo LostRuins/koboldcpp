@@ -272,6 +272,47 @@ static inline void mtmd_log_filter(ggml_log_level level, const char* text, void*
     fflush(stderr);
 }
 
+//koboldcpp never installs a global llama logger, so llama's default callback prints every level - including
+//the DEBUG/INFO "set_causal_attn"/"sched_reserve" chatter that mtmd's causal-attn toggling triggers on every
+//media-bearing generation - ignoring --quiet. this filter is only installed when mtmd is active (keeping
+//non-multimodal builds bit-identical). it stays disarmed until load fully completes so load-time logs print
+//as before; once armed, llama core logs are gated by tier.
+static bool kcpp_llama_logfilter_armed = false;
+static void kcpp_llama_log_filter(ggml_log_level level, const char* text, void* ud) {
+    (void)ud;
+    static bool last_shown = true; //CONT fragments continue the previous line, so follow its decision
+    bool show;
+    if(!kcpp_llama_logfilter_armed)
+    {
+        show = true; //pre-load: behave like the default callback
+    }
+    else if(level == GGML_LOG_LEVEL_CONT)
+    {
+        show = last_shown;
+    }
+    else if(level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR)
+    {
+        show = true;
+    }
+    else if(level == GGML_LOG_LEVEL_DEBUG)
+    {
+        show = (debugmode==1 && !is_quiet);
+    }
+    else //INFO (and NONE): normal-verbosity info, dropped only under --quiet
+    {
+        show = !is_quiet;
+    }
+    if(level != GGML_LOG_LEVEL_CONT)
+    {
+        last_shown = show;
+    }
+    if(show)
+    {
+        fputs(text, stderr);
+        fflush(stderr);
+    }
+}
+
 static inline void string_trim_whitespace(std::string & s) {
     auto nul = std::find(s.begin(), s.end(), '\0'); //remove everything after the first NUL
     if (nul != s.end()) {
@@ -3719,6 +3760,10 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             }
             //gate vendored mtmd/mtmd-helper logging through our verbosity filter (also sets mtmd_log_set internally)
             mtmd_helper_log_set(mtmd_log_filter, nullptr);
+            //also gate llama core logs (set_causal_attn/sched_reserve spam that media generations trigger). disarmed
+            //until load completes so load-time logs still print; runs after the fitting code's log save/restore blocks.
+            kcpp_llama_logfilter_armed = false;
+            llama_log_set(kcpp_llama_log_filter, nullptr);
             vision_multimodal_supported = mtmd_support_vision(mtmd_ctx);
             audio_multimodal_supported = mtmd_support_audio(mtmd_ctx);
             video_multimodal_supported = mtmd_helper_support_video(mtmd_ctx);
@@ -3797,6 +3842,9 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         {
             printf("\nModel Warmup Failed! (code:%d)\n",er);
         }
+        //load (incl. warmup decodes above) is done - arm the llama log filter so generation-time core log
+        //spam now respects the quiet/debug tiers. no-op unless the filter was installed (mtmd active).
+        kcpp_llama_logfilter_armed = true;
         return ModelLoadResult::SUCCESS;
     }
     else if (file_format == FileFormat::RWKV_1 || file_format==FileFormat::RWKV_2)
