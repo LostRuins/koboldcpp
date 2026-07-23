@@ -1130,7 +1130,7 @@ def is_incomplete_utf8_sequence(byte_seq): #note, this will only flag INCOMPLETE
 def strip_base64_prefix(encoded_data):
     if not encoded_data:
         return ""
-    if encoded_data.startswith("data:image") or encoded_data.startswith("data:audio"):
+    if encoded_data.startswith("data:image") or encoded_data.startswith("data:audio") or encoded_data.startswith("data:video"):
         encoded_data = encoded_data.split(',', 1)[-1]
     return encoded_data
 
@@ -2119,6 +2119,7 @@ def generate(genparams, stream_flag=False):
     guidance_scale = tryparsefloat(genparams.get('guidance_scale', 1.0),1.0)
     images = genparams.get('images', [])
     audio = genparams.get('audio', [])
+    videos = genparams.get('videos', [])
     max_context_length = tryparseint(genparams.get('max_context_length', maxctx),maxctx)
     max_length = tryparseint(genparams.get('max_length', args.defaultgenamt),args.defaultgenamt)
     temperature = tryparsefloat(genparams.get('temperature', adapter_obj.get("temperature", 0.7)),0.7)
@@ -2199,6 +2200,11 @@ def generate(genparams, stream_flag=False):
     inputs.audio = (ctypes.c_char_p * inputs.audio_len)()
     for n, item in enumerate(audio):
         inputs.audio[n] = item.encode("UTF-8")
+    videos = videos[-videos_max:]
+    inputs.videos_len = len(videos)
+    inputs.videos = (ctypes.c_char_p * inputs.videos_len)()
+    for n, item in enumerate(videos):
+        inputs.videos[n] = strip_base64_prefix(item).encode("UTF-8")
 
     global showmaxctxwarning
     if max_context_length > maxctx:
