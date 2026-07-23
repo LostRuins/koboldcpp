@@ -159,6 +159,7 @@ static int vision_max_res = 2048;
 static float video_fps = 2.0f;
 static int video_max_frames = 32;
 static int video_max_tokens = -1; //-1 = inherit vision budget via shared clip context; >0 = explicit per-frame token cap
+static int video_min_tokens = -1; //-1 = no floor; >0 = explicit per-frame token floor, undersized frames get upscaled
 static std::string ffmpeg_path = ""; //empty = search PATH
 static bool use_mrope = false;
 
@@ -3023,7 +3024,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     vision_max_res = inputs.visionmaxres;
     video_fps = inputs.videofps;
     video_max_frames = inputs.videomaxframes;
-    video_max_tokens = inputs.videomaxtokens; //videomintokens has no separate action; per-frame min is inherited via the shared clip context
+    video_max_tokens = inputs.videomaxtokens;
+    video_min_tokens = inputs.videomintokens; //undersized frames are upscaled at eval time; the model's own baked clip minimum still applies downstream regardless
     ffmpeg_path = (inputs.ffmpegpath ? inputs.ffmpegpath : "");
     if(isGguf && kcpp_pipeline_parallelism)
     {
@@ -5359,32 +5361,44 @@ static mtmd_bitmap * kcpp_mtmd_bitmap_init_image_from_buf(const unsigned char * 
 }
 
 #ifdef MTMD_VIDEO
-//downscale an already-decoded RGB video frame so its larger dimension does not exceed maxdims.
+//resize an already-decoded RGB video frame so its larger dimension stays within [mindims, maxdims]:
+//downscales if the frame exceeds maxdims, upscales if it's smaller than mindims (either bound <=0 disables that side).
 //takes ownership of the input bitmap; returns a new bitmap (or the original if no resize was needed).
-static mtmd_bitmap * kcpp_downscale_bitmap(mtmd_bitmap * bitmap, int maxdims)
+static mtmd_bitmap * kcpp_resize_bitmap_bounds(mtmd_bitmap * bitmap, int mindims, int maxdims)
 {
-    if(bitmap == nullptr || maxdims <= 0)
+    if(bitmap == nullptr)
     {
         return bitmap;
     }
     int nx = (int)mtmd_bitmap_get_nx(bitmap);
     int ny = (int)mtmd_bitmap_get_ny(bitmap);
-    if(nx <= maxdims && ny <= maxdims)
+
+    int target_dim = 0; //0 = no resize needed
+    if(maxdims > 0 && (nx > maxdims || ny > maxdims))
+    {
+        target_dim = maxdims;
+    }
+    else if(mindims > 0 && nx < mindims && ny < mindims)
+    {
+        target_dim = mindims;
+    }
+    if(target_dim <= 0)
     {
         return bitmap;
     }
+
     const float aspect_ratio = static_cast<float>(nx) / ny;
     int new_width = nx;
     int new_height = ny;
     if(aspect_ratio > 1.0f)
     {
-        new_width = maxdims;
-        new_height = std::max(1, static_cast<int>(maxdims / aspect_ratio));
+        new_width = target_dim;
+        new_height = std::max(1, static_cast<int>(target_dim / aspect_ratio));
     }
     else
     {
-        new_height = maxdims;
-        new_width = std::max(1, static_cast<int>(maxdims * aspect_ratio));
+        new_height = target_dim;
+        new_width = std::max(1, static_cast<int>(target_dim * aspect_ratio));
     }
     uint8_t * resized_image = (uint8_t *)malloc((size_t)new_width * new_height * 3);
     if(resized_image != nullptr && stbir_resize_uint8(mtmd_bitmap_get_data(bitmap), nx, ny, 0, resized_image, new_width, new_height, 0, 3))
@@ -5471,6 +5485,19 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     }
                 }
 
+                //mirror of the max heuristic above: derive a pixel floor from videomintokens so undersized frames
+                //get upscaled before tokenization. the model's own baked clip minimum still applies downstream regardless.
+                int frame_min_res = 0;
+                if(video_min_tokens > 0)
+                {
+                    const int patch_px = 14;
+                    frame_min_res = (int)(std::sqrt((double)video_min_tokens) * patch_px);
+                    if(frame_max_res > 0 && frame_min_res > frame_max_res)
+                    {
+                        frame_min_res = frame_max_res; //never let the floor exceed the cap
+                    }
+                }
+
                 auto append_video_chunks = [&](mtmd::input_chunks & chunks)
                 {
                     for(size_t j=0;j<chunks.size();++j)
@@ -5529,7 +5556,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                             frame_cap_hit = true;
                             break;
                         }
-                        mtmd::bitmap framebmp(kcpp_downscale_bitmap(raw_bitmap, frame_max_res));
+                        mtmd::bitmap framebmp(kcpp_resize_bitmap_bounds(raw_bitmap, frame_min_res, frame_max_res));
                         if(!framebmp.ptr)
                         {
                             printf("\nWarning: MTMD video %d frame %d failed to prepare, skipping frame.", i, frames_processed);
