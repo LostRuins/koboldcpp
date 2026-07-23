@@ -5457,6 +5457,96 @@ struct kcpp_temp_file_guard
     std::string path;
     ~kcpp_temp_file_guard() { if(!path.empty()) { std::remove(path.c_str()); } }
 };
+
+//run ffprobe with the given argument string and return the LAST non-empty line of its stdout.
+//keeping only the last line bounds memory for the per-packet query (one line per packet) while still
+//capturing the single value emitted by the format-duration query.
+static std::string kcpp_run_ffprobe_lastline(const std::string & ffprobe_bin, const std::string & args)
+{
+    std::string cmd = "\"" + ffprobe_bin + "\" " + args;
+#if defined(_WIN32)
+    cmd = "\"" + cmd + "\""; //cmd.exe /c strips one outer quote pair; wrap so quoted bin+path both survive
+    FILE * pp = _popen(cmd.c_str(), "r");
+#else
+    FILE * pp = popen(cmd.c_str(), "r");
+#endif
+    if(pp == nullptr)
+    {
+        return "";
+    }
+    std::string last;
+    char buf[128];
+    while(fgets(buf, sizeof(buf), pp) != nullptr)
+    {
+        std::string line = buf;
+        //trim trailing CR/LF/space so atof sees a clean number and empties are recognised
+        while(!line.empty() && (line.back()=='\n' || line.back()=='\r' || line.back()==' ' || line.back()=='\t'))
+        {
+            line.pop_back();
+        }
+        if(!line.empty())
+        {
+            last = line;
+        }
+    }
+#if defined(_WIN32)
+    _pclose(pp);
+#else
+    pclose(pp);
+#endif
+    return last;
+}
+
+//probe the container duration (seconds) of a staged video file via our own ffprobe. needed because the
+//vendored get_info reports n_frames=-1 whenever the stream lacks both a stream-level duration and
+//nb_frames (common in webm/mkv, where duration lives at the container/format level), which would
+//otherwise skip fps downsampling and hard-truncate long videos at videomaxframes. tiered so that
+//animated webp (which the webp demuxer usually reports with NO duration at either stream OR format
+//level) is still rescued by summing container packet timestamps. returns <=0 on failure.
+static float kcpp_probe_video_duration(const std::string & path, const std::string & bin_dir)
+{
+    //resolve the ffprobe binary the same way the vendored helper's video_resolve_bin does
+    std::string ffprobe_bin;
+    if(bin_dir.empty())
+    {
+        ffprobe_bin = "ffprobe";
+    }
+    else
+    {
+        ffprobe_bin = bin_dir;
+        char lastc = ffprobe_bin.empty() ? '\0' : ffprobe_bin.back();
+        if(lastc != '/' && lastc != '\\')
+        {
+#if defined(_WIN32)
+            ffprobe_bin += '\\';
+#else
+            ffprobe_bin += '/';
+#endif
+        }
+        ffprobe_bin += "ffprobe";
+    }
+#if defined(_WIN32)
+    ffprobe_bin += ".exe";
+#endif
+
+    std::string qpath = "\"" + path + "\"";
+    //tier 1: cheap format-level duration (one line). works for mp4/mov and most containers.
+    std::string out = kcpp_run_ffprobe_lastline(ffprobe_bin,
+        "-v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " + qpath);
+    float duration = out.empty() ? -1.0f : (float)atof(out.c_str()); //atof returns 0 on "N/A"/garbage
+    if(duration > 0.0f)
+    {
+        return duration;
+    }
+    //tier 2: last video packet presentation timestamp. container demux only (no decode), so it stays
+    //fast even on large files, and covers animated webp/webm whose format duration reads N/A. this is
+    //the last frame's start time (one interval short of the true end) which slightly under-estimates
+    //duration - fine, it only makes the downsample fps marginally lower.
+    out = kcpp_run_ffprobe_lastline(ffprobe_bin,
+        "-v quiet -select_streams v:0 -show_entries packet=pts_time -of csv=p=0 " + qpath);
+    duration = out.empty() ? -1.0f : (float)atof(out.c_str());
+    return (duration > 0.0f) ? duration : -1.0f;
+}
 #endif
 
 //this function prepares the mtmd chunks for media. it's only needed when media changes
@@ -5495,20 +5585,24 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 }
 
                 //spread the frame budget across the whole video by lowering fps instead of truncating the tail.
-                //n_frames is the estimated total at the effective fps (-1 if unknown); when it exceeds the budget,
-                //re-init the stream at a reduced fps so sampled frames cover the full duration.
+                //determine the duration to decide: get_info's n_frames is the estimated total at the effective
+                //fps but is -1 when the container exposes neither stream duration nor nb_frames (common in
+                //webm/mkv), so fall back to our own container-level ffprobe rather than hard-truncating.
                 mtmd_helper_video_info vinfo = mtmd_helper_video_get_info(vctx.get());
                 bool downsampled = false;
-                if(vinfo.n_frames > video_max_frames && vinfo.fps > 0.0f)
+                float duration_sec = (vinfo.n_frames > 0 && vinfo.fps > 0.0f)
+                    ? ((float)vinfo.n_frames / vinfo.fps)
+                    : kcpp_probe_video_duration(video_temp_path, ffmpeg_path);
+                if(duration_sec > 0.0f)
                 {
-                    float duration_sec = (float)vinfo.n_frames / vinfo.fps;
-                    if(duration_sec > 0.0f)
+                    float est_frames = duration_sec * video_fps;
+                    if(est_frames > (float)video_max_frames)
                     {
                         //place frames at t=0..duration inclusive: spreading (max-1) intervals across the whole
                         //video makes the first AND last sampled frame land inside the budget, instead of the
                         //(max/duration) rate that emits max+1 frames and drops the frame nearest the end.
                         float adjusted_fps = (video_max_frames > 1) ? ((float)(video_max_frames - 1) / duration_sec) : (1.0f / duration_sec);
-                        printf("\nvideo: %d frames at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration\n", vinfo.n_frames, vinfo.fps, video_max_frames, adjusted_fps);
+                        printf("\nvideo: ~%d frames (%.1fs) at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration\n", (int)(est_frames + 0.5f), duration_sec, video_fps, video_max_frames, adjusted_fps);
                         vparams.fps_target = adjusted_fps;
                         vctx.reset(mtmd_helper_video_init(mtmd_ctx, video_temp_path.c_str(), vparams));
                         if(!vctx)
