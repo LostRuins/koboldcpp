@@ -141,6 +141,18 @@ static mtmd_context * mtmd_ctx = nullptr; //for multimodal media
 static std::vector<media_object> media_objects;
 static std::vector<int> last_media_mem; //for storing dummy tokens that will be consumed by mtmd
 static std::vector<int> media_object_token_counts; //per media object dummy token counts for inline placeholders
+static std::string fnv1a64_hex(const std::string &data) //cheap fixed-size digest, used to avoid concatenating full base64 payloads for cache signatures
+{
+    uint64_t hash = 14695981039346656037ULL;
+    for(unsigned char c : data)
+    {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    char buf[17];
+    snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)hash);
+    return std::string(buf);
+}
 static std::string media_composite_image_signature = ""; //for identifying when the media changes, we need to invalidate the cache
 static int current_media_identifier = MEDIA_TOKEN_IDENTIFIER_A;
 static int vision_max_res = 2048;
@@ -5995,7 +6007,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             lv.mediatype = MEDIA_TYPE_IMAGE;
             TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
             media_objects.push_back(lv);
-            new_media_composite += item;
+            new_media_composite += "img:" + fnv1a64_hex(item) + ";";
         }
     }
     for(int x=0;x<inputs.audio_len;++x)
@@ -6008,7 +6020,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             lv.mediatype = MEDIA_TYPE_AUDIO;
             TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
             media_objects.push_back(lv);
-            new_media_composite += item;
+            new_media_composite += "aud:" + fnv1a64_hex(item) + ";";
         }
     }
     for(int x=0;x<inputs.videos_len;++x)
@@ -6021,7 +6033,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             lv.mediatype = MEDIA_TYPE_VIDEO;
             TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
             media_objects.push_back(lv);
-            new_media_composite += item;
+            new_media_composite += "vid:" + fnv1a64_hex(item) + ";";
         }
     }
     if(media_composite_image_signature!=new_media_composite)
