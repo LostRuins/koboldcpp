@@ -5416,6 +5416,47 @@ static mtmd_bitmap * kcpp_resize_bitmap_bounds(mtmd_bitmap * bitmap, int mindims
     free(resized_image);
     return bitmap;
 }
+
+//stage decoded video bytes to a temp file so we decode via the file-based helper API instead of the
+//buffer API. buffer input (pipe:0) spawns a feeder thread that blocks writing the whole video into
+//ffmpeg's stdin; tearing that context down before ffmpeg's stdout is drained (e.g. the throwaway
+//probe used for fps downsampling) leaves the feeder blocked on a pipe the OS keeps open, deadlocking
+//the server on the join in the context destructor. file input has no feeder and is seekable, so
+//teardown is always clean. returns "" on failure.
+static std::string kcpp_write_temp_video_file(const std::vector<uint8_t> & data, const std::string & uniq)
+{
+#if defined(_WIN32)
+    const char * tmpdir = getenv("TEMP");
+    if(tmpdir == nullptr || tmpdir[0] == '\0') { tmpdir = getenv("TMP"); }
+    if(tmpdir == nullptr || tmpdir[0] == '\0') { tmpdir = "."; }
+    const char sep = '\\';
+#else
+    const char * tmpdir = getenv("TMPDIR");
+    if(tmpdir == nullptr || tmpdir[0] == '\0') { tmpdir = "/tmp"; }
+    const char sep = '/';
+#endif
+    std::string path = std::string(tmpdir) + sep + "kcpp_vid_" + uniq + ".tmp";
+    FILE * tf = fopen(path.c_str(), "wb");
+    if(tf == nullptr)
+    {
+        return "";
+    }
+    size_t written = data.empty() ? 0 : fwrite(data.data(), 1, data.size(), tf);
+    fclose(tf);
+    if(written != data.size())
+    {
+        std::remove(path.c_str());
+        return "";
+    }
+    return path;
+}
+
+//removes the staged temp file when the video branch exits by any path (including early continues)
+struct kcpp_temp_file_guard
+{
+    std::string path;
+    ~kcpp_temp_file_guard() { if(!path.empty()) { std::remove(path.c_str()); } }
+};
 #endif
 
 //this function prepares the mtmd chunks for media. it's only needed when media changes
@@ -5434,10 +5475,18 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             {
 #ifdef MTMD_VIDEO
                 const std::vector<uint8_t> video_data_buffer = kcpp_base64_decode(media_objects[i].b64data);
+                std::string video_temp_path = kcpp_write_temp_video_file(video_data_buffer, fnv1a64_hex(media_objects[i].b64data));
+                kcpp_temp_file_guard video_temp_guard{video_temp_path};
+                if(video_temp_path.empty())
+                {
+                    media_object_token_counts.push_back(0);
+                    printf("\nError: MTMD video %d failed - could not stage temp file for decoding, skipping.", i);
+                    continue;
+                }
                 mtmd_helper_video_init_params vparams = mtmd_helper_video_init_params_default();
                 vparams.fps_target = video_fps;
                 vparams.ffmpeg_bin_dir = ffmpeg_path.empty() ? nullptr : ffmpeg_path.c_str();
-                mtmd_helper::video_ptr vctx(mtmd_helper_video_init_from_buf(mtmd_ctx, video_data_buffer.data(), video_data_buffer.size(), vparams));
+                mtmd_helper::video_ptr vctx(mtmd_helper_video_init(mtmd_ctx, video_temp_path.c_str(), vparams));
                 if(!vctx)
                 {
                     media_object_token_counts.push_back(0);
@@ -5455,9 +5504,9 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     if(duration_sec > 0.0f)
                     {
                         float adjusted_fps = ((float)video_max_frames / duration_sec) * 0.995f; //safety factor so rounding stays within budget
-                        printf("\nvideo: %d frames at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration", vinfo.n_frames, vinfo.fps, video_max_frames, adjusted_fps);
+                        printf("\nvideo: %d frames at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration\n", vinfo.n_frames, vinfo.fps, video_max_frames, adjusted_fps);
                         vparams.fps_target = adjusted_fps;
-                        vctx.reset(mtmd_helper_video_init_from_buf(mtmd_ctx, video_data_buffer.data(), video_data_buffer.size(), vparams));
+                        vctx.reset(mtmd_helper_video_init(mtmd_ctx, video_temp_path.c_str(), vparams));
                         if(!vctx)
                         {
                             media_object_token_counts.push_back(0);
