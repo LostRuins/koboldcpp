@@ -48,6 +48,7 @@ sampler_order_max = 7
 tensor_split_max = 16
 images_max = 16
 audio_max = 16
+videos_max = 2
 bias_min_value = -100.0
 bias_max_value = 100.0
 logprobs_max = 10
@@ -271,6 +272,11 @@ class load_model_inputs(ctypes.Structure):
                 ("visionmaxres", ctypes.c_int),
                 ("visionmintokens", ctypes.c_int),
                 ("visionmaxtokens", ctypes.c_int),
+                ("videomaxframes", ctypes.c_int),
+                ("videofps", ctypes.c_float),
+                ("videomintokens", ctypes.c_int),
+                ("videomaxtokens", ctypes.c_int),
+                ("ffmpegpath", ctypes.c_char_p),
                 ("use_mmap", ctypes.c_bool),
                 ("use_mlock", ctypes.c_bool),
                 ("use_mtp", ctypes.c_bool),
@@ -321,6 +327,8 @@ class generation_inputs(ctypes.Structure):
                 ("images", ctypes.POINTER(ctypes.c_char_p)),
                 ("audio_len", ctypes.c_int),
                 ("audio", ctypes.POINTER(ctypes.c_char_p)),
+                ("videos_len", ctypes.c_int),
+                ("videos", ctypes.POINTER(ctypes.c_char_p)),
                 ("max_context_length", ctypes.c_int),
                 ("max_length", ctypes.c_int),
                 ("temperature", ctypes.c_float),
@@ -1994,6 +2002,11 @@ def load_model(model_filename):
         vmaxtk = max(vmintk,vmaxtk)
     inputs.visionmintokens = vmintk
     inputs.visionmaxtokens = vmaxtk
+    inputs.videomaxframes = 32
+    inputs.videofps = 2.0
+    inputs.videomintokens = -1
+    inputs.videomaxtokens = -1
+    inputs.ffmpegpath = "".encode("UTF-8")
     inputs.use_smartcontext = args.smartcontext
     if args.parallelrequests > 1 and not args.noshift:
         print("\nWarning: Continuous batching is enabled, so context shifting has been disabled automatically.\n")
