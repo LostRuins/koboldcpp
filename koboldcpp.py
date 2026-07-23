@@ -11988,6 +11988,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             worst_case_video_tokens = args.videomaxframes * effective_video_max_tokens
             if worst_case_video_tokens > maxctx:
                 print(f"Warning: Worst-case video token usage ({worst_case_video_tokens} = {args.videomaxframes} frames x {effective_video_max_tokens} tokens/frame) may exceed the max context size ({maxctx}). Consider lowering --videomaxframes, --videofps, or --videomaxtokens.")
+            effective_maxrequestsize = int(args.maxrequestsize) if args.maxrequestsize else 32
+            if effective_maxrequestsize <= 32:
+                print(f"Note: video attachments are limited by --maxrequestsize (currently {effective_maxrequestsize}MB); base64 encoding adds ~33% overhead, so large videos may need a higher value.")
 
         if not loadok:
             exitcounter = 999
