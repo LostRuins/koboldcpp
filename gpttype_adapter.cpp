@@ -5566,8 +5566,10 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                             printf("\nWarning: MTMD video %d frame %d failed to prepare, skipping frame.", i, frames_processed);
                             continue;
                         }
+                        const std::string media_marker = mtmd_default_marker();
                         mtmd_input_text inp_txt = {
-                            mtmd_default_marker(),
+                            media_marker.c_str(),
+                            media_marker.size(),
                             /* add_special */ false,
                             /* parse_special */ true,
                         };
@@ -5588,6 +5590,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         free(raw_text);
                         mtmd_input_text inp_txt = {
                             tstext.c_str(),
+                            tstext.size(),
                             /* add_special */ false,
                             /* parse_special */ false,
                         };
@@ -5663,8 +5666,10 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 printf("\nError: MTMD media %d failed to load!",i);
                 continue;
             }
+            const std::string media_marker = mtmd_default_marker();
             mtmd_input_text inp_txt = {
-                mtmd_default_marker(),
+                media_marker.c_str(),
+                media_marker.size(),
                 /* add_special */ false,
                 /* parse_special */ true,
             };
