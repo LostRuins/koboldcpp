@@ -5786,6 +5786,14 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         printf("\nvideo truncated to %d frames (videomaxframes); rest of the video was not sampled", frames_processed);
                     }
                 }
+                //TODO(future): embed the video's audio track alongside the sampled frames for audio-capable mmprojs.
+                //Shape: (1) run ffmpeg on video_temp_path (-vn -> PCM/WAV); skip silently when the container has no
+                //audio stream; (2) feed the extracted bytes through the existing MEDIA_TYPE_AUDIO ingestion and append
+                //the resulting chunks after the frame/timestamp chunks of this same media object (the chunk/token
+                //accounting below is already generic); (3) gate on mtmd_support_audio(mtmd_ctx) plus a --videoaudio
+                //toggle; (4) count audio tokens in the launch-time context budget warning (~750 tokens per 30s for
+                //whisper-style encoders). Interleaving audio segments between timestamped frames is possible but
+                //untested against model training formats - ship append-after-frames first.
                 if(fallback_start_seq.size() > 0)
                 {
                     media_objects[i].chunk_start_seq.insert(media_objects[i].chunk_start_seq.end(), fallback_start_seq.begin(), fallback_start_seq.end());
