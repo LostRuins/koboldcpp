@@ -144,6 +144,10 @@ static std::vector<int> media_object_token_counts; //per media object dummy toke
 static std::string media_composite_image_signature = ""; //for identifying when the media changes, we need to invalidate the cache
 static int current_media_identifier = MEDIA_TOKEN_IDENTIFIER_A;
 static int vision_max_res = 2048;
+static float video_fps = 2.0f;
+static int video_max_frames = 32;
+static int video_max_tokens = -1; //-1 = inherit vision budget via shared clip context; >0 = explicit per-frame token cap
+static std::string ffmpeg_path = ""; //empty = search PATH
 static bool use_mrope = false;
 
 static kcpp_params * kcpp_data = nullptr;
@@ -2515,22 +2519,30 @@ static bool kcpp_parse_attached_media_placeholder(
     size_t pos,
     int image_count,
     int audio_count,
+    int video_count,
     int & media_index,
     size_t & placeholder_len)
 {
     const std::string image_prefix = "(Attached Image ";
     const std::string audio_prefix = "(Attached Audio ";
-    bool is_audio = false;
+    const std::string video_prefix = "(Attached Video ";
+    MediaType mtype = MEDIA_TYPE_IMAGE;
     size_t prefix_len = 0;
 
     if(prompt.compare(pos, image_prefix.size(), image_prefix) == 0)
     {
+        mtype = MEDIA_TYPE_IMAGE;
         prefix_len = image_prefix.size();
     }
     else if(prompt.compare(pos, audio_prefix.size(), audio_prefix) == 0)
     {
-        is_audio = true;
+        mtype = MEDIA_TYPE_AUDIO;
         prefix_len = audio_prefix.size();
+    }
+    else if(prompt.compare(pos, video_prefix.size(), video_prefix) == 0)
+    {
+        mtype = MEDIA_TYPE_VIDEO;
+        prefix_len = video_prefix.size();
     }
     else
     {
@@ -2555,13 +2567,24 @@ static bool kcpp_parse_attached_media_placeholder(
     }
 
     int candidate = -1;
-    if(is_audio)
+    if(mtype == MEDIA_TYPE_AUDIO)
     {
         if(number <= audio_count)
         {
             candidate = image_count + number - 1;
         }
         else if(number <= (int) media_objects.size() && media_objects[number - 1].mediatype == MEDIA_TYPE_AUDIO)
+        {
+            candidate = number - 1;
+        }
+    }
+    else if(mtype == MEDIA_TYPE_VIDEO)
+    {
+        if(number <= video_count)
+        {
+            candidate = image_count + audio_count + number - 1;
+        }
+        else if(number <= (int) media_objects.size() && media_objects[number - 1].mediatype == MEDIA_TYPE_VIDEO)
         {
             candidate = number - 1;
         }
@@ -2607,7 +2630,8 @@ static bool kcpp_tokenize_prompt_with_inline_media(
     FileFormat file_format,
     bool add_bos,
     int image_count,
-    int audio_count)
+    int audio_count,
+    int video_count)
 {
     output_tokens.clear();
     bool inserted_media = false;
@@ -2630,7 +2654,7 @@ static bool kcpp_tokenize_prompt_with_inline_media(
     {
         int media_index = -1;
         size_t placeholder_len = 0;
-        if(kcpp_parse_attached_media_placeholder(prompt, pos, image_count, audio_count, media_index, placeholder_len))
+        if(kcpp_parse_attached_media_placeholder(prompt, pos, image_count, audio_count, video_count, media_index, placeholder_len))
         {
             append_text(text_start, pos);
             if(add_bos && !emitted_anything)
@@ -2985,6 +3009,10 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->vision_min_tokens = inputs.visionmintokens;
     kcpp_data->vision_max_tokens = inputs.visionmaxtokens;
     vision_max_res = inputs.visionmaxres;
+    video_fps = inputs.videofps;
+    video_max_frames = inputs.videomaxframes;
+    video_max_tokens = inputs.videomaxtokens; //videomintokens has no separate action; per-frame min is inherited via the shared clip context
+    ffmpeg_path = (inputs.ffmpegpath ? inputs.ffmpegpath : "");
     if(isGguf && kcpp_pipeline_parallelism)
     {
         //double the logical batch, while keeping the physical batch the same, pipeline parallel set GGML_SCHED_MAX_COPIES to 2
@@ -5318,6 +5346,48 @@ static mtmd_bitmap * kcpp_mtmd_bitmap_init_image_from_buf(const unsigned char * 
     return bitmap;
 }
 
+#ifdef MTMD_VIDEO
+//downscale an already-decoded RGB video frame so its larger dimension does not exceed maxdims.
+//takes ownership of the input bitmap; returns a new bitmap (or the original if no resize was needed).
+static mtmd_bitmap * kcpp_downscale_bitmap(mtmd_bitmap * bitmap, int maxdims)
+{
+    if(bitmap == nullptr || maxdims <= 0)
+    {
+        return bitmap;
+    }
+    int nx = (int)mtmd_bitmap_get_nx(bitmap);
+    int ny = (int)mtmd_bitmap_get_ny(bitmap);
+    if(nx <= maxdims && ny <= maxdims)
+    {
+        return bitmap;
+    }
+    const float aspect_ratio = static_cast<float>(nx) / ny;
+    int new_width = nx;
+    int new_height = ny;
+    if(aspect_ratio > 1.0f)
+    {
+        new_width = maxdims;
+        new_height = std::max(1, static_cast<int>(maxdims / aspect_ratio));
+    }
+    else
+    {
+        new_height = maxdims;
+        new_width = std::max(1, static_cast<int>(maxdims * aspect_ratio));
+    }
+    uint8_t * resized_image = (uint8_t *)malloc((size_t)new_width * new_height * 3);
+    if(resized_image != nullptr && stbir_resize_uint8(mtmd_bitmap_get_data(bitmap), nx, ny, 0, resized_image, new_width, new_height, 0, 3))
+    {
+        mtmd_bitmap * newbmp = mtmd_bitmap_init(new_width, new_height, resized_image);
+        free(resized_image);
+        mtmd_bitmap_free(bitmap);
+        return newbmp;
+    }
+    printf("\nWarning: MTMD video frame resize failed, using original frame.");
+    free(resized_image);
+    return bitmap;
+}
+#endif
+
 //this function prepares the mtmd chunks for media. it's only needed when media changes
 static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_intro, const std::vector<int> & media_outro)
 {
@@ -5332,9 +5402,190 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
         {
             if(media_objects[i].mediatype == MEDIA_TYPE_VIDEO)
             {
-                media_object_token_counts.push_back(0);
-                printf("\nVideo input provided but video eval is not yet implemented, skipping.");
+#ifdef MTMD_VIDEO
+                const std::vector<uint8_t> video_data_buffer = kcpp_base64_decode(media_objects[i].b64data);
+                mtmd_helper_video_init_params vparams = mtmd_helper_video_init_params_default();
+                vparams.fps_target = video_fps;
+                vparams.ffmpeg_bin_dir = ffmpeg_path.empty() ? nullptr : ffmpeg_path.c_str();
+                mtmd_helper::video_ptr vctx(mtmd_helper_video_init_from_buf(mtmd_ctx, video_data_buffer.data(), video_data_buffer.size(), vparams));
+                if(!vctx)
+                {
+                    media_object_token_counts.push_back(0);
+                    printf("\nError: MTMD video %d failed - ffmpeg/ffprobe not found or unreadable video, skipping.", i);
+                    continue;
+                }
+
+                int mediatokensneeded = 0;
+                bool seen_media_embedding = false;
+                bool used_fallback_boundary_tokens = false;
+                std::vector<int> fallback_start_seq;
+                std::vector<int> fallback_end_seq;
+                int frames_processed = 0;
+                bool frame_cap_hit = false;
+
+                //frames inherit the image resolution clamp; when an explicit video token budget is set we tighten it.
+                //no public patch-size accessor is reachable from this TU, so approximate the token budget with a
+                //conservative 14px patch to derive a pixel cap (otherwise frames just use vision_max_res).
+                int frame_max_res = vision_max_res;
+                if(video_max_tokens > 0)
+                {
+                    const int patch_px = 14;
+                    int tok_res = (int)(std::sqrt((double)video_max_tokens) * patch_px);
+                    if(tok_res > 0 && (frame_max_res <= 0 || tok_res < frame_max_res))
+                    {
+                        frame_max_res = tok_res;
+                    }
+                }
+
+                auto append_video_chunks = [&](mtmd::input_chunks & chunks)
+                {
+                    for(size_t j=0;j<chunks.size();++j)
+                    {
+                        const mtmd_input_chunk * mtmdchunk = chunks[j];
+                        if(mtmd_text_chunk_has_invalid_tokens(mtmdchunk))
+                        {
+                            std::vector<int> fallback_tokens;
+                            TokenizeString(seen_media_embedding ? "</media>" : "<media>", fallback_tokens, file_format, false);
+                            if(fallback_tokens.size() > 0)
+                            {
+                                if(seen_media_embedding)
+                                {
+                                    fallback_end_seq.insert(fallback_end_seq.end(), fallback_tokens.begin(), fallback_tokens.end());
+                                }
+                                else
+                                {
+                                    fallback_start_seq.insert(fallback_start_seq.end(), fallback_tokens.begin(), fallback_tokens.end());
+                                }
+                            }
+                            used_fallback_boundary_tokens = true;
+                            continue;
+                        }
+                        media_chunk chunk;
+                        chunk.mediatype = media_objects[i].mediatype;
+                        chunk.mtmd_chunk = mtmd_input_chunk_copy(mtmdchunk);
+                        chunk.clp_image_tokens = mtmd_input_chunk_get_n_pos(mtmdchunk);
+                        mediatokensneeded += chunk.clp_image_tokens;
+                        media_objects[i].mediachunks.push_back(chunk);
+                        if(mtmd_input_chunk_get_type(mtmdchunk) != MTMD_INPUT_CHUNK_TYPE_TEXT)
+                        {
+                            seen_media_embedding = true;
+                        }
+                    }
+                };
+
+                while(true)
+                {
+                    mtmd_bitmap * raw_bitmap = nullptr;
+                    char * raw_text = nullptr;
+                    int32_t rd = mtmd_helper_video_read_next(vctx.get(), &raw_bitmap, &raw_text);
+                    if(rd == -1) //EOF
+                    {
+                        break;
+                    }
+                    if(rd == -2) //error - keep already-collected chunks
+                    {
+                        printf("\nWarning: MTMD video %d read error, stopping with %d frames collected.", i, frames_processed);
+                        break;
+                    }
+                    if(raw_bitmap != nullptr)
+                    {
+                        if(frames_processed >= video_max_frames)
+                        {
+                            mtmd_bitmap_free(raw_bitmap);
+                            frame_cap_hit = true;
+                            break;
+                        }
+                        mtmd::bitmap framebmp(kcpp_downscale_bitmap(raw_bitmap, frame_max_res));
+                        if(!framebmp.ptr)
+                        {
+                            printf("\nWarning: MTMD video %d frame %d failed to prepare, skipping frame.", i, frames_processed);
+                            continue;
+                        }
+                        mtmd_input_text inp_txt = {
+                            mtmd_default_marker(),
+                            /* add_special */ false,
+                            /* parse_special */ true,
+                        };
+                        mtmd::input_chunks chunks(mtmd_input_chunks_init());
+                        std::vector<const mtmd_bitmap *> bitmaps = { framebmp.ptr.get() };
+                        int32_t tokenized = mtmd_tokenize(mtmd_ctx, chunks.ptr.get(), &inp_txt, bitmaps.data(), bitmaps.size());
+                        if(tokenized != 0)
+                        {
+                            printf("\nWarning: MTMD video %d frame %d failed to tokenize (status %d), skipping frame.", i, frames_processed, tokenized);
+                            continue;
+                        }
+                        append_video_chunks(chunks);
+                        ++frames_processed;
+                    }
+                    else if(raw_text != nullptr)
+                    {
+                        std::string tstext = raw_text;
+                        free(raw_text);
+                        mtmd_input_text inp_txt = {
+                            tstext.c_str(),
+                            /* add_special */ false,
+                            /* parse_special */ false,
+                        };
+                        mtmd::input_chunks chunks(mtmd_input_chunks_init());
+                        std::vector<const mtmd_bitmap *> nobitmaps;
+                        int32_t tokenized = mtmd_tokenize(mtmd_ctx, chunks.ptr.get(), &inp_txt, nobitmaps.data(), nobitmaps.size());
+                        if(tokenized != 0)
+                        {
+                            printf("\nWarning: MTMD video %d timestamp failed to tokenize (status %d), skipping.", i, tokenized);
+                            continue;
+                        }
+                        append_video_chunks(chunks);
+                    }
+                }
+
+                if(frame_cap_hit)
+                {
+                    printf("\nvideo truncated to %d frames (videomaxframes)", frames_processed);
+                }
+                if(fallback_start_seq.size() > 0)
+                {
+                    media_objects[i].chunk_start_seq.insert(media_objects[i].chunk_start_seq.end(), fallback_start_seq.begin(), fallback_start_seq.end());
+                }
+                if(fallback_end_seq.size() > 0)
+                {
+                    media_objects[i].chunk_end_seq.insert(media_objects[i].chunk_end_seq.begin(), fallback_end_seq.begin(), fallback_end_seq.end());
+                }
+                if(used_fallback_boundary_tokens)
+                {
+                    printf("\nWarning: MTMD video %d produced invalid model-specific boundary tokens. Falling back to generic <media> and </media> marker text.", i);
+                }
+                const int boundarytokensneeded = media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size();
+                mediatokensneeded += boundarytokensneeded;
+                if(debugmode==1 && !is_quiet)
+                {
+                    printf("\nMTMD Video %i used %d frames, Tokens: %d",i,frames_processed,mediatokensneeded);
+                }
+                if(mediatokensneeded>0 && mediatokensneeded < nctx)
+                {
+                    media_object_token_counts.push_back(mediatokensneeded);
+                    int tokcnt = mediatokensneeded;
+                    if(i==0)
+                    {
+                        tokcnt += introsize + outrosize;
+                    }
+                    const int media_token = kcpp_media_token_for_index(i);
+                    for(int n=0;n<tokcnt;++n)
+                    {
+                        last_media_mem.push_back(media_token);
+                    }
+                }
+                else
+                {
+                    media_object_token_counts.push_back(0);
+                    media_composite_image_signature = ""; //force invalidate
+                    printf("\nWarning: Video excluded - Context size too low or no frames decoded! (needed %d)\nVideo will be IGNORED! You probably want to relaunch with a larger context size!\n",mediatokensneeded);
+                }
                 continue;
+#else
+                media_object_token_counts.push_back(0);
+                printf("\nVideo input provided but this build has no video support, skipping.");
+                continue;
+#endif
             }
             std::string media_obj = media_objects[i].b64data;
             const std::vector<uint8_t> media_data_buffer = kcpp_base64_decode(media_obj);
@@ -5974,7 +6225,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             file_format,
             add_bos_token,
             inputs.images_len,
-            inputs.audio_len);
+            inputs.audio_len,
+            inputs.videos_len);
     }
     if(!media_inserted_inline)
     {
