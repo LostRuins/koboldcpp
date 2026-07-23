@@ -5415,6 +5415,28 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     continue;
                 }
 
+                //spread the frame budget across the whole video by lowering fps instead of truncating the tail.
+                //n_frames is the estimated total at the effective fps (-1 if unknown); when it exceeds the budget,
+                //re-init the stream at a reduced fps so sampled frames cover the full duration.
+                mtmd_helper_video_info vinfo = mtmd_helper_video_get_info(vctx.get());
+                if(vinfo.n_frames > video_max_frames && vinfo.fps > 0.0f)
+                {
+                    float duration_sec = (float)vinfo.n_frames / vinfo.fps;
+                    if(duration_sec > 0.0f)
+                    {
+                        float adjusted_fps = ((float)video_max_frames / duration_sec) * 0.995f; //safety factor so rounding stays within budget
+                        printf("\nvideo: %d frames at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration", vinfo.n_frames, vinfo.fps, video_max_frames, adjusted_fps);
+                        vparams.fps_target = adjusted_fps;
+                        vctx.reset(mtmd_helper_video_init_from_buf(mtmd_ctx, video_data_buffer.data(), video_data_buffer.size(), vparams));
+                        if(!vctx)
+                        {
+                            media_object_token_counts.push_back(0);
+                            printf("\nError: MTMD video %d failed to re-init at adjusted fps, skipping.", i);
+                            continue;
+                        }
+                    }
+                }
+
                 int mediatokensneeded = 0;
                 bool seen_media_embedding = false;
                 bool used_fallback_boundary_tokens = false;
