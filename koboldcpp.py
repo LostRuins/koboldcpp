@@ -12583,7 +12583,7 @@ if __name__ == '__main__':
     compatgroup3 = advparser.add_mutually_exclusive_group()
     compatgroup3.add_argument("--usemmap", help="If set, uses mmap to load model.", action='store_true')
     advparser.add_argument("--videofps", metavar=('[fps]'), help="Sets the video frame sampling rate in frames per second. Values <=0 use the video's native fps (default 2.0).", type=float, default=2.0)
-    advparser.add_argument("--videomaxframes", metavar=('[frames]'), help="Sets the maximum number of decoded frames per video (default 32).", type=int, default=32)
+    advparser.add_argument("--videomaxframes", metavar=('[frames]'), help="Sets the max frames sampled per video; longer videos are downsampled evenly across their full duration to fit (default 32).", type=int, default=32)
     advparser.add_argument("--videomaxtokens", metavar=('[tokens]'), help="Override the maximum tokens per video frame for the MMProj embedding. If -1, inherits --visionmaxtokens (default -1).", type=int, default=-1)
     advparser.add_argument("--videomintokens", metavar=('[tokens]'), help="Override the minimum tokens per video frame for the MMProj embedding. If -1, inherits --visionmintokens (default -1).", type=int, default=-1)
     advparser.add_argument("--visionmaxres", metavar=('[max px]'), help="Clamp MMProj vision maximum allowed resolution. Allowed values are between 512 to 2048 px (default 1024).", type=int, default=default_visionmaxres)
