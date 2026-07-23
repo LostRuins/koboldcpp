@@ -4379,7 +4379,7 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(draft_ctx || guidance_ctx || inputs.images_len>0 || inputs.audio_len>0)
+    if(draft_ctx || guidance_ctx || inputs.images_len>0 || inputs.audio_len>0 || inputs.videos_len>0)
     {
         return false;
     }
@@ -4391,7 +4391,7 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(inputs.images_len > 0 || inputs.audio_len > 0 || inputs.guidance_scale != 1.0f)
+    if(inputs.images_len > 0 || inputs.audio_len > 0 || inputs.videos_len > 0 || inputs.guidance_scale != 1.0f)
     {
         return false;
     }
@@ -5323,6 +5323,12 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
 
         for(int i=0;i<media_objects.size();++i)
         {
+            if(media_objects[i].mediatype == MEDIA_TYPE_VIDEO)
+            {
+                media_object_token_counts.push_back(0);
+                printf("\nVideo input provided but video eval is not yet implemented, skipping.");
+                continue;
+            }
             std::string media_obj = media_objects[i].b64data;
             const std::vector<uint8_t> media_data_buffer = kcpp_base64_decode(media_obj);
             mtmd::bitmap bitmap(media_objects[i].mediatype == MEDIA_TYPE_AUDIO
@@ -5720,6 +5726,19 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             media_object lv;
             lv.b64data = item;
             lv.mediatype = MEDIA_TYPE_AUDIO;
+            TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
+            media_objects.push_back(lv);
+            new_media_composite += item;
+        }
+    }
+    for(int x=0;x<inputs.videos_len;++x)
+    {
+        std::string item = inputs.videos[x];
+        if(item!="")
+        {
+            media_object lv;
+            lv.b64data = item;
+            lv.mediatype = MEDIA_TYPE_VIDEO;
             TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
             media_objects.push_back(lv);
             new_media_composite += item;
