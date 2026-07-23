@@ -18,6 +18,7 @@
 struct T5Config {
     int64_t num_layers      = 24;
     int64_t model_dim       = 4096;
+    int64_t inner_dim       = 4096;
     int64_t ff_dim          = 10240;
     int64_t num_heads       = 64;
     int64_t vocab_size      = 32128;
@@ -53,6 +54,7 @@ struct T5Config {
             if (q->n_dims == 2) {
                 config.model_dim  = q->ne[0];
                 int64_t inner_dim = q->ne[1];
+                config.inner_dim  = inner_dim;
                 // Flan-T5/T5 uses d_kv=64 for common sizes.
                 if (inner_dim % 64 == 0) {
                     config.num_heads = inner_dim / 64;
@@ -357,7 +359,7 @@ public:
         : config(config) {
         blocks["encoder"] = std::shared_ptr<GGMLBlock>(new T5Stack(config.num_layers,
                                                                    config.model_dim,
-                                                                   config.model_dim,
+                                                                   config.inner_dim,
                                                                    config.ff_dim,
                                                                    config.num_heads,
                                                                    config.relative_attention));

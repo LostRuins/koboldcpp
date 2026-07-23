@@ -26,6 +26,7 @@ struct RefImageParams {
     RefImageResizeMode vlm_resize_mode = RefImageResizeMode::AREA;
     int vlm_min_size                   = -1;
     int vlm_max_size                   = -1;
+    bool resize_vae_to_target          = false;
 };
 
 const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
@@ -34,6 +35,7 @@ const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
     {"flux2", {false, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::NONE, -1, -1}},
     {"qwen", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
     {"qwen_layered", {true, true, Rope::RefIndexMode::DECREASE, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
+    {"mage_flow", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::LONGEST_SIDE, -1, 384, true}},
     {"z_image_omni", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
     {"krea2_ostris_edit", {true, true, Rope::RefIndexMode::INCREASE, true, true, -1, RefImageResizeMode::AREA, -1, -1}},
     {"krea2_edit", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::LONGEST_SIDE, 768, 768}},
@@ -87,6 +89,13 @@ struct MiniT2IDiffusionExtra {
     const sd::Tensor<float>* mask = nullptr;
 };
 
+struct HunyuanVideoDiffusionExtra {
+    const sd::Tensor<float>* guidance   = nullptr;
+    const sd::Tensor<float>* byt5       = nullptr;
+    const sd::Tensor<float>* vision     = nullptr;
+    const sd::Tensor<float>* timestep_r = nullptr;
+};
+
 using DiffusionExtraParams = std::variant<std::monostate,
                                           UNetDiffusionExtra,
                                           SkipLayerDiffusionExtra,
@@ -95,7 +104,8 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           WanDiffusionExtra,
                                           HiDreamO1DiffusionExtra,
                                           LTXAVDiffusionExtra,
-                                          MiniT2IDiffusionExtra>;
+                                          MiniT2IDiffusionExtra,
+                                          HunyuanVideoDiffusionExtra>;
 
 struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;

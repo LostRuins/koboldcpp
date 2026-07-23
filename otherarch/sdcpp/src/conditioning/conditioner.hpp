@@ -1782,6 +1782,7 @@ struct LLMEmbedder : public Conditioner {
     SDVersion version;
     std::shared_ptr<BPETokenizer> tokenizer;
     std::shared_ptr<LLM::LLMRunner> llm;
+    std::shared_ptr<T5Runner> byt5;
 
     LLMEmbedder(ggml_backend_t backend,
                 const String2TensorStorage& tensor_storage_map      = {},
@@ -1799,7 +1800,12 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::GPT_OSS_20B;
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
-        } else if (sd_version_is_lingbot_video(version) || sd_version_is_ideogram4(version) || sd_version_is_boogu_image(version) || sd_version_is_sefi_image(version) || sd_version_is_krea2(version)) {
+        } else if (sd_version_is_lingbot_video(version) ||
+                   sd_version_is_ideogram4(version) ||
+                   sd_version_is_boogu_image(version) ||
+                   sd_version_is_sefi_image(version) ||
+                   sd_version_is_krea2(version) ||
+                   sd_version_is_mage_flow(version)) {
             arch = LLM::LLMArch::QWEN3_VL;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
@@ -1819,27 +1825,55 @@ struct LLMEmbedder : public Conditioner {
                                                "text_encoders.llm",
                                                enable_vision,
                                                weight_manager);
+        if (sd_version_is_hunyuan_video(version)) {
+            const std::string byt5_prefix = "text_encoders.t5xxl.transformer";
+            for (const auto& [name, _] : tensor_storage_map) {
+                if (starts_with(name, byt5_prefix + ".")) {
+                    byt5 = std::make_shared<T5Runner>(backend,
+                                                      tensor_storage_map,
+                                                      byt5_prefix,
+                                                      false,
+                                                      weight_manager);
+                    break;
+                }
+            }
+        }
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         llm->get_param_tensors(tensors, "text_encoders.llm");
+        if (byt5) {
+            byt5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        }
     }
 
     void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
         llm->set_max_graph_vram_bytes(max_vram_bytes);
+        if (byt5) {
+            byt5->set_max_graph_vram_bytes(max_vram_bytes);
+        }
     }
 
     void set_stream_layers_enabled(bool enabled) override {
         llm->set_stream_layers_enabled(enabled);
+        if (byt5) {
+            byt5->set_stream_layers_enabled(enabled);
+        }
     }
 
     void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
         llm->set_runtime_backends(backends);
+        if (byt5) {
+            byt5->set_runtime_backends(backends);
+        }
     }
 
     void set_graph_cut_layer_split_enabled(bool enabled) override {
         if (llm) {
             llm->set_graph_cut_layer_split_enabled(enabled);
+        }
+        if (byt5) {
+            byt5->set_graph_cut_layer_split_enabled(enabled);
         }
     }
 
@@ -1847,25 +1881,40 @@ struct LLMEmbedder : public Conditioner {
         if (llm) {
             llm->set_graph_cut_layer_split_backend_vram_limits(limits);
         }
+        if (byt5) {
+            byt5->set_graph_cut_layer_split_backend_vram_limits(limits);
+        }
     }
 
     void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         llm->get_param_tensors(tensors, "text_encoders.llm");
+        if (byt5) {
+            byt5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        }
     }
 
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
+        if (byt5) {
+            byt5->set_flash_attention_enabled(enabled);
+        }
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (llm) {
             llm->set_weight_adapter(adapter);
         }
+        if (byt5) {
+            byt5->set_weight_adapter(adapter);
+        }
     }
 
     void runner_done() override {
         if (llm) {
             llm->runner_done();
+        }
+        if (byt5) {
+            byt5->runner_done();
         }
     }
 
@@ -2060,7 +2109,24 @@ struct LLMEmbedder : public Conditioner {
         int64_t t0                     = ggml_time_ms();
         RefImageResizeMode resize_mode = conditioner_params.ref_image_params.vlm_resize_mode;
 
-        if (sd_version_is_lingbot_video(version)) {
+        if (sd_version_is_hunyuan_video(version)) {
+            prompt_template_encode_start_idx = 98;
+            out_layers                       = {26};
+
+            prompt =
+                "<|im_start|>system\nYou are a helpful assistant. Describe the video by detailing the following aspects:\n"
+                "1. The main content and theme of the video.\n"
+                "2. The color, shape, size, texture, quantity, text, and spatial relationships of the objects.\n"
+                "3. Actions, events, behaviors temporal relationships, physical movement changes of the objects.\n"
+                "4. background environment, light, style and atmosphere.\n"
+                "5. camera angles, movements, and transitions used in the video.<|im_end|>\n"
+                "<|im_start|>user\n";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
+        } else if (sd_version_is_lingbot_video(version)) {
             const int pad_token = 151643;
             const std::string prompt_prefix =
                 "<|im_start|>system\nGiven a user input that may include a text prompt alone, "
@@ -2144,22 +2210,22 @@ struct LLMEmbedder : public Conditioner {
             prompt += conditioner_params.text;
             prompt_attn_range = {0, 0};
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
-        } else if (sd_version_is_qwen_image(version)) {
+        } else if (sd_version_is_qwen_image(version) || sd_version_is_mage_flow(version)) {
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
-                LOG_INFO("QwenImageEditPlusPipeline");
+                LOG_INFO("%s", sd_version_is_mage_flow(version) ? "MageFlowEditPipeline" : "QwenImageEditPlusPipeline");
                 prompt_template_encode_start_idx = 64;
                 int image_embed_idx              = 64 + 6;
 
                 int min_pixels = conditioner_params.ref_image_params.vlm_min_size;
                 if (min_pixels <= 0) {
-                    min_pixels = 384;
-                    if (resize_mode == RefImageResizeMode::AREA) {
+                    min_pixels = sd_version_is_mage_flow(version) ? -1 : 384;
+                    if (min_pixels > 0 && resize_mode == RefImageResizeMode::AREA) {
                         min_pixels *= min_pixels;
                     }
                 }
                 int max_pixels = conditioner_params.ref_image_params.vlm_max_size;
                 if (max_pixels <= 0) {
-                    max_pixels = 560;
+                    max_pixels = sd_version_is_mage_flow(version) ? 384 : 560;
                     if (resize_mode == RefImageResizeMode::AREA) {
                         max_pixels *= max_pixels;
                     }
@@ -2187,7 +2253,7 @@ struct LLMEmbedder : public Conditioner {
                     image_embeds.emplace_back(image_embed_idx, image_embed);
                     image_embed_idx += 1 + static_cast<int>(image_embed.shape()[1]) + 6;
 
-                    img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
+                    img_prompt += (sd_version_is_mage_flow(version) ? "Image " : "Picture ") + std::to_string(i + 1) + ": <|vision_start|>";
                     int64_t num_image_tokens = image_embed.shape()[1];
                     img_prompt.reserve(num_image_tokens * placeholder.size());
                     for (int j = 0; j < num_image_tokens; j++) {
@@ -2214,6 +2280,9 @@ struct LLMEmbedder : public Conditioner {
                 prompt_attn_range.second = static_cast<int>(prompt.size());
 
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
+            }
+            if (sd_version_is_mage_flow(version)) {
+                max_length = 2048 + prompt_template_encode_start_idx;
             }
         } else if (sd_version_is_boogu_image(version)) {
             prompt_template_encode_start_idx = 0;
@@ -2590,6 +2659,46 @@ struct LLMEmbedder : public Conditioner {
                                            spell_quotes,
                                            max_length);
         std::vector<sd::Tensor<float>> extra_hidden_states_vec;
+        if (sd_version_is_hunyuan_video(version) && byt5) {
+            std::vector<std::string> quoted_texts;
+            auto collect_quoted = [&](const std::string& open, const std::string& close) {
+                size_t begin = 0;
+                while ((begin = conditioner_params.text.find(open, begin)) != std::string::npos) {
+                    size_t content_begin = begin + open.size();
+                    size_t end           = conditioner_params.text.find(close, content_begin);
+                    if (end == std::string::npos) {
+                        break;
+                    }
+                    quoted_texts.push_back(conditioner_params.text.substr(content_begin, end - content_begin));
+                    begin = end + close.size();
+                }
+            };
+            collect_quoted("\"", "\"");
+            collect_quoted("\xE2\x80\x98", "\xE2\x80\x99");
+            collect_quoted("\xE2\x80\x9C", "\xE2\x80\x9D");
+
+            if (!quoted_texts.empty()) {
+                std::string byt5_text;
+                for (const auto& text : quoted_texts) {
+                    byt5_text += "Text \"" + text + "\". ";
+                }
+                std::vector<int> tokens;
+                tokens.reserve(byt5_text.size() + 1);
+                for (unsigned char byte : byt5_text) {
+                    tokens.push_back(static_cast<int>(byte) + 3);
+                }
+                tokens.push_back(1);
+                sd::Tensor<int32_t> input_ids({static_cast<int64_t>(tokens.size())}, tokens);
+                auto byt5_hidden_states = byt5->compute(n_threads,
+                                                        input_ids,
+                                                        sd::Tensor<float>(),
+                                                        false,
+                                                        true,
+                                                        true);
+                GGML_ASSERT(!byt5_hidden_states.empty());
+                extra_hidden_states_vec.push_back(std::move(byt5_hidden_states));
+            }
+        }
         for (int i = 0; i < extra_prompts.size(); i++) {
             auto extra_hidden_states = encode_prompt(n_threads,
                                                      extra_prompts[i],

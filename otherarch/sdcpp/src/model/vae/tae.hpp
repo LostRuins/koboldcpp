@@ -528,6 +528,9 @@ public:
         if (version == VERSION_WAN2_2_TI2V) {
             z_channels = 48;
             patch      = 2;
+        } else if (sd_version_is_hunyuan_video(version)) {
+            z_channels = 32;
+            patch      = 2;
         } else if (sd_version_is_ltxav(version)) {
             z_channels     = 128;
             patch          = 4;
@@ -542,12 +545,12 @@ public:
 
     ggml_tensor* decode(GGMLRunnerContext* ctx, ggml_tensor* z) {
         auto decoder = std::dynamic_pointer_cast<TinyVideoDecoder>(blocks["decoder"]);
-        if (sd_version_is_wan(version) || sd_version_is_ltxav(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
             // (W, H, C, T) -> (W, H, T, C)
             z = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, z, 0, 1, 3, 2));
         }
         auto result = decoder->forward(ctx, z);
-        if (sd_version_is_wan(version) || sd_version_is_ltxav(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
             // (W, H, T, C) -> (W, H, C, T)
             result = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, result, 0, 1, 3, 2));
         }
@@ -556,7 +559,7 @@ public:
 
     ggml_tensor* encode(GGMLRunnerContext* ctx, ggml_tensor* x) {
         auto encoder = std::dynamic_pointer_cast<TinyVideoEncoder>(blocks["encoder"]);
-        if (sd_version_is_wan(version) || sd_version_is_ltxav(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
             // (W, H, T, C) -> (W, H, C, T)
             x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
         }
@@ -569,7 +572,7 @@ public:
             }
         }
         x = encoder->forward(ctx, x);
-        if (sd_version_is_wan(version) || sd_version_is_ltxav(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
             // (W, H, C, T) -> (W, H, T, C)
             x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
         }

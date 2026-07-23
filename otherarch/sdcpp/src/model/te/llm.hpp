@@ -285,7 +285,7 @@ namespace LLM {
                    bool add_unit_offset = false)
             : hidden_size(hidden_size), eps(eps), add_unit_offset(add_unit_offset) {}
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             ggml_tensor* w = params["weight"];
             if (ctx->weight_adapter) {
                 w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");

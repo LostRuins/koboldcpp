@@ -664,6 +664,72 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
     return name;
 }
 
+std::string convert_hunyuan_video_to_original_flux(std::string name) {
+    int num_layers        = 54;
+    int num_single_layers = 0;
+    static std::unordered_map<std::string, std::string> hy_name_map;
+
+    if (hy_name_map.empty()) {
+        // --- double transformer blocks ---
+        for (int i = 0; i < num_layers; ++i) {
+            std::string block_prefix = "double_blocks." + std::to_string(i) + ".";
+            std::string dst_prefix   = "double_blocks." + std::to_string(i) + ".";
+
+            hy_name_map[block_prefix + "img_mod.linear"] = dst_prefix + "img_mod.lin";
+            hy_name_map[block_prefix + "txt_mod.linear"] = dst_prefix + "txt_mod.lin";
+
+            // attn
+            hy_name_map[block_prefix + "img_attn_qkv"] = dst_prefix + "img_attn.qkv";
+            hy_name_map[block_prefix + "txt_attn_qkv"] = dst_prefix + "txt_attn.qkv";
+
+            // norm
+            hy_name_map[block_prefix + "img_attn_q_norm.weight"] = dst_prefix + "img_attn.norm.query_norm.scale";
+            hy_name_map[block_prefix + "img_attn_k_norm.weight"] = dst_prefix + "img_attn.norm.key_norm.scale";
+            hy_name_map[block_prefix + "txt_attn_q_norm.weight"] = dst_prefix + "txt_attn.norm.query_norm.scale";
+            hy_name_map[block_prefix + "txt_attn_k_norm.weight"] = dst_prefix + "txt_attn.norm.key_norm.scale";
+
+            // ff
+            hy_name_map[block_prefix + "img_mlp.fc1"] = dst_prefix + "img_mlp.0";
+            hy_name_map[block_prefix + "img_mlp.fc2"] = dst_prefix + "img_mlp.2";
+
+            hy_name_map[block_prefix + "txt_mlp.fc1"] = dst_prefix + "txt_mlp.0";
+            hy_name_map[block_prefix + "txt_mlp.fc2"] = dst_prefix + "txt_mlp.2";
+
+            // output projections
+            hy_name_map[block_prefix + "img_attn_proj"] = dst_prefix + "img_attn.proj";
+            hy_name_map[block_prefix + "txt_attn_proj"] = dst_prefix + "txt_attn.proj";
+        }
+    }
+
+    hy_name_map["time_in.mlp.0"]     = "time_in.in_layer";
+    hy_name_map["time_in.mlp.2"]     = "time_in.out_layer";
+    hy_name_map["time_r_in.mlp.0"]   = "time_r_in.in_layer";
+    hy_name_map["time_r_in.mlp.2"]   = "time_r_in.out_layer";
+    hy_name_map["vector_in.mlp.0"]   = "vector_in.in_layer";
+    hy_name_map["vector_in.mlp.2"]   = "vector_in.out_layer";
+    hy_name_map["guidance_in.mlp.0"] = "guidance_in.in_layer";
+    hy_name_map["guidance_in.mlp.2"] = "guidance_in.out_layer";
+
+    hy_name_map["txt_in.c_embedder.linear_1"] = "txt_in.c_embedder.in_layer";
+    hy_name_map["txt_in.c_embedder.linear_2"] = "txt_in.c_embedder.out_layer";
+
+    hy_name_map["txt_in.t_embedder.mlp.0"] = "txt_in.t_embedder.in_layer";
+    hy_name_map["txt_in.t_embedder.mlp.2"] = "txt_in.t_embedder.out_layer";
+
+    replace_with_prefix_map(name, hy_name_map);
+
+    static const std::vector<std::pair<std::string, std::string>> generic_name_map = {
+        {"_attn_qkv.", "_attn.qkv."},
+        {"_attn_proj.", "_attn.proj."},
+        {"mlp.fc1.", "mlp.0."},
+        {"mlp.fc2.", "mlp.2."},
+        {".modulation.linear.", ".modulation.lin."},
+    };
+    replace_with_name_map(name, generic_name_map);
+
+    return name;
+}
+
 std::string convert_diffusers_dit_to_original_lumina2(std::string name) {
     int num_layers         = 30;
     int num_refiner_layers = 2;
@@ -807,6 +873,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_sd3(name);
     } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version) || sd_version_is_sefi_image(version)) {
         name = convert_diffusers_dit_to_original_flux(name);
+    } else if (sd_version_is_hunyuan_video(version)) {
+        name = convert_hunyuan_video_to_original_flux(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
     } else if (sd_version_is_anima(version)) {
@@ -980,6 +1048,9 @@ std::string convert_diffusers_to_original_wan_vae(std::string name) {
 }
 
 std::string convert_first_stage_model_name(std::string name, std::string prefix, SDVersion version) {
+    if (sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version)) {
+        return name;
+    }
     if (sd_version_uses_wan_vae(version)) {
         return convert_diffusers_to_original_wan_vae(name);
     }
@@ -1343,8 +1414,14 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     replace_with_prefix_map(name, prefix_map);
 
-    if ((sd_version_is_boogu_image(version) || sd_version_is_krea2(version)) && starts_with(name, "text_encoders.llm.visual.")) {
-        name = convert_qwen3_vl_vision_name(std::move(name));
+    if (sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version)) {
+        const std::string hf_vision_prefix = "text_encoders.llm.model.visual.";
+        if (starts_with(name, hf_vision_prefix)) {
+            name = "text_encoders.llm.visual." + name.substr(hf_vision_prefix.size());
+        }
+        if (starts_with(name, "text_encoders.llm.visual.")) {
+            name = convert_qwen3_vl_vision_name(std::move(name));
+        }
     }
 
     // diffusion model

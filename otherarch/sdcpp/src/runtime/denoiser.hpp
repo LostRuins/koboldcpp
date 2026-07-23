@@ -1153,9 +1153,9 @@ struct CompVisDenoiser : public Denoiser {
         return {c_skip, c_out, c_in};
     }
 
-    virtual sd::Tensor<float> noise_scaling(float sigma,
-                                            const sd::Tensor<float>& noise,
-                                            const sd::Tensor<float>& latent) override {
+    sd::Tensor<float> noise_scaling(float sigma,
+                                    const sd::Tensor<float>& noise,
+                                    const sd::Tensor<float>& latent) override {
         GGML_ASSERT(noise.numel() == latent.numel());
         return latent + noise * sigma;
     }
@@ -1165,7 +1165,7 @@ struct CompVisDenoiser : public Denoiser {
         return latent;
     }
 
-    float noise_level_to_sigma(float noise_level) {
+    float noise_level_to_sigma(float noise_level) override {
         return noise_level / (1.0f - noise_level);
     }
 };
@@ -1256,7 +1256,7 @@ struct DiscreteFlowDenoiser : public Denoiser {
         return latent * (1.0f / (1.0f - sigma));
     }
 
-    float noise_level_to_sigma(float noise_level) {
+    float noise_level_to_sigma(float noise_level) override {
         return noise_level;
     }
 };
@@ -1396,7 +1396,7 @@ struct MiniT2IFlowDenoiser : public Denoiser {
         return latent;
     }
 
-    float noise_level_to_sigma(float noise_level) {
+    float noise_level_to_sigma(float noise_level) override {
         SD_UNUSED(noise_level);
         return 1.0f;
     }

@@ -21,7 +21,7 @@ bool write_gguf_file(const std::string& file_path,
 class GGUFStreamingWriter : public StreamingModelWriter {
 public:
     GGUFStreamingWriter() = default;
-    ~GGUFStreamingWriter();
+    ~GGUFStreamingWriter() override;
 
     bool write_metadata(const std::string& file_path,
                         const std::vector<TensorWritePlan>& tensors,

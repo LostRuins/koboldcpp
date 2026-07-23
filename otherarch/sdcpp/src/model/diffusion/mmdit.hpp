@@ -136,11 +136,15 @@ struct MMDiTConfig {
 };
 
 struct PatchEmbed : public GGMLBlock {
-    // 2D Image to Patch Embedding
+    // 2D/3D Image to Patch Embedding
 protected:
+    bool is_3d;
     bool flatten;
     bool dynamic_img_pad;
-    int patch_size;
+    int patch_t;
+    int patch_h;
+    int patch_w;
+    int64_t embed_dim;
 
 public:
     PatchEmbed(int64_t img_size     = 224,
@@ -149,42 +153,90 @@ public:
                int64_t embed_dim    = 1536,
                bool bias            = true,
                bool flatten         = true,
-               bool dynamic_img_pad = true)
-        : patch_size(patch_size),
+               bool dynamic_img_pad = true,
+               bool is_3d           = false)
+        : patch_t(is_3d ? patch_size : 1),
+          patch_h(patch_size),
+          patch_w(patch_size),
+          embed_dim(embed_dim),
           flatten(flatten),
-          dynamic_img_pad(dynamic_img_pad) {
+          dynamic_img_pad(dynamic_img_pad),
+          is_3d(is_3d) {
         // img_size is always None
         // patch_size is always 2
         // in_chans is always 16
         // norm_layer is always False
         // strict_img_size is always true, but not used
 
-        blocks["proj"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_chans,
-                                                               embed_dim,
-                                                               {patch_size, patch_size},
-                                                               {patch_size, patch_size},
-                                                               {0, 0},
-                                                               {1, 1},
-                                                               bias));
+        if (is_3d) {
+            blocks["proj"] = std::make_shared<Conv3d>(in_chans,
+                                                      embed_dim,
+                                                      std::tuple{patch_size, patch_size, patch_size},
+                                                      std::tuple{patch_size, patch_size, patch_size},
+                                                      std::tuple{0, 0, 0},
+                                                      std::tuple{1, 1, 1},
+                                                      bias);
+        } else {
+            blocks["proj"] = std::make_shared<Conv2d>(in_chans,
+                                                      embed_dim,
+                                                      std::pair{patch_size, patch_size},
+                                                      std::pair{patch_size, patch_size},
+                                                      std::pair{0, 0},
+                                                      std::pair{1, 1},
+                                                      bias);
+        }
+    }
+
+    PatchEmbed(int64_t img_size,
+               std::tuple<int, int, int> patch_size,
+               int64_t in_chans,
+               int64_t embed_dim,
+               bool bias            = true,
+               bool flatten         = true,
+               bool dynamic_img_pad = true)
+        : patch_t(std::get<0>(patch_size)),
+          patch_h(std::get<1>(patch_size)),
+          patch_w(std::get<2>(patch_size)),
+          embed_dim(embed_dim),
+          flatten(flatten),
+          dynamic_img_pad(dynamic_img_pad),
+          is_3d(true) {
+        SD_UNUSED(img_size);
+        blocks["proj"] = std::make_shared<Conv3d>(in_chans,
+                                                  embed_dim,
+                                                  patch_size,
+                                                  patch_size,
+                                                  std::tuple{0, 0, 0},
+                                                  std::tuple{1, 1, 1},
+                                                  bias);
     }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
-        // x: [N, C, H, W]
-        // return: [N, H*W, embed_dim]
-        auto proj = std::dynamic_pointer_cast<Conv2d>(blocks["proj"]);
+        // x: [N, C, H, W] or [N*C, T, H, W]
+        // return: [N, h_len*w_len, embed_dim] or [N, t_len*h_len*w_len, embed_dim]
+        auto proj = std::dynamic_pointer_cast<UnaryBlock>(blocks["proj"]);
 
         if (dynamic_img_pad) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
-            int pad_h = (patch_size - H % patch_size) % patch_size;
-            int pad_w = (patch_size - W % patch_size) % patch_size;
-            x         = ggml_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0);  // TODO: reflect pad mode
+            int pad_t = 0;
+            int pad_h = (patch_h - static_cast<int>(H % patch_h)) % patch_h;
+            int pad_w = (patch_w - static_cast<int>(W % patch_w)) % patch_w;
+            if (is_3d) {
+                int64_t T = x->ne[2];
+                pad_t     = (patch_t - static_cast<int>(T % patch_t)) % patch_t;
+            }
+            x = ggml_pad(ctx->ggml_ctx, x, pad_w, pad_h, pad_t, 0);  // TODO: reflect pad mode
         }
-        x = proj->forward(ctx, x);
+        x = proj->forward(ctx, x);  // [N, C, h_len, w_len] or [N*C, t_len, h_len, w_len]
 
         if (flatten) {
-            x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
-            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+            if (is_3d) {
+                x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0] * x->ne[1] * x->ne[2], embed_dim, x->ne[3] / embed_dim);  // [N, C, t_len*h_len*w_len]
+            } else {
+                x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);  // [N, C, h_len*w_len]
+            }
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, h_len*w_len, C]
         }
         return x;
     }

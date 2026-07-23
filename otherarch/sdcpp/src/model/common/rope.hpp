@@ -535,6 +535,33 @@ namespace Rope {
         return vid_ids_repeated;
     }
 
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_hunyuan_video_ids(int t,
+                                                                            int h,
+                                                                            int w,
+                                                                            int patch_t,
+                                                                            int patch_h,
+                                                                            int patch_w,
+                                                                            int bs,
+                                                                            int context_len) {
+        std::vector<std::vector<float>> txt_ids(bs * context_len, std::vector<float>(3, 0.0f));
+        auto img_ids = gen_vid_ids(t, h, w, patch_t, patch_h, patch_w, bs);
+        return concat_ids(txt_ids, img_ids, bs);
+    }
+
+    __STATIC_INLINE__ std::vector<float> gen_hunyuan_video_pe(int t,
+                                                              int h,
+                                                              int w,
+                                                              int patch_t,
+                                                              int patch_h,
+                                                              int patch_w,
+                                                              int bs,
+                                                              int context_len,
+                                                              float theta,
+                                                              const std::vector<int>& axes_dim) {
+        auto ids = gen_hunyuan_video_ids(t, h, w, patch_t, patch_h, patch_w, bs, context_len);
+        return embed_nd(ids, bs, theta, axes_dim);
+    }
+
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int t,
                                                                          int h,
                                                                          int w,
@@ -625,6 +652,43 @@ namespace Rope {
             }
         }
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
+    }
+
+    __STATIC_INLINE__ std::vector<float> gen_mage_flow_pe(int h,
+                                                          int w,
+                                                          int bs,
+                                                          int context_len,
+                                                          const std::vector<ggml_tensor*>& ref_latents,
+                                                          int theta,
+                                                          const std::vector<int>& axes_dim) {
+        const int axes_dim_num = static_cast<int>(axes_dim.size());
+        auto make_image_ids    = [=](int image_h, int image_w, int image_index) {
+            std::vector<std::vector<float>> image_ids(static_cast<size_t>(bs) * image_h * image_w,
+                                                         std::vector<float>(axes_dim_num, 0.f));
+            int h_start = -(image_h - image_h / 2);
+            int w_start = -(image_w - image_w / 2);
+            for (int b = 0; b < bs; ++b) {
+                for (int y = 0; y < image_h; ++y) {
+                    for (int x = 0; x < image_w; ++x) {
+                        auto& id = image_ids[static_cast<size_t>(b) * image_h * image_w + y * image_w + x];
+                        id[0]    = static_cast<float>(image_index);
+                        id[1]    = static_cast<float>(h_start + y);
+                        id[2]    = static_cast<float>(w_start + x);
+                    }
+                }
+            }
+            return image_ids;
+        };
+        auto ids     = gen_flux_txt_ids(bs, context_len, axes_dim_num, {});
+        auto img_ids = make_image_ids(h, w, 0);
+        ids          = concat_ids(ids, img_ids, bs);
+        for (size_t i = 0; i < ref_latents.size(); ++i) {
+            auto ref_ids = make_image_ids(static_cast<int>(ref_latents[i]->ne[1]),
+                                          static_cast<int>(ref_latents[i]->ne[0]),
+                                          static_cast<int>(i + 1));
+            ids          = concat_ids(ids, ref_ids, bs);
+        }
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_lens_ids(int h,

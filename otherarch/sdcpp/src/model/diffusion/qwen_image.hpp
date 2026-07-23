@@ -103,9 +103,9 @@ namespace Qwen {
             }
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx,
-                             ggml_tensor* timesteps,
-                             ggml_tensor* addition_t_cond = nullptr) {
+        virtual ggml_tensor* forward(GGMLRunnerContext* ctx,
+                                     ggml_tensor* timesteps,
+                                     ggml_tensor* addition_t_cond = nullptr) {
             // timesteps: [N,]
             // return: [N, embedding_dim]
             auto timestep_embedder = std::dynamic_pointer_cast<TimestepEmbedding>(blocks["timestep_embedder"]);
@@ -416,10 +416,14 @@ namespace Qwen {
 
     public:
         QwenImageModel() {}
-        QwenImageModel(QwenImageConfig config)
+        QwenImageModel(QwenImageConfig config,
+                       std::shared_ptr<QwenTimestepProjEmbeddings> time_text_embed = nullptr)
             : config(config) {
-            int64_t inner_dim         = config.num_attention_heads * config.attention_head_dim;
-            blocks["time_text_embed"] = std::shared_ptr<GGMLBlock>(new QwenTimestepProjEmbeddings(inner_dim, config.use_additional_t_cond));
+            int64_t inner_dim = config.num_attention_heads * config.attention_head_dim;
+            if (time_text_embed == nullptr) {
+                time_text_embed = std::make_shared<QwenTimestepProjEmbeddings>(inner_dim, config.use_additional_t_cond);
+            }
+            blocks["time_text_embed"] = std::move(time_text_embed);
             blocks["txt_norm"]        = std::shared_ptr<GGMLBlock>(new RMSNorm(config.joint_attention_dim, 1e-6f));
             blocks["img_in"]          = std::shared_ptr<GGMLBlock>(new Linear(config.in_channels, inner_dim));
             blocks["txt_in"]          = std::shared_ptr<GGMLBlock>(new Linear(config.joint_attention_dim, inner_dim));
