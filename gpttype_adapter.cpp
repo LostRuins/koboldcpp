@@ -5562,6 +5562,26 @@ static float kcpp_probe_video_duration(const std::string & path, const std::stri
     duration = out.empty() ? -1.0f : (float)atof(out.c_str());
     return (duration > 0.0f) ? duration : -1.0f;
 }
+
+//format a whole-second video position as MM:SS (or H:MM:SS past an hour) - a notation the model parses
+//reliably, unlike the vendored compact [XmY.YYs] form which Gemma misreads (e.g. [0m10.45s] as ~0.5s).
+static std::string kcpp_format_video_timestamp(int total_seconds)
+{
+    if(total_seconds < 0) { total_seconds = 0; }
+    int hours = total_seconds / 3600;
+    int mins = (total_seconds % 3600) / 60;
+    int secs = total_seconds % 60;
+    char buf[32];
+    if(hours > 0)
+    {
+        snprintf(buf, sizeof(buf), "%d:%02d:%02d", hours, mins, secs);
+    }
+    else
+    {
+        snprintf(buf, sizeof(buf), "%02d:%02d", mins, secs);
+    }
+    return std::string(buf);
+}
 #endif
 
 //this function prepares the mtmd chunks for media. it's only needed when media changes
@@ -5754,6 +5774,20 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     {
                         std::string tstext = raw_text;
                         free(raw_text);
+                        //the vendored timestamp arrives as the compact "[XmY.YYs]" which the model misparses (it
+                        //read [0m10.45s] as ~0.5s); rewrite to a familiar "[MM:SS]" before tokenizing. anything
+                        //that doesn't match the pattern (prompt header, future vendored format) passes through
+                        //unchanged so no text is ever dropped.
+                        int ts_min = 0;
+                        float ts_sec = 0.0f;
+                        if(sscanf(tstext.c_str(), "[%dm%fs]", &ts_min, &ts_sec) == 2)
+                        {
+                            tstext = "[" + kcpp_format_video_timestamp((int)(ts_min * 60 + ts_sec + 0.5f)) + "]";
+                            if(debugmode==1 && !is_quiet)
+                            {
+                                printf("\nMTMD Video %d timestamp reformatted to %s", i, tstext.c_str());
+                            }
+                        }
                         mtmd_input_text inp_txt = {
                             tstext.c_str(),
                             tstext.size(),
@@ -5784,6 +5818,33 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     else
                     {
                         printf("\nvideo truncated to %d frames (videomaxframes); rest of the video was not sampled", frames_processed);
+                    }
+                }
+                //append an explicit end-of-clip duration note in the same familiar notation so the model can state
+                //how long the video is; skip when the duration is unknown or no frames were actually embedded.
+                if(duration_sec > 0.0f && frames_processed > 0)
+                {
+                    std::string durtext = "(video duration: " + kcpp_format_video_timestamp((int)(duration_sec + 0.5f)) + ")";
+                    mtmd_input_text inp_txt = {
+                        durtext.c_str(),
+                        durtext.size(),
+                        /* add_special */ false,
+                        /* parse_special */ false,
+                    };
+                    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+                    std::vector<const mtmd_bitmap *> nobitmaps;
+                    int32_t tokenized = mtmd_tokenize(mtmd_ctx, chunks.ptr.get(), &inp_txt, nobitmaps.data(), nobitmaps.size());
+                    if(tokenized == 0)
+                    {
+                        append_video_chunks(chunks);
+                        if(debugmode==1 && !is_quiet)
+                        {
+                            printf("\nMTMD Video %d duration note: %s", i, durtext.c_str());
+                        }
+                    }
+                    else
+                    {
+                        printf("\nWarning: MTMD video %d duration note failed to tokenize (status %d), skipping.", i, tokenized);
                     }
                 }
                 //TODO(future): embed the video's audio track alongside the sampled frames for audio-capable mmprojs.
