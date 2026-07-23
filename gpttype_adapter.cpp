@@ -87,6 +87,7 @@ int speculative_chunk_amt = 4; //do it in chunks of this many tokens
 bool generation_finished;
 bool audio_multimodal_supported = false;
 bool vision_multimodal_supported = false;
+bool video_multimodal_supported = false;
 float last_process_time = 0;
 float last_eval_time = 0;
 int last_token_count = 0;
@@ -3016,6 +3017,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     }
     audio_multimodal_supported = false;
     vision_multimodal_supported = false;
+    video_multimodal_supported = false;
     use_mrope = false;
     overridden_jinja_template = inputs.jinja_template;
 
@@ -3658,6 +3660,11 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             }
             vision_multimodal_supported = mtmd_support_vision(mtmd_ctx);
             audio_multimodal_supported = mtmd_support_audio(mtmd_ctx);
+            video_multimodal_supported = mtmd_helper_support_video(mtmd_ctx);
+            if(vision_multimodal_supported && video_multimodal_supported)
+            {
+                printf("Video input enabled (requires ffmpeg/ffprobe on PATH at runtime).\n");
+            }
         }
 
         const llama_vocab * tmpvocab = llama_model_get_vocab(llamamodel);
