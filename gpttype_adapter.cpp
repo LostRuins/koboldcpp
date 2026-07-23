@@ -2560,7 +2560,7 @@ static bool kcpp_parse_attached_media_placeholder(
         {
             candidate = image_count + number - 1;
         }
-        else if(number <= (int) media_objects.size() && media_objects[number - 1].is_audio)
+        else if(number <= (int) media_objects.size() && media_objects[number - 1].mediatype == MEDIA_TYPE_AUDIO)
         {
             candidate = number - 1;
         }
@@ -2571,7 +2571,7 @@ static bool kcpp_parse_attached_media_placeholder(
         {
             candidate = number - 1;
         }
-        else if(number <= (int) media_objects.size() && !media_objects[number - 1].is_audio)
+        else if(number <= (int) media_objects.size() && media_objects[number - 1].mediatype == MEDIA_TYPE_IMAGE)
         {
             candidate = number - 1;
         }
@@ -5325,7 +5325,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
         {
             std::string media_obj = media_objects[i].b64data;
             const std::vector<uint8_t> media_data_buffer = kcpp_base64_decode(media_obj);
-            mtmd::bitmap bitmap(media_objects[i].is_audio
+            mtmd::bitmap bitmap(media_objects[i].mediatype == MEDIA_TYPE_AUDIO
                 ? mtmd_helper_bitmap_init_from_buf(mtmd_ctx, media_data_buffer.data(), media_data_buffer.size(),false).bitmap
                 : kcpp_mtmd_bitmap_init_image_from_buf(media_data_buffer.data(), media_data_buffer.size(), vision_max_res));
             if(!bitmap.ptr)
@@ -5377,7 +5377,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     continue;
                 }
                 media_chunk chunk;
-                chunk.is_audio = media_objects[i].is_audio;
+                chunk.mediatype = media_objects[i].mediatype;
                 chunk.mtmd_chunk = mtmd_input_chunk_copy(mtmdchunk);
                 chunk.clp_image_tokens = mtmd_input_chunk_get_n_pos(mtmdchunk);
                 mediatokensneeded += chunk.clp_image_tokens;
@@ -5706,7 +5706,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         {
             media_object lv;
             lv.b64data = item;
-            lv.is_audio = false;
+            lv.mediatype = MEDIA_TYPE_IMAGE;
             TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
             media_objects.push_back(lv);
             new_media_composite += item;
@@ -5719,7 +5719,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         {
             media_object lv;
             lv.b64data = item;
-            lv.is_audio = true;
+            lv.mediatype = MEDIA_TYPE_AUDIO;
             TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
             media_objects.push_back(lv);
             new_media_composite += item;
