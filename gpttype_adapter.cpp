@@ -141,7 +141,11 @@ static mtmd_context * mtmd_ctx = nullptr; //for multimodal media
 static std::vector<media_object> media_objects;
 static std::vector<int> last_media_mem; //for storing dummy tokens that will be consumed by mtmd
 static std::vector<int> media_object_token_counts; //per media object dummy token counts for inline placeholders
-static std::string fnv1a64_hex(const std::string &data) //cheap fixed-size digest, used to avoid concatenating full base64 payloads for cache signatures
+//standard FNV-1a 64-bit digest, implemented locally: the only in-repo FNV helpers are file-static inside
+//vendored code (tools/mtmd, ggml-rpc) which we keep pristine, and std::hash is implementation-defined
+//(not stable across compilers/platforms), while signatures must compare deterministically. Cheap fixed-size
+//digest avoids concatenating full base64 payloads for cache signatures; non-cryptographic is fine here.
+static std::string fnv1a64_hex(const std::string &data)
 {
     uint64_t hash = 14695981039346656037ULL;
     for(unsigned char c : data)
