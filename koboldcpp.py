@@ -2002,11 +2002,18 @@ def load_model(model_filename):
         vmaxtk = max(vmintk,vmaxtk)
     inputs.visionmintokens = vmintk
     inputs.visionmaxtokens = vmaxtk
-    inputs.videomaxframes = 32
-    inputs.videofps = 2.0
-    inputs.videomintokens = -1
-    inputs.videomaxtokens = -1
-    inputs.ffmpegpath = "".encode("UTF-8")
+    inputs.videomaxframes = args.videomaxframes if args.videomaxframes > 0 else 32
+    inputs.videofps = args.videofps
+    vidmintk = args.videomintokens
+    vidmaxtk = args.videomaxtokens
+    vidmintk = -1 if vidmintk<-1 else vidmintk
+    vidmaxtk = -1 if vidmaxtk<-1 else vidmaxtk
+    if(vidmintk!=-1 or vidmaxtk!=-1) and (vidmintk==-1 or vidmaxtk==-1): #if exactly one of the args is -1
+        vidmintk = max(vidmintk,vidmaxtk)
+        vidmaxtk = max(vidmintk,vidmaxtk)
+    inputs.videomintokens = vidmintk
+    inputs.videomaxtokens = vidmaxtk
+    inputs.ffmpegpath = args.ffmpegpath.encode("UTF-8") if args.ffmpegpath else "".encode("UTF-8")
     inputs.use_smartcontext = args.smartcontext
     if args.parallelrequests > 1 and not args.noshift:
         print("\nWarning: Continuous batching is enabled, so context shifting has been disabled automatically.\n")
@@ -11929,6 +11936,13 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             has_audio_support = False
             has_vision_support = False
 
+        if args.mmproj and args.mmproj!="":
+            effective_video_max_tokens = args.videomaxtokens if args.videomaxtokens>0 else (args.visionmaxtokens if args.visionmaxtokens>0 else 256)
+            print(f"Video Config: maxframes={args.videomaxframes}, fps={args.videofps}, mintokens={args.videomintokens}, maxtokens={args.videomaxtokens} (effective maxtokens/frame: {effective_video_max_tokens})")
+            worst_case_video_tokens = args.videomaxframes * effective_video_max_tokens
+            if worst_case_video_tokens > maxctx:
+                print(f"Warning: Worst-case video token usage ({worst_case_video_tokens} = {args.videomaxframes} frames x {effective_video_max_tokens} tokens/frame) may exceed the max context size ({maxctx}). Consider lowering --videomaxframes, --videofps, or --videomaxtokens.")
+
         if not loadok:
             exitcounter = 999
             exit_with_error(3,"Could not load text model: " + modelname)
@@ -12507,6 +12521,7 @@ if __name__ == '__main__':
     advparser.add_argument("--exportconfig", help="Exports the current selected arguments as a .kcpps settings file", metavar=('[filename]'), type=str, default="")
     advparser.add_argument("--exporttemplate", help="Exports the current selected arguments as a .kcppt template file", metavar=('[filename]'), type=str, default="")
     advparser.add_argument("--failsafe", help="Use failsafe mode, extremely old CPU compatibility mode that should work on all devices.", action='store_true')
+    advparser.add_argument("--ffmpegpath", metavar=('[directory]'), help="Specify a directory containing the ffmpeg/ffprobe binaries used for video frame extraction. If unset, searches PATH.", type=str, default="")
     advparser.add_argument("--foreground", help="Windows only. Sends the terminal to the foreground every time a new prompt is generated. This helps avoid some idle slowdown issues.", action='store_true')
     advparser.add_argument("--gendefaults", metavar=('{"parameter":"value",...}'), help="Sets extra default parameters for some fields in API requests, as a JSON string.", default="")
     advparser.add_argument("--gendefaultsoverwrite", help="Allow the gendefaults parameters to overwrite the original value in API payloads.", action='store_true')
@@ -12567,6 +12582,10 @@ if __name__ == '__main__':
     advparser.add_argument("--usemlock","--mlock", help="Enables mlock, preventing the RAM used to load the model from being paged out. Not usually recommended.", action='store_true')
     compatgroup3 = advparser.add_mutually_exclusive_group()
     compatgroup3.add_argument("--usemmap", help="If set, uses mmap to load model.", action='store_true')
+    advparser.add_argument("--videofps", metavar=('[fps]'), help="Sets the video frame sampling rate in frames per second. Values <=0 use the video's native fps (default 2.0).", type=float, default=2.0)
+    advparser.add_argument("--videomaxframes", metavar=('[frames]'), help="Sets the maximum number of decoded frames per video (default 32).", type=int, default=32)
+    advparser.add_argument("--videomaxtokens", metavar=('[tokens]'), help="Override the maximum tokens per video frame for the MMProj embedding. If -1, inherits --visionmaxtokens (default -1).", type=int, default=-1)
+    advparser.add_argument("--videomintokens", metavar=('[tokens]'), help="Override the minimum tokens per video frame for the MMProj embedding. If -1, inherits --visionmintokens (default -1).", type=int, default=-1)
     advparser.add_argument("--visionmaxres", metavar=('[max px]'), help="Clamp MMProj vision maximum allowed resolution. Allowed values are between 512 to 2048 px (default 1024).", type=int, default=default_visionmaxres)
     advparser.add_argument("--visionmaxtokens","--image-max-tokens", metavar=('[tokens]'), help="Override the maximum tokens for the MMProj embedding (default -1).", type=int, default=-1)
     advparser.add_argument("--visionmintokens","--image-min-tokens", metavar=('[tokens]'), help="Override the minimum tokens for the MMProj embedding (default -1).", type=int, default=-1)
