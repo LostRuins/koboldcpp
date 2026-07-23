@@ -5498,12 +5498,16 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 //n_frames is the estimated total at the effective fps (-1 if unknown); when it exceeds the budget,
                 //re-init the stream at a reduced fps so sampled frames cover the full duration.
                 mtmd_helper_video_info vinfo = mtmd_helper_video_get_info(vctx.get());
+                bool downsampled = false;
                 if(vinfo.n_frames > video_max_frames && vinfo.fps > 0.0f)
                 {
                     float duration_sec = (float)vinfo.n_frames / vinfo.fps;
                     if(duration_sec > 0.0f)
                     {
-                        float adjusted_fps = ((float)video_max_frames / duration_sec) * 0.995f; //safety factor so rounding stays within budget
+                        //place frames at t=0..duration inclusive: spreading (max-1) intervals across the whole
+                        //video makes the first AND last sampled frame land inside the budget, instead of the
+                        //(max/duration) rate that emits max+1 frames and drops the frame nearest the end.
+                        float adjusted_fps = (video_max_frames > 1) ? ((float)(video_max_frames - 1) / duration_sec) : (1.0f / duration_sec);
                         printf("\nvideo: %d frames at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration\n", vinfo.n_frames, vinfo.fps, video_max_frames, adjusted_fps);
                         vparams.fps_target = adjusted_fps;
                         vctx.reset(mtmd_helper_video_init(mtmd_ctx, video_temp_path.c_str(), vparams));
@@ -5513,6 +5517,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                             printf("\nError: MTMD video %d failed to re-init at adjusted fps, skipping.", i);
                             continue;
                         }
+                        downsampled = true;
                     }
                 }
 
@@ -5657,7 +5662,14 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
 
                 if(frame_cap_hit)
                 {
-                    printf("\nvideo truncated to %d frames (videomaxframes)", frames_processed);
+                    if(downsampled)
+                    {
+                        printf("\nNote: video %d produced trailing frame(s) beyond the %d-frame budget from fps rounding; dropped.", i, video_max_frames);
+                    }
+                    else
+                    {
+                        printf("\nvideo truncated to %d frames (videomaxframes); rest of the video was not sampled", frames_processed);
+                    }
                 }
                 if(fallback_start_seq.size() > 0)
                 {
