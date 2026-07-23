@@ -2207,7 +2207,9 @@ def generate(genparams, stream_flag=False):
     inputs.audio = (ctypes.c_char_p * inputs.audio_len)()
     for n, item in enumerate(audio):
         inputs.audio[n] = item.encode("UTF-8")
-    videos = videos[-videos_max:]
+    if len(videos) > videos_max:
+        print(f"Warning: too many videos attached, only the first {videos_max} are used.")
+    videos = videos[:videos_max]
     inputs.videos_len = len(videos)
     inputs.videos = (ctypes.c_char_p * inputs.videos_len)()
     for n, item in enumerate(videos):
@@ -3842,6 +3844,8 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
                 m["content"] = ""
         # fix image placeholders, erase them and slap a reference onto the turn text message
         mediacount = 1
+        video_count = 0
+        videos_dropped_jinja = False
         for m in messages:
             if isinstance(m.get("content"), list):
                 normalized = []
@@ -3856,13 +3860,19 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
                         turn_text += f"\n(Attached Audio {mediacount})\n"
                         mediacount += 1
                     elif item.get("type")=="video_url" or item.get("type")=="input_video":
-                        turn_text += f"\n(Attached Video {mediacount})\n"
-                        mediacount += 1
+                        if video_count < videos_max:
+                            turn_text += f"\n(Attached Video {mediacount})\n"
+                            mediacount += 1
+                            video_count += 1
+                        else:
+                            videos_dropped_jinja = True
                     else:
                         normalized.append(item)
                 if turn_text:
                     normalized.append({"type": "text","text": turn_text})
                 m["content"] = normalized
+        if videos_dropped_jinja:
+            print(f"Warning: too many videos attached, only the first {videos_max} are used.")
         for m in messages: # Fix tool_calls arguments and content if parsable
             if m.get("tool_calls"):
                 for tc in m["tool_calls"]:
@@ -4254,6 +4264,7 @@ def sweep_media_from_messages(messages_array):
     images = []
     audio = []
     videos = []
+    videos_dropped = False
     for message in messages_array:
         curr_content = message.get("content", None)
         if isinstance(curr_content, list):
@@ -4269,11 +4280,17 @@ def sweep_media_from_messages(messages_array):
                 elif item.get("type") == "video_url":
                     url = item.get("video_url", {}).get("url", "")
                     if url.startswith("data:video"):
-                        videos.append(url.split(",", 1)[1])
+                        if len(videos) < videos_max:
+                            videos.append(url.split(",", 1)[1])
+                        else:
+                            videos_dropped = True
                 elif item.get("type") == "input_video":
                     data = item.get("input_video", {}).get("data")
                     if data:
-                        videos.append(data)
+                        if len(videos) < videos_max:
+                            videos.append(data)
+                        else:
+                            videos_dropped = True
         elif message.get("role", "")=="tool" and isinstance(curr_content, str): #handle mcp returned images
             try:
                 mcp_pl = json.loads(curr_content)
@@ -4287,6 +4304,8 @@ def sweep_media_from_messages(messages_array):
         if imgs_ollama:
             for img in imgs_ollama:
                 images.append(img)
+    if videos_dropped:
+        print(f"Warning: too many videos attached, only the first {videos_max} are used.")
     return images, audio, videos
 
 
@@ -4414,6 +4433,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             attachedimgid = 0
             attachedaudid = 0
             attachedvidid = 0
+            videos_dropped_legacy = False
             jinja_output = None
             jinjatools = genparams.get('tools', [])
             if use_jinja and cached_chat_template:
@@ -4507,14 +4527,20 @@ ws ::= | " " | "\n" [ \t]{0,20}
                                         messages_string += f"\n(Attached Audio {attachedaudid})\n"
                                 elif item['type']=="video_url":
                                     if 'video_url' in item and item['video_url'] and item['video_url']['url'] and item['video_url']['url'].startswith("data:video"):
-                                        videos_added.append(item['video_url']['url'].split(",", 1)[1])
-                                        attachedvidid += 1
-                                        messages_string += f"\n(Attached Video {attachedvidid})\n"
+                                        if attachedvidid < videos_max:
+                                            videos_added.append(item['video_url']['url'].split(",", 1)[1])
+                                            attachedvidid += 1
+                                            messages_string += f"\n(Attached Video {attachedvidid})\n"
+                                        else:
+                                            videos_dropped_legacy = True
                                 elif item['type']=="input_video":
                                     if 'input_video' in item and item['input_video'] and item['input_video']['data']:
-                                        videos_added.append(item['input_video']['data'])
-                                        attachedvidid += 1
-                                        messages_string += f"\n(Attached Video {attachedvidid})\n"
+                                        if attachedvidid < videos_max:
+                                            videos_added.append(item['input_video']['data'])
+                                            attachedvidid += 1
+                                            messages_string += f"\n(Attached Video {attachedvidid})\n"
+                                        else:
+                                            videos_dropped_legacy = True
                             elif isinstance(item, str):
                                 messages_string += item # If item is just a string, append it directly
 
@@ -4555,6 +4581,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                         messages_string += assistant_message_end
                     elif message['role'] == "tool":
                         messages_string += tools_message_end
+                if videos_dropped_legacy:
+                    print(f"Warning: too many videos attached, only the first {videos_max} are used.")
                 messages_string += assistant_message_gen
                 if (latest_turn_was_assistant and continue_assistant_turn): #allow continue a prefill, chop off end
                     messages_string = messages_string[:-(len(assistant_message_gen)+len(assistant_message_end))]
