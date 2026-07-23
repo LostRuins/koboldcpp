@@ -200,7 +200,11 @@ namespace LLM {
                         config.vision.in_channels = tensor_storage.ne[2];
                         config.vision.hidden_size = tensor_storage.ne[3];
                     }
-                    if (contains(name, "visual.patch_embed.bias")) {
+                    // HF-format checkpoints keep the patch embed unsplit under a single name.
+                    if (contains(name, "visual.patch_embed.proj.weight")) {
+                        config.vision.patch_size = static_cast<int>(tensor_storage.ne[0]);
+                    }
+                    if (contains(name, "visual.patch_embed.bias") || contains(name, "visual.patch_embed.proj.bias")) {
                         config.vision.hidden_size = tensor_storage.ne[0];
                     }
                     if (contains(name, "visual.pos_embed.weight")) {
