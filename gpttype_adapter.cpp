@@ -5709,6 +5709,12 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 std::vector<int> fallback_end_seq;
                 int frames_processed = 0;
                 bool frame_cap_hit = false;
+                bool cell_budget_hit = false;
+                //hard ceiling on the KV cells one video may occupy: the position-based token counts above cannot
+                //see the M-RoPE inflation, so without this a high-res video passes every check and then exhausts
+                //the KV cache mid-eval (decode error "failed to find a memory slot"). keep a quarter of the
+                //context free for the prompt, response and other media.
+                const int video_cell_budget = (nctx / 4) * 3;
 
                 //frames inherit the image resolution clamp; when an explicit video token budget is set we tighten it.
                 //no public patch-size accessor is reachable from this TU, so approximate the token budget with a
@@ -5723,6 +5729,30 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         frame_max_res = tok_res;
                     }
                 }
+                //also cap frame resolution by the per-video KV cell budget, spread over the frames we expect to
+                //sample, so dynamic-resolution encoders (Qwen-VL: cells scale with pixel area) downsize to fit the
+                //context instead of tripping the cell guard below and losing the tail of the video. the 14px patch
+                //heuristic under-estimates for merged-patch models, erring toward smaller frames + full coverage.
+                {
+                    int expected_frames = video_max_frames;
+                    if(duration_sec > 0.0f && !downsampled)
+                    {
+                        int est = (int)(duration_sec * video_fps) + 1;
+                        expected_frames = std::min(expected_frames, std::max(1, est));
+                    }
+                    const int patch_px = 14;
+                    int per_frame_cells = video_cell_budget / std::max(1, expected_frames);
+                    int budget_res = (int)(std::sqrt((double)per_frame_cells) * patch_px);
+                    if(budget_res > 0 && (frame_max_res <= 0 || budget_res < frame_max_res))
+                    {
+                        frame_max_res = budget_res;
+                        if(!is_quiet && debugmode!=-1)
+                        {
+                            printf("\nvideo: frame resolution capped at %dpx so ~%d frames fit the context budget (%d cells)\n", frame_max_res, expected_frames, video_cell_budget);
+                        }
+                    }
+                }
+
                 //mirror of the max heuristic above: derive a pixel floor from videomintokens so undersized frames
                 //get upscaled before tokenization. the model's own baked clip minimum still applies downstream regardless.
                 int frame_min_res = 0;
@@ -5773,6 +5803,15 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         }
                     }
                 };
+                auto chunks_kv_cells = [](mtmd::input_chunks & chunks) -> int
+                {
+                    int cells = 0;
+                    for(size_t j=0;j<chunks.size();++j)
+                    {
+                        cells += (int)mtmd_input_chunk_get_n_tokens(chunks[j]);
+                    }
+                    return cells;
+                };
 
                 while(true)
                 {
@@ -5816,6 +5855,12 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         {
                             printf("\nWarning: MTMD video %d frame %d failed to tokenize (status %d), skipping frame.", i, frames_processed, tokenized);
                             continue;
+                        }
+                        //exact per-frame guard: measured cells, so it holds even where the pixel-cap heuristic misestimates
+                        if(mediacellsneeded + chunks_kv_cells(chunks) > video_cell_budget)
+                        {
+                            cell_budget_hit = true;
+                            break;
                         }
                         append_video_chunks(chunks);
                         ++frames_processed;
@@ -5869,6 +5914,10 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     {
                         printf("\nvideo truncated to %d frames (videomaxframes); rest of the video was not sampled", frames_processed);
                     }
+                }
+                if(cell_budget_hit)
+                {
+                    printf("\nvideo truncated to %d frames: sampled frames occupy %d KV cells of a %d-cell budget (context %d). Lower the video resolution, raise context size, or reduce videomaxframes for full coverage.", frames_processed, mediacellsneeded, video_cell_budget, nctx);
                 }
                 //append an explicit end-of-clip duration note in the same familiar notation so the model can state
                 //how long the video is; skip when the duration is unknown or no frames were actually embedded.
