@@ -5334,8 +5334,10 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 printf("\nError: MTMD media %d failed to load!",i);
                 continue;
             }
+            const auto * marker = mtmd_default_marker();
             mtmd_input_text inp_txt = {
-                mtmd_default_marker(),
+                marker,
+                strlen(marker),
                 /* add_special */ false,
                 /* parse_special */ true,
             };
