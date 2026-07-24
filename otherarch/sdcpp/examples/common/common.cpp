@@ -428,6 +428,11 @@ ArgOptions SDContextParams::get_options() {
          0,
          &control_net_path},
         {"",
+         "--ip-adapter",
+         "path to IP-Adapter model (requires --clip_vision)",
+         0,
+         &ip_adapter_path},
+        {"",
          "--motion-module",
          "path to AnimateDiff motion module (SD 1.5); enables video generation on --video-frames > 1",
          0,
@@ -876,6 +881,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.audio_vae_path                  = audio_vae_path.c_str();
     sd_ctx_params.taesd_path                      = taesd_path.c_str();
     sd_ctx_params.control_net_path                = control_net_path.c_str();
+    sd_ctx_params.ip_adapter_path                 = ip_adapter_path.c_str();
     sd_ctx_params.motion_module_path              = motion_module_path.c_str();
     sd_ctx_params.embeddings                      = embedding_vec.data();
     sd_ctx_params.embedding_count                 = static_cast<uint32_t>(embedding_vec.size());
@@ -966,6 +972,11 @@ ArgOptions SDGenerationParams::get_options() {
          "path to control image, control net",
          0,
          &control_image_path},
+        {"",
+         "--ip-adapter-image",
+         "path to the IP-Adapter reference image",
+         0,
+         &ip_adapter_image_path},
         {"",
          "--control-video",
          "path to control video frames, It must be a directory path. The video frames inside should be stored as images in "
@@ -1158,6 +1169,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--control-strength",
          "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image",
          &control_strength},
+        {"",
+         "--ip-adapter-strength",
+         "strength to apply IP-Adapter (default: 1.0)",
+         &ip_adapter_strength},
         {"",
          "--moe-boundary",
          "timestep boundary for Wan2.2 MoE model. (default: 0.875). Only enabled if `--high-noise-steps` is set to -1",
@@ -2479,29 +2494,31 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
         LOG_WARN("Notice: --increase-ref-index is deprecated. Use --ref-image-args \"ref_index_mode=increase\" instead.");
     }
 
-    params.loras             = lora_vec.empty() ? nullptr : lora_vec.data();
-    params.lora_count        = static_cast<uint32_t>(lora_vec.size());
-    params.prompt            = prompt.c_str();
-    params.negative_prompt   = negative_prompt.c_str();
-    params.clip_skip         = clip_skip;
-    params.init_image        = init_image.get();
-    params.ref_images        = ref_image_views.empty() ? nullptr : ref_image_views.data();
-    params.ref_images_count  = static_cast<int>(ref_image_views.size());
-    params.ref_image_args    = ref_image_args.c_str();
-    params.mask_image        = mask_image.get();
-    params.width             = get_resolved_width();
-    params.height            = get_resolved_height();
-    params.sample_params     = sample_params;
-    params.strength          = strength;
-    params.seed              = seed;
-    params.batch_count       = batch_count;
-    params.qwen_image_layers = qwen_image_layers;
-    params.control_image     = control_image.get();
-    params.control_strength  = control_strength;
-    params.pm_params         = pm_params;
-    params.pulid_params      = pulid_params;
-    params.vae_tiling_params = vae_tiling_params;
-    params.cache             = cache_params;
+    params.loras               = lora_vec.empty() ? nullptr : lora_vec.data();
+    params.lora_count          = static_cast<uint32_t>(lora_vec.size());
+    params.prompt              = prompt.c_str();
+    params.negative_prompt     = negative_prompt.c_str();
+    params.clip_skip           = clip_skip;
+    params.init_image          = init_image.get();
+    params.ref_images          = ref_image_views.empty() ? nullptr : ref_image_views.data();
+    params.ref_images_count    = static_cast<int>(ref_image_views.size());
+    params.ref_image_args      = ref_image_args.c_str();
+    params.mask_image          = mask_image.get();
+    params.width               = get_resolved_width();
+    params.height              = get_resolved_height();
+    params.sample_params       = sample_params;
+    params.strength            = strength;
+    params.seed                = seed;
+    params.batch_count         = batch_count;
+    params.qwen_image_layers   = qwen_image_layers;
+    params.control_image       = control_image.get();
+    params.control_strength    = control_strength;
+    params.ip_adapter_image    = ip_adapter_image.get();
+    params.ip_adapter_strength = ip_adapter_strength;
+    params.pm_params           = pm_params;
+    params.pulid_params        = pulid_params;
+    params.vae_tiling_params   = vae_tiling_params;
+    params.cache               = cache_params;
 
     params.hires.enabled             = hires_enabled;
     params.hires.upscaler            = resolved_hires_upscaler;

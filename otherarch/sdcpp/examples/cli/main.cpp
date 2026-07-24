@@ -817,6 +817,16 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    if (gen_params.ip_adapter_image_path.size() > 0) {
+        if (!load_sd_image_from_file(gen_params.ip_adapter_image.put(),
+                                     gen_params.ip_adapter_image_path.c_str(),
+                                     0,
+                                     0)) {
+            LOG_ERROR("load image from '%s' failed", gen_params.ip_adapter_image_path.c_str());
+            return 1;
+        }
+    }
+
     if (!gen_params.control_video_path.empty()) {
         gen_params.control_frames.clear();
         if (!load_images_from_dir(gen_params.control_video_path,

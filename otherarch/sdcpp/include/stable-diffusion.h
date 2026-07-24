@@ -200,6 +200,7 @@ typedef struct {
     const char* audio_vae_path;
     const char* taesd_path;
     const char* control_net_path;
+    const char* ip_adapter_path;
     const char* motion_module_path;
     const sd_embedding_t* embeddings;
     uint32_t embedding_count;
@@ -375,6 +376,8 @@ typedef struct {
     int batch_count;
     sd_image_t control_image;
     float control_strength;
+    sd_image_t ip_adapter_image;
+    float ip_adapter_strength;
     sd_pm_params_t pm_params;
     sd_pulid_params_t pulid_params;
     sd_tiling_params_t vae_tiling_params;

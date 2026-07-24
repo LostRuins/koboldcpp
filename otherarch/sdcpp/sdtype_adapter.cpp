@@ -1249,7 +1249,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.negative_prompt = sd_params->negative_prompt.c_str();
     params.clip_skip = sd_params->clip_skip;
     params.sample_params.guidance.txt_cfg = sd_params->cfg_scale;
-    // params.sample_params.guidance.img_cfg = sd_params->cfg_scale; //removed, breaks qwen img edit and more
+    params.sample_params.guidance.img_cfg = sd_params->cfg_scale; //removed, breaks qwen img edit and more
     if (sd_params->distilled_guidance >= 0.f) {
         params.sample_params.guidance.distilled_guidance = sd_params->distilled_guidance;
     }

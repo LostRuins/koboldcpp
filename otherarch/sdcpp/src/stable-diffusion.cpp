@@ -24,6 +24,7 @@
 #include "conditioning/conditioner.hpp"
 #include "core/backend_fit.h"
 #include "extensions/generation_extension.h"
+#include "model/adapter/ip_adapter.hpp"
 #include "model/adapter/lora.hpp"
 #include "model/diffusion/anima.hpp"
 #include "model/diffusion/animatediff.hpp"
@@ -223,6 +224,10 @@ public:
     std::shared_ptr<VAE> preview_vae;
     std::shared_ptr<LTXV::LTXAudioVAERunner> audio_vae_model;
     std::shared_ptr<ControlNet> control_net;
+    std::shared_ptr<IPAdapter::IPAdapterRunner> ip_adapter;
+    sd::Tensor<float> ip_adapter_tokens;
+    sd::Tensor<float> ip_adapter_uncond_tokens;
+    float ip_adapter_strength = 1.0f;
     std::vector<std::shared_ptr<GenerationExtension>> generation_extensions;
     std::vector<std::shared_ptr<LoraModel>> runtime_lora_models;
     bool apply_lora_immediately = false;
@@ -1087,6 +1092,13 @@ public:
             }
         }
 
+        if (strlen(SAFE_STR(sd_ctx_params->ip_adapter_path)) > 0) {
+            if (!model_loader.init_from_file(sd_ctx_params->ip_adapter_path)) {
+                LOG_ERROR("init ip-adapter model loader from file failed: '%s'", sd_ctx_params->ip_adapter_path);
+                return false;
+            }
+        }
+
         model_loader.convert_tensors_name();
 
         version = model_loader.get_sd_version();
@@ -1541,6 +1553,33 @@ public:
                                             high_noise_diffusion_model,
                                             SDBackendModule::DIFFUSION,
                                             &unet_params_mem_size)) {
+                    return false;
+                }
+            }
+
+            if (strlen(SAFE_STR(sd_ctx_params->ip_adapter_path)) > 0 && clip_vision == nullptr) {
+                if (!ensure_backend_pair(SDBackendModule::CLIP_VISION)) {
+                    return false;
+                }
+                clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend_for(SDBackendModule::CLIP_VISION),
+                                                                         tensor_storage_map,
+                                                                         model_manager);
+                clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::CLIP_VISION));
+                if (!register_runner_params("CLIP vision",
+                                            clip_vision,
+                                            SDBackendModule::CLIP_VISION)) {
+                    return false;
+                }
+            }
+
+            if (strlen(SAFE_STR(sd_ctx_params->ip_adapter_path)) > 0) {
+                ip_adapter = std::make_shared<IPAdapter::IPAdapterRunner>(backend_for(SDBackendModule::DIFFUSION),
+                                                                          tensor_storage_map,
+                                                                          "ip_adapter",
+                                                                          model_manager);
+                if (!register_runner_params("IP-Adapter",
+                                            ip_adapter,
+                                            SDBackendModule::DIFFUSION)) {
                     return false;
                 }
             }
@@ -2331,6 +2370,34 @@ public:
         return output;
     }
 
+    void compute_ip_adapter_tokens(const sd_image_t& image, float strength) {
+        ip_adapter_tokens        = {};
+        ip_adapter_uncond_tokens = {};
+        ip_adapter_strength      = strength;
+        if (ip_adapter == nullptr || clip_vision == nullptr || image.data == nullptr) {
+            return;
+        }
+        auto image_tensor = sd_image_to_tensor(image);
+        auto embed        = get_clip_vision_output(image_tensor, true, -1);
+        if (embed.empty()) {
+            return;
+        }
+        ip_adapter_tokens = ip_adapter->compute(n_threads, embed);
+        if (ip_adapter_tokens.empty()) {
+            LOG_ERROR("IP-Adapter conditional image projection failed");
+            return;
+        }
+        auto uncond_embed        = sd::Tensor<float>::zeros_like(embed);
+        ip_adapter_uncond_tokens = ip_adapter->compute(n_threads, uncond_embed);
+        if (ip_adapter_uncond_tokens.empty()) {
+            LOG_ERROR("IP-Adapter unconditional image projection failed");
+            ip_adapter_tokens = {};
+            return;
+        }
+        LOG_INFO("IP-Adapter: %lld image tokens, strength %.2f",
+                 (long long)ip_adapter_tokens.shape()[1], strength);
+    }
+
     std::vector<float> process_timesteps(const std::vector<float>& timesteps,
                                          const sd::Tensor<float>& init_latent,
                                          const sd::Tensor<float>& denoise_mask,
@@ -2819,7 +2886,8 @@ public:
             auto run_condition = [&](const SDCondition& condition,
                                      const sd::Tensor<float>* c_concat_override                 = nullptr,
                                      const std::vector<int>* local_skip_layers                  = nullptr,
-                                     const std::vector<sd::Tensor<float>>* ref_latents_override = nullptr) -> sd::Tensor<float> {
+                                     const std::vector<sd::Tensor<float>>* ref_latents_override = nullptr,
+                                     bool use_uncond_ip                                         = false) -> sd::Tensor<float> {
                 diffusion_params.context     = condition.c_crossattn.empty() ? nullptr : &condition.c_crossattn;
                 diffusion_params.c_concat    = c_concat_override != nullptr ? c_concat_override : (condition.c_concat.empty() ? nullptr : &condition.c_concat);
                 diffusion_params.y           = condition.c_vector.empty() ? nullptr : &condition.c_vector;
@@ -2830,7 +2898,13 @@ public:
                     if (animatediff_loaded && noised_input.dim() >= 4 && noised_input.shape()[3] > 1) {
                         nvf = static_cast<int>(noised_input.shape()[3]);
                     }
-                    diffusion_params.extra = UNetDiffusionExtra{nvf, &controls, control_strength};
+                    UNetDiffusionExtra unet_extra{nvf, &controls, control_strength};
+                    const auto& ip_tokens = use_uncond_ip ? ip_adapter_uncond_tokens : ip_adapter_tokens;
+                    if (!ip_tokens.empty()) {
+                        unet_extra.ip_context = &ip_tokens;
+                        unet_extra.ip_scale   = ip_adapter_strength;
+                    }
+                    diffusion_params.extra = unet_extra;
                 } else if (sd_version_is_sd3(version)) {
                     diffusion_params.extra = SkipLayerDiffusionExtra{local_skip_layers};
                 } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version) || sd_version_is_sefi_image(version)) {
@@ -2921,7 +2995,9 @@ public:
                 }
                 uncond_out = run_condition(uncond,
                                            uncond.c_concat.empty() ? nullptr : &uncond.c_concat,
-                                           uncond_skip_layers);
+                                           uncond_skip_layers,
+                                           nullptr,
+                                           true);
                 if (uncond_out.empty()) {
                     return {};
                 }
@@ -2930,7 +3006,8 @@ public:
                 img_uncond_out = run_condition(img_uncond,
                                                img_uncond.c_concat.empty() ? nullptr : &img_uncond.c_concat,
                                                nullptr,
-                                               uncond_without_ref_latents ? &empty_ref_latents : nullptr);
+                                               uncond_without_ref_latents ? &empty_ref_latents : nullptr,
+                                               true);
                 if (img_uncond_out.empty()) {
                     return {};
                 }
@@ -3778,21 +3855,22 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
 void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     *sd_img_gen_params = {};
     sd_sample_params_init(&sd_img_gen_params->sample_params);
-    sd_img_gen_params->clip_skip         = -1;
-    sd_img_gen_params->ref_images_count  = 0;
-    sd_img_gen_params->ref_image_args    = "";
-    sd_img_gen_params->width             = 512;
-    sd_img_gen_params->height            = 512;
-    sd_img_gen_params->strength          = 0.75f;
-    sd_img_gen_params->seed              = -1;
-    sd_img_gen_params->batch_count       = 1;
-    sd_img_gen_params->control_strength  = 0.9f;
-    sd_img_gen_params->qwen_image_layers = 3;
-    sd_img_gen_params->circular_x        = false;
-    sd_img_gen_params->circular_y        = false;
-    sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
-    sd_img_gen_params->pulid_params      = {nullptr, 1.0f};
-    sd_img_gen_params->vae_tiling_params = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
+    sd_img_gen_params->clip_skip           = -1;
+    sd_img_gen_params->ref_images_count    = 0;
+    sd_img_gen_params->ref_image_args      = "";
+    sd_img_gen_params->width               = 512;
+    sd_img_gen_params->height              = 512;
+    sd_img_gen_params->strength            = 0.75f;
+    sd_img_gen_params->seed                = -1;
+    sd_img_gen_params->batch_count         = 1;
+    sd_img_gen_params->control_strength    = 0.9f;
+    sd_img_gen_params->ip_adapter_strength = 1.0f;
+    sd_img_gen_params->qwen_image_layers   = 3;
+    sd_img_gen_params->circular_x          = false;
+    sd_img_gen_params->circular_y          = false;
+    sd_img_gen_params->pm_params           = {nullptr, 0, nullptr, 20.f};
+    sd_img_gen_params->pulid_params        = {nullptr, 1.0f};
+    sd_img_gen_params->vae_tiling_params   = {false, false, 0, 0, 0.5f, 0.0f, 0.0f, nullptr};
     sd_cache_params_init(&sd_img_gen_params->cache);
     sd_hires_params_init(&sd_img_gen_params->hires);
 }
@@ -5297,6 +5375,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
                                               request->pulid_params,
                                               condition_params,
                                               plan->total_steps);
+    sd_ctx->sd->compute_ip_adapter_tokens(sd_img_gen_params->ip_adapter_image, sd_img_gen_params->ip_adapter_strength);
     int64_t prepare_start_ms         = ggml_time_ms();
     condition_params.zero_out_masked = false;
     auto cond                        = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
@@ -5348,8 +5427,8 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
             }
             condition_params.text            = request->negative_prompt;
             condition_params.zero_out_masked = zero_out_masked;
+            std::vector<sd::Tensor<float>> empty_ref_images;
             if (use_ref_latent_img_cfg) {
-                std::vector<sd::Tensor<float>> empty_ref_images;
                 condition_params.ref_images = &empty_ref_images;
             }
             img_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(sd_ctx->sd->n_threads,
@@ -6091,7 +6170,7 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
         auto encode_condition_frame = [&](const sd::Tensor<float>& image,
                                           int64_t latent_frame,
                                           const char* name) -> bool {
-            auto encoded = sd_ctx->sd->encode_first_stage(image);
+            auto encoded = sd_ctx->sd->encode_first_stage(image.unsqueeze(2));
             if (encoded.empty()) {
                 LOG_ERROR("failed to encode Hunyuan Video %s conditioning frame", name);
                 return false;

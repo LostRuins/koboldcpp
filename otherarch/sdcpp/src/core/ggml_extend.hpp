@@ -1689,6 +1689,8 @@ struct GGMLRunnerContext {
     bool conv2d_direct_enabled                                       = false;
     bool circular_x_enabled                                          = false;
     bool circular_y_enabled                                          = false;
+    ggml_tensor* ip_context                                          = nullptr;
+    float ip_scale                                                   = 1.0f;
     std::shared_ptr<WeightAdapter> weight_adapter                    = nullptr;
     std::vector<std::pair<ggml_tensor*, std::string>>* debug_tensors = nullptr;
     std::function<ggml_tensor*(const std::string&)> get_cache_tensor;

@@ -133,6 +133,7 @@ struct SDContextParams {
     std::string taesd_path;
     std::string esrgan_path;
     std::string control_net_path;
+    std::string ip_adapter_path;
     std::string motion_module_path;
     std::string embedding_dir;
     std::string photo_maker_path;
@@ -200,6 +201,7 @@ struct SDGenerationParams {
     int64_t seed               = 42;
     float strength             = 0.75f;
     float control_strength     = 0.9f;
+    float ip_adapter_strength  = 1.0f;
     bool auto_resize_ref_image = true;
     bool increase_ref_index    = false;
     bool embed_image_metadata  = true;
@@ -208,6 +210,7 @@ struct SDGenerationParams {
     std::string end_image_path;
     std::string mask_image_path;
     std::string control_image_path;
+    std::string ip_adapter_image_path;
     std::vector<std::string> ref_image_paths;
     std::string control_video_path;
 
@@ -274,6 +277,7 @@ struct SDGenerationParams {
     std::vector<SDImageOwner> ref_images;
     SDImageOwner mask_image;
     SDImageOwner control_image;
+    SDImageOwner ip_adapter_image;
     std::vector<SDImageOwner> pm_id_images;
     std::vector<SDImageOwner> control_frames;
 

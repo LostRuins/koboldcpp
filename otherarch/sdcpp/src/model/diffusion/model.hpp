@@ -46,6 +46,8 @@ struct UNetDiffusionExtra {
     int num_video_frames                           = -1;
     const std::vector<sd::Tensor<float>>* controls = nullptr;
     float control_strength                         = 0.f;
+    const sd::Tensor<float>* ip_context            = nullptr;
+    float ip_scale                                 = 1.f;
 };
 
 struct SkipLayerDiffusionExtra {
