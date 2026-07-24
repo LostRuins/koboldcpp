@@ -5702,6 +5702,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 }
 
                 int mediatokensneeded = 0;
+                int mediacellsneeded = 0; //real KV cells: for M-RoPE each frame consumes nx*ny cells while only advancing the position by max(nx,ny)
                 bool seen_media_embedding = false;
                 bool used_fallback_boundary_tokens = false;
                 std::vector<int> fallback_start_seq;
@@ -5722,7 +5723,6 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         frame_max_res = tok_res;
                     }
                 }
-
                 //mirror of the max heuristic above: derive a pixel floor from videomintokens so undersized frames
                 //get upscaled before tokenization. the model's own baked clip minimum still applies downstream regardless.
                 int frame_min_res = 0;
@@ -5763,7 +5763,9 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         chunk.mediatype = media_objects[i].mediatype;
                         chunk.mtmd_chunk = mtmd_input_chunk_copy(mtmdchunk);
                         chunk.clp_image_tokens = mtmd_input_chunk_get_n_pos(mtmdchunk);
+                        chunk.clp_kv_cells = (int32_t)mtmd_input_chunk_get_n_tokens(mtmdchunk);
                         mediatokensneeded += chunk.clp_image_tokens;
+                        mediacellsneeded += chunk.clp_kv_cells;
                         media_objects[i].mediachunks.push_back(chunk);
                         if(mtmd_input_chunk_get_type(mtmdchunk) != MTMD_INPUT_CHUNK_TYPE_TEXT)
                         {
@@ -5917,11 +5919,12 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 }
                 const int boundarytokensneeded = media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size();
                 mediatokensneeded += boundarytokensneeded;
+                mediacellsneeded += boundarytokensneeded;
                 if(debugmode==1 && !is_quiet)
                 {
-                    printf("\nMTMD Video %i used %d frames, Tokens: %d",i,frames_processed,mediatokensneeded);
+                    printf("\nMTMD Video %i used %d frames, Tokens: %d, KV Cells: %d",i,frames_processed,mediatokensneeded,mediacellsneeded);
                 }
-                if(mediatokensneeded>0 && mediatokensneeded < nctx)
+                if(mediatokensneeded>0 && mediatokensneeded < nctx && mediacellsneeded < nctx)
                 {
                     media_object_token_counts.push_back(mediatokensneeded);
                     int tokcnt = mediatokensneeded;
@@ -5939,7 +5942,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 {
                     media_object_token_counts.push_back(0);
                     media_composite_image_signature = ""; //force invalidate
-                    printf("\nWarning: Video excluded - Context size too low or no frames decoded! (needed %d)\nVideo will be IGNORED! You probably want to relaunch with a larger context size!\n",mediatokensneeded);
+                    printf("\nWarning: Video excluded - Context size too low or no frames decoded! (needed %d KV cells)\nVideo will be IGNORED! You probably want to relaunch with a larger context size!\n",mediacellsneeded);
                 }
                 continue;
 #else
@@ -5978,6 +5981,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             }
 
             int mediatokensneeded = 0;
+            int mediacellsneeded = 0; //real KV cells: M-RoPE image grids consume nx*ny cells but advance the position by only max(nx,ny)
             bool seen_media_embedding = false;
             bool used_fallback_boundary_tokens = false;
             std::vector<int> fallback_start_seq;
@@ -6007,7 +6011,9 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 chunk.mediatype = media_objects[i].mediatype;
                 chunk.mtmd_chunk = mtmd_input_chunk_copy(mtmdchunk);
                 chunk.clp_image_tokens = mtmd_input_chunk_get_n_pos(mtmdchunk);
+                chunk.clp_kv_cells = (int32_t)mtmd_input_chunk_get_n_tokens(mtmdchunk);
                 mediatokensneeded += chunk.clp_image_tokens;
+                mediacellsneeded += chunk.clp_kv_cells;
                 media_objects[i].mediachunks.push_back(chunk);
                 if(mtmd_input_chunk_get_type(mtmdchunk) != MTMD_INPUT_CHUNK_TYPE_TEXT)
                 {
@@ -6028,11 +6034,12 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             }
             const int boundarytokensneeded = media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size();
             mediatokensneeded += boundarytokensneeded;
+            mediacellsneeded += boundarytokensneeded;
             if(debugmode==1 && !is_quiet)
             {
-                printf("\nMTMD Media %i used Tokens: %d",i,mediatokensneeded);
+                printf("\nMTMD Media %i used Tokens: %d, KV Cells: %d",i,mediatokensneeded,mediacellsneeded);
             }
-            if(mediatokensneeded>0 && mediatokensneeded < nctx)
+            if(mediatokensneeded>0 && mediatokensneeded < nctx && mediacellsneeded < nctx)
             {
                 media_object_token_counts.push_back(mediatokensneeded);
                 int tokcnt = mediatokensneeded;
@@ -6050,7 +6057,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             {
                 media_object_token_counts.push_back(0);
                 media_composite_image_signature = ""; //force invalidate
-                printf("\nWarning: Media excluded - Context size too low or not enough mtmd tokens! (needed %d)\nMedia will be IGNORED! You probably want to relaunch with a larger context size!\n",mediatokensneeded);
+                printf("\nWarning: Media excluded - Context size too low or not enough mtmd tokens! (needed %d KV cells)\nMedia will be IGNORED! You probably want to relaunch with a larger context size!\n",mediacellsneeded);
             }
         }
     }
@@ -7855,7 +7862,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                 media_chunk chunk = media_objects[curr_media_index].mediachunks[j];
                                 if(allow_regular_prints)
                                 {
-                                    printf("\rProcessing Media Embedding %d (%d tokens)",(curr_media_index+1), chunk.clp_image_tokens);
+                                    printf("\rProcessing Media Embedding %d (%d tokens, %d KV cells)",(curr_media_index+1), chunk.clp_image_tokens, chunk.clp_kv_cells);
                                 }
                                 bool err = kcpp_eval_media(llama_ctx_v4,chunk,kcpp_data->n_batch,&n_past);
                                 mediatokensevaled += chunk.clp_image_tokens;
