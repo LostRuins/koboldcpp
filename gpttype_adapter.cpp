@@ -5842,30 +5842,57 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                         //one calibration holds for the rest. cell cost scales with pixel area (a token covers a
                         //fixed pixel patch), so this is an interpolation search in area space: one probe in the
                         //common case, extra probes only inside an encoder's internal token clamp where measured
-                        //cost stops tracking area. only ever shrinks - a frame within its share stays untouched.
+                        //cost stops tracking area. a frame already within its share never enters this block, and
+                        //probes are bracketed strictly below the original size, so frames are never upscaled.
                         if(frames_processed == 0)
                         {
                             const int orig_cells = chunks_kv_cells(chunks);
                             const int longside = (int)std::max(framebmp.nx(), framebmp.ny());
                             if(orig_cells > per_frame_cell_budget && longside > 1)
                             {
+                                //bracket: hi = smallest resolution known to exceed the share (starts at the original
+                                //size, probes stay strictly below it), best = largest known to fit. interpolate toward
+                                //the share from either side and accept once a fit lands within 90% of it, so an
+                                //undershooting probe gets refined back upward instead of locked in.
+                                int hi_res = longside;
+                                int hi_cells = orig_cells;
+                                int best_res = 0;
+                                int best_cells = 0;
                                 int probe_res = longside;
                                 int probe_cells = orig_cells;
-                                int best_res = 0; //resolution of the probe that fit the share, 0 = none fit
-                                int low_res = 0; //cheapest failing probe, fallback when a min-token floor blocks fitting
-                                int low_cells = orig_cells;
-                                for(int probes=0; probes<5 && probe_cells > per_frame_cell_budget; ++probes)
+                                int prev_res = -1;
+                                int prev_cells = -1;
+                                for(int probes=0; probes<6; ++probes)
                                 {
-                                    int next_res = (int)((double)probe_res * std::sqrt((double)per_frame_cell_budget / (double)probe_cells));
-                                    next_res = std::max(64, next_res);
-                                    if(next_res >= probe_res)
+                                    if(best_res > 0 && best_cells * 10 >= per_frame_cell_budget * 9)
                                     {
-                                        break; //can't shrink further
+                                        break; //close enough to the share, stop refining
                                     }
-                                    probe_res = next_res;
+                                    int next_res;
+                                    if(prev_res > 0 && prev_res != probe_res && prev_cells == probe_cells)
+                                    {
+                                        //two resolutions measured an identical cost (inside an encoder's internal
+                                        //clamp), interpolation has no signal here - step geometrically to escape
+                                        next_res = probe_res / 2;
+                                    }
+                                    else
+                                    {
+                                        next_res = (int)((double)probe_res * std::sqrt((double)per_frame_cell_budget / (double)probe_cells));
+                                    }
+                                    const int res_floor = std::max(64, best_res + 1);
+                                    const int res_ceil = hi_res - 1;
+                                    if(res_floor > res_ceil)
+                                    {
+                                        break; //bracket exhausted
+                                    }
+                                    next_res = std::min(std::max(next_res, res_floor), res_ceil);
+                                    if(next_res == probe_res)
+                                    {
+                                        break; //nothing new to learn
+                                    }
                                     //probe a throwaway copy so the final resize is made straight from the original frame
                                     mtmd::bitmap probebmp(mtmd_bitmap_init(framebmp.nx(), framebmp.ny(), framebmp.data()));
-                                    probebmp.ptr.reset(kcpp_resize_bitmap_bounds(probebmp.ptr.release(), 0, probe_res));
+                                    probebmp.ptr.reset(kcpp_resize_bitmap_bounds(probebmp.ptr.release(), 0, next_res));
                                     if(!probebmp.ptr)
                                     {
                                         break;
@@ -5876,21 +5903,29 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                                     {
                                         break;
                                     }
+                                    prev_res = probe_res;
+                                    prev_cells = probe_cells;
+                                    probe_res = next_res;
                                     probe_cells = chunks_kv_cells(probechunks);
                                     if(probe_cells <= per_frame_cell_budget)
                                     {
-                                        best_res = probe_res;
+                                        if(probe_res > best_res)
+                                        {
+                                            best_res = probe_res;
+                                            best_cells = probe_cells;
+                                        }
                                     }
-                                    else if(probe_cells < low_cells)
+                                    else if(probe_res < hi_res)
                                     {
-                                        low_cells = probe_cells;
-                                        low_res = probe_res;
+                                        hi_res = probe_res;
+                                        hi_cells = probe_cells;
                                     }
                                 }
                                 //when no probe fit the share, an encoder min-token floor may still have bottomed the
-                                //cost out (take the cheapest probed size), or a fixed-output encoder ignores resolution
+                                //cost out (take the cheapest failing size), or a fixed-output encoder ignores resolution
                                 //entirely (keep full quality); either way the exact budget guard below bounds the total.
-                                const int chosen_res = (best_res > 0) ? best_res : ((low_cells < orig_cells) ? low_res : 0);
+                                const int chosen_res = (best_res > 0) ? best_res : ((hi_cells < orig_cells) ? hi_res : 0);
+                                const int chosen_cells = (best_res > 0) ? best_cells : hi_cells;
                                 if(chosen_res > 0)
                                 {
                                     frame_max_res = chosen_res;
@@ -5900,7 +5935,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                                     }
                                     if(!is_quiet && debugmode!=-1)
                                     {
-                                        printf("\nvideo: frame resolution capped at %dpx (%d KV cells, was %d at %dpx) so ~%d frames fit the %d-cell context budget\n", frame_max_res, (best_res > 0) ? probe_cells : low_cells, orig_cells, longside, expected_frames, video_cell_budget);
+                                        printf("\nvideo: frame resolution capped at %dpx (%d KV cells, was %d at %dpx) so ~%d frames fit the %d-cell context budget\n", frame_max_res, chosen_cells, orig_cells, longside, expected_frames, video_cell_budget);
                                     }
                                     mtmd::bitmap calibbmp(kcpp_resize_bitmap_bounds(framebmp.ptr.release(), frame_min_res, frame_max_res));
                                     if(calibbmp.ptr)
