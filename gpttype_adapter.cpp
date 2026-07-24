@@ -5713,45 +5713,26 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 //hard ceiling on the KV cells one video may occupy: the position-based token counts above cannot
                 //see the M-RoPE inflation, so without this a high-res video passes every check and then exhausts
                 //the KV cache mid-eval (decode error "failed to find a memory slot"). keep a quarter of the
-                //context free for the prompt, response and other media.
-                const int video_cell_budget = (nctx / 4) * 3;
+                //context free for the prompt, response and other media. an explicit videomaxtokens tightens it.
+                int video_cell_budget = (nctx / 4) * 3;
+                if(video_max_tokens > 0 && video_max_tokens < video_cell_budget)
+                {
+                    video_cell_budget = video_max_tokens;
+                }
+                //spread the budget over the frames we expect to sample. the first tokenized frame is measured
+                //against this per-frame share to calibrate the resolution cap (inside the loop below): actual
+                //pixels-per-token varies too much across encoders (Qwen3-VL ~32px/token side, Gemma4 clamps
+                //internally to <=280 tokens) for any fixed heuristic to convert cells to pixels accurately.
+                int expected_frames = video_max_frames;
+                if(duration_sec > 0.0f && !downsampled)
+                {
+                    int est = (int)(duration_sec * video_fps) + 1;
+                    expected_frames = std::min(expected_frames, std::max(1, est));
+                }
+                const int per_frame_cell_budget = std::max(1, video_cell_budget / std::max(1, expected_frames));
 
-                //frames inherit the image resolution clamp; when an explicit video token budget is set we tighten it.
-                //no public patch-size accessor is reachable from this TU, so approximate the token budget with a
-                //conservative 14px patch to derive a pixel cap (otherwise frames just use vision_max_res).
+                //frames inherit the image resolution clamp; the measured calibration below can only tighten it
                 int frame_max_res = vision_max_res;
-                if(video_max_tokens > 0)
-                {
-                    const int patch_px = 14;
-                    int tok_res = (int)(std::sqrt((double)video_max_tokens) * patch_px);
-                    if(tok_res > 0 && (frame_max_res <= 0 || tok_res < frame_max_res))
-                    {
-                        frame_max_res = tok_res;
-                    }
-                }
-                //also cap frame resolution by the per-video KV cell budget, spread over the frames we expect to
-                //sample, so dynamic-resolution encoders (Qwen-VL: cells scale with pixel area) downsize to fit the
-                //context instead of tripping the cell guard below and losing the tail of the video. the 14px patch
-                //heuristic under-estimates for merged-patch models, erring toward smaller frames + full coverage.
-                {
-                    int expected_frames = video_max_frames;
-                    if(duration_sec > 0.0f && !downsampled)
-                    {
-                        int est = (int)(duration_sec * video_fps) + 1;
-                        expected_frames = std::min(expected_frames, std::max(1, est));
-                    }
-                    const int patch_px = 14;
-                    int per_frame_cells = video_cell_budget / std::max(1, expected_frames);
-                    int budget_res = (int)(std::sqrt((double)per_frame_cells) * patch_px);
-                    if(budget_res > 0 && (frame_max_res <= 0 || budget_res < frame_max_res))
-                    {
-                        frame_max_res = budget_res;
-                        if(!is_quiet && debugmode!=-1)
-                        {
-                            printf("\nvideo: frame resolution capped at %dpx so ~%d frames fit the context budget (%d cells)\n", frame_max_res, expected_frames, video_cell_budget);
-                        }
-                    }
-                }
 
                 //mirror of the max heuristic above: derive a pixel floor from videomintokens so undersized frames
                 //get upscaled before tokenization. the model's own baked clip minimum still applies downstream regardless.
@@ -5856,7 +5837,44 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                             printf("\nWarning: MTMD video %d frame %d failed to tokenize (status %d), skipping frame.", i, frames_processed, tokenized);
                             continue;
                         }
-                        //exact per-frame guard: measured cells, so it holds even where the pixel-cap heuristic misestimates
+                        //calibrate the resolution cap off the first frame's measured cell cost - tokenization is
+                        //cheap (no encoder run) and exact, and every frame of a video shares one resolution, so
+                        //one measurement holds for the rest. only shrinks when the frame overshoots its share.
+                        if(frames_processed == 0)
+                        {
+                            const int framecells = chunks_kv_cells(chunks);
+                            const int longside = (int)std::max(framebmp.nx(), framebmp.ny());
+                            if(framecells > per_frame_cell_budget && longside > 1)
+                            {
+                                //cells scale with pixel area, so shrink the long side by sqrt of the overshoot
+                                int calib_res = (int)((double)longside * std::sqrt((double)per_frame_cell_budget / (double)framecells));
+                                calib_res = std::max(64, calib_res);
+                                if(calib_res < longside)
+                                {
+                                    frame_max_res = calib_res;
+                                    if(frame_min_res > frame_max_res)
+                                    {
+                                        frame_min_res = frame_max_res; //never let the floor exceed the cap
+                                    }
+                                    if(!is_quiet && debugmode!=-1)
+                                    {
+                                        printf("\nvideo: frame resolution capped at %dpx (measured %d KV cells at %dpx) so ~%d frames fit the %d-cell context budget\n", frame_max_res, framecells, longside, expected_frames, video_cell_budget);
+                                    }
+                                    mtmd::bitmap calibbmp(kcpp_resize_bitmap_bounds(framebmp.ptr.release(), frame_min_res, frame_max_res));
+                                    if(calibbmp.ptr)
+                                    {
+                                        framebmp.ptr = std::move(calibbmp.ptr);
+                                        mtmd::input_chunks rechunks(mtmd_input_chunks_init());
+                                        std::vector<const mtmd_bitmap *> rebitmaps = { framebmp.ptr.get() };
+                                        if(mtmd_tokenize(mtmd_ctx, rechunks.ptr.get(), &inp_txt, rebitmaps.data(), rebitmaps.size()) == 0)
+                                        {
+                                            chunks.ptr = std::move(rechunks.ptr);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        //exact per-frame guard: measured cells, so it holds even where the calibration misestimates
                         if(mediacellsneeded + chunks_kv_cells(chunks) > video_cell_budget)
                         {
                             cell_budget_hit = true;
