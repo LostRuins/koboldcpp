@@ -82,7 +82,7 @@ extra_images_max = 4 # for kontext/qwen img
 KcppVersion = "1.118"
 showdebug = True
 kcpp_instance = None #global running instance
-global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "autoswapmode": False}
+global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "autoswapmode": False, "autoswapSettings": {}}
 using_gui_launcher = False
 
 handle = None
@@ -4974,22 +4974,30 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                 imageReqs = ["/sdapi/v1/txt2img", "/sdapi/v1/img2img", "/sdapi/v1/upscale"] # "/sdapi/v1/sd-models", "/sdapi/v1/options", "/sdapi/v1/samplers"
 
                 swapModeChanged = False
-                if any(clean_path.endswith(e) for e in textReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "text"):
+                autoswapSettings = global_memory["autoswapSettings"]
+                skipTextUnload = autoswapSettings.get("skipTextUnload", False)
+                skipTTSUnload = autoswapSettings.get("skipTTSUnload", False)
+                skipSSTUnload = autoswapSettings.get("skipSSTUnload", False)
+                skipEmbedUnload = autoswapSettings.get("skipEmbedUnload", False)
+                skipMusicUnload = autoswapSettings.get("skipMusicUnload", False)
+                skipImageUnload = autoswapSettings.get("skipImageUnload", False)
+
+                if not skipTextUnload and any(clean_path.endswith(e) for e in textReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "text"):
                     global_memory["swapReqType"] = "text"
                     swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in sttReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "stt"):
+                elif not skipSSTUnload and any(clean_path.endswith(e) for e in sttReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "stt"):
                     global_memory["swapReqType"] = "stt"
                     swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in ttsReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "tts"):
+                elif not skipTTSUnload and any(clean_path.endswith(e) for e in ttsReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "tts"):
                     global_memory["swapReqType"] = "tts"
                     swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in embedReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "embed"):
+                elif not skipEmbedUnload and any(clean_path.endswith(e) for e in embedReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "embed"):
                     global_memory["swapReqType"] = "embed"
                     swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in musicReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "music"):
+                elif not skipMusicUnload and any(clean_path.endswith(e) for e in musicReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "music"):
                     global_memory["swapReqType"] = "music"
                     swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in imageReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "image"):
+                elif not skipImageUnload and any(clean_path.endswith(e) for e in imageReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "image"):
                     global_memory["swapReqType"] = "image"
                     swapModeChanged = True
 
@@ -8200,7 +8208,7 @@ def show_gui():
 
     tabs = ctk.CTkFrame(root, corner_radius = 0, width=windowwidth, height=windowheight-50)
     tabs.grid(row=0, stick="nsew")
-    tabnames= ["Quick Launch", "Hardware", "Context", "Loaded Files", "Network", "Horde Worker","Image Gen","Audio","Admin","Extra"]
+    tabnames= ["Quick Launch", "Hardware", "Context", "Loaded Files", "Network", "Horde Worker","Image Gen","Audio","Admin","Autoswap","Extra"]
     navbuttons = {}
     navbuttonframe = ctk.CTkFrame(tabs, width=int(104), height=int(tabs.cget("height")))
     navbuttonframe.grid(row=0, column=0, padx=2,pady=2)
@@ -8377,6 +8385,12 @@ def show_gui():
     singleinstance_var = ctk.IntVar(value=0)
     router_mode_var = ctk.IntVar(value=0)
     autoswap_mode_var = ctk.IntVar(value=0)
+    autoswap_skiptextunload_var = ctk.IntVar(value=0)
+    autoswap_skipsstunload_var = ctk.IntVar(value=0)
+    autoswap_skipttsunload_var = ctk.IntVar(value=0)
+    autoswap_skipembedunload_var = ctk.IntVar(value=0)
+    autoswap_skipmusicunload_var = ctk.IntVar(value=0)
+    autoswap_skipimageunload_var = ctk.IntVar(value=0)
     admin_unload_timeout_var = ctk.StringVar(value=str(0))
 
     nozenity_var = ctk.IntVar(value=0)
@@ -9356,6 +9370,15 @@ def show_gui():
     router_mode_box = makecheckbox(admin_tab, "Router Mode", router_mode_var, 21, 0, command=togglerouter, tooltiptxt="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.")
     autoswap_mode_box = makecheckbox(admin_tab, "Autoswap Mode", autoswap_mode_var, 23, 0,tooltiptxt="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.")
 
+    autoswap_tab = tabcontent["Autoswap"]
+    makelabel(autoswap_tab, "Autoswap Skip-Unload Options", 1, 0, "These options prevent specific model types from being unloaded during an autoswap. Useful when you want to keep certain models resident in memory across swaps. Requires Autoswap Mode to be enabled.")
+    makecheckbox(autoswap_tab, "Skip Text Model Unload", autoswap_skiptextunload_var, 3, 0, tooltiptxt="Skip unloading of text models during autoswap.")
+    makecheckbox(autoswap_tab, "Skip SST Model Unload", autoswap_skipsstunload_var, 5, 0, tooltiptxt="Skip unloading of SST (Speech-to-Text) models during autoswap.")
+    makecheckbox(autoswap_tab, "Skip TTS Model Unload", autoswap_skipttsunload_var, 7, 0, tooltiptxt="Skip unloading of TTS (Text-to-Speech) models during autoswap.")
+    makecheckbox(autoswap_tab, "Skip Embeddings Model Unload", autoswap_skipembedunload_var, 9, 0, tooltiptxt="Skip unloading of embedding models during autoswap.")
+    makecheckbox(autoswap_tab, "Skip Music Model Unload", autoswap_skipmusicunload_var, 11, 0, tooltiptxt="Skip unloading of music models during autoswap.")
+    makecheckbox(autoswap_tab, "Skip Image Model Unload", autoswap_skipimageunload_var, 13, 0, tooltiptxt="Skip unloading of image models during autoswap.")
+
     def kcpp_export_template():
         nonlocal kcpp_exporting_template
         kcpp_exporting_template = True
@@ -9694,6 +9717,12 @@ def show_gui():
         args.singleinstance = (singleinstance_var.get()==1)
         args.routermode = (router_mode_var.get()==1 and admin_var.get()==1)
         args.autoswapmode = (autoswap_mode_var.get()==1 and router_mode_var.get()==1 and admin_var.get()==1)
+        args.autoswapmode_skiptextunload = (autoswap_skiptextunload_var.get()==1)
+        args.autoswapmode_skipsstunload = (autoswap_skipsstunload_var.get()==1)
+        args.autoswapmode_skipttsunload = (autoswap_skipttsunload_var.get()==1)
+        args.autoswapmode_skipembedunload = (autoswap_skipembedunload_var.get()==1)
+        args.autoswapmode_skipmusicunload = (autoswap_skipmusicunload_var.get()==1)
+        args.autoswapmode_skipimageunload = (autoswap_skipimageunload_var.get()==1)
         args.baseconfig = baseconfig_var.get()
         args.adminunloadtimeout = (0 if admin_unload_timeout_var.get()=="" else int(admin_unload_timeout_var.get()))
         args.showgui = False #prevent showgui from leaking into configs, its cli only
@@ -9997,6 +10026,12 @@ def show_gui():
         admin_var.set(mydict["admin"] if ("admin" in mydict) else 0)
         router_mode_var.set(mydict["routermode"] if ("routermode" in mydict) else 0)
         autoswap_mode_var.set(mydict["autoswapmode"] if ("autoswapmode" in mydict) else 0)
+        autoswap_skiptextunload_var.set(1 if "autoswapmode_skiptextunload" in mydict and mydict["autoswapmode_skiptextunload"] else 0)
+        autoswap_skipsstunload_var.set(1 if "autoswapmode_skipsstunload" in mydict and mydict["autoswapmode_skipsstunload"] else 0)
+        autoswap_skipttsunload_var.set(1 if "autoswapmode_skipttsunload" in mydict and mydict["autoswapmode_skipttsunload"] else 0)
+        autoswap_skipembedunload_var.set(1 if "autoswapmode_skipembedunload" in mydict and mydict["autoswapmode_skipembedunload"] else 0)
+        autoswap_skipmusicunload_var.set(1 if "autoswapmode_skipmusicunload" in mydict and mydict["autoswapmode_skipmusicunload"] else 0)
+        autoswap_skipimageunload_var.set(1 if "autoswapmode_skipimageunload" in mydict and mydict["autoswapmode_skipimageunload"] else 0)
         admin_dir_var.set(mydict["admindir"] if ("admindir" in mydict and mydict["admindir"]) else "")
         baseconfig_var.set(mydict["baseconfig"] if ("baseconfig" in mydict and mydict["baseconfig"]) else "")
         admin_password_var.set(mydict["adminpassword"] if ("adminpassword" in mydict and mydict["adminpassword"]) else "")
@@ -11159,7 +11194,9 @@ def main(launch_args, default_args):
             input()
     else:  # manager command queue for admin mode
         with multiprocessing.Manager() as mp_manager:
-            global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "autoswapmode": False})
+            global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "autoswapmode": False, "autoswapSettings": {}})
+            global_memory["autoswapmode"] = args.autoswapmode
+            global_memory["autoswapSettings"] = build_autoswap_settings(args)
 
             if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
                 setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel) else False)
@@ -11270,6 +11307,7 @@ def main(launch_args, default_args):
                                     reload_from_new_args(defaultargs)
                                     reload_new_config(maintarget_filepath,vars(args),True)
                                 global_memory["autoswapmode"] = args.autoswapmode
+                                global_memory["autoswapSettings"] = build_autoswap_settings(args)
                                 kcpp_instance = multiprocessing.Process(target=kcpp_main_process,kwargs={"launch_args": args, "g_memory": global_memory, "gui_launcher": False})
                                 kcpp_instance.daemon = True
                                 kcpp_instance.start()
@@ -11369,24 +11407,43 @@ def mk_lora_info(imgloras, multipliers):
             preloaded_table.append(lora_entry)
     return preloaded_table, lora_path_map, lora_name_map
 
-def disableSwappedFieldsInConfig(args, swapReqType):
+def build_autoswap_settings(args):
+    return {
+        "skipTextUnload": getattr(args, "autoswapmode_skiptextunload", False) is not None and getattr(args, "autoswapmode_skiptextunload", False),
+        "skipTTSUnload": getattr(args, "autoswapmode_skipttsunload", False) is not None and getattr(args, "autoswapmode_skipttsunload", False),
+        "skipSSTUnload": getattr(args, "autoswapmode_skipsstunload", False) is not None and getattr(args, "autoswapmode_skipsstunload", False),
+        "skipEmbedUnload": getattr(args, "autoswapmode_skipembedunload", False) is not None and getattr(args, "autoswapmode_skipembedunload", False),
+        "skipMusicUnload": getattr(args, "autoswapmode_skipmusicunload", False) is not None and getattr(args, "autoswapmode_skipmusicunload", False),
+        "skipImageUnload": getattr(args, "autoswapmode_skipimageunload", False) is not None and getattr(args, "autoswapmode_skipimageunload", False),
+    }
+
+
+def disableSwappedFieldsInConfig(args, swapReqType, autoswapSettings):
     print(f"Swapping to type: {swapReqType}")
-    if swapReqType != "text":
+
+    skipTextUnload = autoswapSettings.get("skipTextUnload", False)
+    skipTTSUnload = autoswapSettings.get("skipTTSUnload", False)
+    skipSSTUnload = autoswapSettings.get("skipSSTUnload", False)
+    skipEmbedUnload = autoswapSettings.get("skipEmbedUnload", False)
+    skipMusicUnload = autoswapSettings.get("skipMusicUnload", False)
+    skipImageUnload = autoswapSettings.get("skipImageUnload", False)
+
+    if not skipTextUnload and swapReqType != "text":
         for e in ["model", "model_param", "lora", "mmproj"]:
             setattr(args, e, "")
-    if swapReqType != "stt":
+    if not skipSSTUnload and swapReqType != "stt":
         for e in ["whispermodel"]:
             setattr(args, e, "")
-    if swapReqType != "tts":
+    if not skipTTSUnload and swapReqType != "tts":
         for e in ["ttsmodel", "ttswavtokenizer"]:
             setattr(args, e, "")
-    if swapReqType != "embed":
+    if not skipEmbedUnload and swapReqType != "embed":
         for e in ["embeddingsmodel"]:
             setattr(args, e, "")
-    if swapReqType != "music":
+    if not skipMusicUnload and swapReqType != "music":
         for e in ["musicllm", "musicembeddings", "musicdiffusion", "musicvae"]:
             setattr(args, e, "")
-    if swapReqType != "image":
+    if not skipImageUnload and swapReqType != "image":
         for e in ["sdmodel", "sdt5xxl", "sdclip1", "sdclip2", "sdphotomaker", "sdupscaler", "sdvae", "sdaudiovae", "sdlora"]:
             setattr(args, e, "")
 
@@ -11418,6 +11475,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     if args.autoswapmode is not None and args.autoswapmode:
         autoswapmode = True
         global_memory["autoswapmode"] = True
+        global_memory["autoswapSettings"] = build_autoswap_settings(args)
         if args.model_param and args.model_param!="":
             tempName = os.path.basename(os.path.abspath(args.model_param))
             tempName = os.path.splitext(tempName)[0]
@@ -11447,11 +11505,11 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             tempName = os.path.splitext(tempName)[0]
             imageName = sanitize_string(tempName)
         if global_memory["swapReqType"] is not None:
-            disableSwappedFieldsInConfig(args, global_memory["swapReqType"])
+            disableSwappedFieldsInConfig(args, global_memory["swapReqType"], global_memory["autoswapSettings"])
         else:
             global_memory["swapReqType"] = "nomodel"
             setattr(args, "nomodel", True)
-            disableSwappedFieldsInConfig(args, "nomodel")
+            disableSwappedFieldsInConfig(args, "nomodel", global_memory["autoswapSettings"])
     else:
         global_memory["autoswapmode"] = False
 
@@ -12601,6 +12659,14 @@ if __name__ == '__main__':
     admingroup.add_argument("--reqtimeout", metavar=('[seconds]'), help="Timeout in seconds for HTTP requests.", type=int, default=default_reqtimeout)
     admingroup.add_argument("--autoswapmode", help="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.", action='store_true')
     admingroup.add_argument("--baseconfig", help="Specify a base .kcpps config to apply, if no custom base config is selected during a model swap", default="")
+
+    autoswapgroup = parser.add_argument_group('Autoswap Options (Admin Mode)')
+    autoswapgroup.add_argument("--autoswapmode_skiptextunload", help="Skip unloading of text models during autoswap.", action='store_true')
+    autoswapgroup.add_argument("--autoswapmode_skipsstunload", help="Skip unloading of SST models during autoswap.", action='store_true')
+    autoswapgroup.add_argument("--autoswapmode_skipttsunload", help="Skip unloading of TTS models during autoswap.", action='store_true')
+    autoswapgroup.add_argument("--autoswapmode_skipembedunload", help="Skip unloading of embedding models during autoswap.", action='store_true')
+    autoswapgroup.add_argument("--autoswapmode_skipmusicunload", help="Skip unloading of music models during autoswap.", action='store_true')
+    autoswapgroup.add_argument("--autoswapmode_skipimageunload", help="Skip unloading of image models during autoswap.", action='store_true')
 
     deprecatedgroup = parser.add_argument_group('Deprecated Commands, DO NOT USE!')
     deprecatedgroup.add_argument("--hordeconfig", help=argparse.SUPPRESS, nargs='+')
