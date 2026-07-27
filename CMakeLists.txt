@@ -63,9 +63,6 @@ add_compile_definitions(GGML_USE_RPC)
 add_compile_definitions(NOMINMAX)
 add_compile_definitions(_REGEX_MAX_STACK_COUNT=5000)
 
-if (GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12)
-    add_compile_definitions(GGML_HIP_ROCWMMA_FATTN_GFX12)
-endif()
 
 if (MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")

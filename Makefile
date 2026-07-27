@@ -299,21 +299,6 @@ endif
 HCC         := $(ROCM_PATH)/llvm/bin/clang
 HCXX        := $(ROCM_PATH)/llvm/bin/clang++
 endif
-ifdef GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12
-HIPFLAGS   += -DGGML_HIP_ROCWMMA_FATTN_GFX12
-CFLAGS     += -DGGML_HIP_ROCWMMA_FATTN_GFX12
-CXXFLAGS   += -DGGML_HIP_ROCWMMA_FATTN_GFX12
-endif
-ifdef LLAMA_NO_WMMA
-HIPFLAGS   += -DGGML_HIP_NO_ROCWMMA_FATTN
-else
-DETECT_ROCWMMA := $(shell find -L /opt/rocm/include /usr/include -type f -name rocwmma.hpp 2>/dev/null | head -n 1)
-ifdef DETECT_ROCWMMA
-HIPFLAGS   += -DGGML_HIP_ROCWMMA_FATTN -I$(dir $(DETECT_ROCWMMA))
-else
-HIPFLAGS   += -DGGML_HIP_NO_ROCWMMA_FATTN
-endif
-endif
 
 HIPFLAGS   += -DGGML_USE_HIP -DGGML_HIP_NO_VMM -DGGML_USE_CUDA $(shell $(ROCM_PATH)/bin/hipconfig -C)
 HIPLDFLAGS    += -L$(ROCM_PATH)/lib -Wl,-rpath=$(ROCM_PATH)/lib
@@ -734,7 +719,7 @@ otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
 
 OBJS_SDTYPE := otherarch/sdcpp/sdtype_adapter.o $(OBJS_SDCOMMON)
 
-LLAMASERVER_SRCS := tools/server/main.cpp tools/server/server.cpp tools/server/server-schema.cpp tools/server/server-chat.cpp tools/server/server-common.cpp tools/server/server-context.cpp tools/server/server-http.cpp tools/server/server-models.cpp tools/server/server-queue.cpp tools/server/server-task.cpp tools/server/server-tools.cpp tools/server/ui.cpp tools/server/server-stream.cpp
+LLAMASERVER_SRCS := tools/server/main.cpp tools/server/server.cpp tools/server/server-schema.cpp tools/server/server-chat.cpp tools/server/server-common.cpp tools/server/server-context.cpp tools/server/server-http.cpp tools/server/server-models.cpp tools/server/server-queue.cpp tools/server/server-task.cpp tools/server/server-tools.cpp tools/server/server-mcp.cpp tools/server/ui.cpp tools/server/server-stream.cpp common/subproc.cpp
 COMMON_DOWNLOAD_SRCS := common/download.cpp common/hf-cache.cpp vendor/cpp-httplib/httplib.cpp
 LLAMASERVER_COMMON_SRCS := common/arg.cpp common/preset.cpp $(COMMON_DOWNLOAD_SRCS)
 LLAMASERVER_CXXFLAGS := -I./tools/mtmd

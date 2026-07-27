@@ -1178,6 +1178,7 @@ static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inp
         std::string custom_reference_audio_str = inputs.reference_audio;
         std::vector<float> custom_reference_audio_pcmf32;
         std::string speaker_instruction = inputs.speaker_instruction;
+        std::string ttslanguage = inputs.language;
 
         int speakerID = inputs.speaker_seed;
         //{"aiden":2861, "dylan":2878, "eric":2875, "ono_anna":2873,"ryan":3061, "serena":3066, "sohee":2864, "uncle_fu":3010, "vivian":3065}
@@ -1200,6 +1201,7 @@ static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inp
             printf("\nUsing Audio Seed: %d, SpeakerID: %d", audio_seed, speakerID);
         }
         qwen3tts_runner.set_seed(audio_seed);
+        qwen3tts_runner.set_language(ttslanguage);
 
         if(custom_reference_audio_str!="")
         {

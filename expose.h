@@ -51,6 +51,7 @@ struct load_model_inputs
     const int visionmaxtokens = -1;
     const bool use_mmap = false;
     const bool use_mlock = false;
+    const bool no_host = false;
     const bool use_mtp = false;
     const bool use_smartcontext = false;
     const bool use_contextshift = false;
@@ -322,6 +323,7 @@ struct tts_generation_inputs
     const char * custom_speaker_data = "";
     const char * reference_audio = "";
     const char * speaker_instruction = "";
+    const char * language = "";
     const bool use_mp3 = false;
 };
 struct tts_generation_outputs

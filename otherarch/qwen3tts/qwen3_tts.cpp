@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -71,6 +72,46 @@ Qwen3TTS::~Qwen3TTS() = default;
 void Qwen3TTS::set_seed(int seed)
 {
    this->transformer_.set_seed(seed);
+}
+
+static int q3ttslang = 2050;
+void Qwen3TTS::set_language(std::string lang)
+{
+    q3ttslang = 2050; //fallback to english
+
+    for (char & c : lang) {
+        c = (char)std::tolower((unsigned char)c);
+    }
+
+    const size_t region_pos = lang.find_first_of("-_");
+    if (region_pos != std::string::npos) {
+        lang.resize(region_pos);
+    }
+
+    struct lang_code {
+        const char * name;
+        int code;
+    };
+
+    static const lang_code codes[] = {
+        {"en", 2050}, {"eng", 2050}, {"english", 2050},
+        {"zh", 2055}, {"zho", 2055}, {"chi", 2055}, {"chinese", 2055}, {"mandarin", 2055},
+        {"de", 2053}, {"deu", 2053}, {"ger", 2053}, {"german", 2053},
+        {"es", 2054}, {"spa", 2054}, {"spanish", 2054},
+        {"ja", 2058}, {"jpn", 2058}, {"japanese", 2058},
+        {"fr", 2061}, {"fra", 2061}, {"fre", 2061}, {"french", 2061},
+        {"ko", 2064}, {"kor", 2064}, {"korean", 2064},
+        {"ru", 2069}, {"rus", 2069}, {"russian", 2069},
+        {"it", 2070}, {"ita", 2070}, {"italian", 2070},
+        {"pt", 2071}, {"por", 2071}, {"portuguese", 2071},
+    };
+
+    for (const lang_code & entry : codes) {
+        if (lang == entry.name) {
+            q3ttslang = entry.code;
+            return;
+        }
+    }
 }
 
 bool Qwen3TTS::load_models(const std::string & model_dir) {
@@ -343,7 +384,7 @@ tts_result Qwen3TTS::synthesize_internal(const std::string & text, const std::st
     std::vector<int32_t> speech_codes;
     if (!transformer_.generate(text_tokens.data(), (int32_t)text_tokens.size(),
                                speaker_embedding, params.max_audio_tokens, speech_codes,
-                               2050, params.repetition_penalty,
+                               q3ttslang, params.repetition_penalty,
                                params.temperature, params.top_k, speakerid, instruct_tok_data, instruct_tok_count)) {
         result.error_msg = "Failed to generate speech codes: " + transformer_.get_error();
         return result;

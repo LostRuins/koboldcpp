@@ -82,6 +82,7 @@ public:
     ~Qwen3TTS();
 
     void set_seed(int seed);
+    void set_language(std::string lang);
 
     // Load all models from directory
     // model_dir should contain: transformer.gguf, tokenizer.gguf, vocoder.gguf

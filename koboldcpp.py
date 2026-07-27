@@ -273,6 +273,7 @@ class load_model_inputs(ctypes.Structure):
                 ("visionmaxtokens", ctypes.c_int),
                 ("use_mmap", ctypes.c_bool),
                 ("use_mlock", ctypes.c_bool),
+                ("no_host", ctypes.c_bool),
                 ("use_mtp", ctypes.c_bool),
                 ("use_smartcontext", ctypes.c_bool),
                 ("use_contextshift", ctypes.c_bool),
@@ -504,6 +505,7 @@ class tts_generation_inputs(ctypes.Structure):
                 ("custom_speaker_data", ctypes.c_char_p),
                 ("reference_audio", ctypes.c_char_p),
                 ("speaker_instruction", ctypes.c_char_p),
+                ("language", ctypes.c_char_p),
                 ("use_mp3", ctypes.c_bool)]
 
 class tts_generation_outputs(ctypes.Structure):
@@ -1969,6 +1971,7 @@ def load_model(model_filename):
     inputs.blasthreads = args.blasthreads
     inputs.use_mmap = args.usemmap
     inputs.use_mlock = args.usemlock
+    inputs.no_host = True
     inputs.use_mtp = args.usemtp
     inputs.lora_filename = "".encode("UTF-8")
     inputs.lora_multiplier = args.loramult
@@ -3066,10 +3069,12 @@ def tts_generate(genparams):
     inputs = tts_generation_inputs()
     inputs.custom_speaker_voice = normalized_voice.encode("UTF-8")
     ttsinstruction = genparams.get("instruction", "")
+    ttslang = genparams.get("language", "en")
     # if no instruction provided, extract from text
     if not genparams.get("instruction", ""):
         prompt, ttsinstruction = tts_extract_instruction(prompt)
     inputs.speaker_instruction = ttsinstruction.encode("UTF-8")
+    inputs.language = ttslang.encode("UTF-8")
     response_format_mp3 = True if (genparams.get("response_format")=="mp3") else False
     inputs.use_mp3 = genparams.get("use_mp3", response_format_mp3)
     inputs.prompt = prompt.encode("UTF-8")

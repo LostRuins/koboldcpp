@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 <head>
 	<script id="init-config">
-	const LITEVER = 339;
+	const LITEVER = 340;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -5359,7 +5359,7 @@ Current version indicated by LITEVER below.
 
 	function preserve_protected_fields(source) {
 		const out = {};
-		for (const key in PROTECTED_FIELDS) {
+		for (let key in PROTECTED_FIELDS) {
 			if (source[key] !== undefined) {
 			out[key] = source[key];
 			}
@@ -6013,6 +6013,44 @@ Current version indicated by LITEVER below.
 	{
 		return "["+(new Date().toLocaleTimeString([], {year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'}))+"]";
 	}
+	function get_thinking_boundary_regex()
+	{
+		let raw_boundary_tags = [
+			get_instructstartplaceholder(),
+			get_instructendplaceholder(),
+			get_instructsysplaceholder(),
+			get_instructstartplaceholder_end(),
+			get_instructendplaceholder_end(),
+			get_instructsysplaceholder_end()
+		];
+		let boundary_tags = [];
+		for(let i=0;i<raw_boundary_tags.length;++i)
+		{
+			let tag = raw_boundary_tags[i];
+			if(tag)
+			{
+				if(boundary_tags.indexOf(tag)==-1)
+				{
+					boundary_tags.push(tag);
+				}
+				tag = tag.trim();
+				if(tag && boundary_tags.indexOf(tag)==-1)
+				{
+					boundary_tags.push(tag);
+				}
+			}
+		}
+		if(boundary_tags.length==0)
+		{
+			return "";
+		}
+		return `(?:${boundary_tags.map(function(tag) { return escapeRegExp(tag); }).join("|")})`;
+	}
+	function get_thinking_content_regex()
+	{
+		const boundary = get_thinking_boundary_regex();
+		return boundary ? `(?:(?!${boundary})[\\s\\S])*?` : `[\\s\\S]*?`;
+	}
 	function get_thinking_regex()
 	{
 		if(!localsettings.start_thinking_tag || !localsettings.stop_thinking_tag)
@@ -6021,7 +6059,7 @@ Current version indicated by LITEVER below.
 		}
 		const safeStart = escapeRegExp(localsettings.start_thinking_tag);
 		const safeStop = escapeRegExp(localsettings.stop_thinking_tag);
-		return `${safeStart}([\\s\\S]*?)${safeStop}`;
+		return `${safeStart}(${get_thinking_content_regex()})${safeStop}`;
 	}
 	function get_orphaned_thinking_regex(tag)
 	{
@@ -6031,7 +6069,7 @@ Current version indicated by LITEVER below.
 		}
 		const safeStart = escapeRegExp(get_instructendplaceholder());
 		const safeStop = escapeRegExp(tag);
-		return `${safeStart}([\\s\\S]*?)${safeStop}`;
+		return `${safeStart}(${get_thinking_content_regex()})${safeStop}`;
 	}
 
 	function remove_all_instruct_tags(text)
@@ -10248,23 +10286,23 @@ Current version indicated by LITEVER below.
 		return new_save_storyobj;
 	}
 
-	function load_file(event) {
+	function load_file(event, to_groupchat=false) {
 		let input = event.target;
 
 		if (input.files.length > 0) {
 
 			var selectedFile = input.files[0];
 
-			load_selected_file(selectedFile);
+			load_selected_file(selectedFile, to_groupchat);
 
-			document.getElementById("loadfileinput").value = "";
+			input.value = "";
 		} else {
 			console.log("No file to load")
 		}
 	};
 
 	//attempt to load a file from disk. could be any format, even images
-	function load_selected_file(selectedFile)
+	function load_selected_file(selectedFile, to_groupchat=false)
 	{
 		var selectedFilename = "";
 		if(selectedFile)
@@ -10281,7 +10319,7 @@ Current version indicated by LITEVER below.
 				//we don't want to fiddle with the file as its very complex. only handle the parts we are interested in, and just leave the rest untouched.
 				if (is_kai_json(new_loaded_storyobj) && !new_loaded_storyobj.scenarioVersion) {
 					//quick sanity check. if prompt does not exist, this is not a KAI save.
-					kai_json_load(new_loaded_storyobj,false);
+					kai_json_load(new_loaded_storyobj,false, false, true, to_groupchat);
 					if (selectedFilename && selectedFilename != "") {
 						localsettings.last_known_filename = selectedFilename;
 					}
@@ -10290,15 +10328,19 @@ Current version indicated by LITEVER below.
 					let has_tav_wi_check = has_tavern_wi_check(new_loaded_storyobj);
 					if (!new_loaded_storyobj.scenarioVersion && (new_loaded_storyobj.name != null || new_loaded_storyobj.description != null ||
 						new_loaded_storyobj.personality != null || (new_loaded_storyobj.spec=="chara_card_v2" || new_loaded_storyobj.spec=="chara_card_v3") || has_tav_wi_check)) {
-						load_tavern_obj(new_loaded_storyobj);
+						load_tavern_obj(new_loaded_storyobj,to_groupchat);
 					}
 					else if (new_loaded_storyobj.char_name != null || new_loaded_storyobj.char_persona != null) {
 						//check for ooba text generation fields (character)
-						load_ooba_obj(new_loaded_storyobj);
+						load_ooba_obj(new_loaded_storyobj,to_groupchat);
 					}
 					else if(new_loaded_storyobj.md && new_loaded_storyobj.savedsettings) //add some compat loading for sharefiles
 					{
-						kai_json_load(new_loaded_storyobj,false);
+						kai_json_load(new_loaded_storyobj,false, false, true, to_groupchat);
+					}
+					else if(to_groupchat)
+					{
+						msgbox("Could not import selected file as a group chat participant. Please select a KoboldAI save, Tavern character card, Risu card, or compatible Ooba character file.");
 					}
 					else if(new_loaded_storyobj.scenarioVersion>1 && new_loaded_storyobj.scenarioVersion<10)
 					{
@@ -10324,37 +10366,24 @@ Current version indicated by LITEVER below.
 					const data = pngfr.result;
 					const arr = new Uint8Array(data);
 
-					function setImgAsAvatar(data)
-					{
-						compressImage(data, (compressedImageURI, aspectratio) => {
-							aestheticInstructUISettings.AI_portrait = compressedImageURI;
-							document.getElementById('portrait_ratio_AI').value = aspectratio.toFixed(2);
-							refreshAestheticPreview(true);
-							render_gametext();
-						}, true, AVATAR_PX);
-					}
-
 					// 1. Try Tavern PNG
 					let result = convertTavernPng(arr);
 					if (result) {
-						load_tavern_obj(result);
-						setImgAsAvatar(data);
+						load_tavern_obj(result,to_groupchat,data);
 						return;
 					}
 
 					// 2. Try Tavern EXIF
 					result = getTavernExifJSON(arr);
 					if (result) {
-						load_tavern_obj(result);
-						setImgAsAvatar(data);
+						load_tavern_obj(result,to_groupchat,data);
 						return;
 					}
 
 					// 3. Try Risu V3
 					result = extractRisuData(arr);
 					if (result) {
-						load_tavern_obj(result);
-						setImgAsAvatar(data);
+						load_tavern_obj(result,to_groupchat,data);
 						return;
 					}
 
@@ -10362,11 +10391,17 @@ Current version indicated by LITEVER below.
 					try {
 						result = UnzipKAISTORYFile(arr);
 						if (result) {
-							kai_json_load(result, false);
+							kai_json_load(result, false, false, true, to_groupchat);
 							return;
 						}
 					} catch (error) {
 						console.log("Unzip failed: " + error);
+					}
+
+					if(to_groupchat)
+					{
+						msgbox("Could not import selected file as a group chat participant. Please select a KoboldAI save, Tavern character card, Risu card, or compatible Ooba character file.");
+						return;
 					}
 
 					//try JSONL
@@ -10434,8 +10469,19 @@ Current version indicated by LITEVER below.
 		return is_kai;
 	}
 
-	function kai_json_load(storyobj, force_load_settings, ignore_multiplayer_sync=false, save_after_loading=true)
+	function kai_json_load(storyobj, force_load_settings, ignore_multiplayer_sync=false, save_after_loading=true, to_groupchat=false)
 	{
+		if(to_groupchat)
+		{
+			let savedsettings = storyobj.savedsettings || {};
+			let savedaestheticsettings = storyobj.savedaestheticsettings || {};
+			let chatopponent = savedsettings.chatopponent?String(savedsettings.chatopponent).split("||$||")[0]:defaultchatopponent;
+			let memory = storyobj.memory?storyobj.memory:"";
+			memory = replaceAll(memory,"{{char}}",chatopponent,true);
+			let portrait = (savedaestheticsettings.AI_portrait && savedaestheticsettings.AI_portrait!="default") ? savedaestheticsettings.AI_portrait : null;
+			add_another_participant_from_file({name:chatopponent,ctx_memory:memory,portrait:portrait});
+			return;
+		}
 		//either show popup or just proceed to load
 		handle_advload_popup((localsettings.show_advanced_load && !force_load_settings),()=>
 		{
@@ -11065,8 +11111,20 @@ Current version indicated by LITEVER below.
 		render_gametext(true);
 		sync_multiplayer(true);
 	}
-	function load_tavern_obj(obj)
+	function load_tavern_obj(obj, to_groupchat=false, image_data=null)
 	{
+		if(to_groupchat)
+		{
+			if((obj.spec=="chara_card_v2"||obj.spec=="chara_card_v3") && obj.data!=null)
+			{
+				obj = obj.data;
+			}
+			let chatopponent = obj.name?obj.name:defaultchatopponent;
+			let memory = [obj.description, obj.personality].filter(Boolean).join("\n\n");
+			memory = replaceAll(memory,"{{char}}",chatopponent,true);
+			add_another_participant_from_file({name: chatopponent,ctx_memory:memory,portrait:image_data});
+			return;
+		}
 		let selectedgreeting = "";
 		let load_tav_obj_confirm_p1 = function(usechatmode) // need second input for alt greeting
 		{
@@ -11214,11 +11272,28 @@ Current version indicated by LITEVER below.
 		{
 			load_tav_obj_confirm_p1(true);
 		}
+		//set image as avatar
+		if(image_data)
+		{
+			compressImage(image_data, (compressedImageURI, aspectratio) => {
+				aestheticInstructUISettings.AI_portrait = compressedImageURI;
+				document.getElementById('portrait_ratio_AI').value = aspectratio.toFixed(2);
+				refreshAestheticPreview(true);
+				render_gametext();
+			}, true, AVATAR_PX);
+		}
 	}
-	function load_ooba_obj(obj)
+	function load_ooba_obj(obj, to_groupchat=false)
 	{
 		console.log("Loading ooba obj");
 		let chatopponent = obj.char_name?obj.char_name:defaultchatopponent;
+		if(to_groupchat)
+		{
+			let memory = obj.char_persona?obj.char_persona:"";
+			memory = replaceAll(memory,"{{char}}",chatopponent,true);
+			add_another_participant_from_file({name:chatopponent,ctx_memory:memory,portrait:null});
+			return;
+		}
 		let myname = ((localsettings.chatname && localsettings.chatname!="")?localsettings.chatname:"User");
 		let memory = obj.char_persona?("Persona: "+obj.char_persona):"";
 		let scenario = obj.world_scenario?obj.world_scenario:"";
@@ -21598,7 +21673,8 @@ Current version indicated by LITEVER below.
 					if (oai_payload.messages && Array.isArray(oai_payload.messages))
 					{
 						const systemInstructions = [];
-						for (const msg of oai_payload.messages) {
+						for (let i = 0; i < oai_payload.messages.length; i++) {
+							var msg = oai_payload.messages[i];
 							// 1. Handle System Instructions
 							if (msg.role === 'system') {
 								systemInstructions.push({ text: msg.content });
@@ -21615,7 +21691,8 @@ Current version indicated by LITEVER below.
 							}
 							else if (Array.isArray(msg.content))  // Handle Multimodal Arrays (Text + Image + Audio)
 							{
-								for (const item of msg.content) {
+								for (var j = 0; j < msg.content.length; j++) {
+									var item = msg.content[j];
 									if (item.type === 'text') {
 										parts.push({ text: item.text });
 									} else if (item.type === 'image_url') {
@@ -28106,6 +28183,8 @@ Current version indicated by LITEVER below.
 			}
 			gs += `</tbody></table>`;
 			gs += `<br><div class="ui-settings-inline color_blueurl groupchat-inline-action" onclick="add_another_participant(true)">Add AI Participant</div>`;
+			gs+= `<input type="file" id="loadgroupchatinput" accept="*" onchange="load_file(event,true)" style="display:none;">`;
+			gs += `Alternatively, <a href="#" class="color_blueurl groupchat-inline-action" onclick="document.getElementById('loadgroupchatinput').click()"><b>click here to import an existing Tavern Character Card</b></a>.`;
 		}
 		else if(localsettings.opmode==4 && !localsettings.inject_chatnames_instruct)
 		{
@@ -28308,9 +28387,7 @@ Current version indicated by LITEVER below.
 	}
 	function impersonate_message(index)
 	{
-		hide_popups();
-
-		if(localsettings.opmode==3)
+		if(localsettings.opmode==3 || (localsettings.opmode==4 && localsettings.inject_chatnames_instruct))
 		{
 			let grouplist = localsettings.chatopponent.split("||$||");
 			let target = grouplist[index];
@@ -28321,8 +28398,8 @@ Current version indicated by LITEVER below.
 				{
 					gametext_arr.push("\n"+target+": "+userinput);
 					render_gametext();
+					hide_popups();
 				}
-				hide_popups();
 			},false);
 		}
 		else
@@ -28370,6 +28447,35 @@ Current version indicated by LITEVER below.
 				}
 			}
 		},false);
+	}
+	function add_another_participant_from_file(obj)
+	{
+		let name = sanitize_groupchat_participant_name(obj.name);
+		if(name!="")
+		{
+			let names = groupchat_bot_names();
+			names.push(name);
+			set_groupchat_bot_names(names);
+			let bot_data = get_groupchat_bot_meta(name);
+			if(obj.ctx_memory)
+			{
+				bot_data.ctx_memory = obj.ctx_memory;
+				set_groupchat_bot_meta(name, bot_data);
+			}
+			if(obj.portrait)
+			{
+				compressImage(obj.portrait, (compressedImageURI, aspectratio) => {
+					bot_data.portrait = compressedImageURI;
+					bot_data.portrait_ratio = aspectratio.toFixed(2);
+					set_groupchat_bot_meta(name, bot_data);
+					show_groupchat_select();
+				}, true, AVATAR_PX);
+			}
+			else
+			{
+				show_groupchat_select();
+			}
+		}
 	}
 	function confirm_groupchat_select()
 	{
@@ -28831,7 +28937,7 @@ Current version indicated by LITEVER below.
 		let participantStyling = "";
 
 		let groupchat_data = ensure_groupchat_data();
-		for (const key in groupchat_data) {
+		for (let key in groupchat_data) {
 			if (groupchat_data.hasOwnProperty(key)) {
 				let currchar = normalize_groupchat_bot_meta(groupchat_data[key]);
 				let participantClass = `aui_participant_${key}`;
