@@ -1107,6 +1107,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
 
                 std::vector<uint8_t> read_buffer;
                 std::vector<uint8_t> convert_buffer;
+                std::vector<uint8_t> zip_entry_buffer;
                 std::vector<uint8_t> dequant_buffer;
                 std::vector<uint8_t> scale_buffer;
 
@@ -1147,37 +1148,63 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
 
                     size_t nbytes_to_read = tensor_storage.nbytes_to_read();
 
-                    auto read_data_at = [&](char* buf, size_t n, uint64_t offset) {
+                    auto read_data_at = [&](char* buf, size_t n, uint64_t offset) -> bool {
                         if (zip != nullptr) {
-                            zip_entry_openbyindex(zip, tensor_storage.index_in_zip);
+                            if (zip_entry_openbyindex(zip, tensor_storage.index_in_zip) != 0) {
+                                LOG_ERROR("failed to open zip entry for tensor '%s'", tensor_storage.name.c_str());
+                                return false;
+                            }
                             size_t entry_size = zip_entry_size(zip);
+                            if (offset > entry_size) {
+                                LOG_ERROR("tensor '%s' exceeds its zip storage entry", tensor_storage.name.c_str());
+                                zip_entry_close(zip);
+                                return false;
+                            }
+                            size_t tensor_offset = static_cast<size_t>(offset);
+                            if (n > entry_size - tensor_offset) {
+                                LOG_ERROR("tensor '%s' exceeds its zip storage entry", tensor_storage.name.c_str());
+                                zip_entry_close(zip);
+                                return false;
+                            }
+
                             if (entry_size != n || offset != 0) {
                                 int64_t t_memcpy_start;
-                                read_buffer.resize(entry_size);
-                                zip_entry_noallocread(zip, (void*)read_buffer.data(), entry_size);
+                                zip_entry_buffer.resize(entry_size);
+                                auto bytes_read = zip_entry_noallocread(zip, (void*)zip_entry_buffer.data(), entry_size);
+                                if (bytes_read < 0 || static_cast<size_t>(bytes_read) != entry_size) {
+                                    LOG_ERROR("failed to read zip entry for tensor '%s'", tensor_storage.name.c_str());
+                                    zip_entry_close(zip);
+                                    return false;
+                                }
                                 t_memcpy_start = ggml_time_ms();
-                                memcpy((void*)buf, (void*)(read_buffer.data() + offset), n);
+                                memcpy((void*)buf, (void*)(zip_entry_buffer.data() + tensor_offset), n);
                                 memcpy_time_ms.fetch_add(ggml_time_ms() - t_memcpy_start);
                             } else {
-                                zip_entry_noallocread(zip, (void*)buf, n);
+                                auto bytes_read = zip_entry_noallocread(zip, (void*)buf, n);
+                                if (bytes_read < 0 || static_cast<size_t>(bytes_read) != n) {
+                                    LOG_ERROR("failed to read zip entry for tensor '%s'", tensor_storage.name.c_str());
+                                    zip_entry_close(zip);
+                                    return false;
+                                }
                             }
                             zip_entry_close(zip);
                         } else if (mmapped) {
                             if (!mmapped->copy_data(buf, n, offset)) {
                                 LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
-                                failed = true;
+                                return false;
                             }
                         } else {
                             file.seekg(offset);
                             file.read(buf, n);
                             if (!file) {
                                 LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
-                                failed = true;
+                                return false;
                             }
                         }
+                        return true;
                     };
-                    auto read_data = [&](char* buf, size_t n) {
-                        read_data_at(buf, n, tensor_storage.offset);
+                    auto read_data = [&](char* buf, size_t n) -> bool {
+                        return read_data_at(buf, n, tensor_storage.offset);
                     };
 
                     char* read_buf    = nullptr;
@@ -1219,7 +1246,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                     }
 
                     t0 = ggml_time_ms();
-                    read_data(read_buf, nbytes_to_read);
+                    if (!read_data(read_buf, nbytes_to_read)) {
+                        failed = true;
+                        break;
+                    }
                     t1 = ggml_time_ms();
                     read_time_ms.fetch_add(t1 - t0);
 

@@ -54,9 +54,9 @@ static bool backend_supports_host_buffer(ggml_backend_t backend) {
 }
 
 static bool device_supports_param_op(ggml_backend_dev_t device,
-                                      ggml_tensor* weight,
-                                      enum ggml_op op,
-                                      ggml_backend_buffer_type_t buft) {
+                                     ggml_tensor* weight,
+                                     enum ggml_op op,
+                                     ggml_backend_buffer_type_t buft) {
     if (op == GGML_OP_NONE) {
         return true;
     }
