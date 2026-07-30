@@ -1901,6 +1901,7 @@ bool SDGenerationParams::from_json_str(
 
     load_if_exists("strength", strength);
     load_if_exists("control_strength", control_strength);
+    load_if_exists("ip_adapter_strength", ip_adapter_strength);
     load_if_exists("moe_boundary", moe_boundary);
     load_if_exists("vace_strength", vace_strength);
 
@@ -2070,6 +2071,10 @@ bool SDGenerationParams::from_json_str(
     }
     if (!parse_image_json_field(j, "control_image", 3, width, height, control_image)) {
         LOG_ERROR("invalid control_image");
+        return false;
+    }
+    if (!parse_image_json_field(j, "ip_adapter_image", 3, width, height, ip_adapter_image)) {
+        LOG_ERROR("invalid ip_adapter_image");
         return false;
     }
 
@@ -2807,6 +2812,7 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
     root["clip_skip"]             = gen_params.clip_skip;
     root["strength"]              = gen_params.strength;
     root["control_strength"]      = gen_params.control_strength;
+    root["ip_adapter_strength"]   = gen_params.ip_adapter_strength;
     root["auto_resize_ref_image"] = gen_params.auto_resize_ref_image;
     root["increase_ref_index"]    = gen_params.increase_ref_index;
     if (mode == VID_GEN) {

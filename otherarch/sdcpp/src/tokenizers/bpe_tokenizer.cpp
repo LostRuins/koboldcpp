@@ -205,7 +205,7 @@ std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t
         ss << "\"" << token << "\", ";
     }
     ss << "]";
-    LOG_DEBUG("split prompt \"%s\" to tokens %s", text.c_str(), ss.str().c_str());
+    LOG_DEBUG("split prompt \"%s\" to %zu tokens %s", text.c_str(), bpe_tokens.size(), ss.str().c_str());
     return bpe_tokens;
 }
 

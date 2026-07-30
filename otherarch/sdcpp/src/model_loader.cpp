@@ -1083,7 +1083,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
         std::atomic<size_t> tensor_idx(0);
         std::atomic<bool> failed(false);
         std::vector<std::thread> workers;
-        std::mutex rpc_backend_mutex;
+        std::mutex backend_tensor_set_mutex;
 
         for (int i = 0; i < n_threads; ++i) {
             workers.emplace_back([&, file_path, is_zip]() {
@@ -1271,17 +1271,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                     if (dst_tensor->buffer != nullptr && !ggml_backend_buffer_is_host(dst_tensor->buffer)) {
                         t0 = ggml_time_ms();
 
-                        // RPC backends require serialized access to prevent concurrency issues
-                        const char* buffer_type_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(dst_tensor->buffer));
-                        bool is_rpc_buffer           = buffer_type_name != nullptr &&
-                                             std::string(buffer_type_name).find("RPC") != std::string::npos;
-
-                        if (is_rpc_buffer) {
-                            std::lock_guard<std::mutex> lock(rpc_backend_mutex);
-                            ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
-                        } else {
-                            ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
-                        }
+                        std::lock_guard<std::mutex> lock(backend_tensor_set_mutex);
+                        ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
 
                         t1 = ggml_time_ms();
                         copy_to_backend_time_ms.fetch_add(t1 - t0);

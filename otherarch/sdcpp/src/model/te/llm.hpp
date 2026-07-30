@@ -1657,6 +1657,10 @@ namespace LLM {
             model.get_param_tensors(tensors, prefix);
         }
 
+        void get_param_tensor_ops(std::map<ggml_tensor*, enum ggml_op>& tensor_ops) {
+            model.get_param_tensor_ops(tensor_ops);
+        }
+
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* input_ids,
                              ggml_tensor* input_pos,

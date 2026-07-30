@@ -53,6 +53,48 @@ static bool backend_supports_host_buffer(ggml_backend_t backend) {
     return props.caps.buffer_from_host_ptr;
 }
 
+static bool device_supports_param_op(ggml_backend_dev_t device,
+                                      ggml_tensor* weight,
+                                      enum ggml_op op,
+                                      ggml_backend_buffer_type_t buft) {
+    if (op == GGML_OP_NONE) {
+        return true;
+    }
+    if (device == nullptr || weight == nullptr || buft == nullptr || weight->buffer != nullptr) {
+        return false;
+    }
+
+    ggml_init_params params;
+    params.mem_size   = ggml_tensor_overhead() * 2;
+    params.mem_buffer = nullptr;
+    params.no_alloc   = true;
+    ggml_context* ctx = ggml_init(params);
+    if (ctx == nullptr) {
+        return false;
+    }
+
+    ggml_tensor* op_tensor = nullptr;
+    if (op == GGML_OP_GET_ROWS) {
+        ggml_tensor* indices = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+        op_tensor            = ggml_get_rows(ctx, weight, indices);
+    }
+    if (op_tensor == nullptr) {
+        ggml_free(ctx);
+        return false;
+    }
+
+    weight->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
+    if (weight->buffer == nullptr) {
+        ggml_free(ctx);
+        return false;
+    }
+    bool supported = ggml_backend_dev_supports_op(device, op_tensor);
+    ggml_backend_buffer_free(weight->buffer);
+    weight->buffer = nullptr;
+    ggml_free(ctx);
+    return supported;
+}
+
 ModelManager::~ModelManager() {
     release_all();
 }
@@ -135,7 +177,8 @@ bool ModelManager::register_param_tensors(const std::string& desc,
                                           ggml_backend_t params_backend,
                                           size_t* registered_tensor_size,
                                           bool allow_split_buffer,
-                                          bool params_follow_compute_backend) {
+                                          bool params_follow_compute_backend,
+                                          const std::map<ggml_tensor*, enum ggml_op>* tensor_ops) {
     if (desc.empty()) {
         LOG_ERROR("model manager tensor desc is empty");
         return false;
@@ -168,6 +211,12 @@ bool ModelManager::register_param_tensors(const std::string& desc,
         state->params_backend                = params_backend;
         state->allow_split_buffer            = allow_split_buffer;
         state->params_follow_compute_backend = params_follow_compute_backend;
+        if (tensor_ops != nullptr) {
+            auto op_it = tensor_ops->find(tensor);
+            if (op_it != tensor_ops->end()) {
+                state->usage_op = op_it->second;
+            }
+        }
         new_states.push_back(std::move(state));
     }
 
@@ -843,6 +892,22 @@ ggml_backend_buffer_type_t ModelManager::params_buffer_type_for(const TensorStat
     }
     if (params_buft == nullptr) {
         params_buft = ggml_backend_get_default_buffer_type(state.params_backend);
+    }
+    if (state.usage_op != GGML_OP_NONE &&
+        state.compute_backend != nullptr) {
+        ggml_backend_dev_t compute_dev = ggml_backend_get_device(state.compute_backend);
+        if (device_supports_param_op(compute_dev, state.tensor, state.usage_op, params_buft)) {
+            return params_buft;
+        }
+
+        ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        params_buft                = cpu_dev != nullptr ? ggml_backend_dev_buffer_type(cpu_dev) : nullptr;
+        if (!device_supports_param_op(cpu_dev, state.tensor, state.usage_op, params_buft)) {
+            LOG_ERROR("model manager has no compatible buffer for tensor '%s' used by %s",
+                      state.name.c_str(),
+                      ggml_op_name(state.usage_op));
+            return nullptr;
+        }
     }
     return params_buft;
 }

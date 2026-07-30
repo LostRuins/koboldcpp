@@ -39,6 +39,7 @@ private:
         bool allow_split_buffer            = false;
         bool params_follow_compute_backend = false;
         bool metadata_validated            = false;
+        enum ggml_op usage_op              = GGML_OP_NONE;
 
         int active_prepare_count = 0;
 
@@ -132,7 +133,8 @@ public:
                                 ggml_backend_t params_backend,
                                 size_t* registered_tensor_size     = nullptr,
                                 bool allow_split_buffer            = false,
-                                bool params_follow_compute_backend = false);
+                                bool params_follow_compute_backend = false,
+                                const std::map<ggml_tensor*, enum ggml_op>* tensor_ops = nullptr);
 
     bool unregister_param_tensors(const std::string& desc,
                                   size_t* registered_tensor_size = nullptr);
