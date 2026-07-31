@@ -780,8 +780,6 @@ public:
             }
         }
 
-        bool is_unet = sd_version_is_unet(model_loader.get_sd_version());
-
         // begin kcpp replacements
         SDVersion tempver = model_loader.get_sd_version();
         bool fallback_swapped = false;
@@ -1012,24 +1010,21 @@ public:
 
         if (strlen(SAFE_STR(sd_ctx_params->clip_l_path)) > 0) {
             LOG_INFO("loading clip_l from '%s'", sd_ctx_params->clip_l_path);
-            std::string prefix = is_unet ? "cond_stage_model.transformer." : "text_encoders.clip_l.transformer.";
-            if (!model_loader.init_from_file(sd_ctx_params->clip_l_path, prefix)) {
+            if (!model_loader.init_from_file(sd_ctx_params->clip_l_path, "clip_l.")) {
                 LOG_WARN("loading clip_l from '%s' failed", sd_ctx_params->clip_l_path);
             }
         }
 
         if (strlen(SAFE_STR(sd_ctx_params->clip_g_path)) > 0) {
             LOG_INFO("loading clip_g from '%s'", sd_ctx_params->clip_g_path);
-            std::string prefix = is_unet ? "cond_stage_model.1.transformer." : "text_encoders.clip_g.transformer.";
-            if (!model_loader.init_from_file(sd_ctx_params->clip_g_path, prefix)) {
+            if (!model_loader.init_from_file(sd_ctx_params->clip_g_path, "clip_g.")) {
                 LOG_WARN("loading clip_g from '%s' failed", sd_ctx_params->clip_g_path);
             }
         }
 
         if (strlen(SAFE_STR(sd_ctx_params->clip_vision_path)) > 0) {
             LOG_INFO("loading clip_vision from '%s'", sd_ctx_params->clip_vision_path);
-            std::string prefix = "cond_stage_model.transformer.";
-            if (!model_loader.init_from_file(sd_ctx_params->clip_vision_path, prefix)) {
+            if (!model_loader.init_from_file(sd_ctx_params->clip_vision_path, "clip_vision.")) {
                 LOG_WARN("loading clip_vision from '%s' failed", sd_ctx_params->clip_vision_path);
             }
         }

@@ -306,8 +306,33 @@ struct KarrasScheduler : SigmaScheduler {
 };
 
 struct BetaScheduler : SigmaScheduler {
-    static constexpr double alpha = 0.6;
-    static constexpr double beta  = 0.6;
+    double alpha = 0.6;
+    double beta  = 0.6;
+
+    explicit BetaScheduler(const char* extra_sample_args = nullptr) {
+        parse_extra_sample_args(extra_sample_args);
+        LOG_DEBUG("Beta scheduler: alpha=%.4f, beta=%.4f", alpha, beta);
+    }
+
+    void parse_extra_sample_args(const char* extra_sample_args) {
+        for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "beta scheduler arg")) {
+            if (key == "alpha") {
+                float parsed;
+                if (!parse_strict_float(value, parsed) || parsed <= 0.0) {
+                    LOG_WARN("ignoring invalid beta scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                } else {
+                    alpha = static_cast<double>(parsed);
+                }
+            } else if (key == "beta") {
+                float parsed;
+                if (!parse_strict_float(value, parsed) || parsed <= 0.0) {
+                    LOG_WARN("ignoring invalid beta scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                } else {
+                    beta = static_cast<double>(parsed);
+                }
+            }
+        }
+    }
 
     static double log_beta(double a, double b) {
         return std::lgamma(a) + std::lgamma(b) - std::lgamma(a + b);
@@ -1032,7 +1057,7 @@ struct Denoiser {
                 break;
             case BETA_SCHEDULER:
                 LOG_INFO("get_sigmas with Beta scheduler");
-                scheduler = std::make_shared<BetaScheduler>();
+                scheduler = std::make_shared<BetaScheduler>(extra_sample_args);
                 break;
             case EXPONENTIAL_SCHEDULER:
                 LOG_INFO("get_sigmas exponential scheduler");
