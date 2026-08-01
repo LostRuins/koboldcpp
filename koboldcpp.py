@@ -3466,6 +3466,9 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
         for m in messages:
             if m.get("content") is None:
                 m["content"] = ""
+            # strip mcp image b64 from tool string content so it isn't rendered as text (image is swept out separately)
+            elif m.get("role", "") == "tool" and isinstance(m.get("content"), str):
+                m["content"] = strip_mcpcontent_of_media(m["content"])
         # fix image placeholders, erase them and slap a reference onto the turn text message
         mediacount = 1
         for m in messages:
@@ -3845,6 +3848,10 @@ def sweep_media_from_messages(messages_array):
                     url = item.get("image_url", {}).get("url", "")
                     if url.startswith("data:image"):
                         images.append(url.split(",", 1)[1])
+                elif item.get("type") == "image": #handle mcp image content blocks in a list
+                    data = item.get("data", "")
+                    if data:
+                        images.append(data.split(",", 1)[1] if data.startswith("data:") else data)
                 elif item.get("type") == "input_audio":
                     data = item.get("input_audio", {}).get("data")
                     if data:
