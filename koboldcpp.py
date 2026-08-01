@@ -36,7 +36,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Any, Dict, Optional, Tuple
 import shutil
 import subprocess
 import gzip
@@ -100,6 +100,7 @@ mmprojName = None
 lastgeneratedcomfyimg = b''
 lastgeneratedcachedimg = b''
 lastgeneratedcachedimgkey = b''
+currgenimgkey = ''
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
 password = "" #if empty, no auth key required
@@ -999,6 +1000,8 @@ def init_library():
     handle.sd_get_info.restype = sd_info_outputs
     handle.sd_abort_generation.argtypes = []
     handle.sd_abort_generation.restype = None
+    handle.sd_get_ongoing_generation_info.argtypes = []
+    handle.sd_get_ongoing_generation_info.restype = sd_info_outputs
     handle.whisper_load_model.argtypes = [whisper_load_model_inputs]
     handle.whisper_load_model.restype = ctypes.c_bool
     handle.whisper_generate.argtypes = [whisper_generation_inputs]
@@ -2969,6 +2972,102 @@ def sd_generate(genparams):
     info["job_timestamp"] = job_timestamp
     return {"animated": animated, "data":data_main, "data_extra":data_extra, "final_frame":final_frame, "info": info}
 
+def sd_get_ongoing_generation_info():
+    info = handle.sd_get_ongoing_generation_info()
+    if info.status == 0:
+        try:
+            return json.loads(info.data)
+        except Exception:
+            print("An error occurred while decoding sd ongoig generation info")
+    else:
+        print("An error occurred while getting sd ongoig generation info")
+    return {}
+
+def build_a1111_progress_response(
+    status: str,
+    step_count: int = 0,
+    total_steps: int = 0,
+    elapsed_time: float = 0.0,
+    current_image: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Maps generation state from the backend to the AUTOMATIC1111 ProgressResponse format.
+
+    :param status: one of 'idle', 'conditioning', 'diffusing', 'vae'
+    :param step_count: current sampling step
+    :param total_steps: total sampling steps for the job
+    :param elapsed_time: seconds since the generation started
+    :param current_image: base64 encoded string of the preview image, or None
+    """
+
+    # "idle" state signature from A1111
+    progress = 0.0
+    eta_relative = 0.0
+    state = {
+        "job_count": 0,
+        "job_no": 0,
+        "sampling_step": 0,
+        "sampling_steps": 0,
+        "interrupted": False,
+        "skipped": False
+    }
+    textinfo = None
+
+    if status != 'idle':
+
+        # single job (queue is client-side)
+        state["job_count"] = 1
+        state["job_no"] = 0
+        state["sampling_step"] = step_count
+        state["sampling_steps"] = total_steps
+
+        # calculate progress estimate: fixed portion allocated to conditioning,
+        # and decoding estimate based on the total number of steps
+        conditioning_progress = 0.03
+        decoding_steps = 0.8
+        effective_total = total_steps + decoding_steps
+
+        progress_per_step = (1.0 - conditioning_progress) / effective_total if effective_total > 0 else 0.0
+
+        if status == 'conditioning':
+            # A1111 sets progress to > 0.0 during initialization to show activity
+            # and avoid dividing by zero in the ETA calculation later.
+            progress = conditioning_progress
+            textinfo = "Status: conditioning"
+        elif status == 'diffusing':
+            progress = conditioning_progress + (step_count * progress_per_step)
+            textinfo = f"Status: diffusing, Step: {step_count}/{total_steps}"
+        elif status == 'decoding':
+            # A1111 sets this as a fixed 0.99, but we keep it proportional
+            progress = conditioning_progress + (total_steps * progress_per_step)
+            textinfo = "Status: decoding"
+        else:
+            # shouldn't happen
+            progress = 0.99
+
+        # note A1111 caps progress below 1.0 until the final image is actually
+        # returned by the blocking txt2img endpoint, preventing the progress bar
+        # from jumping to 100% early
+
+        eta_relative = (elapsed_time / progress) - elapsed_time
+
+    return {
+        "progress": round(progress, 4),
+        "eta_relative": round(eta_relative, 2),
+        "state": state,
+        "current_image": current_image,
+        "textinfo": textinfo
+    }
+
+def a1111_progress_response(preview=False):
+    status = sd_get_ongoing_generation_info()
+    result = build_a1111_progress_response(
+        status.get('status', 0),
+        status.get('step', 0),
+        status.get('steps', 1),
+        status.get('step_time', 1),
+        preview and status.get('preview') or None)
+    return result
 
 def whisper_load_model(model_filename):
     global args
@@ -6185,7 +6284,7 @@ Change Mode<br>
     def do_GET(self):
         global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, embedded_kailite_gz, embedded_kcpp_docs_gz, embedded_kcpp_sdui_gz, embedded_lcpp_ui_gz, embedded_musicui, embedded_musicui_gz
         global last_req_time, start_time, cached_chat_template, cached_sd_info, has_vision_support, has_audio_support, has_whisper, friendlymodelname
-        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname, voicelist
+        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, currgenimgkey, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname, voicelist
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
 
         clean_path = self.path.split("?")[0] #for cases where we do not want query params
@@ -6445,6 +6544,15 @@ Change Mode<br>
                 response_body = lastgeneratedcachedimg
             else:
                 response_body = None
+        elif clean_path.startswith('/sdapi/v1/progress'):
+            parsed_url = urllib.parse.urlparse(self.path)
+            parsed_dict = urllib.parse.parse_qs(parsed_url.query)
+            genkey = parsed_dict.get('genkey', [''])[0]
+            skip_current_image = bool(parsed_dict.get('skip_current_image', False))
+            # with no auth, reveal status without preview image
+            auth = bool(genkey and genkey==currgenimgkey)
+            info = a1111_progress_response(auth and not skip_current_image)
+            response_body = json.dumps(info).encode()
         elif clean_path=='/history' or clean_path=='/api/history' or clean_path.startswith('/api/history/') or clean_path.startswith('/history/'): #emulate comfyui
             modelNameToReturn = friendlysdmodelname
             if autoswapmode and imageName is not None:
@@ -6580,7 +6688,7 @@ Change Mode<br>
 
     def do_POST(self):
         global thinkformats
-        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
+        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, currgenimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
         contlenstr = self.headers['content-length']
         content_length = 0
@@ -7543,6 +7651,7 @@ Change Mode<br>
                     try:
                         lastgeneratedcachedimg = b''
                         lastgeneratedcachedimgkey = ''
+                        currgenimgkey = genparams.get('genkey', '')
                         if is_comfyui_imggen:
                             lastgeneratedcomfyimg = b''
                             genparams = sd_comfyui_tranform_params(genparams)
@@ -7564,6 +7673,7 @@ Change Mode<br>
                         gendatextra = gen["data_extra"]
                         genfinalframe = gen["final_frame"]
                         geninfo = json.dumps(gen["info"]) # sdapi really expects a stringified JSON
+                        currgenimgkey = ''
                         genresp = None
                         if gendat:
                             lastgeneratedcachedimg = base64.b64decode(gendat)

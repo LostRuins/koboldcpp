@@ -2,11 +2,13 @@
 #include <string.h>
 #include <time.h>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <chrono>
 
 #include <nlohmann/json.hpp>
 #include <inttypes.h>
@@ -158,6 +160,20 @@ static bool photomaker_enabled = false;
 static bool is_vid_model = false;
 static bool remove_limits = false;
 
+struct gendata_st {
+    int status;
+    int step;
+    double step_time;
+    std::string preview;
+};
+
+struct {
+    std::mutex mux;
+    std::chrono::steady_clock::time_point start_time;
+    int steps;
+    gendata_st gendata;
+} geninfo;
+
 static struct {
     std::string data;
     std::string data_extra;
@@ -273,7 +289,24 @@ std::string load_gpt_oss_vocab_json()
     return load_embd_file(cache, "embd_res/gpt_oss_vocab_json.embd");
 }
 
+static void progress_callback(int step, int steps, float time, void* data)
+{
+    (void) data;
+    if(sd_is_quiet) return;
+    const char* unit = "s/it";
+    float speed = time;
+    if (speed < 1.0f && speed > 0.f) {
+        speed = 1.0f / speed;
+        unit  = "it/s";
+    }
+    printf("Generating image: %d/%d steps, %.2f%s\n", step, steps, speed, unit);
+    fflush(stdout);
+}
+
+static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data);
+
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
+
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
     executable_path = sd_get_u8path(inputs.executable_path);
@@ -534,6 +567,13 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         } else {
             printf("\nUpscaler has been loaded.\n");
         }
+    }
+
+    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, true, false, nullptr);
+
+    if (sddebugmode) {
+        // the default progress bar would become intermingled with the debug log
+        sd_set_progress_callback(progress_callback, nullptr);
     }
 
     return true;
@@ -981,10 +1021,25 @@ void sdtype_abort_generation() {
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
+    struct CleanupInfoOnExit {
+        ~CleanupInfoOnExit() {
+            std::lock_guard<std::mutex> lock(geninfo.mux);
+            geninfo.gendata.status = 0;
+        }
+    } cleanup_info_on_exit;
+
     if(sd_ctx == nullptr || sd_params == nullptr)
     {
         return sd_generation.error("Warning: KCPP image generation not initialized!");
     }
+
+    {
+        std::lock_guard<std::mutex> lock(geninfo.mux);
+        geninfo.start_time = std::chrono::steady_clock::now();
+        geninfo.gendata.status = 1;
+        geninfo.steps = inputs.sample_steps;
+    }
+
     sd_image_t * results = nullptr;
     int generated_num_results = 0;
 
@@ -1336,6 +1391,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_audio_t* generated_audio = nullptr;
     sd_audio_t input_audio = {0, 0, 0, nullptr};
 
+    {
+        std::lock_guard<std::mutex> lock(geninfo.mux);
+        geninfo.steps = inputs.sample_steps;
+    }
+
     if(is_vid_model)
     {
         std::vector<sd_image_t> control_frames; //empty for now
@@ -1658,6 +1718,32 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     return sd_generation.outputs(1);
 }
 
+static inline double get_time_delta(const std::chrono::steady_clock::time_point& start) {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration<double>(now - start).count();
+}
+
+static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data)
+{
+    gendata_st gendata;
+    gendata.status = 2;
+    if (frame_count == 1) {
+        gendata.preview = raw_image_to_png_base64(*image);
+    } else {
+        uint8_t * out_data = nullptr;
+        size_t out_len = 0;
+        create_gif_buf_from_sd_images_msf(image, frame_count, 16, &out_data,&out_len);
+        gendata.preview = kcpp_base64_encode(out_data, out_len);
+    }
+    gendata.step = step;
+    gendata.step_time = get_time_delta(geninfo.start_time);
+
+    std::lock_guard<std::mutex> lock(geninfo.mux);
+    if (step == geninfo.steps)
+        gendata.status = 3;
+    geninfo.gendata = gendata;
+}
+
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 {
     sd_generation.reset();
@@ -1744,6 +1830,41 @@ sd_info_outputs sdtype_get_info()
     j["devices"] = devices;
 
     static std::string recent_info = j.dump();
+    sd_info_outputs output;
+    output.status = 0;
+    output.data = recent_info.c_str();
+    return output;
+}
+
+sd_info_outputs sdtype_get_ongoing_generation_info()
+{
+    double elapsed_time;
+    int steps;
+    gendata_st gendata;
+    {
+        std::lock_guard<std::mutex> lock(geninfo.mux);
+        gendata = geninfo.gendata;
+        elapsed_time = get_time_delta(geninfo.start_time);
+        steps = geninfo.steps;
+    }
+
+    nlohmann::json j;
+    j["steps"] = steps;
+    j["elapsed_time"] = elapsed_time;
+    j["step"] = gendata.step;
+    j["step_time"] = gendata.step_time;
+    if (gendata.status == 1)
+        j["status"] = "conditioning";
+    else if (gendata.status == 2)
+        j["status"] = "diffusing";
+    else if (gendata.status == 3)
+        j["status"] = "decoding";
+    else
+        j["status"] = "idle";
+    j["preview"] = gendata.preview;
+
+    static std::string recent_info;
+    recent_info = j.dump();
     sd_info_outputs output;
     output.status = 0;
     output.data = recent_info.c_str();
