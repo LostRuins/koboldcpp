@@ -1384,6 +1384,8 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             {".lora_B.weight", ".weight.lora_up"},
             {".lora_A.default.weight", ".weight.lora_down"},
             {".lora_B.default.weight", ".weight.lora_up"},
+            {".lora_A", ".weight.lora_down"},
+            {".lora_B", ".weight.lora_up"},
             {".lora_linear", ".weight.alpha"},
             {".alpha", ".weight.alpha"},
             {".scale", ".weight.scale"},

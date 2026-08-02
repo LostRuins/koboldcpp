@@ -145,6 +145,7 @@ const char* sampling_methods_str[] = {
     "Euler GE",
     "DPM++ (2M) SDE",
     "DPM++ (2M) SDE BT",
+    "LMS",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -699,42 +700,15 @@ public:
         LOG_DEBUG("loaded alphas_cumprod from model file");
     }
 
-    bool init(const sd_ctx_params_t* sd_ctx_params_kcpp) {
+    bool init_model_loader(ModelLoader& model_loader,
+                           const sd_ctx_params_t* sd_ctx_params_kcpp,
+                           bool& use_tae,
+                           bool& use_audio_vae,
+                           bool& use_control_net) {
+
         // kcpp make sd_ctx_params mutable
         sd_ctx_params_t sd_ctx_params_local = *sd_ctx_params_kcpp;
         sd_ctx_params_t *sd_ctx_params = &sd_ctx_params_local;
-        n_threads           = sd_ctx_params->n_threads;
-        enable_mmap         = sd_ctx_params->enable_mmap;
-        stream_layers       = sd_ctx_params->stream_layers;
-        eager_load          = sd_ctx_params->eager_load;
-        backend_spec        = SAFE_STR(sd_ctx_params->backend);
-        params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
-        split_mode_spec     = SAFE_STR(sd_ctx_params->split_mode);
-        auto_fit_enabled    = sd_ctx_params->auto_fit;
-        max_vram_assignment.reset(0.f);
-        {
-            std::string error;
-            if (!max_vram_assignment.parse(SAFE_STR(sd_ctx_params->max_vram), &error)) {
-                LOG_ERROR("%s", error.c_str());
-                return false;
-            }
-        }
-
-        std::string rpc_servers_spec = SAFE_STR(sd_ctx_params->rpc_servers);
-        add_rpc_devices(rpc_servers_spec);
-
-        bool use_tae         = false;
-        bool use_audio_vae   = false;
-        bool use_control_net = false;
-
-        rng = get_rng(sd_ctx_params->rng_type);
-        if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT && sd_ctx_params->sampler_rng_type != sd_ctx_params->rng_type) {
-            sampler_rng = get_rng(sd_ctx_params->sampler_rng_type);
-        } else {
-            sampler_rng = rng;
-        }
-
-        ggml_log_set(ggml_log_callback_default, nullptr);
 
         std::string clip_vision_fixed     = SAFE_STR(sd_ctx_params->clip_vision_path);
         std::string clipg_path_fixed      = SAFE_STR(sd_ctx_params->clip_g_path);
@@ -746,11 +720,6 @@ public:
         std::string embed_connector_fixed = SAFE_STR(sd_ctx_params->embeddings_connectors_path);
         std::string vae_path_fixed        = SAFE_STR(sd_ctx_params->vae_path);
         std::string uncond_fixed          = SAFE_STR(sd_ctx_params->uncond_diffusion_model_path);
-
-        model_manager = std::make_shared<ModelManager>();
-        model_manager->set_n_threads(n_threads);
-        model_manager->set_enable_mmap(enable_mmap);
-        ModelLoader& model_loader = model_manager->loader();
 
         if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
             LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
@@ -1119,19 +1088,10 @@ public:
 
         model_loader.convert_tensors_name();
 
-        version = model_loader.get_sd_version();
-        if (version == VERSION_COUNT) {
-            LOG_ERROR("get sd version from file failed: '%s'", SAFE_STR(sd_ctx_params->model_path));
-            return false;
-        }
-
-        auto& tensor_storage_map = model_loader.get_tensor_storage_map();
-
-        LOG_INFO("Version: %s ", model_version_to_str[version]);
         ggml_type wtype               = sd_type_to_ggml_type(sd_ctx_params->wtype);
         std::string tensor_type_rules = SAFE_STR(sd_ctx_params->tensor_type_rules);
         //kcpp: patch hidream to fix broken images on vulkan https://github.com/leejet/stable-diffusion.cpp/issues/1496
-        if(version == VERSION_HIDREAM_O1 && tensor_type_rules.size()==0)
+        if(tempver == VERSION_HIDREAM_O1 && tensor_type_rules.size()==0)
         {
             tensor_type_rules = "^model.language_model.layers.[0-9]+.mlp.down_proj.weight=bf16";
         }
@@ -1139,9 +1099,63 @@ public:
             model_loader.set_wtype_override(wtype, tensor_type_rules);
         }
 
+        return true;
+    }
+
+    bool init(const sd_ctx_params_t* sd_ctx_params) {
+        n_threads           = sd_ctx_params->n_threads;
+        enable_mmap         = sd_ctx_params->enable_mmap;
+        stream_layers       = sd_ctx_params->stream_layers;
+        eager_load          = sd_ctx_params->eager_load;
+        backend_spec        = SAFE_STR(sd_ctx_params->backend);
+        params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
+        split_mode_spec     = SAFE_STR(sd_ctx_params->split_mode);
+        auto_fit_enabled    = sd_ctx_params->auto_fit;
+        max_vram_assignment.reset(0.f);
+        {
+            std::string error;
+            if (!max_vram_assignment.parse(SAFE_STR(sd_ctx_params->max_vram), &error)) {
+                LOG_ERROR("%s", error.c_str());
+                return false;
+            }
+        }
+
+        std::string rpc_servers_spec = SAFE_STR(sd_ctx_params->rpc_servers);
+        add_rpc_devices(rpc_servers_spec);
+
+        bool use_tae         = false;
+        bool use_audio_vae   = false;
+        bool use_control_net = false;
+
+        rng = get_rng(sd_ctx_params->rng_type);
+        if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT && sd_ctx_params->sampler_rng_type != sd_ctx_params->rng_type) {
+            sampler_rng = get_rng(sd_ctx_params->sampler_rng_type);
+        } else {
+            sampler_rng = rng;
+        }
+
+        ggml_log_set(ggml_log_callback_default, nullptr);
+
+        model_manager = std::make_shared<ModelManager>();
+        model_manager->set_n_threads(n_threads);
+        model_manager->set_enable_mmap(enable_mmap);
+        ModelLoader& model_loader = model_manager->loader();
+
+        if (!init_model_loader(model_loader, sd_ctx_params, use_tae, use_audio_vae, use_control_net)) {
+            return false;
+        }
+
+        version = model_loader.get_sd_version();
+        if (version == VERSION_COUNT) {
+            LOG_ERROR("get sd version from file failed: '%s'", SAFE_STR(sd_ctx_params->model_path));
+            return false;
+        } else {
+            LOG_INFO("Version: %s ", model_version_to_str[version]);
+        }
+
         if (auto_fit_enabled) {
             if (!sd::backend_fit::derive_backend_specs(model_loader,
-                                                       wtype,
+                                                       sd_type_to_ggml_type(sd_ctx_params->wtype),
                                                        max_vram_assignment,
                                                        backend_spec,
                                                        params_backend_spec)) {
@@ -1196,14 +1210,10 @@ public:
 
         if (sd_ctx_params->lora_apply_mode == LORA_APPLY_AUTO) {
             bool have_quantized_weight = false;
-            if (wtype != GGML_TYPE_COUNT && ggml_is_quantized(wtype)) {
-                have_quantized_weight = true;
-            } else {
-                for (const auto& [type, _] : wtype_stat) {
-                    if (ggml_is_quantized(type)) {
-                        have_quantized_weight = true;
-                        break;
-                    }
+            for (const auto& [type, _] : wtype_stat) {
+                if (ggml_is_quantized(type)) {
+                    have_quantized_weight = true;
+                    break;
                 }
             }
             // Avoid full-model LoRA merge buffers on constrained setups.
@@ -1246,6 +1256,8 @@ public:
             tae_preview_only = false;
             use_tae          = true;
         }
+
+        auto& tensor_storage_map = model_loader.get_tensor_storage_map();
 
         {
             if (!ensure_backend_pair(SDBackendModule::TE) ||
@@ -2396,7 +2408,9 @@ public:
             return;
         }
         auto image_tensor = sd_image_to_tensor(image);
-        auto embed        = get_clip_vision_output(image_tensor, true, -1);
+        auto embed        = ip_adapter->is_plus
+                                ? get_clip_vision_output(image_tensor, false, 2)
+                                : get_clip_vision_output(image_tensor, true, -1);
         if (embed.empty()) {
             return;
         }
@@ -3476,6 +3490,7 @@ const char* sample_method_to_str[] = {
     "euler_ge",
     "dpm++2m_sde",
     "dpm++2m_sde_bt",
+    "lms",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
