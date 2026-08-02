@@ -509,11 +509,13 @@ struct mpt_model {
     std::map<std::string, struct ggml_v3_tensor *> tensors;
 };
 
+enum MediaType { MEDIA_TYPE_IMAGE, MEDIA_TYPE_AUDIO, MEDIA_TYPE_VIDEO };
 struct media_chunk
 {
-    bool is_audio = false; //if true its audio, otherwise its vision
+    MediaType mediatype = MEDIA_TYPE_IMAGE;
     void * mtmd_chunk = nullptr; // mtmd_input_chunk, owned by this chunk
-    int32_t clp_image_tokens = 0; //holds number of tokens used in this chunk
+    int32_t clp_image_tokens = 0; //position advance of this chunk (max(nx,ny) for M-RoPE, real token count otherwise)
+    int32_t clp_kv_cells = 0; //real embedding token count = KV cells this chunk occupies (nx*ny for M-RoPE grids)
     int32_t nx = 0; //only used for 2d roped images
     int32_t ny = 0;
 };
@@ -521,7 +523,7 @@ struct media_object
 {
     std::string b64data = "";
     std::vector<media_chunk> mediachunks;
-    bool is_audio = false; //if true its audio, otherwise its vision
+    MediaType mediatype = MEDIA_TYPE_IMAGE;
     std::vector<int> chunk_start_seq;
     std::vector<int> chunk_end_seq;
 };

@@ -48,6 +48,7 @@ sampler_order_max = 7
 tensor_split_max = 16
 images_max = 16
 audio_max = 16
+videos_max = 2
 bias_min_value = -100.0
 bias_max_value = 100.0
 logprobs_max = 10
@@ -271,6 +272,11 @@ class load_model_inputs(ctypes.Structure):
                 ("visionmaxres", ctypes.c_int),
                 ("visionmintokens", ctypes.c_int),
                 ("visionmaxtokens", ctypes.c_int),
+                ("videomaxframes", ctypes.c_int),
+                ("videofps", ctypes.c_float),
+                ("videomintokens", ctypes.c_int),
+                ("videomaxtokens", ctypes.c_int),
+                ("ffmpegpath", ctypes.c_char_p),
                 ("use_mmap", ctypes.c_bool),
                 ("use_mlock", ctypes.c_bool),
                 ("no_host", ctypes.c_bool),
@@ -322,6 +328,8 @@ class generation_inputs(ctypes.Structure):
                 ("images", ctypes.POINTER(ctypes.c_char_p)),
                 ("audio_len", ctypes.c_int),
                 ("audio", ctypes.POINTER(ctypes.c_char_p)),
+                ("videos_len", ctypes.c_int),
+                ("videos", ctypes.POINTER(ctypes.c_char_p)),
                 ("max_context_length", ctypes.c_int),
                 ("max_length", ctypes.c_int),
                 ("temperature", ctypes.c_float),
@@ -1125,7 +1133,7 @@ def is_incomplete_utf8_sequence(byte_seq): #note, this will only flag INCOMPLETE
 def strip_base64_prefix(encoded_data):
     if not encoded_data:
         return ""
-    if encoded_data.startswith("data:image") or encoded_data.startswith("data:audio"):
+    if encoded_data.startswith("data:image") or encoded_data.startswith("data:audio") or encoded_data.startswith("data:video"):
         encoded_data = encoded_data.split(',', 1)[-1]
     return encoded_data
 
@@ -1998,6 +2006,18 @@ def load_model(model_filename):
         vmaxtk = max(vmintk,vmaxtk)
     inputs.visionmintokens = vmintk
     inputs.visionmaxtokens = vmaxtk
+    inputs.videomaxframes = args.videomaxframes if args.videomaxframes > 0 else 32
+    inputs.videofps = args.videofps
+    vidmintk = args.videomintokens
+    vidmaxtk = args.videomaxtokens
+    vidmintk = -1 if vidmintk<-1 else vidmintk
+    vidmaxtk = -1 if vidmaxtk<-1 else vidmaxtk
+    if(vidmintk!=-1 or vidmaxtk!=-1) and (vidmintk==-1 or vidmaxtk==-1): #if exactly one of the args is -1
+        vidmintk = max(vidmintk,vidmaxtk)
+        vidmaxtk = max(vidmintk,vidmaxtk)
+    inputs.videomintokens = vidmintk
+    inputs.videomaxtokens = vidmaxtk
+    inputs.ffmpegpath = args.ffmpegpath.encode("UTF-8") if args.ffmpegpath else "".encode("UTF-8")
     inputs.use_smartcontext = args.smartcontext
     if args.parallelrequests > 1 and not args.noshift:
         print("\nWarning: Continuous batching is enabled, so context shifting has been disabled automatically.\n")
@@ -2110,6 +2130,7 @@ def generate(genparams, stream_flag=False):
     guidance_scale = tryparsefloat(genparams.get('guidance_scale', 1.0),1.0)
     images = genparams.get('images', [])
     audio = genparams.get('audio', [])
+    videos = genparams.get('videos', [])
     max_context_length = tryparseint(genparams.get('max_context_length', maxctx),maxctx)
     max_length = tryparseint(genparams.get('max_length', args.defaultgenamt),args.defaultgenamt)
     temperature = tryparsefloat(genparams.get('temperature', adapter_obj.get("temperature", 0.7)),0.7)
@@ -2190,6 +2211,13 @@ def generate(genparams, stream_flag=False):
     inputs.audio = (ctypes.c_char_p * inputs.audio_len)()
     for n, item in enumerate(audio):
         inputs.audio[n] = item.encode("UTF-8")
+    if len(videos) > videos_max:
+        print(f"Note: {len(videos)} videos attached, keeping only the most recent {videos_max}.")
+    videos = videos[-videos_max:]
+    inputs.videos_len = len(videos)
+    inputs.videos = (ctypes.c_char_p * inputs.videos_len)()
+    for n, item in enumerate(videos):
+        inputs.videos[n] = strip_base64_prefix(item).encode("UTF-8")
 
     global showmaxctxwarning
     if max_context_length > maxctx:
@@ -2381,7 +2409,7 @@ def continuous_batching_python_eligible(genparams, api_format):
     if not getattr(args, "noshift", False) or getattr(args, "smartcontext", False) or getattr(args, "draftmodel", "") or getattr(args, "usemtp", False) or getattr(args, "enableguidance", False):
         utfprint("Batching disabled due to loaded settings",2)
         return False
-    if genparams.get("negative_prompt") or genparams.get("images") or genparams.get("audio"):
+    if genparams.get("negative_prompt") or genparams.get("images") or genparams.get("audio") or genparams.get("videos"):
         utfprint("Batching disabled due to media",2)
         return False
     if genparams.get("grammar") or genparams.get("grammar_retain_state") or genparams.get("banned_tokens") or genparams.get("banned_strings"):
@@ -3825,6 +3853,10 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
                 m["content"] = ""
         # fix image placeholders, erase them and slap a reference onto the turn text message
         mediacount = 1
+        #pre-count videos so the cap below keeps only the most recent videos_max (sliding window over the chat)
+        total_videos = count_video_parts_in_messages(messages)
+        videos_to_skip = max(0, total_videos - videos_max)
+        video_seen = 0
         for m in messages:
             if isinstance(m.get("content"), list):
                 normalized = []
@@ -3838,11 +3870,18 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
                     elif item.get("type")=="input_audio":
                         turn_text += f"\n(Attached Audio {mediacount})\n"
                         mediacount += 1
+                    elif item.get("type")=="video_url" or item.get("type")=="input_video":
+                        video_seen += 1
+                        if video_seen > videos_to_skip:
+                            turn_text += f"\n(Attached Video {mediacount})\n"
+                            mediacount += 1
                     else:
                         normalized.append(item)
                 if turn_text:
                     normalized.append({"type": "text","text": turn_text})
                 m["content"] = normalized
+        if videos_to_skip > 0:
+            print(f"Note: {total_videos} videos attached, keeping only the most recent {videos_max}.")
         for m in messages: # Fix tool_calls arguments and content if parsable
             if m.get("tool_calls"):
                 for tc in m["tool_calls"]:
@@ -4111,9 +4150,10 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 
     images_added = [] #sometimes images are needed to make a decision too
     audio_added = []
+    videos_added = []
 
     if messages:
-        images_added, audio_added = sweep_media_from_messages(messages)
+        images_added, audio_added, videos_added = sweep_media_from_messages(messages)
         reversed_messages = list(reversed(messages))
         for message in reversed_messages:
             if message["role"] == "user":
@@ -4171,6 +4211,8 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
                 temp_poll["images"] = images_added
             if len(audio_added)>0:
                 temp_poll["audio"] = audio_added
+            if len(videos_added)>0:
+                temp_poll["videos"] = videos_added
             temp_poll_result = generate(genparams=temp_poll)
             temp_poll_text = temp_poll_result['text'].strip().rstrip('.')
             temp_poll_data_arr = extract_json_from_string(temp_poll_text)
@@ -4227,9 +4269,29 @@ def compress_tools_array(tools_array):
 
     return tools_array_filtered
 
+def count_video_parts_in_messages(messages_array):
+    #counts video content parts across a chat messages array, used to determine how many of the
+    #oldest videos to skip so a videos_max cap keeps only the most recent videos (sliding window).
+    total = 0
+    for message in messages_array:
+        curr_content = message.get("content", None)
+        if isinstance(curr_content, list):
+            for item in curr_content:
+                if item.get("type") == "video_url":
+                    if item.get("video_url", {}).get("url", "").startswith("data:video"):
+                        total += 1
+                elif item.get("type") == "input_video":
+                    if item.get("input_video", {}).get("data"):
+                        total += 1
+    return total
+
 def sweep_media_from_messages(messages_array):
     images = []
     audio = []
+    videos = []
+    total_videos = count_video_parts_in_messages(messages_array)
+    videos_to_skip = max(0, total_videos - videos_max)
+    videos_seen = 0
     for message in messages_array:
         curr_content = message.get("content", None)
         if isinstance(curr_content, list):
@@ -4242,6 +4304,18 @@ def sweep_media_from_messages(messages_array):
                     data = item.get("input_audio", {}).get("data")
                     if data:
                         audio.append(data)
+                elif item.get("type") == "video_url":
+                    url = item.get("video_url", {}).get("url", "")
+                    if url.startswith("data:video"):
+                        videos_seen += 1
+                        if videos_seen > videos_to_skip:
+                            videos.append(url.split(",", 1)[1])
+                elif item.get("type") == "input_video":
+                    data = item.get("input_video", {}).get("data")
+                    if data:
+                        videos_seen += 1
+                        if videos_seen > videos_to_skip:
+                            videos.append(data)
         elif message.get("role", "")=="tool" and isinstance(curr_content, str): #handle mcp returned images
             try:
                 mcp_pl = json.loads(curr_content)
@@ -4255,7 +4329,9 @@ def sweep_media_from_messages(messages_array):
         if imgs_ollama:
             for img in imgs_ollama:
                 images.append(img)
-    return images, audio
+    if videos_to_skip > 0:
+        print(f"Note: {total_videos} videos attached, keeping only the most recent {videos_max}.")
+    return images, audio, videos
 
 
 def transform_genparams(genparams, api_format, use_jinja):
@@ -4347,6 +4423,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             tools_message_end = adapter_obj.get("tools_end", "")
             images_added = []
             audio_added = []
+            videos_added = []
             continue_assistant_turn = genparams.get('continue_assistant_turn', True)
             latest_turn_was_assistant = False
             latest_turn_was_tool = False
@@ -4380,6 +4457,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             message_index = 0
             attachedimgid = 0
             attachedaudid = 0
+            attachedvidid = 0
             jinja_output = None
             jinjatools = genparams.get('tools', [])
             if use_jinja and cached_chat_template:
@@ -4402,7 +4480,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 if jinjatools and len(jinjatools)>0:
                     genparams["using_openai_tools"] = True
                 # handle media
-                images_added, audio_added = sweep_media_from_messages(messages_array)
+                images_added, audio_added, videos_added = sweep_media_from_messages(messages_array)
             else:
                 if jinjatools:
                     # inject the tools list at the top of the context window, even if context has shifted
@@ -4410,6 +4488,11 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     tools_string = f"{system_message_start}### Available Tools:\n{json.dumps(compress_tools_array(jinjatools), indent=0)}{system_message_end}\n"
                     exist_mem = genparams.get('memory', "")
                     genparams["memory"] = tools_string + exist_mem
+
+                #pre-count videos so the cap below keeps only the most recent videos_max (sliding window over the chat)
+                total_videos_legacy = count_video_parts_in_messages(messages_array)
+                videos_to_skip_legacy = max(0, total_videos_legacy - videos_max)
+                videos_seen_legacy = 0
 
                 for message in messages_array:
                     message_index += 1
@@ -4471,6 +4554,20 @@ ws ::= | " " | "\n" [ \t]{0,20}
                                         audio_added.append(item['input_audio']['data'])
                                         attachedaudid += 1
                                         messages_string += f"\n(Attached Audio {attachedaudid})\n"
+                                elif item['type']=="video_url":
+                                    if 'video_url' in item and item['video_url'] and item['video_url']['url'] and item['video_url']['url'].startswith("data:video"):
+                                        videos_seen_legacy += 1
+                                        if videos_seen_legacy > videos_to_skip_legacy:
+                                            videos_added.append(item['video_url']['url'].split(",", 1)[1])
+                                            attachedvidid += 1
+                                            messages_string += f"\n(Attached Video {attachedvidid})\n"
+                                elif item['type']=="input_video":
+                                    if 'input_video' in item and item['input_video'] and item['input_video']['data']:
+                                        videos_seen_legacy += 1
+                                        if videos_seen_legacy > videos_to_skip_legacy:
+                                            videos_added.append(item['input_video']['data'])
+                                            attachedvidid += 1
+                                            messages_string += f"\n(Attached Video {attachedvidid})\n"
                             elif isinstance(item, str):
                                 messages_string += item # If item is just a string, append it directly
 
@@ -4511,6 +4608,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                         messages_string += assistant_message_end
                     elif message['role'] == "tool":
                         messages_string += tools_message_end
+                if videos_to_skip_legacy > 0:
+                    print(f"Note: {total_videos_legacy} videos attached, keeping only the most recent {videos_max}.")
                 messages_string += assistant_message_gen
                 if (latest_turn_was_assistant and continue_assistant_turn): #allow continue a prefill, chop off end
                     messages_string = messages_string[:-(len(assistant_message_gen)+len(assistant_message_end))]
@@ -4524,6 +4623,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 genparams["images"] = images_added
             if len(audio_added)>0:
                 genparams["audio"] = audio_added
+            if len(videos_added)>0:
+                genparams["videos"] = videos_added
             if len(genparams.get('stop_sequence', []))==0: #only set stop seq if it wont overwrite existing
                 genparams["stop_sequence"] = [user_message_start.strip(),assistant_message_start.strip()]
             else:
@@ -4600,6 +4701,9 @@ ws ::= | " " | "\n" [ \t]{0,20}
                             elif part.get("type") == "input_image":
                                 img = part.get("image_url", part.get("source", {}))
                                 parts.append({"type": "image_url", "image_url": {"url": img}})
+                            elif part.get("type") == "input_video":
+                                vid = part.get("video_url", part.get("source", {}))
+                                parts.append({"type": "video_url", "video_url": {"url": vid}})
                         content = parts
                     converted.append({"role": role, "content": content})
                 elif isinstance(item, str):
@@ -4662,6 +4766,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     return [{"type": "text", "text": doc_text}]
                 else:
                     return [{"type": "text", "text": "(Attached Unknown Document)"}]
+            # Anthropic Messages API has no video content block type, so video is intentionally unsupported here.
             else:
                 return [item]  # pass through unknown types (including tool_use, tool_result - handled below)
 
@@ -11886,6 +11991,16 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             has_audio_support = False
             has_vision_support = False
 
+        if args.mmproj and args.mmproj!="":
+            effective_video_max_tokens = args.videomaxtokens if args.videomaxtokens>0 else (args.visionmaxtokens if args.visionmaxtokens>0 else 256)
+            print(f"Video Config: maxframes={args.videomaxframes}, fps={args.videofps}, mintokens={args.videomintokens}, maxtokens={args.videomaxtokens} (effective maxtokens/frame: {effective_video_max_tokens})")
+            worst_case_video_tokens = args.videomaxframes * effective_video_max_tokens
+            if worst_case_video_tokens > maxctx:
+                print(f"Warning: Worst-case video token usage ({worst_case_video_tokens} = {args.videomaxframes} frames x {effective_video_max_tokens} tokens/frame) may exceed the max context size ({maxctx}). Consider lowering --videomaxframes, --videofps, or --videomaxtokens.")
+            effective_maxrequestsize = int(args.maxrequestsize) if args.maxrequestsize else 32
+            if effective_maxrequestsize <= 32:
+                print(f"Note: video attachments are limited by --maxrequestsize (currently {effective_maxrequestsize}MB); base64 encoding adds ~33% overhead, so large videos may need a higher value.")
+
         if not loadok:
             exitcounter = 999
             exit_with_error(3,"Could not load text model: " + modelname)
@@ -12464,6 +12579,7 @@ if __name__ == '__main__':
     advparser.add_argument("--exportconfig", help="Exports the current selected arguments as a .kcpps settings file", metavar=('[filename]'), type=str, default="")
     advparser.add_argument("--exporttemplate", help="Exports the current selected arguments as a .kcppt template file", metavar=('[filename]'), type=str, default="")
     advparser.add_argument("--failsafe", help="Use failsafe mode, extremely old CPU compatibility mode that should work on all devices.", action='store_true')
+    advparser.add_argument("--ffmpegpath", metavar=('[directory]'), help="Specify a directory containing the ffmpeg/ffprobe binaries used for video frame extraction. If unset, searches PATH.", type=str, default="")
     advparser.add_argument("--foreground", help="Windows only. Sends the terminal to the foreground every time a new prompt is generated. This helps avoid some idle slowdown issues.", action='store_true')
     advparser.add_argument("--gendefaults", metavar=('{"parameter":"value",...}'), help="Sets extra default parameters for some fields in API requests, as a JSON string.", default="")
     advparser.add_argument("--gendefaultsoverwrite", help="Allow the gendefaults parameters to overwrite the original value in API payloads.", action='store_true')
@@ -12524,6 +12640,10 @@ if __name__ == '__main__':
     advparser.add_argument("--usemlock","--mlock", help="Enables mlock, preventing the RAM used to load the model from being paged out. Not usually recommended.", action='store_true')
     compatgroup3 = advparser.add_mutually_exclusive_group()
     compatgroup3.add_argument("--usemmap", help="If set, uses mmap to load model.", action='store_true')
+    advparser.add_argument("--videofps", metavar=('[fps]'), help="Sets the video frame sampling rate in frames per second. Values <=0 use the video's native fps (default 2.0).", type=float, default=2.0)
+    advparser.add_argument("--videomaxframes", metavar=('[frames]'), help="Sets the max frames sampled per video; longer videos are downsampled evenly across their full duration to fit (default 32).", type=int, default=32)
+    advparser.add_argument("--videomaxtokens", metavar=('[tokens]'), help="Override the maximum tokens per video frame for the MMProj embedding. If -1, inherits --visionmaxtokens (default -1).", type=int, default=-1)
+    advparser.add_argument("--videomintokens", metavar=('[tokens]'), help="Sets a minimum tokens per video frame for the MMProj embedding; undersized frames are upscaled to meet this floor. If -1, no floor is applied (default -1).", type=int, default=-1)
     advparser.add_argument("--visionmaxres", metavar=('[max px]'), help="Clamp MMProj vision maximum allowed resolution. Allowed values are between 512 to 2048 px (default 1024).", type=int, default=default_visionmaxres)
     advparser.add_argument("--visionmaxtokens","--image-max-tokens", metavar=('[tokens]'), help="Override the maximum tokens for the MMProj embedding (default -1).", type=int, default=-1)
     advparser.add_argument("--visionmintokens","--image-min-tokens", metavar=('[tokens]'), help="Override the minimum tokens for the MMProj embedding (default -1).", type=int, default=-1)

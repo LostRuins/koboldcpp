@@ -49,6 +49,11 @@ struct load_model_inputs
     const int visionmaxres = 2048;
     const int visionmintokens = -1;
     const int visionmaxtokens = -1;
+    const int videomaxframes = 32;
+    const float videofps = 2.0f;
+    const int videomintokens = -1;
+    const int videomaxtokens = -1;
+    const char * ffmpegpath = "";
     const bool use_mmap = false;
     const bool use_mlock = false;
     const bool no_host = false;
@@ -101,6 +106,8 @@ struct generation_inputs
     const char ** images = nullptr;
     const int audio_len = 0;
     const char ** audio = nullptr;
+    const int videos_len = 0;
+    const char ** videos = nullptr;
     const int max_context_length = 0;
     const int max_length = 0;
     const float temperature = 0.0f;

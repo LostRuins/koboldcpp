@@ -87,6 +87,7 @@ int speculative_chunk_amt = 4; //do it in chunks of this many tokens
 bool generation_finished;
 bool audio_multimodal_supported = false;
 bool vision_multimodal_supported = false;
+bool video_multimodal_supported = false;
 float last_process_time = 0;
 float last_eval_time = 0;
 int last_token_count = 0;
@@ -140,9 +141,30 @@ static mtmd_context * mtmd_ctx = nullptr; //for multimodal media
 static std::vector<media_object> media_objects;
 static std::vector<int> last_media_mem; //for storing dummy tokens that will be consumed by mtmd
 static std::vector<int> media_object_token_counts; //per media object dummy token counts for inline placeholders
+//standard FNV-1a 64-bit digest, implemented locally: the only in-repo FNV helpers are file-static inside
+//vendored code (tools/mtmd, ggml-rpc) which we keep pristine, and std::hash is implementation-defined
+//(not stable across compilers/platforms), while signatures must compare deterministically. Cheap fixed-size
+//digest avoids concatenating full base64 payloads for cache signatures; non-cryptographic is fine here.
+static std::string fnv1a64_hex(const std::string &data)
+{
+    uint64_t hash = 14695981039346656037ULL;
+    for(unsigned char c : data)
+    {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    char buf[17];
+    snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)hash);
+    return std::string(buf);
+}
 static std::string media_composite_image_signature = ""; //for identifying when the media changes, we need to invalidate the cache
 static int current_media_identifier = MEDIA_TOKEN_IDENTIFIER_A;
 static int vision_max_res = 2048;
+static float video_fps = 2.0f;
+static int video_max_frames = 32;
+static int video_max_tokens = -1; //-1 = inherit vision budget via shared clip context; >0 = explicit per-frame token cap
+static int video_min_tokens = -1; //-1 = no floor; >0 = explicit per-frame token floor, undersized frames get upscaled
+static std::string ffmpeg_path = ""; //empty = search PATH
 static bool use_mrope = false;
 
 static kcpp_params * kcpp_data = nullptr;
@@ -235,6 +257,60 @@ inline bool LogitsDuplicated(std::vector<float> & arr1, std::vector<float> & arr
 
 static inline void log_callback_off(ggml_log_level level, const char* text, void*) {
     return;
+}
+
+//vendored mtmd/mtmd-helper emit their ffmpeg probe/decode progress ("probe: launching", "start_ffmpeg",
+//"read_next: proc_alive=", per-batch decode timings, etc.) at DEBUG/INFO via a global logger whose default
+//callback prints every level unconditionally - ignoring kcpp's --quiet. route it through our verbosity gate:
+//only surface that spam in full --debugmode, but always let warnings and errors through.
+static inline void mtmd_log_filter(ggml_log_level level, const char* text, void*) {
+    bool showall = (debugmode==1 && !is_quiet);
+    if(!showall && level < GGML_LOG_LEVEL_WARN) {
+        return;
+    }
+    fputs(text, stderr);
+    fflush(stderr);
+}
+
+//koboldcpp never installs a global llama logger, so llama's default callback prints every level - including
+//the DEBUG/INFO "set_causal_attn"/"sched_reserve" chatter that mtmd's causal-attn toggling triggers on every
+//media-bearing generation - ignoring --quiet. this filter is only installed when mtmd is active (keeping
+//non-multimodal builds bit-identical). it stays disarmed until load fully completes so load-time logs print
+//as before; once armed, llama core logs are gated by tier.
+static bool kcpp_llama_logfilter_armed = false;
+static void kcpp_llama_log_filter(ggml_log_level level, const char* text, void* ud) {
+    (void)ud;
+    static bool last_shown = true; //CONT fragments continue the previous line, so follow its decision
+    bool show;
+    if(!kcpp_llama_logfilter_armed)
+    {
+        show = true; //pre-load: behave like the default callback
+    }
+    else if(level == GGML_LOG_LEVEL_CONT)
+    {
+        show = last_shown;
+    }
+    else if(level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR)
+    {
+        show = true;
+    }
+    else if(level == GGML_LOG_LEVEL_DEBUG)
+    {
+        show = (debugmode==1 && !is_quiet);
+    }
+    else //INFO (and NONE): normal-verbosity info, dropped only under --quiet
+    {
+        show = !is_quiet;
+    }
+    if(level != GGML_LOG_LEVEL_CONT)
+    {
+        last_shown = show;
+    }
+    if(show)
+    {
+        fputs(text, stderr);
+        fflush(stderr);
+    }
 }
 
 static inline void string_trim_whitespace(std::string & s) {
@@ -2508,22 +2584,30 @@ static bool kcpp_parse_attached_media_placeholder(
     size_t pos,
     int image_count,
     int audio_count,
+    int video_count,
     int & media_index,
     size_t & placeholder_len)
 {
     const std::string image_prefix = "(Attached Image ";
     const std::string audio_prefix = "(Attached Audio ";
-    bool is_audio = false;
+    const std::string video_prefix = "(Attached Video ";
+    MediaType mtype = MEDIA_TYPE_IMAGE;
     size_t prefix_len = 0;
 
     if(prompt.compare(pos, image_prefix.size(), image_prefix) == 0)
     {
+        mtype = MEDIA_TYPE_IMAGE;
         prefix_len = image_prefix.size();
     }
     else if(prompt.compare(pos, audio_prefix.size(), audio_prefix) == 0)
     {
-        is_audio = true;
+        mtype = MEDIA_TYPE_AUDIO;
         prefix_len = audio_prefix.size();
+    }
+    else if(prompt.compare(pos, video_prefix.size(), video_prefix) == 0)
+    {
+        mtype = MEDIA_TYPE_VIDEO;
+        prefix_len = video_prefix.size();
     }
     else
     {
@@ -2548,13 +2632,24 @@ static bool kcpp_parse_attached_media_placeholder(
     }
 
     int candidate = -1;
-    if(is_audio)
+    if(mtype == MEDIA_TYPE_AUDIO)
     {
         if(number <= audio_count)
         {
             candidate = image_count + number - 1;
         }
-        else if(number <= (int) media_objects.size() && media_objects[number - 1].is_audio)
+        else if(number <= (int) media_objects.size() && media_objects[number - 1].mediatype == MEDIA_TYPE_AUDIO)
+        {
+            candidate = number - 1;
+        }
+    }
+    else if(mtype == MEDIA_TYPE_VIDEO)
+    {
+        if(number <= video_count)
+        {
+            candidate = image_count + audio_count + number - 1;
+        }
+        else if(number <= (int) media_objects.size() && media_objects[number - 1].mediatype == MEDIA_TYPE_VIDEO)
         {
             candidate = number - 1;
         }
@@ -2565,7 +2660,7 @@ static bool kcpp_parse_attached_media_placeholder(
         {
             candidate = number - 1;
         }
-        else if(number <= (int) media_objects.size() && !media_objects[number - 1].is_audio)
+        else if(number <= (int) media_objects.size() && media_objects[number - 1].mediatype == MEDIA_TYPE_IMAGE)
         {
             candidate = number - 1;
         }
@@ -2600,7 +2695,8 @@ static bool kcpp_tokenize_prompt_with_inline_media(
     FileFormat file_format,
     bool add_bos,
     int image_count,
-    int audio_count)
+    int audio_count,
+    int video_count)
 {
     output_tokens.clear();
     bool inserted_media = false;
@@ -2623,7 +2719,7 @@ static bool kcpp_tokenize_prompt_with_inline_media(
     {
         int media_index = -1;
         size_t placeholder_len = 0;
-        if(kcpp_parse_attached_media_placeholder(prompt, pos, image_count, audio_count, media_index, placeholder_len))
+        if(kcpp_parse_attached_media_placeholder(prompt, pos, image_count, audio_count, video_count, media_index, placeholder_len))
         {
             append_text(text_start, pos);
             if(add_bos && !emitted_anything)
@@ -2978,6 +3074,11 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->vision_min_tokens = inputs.visionmintokens;
     kcpp_data->vision_max_tokens = inputs.visionmaxtokens;
     vision_max_res = inputs.visionmaxres;
+    video_fps = inputs.videofps;
+    video_max_frames = inputs.videomaxframes;
+    video_max_tokens = inputs.videomaxtokens;
+    video_min_tokens = inputs.videomintokens; //undersized frames are upscaled at eval time; the model's own baked clip minimum still applies downstream regardless
+    ffmpeg_path = (inputs.ffmpegpath ? inputs.ffmpegpath : "");
     if(isGguf && kcpp_pipeline_parallelism)
     {
         //double the logical batch, while keeping the physical batch the same, pipeline parallel set GGML_SCHED_MAX_COPIES to 2
@@ -3010,6 +3111,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     }
     audio_multimodal_supported = false;
     vision_multimodal_supported = false;
+    video_multimodal_supported = false;
     use_mrope = false;
     overridden_jinja_template = inputs.jinja_template;
 
@@ -3649,8 +3751,19 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 fprintf(stderr, "%s: error: failed to load mmproj model!\n", __func__);
                 return ModelLoadResult::FAIL;
             }
+            //gate vendored mtmd/mtmd-helper logging through our verbosity filter (also sets mtmd_log_set internally)
+            mtmd_helper_log_set(mtmd_log_filter, nullptr);
+            //also gate llama core logs (set_causal_attn/sched_reserve spam that media generations trigger). disarmed
+            //until load completes so load-time logs still print; runs after the fitting code's log save/restore blocks.
+            kcpp_llama_logfilter_armed = false;
+            llama_log_set(kcpp_llama_log_filter, nullptr);
             vision_multimodal_supported = mtmd_support_vision(mtmd_ctx);
             audio_multimodal_supported = mtmd_support_audio(mtmd_ctx);
+            video_multimodal_supported = mtmd_helper_support_video(mtmd_ctx);
+            if(vision_multimodal_supported && video_multimodal_supported)
+            {
+                printf("Video input enabled (requires ffmpeg/ffprobe on PATH at runtime).\n");
+            }
         }
 
         const llama_vocab * tmpvocab = llama_model_get_vocab(llamamodel);
@@ -3722,6 +3835,9 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         {
             printf("\nModel Warmup Failed! (code:%d)\n",er);
         }
+        //load (incl. warmup decodes above) is done - arm the llama log filter so generation-time core log
+        //spam now respects the quiet/debug tiers. no-op unless the filter was installed (mtmd active).
+        kcpp_llama_logfilter_armed = true;
         return ModelLoadResult::SUCCESS;
     }
     else if (file_format == FileFormat::RWKV_1 || file_format==FileFormat::RWKV_2)
@@ -4372,7 +4488,7 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(draft_ctx || guidance_ctx || inputs.images_len>0 || inputs.audio_len>0)
+    if(draft_ctx || guidance_ctx || inputs.images_len>0 || inputs.audio_len>0 || inputs.videos_len>0)
     {
         return false;
     }
@@ -4384,7 +4500,7 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(inputs.images_len > 0 || inputs.audio_len > 0 || inputs.guidance_scale != 1.0f)
+    if(inputs.images_len > 0 || inputs.audio_len > 0 || inputs.videos_len > 0 || inputs.guidance_scale != 1.0f)
     {
         return false;
     }
@@ -5304,6 +5420,211 @@ static mtmd_bitmap * kcpp_mtmd_bitmap_init_image_from_buf(const unsigned char * 
     return bitmap;
 }
 
+#ifdef MTMD_VIDEO
+//resize an already-decoded RGB video frame so its larger dimension stays within [mindims, maxdims]:
+//downscales if the frame exceeds maxdims, upscales if it's smaller than mindims (either bound <=0 disables that side).
+//takes ownership of the input bitmap; returns a new bitmap (or the original if no resize was needed).
+static mtmd_bitmap * kcpp_resize_bitmap_bounds(mtmd_bitmap * bitmap, int mindims, int maxdims)
+{
+    if(bitmap == nullptr)
+    {
+        return bitmap;
+    }
+    int nx = (int)mtmd_bitmap_get_nx(bitmap);
+    int ny = (int)mtmd_bitmap_get_ny(bitmap);
+
+    int target_dim = 0; //0 = no resize needed
+    if(maxdims > 0 && (nx > maxdims || ny > maxdims))
+    {
+        target_dim = maxdims;
+    }
+    else if(mindims > 0 && nx < mindims && ny < mindims)
+    {
+        target_dim = mindims;
+    }
+    if(target_dim <= 0)
+    {
+        return bitmap;
+    }
+
+    const float aspect_ratio = static_cast<float>(nx) / ny;
+    int new_width = nx;
+    int new_height = ny;
+    if(aspect_ratio > 1.0f)
+    {
+        new_width = target_dim;
+        new_height = std::max(1, static_cast<int>(target_dim / aspect_ratio));
+    }
+    else
+    {
+        new_height = target_dim;
+        new_width = std::max(1, static_cast<int>(target_dim * aspect_ratio));
+    }
+    uint8_t * resized_image = (uint8_t *)malloc((size_t)new_width * new_height * 3);
+    if(resized_image != nullptr && stbir_resize_uint8(mtmd_bitmap_get_data(bitmap), nx, ny, 0, resized_image, new_width, new_height, 0, 3))
+    {
+        mtmd_bitmap * newbmp = mtmd_bitmap_init(new_width, new_height, resized_image);
+        free(resized_image);
+        mtmd_bitmap_free(bitmap);
+        return newbmp;
+    }
+    printf("\nWarning: MTMD video frame resize failed, using original frame.");
+    free(resized_image);
+    return bitmap;
+}
+
+//stage decoded video bytes to a temp file so we decode via the file-based helper API instead of the
+//buffer API. buffer input (pipe:0) spawns a feeder thread that blocks writing the whole video into
+//ffmpeg's stdin; tearing that context down before ffmpeg's stdout is drained (e.g. the throwaway
+//probe used for fps downsampling) leaves the feeder blocked on a pipe the OS keeps open, deadlocking
+//the server on the join in the context destructor. file input has no feeder and is seekable, so
+//teardown is always clean. returns "" on failure.
+static std::string kcpp_write_temp_video_file(const std::vector<uint8_t> & data, const std::string & uniq)
+{
+#if defined(_WIN32)
+    const char * tmpdir = getenv("TEMP");
+    if(tmpdir == nullptr || tmpdir[0] == '\0') { tmpdir = getenv("TMP"); }
+    if(tmpdir == nullptr || tmpdir[0] == '\0') { tmpdir = "."; }
+    const char sep = '\\';
+#else
+    const char * tmpdir = getenv("TMPDIR");
+    if(tmpdir == nullptr || tmpdir[0] == '\0') { tmpdir = "/tmp"; }
+    const char sep = '/';
+#endif
+    std::string path = std::string(tmpdir) + sep + "kcpp_vid_" + uniq + ".tmp";
+    FILE * tf = fopen(path.c_str(), "wb");
+    if(tf == nullptr)
+    {
+        return "";
+    }
+    size_t written = data.empty() ? 0 : fwrite(data.data(), 1, data.size(), tf);
+    fclose(tf);
+    if(written != data.size())
+    {
+        std::remove(path.c_str());
+        return "";
+    }
+    return path;
+}
+
+//removes the staged temp file when the video branch exits by any path (including early continues)
+struct kcpp_temp_file_guard
+{
+    std::string path;
+    ~kcpp_temp_file_guard() { if(!path.empty()) { std::remove(path.c_str()); } }
+};
+
+//run ffprobe with the given argument string and return the LAST non-empty line of its stdout.
+//keeping only the last line bounds memory for the per-packet query (one line per packet) while still
+//capturing the single value emitted by the format-duration query.
+static std::string kcpp_run_ffprobe_lastline(const std::string & ffprobe_bin, const std::string & args)
+{
+    std::string cmd = "\"" + ffprobe_bin + "\" " + args;
+#if defined(_WIN32)
+    cmd = "\"" + cmd + "\""; //cmd.exe /c strips one outer quote pair; wrap so quoted bin+path both survive
+    FILE * pp = _popen(cmd.c_str(), "r");
+#else
+    FILE * pp = popen(cmd.c_str(), "r");
+#endif
+    if(pp == nullptr)
+    {
+        return "";
+    }
+    std::string last;
+    char buf[128];
+    while(fgets(buf, sizeof(buf), pp) != nullptr)
+    {
+        std::string line = buf;
+        //trim trailing CR/LF/space so atof sees a clean number and empties are recognised
+        while(!line.empty() && (line.back()=='\n' || line.back()=='\r' || line.back()==' ' || line.back()=='\t'))
+        {
+            line.pop_back();
+        }
+        if(!line.empty())
+        {
+            last = line;
+        }
+    }
+#if defined(_WIN32)
+    _pclose(pp);
+#else
+    pclose(pp);
+#endif
+    return last;
+}
+
+//probe the container duration (seconds) of a staged video file via our own ffprobe. needed because the
+//vendored get_info reports n_frames=-1 whenever the stream lacks both a stream-level duration and
+//nb_frames (common in webm/mkv, where duration lives at the container/format level), which would
+//otherwise skip fps downsampling and hard-truncate long videos at videomaxframes. tiered so that
+//animated webp (which the webp demuxer usually reports with NO duration at either stream OR format
+//level) is still rescued by summing container packet timestamps. returns <=0 on failure.
+static float kcpp_probe_video_duration(const std::string & path, const std::string & bin_dir)
+{
+    //resolve the ffprobe binary the same way the vendored helper's video_resolve_bin does
+    std::string ffprobe_bin;
+    if(bin_dir.empty())
+    {
+        ffprobe_bin = "ffprobe";
+    }
+    else
+    {
+        ffprobe_bin = bin_dir;
+        char lastc = ffprobe_bin.empty() ? '\0' : ffprobe_bin.back();
+        if(lastc != '/' && lastc != '\\')
+        {
+#if defined(_WIN32)
+            ffprobe_bin += '\\';
+#else
+            ffprobe_bin += '/';
+#endif
+        }
+        ffprobe_bin += "ffprobe";
+    }
+#if defined(_WIN32)
+    ffprobe_bin += ".exe";
+#endif
+
+    std::string qpath = "\"" + path + "\"";
+    //tier 1: cheap format-level duration (one line). works for mp4/mov and most containers.
+    std::string out = kcpp_run_ffprobe_lastline(ffprobe_bin,
+        "-v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " + qpath);
+    float duration = out.empty() ? -1.0f : (float)atof(out.c_str()); //atof returns 0 on "N/A"/garbage
+    if(duration > 0.0f)
+    {
+        return duration;
+    }
+    //tier 2: last video packet presentation timestamp. container demux only (no decode), so it stays
+    //fast even on large files, and covers animated webp/webm whose format duration reads N/A. this is
+    //the last frame's start time (one interval short of the true end) which slightly under-estimates
+    //duration - fine, it only makes the downsample fps marginally lower.
+    out = kcpp_run_ffprobe_lastline(ffprobe_bin,
+        "-v quiet -select_streams v:0 -show_entries packet=pts_time -of csv=p=0 " + qpath);
+    duration = out.empty() ? -1.0f : (float)atof(out.c_str());
+    return (duration > 0.0f) ? duration : -1.0f;
+}
+
+//format a whole-second video position as MM:SS (or H:MM:SS past an hour) - a notation the model parses
+//reliably, unlike the vendored compact [XmY.YYs] form which Gemma misreads (e.g. [0m10.45s] as ~0.5s).
+static std::string kcpp_format_video_timestamp(int total_seconds)
+{
+    if(total_seconds < 0) { total_seconds = 0; }
+    int hours = total_seconds / 3600;
+    int mins = (total_seconds % 3600) / 60;
+    int secs = total_seconds % 60;
+    char buf[32];
+    if(hours > 0)
+    {
+        snprintf(buf, sizeof(buf), "%d:%02d:%02d", hours, mins, secs);
+    }
+    else
+    {
+        snprintf(buf, sizeof(buf), "%02d:%02d", mins, secs);
+    }
+    return std::string(buf);
+}
+#endif
+
 //this function prepares the mtmd chunks for media. it's only needed when media changes
 static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_intro, const std::vector<int> & media_outro)
 {
@@ -5316,9 +5637,464 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
 
         for(int i=0;i<media_objects.size();++i)
         {
+            if(media_objects[i].mediatype == MEDIA_TYPE_VIDEO)
+            {
+#ifdef MTMD_VIDEO
+                const std::vector<uint8_t> video_data_buffer = kcpp_base64_decode(media_objects[i].b64data);
+                std::string video_temp_path = kcpp_write_temp_video_file(video_data_buffer, fnv1a64_hex(media_objects[i].b64data));
+                kcpp_temp_file_guard video_temp_guard{video_temp_path};
+                if(video_temp_path.empty())
+                {
+                    media_object_token_counts.push_back(0);
+                    printf("\nError: MTMD video %d failed - could not stage temp file for decoding, skipping.", i);
+                    continue;
+                }
+                mtmd_helper_video_init_params vparams = mtmd_helper_video_init_params_default();
+                vparams.fps_target = video_fps;
+                vparams.ffmpeg_bin_dir = ffmpeg_path.empty() ? nullptr : ffmpeg_path.c_str();
+                mtmd_helper::video_ptr vctx(mtmd_helper_video_init(mtmd_ctx, video_temp_path.c_str(), vparams));
+                if(!vctx)
+                {
+                    media_object_token_counts.push_back(0);
+                    printf("\nError: MTMD video %d failed - ffmpeg/ffprobe not found or unreadable video, skipping.", i);
+                    continue;
+                }
+
+                //spread the frame budget across the whole video by lowering fps instead of truncating the tail.
+                //determine the duration to decide: get_info's n_frames is the estimated total at the effective
+                //fps but is -1 when the container exposes neither stream duration nor nb_frames (common in
+                //webm/mkv), so fall back to our own container-level ffprobe rather than hard-truncating.
+                mtmd_helper_video_info vinfo = mtmd_helper_video_get_info(vctx.get());
+                bool downsampled = false;
+                float duration_sec = (vinfo.n_frames > 0 && vinfo.fps > 0.0f)
+                    ? ((float)vinfo.n_frames / vinfo.fps)
+                    : kcpp_probe_video_duration(video_temp_path, ffmpeg_path);
+                if(duration_sec > 0.0f)
+                {
+                    float est_frames = duration_sec * video_fps;
+                    if(est_frames > (float)video_max_frames)
+                    {
+                        //place frames at t=0..duration inclusive: spreading (max-1) intervals across the whole
+                        //video makes the first AND last sampled frame land inside the budget, instead of the
+                        //(max/duration) rate that emits max+1 frames and drops the frame nearest the end.
+                        float adjusted_fps = (video_max_frames > 1) ? ((float)(video_max_frames - 1) / duration_sec) : (1.0f / duration_sec);
+                        if(!is_quiet && debugmode!=-1)
+                        {
+                            printf("\nvideo: ~%d frames (%.1fs) at %.2f fps exceeds budget of %d, downsampling to %.3f fps to sample the full duration\n", (int)(est_frames + 0.5f), duration_sec, video_fps, video_max_frames, adjusted_fps);
+                        }
+                        vparams.fps_target = adjusted_fps;
+                        vctx.reset(mtmd_helper_video_init(mtmd_ctx, video_temp_path.c_str(), vparams));
+                        if(!vctx)
+                        {
+                            media_object_token_counts.push_back(0);
+                            printf("\nError: MTMD video %d failed to re-init at adjusted fps, skipping.", i);
+                            continue;
+                        }
+                        downsampled = true;
+                    }
+                }
+
+                int mediatokensneeded = 0;
+                int mediacellsneeded = 0; //real KV cells: for M-RoPE each frame consumes nx*ny cells while only advancing the position by max(nx,ny)
+                bool seen_media_embedding = false;
+                bool used_fallback_boundary_tokens = false;
+                std::vector<int> fallback_start_seq;
+                std::vector<int> fallback_end_seq;
+                int frames_processed = 0;
+                bool frame_cap_hit = false;
+                bool cell_budget_hit = false;
+                //hard ceiling on the KV cells one video may occupy: the position-based token counts above cannot
+                //see the M-RoPE inflation, so without this a high-res video passes every check and then exhausts
+                //the KV cache mid-eval (decode error "failed to find a memory slot"). keep a quarter of the
+                //context free for the prompt, response and other media. an explicit videomaxtokens tightens it.
+                int video_cell_budget = (nctx / 4) * 3;
+                if(video_max_tokens > 0 && video_max_tokens < video_cell_budget)
+                {
+                    video_cell_budget = video_max_tokens;
+                }
+                //spread the budget over the frames we expect to sample. the first tokenized frame is measured
+                //against this per-frame share to calibrate the resolution cap (inside the loop below): actual
+                //pixels-per-token varies too much across encoders (Qwen3-VL ~32px/token side, Gemma4 clamps
+                //internally to <=280 tokens) for any fixed heuristic to convert cells to pixels accurately.
+                int expected_frames = video_max_frames;
+                if(duration_sec > 0.0f && !downsampled)
+                {
+                    int est = (int)(duration_sec * video_fps) + 1;
+                    expected_frames = std::min(expected_frames, std::max(1, est));
+                }
+                const int per_frame_cell_budget = std::max(1, video_cell_budget / std::max(1, expected_frames));
+
+                //frames inherit the image resolution clamp; the measured calibration below can only tighten it
+                int frame_max_res = vision_max_res;
+
+                //mirror of the max heuristic above: derive a pixel floor from videomintokens so undersized frames
+                //get upscaled before tokenization. the model's own baked clip minimum still applies downstream regardless.
+                int frame_min_res = 0;
+                if(video_min_tokens > 0)
+                {
+                    const int patch_px = 14;
+                    frame_min_res = (int)(std::sqrt((double)video_min_tokens) * patch_px);
+                    if(frame_max_res > 0 && frame_min_res > frame_max_res)
+                    {
+                        frame_min_res = frame_max_res; //never let the floor exceed the cap
+                    }
+                }
+
+                auto append_video_chunks = [&](mtmd::input_chunks & chunks)
+                {
+                    for(size_t j=0;j<chunks.size();++j)
+                    {
+                        const mtmd_input_chunk * mtmdchunk = chunks[j];
+                        if(mtmd_text_chunk_has_invalid_tokens(mtmdchunk))
+                        {
+                            std::vector<int> fallback_tokens;
+                            TokenizeString(seen_media_embedding ? "</media>" : "<media>", fallback_tokens, file_format, false);
+                            if(fallback_tokens.size() > 0)
+                            {
+                                if(seen_media_embedding)
+                                {
+                                    fallback_end_seq.insert(fallback_end_seq.end(), fallback_tokens.begin(), fallback_tokens.end());
+                                }
+                                else
+                                {
+                                    fallback_start_seq.insert(fallback_start_seq.end(), fallback_tokens.begin(), fallback_tokens.end());
+                                }
+                            }
+                            used_fallback_boundary_tokens = true;
+                            continue;
+                        }
+                        media_chunk chunk;
+                        chunk.mediatype = media_objects[i].mediatype;
+                        chunk.mtmd_chunk = mtmd_input_chunk_copy(mtmdchunk);
+                        chunk.clp_image_tokens = mtmd_input_chunk_get_n_pos(mtmdchunk);
+                        chunk.clp_kv_cells = (int32_t)mtmd_input_chunk_get_n_tokens(mtmdchunk);
+                        mediatokensneeded += chunk.clp_image_tokens;
+                        mediacellsneeded += chunk.clp_kv_cells;
+                        media_objects[i].mediachunks.push_back(chunk);
+                        if(mtmd_input_chunk_get_type(mtmdchunk) != MTMD_INPUT_CHUNK_TYPE_TEXT)
+                        {
+                            seen_media_embedding = true;
+                        }
+                    }
+                };
+                auto chunks_kv_cells = [](mtmd::input_chunks & chunks) -> int
+                {
+                    int cells = 0;
+                    for(size_t j=0;j<chunks.size();++j)
+                    {
+                        cells += (int)mtmd_input_chunk_get_n_tokens(chunks[j]);
+                    }
+                    return cells;
+                };
+
+                while(true)
+                {
+                    mtmd_bitmap * raw_bitmap = nullptr;
+                    char * raw_text = nullptr;
+                    int32_t rd = mtmd_helper_video_read_next(vctx.get(), &raw_bitmap, &raw_text);
+                    if(rd == -1) //EOF
+                    {
+                        break;
+                    }
+                    if(rd == -2) //error - keep already-collected chunks
+                    {
+                        printf("\nWarning: MTMD video %d read error, stopping with %d frames collected.", i, frames_processed);
+                        break;
+                    }
+                    if(raw_bitmap != nullptr)
+                    {
+                        if(frames_processed >= video_max_frames)
+                        {
+                            mtmd_bitmap_free(raw_bitmap);
+                            frame_cap_hit = true;
+                            break;
+                        }
+                        mtmd::bitmap framebmp(kcpp_resize_bitmap_bounds(raw_bitmap, frame_min_res, frame_max_res));
+                        if(!framebmp.ptr)
+                        {
+                            printf("\nWarning: MTMD video %d frame %d failed to prepare, skipping frame.", i, frames_processed);
+                            continue;
+                        }
+                        const std::string media_marker = mtmd_default_marker();
+                        mtmd_input_text inp_txt = {
+                            media_marker.c_str(),
+                            media_marker.size(),
+                            /* add_special */ false,
+                            /* parse_special */ true,
+                        };
+                        mtmd::input_chunks chunks(mtmd_input_chunks_init());
+                        std::vector<const mtmd_bitmap *> bitmaps = { framebmp.ptr.get() };
+                        int32_t tokenized = mtmd_tokenize(mtmd_ctx, chunks.ptr.get(), &inp_txt, bitmaps.data(), bitmaps.size());
+                        if(tokenized != 0)
+                        {
+                            printf("\nWarning: MTMD video %d frame %d failed to tokenize (status %d), skipping frame.", i, frames_processed, tokenized);
+                            continue;
+                        }
+                        //calibrate the resolution cap off the first frame's measured cell cost - tokenization is
+                        //cheap (no encoder run) and exact, and every frame of a video shares one resolution, so
+                        //one calibration holds for the rest. cell cost scales with pixel area (a token covers a
+                        //fixed pixel patch), so this is an interpolation search in area space: one probe in the
+                        //common case, extra probes only inside an encoder's internal token clamp where measured
+                        //cost stops tracking area. a frame already within its share never enters this block, and
+                        //probes are bracketed strictly below the original size, so frames are never upscaled.
+                        if(frames_processed == 0)
+                        {
+                            const int orig_cells = chunks_kv_cells(chunks);
+                            const int longside = (int)std::max(framebmp.nx(), framebmp.ny());
+                            if(orig_cells > per_frame_cell_budget && longside > 1)
+                            {
+                                //bracket: hi = smallest resolution known to exceed the share (starts at the original
+                                //size, probes stay strictly below it), best = largest known to fit. interpolate toward
+                                //the share from either side and accept once a fit lands within 90% of it, so an
+                                //undershooting probe gets refined back upward instead of locked in.
+                                int hi_res = longside;
+                                int hi_cells = orig_cells;
+                                int best_res = 0;
+                                int best_cells = 0;
+                                int probe_res = longside;
+                                int probe_cells = orig_cells;
+                                int prev_res = -1;
+                                int prev_cells = -1;
+                                for(int probes=0; probes<6; ++probes)
+                                {
+                                    if(best_res > 0 && best_cells * 10 >= per_frame_cell_budget * 9)
+                                    {
+                                        break; //close enough to the share, stop refining
+                                    }
+                                    int next_res;
+                                    if(prev_res > 0 && prev_res != probe_res && prev_cells == probe_cells)
+                                    {
+                                        //two resolutions measured an identical cost (inside an encoder's internal
+                                        //clamp), interpolation has no signal here - step geometrically to escape
+                                        next_res = probe_res / 2;
+                                    }
+                                    else
+                                    {
+                                        next_res = (int)((double)probe_res * std::sqrt((double)per_frame_cell_budget / (double)probe_cells));
+                                    }
+                                    const int res_floor = std::max(64, best_res + 1);
+                                    const int res_ceil = hi_res - 1;
+                                    if(res_floor > res_ceil)
+                                    {
+                                        break; //bracket exhausted
+                                    }
+                                    next_res = std::min(std::max(next_res, res_floor), res_ceil);
+                                    if(next_res == probe_res)
+                                    {
+                                        break; //nothing new to learn
+                                    }
+                                    //probe a throwaway copy so the final resize is made straight from the original frame
+                                    mtmd::bitmap probebmp(mtmd_bitmap_init(framebmp.nx(), framebmp.ny(), framebmp.data()));
+                                    probebmp.ptr.reset(kcpp_resize_bitmap_bounds(probebmp.ptr.release(), 0, next_res));
+                                    if(!probebmp.ptr)
+                                    {
+                                        break;
+                                    }
+                                    mtmd::input_chunks probechunks(mtmd_input_chunks_init());
+                                    std::vector<const mtmd_bitmap *> probebitmaps = { probebmp.ptr.get() };
+                                    if(mtmd_tokenize(mtmd_ctx, probechunks.ptr.get(), &inp_txt, probebitmaps.data(), probebitmaps.size()) != 0)
+                                    {
+                                        break;
+                                    }
+                                    prev_res = probe_res;
+                                    prev_cells = probe_cells;
+                                    probe_res = next_res;
+                                    probe_cells = chunks_kv_cells(probechunks);
+                                    if(probe_cells <= per_frame_cell_budget)
+                                    {
+                                        if(probe_res > best_res)
+                                        {
+                                            best_res = probe_res;
+                                            best_cells = probe_cells;
+                                        }
+                                    }
+                                    else if(probe_res < hi_res)
+                                    {
+                                        hi_res = probe_res;
+                                        hi_cells = probe_cells;
+                                    }
+                                }
+                                //when no probe fit the share, an encoder min-token floor may still have bottomed the
+                                //cost out (take the cheapest failing size), or a fixed-output encoder ignores resolution
+                                //entirely (keep full quality); either way the exact budget guard below bounds the total.
+                                const int chosen_res = (best_res > 0) ? best_res : ((hi_cells < orig_cells) ? hi_res : 0);
+                                const int chosen_cells = (best_res > 0) ? best_cells : hi_cells;
+                                if(chosen_res > 0)
+                                {
+                                    frame_max_res = chosen_res;
+                                    if(frame_min_res > frame_max_res)
+                                    {
+                                        frame_min_res = frame_max_res; //never let the floor exceed the cap
+                                    }
+                                    if(!is_quiet && debugmode!=-1)
+                                    {
+                                        printf("\nvideo: frame resolution capped at %dpx (%d KV cells, was %d at %dpx) so ~%d frames fit the %d-cell context budget\n", frame_max_res, chosen_cells, orig_cells, longside, expected_frames, video_cell_budget);
+                                    }
+                                    mtmd::bitmap calibbmp(kcpp_resize_bitmap_bounds(framebmp.ptr.release(), frame_min_res, frame_max_res));
+                                    if(calibbmp.ptr)
+                                    {
+                                        framebmp.ptr = std::move(calibbmp.ptr);
+                                        mtmd::input_chunks rechunks(mtmd_input_chunks_init());
+                                        std::vector<const mtmd_bitmap *> rebitmaps = { framebmp.ptr.get() };
+                                        if(mtmd_tokenize(mtmd_ctx, rechunks.ptr.get(), &inp_txt, rebitmaps.data(), rebitmaps.size()) == 0)
+                                        {
+                                            chunks.ptr = std::move(rechunks.ptr);
+                                        }
+                                    }
+                                }
+                                else if(!is_quiet && debugmode!=-1)
+                                {
+                                    printf("\nvideo: frame cell cost (%d) does not shrink with resolution for this model; keeping %dpx frames, the cell budget may truncate frame count\n", orig_cells, longside);
+                                }
+                            }
+                        }
+                        //exact per-frame guard: measured cells, so it holds even where the calibration misestimates
+                        if(mediacellsneeded + chunks_kv_cells(chunks) > video_cell_budget)
+                        {
+                            cell_budget_hit = true;
+                            break;
+                        }
+                        append_video_chunks(chunks);
+                        ++frames_processed;
+                    }
+                    else if(raw_text != nullptr)
+                    {
+                        std::string tstext = raw_text;
+                        free(raw_text);
+                        //the vendored timestamp arrives as the compact "[XmY.YYs]" which the model misparses (it
+                        //read [0m10.45s] as ~0.5s); rewrite to a familiar "[MM:SS]" before tokenizing. anything
+                        //that doesn't match the pattern (prompt header, future vendored format) passes through
+                        //unchanged so no text is ever dropped.
+                        int ts_min = 0;
+                        float ts_sec = 0.0f;
+                        if(sscanf(tstext.c_str(), "[%dm%fs]", &ts_min, &ts_sec) == 2)
+                        {
+                            tstext = "[" + kcpp_format_video_timestamp((int)(ts_min * 60 + ts_sec + 0.5f)) + "]";
+                            if(debugmode==1 && !is_quiet)
+                            {
+                                printf("\nMTMD Video %d timestamp reformatted to %s", i, tstext.c_str());
+                            }
+                        }
+                        mtmd_input_text inp_txt = {
+                            tstext.c_str(),
+                            tstext.size(),
+                            /* add_special */ false,
+                            /* parse_special */ false,
+                        };
+                        mtmd::input_chunks chunks(mtmd_input_chunks_init());
+                        std::vector<const mtmd_bitmap *> nobitmaps;
+                        int32_t tokenized = mtmd_tokenize(mtmd_ctx, chunks.ptr.get(), &inp_txt, nobitmaps.data(), nobitmaps.size());
+                        if(tokenized != 0)
+                        {
+                            printf("\nWarning: MTMD video %d timestamp failed to tokenize (status %d), skipping.", i, tokenized);
+                            continue;
+                        }
+                        append_video_chunks(chunks);
+                    }
+                }
+
+                if(frame_cap_hit)
+                {
+                    if(downsampled)
+                    {
+                        if(!is_quiet && debugmode!=-1)
+                        {
+                            printf("\nNote: video %d produced trailing frame(s) beyond the %d-frame budget from fps rounding; dropped.", i, video_max_frames);
+                        }
+                    }
+                    else
+                    {
+                        printf("\nvideo truncated to %d frames (videomaxframes); rest of the video was not sampled", frames_processed);
+                    }
+                }
+                if(cell_budget_hit)
+                {
+                    printf("\nvideo truncated to %d frames: sampled frames occupy %d KV cells of a %d-cell budget (context %d). Lower the video resolution, raise context size, or reduce videomaxframes for full coverage.", frames_processed, mediacellsneeded, video_cell_budget, nctx);
+                }
+                //append an explicit end-of-clip duration note in the same familiar notation so the model can state
+                //how long the video is; skip when the duration is unknown or no frames were actually embedded.
+                if(duration_sec > 0.0f && frames_processed > 0)
+                {
+                    std::string durtext = "(video duration: " + kcpp_format_video_timestamp((int)(duration_sec + 0.5f)) + ")";
+                    mtmd_input_text inp_txt = {
+                        durtext.c_str(),
+                        durtext.size(),
+                        /* add_special */ false,
+                        /* parse_special */ false,
+                    };
+                    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+                    std::vector<const mtmd_bitmap *> nobitmaps;
+                    int32_t tokenized = mtmd_tokenize(mtmd_ctx, chunks.ptr.get(), &inp_txt, nobitmaps.data(), nobitmaps.size());
+                    if(tokenized == 0)
+                    {
+                        append_video_chunks(chunks);
+                        if(debugmode==1 && !is_quiet)
+                        {
+                            printf("\nMTMD Video %d duration note: %s", i, durtext.c_str());
+                        }
+                    }
+                    else
+                    {
+                        printf("\nWarning: MTMD video %d duration note failed to tokenize (status %d), skipping.", i, tokenized);
+                    }
+                }
+                //TODO(future): embed the video's audio track alongside the sampled frames for audio-capable mmprojs.
+                //Shape: (1) run ffmpeg on video_temp_path (-vn -> PCM/WAV); skip silently when the container has no
+                //audio stream; (2) feed the extracted bytes through the existing MEDIA_TYPE_AUDIO ingestion and append
+                //the resulting chunks after the frame/timestamp chunks of this same media object (the chunk/token
+                //accounting below is already generic); (3) gate on mtmd_support_audio(mtmd_ctx) plus a --videoaudio
+                //toggle; (4) count audio tokens in the launch-time context budget warning (~750 tokens per 30s for
+                //whisper-style encoders). Interleaving audio segments between timestamped frames is possible but
+                //untested against model training formats - ship append-after-frames first.
+                if(fallback_start_seq.size() > 0)
+                {
+                    media_objects[i].chunk_start_seq.insert(media_objects[i].chunk_start_seq.end(), fallback_start_seq.begin(), fallback_start_seq.end());
+                }
+                if(fallback_end_seq.size() > 0)
+                {
+                    media_objects[i].chunk_end_seq.insert(media_objects[i].chunk_end_seq.begin(), fallback_end_seq.begin(), fallback_end_seq.end());
+                }
+                if(used_fallback_boundary_tokens)
+                {
+                    printf("\nWarning: MTMD video %d produced invalid model-specific boundary tokens. Falling back to generic <media> and </media> marker text.", i);
+                }
+                const int boundarytokensneeded = media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size();
+                mediatokensneeded += boundarytokensneeded;
+                mediacellsneeded += boundarytokensneeded;
+                if(debugmode==1 && !is_quiet)
+                {
+                    printf("\nMTMD Video %i used %d frames, Tokens: %d, KV Cells: %d",i,frames_processed,mediatokensneeded,mediacellsneeded);
+                }
+                if(mediatokensneeded>0 && mediatokensneeded < nctx && mediacellsneeded < nctx)
+                {
+                    media_object_token_counts.push_back(mediatokensneeded);
+                    int tokcnt = mediatokensneeded;
+                    if(i==0)
+                    {
+                        tokcnt += introsize + outrosize;
+                    }
+                    const int media_token = kcpp_media_token_for_index(i);
+                    for(int n=0;n<tokcnt;++n)
+                    {
+                        last_media_mem.push_back(media_token);
+                    }
+                }
+                else
+                {
+                    media_object_token_counts.push_back(0);
+                    media_composite_image_signature = ""; //force invalidate
+                    printf("\nWarning: Video excluded - Context size too low or no frames decoded! (needed %d KV cells)\nVideo will be IGNORED! You probably want to relaunch with a larger context size!\n",mediacellsneeded);
+                }
+                continue;
+#else
+                media_object_token_counts.push_back(0);
+                printf("\nVideo input provided but this build has no video support, skipping.");
+                continue;
+#endif
+            }
             std::string media_obj = media_objects[i].b64data;
             const std::vector<uint8_t> media_data_buffer = kcpp_base64_decode(media_obj);
-            mtmd::bitmap bitmap(media_objects[i].is_audio
+            mtmd::bitmap bitmap(media_objects[i].mediatype == MEDIA_TYPE_AUDIO
                 ? mtmd_helper_bitmap_init_from_buf(mtmd_ctx, media_data_buffer.data(), media_data_buffer.size(),false).bitmap
                 : kcpp_mtmd_bitmap_init_image_from_buf(media_data_buffer.data(), media_data_buffer.size(), vision_max_res));
             if(!bitmap.ptr)
@@ -5327,10 +6103,10 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                 printf("\nError: MTMD media %d failed to load!",i);
                 continue;
             }
-            const auto * marker = mtmd_default_marker();
+            const std::string media_marker = mtmd_default_marker();
             mtmd_input_text inp_txt = {
-                marker,
-                strlen(marker),
+                media_marker.c_str(),
+                media_marker.size(),
                 /* add_special */ false,
                 /* parse_special */ true,
             };
@@ -5346,6 +6122,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             }
 
             int mediatokensneeded = 0;
+            int mediacellsneeded = 0; //real KV cells: M-RoPE image grids consume nx*ny cells but advance the position by only max(nx,ny)
             bool seen_media_embedding = false;
             bool used_fallback_boundary_tokens = false;
             std::vector<int> fallback_start_seq;
@@ -5372,10 +6149,12 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     continue;
                 }
                 media_chunk chunk;
-                chunk.is_audio = media_objects[i].is_audio;
+                chunk.mediatype = media_objects[i].mediatype;
                 chunk.mtmd_chunk = mtmd_input_chunk_copy(mtmdchunk);
                 chunk.clp_image_tokens = mtmd_input_chunk_get_n_pos(mtmdchunk);
+                chunk.clp_kv_cells = (int32_t)mtmd_input_chunk_get_n_tokens(mtmdchunk);
                 mediatokensneeded += chunk.clp_image_tokens;
+                mediacellsneeded += chunk.clp_kv_cells;
                 media_objects[i].mediachunks.push_back(chunk);
                 if(mtmd_input_chunk_get_type(mtmdchunk) != MTMD_INPUT_CHUNK_TYPE_TEXT)
                 {
@@ -5396,11 +6175,12 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             }
             const int boundarytokensneeded = media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size();
             mediatokensneeded += boundarytokensneeded;
+            mediacellsneeded += boundarytokensneeded;
             if(debugmode==1 && !is_quiet)
             {
-                printf("\nMTMD Media %i used Tokens: %d",i,mediatokensneeded);
+                printf("\nMTMD Media %i used Tokens: %d, KV Cells: %d",i,mediatokensneeded,mediacellsneeded);
             }
-            if(mediatokensneeded>0 && mediatokensneeded < nctx)
+            if(mediatokensneeded>0 && mediatokensneeded < nctx && mediacellsneeded < nctx)
             {
                 media_object_token_counts.push_back(mediatokensneeded);
                 int tokcnt = mediatokensneeded;
@@ -5418,7 +6198,7 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             {
                 media_object_token_counts.push_back(0);
                 media_composite_image_signature = ""; //force invalidate
-                printf("\nWarning: Media excluded - Context size too low or not enough mtmd tokens! (needed %d)\nMedia will be IGNORED! You probably want to relaunch with a larger context size!\n",mediatokensneeded);
+                printf("\nWarning: Media excluded - Context size too low or not enough mtmd tokens! (needed %d KV cells)\nMedia will be IGNORED! You probably want to relaunch with a larger context size!\n",mediacellsneeded);
             }
         }
     }
@@ -5701,10 +6481,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         {
             media_object lv;
             lv.b64data = item;
-            lv.is_audio = false;
+            lv.mediatype = MEDIA_TYPE_IMAGE;
             TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
             media_objects.push_back(lv);
-            new_media_composite += item;
+            new_media_composite += "img:" + fnv1a64_hex(item) + ";";
         }
     }
     for(int x=0;x<inputs.audio_len;++x)
@@ -5714,10 +6494,23 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         {
             media_object lv;
             lv.b64data = item;
-            lv.is_audio = true;
+            lv.mediatype = MEDIA_TYPE_AUDIO;
             TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
             media_objects.push_back(lv);
-            new_media_composite += item;
+            new_media_composite += "aud:" + fnv1a64_hex(item) + ";";
+        }
+    }
+    for(int x=0;x<inputs.videos_len;++x)
+    {
+        std::string item = inputs.videos[x];
+        if(item!="")
+        {
+            media_object lv;
+            lv.b64data = item;
+            lv.mediatype = MEDIA_TYPE_VIDEO;
+            TokenizeString("\n\n", lv.chunk_end_seq, file_format, false);
+            media_objects.push_back(lv);
+            new_media_composite += "vid:" + fnv1a64_hex(item) + ";";
         }
     }
     if(media_composite_image_signature!=new_media_composite)
@@ -5943,7 +6736,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             file_format,
             add_bos_token,
             inputs.images_len,
-            inputs.audio_len);
+            inputs.audio_len,
+            inputs.videos_len);
     }
     if(!media_inserted_inline)
     {
@@ -7209,7 +8003,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                 media_chunk chunk = media_objects[curr_media_index].mediachunks[j];
                                 if(allow_regular_prints)
                                 {
-                                    printf("\rProcessing Media Embedding %d (%d tokens)",(curr_media_index+1), chunk.clp_image_tokens);
+                                    printf("\rProcessing Media Embedding %d (%d tokens, %d KV cells)",(curr_media_index+1), chunk.clp_image_tokens, chunk.clp_kv_cells);
                                 }
                                 bool err = kcpp_eval_media(llama_ctx_v4,chunk,kcpp_data->n_batch,&n_past);
                                 mediatokensevaled += chunk.clp_image_tokens;

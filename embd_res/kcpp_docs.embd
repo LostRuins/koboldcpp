@@ -197,6 +197,13 @@
                                "type": "string"
                             }
                          },
+                         "videos": {
+                            "description": "KoboldCpp ONLY. If set, takes an array of up to 2 base64 encoded strings, each one representing a video to be processed.",
+                            "type": "array",
+                            "items": {
+                               "type": "string"
+                            }
+                         },
                          "trim_stop": {
                             "default": true,
                             "description": "KoboldCpp ONLY. If true, also removes detected stop_sequences from the output and truncates all text after them. If false, output will also include stop sequence and potentially a few additional characters.",
