@@ -186,7 +186,8 @@ thinkformats = [{"start":"<|channel|>analysis<|message|>","end":"<|start|>assist
                 {"start":"<think>","end":"</think>"},
                 {"start":"<seed:think>","end":"</seed:think>"},
                 {"start":"<|START_THINKING|>","end":"<|END_THINKING|>"},
-                {"start":"<|channel>thought","end":"<channel|>"}]
+                {"start":"<|channel>thought","end":"<channel|>"},
+                {"start":"[THINK]","end":"[/THINK]"}]
 tool_call_pairs = [ #third element is optional str to match in chat template before we use this pair, fourth element is whether its stream-handleable
     ("<tool_call>", "</tool_call>", None, True), #qwen, glm
     ("<seed:tool_call>", "</seed:tool_call>", None, True), #seed oss
