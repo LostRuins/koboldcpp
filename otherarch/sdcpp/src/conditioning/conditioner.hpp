@@ -2,8 +2,10 @@
 #define __SD_CONDITIONING_CONDITIONER_HPP__
 
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <optional>
+#include <sstream>
 
 #include "core/tensor_ggml.hpp"
 #include "core/util.h"
@@ -25,6 +27,8 @@ struct SDCondition {
     sd::Tensor<int32_t> c_vinput_mask;
     std::vector<std::pair<int, sd::Tensor<float>>> c_image_embeds;
     std::vector<sd::Tensor<float>> c_ref_images;
+    std::vector<sd::Tensor<float>> c_ref_audios;
+    std::vector<MiniMaxH3ReferenceBlock> c_reference_blocks;
 
     std::vector<sd::Tensor<float>> extra_c_crossattns;
 
@@ -55,6 +59,12 @@ struct SDCondition {
             }
         }
 
+        for (const auto& tensor : c_ref_audios) {
+            if (!tensor.empty()) {
+                return false;
+            }
+        }
+
         for (const auto& tensor : extra_c_crossattns) {
             if (!tensor.empty()) {
                 return false;
@@ -63,6 +73,18 @@ struct SDCondition {
 
         return true;
     }
+};
+
+enum class MiniMaxH3PresentationKind {
+    IMAGE,
+    VIDEO,
+    AUDIO,
+};
+
+struct MiniMaxH3PresentationItem {
+    MiniMaxH3PresentationKind kind = MiniMaxH3PresentationKind::IMAGE;
+    std::vector<sd::Tensor<float>> frames;
+    std::vector<float> timestamps;
 };
 
 static inline sd::Tensor<float> apply_token_weights(sd::Tensor<float> hidden_states,
@@ -102,11 +124,12 @@ static inline sd::Tensor<float> apply_token_weights(sd::Tensor<float> hidden_sta
 
 struct ConditionerParams {
     std::string text;
-    int clip_skip                                    = -1;
-    int width                                        = -1;
-    int height                                       = -1;
-    bool zero_out_masked                             = false;
-    const std::vector<sd::Tensor<float>>* ref_images = nullptr;  // for qwen image edit
+    int clip_skip                                                       = -1;
+    int width                                                           = -1;
+    int height                                                          = -1;
+    bool zero_out_masked                                                = false;
+    const std::vector<sd::Tensor<float>>* ref_images                    = nullptr;  // for qwen image edit
+    const std::vector<MiniMaxH3PresentationItem>* minimax_h3_references = nullptr;
     RefImageParams ref_image_params;
 };
 
@@ -1810,6 +1833,7 @@ struct LLMEmbedder : public Conditioner {
                    sd_version_is_boogu_image(version) ||
                    sd_version_is_sefi_image(version) ||
                    sd_version_is_krea2(version) ||
+                   sd_version_is_minimax_h3(version) ||
                    sd_version_is_mage_flow(version)) {
             arch = LLM::LLMArch::QWEN3_VL;
         } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
@@ -1992,8 +2016,10 @@ struct LLMEmbedder : public Conditioner {
                                     const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
                                     const std::set<int>& out_layers,
                                     int prompt_template_encode_start_idx,
-                                    bool spell_quotes = false,
-                                    int max_length    = 100000000) {
+                                    bool spell_quotes                                       = false,
+                                    int max_length                                          = 100000000,
+                                    const LLM::DeepStackImageEmbeds& deepstack_image_embeds = {},
+                                    const std::vector<LLM::ImageGrid>& image_grids          = {}) {
         auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length, max_length, spell_quotes);
         auto& tokens             = std::get<0>(tokens_weights_mask);
         auto& weights            = std::get<1>(tokens_weights_mask);
@@ -2026,7 +2052,9 @@ struct LLMEmbedder : public Conditioner {
                                           false,
                                           false,
                                           true,
-                                          true);
+                                          true,
+                                          deepstack_image_embeds,
+                                          image_grids);
         GGML_ASSERT(!hidden_states.empty());
         hidden_states = apply_token_weights(std::move(hidden_states), weights);
         GGML_ASSERT(hidden_states.shape()[1] > prompt_template_encode_start_idx);
@@ -2108,6 +2136,8 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::string> extra_prompts;
         std::vector<std::pair<int, int>> extra_prompts_attn_range;
         std::vector<std::pair<int, sd::Tensor<float>>> image_embeds;
+        LLM::DeepStackImageEmbeds deepstack_image_embeds;
+        std::vector<LLM::ImageGrid> image_grids;
         int prompt_template_encode_start_idx = 34;
         int min_length                       = 0;  // pad tokens
         int max_length                       = 100000000;
@@ -2118,7 +2148,131 @@ struct LLMEmbedder : public Conditioner {
         int64_t t0                     = ggml_time_ms();
         RefImageResizeMode resize_mode = conditioner_params.ref_image_params.vlm_resize_mode;
 
-        if (sd_version_is_hunyuan_video(version)) {
+        if (sd_version_is_minimax_h3(version)) {
+            prompt_template_encode_start_idx = 0;
+            out_layers                       = {50};
+            prompt_attn_range                = {0, 0};
+
+            if (llm->enable_vision) {
+                const std::string placeholder = "<|image_pad|>";
+                const int patch_size          = llm->config.vision.patch_size;
+                const int factor              = patch_size * llm->config.vision.spatial_merge_size;
+
+                auto resize_for_vision = [&](const sd::Tensor<float>& image) {
+                    int height = static_cast<int>(image.shape()[1]);
+                    int width  = static_cast<int>(image.shape()[0]);
+                    int h_bar  = std::max(factor, static_cast<int>(std::round(static_cast<double>(height) / factor)) * factor);
+                    int w_bar  = std::max(factor, static_cast<int>(std::round(static_cast<double>(width) / factor)) * factor);
+                    resize_image_dims(height,
+                                      width,
+                                      h_bar,
+                                      w_bar,
+                                      factor,
+                                      3136,
+                                      12845056,
+                                      RefImageResizeMode::AREA);
+                    auto resized = sd::ops::interpolate(
+                        image,
+                        std::vector<int64_t>{w_bar, h_bar, image.shape()[2], image.shape()[3]});
+                    for (int64_t i = 0; i < resized.numel(); ++i) {
+                        resized[i] = std::clamp(resized[i], 0.f, 1.f) * 2.f - 1.f;
+                    }
+                    return resized;
+                };
+
+                auto add_vision_outputs = [&](std::vector<sd::Tensor<float>> image_outputs,
+                                              int grid_h,
+                                              int grid_w) {
+                    GGML_ASSERT(image_outputs.size() == 4);
+                    auto image_embed = std::move(image_outputs[0]);
+                    prompt += "<|vision_start|>";
+                    int image_embed_idx = static_cast<int>(tokenizer->encode(prompt, nullptr).size());
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+                    if (deepstack_image_embeds.empty()) {
+                        deepstack_image_embeds.resize(image_outputs.size() - 1);
+                    }
+                    for (size_t layer = 0; layer < deepstack_image_embeds.size(); ++layer) {
+                        deepstack_image_embeds[layer].emplace_back(image_embed_idx, std::move(image_outputs[layer + 1]));
+                    }
+                    image_grids.push_back({image_embed_idx,
+                                           static_cast<int>(image_embed.shape()[1]),
+                                           grid_h,
+                                           grid_w});
+                    for (int64_t i = 0; i < image_embed.shape()[1]; ++i) {
+                        prompt += placeholder;
+                    }
+                    prompt += "<|vision_end|>";
+                };
+
+                const auto* references = conditioner_params.minimax_h3_references;
+                if (references != nullptr && !references->empty()) {
+                    int picture_index = 0;
+                    int video_index   = 0;
+                    int audio_index   = 0;
+                    for (const auto& item : *references) {
+                        if (item.kind == MiniMaxH3PresentationKind::AUDIO) {
+                            prompt += "<Audio " + std::to_string(++audio_index) + ">: ";
+                            continue;
+                        }
+                        if (item.kind == MiniMaxH3PresentationKind::IMAGE) {
+                            GGML_ASSERT(item.frames.size() == 1);
+                            auto resized = resize_for_vision(item.frames[0]);
+                            prompt += "<Picture " + std::to_string(++picture_index) + ">: ";
+                            add_vision_outputs(llm->encode_image_outputs(n_threads,
+                                                                         resized,
+                                                                         false,
+                                                                         true,
+                                                                         true),
+                                               static_cast<int>(resized.shape()[1]) / patch_size,
+                                               static_cast<int>(resized.shape()[0]) / patch_size);
+                            continue;
+                        }
+
+                        GGML_ASSERT(!item.frames.empty());
+                        prompt += "<Video " + std::to_string(++video_index) + ">: ";
+                        for (size_t frame = 0; frame < item.frames.size(); frame += 2) {
+                            size_t next = std::min(frame + 1, item.frames.size() - 1);
+                            float t0    = frame < item.timestamps.size() ? item.timestamps[frame] : frame / 2.f;
+                            float t1    = next < item.timestamps.size() ? item.timestamps[next] : next / 2.f;
+                            std::ostringstream timestamp;
+                            timestamp << '<' << std::fixed << std::setprecision(1) << (t0 + t1) * 0.5f << " seconds>";
+                            prompt += timestamp.str();
+
+                            auto first  = resize_for_vision(item.frames[frame]);
+                            auto second = resize_for_vision(item.frames[next]);
+                            if (first.shape()[0] != second.shape()[0] || first.shape()[1] != second.shape()[1]) {
+                                second = sd::ops::interpolate(second,
+                                                              std::vector<int64_t>{first.shape()[0],
+                                                                                   first.shape()[1],
+                                                                                   second.shape()[2],
+                                                                                   second.shape()[3]});
+                            }
+                            auto pair = sd::ops::concat(first.unsqueeze(2), second.unsqueeze(2), 2);
+                            add_vision_outputs(llm->encode_video_block_outputs(n_threads,
+                                                                               pair,
+                                                                               false,
+                                                                               true,
+                                                                               true),
+                                               static_cast<int>(first.shape()[1]) / patch_size,
+                                               static_cast<int>(first.shape()[0]) / patch_size);
+                        }
+                    }
+                } else if (conditioner_params.ref_images != nullptr) {
+                    for (size_t i = 0; i < conditioner_params.ref_images->size(); ++i) {
+                        auto resized = resize_for_vision((*conditioner_params.ref_images)[i]);
+                        prompt += "<Picture " + std::to_string(i + 1) + ">: ";
+                        add_vision_outputs(llm->encode_image_outputs(n_threads,
+                                                                     resized,
+                                                                     false,
+                                                                     true,
+                                                                     true),
+                                           static_cast<int>(resized.shape()[1]) / patch_size,
+                                           static_cast<int>(resized.shape()[0]) / patch_size);
+                    }
+                }
+            }
+            prompt += conditioner_params.text;
+        } else if (sd_version_is_hunyuan_video(version)) {
             prompt_template_encode_start_idx = 98;
             out_layers                       = {26};
 
@@ -2666,7 +2820,9 @@ struct LLMEmbedder : public Conditioner {
                                            out_layers,
                                            prompt_template_encode_start_idx,
                                            spell_quotes,
-                                           max_length);
+                                           max_length,
+                                           deepstack_image_embeds,
+                                           image_grids);
         std::vector<sd::Tensor<float>> extra_hidden_states_vec;
         if (sd_version_is_hunyuan_video(version) && byt5) {
             std::vector<std::string> quoted_texts;
@@ -2727,6 +2883,17 @@ struct LLMEmbedder : public Conditioner {
         SDCondition result;
         result.c_crossattn        = std::move(hidden_states);
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
+        if (sd_version_is_minimax_h3(version)) {
+            std::vector<int32_t> tags(static_cast<size_t>(result.c_crossattn.shape()[1]), 1);
+            for (const auto& [index, image_embed] : image_embeds) {
+                int64_t begin = std::max<int64_t>(0, index - 1);
+                int64_t end   = std::min<int64_t>(static_cast<int64_t>(tags.size()),
+                                                index + image_embed.shape()[1] + 1);
+                std::fill(tags.begin() + begin, tags.begin() + end, 0);
+            }
+            int64_t tag_count    = static_cast<int64_t>(tags.size());
+            result.c_token_types = sd::Tensor<int32_t>({tag_count}, std::move(tags));
+        }
         return result;
     }
 };

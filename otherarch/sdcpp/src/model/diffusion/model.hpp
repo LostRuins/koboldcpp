@@ -87,6 +87,29 @@ struct LTXAVDiffusionExtra {
     const sd::Tensor<float>* video_positions = nullptr;
 };
 
+enum class MiniMaxH3ReferenceKind : int32_t {
+    IMAGE,
+    VIDEO,
+    AUDIO,
+    VIDEO_AUDIO,
+};
+
+struct MiniMaxH3ReferenceBlock {
+    MiniMaxH3ReferenceKind kind = MiniMaxH3ReferenceKind::IMAGE;
+    int32_t video_index         = -1;
+    int32_t audio_index         = -1;
+};
+
+struct MiniMaxH3DiffusionExtra {
+    const sd::Tensor<int32_t>* text_token_tags                    = nullptr;
+    const sd::Tensor<int32_t>* keyframe_indices                   = nullptr;
+    const std::vector<sd::Tensor<float>>* reference_audio_latents = nullptr;
+    const std::vector<MiniMaxH3ReferenceBlock>* reference_blocks  = nullptr;
+    int audio_length                                              = 0;
+    float video_sigma_shift                                       = 12.f;
+    float audio_sigma_shift                                       = 3.f;
+};
+
 struct MiniT2IDiffusionExtra {
     const sd::Tensor<float>* mask = nullptr;
 };
@@ -106,6 +129,7 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           WanDiffusionExtra,
                                           HiDreamO1DiffusionExtra,
                                           LTXAVDiffusionExtra,
+                                          MiniMaxH3DiffusionExtra,
                                           MiniT2IDiffusionExtra,
                                           HunyuanVideoDiffusionExtra>;
 

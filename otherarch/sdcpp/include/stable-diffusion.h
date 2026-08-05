@@ -248,6 +248,13 @@ typedef struct {
 } sd_image_t;
 
 typedef struct {
+    sd_image_t* frames;
+    int frame_count;
+    int fps;
+    sd_audio_t audio;
+} sd_ref_video_t;
+
+typedef struct {
     int* layers;
     size_t layer_count;
     float layer_start;
@@ -397,6 +404,12 @@ typedef struct {
     int clip_skip;
     sd_image_t init_image;
     sd_image_t end_image;
+    sd_image_t* ref_images;
+    int ref_images_count;
+    sd_ref_video_t* ref_videos;
+    int ref_videos_count;
+    sd_audio_t* ref_audios;
+    int ref_audios_count;
     sd_image_t* control_frames;
     int control_frames_size;
     int width;

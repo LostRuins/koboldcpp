@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/ggml_extend.hpp"
+#include "model/vae/audio_vae.hpp"
 #include "model_loader.h"
 #include "model_manager.h"
 
@@ -1230,7 +1231,7 @@ namespace LTXV {
         }
     };
 
-    struct LTXAudioVAERunner : public GGMLRunner {
+    struct LTXAudioVAERunner : public AudioVAERunner {
         LTXAudioVAEConfig config;
         LTXAudioVAE model;
         std::string weight_prefix;
@@ -1242,7 +1243,7 @@ namespace LTXV {
                           const String2TensorStorage& tensor_storage_map,
                           const std::string& prefix                           = "",
                           std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
-            : GGMLRunner(backend, weight_manager),
+            : AudioVAERunner(backend, weight_manager),
               weight_prefix(prefix),
               config(LTXAudioVAEConfig::detect_from_weights(tensor_storage_map)),
               model(config) {
@@ -1257,20 +1258,20 @@ namespace LTXV {
             }
         }
 
-        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
             model.get_param_tensors(tensors, weight_prefix);
         }
 
-        size_t get_params_mem_size() {
+        size_t get_params_mem_size() override {
             return model.get_params_mem_size();
         }
 
-        std::string get_desc() {
+        std::string get_desc() override {
             return "ltx_audio_vae";
         }
 
         sd::Tensor<float> decode(int n_threads,
-                                 const sd::Tensor<float>& latent_tensor) {
+                                 const sd::Tensor<float>& latent_tensor) override {
             int64_t t0     = ggml_time_ms();
             auto get_graph = [&]() -> ggml_cgraph* {
                 auto latent                  = make_input(latent_tensor);
@@ -1308,6 +1309,10 @@ namespace LTXV {
             int64_t t1  = ggml_time_ms();
             LOG_INFO("ltx audio vae encode completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
             return result;
+        }
+
+        int output_sample_rate() const override {
+            return config.output_sample_rate();
         }
 
         void test(const std::string& input_path) {

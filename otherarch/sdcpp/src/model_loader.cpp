@@ -566,6 +566,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") != std::string::npos) {
             return VERSION_LTXAV;
         }
+        if (tensor_storage.name.find("model.diffusion_model.video_patch_proj.weight") != std::string::npos &&
+            tensor_storage_map.find("model.diffusion_model.audio_patch_proj.weight") != tensor_storage_map.end()) {
+            return VERSION_MINIMAX_H3;
+        }
         if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
             is_wan = true;
         }

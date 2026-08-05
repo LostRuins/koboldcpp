@@ -754,6 +754,18 @@ int main(int argc, const char* argv[]) {
         return true;
     };
 
+    auto load_audio = [&](const std::string& path, SDAudioOwner& audio) -> bool {
+        std::vector<float> samples;
+        uint32_t sample_rate = 0;
+        uint32_t channels    = 0;
+        if (!load_wav_from_file(path, samples, sample_rate, channels)) {
+            LOG_ERROR("load WAV audio from '%s' failed", path.c_str());
+            return false;
+        }
+        audio.reset(std::move(samples), sample_rate, channels);
+        return true;
+    };
+
     if (gen_params.init_image_path.size() > 0) {
         if (!load_image_and_update_size(gen_params.init_image_path, gen_params.init_image)) {
             return 1;
@@ -774,6 +786,37 @@ int main(int argc, const char* argv[]) {
                 return 1;
             }
             gen_params.ref_images.push_back(std::move(ref_image));
+        }
+    }
+
+    if (!gen_params.ref_video_paths.empty()) {
+        gen_params.ref_videos.clear();
+        gen_params.ref_videos.reserve(gen_params.ref_video_paths.size());
+        for (const auto& path : gen_params.ref_video_paths) {
+            std::vector<SDImageOwner> frames;
+            if (!load_images_from_dir(path, frames, 0, 0, 0, cli_params.verbose) || frames.empty()) {
+                LOG_ERROR("load reference video frames from '%s' failed", path.c_str());
+                return 1;
+            }
+            gen_params.ref_videos.push_back(std::move(frames));
+        }
+
+        gen_params.ref_video_audios.clear();
+        gen_params.ref_video_audios.resize(gen_params.ref_videos.size());
+        for (size_t i = 0; i < gen_params.ref_video_audio_paths.size(); ++i) {
+            if (!load_audio(gen_params.ref_video_audio_paths[i], gen_params.ref_video_audios[i])) {
+                return 1;
+            }
+        }
+    }
+
+    if (!gen_params.ref_audio_paths.empty()) {
+        gen_params.ref_audios.clear();
+        gen_params.ref_audios.resize(gen_params.ref_audio_paths.size());
+        for (size_t i = 0; i < gen_params.ref_audio_paths.size(); ++i) {
+            if (!load_audio(gen_params.ref_audio_paths[i], gen_params.ref_audios[i])) {
+                return 1;
+            }
         }
     }
 
