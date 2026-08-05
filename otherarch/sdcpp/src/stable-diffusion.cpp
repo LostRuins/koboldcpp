@@ -813,7 +813,8 @@ public:
         bool is_krea2 = sd_version_is_krea2(tempver);
         bool is_sefi = sd_version_is_sefi_image(tempver);
         bool is_mageflow = sd_version_is_mage_flow(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow);
+        bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3);
         bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
@@ -7528,7 +7529,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     if ((sd_version_is_ltxav(sd_ctx->sd->version) || sd_version_is_minimax_h3(sd_ctx->sd->version)) &&
         has_input_audio) {
         generated_audio = clone_sd_audio(sd_vid_gen_params->input_audio);
-    } else if (sd_version_is_ltxav(sd_ctx->sd->version) &&
+    } else if ((sd_version_is_ltxav(sd_ctx->sd->version) || sd_version_is_minimax_h3(sd_ctx->sd->version)) &&
         latents.audio_length > 0 &&
         sd_ctx->sd->audio_vae_model != nullptr) {
         if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
@@ -7650,6 +7651,7 @@ namespace kcpp_sd {
         res.is_sd2 = (loadedsdver == SDVersion::VERSION_SD2);
         res.is_sdxl = sd_version_is_sdxl((SDVersion)loadedsdver);
         res.is_ltx = sd_version_is_ltxav((SDVersion)loadedsdver);
+        res.is_minimaxh3 = sd_version_is_minimax_h3((SDVersion)loadedsdver);
         res.is_boogu = sd_version_is_boogu_image((SDVersion)loadedsdver);
         res.supports_ref_image = sd_version_supports_ref_latent_img_cfg((SDVersion)loadedsdver);
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
