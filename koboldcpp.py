@@ -4403,11 +4403,11 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                     is_different_model = True
 
                 if is_different_model or was_auto_unloaded:
-                    model_switch_pass = True
                     whitelist = get_current_admindir_list() # see if its an allowed swap
                     if was_auto_unloaded and not model_name:
                         model_name = "initial_model"
                     if is_different_model and (model_name in whitelist):
+                        model_switch_pass = True # only claim the request if we really are swapping
                         global_memory["last_active_timestamp"] = datetime.now()
                         global_memory["triggered_sleeping"] = False
                         reqbody = json.dumps({"filename":model_name})
