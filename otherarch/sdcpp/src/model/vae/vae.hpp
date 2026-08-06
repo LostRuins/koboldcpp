@@ -74,7 +74,7 @@ public:
         int scale_factor = 8;
         if (version == VERSION_LTXAV) {
             scale_factor = 32;
-        } else if (version == VERSION_WAN2_2_TI2V || sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version)) {
+        } else if (version == VERSION_WAN2_2_TI2V || sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
             scale_factor = 16;
         } else if (sd_version_uses_flux2_vae(version)) {
             scale_factor = 16;
@@ -115,11 +115,11 @@ public:
         tile_size_y = get_tile_size(params.tile_size_y, params.rel_size_y, latent_y);
     }
 
-    sd::Tensor<float> encode(int n_threads,
-                             const sd::Tensor<float>& x,
-                             sd_tiling_params_t tiling_params,
-                             bool circular_x = false,
-                             bool circular_y = false) {
+    virtual sd::Tensor<float> encode(int n_threads,
+                                     const sd::Tensor<float>& x,
+                                     sd_tiling_params_t tiling_params,
+                                     bool circular_x = false,
+                                     bool circular_y = false) {
         int64_t t0              = ggml_time_ms();
         sd::Tensor<float> input = x;
         sd::Tensor<float> output;
@@ -136,7 +136,8 @@ public:
             // Image VAE encode is more sensitive to tile boundary context than decode.
             // Keep the smaller legacy factor for video VAEs, but default image encode
             // tiles to 64 latent pixels so a 512px SD image is encoded as one tile.
-            const float encode_tile_factor = (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) ? 1.30539f : 2.0f;
+            const float encode_tile_factor = sd_version_is_minimax_h3(version) ? 1.f : (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) ? 1.30539f
+                                                                                                                                                                                            : 2.0f;
             get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, tiling_params, W, H, encode_tile_factor);
             LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
             output = tiled_compute(input,
@@ -166,13 +167,13 @@ public:
         return std::move(output);
     }
 
-    sd::Tensor<float> decode(int n_threads,
-                             const sd::Tensor<float>& x,
-                             sd_tiling_params_t tiling_params,
-                             bool decode_video = false,
-                             bool circular_x   = false,
-                             bool circular_y   = false,
-                             bool silent       = false) {
+    virtual sd::Tensor<float> decode(int n_threads,
+                                     const sd::Tensor<float>& x,
+                                     sd_tiling_params_t tiling_params,
+                                     bool decode_video = false,
+                                     bool circular_x   = false,
+                                     bool circular_y   = false,
+                                     bool silent       = false) {
         int64_t t0              = ggml_time_ms();
         sd::Tensor<float> input = x;
         sd::Tensor<float> output;

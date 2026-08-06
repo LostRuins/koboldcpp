@@ -1048,7 +1048,7 @@ std::string convert_diffusers_to_original_wan_vae(std::string name) {
 }
 
 std::string convert_first_stage_model_name(std::string name, std::string prefix, SDVersion version) {
-    if (sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version)) {
+    if (sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
         return name;
     }
     if (sd_version_uses_wan_vae(version)) {
@@ -1384,6 +1384,8 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             {".lora_B.weight", ".weight.lora_up"},
             {".lora_A.default.weight", ".weight.lora_down"},
             {".lora_B.default.weight", ".weight.lora_up"},
+            {".lora_A", ".weight.lora_down"},
+            {".lora_B", ".weight.lora_up"},
             {".lora_linear", ".weight.alpha"},
             {".alpha", ".weight.alpha"},
             {".scale", ".weight.scale"},
@@ -1449,15 +1451,24 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         {"te2.", "cond_stage_model.1.transformer."},
         {"te1.", "cond_stage_model.transformer."},
         {"te3.", "text_encoders.t5xxl.transformer."},
+        {"clip_vision.", "cond_stage_model.transformer."},
     };
 
     if (sd_version_is_flux(version)) {
         prefix_map["te1."] = "text_encoders.clip_l.transformer.";
     }
 
+    if (sd_version_is_unet(version)) {
+        prefix_map["clip_l."] = "cond_stage_model.transformer.";
+        prefix_map["clip_g."] = "cond_stage_model.1.transformer.";
+    } else {
+        prefix_map["clip_l."] = "text_encoders.clip_l.transformer.";
+        prefix_map["clip_g."] = "text_encoders.clip_g.transformer.";
+    }
+
     replace_with_prefix_map(name, prefix_map);
 
-    if (sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version)) {
+    if (sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
         const std::string hf_vision_prefix = "text_encoders.llm.model.visual.";
         if (starts_with(name, hf_vision_prefix)) {
             name = "text_encoders.llm.visual." + name.substr(hf_vision_prefix.size());

@@ -139,11 +139,16 @@ bool read_torch_legacy_file(const std::string& file_path,
             if (it == legacy_storage_map.end()) {
                 return false;
             }
-            if (current_offset + LEGACY_STORAGE_HEADER_SIZE + it->second > file_size) {
+            if (current_offset > file_size ||
+                LEGACY_STORAGE_HEADER_SIZE > file_size - current_offset) {
                 return false;
             }
-            storage_offsets[storage_key] = current_offset + LEGACY_STORAGE_HEADER_SIZE;
-            current_offset += LEGACY_STORAGE_HEADER_SIZE + it->second;
+            uint64_t storage_offset = current_offset + LEGACY_STORAGE_HEADER_SIZE;
+            if (it->second > file_size - storage_offset) {
+                return false;
+            }
+            storage_offsets[storage_key] = storage_offset;
+            current_offset               = storage_offset + it->second;
         }
 
         for (auto& tensor_storage : tensor_storages) {
@@ -159,8 +164,10 @@ bool read_torch_legacy_file(const std::string& file_path,
 
             uint64_t base_offset    = it_offset->second;
             uint64_t storage_nbytes = it_size->second;
-            uint64_t tensor_nbytes  = tensor_storage.nbytes_to_read();
-            if (tensor_storage.offset + tensor_nbytes > storage_nbytes) {
+            int64_t tensor_nbytes   = tensor_storage.nbytes_to_read();
+            if (tensor_nbytes < 0 ||
+                tensor_storage.offset > storage_nbytes ||
+                static_cast<uint64_t>(tensor_nbytes) > storage_nbytes - tensor_storage.offset) {
                 return false;
             }
 

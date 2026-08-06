@@ -76,8 +76,10 @@ static bool parse_zip_data_pkl(const uint8_t* buffer,
             return false;
         }
 
-        uint64_t tensor_nbytes = tensor_storage.nbytes_to_read();
-        if (tensor_storage.offset + tensor_nbytes > entry_size) {
+        int64_t tensor_nbytes = tensor_storage.nbytes_to_read();
+        if (tensor_nbytes < 0 ||
+            tensor_storage.offset > entry_size ||
+            static_cast<uint64_t>(tensor_nbytes) > entry_size - tensor_storage.offset) {
             set_error(error, "tensor '" + tensor_storage.name + "' exceeds storage entry '" + entry_name + "'");
             return false;
         }

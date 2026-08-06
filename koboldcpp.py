@@ -46,8 +46,8 @@ import queue
 num_server_threads = 40
 sampler_order_max = 7
 tensor_split_max = 16
-images_max = 16
-audio_max = 16
+images_max = 48
+audio_max = 48
 bias_min_value = -100.0
 bias_max_value = 100.0
 logprobs_max = 10
@@ -65,7 +65,7 @@ default_native_ctx = 16384
 default_genlen = 1536
 overridekv_max = 16
 default_autofit_padding = 1024
-lora_filenames_max = 4
+lora_filenames_max = 10
 multiuser_concurrent_limit = 10
 swa_padding_default = 0
 default_reqtimeout = 600 # 10 min default
@@ -79,7 +79,7 @@ dry_seq_break_max = 128
 extra_images_max = 4 # for kontext/qwen img
 
 # global vars
-KcppVersion = "1.118"
+KcppVersion = "1.118.1"
 showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "autoswapmode": False}
@@ -187,7 +187,8 @@ thinkformats = [{"start":"<|channel|>analysis<|message|>","end":"<|start|>assist
                 {"start":"<think>","end":"</think>"},
                 {"start":"<seed:think>","end":"</seed:think>"},
                 {"start":"<|START_THINKING|>","end":"<|END_THINKING|>"},
-                {"start":"<|channel>thought","end":"<channel|>"}]
+                {"start":"<|channel>thought","end":"<channel|>"},
+                {"start":"[THINK]","end":"[/THINK]"}]
 tool_call_pairs = [ #third element is optional str to match in chat template before we use this pair, fourth element is whether its stream-handleable
     ("<tool_call>", "</tool_call>", None, True), #qwen, glm
     ("<seed:tool_call>", "</seed:tool_call>", None, True), #seed oss
@@ -1974,7 +1975,7 @@ def load_model(model_filename):
     inputs.blasthreads = args.blasthreads
     inputs.use_mmap = args.usemmap
     inputs.use_mlock = args.usemlock
-    inputs.no_host = True
+    inputs.no_host = False
     inputs.use_mtp = args.usemtp
     inputs.lora_filename = "".encode("UTF-8")
     inputs.lora_multiplier = args.loramult
@@ -3922,6 +3923,9 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
         for m in messages:
             if m.get("content") is None:
                 m["content"] = ""
+            # strip mcp image b64 from tool string content so it isn't rendered as text (image is swept out separately)
+            elif m.get("role", "") == "tool" and isinstance(m.get("content"), str):
+                m["content"] = strip_mcpcontent_of_media(m["content"])
         # fix image placeholders, erase them and slap a reference onto the turn text message
         mediacount = 1
         for m in messages:
@@ -4173,6 +4177,28 @@ def strip_oaicontent_of_media(oaicontent):
         return outarr
     return oaicontent
 
+def get_base64_from_media_data(data):
+    if isinstance(data, str) and data.startswith("data:") and "," in data:
+        return data.split(",", 1)[1]
+    return data
+
+def sweep_media_from_mcpcontent(mcpcontentstr):
+    images = []
+    try:
+        if isinstance(mcpcontentstr, str):
+            mcp_pl = json.loads(mcpcontentstr)
+            if isinstance(mcp_pl, dict) and isinstance(mcp_pl.get("content",None),list):
+                for item in mcp_pl.get("content",[]):
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type","")=="image":
+                        data = get_base64_from_media_data(item.get("data",""))
+                        if data:
+                            images.append(data)
+    except Exception:
+        pass
+    return images
+
 def strip_mcpcontent_of_media(mcpcontentstr):
     try:
         if isinstance(mcpcontentstr, str):
@@ -4182,7 +4208,7 @@ def strip_mcpcontent_of_media(mcpcontentstr):
             if isinstance(mcp_pl, dict) and isinstance(mcp_pl.get("content",None),list):
                 pl_arr = mcp_pl.get("content",[])
                 for idx in range(len(pl_arr)):
-                    if pl_arr[idx].get("type","")=="image" and pl_arr[idx].get("data","")!="":
+                    if isinstance(pl_arr[idx], dict) and pl_arr[idx].get("type","")=="image" and pl_arr[idx].get("data","")!="":
                         pl_arr[idx]["data"] = "(base64 data attached)"
                         pl_modified = True
                 if pl_modified:
@@ -4224,7 +4250,10 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
         for message in reversed_messages:
             if message["role"] == "tool":
                 toolrespstr = message["content"]
-                # toolrespstr = strip_mcpcontent_of_media(toolrespstr)
+                if isinstance(toolrespstr, str):
+                    toolrespstr = strip_mcpcontent_of_media(toolrespstr)
+                else:
+                    toolrespstr = strip_oaicontent_of_media(toolrespstr)
                 tool_call_chunk.append(toolrespstr)
             else:
                 break
@@ -4333,23 +4362,22 @@ def sweep_media_from_messages(messages_array):
         curr_content = message.get("content", None)
         if isinstance(curr_content, list):
             for item in curr_content:
+                if not isinstance(item, dict):
+                    continue
                 if item.get("type") == "image_url":
                     url = item.get("image_url", {}).get("url", "")
                     if url.startswith("data:image"):
                         images.append(url.split(",", 1)[1])
+                elif item.get("type") == "image": #handle mcp image content blocks in a list
+                    data = item.get("data", "")
+                    if data:
+                        images.append(get_base64_from_media_data(data))
                 elif item.get("type") == "input_audio":
                     data = item.get("input_audio", {}).get("data")
                     if data:
                         audio.append(data)
         elif message.get("role", "")=="tool" and isinstance(curr_content, str): #handle mcp returned images
-            try:
-                mcp_pl = json.loads(curr_content)
-                if isinstance(mcp_pl, dict) and isinstance(mcp_pl.get("content",None),list):
-                    pl_arr = mcp_pl.get("content",[])
-                    if len(pl_arr)>0 and pl_arr[0].get("type","")=="image" and pl_arr[0].get("data","")!="":
-                        images.append(pl_arr[0].get("data",""))
-            except Exception:
-                pass
+            images.extend(sweep_media_from_mcpcontent(curr_content))
         imgs_ollama = message.get("images", None)
         if imgs_ollama:
             for img in imgs_ollama:
@@ -4552,20 +4580,28 @@ ws ::= | " " | "\n" [ \t]{0,20}
                                 messages_string += "\n(Made a function call)\n"
                         pass  # do nothing
                     elif isinstance(curr_content, str):
-                        if latest_turn_was_tool and message_index < len(messages_array):
+                        if latest_turn_was_tool:
+                            images_added.extend(sweep_media_from_mcpcontent(curr_content))
                             curr_content = strip_mcpcontent_of_media(curr_content)
                         messages_string += curr_content
                     elif isinstance(curr_content, list): #is an array
                         for item in curr_content:
                             if isinstance(item, dict):
-                                if item['type']=="text":
+                                item_type = item.get("type", "")
+                                if item_type=="text":
                                         messages_string += item['text']
-                                elif item['type']=="image_url":
+                                elif item_type=="image_url":
                                     if 'image_url' in item and item['image_url'] and item['image_url']['url'] and item['image_url']['url'].startswith("data:image"):
                                         images_added.append(item['image_url']['url'].split(",", 1)[1])
                                         attachedimgid += 1
                                         messages_string += f"\n(Attached Image {attachedimgid})\n"
-                                elif item['type']=="input_audio":
+                                elif item_type=="image":
+                                    data = get_base64_from_media_data(item.get("data", ""))
+                                    if data:
+                                        images_added.append(data)
+                                        attachedimgid += 1
+                                        messages_string += f"\n(Attached Image {attachedimgid})\n"
+                                elif item_type=="input_audio":
                                     if 'input_audio' in item and item['input_audio'] and item['input_audio']['data']:
                                         audio_added.append(item['input_audio']['data'])
                                         attachedaudid += 1
@@ -5045,11 +5081,11 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                     is_different_model = True
 
                 if is_different_model or was_auto_unloaded:
-                    model_switch_pass = True
                     whitelist = get_current_admindir_list() # see if its an allowed swap
                     if was_auto_unloaded and not model_name:
                         model_name = "initial_model"
-                    if is_different_model and (model_name in whitelist):
+                    if model_name and model_name != global_memory["current_model"] and (model_name in whitelist):
+                        model_switch_pass = True # only claim the request if we really are swapping
                         global_memory["last_active_timestamp"] = datetime.now()
                         global_memory["triggered_sleeping"] = False
                         reqbody = json.dumps({"filename":model_name})

@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -512,8 +513,51 @@ static bool parse_storage_type(const std::string& global_name, PickleStorageInfo
     return false;
 }
 
-static bool tensor_is_contiguous(const PickleTensorInfo& tensor) {
-    if (tensor.tensor_storage.nelements() == 0) {
+static bool checked_pickle_byte_count(int64_t element_count,
+                                      uint64_t element_nbytes,
+                                      uint64_t* byte_count) {
+    if (element_count < 0 || element_nbytes == 0) {
+        return false;
+    }
+
+    uint64_t count = static_cast<uint64_t>(element_count);
+    if (count > std::numeric_limits<uint64_t>::max() / element_nbytes) {
+        return false;
+    }
+
+    *byte_count = count * element_nbytes;
+    return true;
+}
+
+static bool tensor_layout_is_valid(const PickleTensorInfo& tensor, uint64_t raw_element_nbytes) {
+    if (raw_element_nbytes == 0) {
+        return false;
+    }
+
+    bool has_zero_dimension = false;
+    uint64_t element_count  = 1;
+    for (int i = 0; i < tensor.tensor_storage.n_dims; ++i) {
+        int64_t dimension = tensor.tensor_storage.ne[i];
+        if (dimension < 0) {
+            return false;
+        }
+        if (dimension == 0) {
+            has_zero_dimension = true;
+            continue;
+        }
+
+        uint64_t size = static_cast<uint64_t>(dimension);
+        if (element_count > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) / size) {
+            return false;
+        }
+        element_count *= size;
+    }
+
+    if (!has_zero_dimension &&
+        element_count > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) / raw_element_nbytes) {
+        return false;
+    }
+    if (has_zero_dimension) {
         return true;
     }
     if (tensor.stride_n_dims != tensor.tensor_storage.n_dims) {
@@ -932,7 +976,12 @@ bool parse_torch_state_dict_pickle(const uint8_t* buffer,
                 if (storage.key.empty() || !parse_storage_type(pid.items[1].str_value, &storage)) {
                     return false;
                 }
-                storage.nbytes              = (uint64_t)pid.items[4].int_value * storage.raw_element_nbytes;
+                if (!checked_pickle_byte_count(pid.items[4].int_value,
+                                               storage.raw_element_nbytes,
+                                               &storage.nbytes)) {
+                    set_error(error, "invalid storage size in torch pickle");
+                    return false;
+                }
                 storage_nbytes[storage.key] = storage.nbytes;
                 stack.push_back(make_storage_value(storage));
             } break;
@@ -963,7 +1012,12 @@ bool parse_torch_state_dict_pickle(const uint8_t* buffer,
                     tensor.tensor_storage.is_f64      = args.items[0].storage.is_f64;
                     tensor.tensor_storage.is_i64      = args.items[0].storage.is_i64;
                     tensor.tensor_storage.storage_key = args.items[0].storage.key;
-                    tensor.tensor_storage.offset      = (uint64_t)args.items[1].int_value * args.items[0].storage.raw_element_nbytes;
+                    if (!checked_pickle_byte_count(args.items[1].int_value,
+                                                   args.items[0].storage.raw_element_nbytes,
+                                                   &tensor.tensor_storage.offset)) {
+                        set_error(error, "invalid tensor storage offset in torch pickle");
+                        return false;
+                    }
 
                     for (const auto& item : args.items[2].items) {
                         if (item.kind != PickleValue::INT || tensor.tensor_storage.n_dims >= SD_MAX_DIMS) {
@@ -979,7 +1033,8 @@ bool parse_torch_state_dict_pickle(const uint8_t* buffer,
                         tensor.stride[tensor.stride_n_dims++] = item.int_value;
                     }
 
-                    if (!tensor_is_contiguous(tensor)) {
+                    if (!tensor_layout_is_valid(tensor, args.items[0].storage.raw_element_nbytes)) {
+                        set_error(error, "invalid tensor shape or stride in torch pickle");
                         return false;
                     }
                     stack.push_back(make_tensor_value(tensor));

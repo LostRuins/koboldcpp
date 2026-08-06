@@ -305,6 +305,11 @@ static void progress_callback(int step, int steps, float time, void* data)
 
 static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data);
 
+static bool is_video_model(kcpp_sd::model_info info)
+{
+    return info.is_wan || info.is_ltx || info.is_minimaxh3;
+}
+
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     sd_is_quiet = inputs.quiet;
@@ -337,7 +342,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
     bool lora_cache = false;
-    if(inputs.lora_apply_mode >= 0 && inputs.lora_apply_mode <= 2) {
+    if(inputs.lora_apply_mode >= 1 && inputs.lora_apply_mode <= 2) {
         lora_apply_mode = inputs.lora_apply_mode;
     }
     else {
@@ -534,7 +539,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     auto info = get_model_info(sd_ctx);
 
-    if (info.is_wan || info.is_ltx)
+    if (is_video_model(info))
     {
         printf("\nSetting to Video Generation Mode!\n");
         is_vid_model = true;
@@ -994,9 +999,9 @@ static sd_audio_t load_audio_from_b64(const std::string& b64audio) {
     return audio;
 }
 
-bool supports_reference_images(kcpp_sd::model_info info)
+static bool supports_reference_images(kcpp_sd::model_info info)
 {
-    bool supported = (info.is_wan || info.is_ltx || info.supports_ref_image || info.is_kontext || photomaker_enabled) && !info.is_zimage;
+    bool supported = (is_video_model(info) || info.supports_ref_image || info.is_kontext || photomaker_enabled) && !info.is_zimage;
     return supported;
 }
 
@@ -1137,7 +1142,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    if ((info.is_wan || info.is_ltx) && extra_image_data.size() == 0 && is_img2img)
+    if (is_video_model(info) && extra_image_data.size() == 0 && is_img2img)
     {
         extra_image_data.push_back(img2img_data);
     }
@@ -1219,7 +1224,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             int desiredchannels = 3;
             if(supports_reference_images(info)||force_image_edit)
             {
-                if(info.is_wan || info.is_ltx)
+                if(is_video_model(info))
                 {
                     uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2,img2imgW,img2imgH,3);
                     if(loaded)

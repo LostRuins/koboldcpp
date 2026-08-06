@@ -180,9 +180,12 @@ namespace Krea2 {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             ggml_tensor* scale = params["scale"];
-            scale              = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
-            x                  = ggml_rms_norm(ctx->ggml_ctx, x, eps);
-            x                  = ggml_mul_inplace(ctx->ggml_ctx, x, scale);
+            if (ctx->weight_adapter) {
+                scale = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, scale, prefix + "scale.weight");
+            }
+            scale = ggml_add(ctx->ggml_ctx, scale, ggml_ext_ones(ctx->ggml_ctx, scale->ne[0], 1, 1, 1));
+            x     = ggml_rms_norm(ctx->ggml_ctx, x, eps);
+            x     = ggml_mul_inplace(ctx->ggml_ctx, x, scale);
             return x;
         }
     };
@@ -295,10 +298,11 @@ namespace Krea2 {
     class KreaDoubleSharedModulation : public GGMLBlock {
     protected:
         int64_t dim;
+        std::string prefix;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             GGML_UNUSED(tensor_storage_map);
-            GGML_UNUSED(prefix);
+            this->prefix  = prefix;
             params["lin"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dim * 6);
         }
 
@@ -307,7 +311,11 @@ namespace Krea2 {
             : dim(dim) {}
 
         std::vector<ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* vec) {
-            auto lin = ggml_repeat(ctx->ggml_ctx, params["lin"], vec);
+            auto lin = params["lin"];
+            if (ctx->weight_adapter) {
+                lin = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, lin, prefix + "lin.weight");
+            }
+            lin      = ggml_repeat(ctx->ggml_ctx, lin, vec);
             auto out = ggml_add(ctx->ggml_ctx, vec, lin);
             return ggml_ext_chunk(ctx->ggml_ctx, out, 6, 0);
         }
@@ -316,10 +324,11 @@ namespace Krea2 {
     class KreaFinalModulation : public GGMLBlock {
     protected:
         int64_t dim;
+        std::string prefix;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             GGML_UNUSED(tensor_storage_map);
-            GGML_UNUSED(prefix);
+            this->prefix  = prefix;
             params["lin"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, 2);
         }
 
@@ -328,7 +337,11 @@ namespace Krea2 {
             : dim(dim) {}
 
         std::vector<ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* vec) {
-            auto out = ggml_add(ctx->ggml_ctx, params["lin"], vec);
+            auto lin = params["lin"];
+            if (ctx->weight_adapter) {
+                lin = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, lin, prefix + "lin.weight");
+            }
+            auto out = ggml_add(ctx->ggml_ctx, lin, vec);
             return ggml_ext_chunk(ctx->ggml_ctx, out, 2, 1);
         }
     };

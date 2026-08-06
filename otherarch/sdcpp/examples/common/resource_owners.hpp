@@ -141,6 +141,37 @@ public:
     }
 };
 
+class SDAudioOwner {
+private:
+    uint32_t sample_rate_ = 0;
+    uint32_t channels_    = 0;
+    std::vector<float> samples_;
+
+public:
+    SDAudioOwner() = default;
+
+    void reset(std::vector<float> samples = {}, uint32_t sample_rate = 0, uint32_t channels = 0) {
+        samples_     = std::move(samples);
+        sample_rate_ = sample_rate;
+        channels_    = channels;
+    }
+
+    bool empty() const {
+        return samples_.empty();
+    }
+
+    sd_audio_t get() {
+        return {sample_rate_,
+                channels_,
+                channels_ == 0 ? 0 : static_cast<uint64_t>(samples_.size() / channels_),
+                samples_.empty() ? nullptr : samples_.data()};
+    }
+
+    const std::vector<float>& samples() const {
+        return samples_;
+    }
+};
+
 class SDImageVec {
 private:
     std::vector<sd_image_t> images_;

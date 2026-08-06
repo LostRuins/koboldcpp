@@ -1489,3 +1489,132 @@ sd_audio_t load_pcm_wav_from_file(const std::string& path) {
     audio.data         = samples;
     return audio;
 }
+
+static uint16_t read_le16(const uint8_t* data) {
+    return static_cast<uint16_t>(data[0]) |
+           (static_cast<uint16_t>(data[1]) << 8);
+}
+
+static uint32_t read_le32(const uint8_t* data) {
+    return static_cast<uint32_t>(data[0]) |
+           (static_cast<uint32_t>(data[1]) << 8) |
+           (static_cast<uint32_t>(data[2]) << 16) |
+           (static_cast<uint32_t>(data[3]) << 24);
+}
+
+bool load_wav_from_file(const std::string& path,
+                        std::vector<float>& interleaved_samples,
+                        uint32_t& sample_rate,
+                        uint32_t& channels) {
+    interleaved_samples.clear();
+    sample_rate = 0;
+    channels    = 0;
+
+    std::ifstream file(path, std::ios::binary);
+    uint8_t riff_header[12];
+    if (!file.read(reinterpret_cast<char*>(riff_header), sizeof(riff_header)) ||
+        std::memcmp(riff_header, "RIFF", 4) != 0 ||
+        std::memcmp(riff_header + 8, "WAVE", 4) != 0) {
+        return false;
+    }
+
+    uint16_t audio_format    = 0;
+    uint16_t bits_per_sample = 0;
+    uint16_t block_align     = 0;
+    std::streampos data_pos  = std::streampos(-1);
+    uint32_t data_size       = 0;
+
+    while (file.good()) {
+        uint8_t chunk_header[8];
+        if (!file.read(reinterpret_cast<char*>(chunk_header), sizeof(chunk_header))) {
+            break;
+        }
+        uint32_t chunk_size           = read_le32(chunk_header + 4);
+        std::streampos chunk_data_pos = file.tellg();
+
+        if (std::memcmp(chunk_header, "fmt ", 4) == 0) {
+            if (chunk_size < 16) {
+                return false;
+            }
+            std::vector<uint8_t> fmt(chunk_size);
+            if (!file.read(reinterpret_cast<char*>(fmt.data()), chunk_size)) {
+                return false;
+            }
+            audio_format    = read_le16(fmt.data());
+            channels        = read_le16(fmt.data() + 2);
+            sample_rate     = read_le32(fmt.data() + 4);
+            block_align     = read_le16(fmt.data() + 12);
+            bits_per_sample = read_le16(fmt.data() + 14);
+            if (audio_format == 0xfffe && chunk_size >= 40) {
+                audio_format = read_le16(fmt.data() + 24);
+            }
+        } else if (std::memcmp(chunk_header, "data", 4) == 0) {
+            data_pos  = chunk_data_pos;
+            data_size = chunk_size;
+            file.seekg(chunk_size, std::ios::cur);
+        } else {
+            file.seekg(chunk_size, std::ios::cur);
+        }
+
+        if (!file.good()) {
+            break;
+        }
+        if ((chunk_size & 1) != 0) {
+            file.seekg(1, std::ios::cur);
+        }
+    }
+
+    const uint32_t bytes_per_sample = (bits_per_sample + 7) / 8;
+    if (data_pos == std::streampos(-1) || data_size == 0 || channels == 0 || sample_rate == 0 ||
+        block_align == 0 || bytes_per_sample == 0 || block_align < channels * bytes_per_sample ||
+        (audio_format != 1 && audio_format != 3)) {
+        return false;
+    }
+
+    const uint64_t frame_count = data_size / block_align;
+    if (frame_count == 0 || frame_count > SIZE_MAX / channels) {
+        return false;
+    }
+    std::vector<uint8_t> pcm(data_size);
+    file.clear();
+    file.seekg(data_pos);
+    if (!file.read(reinterpret_cast<char*>(pcm.data()), data_size)) {
+        return false;
+    }
+
+    interleaved_samples.resize(static_cast<size_t>(frame_count * channels));
+    for (uint64_t frame = 0; frame < frame_count; ++frame) {
+        const uint8_t* frame_data = pcm.data() + frame * block_align;
+        for (uint32_t channel = 0; channel < channels; ++channel) {
+            const uint8_t* sample_data = frame_data + channel * bytes_per_sample;
+            float sample               = 0.0f;
+            if (audio_format == 3 && bits_per_sample == 32) {
+                std::memcpy(&sample, sample_data, sizeof(sample));
+            } else if (audio_format == 3 && bits_per_sample == 64) {
+                double value;
+                std::memcpy(&value, sample_data, sizeof(value));
+                sample = static_cast<float>(value);
+            } else if (audio_format == 1 && bits_per_sample == 8) {
+                sample = (static_cast<int>(sample_data[0]) - 128) / 128.0f;
+            } else if (audio_format == 1 && bits_per_sample == 16) {
+                sample = static_cast<int16_t>(read_le16(sample_data)) / 32768.0f;
+            } else if (audio_format == 1 && bits_per_sample == 24) {
+                int32_t value = static_cast<int32_t>(sample_data[0]) |
+                                (static_cast<int32_t>(sample_data[1]) << 8) |
+                                (static_cast<int32_t>(sample_data[2]) << 16);
+                if ((value & 0x800000) != 0) {
+                    value |= ~0xffffff;
+                }
+                sample = value / 8388608.0f;
+            } else if (audio_format == 1 && bits_per_sample == 32) {
+                int32_t value = static_cast<int32_t>(read_le32(sample_data));
+                sample        = value / 2147483648.0f;
+            } else {
+                interleaved_samples.clear();
+                return false;
+            }
+            interleaved_samples[static_cast<size_t>(frame * channels + channel)] = sample;
+        }
+    }
+    return true;
+}

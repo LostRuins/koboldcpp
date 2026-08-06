@@ -566,6 +566,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") != std::string::npos) {
             return VERSION_LTXAV;
         }
+        if (tensor_storage.name.find("model.diffusion_model.video_patch_proj.weight") != std::string::npos &&
+            tensor_storage_map.find("model.diffusion_model.audio_patch_proj.weight") != tensor_storage_map.end()) {
+            return VERSION_MINIMAX_H3;
+        }
         if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
             is_wan = true;
         }
@@ -1083,7 +1087,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
         std::atomic<size_t> tensor_idx(0);
         std::atomic<bool> failed(false);
         std::vector<std::thread> workers;
-        std::mutex rpc_backend_mutex;
+        std::mutex backend_tensor_set_mutex;
 
         for (int i = 0; i < n_threads; ++i) {
             workers.emplace_back([&, file_path, is_zip]() {
@@ -1107,6 +1111,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
 
                 std::vector<uint8_t> read_buffer;
                 std::vector<uint8_t> convert_buffer;
+                std::vector<uint8_t> zip_entry_buffer;
                 std::vector<uint8_t> dequant_buffer;
                 std::vector<uint8_t> scale_buffer;
 
@@ -1147,37 +1152,63 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
 
                     size_t nbytes_to_read = tensor_storage.nbytes_to_read();
 
-                    auto read_data_at = [&](char* buf, size_t n, uint64_t offset) {
+                    auto read_data_at = [&](char* buf, size_t n, uint64_t offset) -> bool {
                         if (zip != nullptr) {
-                            zip_entry_openbyindex(zip, tensor_storage.index_in_zip);
+                            if (zip_entry_openbyindex(zip, tensor_storage.index_in_zip) != 0) {
+                                LOG_ERROR("failed to open zip entry for tensor '%s'", tensor_storage.name.c_str());
+                                return false;
+                            }
                             size_t entry_size = zip_entry_size(zip);
+                            if (offset > entry_size) {
+                                LOG_ERROR("tensor '%s' exceeds its zip storage entry", tensor_storage.name.c_str());
+                                zip_entry_close(zip);
+                                return false;
+                            }
+                            size_t tensor_offset = static_cast<size_t>(offset);
+                            if (n > entry_size - tensor_offset) {
+                                LOG_ERROR("tensor '%s' exceeds its zip storage entry", tensor_storage.name.c_str());
+                                zip_entry_close(zip);
+                                return false;
+                            }
+
                             if (entry_size != n || offset != 0) {
                                 int64_t t_memcpy_start;
-                                read_buffer.resize(entry_size);
-                                zip_entry_noallocread(zip, (void*)read_buffer.data(), entry_size);
+                                zip_entry_buffer.resize(entry_size);
+                                auto bytes_read = zip_entry_noallocread(zip, (void*)zip_entry_buffer.data(), entry_size);
+                                if (bytes_read < 0 || static_cast<size_t>(bytes_read) != entry_size) {
+                                    LOG_ERROR("failed to read zip entry for tensor '%s'", tensor_storage.name.c_str());
+                                    zip_entry_close(zip);
+                                    return false;
+                                }
                                 t_memcpy_start = ggml_time_ms();
-                                memcpy((void*)buf, (void*)(read_buffer.data() + offset), n);
+                                memcpy((void*)buf, (void*)(zip_entry_buffer.data() + tensor_offset), n);
                                 memcpy_time_ms.fetch_add(ggml_time_ms() - t_memcpy_start);
                             } else {
-                                zip_entry_noallocread(zip, (void*)buf, n);
+                                auto bytes_read = zip_entry_noallocread(zip, (void*)buf, n);
+                                if (bytes_read < 0 || static_cast<size_t>(bytes_read) != n) {
+                                    LOG_ERROR("failed to read zip entry for tensor '%s'", tensor_storage.name.c_str());
+                                    zip_entry_close(zip);
+                                    return false;
+                                }
                             }
                             zip_entry_close(zip);
                         } else if (mmapped) {
                             if (!mmapped->copy_data(buf, n, offset)) {
                                 LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
-                                failed = true;
+                                return false;
                             }
                         } else {
                             file.seekg(offset);
                             file.read(buf, n);
                             if (!file) {
                                 LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
-                                failed = true;
+                                return false;
                             }
                         }
+                        return true;
                     };
-                    auto read_data = [&](char* buf, size_t n) {
-                        read_data_at(buf, n, tensor_storage.offset);
+                    auto read_data = [&](char* buf, size_t n) -> bool {
+                        return read_data_at(buf, n, tensor_storage.offset);
                     };
 
                     char* read_buf    = nullptr;
@@ -1219,7 +1250,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                     }
 
                     t0 = ggml_time_ms();
-                    read_data(read_buf, nbytes_to_read);
+                    if (!read_data(read_buf, nbytes_to_read)) {
+                        failed = true;
+                        break;
+                    }
                     t1 = ggml_time_ms();
                     read_time_ms.fetch_add(t1 - t0);
 
@@ -1271,17 +1305,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                     if (dst_tensor->buffer != nullptr && !ggml_backend_buffer_is_host(dst_tensor->buffer)) {
                         t0 = ggml_time_ms();
 
-                        // RPC backends require serialized access to prevent concurrency issues
-                        const char* buffer_type_name = ggml_backend_buft_name(ggml_backend_buffer_get_type(dst_tensor->buffer));
-                        bool is_rpc_buffer           = buffer_type_name != nullptr &&
-                                             std::string(buffer_type_name).find("RPC") != std::string::npos;
-
-                        if (is_rpc_buffer) {
-                            std::lock_guard<std::mutex> lock(rpc_backend_mutex);
-                            ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
-                        } else {
-                            ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
-                        }
+                        std::lock_guard<std::mutex> lock(backend_tensor_set_mutex);
+                        ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
 
                         t1 = ggml_time_ms();
                         copy_to_backend_time_ms.fetch_add(t1 - t0);
