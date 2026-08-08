@@ -293,19 +293,41 @@ std::string load_gpt_oss_vocab_json()
 
 static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data);
 
+static void set_preview_images(bool enable) {
+    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, enable, false, nullptr);
+}
+
+static inline double get_time_delta(const std::chrono::steady_clock::time_point& start) {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration<double>(now - start).count();
+}
+
 static void progress_callback(int step, int steps, float time, void* data)
 {
     (void) data;
-    bool enable_preview = false;
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);
         if (geninfo.preview_requested && !geninfo.preview_enabled) {
             geninfo.preview_enabled = true;
-            enable_preview = true;
+            set_preview_images(true);
         }
-    }
-    if (enable_preview) {
-        sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, true, false, nullptr);
+        /* progress_callback is also called for model loading; in this case,
+        steps is a tensor size, so ignore the call if steps is larger than
+        it was set at the beginning */
+        if (steps > geninfo.steps) {
+            return;
+        }
+        /* if steps is smaller than expected (e.g. img2img), adjust its value */
+        if (steps < geninfo.steps) {
+            geninfo.steps = steps;
+        }
+        geninfo.gendata.step = step;
+        geninfo.gendata.step_time = get_time_delta(geninfo.start_time);
+        if (step == steps) {
+            geninfo.gendata.status = 3;
+        } else {
+            geninfo.gendata.status = 2;
+        }
     }
 
     if(sd_is_quiet || step == 0) return;
@@ -592,7 +614,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         }
     }
 
-    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, false, false, nullptr);
+    set_preview_images(false);
 
     sd_set_progress_callback(progress_callback, nullptr);
 
@@ -1049,7 +1071,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 geninfo.preview_requested = false;
                 geninfo.preview_enabled = false;
             }
-            sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, false, false, nullptr);
+            set_preview_images(false);
         }
     } cleanup_info_on_exit;
 
@@ -1067,7 +1089,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         geninfo.gendata = {};
         geninfo.gendata.status = 1;
     }
-    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, false, false, nullptr);
 
     sd_image_t * results = nullptr;
     int generated_num_results = 0;
@@ -1747,35 +1768,22 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     return sd_generation.outputs(1);
 }
 
-static inline double get_time_delta(const std::chrono::steady_clock::time_point& start) {
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration<double>(now - start).count();
-}
-
 static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data)
 {
-    {
-        std::lock_guard<std::mutex> lock(geninfo.mux);
-        if (!geninfo.preview_requested) {
-            return;
-        }
-        geninfo.preview_requested = false;
-        geninfo.preview_enabled = false;
-    }
-    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, false, false, nullptr);
-
     gendata_st gendata;
     gendata.status = 2;
-    if (frame_count == 1) {
-        gendata.preview = raw_image_to_png_base64(*image);
-    } else {
-        uint8_t * out_data = nullptr;
-        size_t out_len = 0;
-        if (create_gif_buf_from_sd_images_msf(image, frame_count, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
-            gendata.preview = kcpp_base64_encode(out_data, out_len);
-        }
-        if (out_data) {
-            free(out_data);
+    if (image != nullptr) {
+        if (frame_count == 1) {
+            gendata.preview = raw_image_to_png_base64(*image);
+        } else {
+            uint8_t * out_data = nullptr;
+            size_t out_len = 0;
+            if (create_gif_buf_from_sd_images_msf(image, frame_count, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
+                gendata.preview = kcpp_base64_encode(out_data, out_len);
+            }
+            if (out_data) {
+                free(out_data);
+            }
         }
     }
     gendata.step = step;
@@ -1790,7 +1798,7 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
 void sdtype_request_ongoing_generation_preview()
 {
     std::lock_guard<std::mutex> lock(geninfo.mux);
-    if (geninfo.gendata.status != 0) {
+    if (geninfo.gendata.status != 0 && !geninfo.preview_requested) {
         geninfo.preview_requested = true;
     }
 }
