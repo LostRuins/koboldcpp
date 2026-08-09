@@ -293,8 +293,12 @@ std::string load_gpt_oss_vocab_json()
 
 static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data);
 
-static void set_preview_images(bool enable) {
-    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, enable, false, nullptr);
+// 0 disable, 1 initial, 2 denoised
+// the first noisy call is used to detect the inference phase
+static void set_preview_images(int enable) {
+    bool denoised = (enable == 2);
+    bool noisy = (enable == 1);
+    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, denoised, noisy, nullptr);
 }
 
 static inline double get_time_delta(const std::chrono::steady_clock::time_point& start) {
@@ -305,29 +309,30 @@ static inline double get_time_delta(const std::chrono::steady_clock::time_point&
 static void progress_callback(int step, int steps, float time, void* data)
 {
     (void) data;
+    const char* phase = "Encoding";
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);
         if (geninfo.preview_requested && !geninfo.preview_enabled) {
             geninfo.preview_enabled = true;
-            set_preview_images(true);
+            set_preview_images(2);
         }
-        /* progress_callback is also called for model loading; in this case,
-        steps is a tensor size, so ignore the call if steps is larger than
-        it was set at the beginning */
-        if (steps > geninfo.steps) {
-            return;
-        }
-        /* if steps is smaller than expected (e.g. img2img), adjust its value */
-        if (steps < geninfo.steps) {
+        /* progress_callback is also called for model loading and VAE encoding,
+        so ignore the step count unless step_callback signals we are diffusing */
+        if (geninfo.gendata.status == 2) {
+            /* adjust the max step count (may change for img2img) */
             geninfo.steps = steps;
+            if (step != geninfo.gendata.step) {
+                geninfo.gendata.step = step;
+                geninfo.gendata.preview = "";
+            }
+            if (step == steps) {
+                geninfo.gendata.status = 3;
+            }
+            phase = "Generating image";
+        } else if (geninfo.gendata.status == 3) {
+            phase = "Decoding";
         }
-        geninfo.gendata.step = step;
-        geninfo.gendata.step_time = get_time_delta(geninfo.start_time);
-        if (step == steps) {
-            geninfo.gendata.status = 3;
-        } else {
-            geninfo.gendata.status = 2;
-        }
+        /* let the terminal report tiling progress */
     }
 
     if(sd_is_quiet || step == 0) return;
@@ -341,7 +346,7 @@ static void progress_callback(int step, int steps, float time, void* data)
     {
         printf("\n");
     }
-    printf("\rGenerating image: %d/%d steps, %.2f %s\033[K%s", step, steps, speed, unit, (step == steps || sddebugmode==1) ? "\n" : "");
+    printf("\r%s: %d/%d steps, %.2f %s\033[K%s", phase, step, steps, speed, unit, (step == steps || sddebugmode==1) ? "\n" : "");
     fflush(stdout);
 }
 
@@ -614,7 +619,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         }
     }
 
-    set_preview_images(false);
+    set_preview_images(0);
 
     sd_set_progress_callback(progress_callback, nullptr);
 
@@ -1071,7 +1076,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 geninfo.preview_requested = false;
                 geninfo.preview_enabled = false;
             }
-            set_preview_images(false);
+            set_preview_images(0);
         }
     } cleanup_info_on_exit;
 
@@ -1088,6 +1093,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         geninfo.preview_enabled = false;
         geninfo.gendata = {};
         geninfo.gendata.status = 1;
+        set_preview_images(1);
     }
 
     sd_image_t * results = nullptr;
@@ -1441,11 +1447,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_audio_t* generated_audio = nullptr;
     sd_audio_t input_audio = {0, 0, 0, nullptr};
 
-    {
-        std::lock_guard<std::mutex> lock(geninfo.mux);
-        geninfo.steps = inputs.sample_steps;
-    }
-
     if(is_vid_model)
     {
         std::vector<sd_image_t> control_frames; //empty for now
@@ -1770,29 +1771,38 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
 static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data)
 {
-    gendata_st gendata;
-    gendata.status = 2;
+    std::string preview;
     if (image != nullptr) {
         if (frame_count == 1) {
-            gendata.preview = raw_image_to_png_base64(*image);
+            preview = raw_image_to_png_base64(*image);
         } else {
             uint8_t * out_data = nullptr;
             size_t out_len = 0;
             if (create_gif_buf_from_sd_images_msf(image, frame_count, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
-                gendata.preview = kcpp_base64_encode(out_data, out_len);
+                preview = kcpp_base64_encode(out_data, out_len);
             }
             if (out_data) {
                 free(out_data);
             }
         }
     }
-    gendata.step = step;
-    gendata.step_time = get_time_delta(geninfo.start_time);
+    double step_time = get_time_delta(geninfo.start_time);
 
     std::lock_guard<std::mutex> lock(geninfo.mux);
-    if (step == geninfo.steps)
-        gendata.status = 3;
-    geninfo.gendata = gendata;
+    if (geninfo.gendata.status <= 1) {
+        geninfo.gendata.status = 2;
+        if (geninfo.preview_requested && !geninfo.preview_enabled) {
+            geninfo.preview_enabled = true;
+        }
+        if (geninfo.preview_enabled) {
+            set_preview_images(2);
+        } else {
+            set_preview_images(0);
+        }
+    }
+    geninfo.gendata.step = step;
+    geninfo.gendata.step_time = step_time;
+    geninfo.gendata.preview = preview;
 }
 
 void sdtype_request_ongoing_generation_preview()
@@ -1910,19 +1920,23 @@ sd_info_outputs sdtype_get_ongoing_generation_info()
     }
 
     nlohmann::json j;
-    j["steps"] = steps;
-    j["elapsed_time"] = elapsed_time;
-    j["step"] = gendata.step;
-    j["step_time"] = gendata.step_time;
-    if (gendata.status == 1)
-        j["status"] = "conditioning";
-    else if (gendata.status == 2)
-        j["status"] = "diffusing";
-    else if (gendata.status == 3)
-        j["status"] = "decoding";
-    else
+    if (gendata.status == 0) {
         j["status"] = "idle";
-    j["preview"] = gendata.preview;
+    } else {
+        if (gendata.status == 1)
+            j["status"] = "conditioning";
+        else if (gendata.status == 2)
+            j["status"] = "diffusing";
+        else if (gendata.status == 3)
+            j["status"] = "decoding";
+        else
+            j["status"] = "UNKNOWN";
+        j["steps"] = steps;
+        j["elapsed_time"] = elapsed_time;
+        j["step"] = gendata.step;
+        j["step_time"] = gendata.step_time;
+        j["preview"] = gendata.preview;
+    }
 
     static thread_local std::string recent_info;
     recent_info = j.dump();
