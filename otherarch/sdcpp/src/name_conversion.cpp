@@ -185,6 +185,20 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
 }
 
 std::string convert_qwen3_vl_vision_name(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> qwen3_vl_deepstack_name_map{
+        {"v.deepstack_merger_list.", "deepstack_merger_list."},
+        {"v.deepstack.5.", "deepstack_merger_list.0."},
+        {"v.deepstack.8.", "deepstack_merger_list.0."},
+        {"v.deepstack.11.", "deepstack_merger_list.1."},
+        {"v.deepstack.16.", "deepstack_merger_list.1."},
+        {"v.deepstack.17.", "deepstack_merger_list.2."},
+        {"v.deepstack.24.", "deepstack_merger_list.2."},
+        {"fc1.", "linear_fc1."},
+        {"fc2.", "linear_fc2."},
+        {"ffn_up.", "linear_fc1."},
+        {"ffn_down.", "linear_fc2."},
+        {"ffn_norm.", "norm."},
+    };
     static const std::vector<std::pair<std::string, std::string>> qwen3_vl_vision_name_map{
         {"mm.0.", "merger.linear_fc1."},
         {"mm.2.", "merger.linear_fc2."},
@@ -201,6 +215,10 @@ std::string convert_qwen3_vl_vision_name(std::string name) {
         {"ln1.", "norm1."},
         {"ln2.", "norm2."},
     };
+    if (contains(name, "v.deepstack_merger_list.") || contains(name, "v.deepstack.")) {
+        replace_with_name_map(name, qwen3_vl_deepstack_name_map);
+        return name;
+    }
     replace_with_name_map(name, qwen3_vl_vision_name_map);
     return name;
 }
@@ -1181,6 +1199,7 @@ std::string convert_sep_to_dot(std::string name) {
         "x_embedder",
         "cross_attn",
         "output_proj",
+        "token_refiner",
     };
 
     // record the positions of underscores that should NOT be replaced
