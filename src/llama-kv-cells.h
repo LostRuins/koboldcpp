@@ -28,7 +28,6 @@ struct llama_kv_cell_ext {
 };
 
 // meta information about KV cells that can be part of multiple sequences at the same time
-// TODO: add unit tests
 class llama_kv_cells {
 public:
     void reset() {

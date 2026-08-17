@@ -1,10 +1,14 @@
 # Add custom options to Makefile.local rather than editing this file.
 -include $(abspath $(lastword ${MAKEFILE_LIST})).local
 
-.PHONY: finishedmsg
+.PHONY: finishedmsg test-kv-cells
 
 default: koboldcpp_default koboldcpp_failsafe koboldcpp_noavx2 koboldcpp_vulkan_failsafe koboldcpp_cublas koboldcpp_hipblas koboldcpp_vulkan koboldcpp_vulkan_noavx2 finishedmsg
 tools: quantize_gpt2 quantize_gptj quantize_gguf quantize_neox quantize_mpt ttsmain whispermain sdmain gguf-split
+
+test-kv-cells: tests/test-llama-kv-cells.cpp
+	$(CXX) $(CXXFLAGS) -UNDEBUG $< -o /tmp/koboldcpp-test-llama-kv-cells
+	/tmp/koboldcpp-test-llama-kv-cells
 
 ifndef UNAME_S
 UNAME_S := $(shell uname -s)
