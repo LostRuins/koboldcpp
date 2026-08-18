@@ -308,6 +308,7 @@ static inline double get_time_delta(const std::chrono::steady_clock::time_point&
 
 static void progress_callback(int step, int steps, float time, void* data)
 {
+    step = step < 0 ? -step : step;
     (void) data;
     const char* phase = "Encoding";
     {
@@ -1771,6 +1772,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
 static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data)
 {
+    step = step < 0 ? -step : step;
     std::lock_guard<std::mutex> lock(geninfo.mux);
     double step_time = get_time_delta(geninfo.start_time);
 
