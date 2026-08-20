@@ -2408,13 +2408,14 @@ protected:
         GGML_ASSERT(gf != nullptr);
 
         size_t effective_budget = max_graph_vram_bytes;
+        size_t free_clamp       = SIZE_MAX;
         if (stream_layers_enabled && max_graph_vram_bytes > 0 && runtime_backend != nullptr) {
             ggml_backend_dev_t dev = ggml_backend_get_device(runtime_backend);
             if (dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
                 size_t free_vram = 0, total_vram = 0;
                 ggml_backend_dev_memory(dev, &free_vram, &total_vram);
                 constexpr size_t safety_margin = 512ull * 1024 * 1024;
-                size_t free_clamp              = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
+                free_clamp                     = (free_vram > safety_margin) ? (free_vram - safety_margin) : 0;
                 if (free_clamp < effective_budget) {
                     LOG_DEBUG("%s clamping streaming budget: actual free VRAM %.2f MB < user cap %.2f MB",
                               get_desc().c_str(),
@@ -2431,7 +2432,9 @@ protected:
                 observed_max_effective_budget_ = effective_budget;
                 budget_increased               = true;
             } else {
-                effective_budget = observed_max_effective_budget_;
+                // Keep the plan cache stable, but never plan above what is free now:
+                // another model or process can take VRAM after the first measurement.
+                effective_budget = std::min(observed_max_effective_budget_, free_clamp);
             }
         }
 

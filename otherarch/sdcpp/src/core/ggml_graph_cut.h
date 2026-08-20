@@ -68,6 +68,7 @@ namespace sd::ggml_graph_cut {
     };
 
     static constexpr const char* GGML_RUNNER_CUT_PREFIX = "ggml_runner_cut:";
+    static constexpr const char* GGML_RUNNER_CUT_SUFFIX = "|";
 
     struct MaxVramAssignment {
         float default_gib = 0.f;

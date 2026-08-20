@@ -60,6 +60,8 @@ enum sample_method_t {
     SAMPLE_METHOD_COUNT
 };
 
+extern SD_API const char* sample_method_to_str[];
+
 enum scheduler_t {
     DISCRETE_SCHEDULER,
     KARRAS_SCHEDULER,
@@ -79,6 +81,8 @@ enum scheduler_t {
     BETA_SCHEDULER,
     SCHEDULER_COUNT
 };
+
+extern SD_API const char* scheduler_to_str[];
 
 enum prediction_t {
     EPS_PRED,

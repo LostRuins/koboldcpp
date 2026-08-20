@@ -426,10 +426,10 @@ class TinyVideoDecoder : public UnaryBlock {
     static const int num_layers  = 3;
     int channels[num_layers + 1] = {256, 128, 64, 64};
     int patch_size               = 1;
-    int t_upscale                = 1;
     bool is_wide                 = false;
 
 public:
+    int t_upscale = 1;
     TinyVideoDecoder(int z_channels = 4, int patch_size = 1, std::vector<bool> time_upscale = {false, true, true}, bool is_wide = false)
         : z_channels(z_channels), patch_size(patch_size), is_wide(is_wide) {
         t_upscale = 1;
@@ -536,6 +536,10 @@ public:
             patch          = 4;
             time_downscale = {true, true, true};
             time_upscale   = {true, true, true};
+        } else if (sd_version_is_minimax_h3(version)) {
+            z_channels     = 24;
+            patch          = 2;
+            time_downscale = {true, true, false};
         }
         blocks["decoder"] = std::shared_ptr<GGMLBlock>(new TinyVideoDecoder(z_channels, patch, time_upscale, is_wide));
         if (!decode_only) {
@@ -545,24 +549,123 @@ public:
 
     ggml_tensor* decode(GGMLRunnerContext* ctx, ggml_tensor* z) {
         auto decoder = std::dynamic_pointer_cast<TinyVideoDecoder>(blocks["decoder"]);
-        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version)) {
             // (W, H, C, T) -> (W, H, T, C)
             z = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, z, 0, 1, 3, 2));
         }
         auto result = decoder->forward(ctx, z);
-        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
+
+        if (sd_version_is_minimax_h3(version)) {
+            int64_t num_frames   = result->ne[3];
+            int64_t chunk_frames = 5 * decoder->t_upscale;
+            int64_t pad          = (chunk_frames - (num_frames % chunk_frames)) % chunk_frames;
+
+            result = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, result, 0, 0, 0, 0, 0, 0, 0, pad, false, false);
+
+            int64_t num_chunks                  = (num_frames + pad) / chunk_frames;
+            auto to_trim                        = decoder->t_upscale - 1;
+            std::vector<ggml_tensor*> to_concat = {};
+            for (int i = 0; i < num_chunks; i++) {
+                auto chunk = ggml_view_4d(ctx->ggml_ctx, result,
+                                          result->ne[0], result->ne[1], result->ne[2], chunk_frames - to_trim,
+                                          result->nb[1], result->nb[2], result->nb[3],
+                                          i * chunk_frames * result->nb[3]);
+                to_concat.push_back(chunk);
+            }
+            result = ggml_ext_vec_concat(ctx->ggml_ctx, to_concat, 3);
+            result = ggml_view_4d(ctx->ggml_ctx, result,
+                                  result->ne[0], result->ne[1], result->ne[2],
+                                  result->ne[3] - decoder->t_upscale * 3,
+                                  result->nb[1], result->nb[2], result->nb[3], 0);
+        }
+
+        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version)) {
             // (W, H, T, C) -> (W, H, C, T)
             result = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, result, 0, 1, 3, 2));
         }
         return result;
     }
 
-    ggml_tensor* encode(GGMLRunnerContext* ctx, ggml_tensor* x) {
+    ggml_tensor* encode_h3(GGMLRunnerContext* ctx, ggml_tensor* x) {
         auto encoder = std::dynamic_pointer_cast<TinyVideoEncoder>(blocks["encoder"]);
-        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) {
+
+        int64_t num_frames = x->ne[3];
+        int64_t pad        = (17 - (num_frames % 17)) % 17;
+
+        if (pad > 0) {
+            auto last_frame = ggml_view_4d(ctx->ggml_ctx, x,
+                                           x->ne[0], x->ne[1], x->ne[2], 1,
+                                           x->nb[1], x->nb[2], x->nb[3],
+                                           (num_frames - 1) * x->nb[3]);
+            for (int i = 0; i < pad; i++) {
+                x = ggml_concat(ctx->ggml_ctx, x, last_frame, 3);
+            }
+        }
+
+        int64_t T_padded   = x->ne[3];
+        int64_t num_chunks = T_padded / 17;
+
+        auto zero_frame = ggml_view_4d(ctx->ggml_ctx, x,
+                                       x->ne[0], x->ne[1], x->ne[2], 1,
+                                       x->nb[1], x->nb[2], x->nb[3], 0);
+        auto zeros_1    = ggml_scale(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, zero_frame), 0.0f);
+        auto zeros_3    = zeros_1;
+        for (int i = 1; i < 3; i++) {
+            zeros_3 = ggml_concat(ctx->ggml_ctx, zeros_3, zeros_1, 3);
+        }
+        ggml_tensor* out = nullptr;
+        if (false) {
+            std::vector<ggml_tensor*> to_concat = {};
+            for (int i = 0; i < num_chunks; i++) {
+                auto chunk = ggml_view_4d(ctx->ggml_ctx, x,
+                                          x->ne[0], x->ne[1], x->ne[2], 17,
+                                          x->nb[1], x->nb[2], x->nb[3],
+                                          i * 17 * x->nb[3]);
+
+                auto chunk_padded = ggml_concat(ctx->ggml_ctx, zeros_3, chunk, 3);
+
+                to_concat.push_back(chunk_padded);
+            }
+            ggml_tensor* x_in = ggml_ext_vec_concat(ctx->ggml_ctx, to_concat, 3);
+            out               = encoder->forward(ctx, x_in);
+        } else {
+            std::vector<ggml_tensor*> to_concat = {};
+            for (int i = 0; i < num_chunks; i++) {
+                auto chunk = ggml_view_4d(ctx->ggml_ctx, x,
+                                          x->ne[0], x->ne[1], x->ne[2], 17,
+                                          x->nb[1], x->nb[2], x->nb[3],
+                                          i * 17 * x->nb[3]);
+
+                auto chunk_padded = ggml_concat(ctx->ggml_ctx, zeros_3, chunk, 3);
+
+                auto chunk_out = encoder->forward(ctx, chunk_padded);
+                // auto chunk_out = encoder->forward_seq(ctx, chunk_padded); // ~same vram usage, and straight-up slower. it's already sequential enough
+
+                to_concat.push_back(chunk_out);
+            }
+            out = ggml_ext_vec_concat(ctx->ggml_ctx, to_concat, 3);
+        }
+
+        // Return x[:, :-3] - drop the last 3 elements in the T dimension
+        int64_t out_T = out->ne[3];
+        out           = ggml_view_4d(ctx->ggml_ctx, out,
+                                     out->ne[0], out->ne[1], out->ne[2], out_T - 3,
+                                     out->nb[1], out->nb[2], out->nb[3], 0);
+
+        return ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, out, 0, 1, 3, 2));
+    }
+
+    ggml_tensor* encode(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        if (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || (sd_version_is_minimax_h3(version) && x->ne[3] > 1)) {
             // (W, H, T, C) -> (W, H, C, T)
             x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
         }
+        if (sd_version_is_minimax_h3(version)) {
+            return encode_h3(ctx, x);
+        }
+
+        auto encoder = std::dynamic_pointer_cast<TinyVideoEncoder>(blocks["encoder"]);
+
         int64_t num_frames = x->ne[3];
         if (num_frames % encoder->t_downscale) {
             // pad to multiple of encoder->t_downscale at the end

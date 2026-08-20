@@ -1008,7 +1008,7 @@ ArgOptions SDGenerationParams::get_options() {
          &hires_upscaler},
         {"",
          "--extra-sample-args",
-         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; lms supports lms_divisions",
+         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; lms supports lms_max_order, lms_shift, lms_divisions",
          (int)',',
          &extra_sample_args},
         {"",
@@ -1555,6 +1555,16 @@ ArgOptions SDGenerationParams::get_options() {
         return 1;
     };
 
+    std::string sample_methods = sample_method_to_str[0];
+    for (int i = 1; i < SAMPLE_METHOD_COUNT; i++) {
+        sample_methods += ", " + std::string(sample_method_to_str[i]);
+    }
+
+    std::string schedulers = scheduler_to_str[0];
+    for (int i = 1; i < SCHEDULER_COUNT; i++) {
+        schedulers += ", " + std::string(scheduler_to_str[i]);
+    }
+
     options.manual_options = {
         {"-s",
          "--seed",
@@ -1562,17 +1572,18 @@ ArgOptions SDGenerationParams::get_options() {
          on_seed_arg},
         {"",
          "--sampling-method",
-         "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, dpm++2m_sde, dpm++2m_sde_bt, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp, lms]"
-         "(default: euler for Flux/SD3/Wan, euler_a otherwise)",
+         "sampling method, one of [" + sample_methods + "], "
+                                                        "default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_sample_method_arg},
         {"",
          "--high-noise-sampling-method",
-         "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, dpm++2m_sde, dpm++2m_sde_bt, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s, er_sde, euler_cfg_pp, euler_a_cfg_pp, lms]"
-         " default: euler for Flux/SD3/Wan, euler_a otherwise",
+         "(high noise) sampling method, one of [" + sample_methods + "], "
+                                                                     "default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_high_noise_sample_method_arg},
         {"",
          "--scheduler",
-         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent, ltx2, logit_normal, flux2, flux, beta], alias: normal=discrete, default: model-specific",
+         "denoiser sigma scheduler, one of [" + schedulers + "], "
+                                                             "alias: normal=discrete, default: model-specific",
          on_scheduler_arg},
         {"",
          "--sigmas",
