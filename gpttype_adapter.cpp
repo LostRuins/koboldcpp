@@ -525,10 +525,12 @@ std::string get_fitted_params_str(const llama_model_params & mparams, const llam
 
 static bool has_tensor_split(const float* ratios, int num_ratios, ggml_backend_t backend = nullptr)
 {
-    const int ratios_count = std::min(num_ratios, tensor_split_max);
-    for (int i = 0; i < ratios_count; ++i) {
-        if (ratios[i] != 0.0f) {
-            return true;
+    if(kcpp_backend_check(KCPP_BACKENDS_TENSOR_SPLIT, backend)) {
+        const int ratios_count = std::min(num_ratios, tensor_split_max);
+        for (int i = 0; i < ratios_count; ++i) {
+            if (ratios[i] != 0.0f) {
+                return true;
+            }
         }
     }
     return false;
