@@ -1787,7 +1787,7 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
                 set_preview_images(0);
             }
         }
-        geninfo.gendata.step = step;
+        geninfo.gendata.step = is_noisy ? 0 : step;
         geninfo.gendata.step_time = step_time;
         should_encode_preview = !is_noisy && geninfo.preview_enabled;
     }
