@@ -217,13 +217,13 @@ extern "C"
     {
         sdtype_abort_generation();
     }
-    sd_info_outputs sd_get_ongoing_generation_info()
+    sd_info_outputs sd_get_ongoing_generation_info(const char* genkey)
     {
-        return sdtype_get_ongoing_generation_info();
+        return sdtype_get_ongoing_generation_info(genkey);
     }
-    void sd_request_ongoing_generation_preview()
+    void sd_request_ongoing_generation_preview(const char* genkey)
     {
-        sdtype_request_ongoing_generation_preview();
+        sdtype_request_ongoing_generation_preview(genkey);
     }
 
     bool whisper_load_model(const whisper_load_model_inputs inputs)

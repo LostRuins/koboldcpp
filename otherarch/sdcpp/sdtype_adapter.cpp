@@ -167,14 +167,38 @@ struct gendata_st {
     std::string preview;
 };
 
-struct {
-    std::mutex mux;
+struct genstatus_st {
+    std::string genkey;
     std::chrono::steady_clock::time_point start_time;
     int steps = 0;
     bool preview_requested = false;
     bool preview_enabled = false;
     gendata_st gendata;
+};
+
+static constexpr size_t max_genstatus = 2;
+
+static struct {
+    std::mutex mux;
+    genstatus_st genstatus[max_genstatus];
+    size_t next_slot = 0;
+    size_t active_slot = max_genstatus;
 } geninfo;
+
+static genstatus_st* get_preview_data(const std::string& genkey = "") {
+    if (genkey == "") {
+        if (geninfo.active_slot != max_genstatus) {
+            return &geninfo.genstatus[geninfo.active_slot];
+        }
+    } else {
+        for (auto& record: geninfo.genstatus) {
+            if (record.genkey == genkey) {
+                return &record;
+            }
+        }
+    }
+    return nullptr;
+}
 
 static struct {
     std::string data;
@@ -313,24 +337,27 @@ static void progress_callback(int step, int steps, float time, void* data)
     const char* phase = "Encoding";
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);
-        if (geninfo.gendata.status == 2 && geninfo.preview_requested && !geninfo.preview_enabled) {
-            geninfo.preview_enabled = true;
+        auto active = get_preview_data();
+        if (!active) return;
+
+        if (active->gendata.status == 2 && active->preview_requested && !active->preview_enabled) {
+            active->preview_enabled = true;
             set_preview_images(2);
         }
         /* Once diffusion has started, use progress_callback for step counts
         because img2img and custom schedules can change the effective total. */
-        if (geninfo.gendata.status == 2) {
+        if (active->gendata.status == 2) {
             /* adjust the max step count (may change for img2img) */
-            geninfo.steps = steps;
-            if (step != geninfo.gendata.step) {
-                geninfo.gendata.step = step;
-                geninfo.gendata.preview = "";
+            active->steps = steps;
+            if (step != active->gendata.step) {
+                active->gendata.step = step;
+                active->gendata.preview = "";
             }
             if (step == steps) {
-                geninfo.gendata.status = 3;
+                active->gendata.status = 3;
             }
             phase = "Generating image";
-        } else if (geninfo.gendata.status == 3) {
+        } else if (active->gendata.status == 3) {
             phase = "Decoding";
         }
         /* let the terminal report tiling progress */
@@ -1069,13 +1096,21 @@ void sdtype_abort_generation() {
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
+    std::string genkey = inputs.genkey ? inputs.genkey : "";
+
     struct CleanupInfoOnExit {
         ~CleanupInfoOnExit() {
             {
                 std::lock_guard<std::mutex> lock(geninfo.mux);
-                geninfo.gendata.status = 0;
-                geninfo.preview_requested = false;
-                geninfo.preview_enabled = false;
+                size_t status_slot = geninfo.active_slot;
+                if (status_slot < max_genstatus) {
+                    auto& genstatus = geninfo.genstatus[status_slot];
+                    genstatus.gendata.status = 0;
+                    genstatus.gendata.preview = "";
+                    genstatus.preview_requested = false;
+                    genstatus.preview_enabled = false;
+                }
+                geninfo.active_slot = max_genstatus;
             }
             set_preview_images(0);
         }
@@ -1088,12 +1123,17 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);
-        geninfo.start_time = std::chrono::steady_clock::now();
-        geninfo.steps = inputs.sample_steps;
-        geninfo.preview_requested = false;
-        geninfo.preview_enabled = false;
-        geninfo.gendata = {};
-        geninfo.gendata.status = 1;
+        size_t status_slot = geninfo.next_slot;
+        geninfo.next_slot = (status_slot + 1) % max_genstatus;
+        geninfo.active_slot = status_slot;
+        auto& genstatus = geninfo.genstatus[status_slot];
+        genstatus.genkey = genkey;
+        genstatus.start_time = std::chrono::steady_clock::now();
+        genstatus.steps = inputs.sample_steps;
+        genstatus.preview_requested = false;
+        genstatus.preview_enabled = false;
+        genstatus.gendata = {};
+        genstatus.gendata.status = 1;
         set_preview_images(1);
     }
 
@@ -1774,23 +1814,25 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
 {
     step = step < 0 ? -step : step;
     std::lock_guard<std::mutex> lock(geninfo.mux);
-    double step_time = get_time_delta(geninfo.start_time);
+
+    auto active = get_preview_data();
+    if (!active) return;
+
+    double step_time = get_time_delta(active->start_time);
 
     bool should_encode_preview = false;
-    {
-        if (geninfo.gendata.status <= 1) {
-            geninfo.gendata.status = 2;
-            if (geninfo.preview_requested && !geninfo.preview_enabled) {
-                geninfo.preview_enabled = true;
-                set_preview_images(2);
-            } else {
-                set_preview_images(0);
-            }
+    if (active->gendata.status <= 1) {
+        active->gendata.status = 2;
+        if (active->preview_requested && !active->preview_enabled) {
+            active->preview_enabled = true;
+            set_preview_images(2);
+        } else {
+            set_preview_images(0);
         }
-        geninfo.gendata.step = is_noisy ? 0 : step;
-        geninfo.gendata.step_time = step_time;
-        should_encode_preview = !is_noisy && geninfo.preview_enabled;
     }
+    active->gendata.step = is_noisy ? 0 : step;
+    active->gendata.step_time = step_time;
+    should_encode_preview = !is_noisy && active->preview_enabled;
 
     if (!should_encode_preview) {
         return;
@@ -1813,17 +1855,20 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
     }
 
     {
-        geninfo.gendata.step = step;
-        geninfo.gendata.step_time = step_time;
-        geninfo.gendata.preview = preview;
+        active->gendata.step = step;
+        active->gendata.step_time = step_time;
+        active->gendata.preview = preview;
     }
 }
 
-void sdtype_request_ongoing_generation_preview()
+void sdtype_request_ongoing_generation_preview(const char* genkey)
 {
+    if (!genkey || !*genkey) return;
     std::lock_guard<std::mutex> lock(geninfo.mux);
-    if (geninfo.gendata.status != 0 && !geninfo.preview_requested) {
-        geninfo.preview_requested = true;
+    auto active = get_preview_data(genkey);
+    if (!active) return;
+    if (active->gendata.status != 0 && !active->preview_requested) {
+        active->preview_requested = true;
     }
 }
 
@@ -1919,17 +1964,32 @@ sd_info_outputs sdtype_get_info()
     return output;
 }
 
-sd_info_outputs sdtype_get_ongoing_generation_info()
+sd_info_outputs sdtype_get_ongoing_generation_info(const char* genkey)
 {
     double elapsed_time = 0.0;
     int steps = 0;
-    gendata_st gendata;
+    gendata_st gendata = {};
+    std::string key = genkey ? genkey : "";
+
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);
-        gendata = geninfo.gendata;
-        steps = geninfo.steps;
-        if (gendata.status != 0) {
-            elapsed_time = get_time_delta(geninfo.start_time);
+        genstatus_st* record = nullptr;
+        if (!key.empty()) {
+            record = get_preview_data(key);
+        }
+        if (record) {
+            elapsed_time = get_time_delta(record->start_time);
+            steps = record->steps;
+            gendata = record->gendata;
+        } else {
+            // no key: retrieve current status, no preview
+            record = get_preview_data();
+            if (record) {
+                elapsed_time = get_time_delta(record->start_time);
+                steps = record->steps;
+                gendata = record->gendata;
+                gendata.preview = "";
+            }
         }
     }
 
@@ -1950,7 +2010,7 @@ sd_info_outputs sdtype_get_ongoing_generation_info()
         j["status"] = "UNKNOWN";
     j["preview"] = gendata.preview;
 
-    static thread_local std::string recent_info;
+    static std::string recent_info;
     recent_info = j.dump();
     sd_info_outputs output;
     output.status = 0;

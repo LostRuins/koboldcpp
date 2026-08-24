@@ -112,8 +112,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs);
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs);
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs);
 sd_info_outputs sdtype_get_info();
-sd_info_outputs sdtype_get_ongoing_generation_info();
-void sdtype_request_ongoing_generation_preview();
+sd_info_outputs sdtype_get_ongoing_generation_info(const char* genkey);
+void sdtype_request_ongoing_generation_preview(const char* genkey);
 void sdtype_abort_generation();
 
 bool whispertype_load_model(const whisper_load_model_inputs inputs);

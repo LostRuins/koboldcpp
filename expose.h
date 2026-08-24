@@ -256,6 +256,7 @@ struct sd_generation_inputs
     const int lora_len = 0;
     const char ** lora_filenames = nullptr;
     const float * lora_multipliers = nullptr;
+    const char * genkey = nullptr;
 };
 struct sd_generation_outputs
 {

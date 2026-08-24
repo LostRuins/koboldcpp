@@ -100,7 +100,6 @@ mmprojName = None
 lastgeneratedcomfyimg = b''
 lastgeneratedcachedimg = b''
 lastgeneratedcachedimgkey = b''
-currgenimgkey = ''
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
 password = "" #if empty, no auth key required
@@ -492,7 +491,8 @@ class sd_generation_inputs(ctypes.Structure):
                 ("upscale", ctypes.c_bool),
                 ("lora_len", ctypes.c_int),
                 ("lora_filenames", ctypes.POINTER(ctypes.c_char_p)),
-                ("lora_multipliers", ctypes.POINTER(ctypes.c_float))]
+                ("lora_multipliers", ctypes.POINTER(ctypes.c_float)),
+                ("genkey", ctypes.c_char_p)]
 
 class sd_generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -1044,9 +1044,9 @@ def init_library():
     handle.sd_get_info.restype = sd_info_outputs
     handle.sd_abort_generation.argtypes = []
     handle.sd_abort_generation.restype = None
-    handle.sd_get_ongoing_generation_info.argtypes = []
+    handle.sd_get_ongoing_generation_info.argtypes = [ctypes.c_char_p]
     handle.sd_get_ongoing_generation_info.restype = sd_info_outputs
-    handle.sd_request_ongoing_generation_preview.argtypes = []
+    handle.sd_request_ongoing_generation_preview.argtypes = [ctypes.c_char_p]
     handle.sd_request_ongoing_generation_preview.restype = None
     handle.whisper_load_model.argtypes = [whisper_load_model_inputs]
     handle.whisper_load_model.restype = ctypes.c_bool
@@ -2902,6 +2902,7 @@ def lora_map_name_to_path(request_list):
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
 
+    genkey = genparams.get('genkey', '')
     job_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
     default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
@@ -3020,6 +3021,7 @@ def sd_generate(genparams):
     inputs.lora_len = len(lora_filenames)
     inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*lora_filenames)
     inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*lora_multipliers)
+    inputs.genkey = (genkey or "").encode("UTF-8")
 
     ret = handle.sd_generate(inputs)
     data_main = ""
@@ -3036,8 +3038,8 @@ def sd_generate(genparams):
     info["job_timestamp"] = job_timestamp
     return {"animated": animated, "data":data_main, "data_extra":data_extra, "final_frame":final_frame, "info": info}
 
-def sd_get_ongoing_generation_info():
-    info = handle.sd_get_ongoing_generation_info()
+def sd_get_ongoing_generation_info(genkey):
+    info = handle.sd_get_ongoing_generation_info(genkey)
     if info.status == 0:
         try:
             return json.loads(info.data)
@@ -3138,10 +3140,11 @@ def build_a1111_progress_response(
         "textinfo": textinfo
     }
 
-def a1111_progress_response(preview=False):
+def a1111_progress_response(preview=False, genkey=None):
+    genkey = (genkey or "").encode("UTF-8")
     if preview:
-        handle.sd_request_ongoing_generation_preview()
-    status = sd_get_ongoing_generation_info()
+        handle.sd_request_ongoing_generation_preview(genkey)
+    status = sd_get_ongoing_generation_info(genkey)
     result = build_a1111_progress_response(
         status.get('status', 0),
         status.get('step', 0),
@@ -6489,7 +6492,7 @@ Change Mode<br>
     def do_GET(self):
         global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, embedded_kailite_gz, embedded_kcpp_docs_gz, embedded_kcpp_sdui_gz, embedded_lcpp_ui_gz, embedded_musicui, embedded_musicui_gz
         global last_req_time, start_time, cached_chat_template, cached_sd_info, has_vision_support, has_audio_support, has_whisper, friendlymodelname
-        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, currgenimgkey, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname, voicelist
+        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname, voicelist
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
 
         clean_path = self.path.split("?")[0] #for cases where we do not want query params
@@ -6754,9 +6757,7 @@ Change Mode<br>
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
             skip_current_image = parse_query_bool(parsed_dict, 'skip_current_image')
-            # with no auth, reveal status without preview image
-            auth = bool(genkey and genkey==currgenimgkey)
-            info = a1111_progress_response(auth and not skip_current_image)
+            info = a1111_progress_response(not skip_current_image, genkey)
             response_body = json.dumps(info).encode()
         elif clean_path=='/history' or clean_path=='/api/history' or clean_path.startswith('/api/history/') or clean_path.startswith('/history/'): #emulate comfyui
             modelNameToReturn = friendlysdmodelname
@@ -6893,7 +6894,7 @@ Change Mode<br>
 
     def do_POST(self):
         global thinkformats
-        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, currgenimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
+        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
         contlenstr = self.headers['content-length']
         content_length = 0
@@ -7862,7 +7863,6 @@ Change Mode<br>
                     try:
                         lastgeneratedcachedimg = b''
                         lastgeneratedcachedimgkey = ''
-                        currgenimgkey = genparams.get('genkey', '')
                         if is_comfyui_imggen:
                             lastgeneratedcomfyimg = b''
                             genparams = sd_comfyui_tranform_params(genparams)
@@ -7886,7 +7886,6 @@ Change Mode<br>
                         gendatextra = gen["data_extra"]
                         genfinalframe = gen["final_frame"]
                         geninfo = json.dumps(gen["info"]) # sdapi really expects a stringified JSON
-                        currgenimgkey = ''
                         genresp = None
                         if gendat:
                             lastgeneratedcachedimg = base64.b64decode(gendat)
@@ -7909,7 +7908,6 @@ Change Mode<br>
                         self.end_headers(content_type='application/json')
                         self.wfile.write(genresp)
                     except Exception as ex:
-                        currgenimgkey = ''
                         utfprint(ex,1)
                         print("Generate Image: The response could not be sent, maybe connection was terminated?")
                         time.sleep(0.2) #short delay
