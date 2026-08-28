@@ -4305,9 +4305,11 @@ struct BatchGenerateRequest
     std::string output;
     int prompt_token_count = 0;
     int completion_token_count = 0;
+    std::chrono::steady_clock::time_point submitted_at;
     std::chrono::steady_clock::time_point start_time;
     std::chrono::steady_clock::time_point process_start_time;
     std::chrono::steady_clock::time_point generation_start_time;
+    std::chrono::steady_clock::time_point finished_at;
     float init_time = 0.0f;
     float process_time = 0.0f;
     stop_reason finish_reason = stop_reason::INVALID;
@@ -4332,6 +4334,7 @@ static std::thread batch_worker_thread;
 static bool batch_worker_stop = false;
 static bool batch_worker_started = false;
 static bool batch_legacy_active = false;
+static bool batch_benchmark_active = false;
 static bool batch_touched_since_legacy = false;
 static int batch_legacy_waiting = 0;
 static int batch_next_request_id = 1;
@@ -4366,13 +4369,8 @@ static bool batch_has_live_locked()
     return false;
 }
 
-static void batch_invalidate_legacy_context_locked()
+static void batch_clear_legacy_context_locked()
 {
-    if(!batch_touched_since_legacy)
-    {
-        return;
-    }
-    batch_touched_since_legacy = false;
     n_past = 0;
     current_context_tokens.clear();
     last_n_tokens.clear();
@@ -4386,6 +4384,16 @@ static void batch_invalidate_legacy_context_locked()
     {
         llama_memory_seq_rm(llama_get_memory(draft_ctx), 0, -1, -1);
     }
+}
+
+static void batch_invalidate_legacy_context_locked()
+{
+    if(!batch_touched_since_legacy)
+    {
+        return;
+    }
+    batch_touched_since_legacy = false;
+    batch_clear_legacy_context_locked();
     if(debugmode==1 && !is_quiet)
     {
         printf("\n[Continuous batching touched shared context; forcing next legacy generation to reprocess prompt]\n");
@@ -4400,7 +4408,7 @@ public:
         std::unique_lock<std::mutex> lock(batch_mutex);
         batch_legacy_waiting++;
         batch_cv.notify_all();
-        batch_cv.wait(lock, [](){ return !batch_legacy_active && !batch_has_live_locked(); });
+        batch_cv.wait(lock, [](){ return !batch_legacy_active && !batch_benchmark_active && !batch_has_live_locked(); });
         batch_legacy_waiting--;
         batch_invalidate_legacy_context_locked();
         batch_legacy_active = true;
@@ -4412,6 +4420,38 @@ public:
         batch_legacy_active = false;
         batch_cv.notify_all();
     }
+};
+
+class BatchBenchmarkGuard
+{
+public:
+    bool try_acquire()
+    {
+        std::lock_guard<std::mutex> lock(batch_mutex);
+        if(batch_benchmark_active || batch_legacy_active || batch_legacy_waiting > 0 || batch_has_live_locked())
+        {
+            return false;
+        }
+        batch_clear_legacy_context_locked();
+        batch_touched_since_legacy = false;
+        batch_benchmark_active = true;
+        acquired = true;
+        return true;
+    }
+
+    ~BatchBenchmarkGuard()
+    {
+        if(!acquired)
+        {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(batch_mutex);
+        batch_benchmark_active = false;
+        batch_cv.notify_all();
+    }
+
+private:
+    bool acquired = false;
 };
 
 static bool batch_inputs_eligible(const generation_inputs & inputs)
@@ -4659,6 +4699,7 @@ static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason 
     req.result.prompt_tokens = req.prompt_token_count;
     req.result.completion_tokens = req.completion_token_count;
     req.result.text = req.output.c_str();
+    req.finished_at = finish_time;
     req.state = reason == stop_reason::ERROR_ENCOUNTERED ? BatchState::FAILED : (reason == stop_reason::INVALID ? BatchState::ABORTED : BatchState::FINISHED);
     if(req.slot >= 0 && llama_ctx_v4)
     {
@@ -4726,7 +4767,8 @@ static bool batch_claim_waiting_locked()
             TokenizeString(req->prompt_added_memory, added_memory_tokens, file_format, add_bos_token);
         }
 
-        int n_ctx = req->max_context_length > 0 ? std::min(req->max_context_length, kcpp_data->n_ctx) : kcpp_data->n_ctx;
+        const int engine_context = batch_benchmark_active ? max_context_limit_at_load : kcpp_data->n_ctx;
+        int n_ctx = req->max_context_length > 0 ? std::min(req->max_context_length, engine_context) : engine_context;
         AppendDedicatedMemoryAndNegativePrompt(req->prompt_tokens, added_memory_tokens, std::vector<llama_token>(), req->max_length, n_ctx);
 
         if(req->max_length > 0 && (int) req->prompt_tokens.size() + req->max_length > n_ctx)
@@ -4850,12 +4892,26 @@ static void batch_worker_loop()
         std::lock_guard<std::mutex> lock(batch_mutex);
         if(decode_status != 0)
         {
-            for(int request_id : decode_ids)
+            if(batch_benchmark_active)
             {
-                BatchGenerateRequest * req = batch_find_request_locked(request_id);
-                if(req && batch_is_live_state(req->state))
+                batch_waiting.clear();
+                for(auto & req : batch_requests)
                 {
-                    batch_finish_request_locked(*req, stop_reason::ERROR_ENCOUNTERED);
+                    if(req && batch_is_live_state(req->state))
+                    {
+                        batch_finish_request_locked(*req, stop_reason::ERROR_ENCOUNTERED);
+                    }
+                }
+            }
+            else
+            {
+                for(int request_id : decode_ids)
+                {
+                    BatchGenerateRequest * req = batch_find_request_locked(request_id);
+                    if(req && batch_is_live_state(req->state))
+                    {
+                        batch_finish_request_locked(*req, stop_reason::ERROR_ENCOUNTERED);
+                    }
                 }
             }
             continue;
@@ -4921,19 +4977,11 @@ bool gpttype_batch_generate_enabled()
     return continuous_batching_slots > 1 && file_format == FileFormat::GGUF_GENERIC && llama_ctx_v4 && kcpp_data && !draft_ctx && !guidance_ctx;
 }
 
-int gpttype_batch_generate_submit(const generation_inputs inputs)
+static int batch_generate_submit_locked(const generation_inputs & inputs, const std::chrono::steady_clock::time_point & submitted_at)
 {
-    if(!batch_inputs_eligible(inputs))
-    {
-        return -1;
-    }
-    std::lock_guard<std::mutex> lock(batch_mutex);
-    if(batch_legacy_active || batch_legacy_waiting > 0)
-    {
-        return -1;
-    }
     auto req = std::make_unique<BatchGenerateRequest>();
     req->id = batch_next_request_id++;
+    req->submitted_at = submitted_at;
     req->prompt = inputs.prompt ? inputs.prompt : "";
     req->prompt_added_memory = inputs.memory ? inputs.memory : "";
     req->max_context_length = inputs.max_context_length;
@@ -4979,6 +5027,22 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     int request_id = req->id;
     batch_requests.emplace_back(std::move(req));
     batch_waiting.push_back(request_id);
+    return request_id;
+}
+
+int gpttype_batch_generate_submit(const generation_inputs inputs)
+{
+    if(!batch_inputs_eligible(inputs))
+    {
+        return -1;
+    }
+    const auto submitted_at = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(batch_mutex);
+    if(batch_benchmark_active || batch_legacy_active || batch_legacy_waiting > 0)
+    {
+        return -1;
+    }
+    int request_id = batch_generate_submit_locked(inputs, submitted_at);
     batch_start_worker_locked();
     batch_cv.notify_all();
     return request_id;
@@ -5062,6 +5126,203 @@ void gpttype_batch_generate_release(int request_id)
         return req && req->id == request_id && !batch_is_live_state(req->state);
     }), batch_requests.end());
     batch_cv.notify_all();
+}
+
+static double batch_benchmark_percentile(std::vector<double> values, double percentile)
+{
+    if(values.empty())
+    {
+        return 0.0;
+    }
+    std::sort(values.begin(), values.end());
+    size_t rank = (size_t) std::ceil(percentile * values.size());
+    rank = std::max((size_t) 1, std::min(rank, values.size()));
+    return values[rank - 1];
+}
+
+batch_benchmark_outputs gpttype_batch_benchmark(const generation_inputs inputs, int jobs)
+{
+    batch_benchmark_outputs output;
+    output.jobs = jobs;
+    output.slots = continuous_batching_slots;
+    output.engine_context = max_context_limit_at_load;
+
+    if(!gpttype_batch_generate_enabled() || !batch_inputs_eligible(inputs))
+    {
+        output.status = BATCH_BENCHMARK_UNAVAILABLE;
+        return output;
+    }
+    const int active_jobs = std::min(jobs, continuous_batching_slots);
+    if(jobs < 1 || jobs > 128 || inputs.max_length < 2 ||
+        inputs.max_context_length <= inputs.max_length ||
+        inputs.max_context_length > output.engine_context ||
+        (int64_t) active_jobs * inputs.max_context_length > output.engine_context)
+    {
+        output.status = BATCH_BENCHMARK_INVALID_CONFIG;
+        return output;
+    }
+
+    BatchBenchmarkGuard benchmark_guard;
+    if(!benchmark_guard.try_acquire())
+    {
+        output.status = BATCH_BENCHMARK_BUSY;
+        return output;
+    }
+
+    const auto cohort_submitted_at = std::chrono::steady_clock::now();
+    std::vector<int> request_ids;
+    std::vector<double> latency_ms;
+    std::vector<BatchGenerateRequest *> requests;
+    try
+    {
+        request_ids.reserve(jobs);
+        latency_ms.reserve(jobs);
+        requests.reserve(jobs);
+    }
+    catch(...)
+    {
+        output.status = BATCH_BENCHMARK_REQUEST_FAILED;
+        output.failures = jobs;
+        output.first_failure_stopreason = stop_reason::ERROR_ENCOUNTERED;
+        return output;
+    }
+    {
+        std::lock_guard<std::mutex> lock(batch_mutex);
+        const size_t previous_request_count = batch_requests.size();
+        const size_t previous_waiting_count = batch_waiting.size();
+        const int previous_next_request_id = batch_next_request_id;
+        try
+        {
+            batch_requests.reserve(previous_request_count + jobs);
+            for(int job = 0; job < jobs; ++job)
+            {
+                request_ids.push_back(batch_generate_submit_locked(inputs, cohort_submitted_at));
+            }
+            batch_start_worker_locked();
+            batch_cv.notify_all();
+        }
+        catch(...)
+        {
+            while(batch_waiting.size() > previous_waiting_count)
+            {
+                batch_waiting.pop_back();
+            }
+            batch_requests.resize(previous_request_count);
+            batch_next_request_id = previous_next_request_id;
+            output.status = BATCH_BENCHMARK_REQUEST_FAILED;
+            output.failures = jobs;
+            output.first_failure_stopreason = stop_reason::ERROR_ENCOUNTERED;
+            return output;
+        }
+    }
+
+    bool missing_request = false;
+    {
+        std::unique_lock<std::mutex> lock(batch_mutex);
+        batch_cv.wait(lock, [](){ return !batch_has_live_locked(); });
+
+        for(int request_id : request_ids)
+        {
+            BatchGenerateRequest * req = batch_find_request_locked(request_id);
+            if(!req)
+            {
+                missing_request = true;
+                continue;
+            }
+            requests.push_back(req);
+        }
+
+        if(!requests.empty())
+        {
+            output.prompt_tokens_min = requests.front()->prompt_token_count;
+            output.prompt_tokens_max = requests.front()->prompt_token_count;
+            auto cohort_finished_at = requests.front()->finished_at;
+            for(const BatchGenerateRequest * req : requests)
+            {
+                output.prompt_tokens_min = std::min(output.prompt_tokens_min, req->prompt_token_count);
+                output.prompt_tokens_max = std::max(output.prompt_tokens_max, req->prompt_token_count);
+                output.total_prompt_tokens += req->prompt_token_count;
+                output.total_generated_tokens += req->completion_token_count;
+                cohort_finished_at = std::max(cohort_finished_at, req->finished_at);
+                if(req->submitted_at.time_since_epoch().count() != 0 && req->finished_at >= req->submitted_at)
+                {
+                    const double request_latency_ms = std::chrono::duration<double, std::milli>(req->finished_at - req->submitted_at).count();
+                    if(std::isfinite(request_latency_ms))
+                    {
+                        latency_ms.push_back(request_latency_ms);
+                    }
+                }
+            }
+
+            const int expected_prompt_tokens = inputs.max_context_length - inputs.max_length;
+            const bool prompt_counts_valid =
+                output.prompt_tokens_min == output.prompt_tokens_max &&
+                output.prompt_tokens_min > 0 &&
+                (output.prompt_tokens_min == expected_prompt_tokens ||
+                 output.prompt_tokens_min == expected_prompt_tokens - 1);
+            for(const BatchGenerateRequest * req : requests)
+            {
+                const bool request_valid = prompt_counts_valid &&
+                    req->result.status == 1 &&
+                    req->finish_reason == stop_reason::OUT_OF_TOKENS &&
+                    req->completion_token_count == inputs.max_length;
+                if(request_valid)
+                {
+                    output.successes++;
+                }
+                else
+                {
+                    output.failures++;
+                    if(output.first_failure_request == 0)
+                    {
+                        output.first_failure_request = req->id;
+                        output.first_failure_stopreason = req->finish_reason;
+                    }
+                }
+            }
+
+            if(cohort_finished_at >= cohort_submitted_at)
+            {
+                output.wall_seconds = std::chrono::duration<double>(cohort_finished_at - cohort_submitted_at).count();
+            }
+        }
+
+        batch_requests.erase(std::remove_if(batch_requests.begin(), batch_requests.end(), [&request_ids](const std::unique_ptr<BatchGenerateRequest> & req){
+            return req && std::find(request_ids.begin(), request_ids.end(), req->id) != request_ids.end();
+        }), batch_requests.end());
+        batch_cv.notify_all();
+    }
+
+    if(missing_request || output.successes + output.failures != jobs)
+    {
+        output.status = BATCH_BENCHMARK_MISSING_REQUEST;
+        output.failures = jobs - output.successes;
+        return output;
+    }
+    const bool timing_valid = output.wall_seconds > 0.0 && std::isfinite(output.wall_seconds) && latency_ms.size() == (size_t) jobs;
+    if(timing_valid)
+    {
+        output.cohort_e2e_generated_tps = (double) output.total_generated_tokens / output.wall_seconds;
+        output.requests_per_second = (double) output.successes / output.wall_seconds;
+        output.jobs_per_hour = output.requests_per_second * 3600.0;
+    }
+    output.latency_p50_ms = batch_benchmark_percentile(latency_ms, 0.50);
+    output.latency_p95_ms = batch_benchmark_percentile(latency_ms, 0.95);
+    output.latency_max_ms = latency_ms.empty() ? 0.0 : *std::max_element(latency_ms.begin(), latency_ms.end());
+    const bool metrics_valid = timing_valid &&
+        output.cohort_e2e_generated_tps > 0.0 && std::isfinite(output.cohort_e2e_generated_tps) &&
+        output.requests_per_second > 0.0 && std::isfinite(output.requests_per_second) &&
+        output.jobs_per_hour > 0.0 && std::isfinite(output.jobs_per_hour) &&
+        std::isfinite(output.latency_p50_ms) && std::isfinite(output.latency_p95_ms) && std::isfinite(output.latency_max_ms);
+    if(output.failures == 0 && !metrics_valid)
+    {
+        output.successes = 0;
+        output.failures = jobs;
+        output.first_failure_request = request_ids.empty() ? 0 : request_ids.front();
+        output.first_failure_stopreason = stop_reason::INVALID;
+    }
+    output.status = output.failures == 0 && metrics_valid ? BATCH_BENCHMARK_SUCCESS : BATCH_BENCHMARK_REQUEST_FAILED;
+    return output;
 }
 
 std::string gpttype_get_chat_template()

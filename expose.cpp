@@ -302,6 +302,21 @@ extern "C"
     void batch_generate_release(int request_id) {
         gpttype_batch_generate_release(request_id);
     }
+    batch_benchmark_outputs batch_benchmark(const generation_inputs inputs, int jobs) {
+        try
+        {
+            return gpttype_batch_benchmark(inputs, jobs);
+        }
+        catch(...)
+        {
+            batch_benchmark_outputs output;
+            output.status = BATCH_BENCHMARK_REQUEST_FAILED;
+            output.jobs = jobs;
+            output.failures = jobs > 0 ? jobs : 0;
+            output.first_failure_stopreason = stop_reason::ERROR_ENCOUNTERED;
+            return output;
+        }
+    }
     bool has_audio_support()
     {
         return audio_multimodal_supported;

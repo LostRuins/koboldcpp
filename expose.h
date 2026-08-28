@@ -1,5 +1,7 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 const int tensor_split_max = 16;
 const int logprobs_max = 10;
@@ -158,6 +160,43 @@ struct generation_outputs
     int completion_tokens = 0;
     const char * text; //response will now be stored in c++ allocated memory
 };
+enum batch_benchmark_status
+{
+    BATCH_BENCHMARK_SUCCESS = 1,
+    BATCH_BENCHMARK_UNAVAILABLE = -1,
+    BATCH_BENCHMARK_INVALID_CONFIG = -2,
+    BATCH_BENCHMARK_BUSY = -3,
+    BATCH_BENCHMARK_MISSING_REQUEST = -4,
+    BATCH_BENCHMARK_REQUEST_FAILED = -5,
+};
+struct batch_benchmark_outputs
+{
+    int status = BATCH_BENCHMARK_UNAVAILABLE;
+    int jobs = 0;
+    int slots = 0;
+    int successes = 0;
+    int failures = 0;
+    int engine_context = 0;
+    int prompt_tokens_min = 0;
+    int prompt_tokens_max = 0;
+    int first_failure_request = 0;
+    int first_failure_stopreason = stop_reason::INVALID;
+    int64_t total_prompt_tokens = 0;
+    int64_t total_generated_tokens = 0;
+    double wall_seconds = 0.0;
+    double cohort_e2e_generated_tps = 0.0;
+    double requests_per_second = 0.0;
+    double jobs_per_hour = 0.0;
+    double latency_p50_ms = 0.0;
+    double latency_p95_ms = 0.0;
+    double latency_max_ms = 0.0;
+};
+static_assert(std::is_standard_layout<batch_benchmark_outputs>::value, "batch_benchmark_outputs must remain a C-compatible POD layout");
+static_assert(std::is_trivially_copyable<batch_benchmark_outputs>::value, "batch_benchmark_outputs must remain trivially copyable");
+static_assert(sizeof(batch_benchmark_outputs) == 112, "batch_benchmark_outputs ABI size changed");
+static_assert(offsetof(batch_benchmark_outputs, total_prompt_tokens) == 40, "batch_benchmark_outputs integer layout changed");
+static_assert(offsetof(batch_benchmark_outputs, wall_seconds) == 56, "batch_benchmark_outputs timing layout changed");
+static_assert(offsetof(batch_benchmark_outputs, latency_max_ms) == 104, "batch_benchmark_outputs latency layout changed");
 struct token_count_outputs
 {
     int count = 0;
@@ -419,3 +458,4 @@ const char * gpttype_batch_generate_pending_output(int request_id);
 generation_outputs gpttype_batch_generate_result(int request_id);
 bool gpttype_batch_generate_abort(int request_id);
 void gpttype_batch_generate_release(int request_id);
+batch_benchmark_outputs gpttype_batch_benchmark(const generation_inputs inputs, int jobs);
