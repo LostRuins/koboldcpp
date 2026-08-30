@@ -1898,7 +1898,7 @@ public:
         ignore_tensors.insert("model.diffusion_model.__index_timestep_zero__");
 
         if (audio_vae_model) {
-            if (1 || !sd_version_is_minimax_h3(version)) { // kcpp
+            if (!sd_version_is_minimax_h3(version) && !sd_version_is_ltxav(version)) { // kcpp
                 ignore_tensors.insert("audio_vae.encoder");
             }
         }
