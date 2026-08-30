@@ -10,9 +10,9 @@ on:
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-  LLAMA_NOAVX2: 1
-  LLAMA_ARCHES_CU11: 1
-  KCPP_CUDA: 11.5.0
+  NOAVX2: 1
+  ARCHES_CU11: 1
+  KCPP_CUDA: 11.4.0
 
 jobs:
   linux:
