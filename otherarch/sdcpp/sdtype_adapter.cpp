@@ -1117,11 +1117,17 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     std::string img2img_data = std::string(inputs.init_images);
     std::string img2img_mask = std::string(inputs.mask);
-    std::string input_audio_data = std::string(inputs.audio_data ? inputs.audio_data : "");
+    std::string video_start_frame_data = std::string(inputs.video_start_frame ? inputs.video_start_frame : "");
+    std::string video_end_frame_data = std::string(inputs.video_end_frame ? inputs.video_end_frame : "");
     std::vector<std::string> extra_image_data;
     for(int i=0;i<inputs.extra_images_len;++i)
     {
         extra_image_data.push_back(std::string(inputs.extra_images[i]));
+    }
+    std::vector<std::string> ref_audio_data;
+    for(int i=0;i<inputs.ref_audios_len;++i)
+    {
+        ref_audio_data.push_back(std::string(inputs.ref_audios[i]));
     }
     sd_params->prompt = inputs.prompt;
     sd_params->negative_prompt = inputs.negative_prompt;
@@ -1209,9 +1215,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    if (is_video_model(info) && extra_image_data.size() == 0 && is_img2img)
+    if (is_video_model(info) && video_start_frame_data.empty() && is_img2img && img2img_mask=="")
     {
-        extra_image_data.push_back(img2img_data);
+        video_start_frame_data = img2img_data;
     }
 
     // limit by image side
@@ -1256,9 +1262,23 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     //for img2img
     sd_image_t input_image = {0,0,0,nullptr};
+    sd_image_t video_start_image = {0,0,0,nullptr};
+    sd_image_t video_end_image = {0,0,0,nullptr};
     std::vector<sd_image_t> reference_imgs;
-    std::vector<sd_image_t> wan_imgs;
+    std::vector<sd_image_t> legacy_video_imgs;
     std::vector<sd_image_t> photomaker_imgs;
+    std::vector<sd_audio_t> reference_audios;
+    struct ReferenceAudioCleanup {
+        std::vector<sd_audio_t>& audios;
+        ~ReferenceAudioCleanup() {
+            for (auto& audio : audios) {
+                if (audio.data) {
+                    free(audio.data);
+                    audio.data = nullptr;
+                }
+            }
+        }
+    } reference_audio_cleanup { reference_audios };
 
     int nx, ny, nc;
     int img2imgW = sd_params->width; //for img2img input
@@ -1275,16 +1295,50 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     fflush(stdout);
 
+    if(input_extraimage_buffers.size()>0) //just in time free old buffer
+    {
+        for(int i=0;i<input_extraimage_buffers.size();++i)
+        {
+            stbi_image_free(input_extraimage_buffers[i]);
+        }
+        input_extraimage_buffers.clear();
+    }
+
+    auto load_extra_image = [&](const std::string& b64, bool resize_to_generation) -> sd_image_t {
+        sd_image_t image = {0,0,0,nullptr};
+        if (b64.empty()) {
+            return image;
+        }
+        int nx2, ny2, nc2;
+        uint8_t * loaded = resize_to_generation
+            ? load_image_from_b64(b64,nx2,ny2,img2imgW,img2imgH,3)
+            : load_image_from_b64(b64,nx2,ny2);
+        if(loaded)
+        {
+            input_extraimage_buffers.push_back(loaded);
+            image.width = nx2;
+            image.height = ny2;
+            image.channel = 3;
+            image.data = loaded;
+        }
+        return image;
+    };
+
+    auto push_image_if_loaded = [](std::vector<sd_image_t>& images, sd_image_t image) {
+        if(image.data)
+        {
+            images.push_back(image);
+        }
+    };
+
+    if (is_video_model(info))
+    {
+        video_start_image = load_extra_image(video_start_frame_data, true);
+        video_end_image = load_extra_image(video_end_frame_data, true);
+    }
+
     if(extra_image_data.size()>0)
     {
-        if(input_extraimage_buffers.size()>0) //just in time free old buffer
-        {
-            for(int i=0;i<input_extraimage_buffers.size();++i)
-            {
-                stbi_image_free(input_extraimage_buffers[i]);
-            }
-            input_extraimage_buffers.clear();
-        }
         for(int i=0;i<extra_image_data.size() && i<max_extra_images;++i)
         {
             int nx2, ny2, nc2;
@@ -1293,17 +1347,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             {
                 if(is_video_model(info))
                 {
-                    uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2,img2imgW,img2imgH,3);
-                    if(loaded)
+                    if(info.is_minimaxh3 && (extra_image_data[i] == video_start_frame_data || extra_image_data[i] == video_end_frame_data))
                     {
-                        input_extraimage_buffers.push_back(loaded);
-                        sd_image_t extraimage_reference;
-                        extraimage_reference.width = nx2;
-                        extraimage_reference.height = ny2;
-                        extraimage_reference.channel = desiredchannels;
-                        extraimage_reference.data = loaded;
-                        wan_imgs.push_back(extraimage_reference);
+                        continue;
                     }
+                    push_image_if_loaded(info.is_minimaxh3 ? reference_imgs : legacy_video_imgs, load_extra_image(extra_image_data[i], !info.is_minimaxh3));
                 }
                 else if(info.supports_ref_image||force_image_edit)
                 {
@@ -1376,8 +1424,33 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         if(!sd_is_quiet && sddebugmode==1)
         {
-            printf("\nImageGen References: RefImg=%zu Wan=%zu Photomaker=%zu\n",reference_imgs.size(),wan_imgs.size(),photomaker_imgs.size());
+            printf("\nImageGen References: RefImg=%zu Wan=%zu Photomaker=%zu\n",reference_imgs.size(),legacy_video_imgs.size(),photomaker_imgs.size());
         }
+    }
+
+    if(info.is_minimaxh3 && ref_audio_data.size()>0)
+    {
+        for(int i=0;i<ref_audio_data.size();++i)
+        {
+            sd_audio_t ref_audio = load_audio_from_b64(ref_audio_data[i]);
+            if (ref_audio.data == nullptr) {
+                return sd_generation.error("KCPP SD: load reference audio from base64 failed!");
+            }
+            reference_audios.push_back(ref_audio);
+        }
+    }
+
+    const bool has_minimax_keyframes = info.is_minimaxh3 && (video_start_image.data || video_end_image.data || legacy_video_imgs.size() > 0);
+    const bool has_minimax_references = info.is_minimaxh3 && (reference_imgs.size() > 0 || reference_audios.size() > 0);
+    if(has_minimax_keyframes && has_minimax_references)
+    {
+        if(!sd_is_quiet && sddebugmode==1)
+        {
+            printf("\nMiniMax-H3: keyframes and Ref2VA references cannot be mixed; using reference media and ignoring keyframes.\n");
+        }
+        video_start_image = {0,0,0,nullptr};
+        video_end_image = {0,0,0,nullptr};
+        legacy_video_imgs.clear();
     }
 
     sd_img_gen_params_t params = {};
@@ -1481,24 +1554,38 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         vid_gen_params.video_frames = vid_req_frames;
         vid_gen_params.fps = vid_fps;
         vid_gen_params.vae_tiling_params = params.vae_tiling_params;
-        if (!input_audio_data.empty()) {
-            input_audio = load_audio_from_b64(input_audio_data);
+        if (!info.is_minimaxh3 && ref_audio_data.size()>0) {
+            input_audio = load_audio_from_b64(ref_audio_data[0]);
             if (input_audio.data == nullptr) {
                 return sd_generation.error("KCPP SD: load audio from base64 failed!");
             }
             vid_gen_params.input_audio = &input_audio;
         }
-        if (wan_imgs.size() > 0) {
-            if (wan_imgs.size() >= 2) {
-                vid_gen_params.init_image = wan_imgs[0];
-                vid_gen_params.end_image  = wan_imgs[1];
-            } else if (wan_imgs.size() == 1) {
-                if (inputs.reverse_refimg) {
-                    vid_gen_params.end_image = wan_imgs[0];
-                } else {
-                    vid_gen_params.init_image = wan_imgs[0];
-                }
+        if (info.is_minimaxh3 && reference_imgs.size() > 0) {
+            vid_gen_params.ref_images = reference_imgs.data();
+            vid_gen_params.ref_images_count = (int)reference_imgs.size();
+        }
+        if (info.is_minimaxh3 && reference_audios.size() > 0) {
+            vid_gen_params.ref_audios = reference_audios.data();
+            vid_gen_params.ref_audios_count = (int)reference_audios.size();
+        }
+        if (legacy_video_imgs.size() >= 2) {
+            if(!video_start_image.data) {
+                video_start_image = legacy_video_imgs[0];
             }
+            if(!video_end_image.data) {
+                video_end_image = legacy_video_imgs[1];
+            }
+        } else if (legacy_video_imgs.size() == 1) {
+            if(!video_start_image.data && !video_end_image.data) {
+                video_start_image = legacy_video_imgs[0];
+            }
+        }
+        if (video_start_image.data) {
+            vid_gen_params.init_image = video_start_image;
+        }
+        if (video_end_image.data) {
+            vid_gen_params.end_image = video_end_image;
         }
         if(!sd_is_quiet && sddebugmode==1)
         {
@@ -1512,7 +1599,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             << "\nSTRENGTH:" << vid_gen_params.strength
             << "\nFRAMES:"   << vid_gen_params.video_frames
             << "\nCTRL_FRM:" << vid_gen_params.control_frames_size
-            << "\nINIT_IMGS:" << wan_imgs.size()
+            << "\nINIT_IMGS:" << ((vid_gen_params.init_image.data ? 1 : 0) + (vid_gen_params.end_image.data ? 1 : 0))
+            << "\nREF_IMGS:" << vid_gen_params.ref_images_count
+            << "\nREF_AUDIOS:" << vid_gen_params.ref_audios_count
             << "\nINPUT_AUDIO:" << (vid_gen_params.input_audio ? "true" : "false")
             << "\n\n";
             printf("%s", ss.str().c_str());

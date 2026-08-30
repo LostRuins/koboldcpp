@@ -225,10 +225,12 @@ struct sd_generation_inputs
     const char * negative_prompt = nullptr;
     const char * init_images = "";
     const char * mask = "";
-    const char * audio_data = "";
+    const char * video_start_frame = "";
+    const char * video_end_frame = "";
     const int extra_images_len = 0;
     const char ** extra_images = nullptr;
-    const bool reverse_refimg = false;
+    const int ref_audios_len = 0;
+    const char ** ref_audios = nullptr;
     const bool flip_mask = false;
     const float denoising_strength = 0.0f;
     const float cfg_scale = 0.0f;

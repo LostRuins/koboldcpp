@@ -462,10 +462,12 @@ class sd_generation_inputs(ctypes.Structure):
                 ("negative_prompt", ctypes.c_char_p),
                 ("init_images", ctypes.c_char_p),
                 ("mask", ctypes.c_char_p),
-                ("audio_data", ctypes.c_char_p),
+                ("video_start_frame", ctypes.c_char_p),
+                ("video_end_frame", ctypes.c_char_p),
                 ("extra_images_len", ctypes.c_int),
                 ("extra_images", ctypes.POINTER(ctypes.c_char_p)),
-                ("reverse_refimg", ctypes.c_bool),
+                ("ref_audios_len", ctypes.c_int),
+                ("ref_audios", ctypes.POINTER(ctypes.c_char_p)),
                 ("flip_mask", ctypes.c_bool),
                 ("denoising_strength", ctypes.c_float),
                 ("cfg_scale", ctypes.c_float),
@@ -2931,6 +2933,8 @@ def sd_generate(genparams):
     init_images = ("" if (not init_images_arr or len(init_images_arr)==0 or not init_images_arr[0]) else init_images_arr[0])
     init_images = strip_base64_prefix(init_images)
     mask = strip_base64_prefix(genparams.get("mask", ""))
+    video_start_frame = strip_base64_prefix(genparams.get("video_start_frame", ""))
+    video_end_frame = strip_base64_prefix(genparams.get("video_end_frame", ""))
     flip_mask = genparams.get("inpainting_mask_invert", 0)
     denoising_strength = tryparsefloat(genparams.get("denoising_strength", 0.6),0.6)
     cfg_scale = tryparsefloat(genparams.get("cfg_scale", 5),5)
@@ -2959,9 +2963,9 @@ def sd_generate(genparams):
     extra_images_arr = ([] if not extra_images_arr else extra_images_arr)
     extra_images_arr = [img for img in extra_images_arr if img not in (None, "")]
 
-    audio_data = next((img for img in extra_images_arr if img.startswith("data:audio")), None)
-    extra_images_arr = [img for img in extra_images_arr if not img.startswith("data:audio")]
-    audio_data = strip_base64_prefix(audio_data)
+    audio_refs_arr = [img for img in extra_images_arr if isinstance(img, str) and img.startswith("data:audio")]
+    extra_images_arr = [img for img in extra_images_arr if not (isinstance(img, str) and img.startswith("data:audio"))]
+    audio_refs_arr = [strip_base64_prefix(aud) for aud in audio_refs_arr]
 
     extra_images_arr = extra_images_arr[:extra_images_max]
     lora_filenames, lora_multipliers = prepare_lora_multipliers(genparams.get("lora", []))
@@ -2979,8 +2983,9 @@ def sd_generate(genparams):
     vid_fps = (16 if vid_fps < 16 else (32 if vid_fps > 32 else vid_fps))
 
     swap_refimg = (True if tryparseint(genparams.get("send_as_refimg", 0),0) else False)
-    reverse_refimg = (True if tryparseint(genparams.get("reverse_refimg", 0),0) else False)
     if swap_refimg and init_images and init_images != "" and not mask:
+        if not video_start_frame:
+            video_start_frame = init_images
         extra_images_arr = [init_images] + extra_images_arr
         init_images = ""
 
@@ -2989,13 +2994,17 @@ def sd_generate(genparams):
     inputs.negative_prompt = negative_prompt.encode("UTF-8")
     inputs.init_images = init_images.encode("UTF-8")
     inputs.mask = "".encode("UTF-8") if not mask else mask.encode("UTF-8")
-    inputs.audio_data = "".encode("UTF-8") if not audio_data else audio_data.encode("UTF-8")
+    inputs.video_start_frame = "".encode("UTF-8") if not video_start_frame else video_start_frame.encode("UTF-8")
+    inputs.video_end_frame = "".encode("UTF-8") if not video_end_frame else video_end_frame.encode("UTF-8")
     inputs.extra_images_len = len(extra_images_arr)
     inputs.extra_images = (ctypes.c_char_p * inputs.extra_images_len)()
     for n, estr in enumerate(extra_images_arr):
         extra_image = strip_base64_prefix(estr)
         inputs.extra_images[n] = extra_image.encode("UTF-8")
-    inputs.reverse_refimg = reverse_refimg
+    inputs.ref_audios_len = len(audio_refs_arr)
+    inputs.ref_audios = (ctypes.c_char_p * inputs.ref_audios_len)()
+    for n, aud in enumerate(audio_refs_arr):
+        inputs.ref_audios[n] = aud.encode("UTF-8")
     inputs.flip_mask = flip_mask
     inputs.cfg_scale = cfg_scale
     if distilled_guidance is not None:
