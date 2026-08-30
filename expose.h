@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 
 const int tensor_split_max = 16;
@@ -396,7 +397,7 @@ extern std::string lora_filename;
 extern std::string mmproj_filename;
 extern std::string draftmodel_filename;
 extern std::vector<std::string> generated_tokens;
-extern bool generation_finished;
+extern std::atomic<bool> generation_finished;
 extern bool audio_multimodal_supported;
 extern bool vision_multimodal_supported;
 extern float last_eval_time;

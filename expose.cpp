@@ -263,17 +263,15 @@ extern "C"
     }
 
     const char * new_token(int idx) {
-        if (generated_tokens.size() <= idx || idx < 0) return nullptr;
-
-        return generated_tokens[idx].c_str();
+        return gpttype_new_token(idx);
     }
 
     int get_stream_count() {
-        return generated_tokens.size();
+        return gpttype_get_stream_count();
     }
 
     bool has_finished() {
-        return generation_finished;
+        return generation_finished.load();
     }
     bool batch_generate_enabled() {
         return gpttype_batch_generate_enabled();

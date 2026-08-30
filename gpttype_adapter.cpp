@@ -77,7 +77,7 @@ std::string lora_filename = "";
 std::string mmproj_filename = "";
 std::string draftmodel_filename = "";
 int speculative_chunk_amt = 4; //do it in chunks of this many tokens
-bool generation_finished;
+std::atomic<bool> generation_finished;
 bool audio_multimodal_supported = false;
 bool vision_multimodal_supported = false;
 float last_process_time = 0;
@@ -163,11 +163,12 @@ static std::vector<int> dry_repeat_count; // Indexed as last_n_tokens
 static std::unordered_map<gpt_vocab::id, int> dry_max_token_repeat;
 static std::vector<TopPicksData> top_picks_history;
 static int remaining_tokens = 0;
-static bool early_abort = false;
+static std::atomic<bool> early_abort = false;
 static std::mutex concat_output_mtx;
 static std::string concat_output = "";
 static std::string concat_output_reader_copy_poll = ""; //for streaming
 static std::string concat_output_reader_copy_res = ""; //for gen response
+static std::string generated_token_reader_copy = ""; //stable copy for streaming token readers
 static std::vector<logit_bias> logit_biases;
 static bool add_bos_token = true; // if set to false, mmproj handling breaks. dont disable unless you know what you're doing
 static bool load_guidance = false; //whether to enable cfg for negative prompts
@@ -4302,6 +4303,7 @@ struct BatchGenerateRequest
     bool i_batch_is_prefill = false;
     llama_sampler * sampler = nullptr;
     std::vector<std::string> generated_pieces;
+    std::string stream_reader_copy;
     std::string output;
     int prompt_token_count = 0;
     int completion_token_count = 0;
@@ -5006,7 +5008,8 @@ const char * gpttype_batch_generate_new_token(int request_id, int idx)
     {
         return nullptr;
     }
-    return req->generated_pieces[idx].c_str();
+    req->stream_reader_copy = req->generated_pieces[idx];
+    return req->stream_reader_copy.c_str();
 }
 
 const char * gpttype_batch_generate_pending_output(int request_id)
@@ -5254,6 +5257,23 @@ const std::string & gpttype_get_pending_output()
     concat_output_reader_copy_poll = concat_output;
     concat_output_mtx.unlock();
     return concat_output_reader_copy_poll;
+}
+
+int gpttype_get_stream_count()
+{
+    std::lock_guard<std::mutex> lock(concat_output_mtx);
+    return static_cast<int>(generated_tokens.size());
+}
+
+const char * gpttype_new_token(int idx)
+{
+    std::lock_guard<std::mutex> lock(concat_output_mtx);
+    if (idx < 0 || idx >= (int) generated_tokens.size())
+    {
+        return nullptr;
+    }
+    generated_token_reader_copy = generated_tokens[idx];
+    return generated_token_reader_copy.c_str();
 }
 
 const std::vector<TopPicksData> gpttype_get_top_picks_data()
@@ -5599,7 +5619,12 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
 
     showed_rnn_warning = false;
     generation_finished = false; // Set current generation status
-    generated_tokens.clear(); // New Generation, new tokens
+    {
+        std::lock_guard<std::mutex> lock(concat_output_mtx);
+        generated_tokens.clear(); // New Generation, new tokens
+        generated_tokens.reserve(16);
+        generated_token_reader_copy = "";
+    }
     delayed_generated_tokens.clear();
 
     concat_output_mtx.lock();
@@ -6442,7 +6467,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     std::mt19937 rng(kcpp_data->seed);
 
     //do some reservation so we don't have to realloc
-    generated_tokens.reserve(remaining_tokens+16);
+    {
+        std::lock_guard<std::mutex> lock(concat_output_mtx);
+        generated_tokens.reserve(remaining_tokens+16);
+    }
 
     //prepare sampler order
     std::vector<samplers> sampler_order;
@@ -7005,8 +7033,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     delayed_generated_tokens.push_back(tokenizedstr);
                     while(delayed_generated_tokens.size() > delayed_generated_tokens_limit && delayed_generated_tokens.size() > 0)
                     {
-                        generated_tokens.push_back(delayed_generated_tokens[0]);
                         concat_output_mtx.lock();
+                        generated_tokens.push_back(delayed_generated_tokens[0]);
                         concat_output += delayed_generated_tokens[0];
                         concat_output_mtx.unlock();
                         delayed_generated_tokens.pop_front();
@@ -7380,8 +7408,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     //flush any remaining delayed tokens
     while(delayed_generated_tokens.size() > 0)
     {
-        generated_tokens.push_back(delayed_generated_tokens[0]);
         concat_output_mtx.lock();
+        generated_tokens.push_back(delayed_generated_tokens[0]);
         concat_output += delayed_generated_tokens[0];
         concat_output_mtx.unlock();
         delayed_generated_tokens.pop_front();
