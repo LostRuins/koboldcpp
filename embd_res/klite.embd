@@ -3816,8 +3816,8 @@ Current version indicated by LITEVER below.
 		"opmode":3,
 		"chatopponent": "Bob||$||Alice||$||Mike||$||Lisa",
 		"gui_type":1,
-		"prompt":"\nBob: So, did anyone want to order a pizza?\nMike: Yeah, I'm starving.",
-		"memory":instructstartplaceholder + "[Roleplay Scene. You are in a class reunion, meeting a group of old former schoolmates. The following is a group conversation between you and your friends.]"+instructendplaceholder,
+		"prompt":"\nBob: So, did anyone want to order a pizza? I'm starving!",
+		"memory":instructstartplaceholder + "[Roleplay Scene. Participants take turns to respond (one person's reply per turn only). You are in a class reunion, meeting a group of old former schoolmates. The following is a group conversation between {{user}} and their friends, Bob, Alice, Mike, Lisa.]"+instructendplaceholder,
 		"authorsnote": "",
 		"worldinfo": []
 	},
