@@ -444,6 +444,9 @@ typedef bool (*sd_graph_eval_callback_t)(struct ggml_tensor* t, bool ask, void* 
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+// In each sampling pass, a positive interval previews every Nth denoiser step, while a
+// negative interval previews only completed logical step -interval. Zero previews the final
+// completed step of the first sampling pass (base-resolution or high-noise).
 SD_API void sd_set_preview_callback(sd_preview_cb_t cb, enum preview_t mode, int interval, bool denoised, bool noisy, void* data);
 SD_API void sd_set_backend_eval_callback(sd_graph_eval_callback_t cb, void* data);
 SD_API int32_t sd_get_num_physical_cores();

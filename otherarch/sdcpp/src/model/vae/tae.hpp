@@ -819,6 +819,21 @@ struct TinyVideoAutoEncoder : public VAE {
         return "taehv";
     }
 
+    bool supports_temporal_tiling(VAETemporalDirection direction) const override {
+        return direction == VAETemporalDirection::DECODE && !sd_version_is_minimax_h3(version);
+    }
+
+    int get_temporal_tile_output_scale(VAETemporalDirection direction) const override {
+        SD_UNUSED(direction);
+        int scale = 1;
+        for (bool upscale : taehv.time_upscale) {
+            if (upscale) {
+                scale *= 2;
+            }
+        }
+        return scale;
+    }
+
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         taehv.get_param_tensors(tensors, weight_prefix);
     }

@@ -123,13 +123,6 @@ namespace MiniMaxH3 {
         return to_shift * base / (1.f + (to_shift - 1.f) * base);
     }
 
-    static float time_shift_slope(float sigma, float from_shift, float to_shift) {
-        float base = sigma / (from_shift + sigma * (1.f - from_shift));
-        float a    = 1.f + (from_shift - 1.f) * base;
-        float b    = 1.f + (to_shift - 1.f) * base;
-        return to_shift * a * a / (from_shift * b * b);
-    }
-
     struct TimeEmbedder : public GGMLBlock {
         TimeEmbedder(int64_t input_dim, int64_t hidden_dim, int64_t output_dim) {
             blocks["proj_in"]  = std::make_shared<Linear>(input_dim, hidden_dim, true, true);
@@ -594,8 +587,7 @@ namespace MiniMaxH3 {
                                                       const std::vector<TokenModulationSpan>& segments,
                                                       const std::vector<SequenceSegment>& sequence_segments,
                                                       const TokenModulationSpan& video_segment,
-                                                      const TokenModulationSpan& audio_segment,
-                                                      float audio_slope) {
+                                                      const TokenModulationSpan& audio_segment) {
             auto video_proj = std::dynamic_pointer_cast<Linear>(blocks["video_patch_proj"]);
             auto audio_proj = std::dynamic_pointer_cast<Linear>(blocks["audio_patch_proj"]);
 
@@ -715,7 +707,7 @@ namespace MiniMaxH3 {
                                                audio->ne[2]);
             audio_out        = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, audio_out, 1, 2, 0, 3));
             video_out        = ggml_ext_scale(ctx->ggml_ctx, video_out, -1.f);
-            audio_out        = ggml_ext_scale(ctx->ggml_ctx, audio_out, -audio_slope);
+            audio_out        = ggml_ext_scale(ctx->ggml_ctx, audio_out, -1.f);
             return {video_out, audio_out};
         }
     };
@@ -1040,9 +1032,9 @@ namespace MiniMaxH3 {
             GGML_ASSERT(!audio_input_cache.empty());
             GGML_ASSERT(!context_tensor.empty());
 
-            auto video   = make_input(video_input_cache);
-            auto audio   = make_input(audio_input_cache);
-            auto context = make_input(context_tensor);
+            auto video         = make_input(video_input_cache);
+            auto audio_carrier = make_input(audio_input_cache);
+            auto context       = make_input(context_tensor);
             std::vector<ggml_tensor*> condition_inputs;
             condition_inputs.reserve(condition_videos.size());
             for (const auto& condition : condition_videos) {
@@ -1054,21 +1046,26 @@ namespace MiniMaxH3 {
                 audio_condition_inputs.push_back(make_input(condition));
             }
 
-            float sigma_v = std::clamp(timestep[0] / 1000.f, 1e-6f, 1.f);
-            float t_v     = 1.f - sigma_v;
-            float t_a     = 1.f - time_shift_sigma(sigma_v, video_shift, audio_shift);
-            auto layout   = build_layout(context_tensor.shape()[1],
-                                         video_input_cache.shape()[2],
-                                         video_input_cache.shape()[1],
-                                         video_input_cache.shape()[0],
-                                         audio_length,
-                                         condition_videos,
-                                         condition_audios,
-                                         keyframe_indices,
-                                         reference_blocks,
-                                         text_tags,
-                                         t_v,
-                                         t_a);
+            float sigma_v     = std::clamp(timestep[0] / 1000.f, 1e-6f, 1.f);
+            float sigma_a     = time_shift_sigma(sigma_v, video_shift, audio_shift);
+            float audio_scale = video_shift / audio_shift;
+            float t_v         = 1.f - sigma_v;
+            float t_a         = 1.f - sigma_a;
+            // The sampler carries c_a = (sigma_v / sigma_a) * x_a so the packed
+            // latent follows one sigma schedule. Restore x_a for the H3 network.
+            auto audio  = ggml_ext_scale(compute_ctx, audio_carrier, sigma_a / sigma_v);
+            auto layout = build_layout(context_tensor.shape()[1],
+                                       video_input_cache.shape()[2],
+                                       video_input_cache.shape()[1],
+                                       video_input_cache.shape()[0],
+                                       audio_length,
+                                       condition_videos,
+                                       condition_audios,
+                                       keyframe_indices,
+                                       reference_blocks,
+                                       text_tags,
+                                       t_v,
+                                       t_a);
 
             position_input_cache = sd::Tensor<float>(
                 {3, static_cast<int64_t>(layout.positions.size() / 3)},
@@ -1129,10 +1126,15 @@ namespace MiniMaxH3 {
                                             layout.segments,
                                             layout.sequence_segments,
                                             layout.video_segment,
-                                            layout.audio_segment,
-                                            time_shift_slope(sigma_v, video_shift, audio_shift));
-            auto merged     = merge_av_latents(compute_ctx, output.first, output.second);
-            auto graph      = new_graph_custom(H3_GRAPH_SIZE);
+                                            layout.audio_segment);
+            // Convert the model's audio velocity to d(c_a) / d(sigma_v).
+            output.second = ggml_add(compute_ctx,
+                                     ggml_ext_scale(compute_ctx, audio, 1.f - audio_scale),
+                                     ggml_ext_scale(compute_ctx,
+                                                    output.second,
+                                                    1.f + (audio_scale - 1.f) * sigma_a));
+            auto merged   = merge_av_latents(compute_ctx, output.first, output.second);
+            auto graph    = new_graph_custom(H3_GRAPH_SIZE);
             ggml_build_forward_expand(graph, merged);
             return graph;
         }

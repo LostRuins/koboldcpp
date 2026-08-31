@@ -1213,9 +1213,6 @@ struct LTXVideoVAE : public VAE {
     static constexpr int DEFAULT_TEMPORAL_TILE_OVERLAP = 1;
 
     bool decode_only;
-    bool temporal_tiling_enabled = false;
-    int temporal_tile_frames     = DEFAULT_TEMPORAL_TILE_FRAMES;
-    int temporal_tile_overlap    = DEFAULT_TEMPORAL_TILE_OVERLAP;
     int ltx_vae_version;
     bool timestep_conditioning;
     int patch_size;
@@ -1248,62 +1245,22 @@ struct LTXVideoVAE : public VAE {
         return "ltx_video_vae";
     }
 
-    void set_temporal_tiling_enabled(bool enabled) override {
-        temporal_tiling_enabled = enabled;
+    bool supports_temporal_tiling(VAETemporalDirection direction) const override {
+        return direction == VAETemporalDirection::DECODE;
     }
 
-    void set_tiling_params(const sd_tiling_params_t& params) override {
-        temporal_tiling_enabled = params.temporal_tiling;
-        temporal_tile_frames    = DEFAULT_TEMPORAL_TILE_FRAMES;
-        temporal_tile_overlap   = DEFAULT_TEMPORAL_TILE_OVERLAP;
+    int get_default_temporal_tile_frames(VAETemporalDirection direction) const override {
+        SD_UNUSED(direction);
+        return DEFAULT_TEMPORAL_TILE_FRAMES;
+    }
 
-        for (const auto& [key, value] : parse_key_value_args(params.extra_tiling_args, "LTX VAE extra tiling arg")) {
-            int parsed = 0;
-            if (!parse_strict_int(value, parsed)) {
-                LOG_WARN("ignoring invalid LTX VAE extra tiling arg '%s=%s'", key.c_str(), value.c_str());
-            } else if (key == "temporal_tile_frames") {
-                temporal_tile_frames = std::max(1, parsed);
-            } else if (key == "temporal_tile_overlap") {
-                temporal_tile_overlap = std::max(0, parsed);
-            } else {
-                LOG_WARN("ignoring unknown LTX VAE extra tiling arg '%s'", key.c_str());
-            }
-        }
+    int get_default_temporal_tile_overlap(VAETemporalDirection direction) const override {
+        SD_UNUSED(direction);
+        return DEFAULT_TEMPORAL_TILE_OVERLAP;
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         vae.get_param_tensors(tensors, weight_prefix);
-    }
-
-    struct TemporalTilePlan {
-        int frames    = 1;
-        int overlap   = 0;
-        int stride    = 1;
-        int num_tiles = 1;
-    };
-
-    TemporalTilePlan resolve_temporal_tile_plan(int64_t total_frames) const {
-        TemporalTilePlan plan;
-        plan.frames  = std::max(1, temporal_tile_frames);
-        plan.overlap = std::max(0, temporal_tile_overlap);
-
-        if (plan.overlap >= plan.frames) {
-            LOG_WARN("temporal_tile_overlap (%d) is greater than or equal to temporal_tile_frames (%d), adjusting values to avoid empty decode windows",
-                     plan.overlap,
-                     plan.frames);
-            plan.overlap = plan.frames - 1;
-        }
-        if (total_frames > 1 && plan.overlap >= total_frames) {
-            LOG_WARN("temporal_tile_overlap (%d) is greater than or equal to total latent frames (%lld), adjusting values to decode at least one tile",
-                     plan.overlap,
-                     (long long)total_frames);
-            plan.overlap = static_cast<int>(total_frames - 1);
-        }
-
-        plan.stride          = std::max(1, plan.frames - plan.overlap);
-        int64_t tiled_frames = std::max<int64_t>(1, total_frames - plan.overlap);
-        plan.num_tiles       = total_frames > 0 ? static_cast<int>((tiled_frames + plan.stride - 1) / plan.stride) : 0;
-        return plan;
     }
 
     std::string temporal_feat_cache_name(size_t feat_idx) const {
@@ -1365,50 +1322,51 @@ struct LTXVideoVAE : public VAE {
 
     sd::Tensor<float> decode_temporal_tiled_streaming(const int n_threads,
                                                       const sd::Tensor<float>& input,
-                                                      size_t expected_dim) {
+                                                      size_t expected_dim,
+                                                      const VAETemporalTilingConfig& config) {
         const int64_t total_frames = input.shape()[2];
-        TemporalTilePlan plan      = resolve_temporal_tile_plan(total_frames);
+        auto plan                  = make_vae_temporal_tile_plan(total_frames, config);
 
         LOG_DEBUG("Using streaming temporal tiling: temporal_tile_frames=%d, temporal_tile_overlap=%d, total latent frames=%lld, resulting in %d tiles",
-                  plan.frames,
+                  plan.tile_frames,
                   plan.overlap,
                   (long long)total_frames,
-                  plan.num_tiles);
+                  (int)plan.tiles.size());
 
         free_cache_ctx_and_buffer();
         cache_tensor_map.clear();
 
-        sd::Tensor<float> output;
-        for (int64_t start = 0; start < total_frames - plan.overlap; start += plan.stride) {
-            const int64_t end       = std::min<int64_t>(total_frames, start + plan.frames);
-            const int chunk_overlap = end < total_frames ? plan.overlap : 0;
-            auto z_chunk            = sd::ops::slice(input, 2, start, end);
-
+        auto output = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& z_chunk, const VAETemporalTile& tile) {
             LOG_DEBUG("LTX VAE temporal tile %lld/%d: latent frames [%lld, %lld), overlap=%d",
-                      (long long)(start / plan.stride + 1),
-                      plan.num_tiles,
-                      (long long)start,
-                      (long long)end,
-                      chunk_overlap);
+                      (long long)tile.index + 1,
+                      (int)plan.tiles.size(),
+                      (long long)tile.start,
+                      (long long)tile.end,
+                      tile.overlap);
 
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_temporal_tile_graph(z_chunk,
-                                                 static_cast<int>(start),
-                                                 chunk_overlap);
+                                                 static_cast<int>(tile.start),
+                                                 tile.overlap);
             };
-            auto chunk = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
-                                                         expected_dim);
-            if (chunk.empty()) {
-                free_cache_ctx_and_buffer();
-                cache_tensor_map.clear();
-                return {};
-            }
-            output = output.empty() ? std::move(chunk) : sd::ops::concat(output, chunk, 2);
-        }
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
+                                                   expected_dim);
+        });
 
         free_cache_ctx_and_buffer();
         cache_tensor_map.clear();
         return output;
+    }
+
+    sd::Tensor<float> _compute_temporal_tiled(const int n_threads,
+                                              const sd::Tensor<float>& input,
+                                              VAETemporalDirection direction,
+                                              const VAETemporalTilingConfig& config) override {
+        GGML_ASSERT(direction == VAETemporalDirection::DECODE);
+        return decode_temporal_tiled_streaming(n_threads,
+                                               input,
+                                               static_cast<size_t>(input.dim()),
+                                               config);
     }
 
     ggml_cgraph* build_latent_statistics_graph(const sd::Tensor<float>& z_tensor, bool normalize) {
@@ -1445,9 +1403,6 @@ struct LTXVideoVAE : public VAE {
             if (cropped_t != input.shape()[2]) {
                 input = sd::ops::slice(input, 2, 0, cropped_t);
             }
-        }
-        if (decode_graph && temporal_tiling_enabled && input.dim() == 5 && input.shape()[2] > 1) {
-            return decode_temporal_tiled_streaming(n_threads, input, expected_dim);
         }
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input, decode_graph);

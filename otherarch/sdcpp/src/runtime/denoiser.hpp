@@ -1043,6 +1043,16 @@ struct Denoiser {
                                                     const sd::Tensor<float>& latent) = 0;
     virtual float noise_level_to_sigma(float noise_level)                            = 0;
 
+    virtual sd::Tensor<float> process_latent_in(const sd::Tensor<float>& latent) {
+        // An empty result means the original latent can be used unchanged.
+        SD_UNUSED(latent);
+        return {};
+    }
+
+    virtual sd::Tensor<float> process_latent_out(sd::Tensor<float> latent) {
+        return latent;
+    }
+
     virtual std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
         std::shared_ptr<SigmaScheduler> scheduler;
@@ -1283,6 +1293,40 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     float noise_level_to_sigma(float noise_level) override {
         return noise_level;
+    }
+};
+
+struct H3AVFlowDenoiser : public DiscreteFlowDenoiser {
+    int64_t video_channels;
+    float audio_shift;
+
+    H3AVFlowDenoiser(float shift, float audio_shift, int64_t video_channels)
+        : DiscreteFlowDenoiser(shift),
+          video_channels(video_channels),
+          audio_shift(audio_shift) {
+        GGML_ASSERT(shift > 0.f && audio_shift > 0.f && video_channels > 0);
+    }
+
+    sd::Tensor<float> process_latent_in(const sd::Tensor<float>& latent) override {
+        return scale_audio(latent, shift / audio_shift);
+    }
+
+    sd::Tensor<float> process_latent_out(sd::Tensor<float> latent) override {
+        auto transformed = scale_audio(latent, audio_shift / shift);
+        if (transformed.empty()) {
+            return latent;
+        }
+        return transformed;
+    }
+
+private:
+    sd::Tensor<float> scale_audio(const sd::Tensor<float>& latent, float scale) const {
+        if (scale == 1.f || latent.dim() < 4 || latent.shape()[3] <= video_channels) {
+            return {};
+        }
+        auto video = sd::ops::slice(latent, 3, 0, video_channels);
+        auto audio = sd::ops::slice(latent, 3, video_channels, latent.shape()[3]) * scale;
+        return sd::ops::concat(video, audio, 3);
     }
 };
 

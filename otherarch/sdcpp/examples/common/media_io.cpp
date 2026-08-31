@@ -849,6 +849,9 @@ std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images
     const uint32_t audio_byte_rate       = has_audio ? static_cast<uint32_t>(audio->sample_rate * audio_block_align) : 0;
     const uint32_t audio_data_size       = has_audio ? static_cast<uint32_t>(audio_pcm.size()) : 0;
 
+    if (mjpg_quality != quality)
+        LOG_DEBUG("create_mjpg_avi...(): compression quality was limited from %i to %i", quality, mjpg_quality);
+
     std::vector<uint8_t> avi_data;
     avi_data.reserve(static_cast<size_t>(num_images) * 1024);
 

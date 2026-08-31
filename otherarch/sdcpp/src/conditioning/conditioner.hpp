@@ -2978,15 +2978,36 @@ struct LTXAVEmbedder : public Conditioner {
     std::shared_ptr<GemmaTokenizer> tokenizer;
     std::shared_ptr<LLM::LLMRunner> llm;
     std::shared_ptr<LTXAVTextProjectionRunner> projector;
+    std::string projector_prefix;
     bool dual_projection = false;
+
+    // Gemma 4 keeps a per-layer output scalar that no Gemma 3 checkpoint has, and widens its
+    // full-attention heads to 512 so their q_proj is twice a sliding layer's.
+    static LLM::LLMArch detect_gemma_arch(const String2TensorStorage& tensor_storage_map,
+                                          const std::string& llm_prefix) {
+        if (tensor_storage_map.find(llm_prefix + ".model.layers.0.layer_scalar") != tensor_storage_map.end()) {
+            return LLM::LLMArch::GEMMA4_12B;
+        }
+        auto global_q  = tensor_storage_map.find(llm_prefix + ".model.layers.5.self_attn.q_proj.weight");
+        auto sliding_q = tensor_storage_map.find(llm_prefix + ".model.layers.0.self_attn.q_proj.weight");
+        if (global_q != tensor_storage_map.end() &&
+            sliding_q != tensor_storage_map.end() &&
+            global_q->second.ne[1] == sliding_q->second.ne[1] * 2) {
+            return LLM::LLMArch::GEMMA4_12B;
+        }
+        return LLM::LLMArch::GEMMA3_12B;
+    }
 
     LTXAVEmbedder(ggml_backend_t backend,
                   const String2TensorStorage& tensor_storage_map      = {},
                   const std::string& llm_prefix                       = "text_encoders.llm",
                   const std::string& projector_prefix                 = "text_embedding_projection",
-                  std::shared_ptr<RunnerWeightManager> weight_manager = nullptr) {
+                  std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+        : projector_prefix(projector_prefix) {
+        LLM::LLMArch arch = detect_gemma_arch(tensor_storage_map, llm_prefix);
+        LOG_INFO("ltxav text encoder: %s", arch == LLM::LLMArch::GEMMA4_12B ? "gemma 4" : "gemma 3");
         tokenizer       = std::make_shared<GemmaTokenizer>();
-        llm             = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::GEMMA3_12B,
+        llm             = std::make_shared<LLM::LLMRunner>(arch,
                                                backend,
                                                tensor_storage_map,
                                                llm_prefix,
@@ -3001,7 +3022,7 @@ struct LTXAVEmbedder : public Conditioner {
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         llm->get_param_tensors(tensors, "text_encoders.llm");
-        projector->get_param_tensors(tensors, "text_embedding_projection");
+        projector->get_param_tensors(tensors, projector_prefix);
     }
 
     void get_param_tensor_ops(std::map<ggml_tensor*, enum ggml_op>& tensor_ops) override {

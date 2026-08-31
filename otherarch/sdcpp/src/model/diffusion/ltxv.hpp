@@ -129,6 +129,10 @@ namespace LTXV {
         bool self_attention_gated  = false;
         bool cross_attention_gated = false;
 
+        bool ff_bias                         = true;
+        bool audio_ff_bias                   = true;
+        bool use_keyframes_abs_pos_embedding = false;
+
         static std::pair<int64_t, int64_t> infer_attention_layout(int64_t hidden_size,
                                                                   int64_t preferred_heads = -1) {
             if (preferred_heads > 0 && hidden_size % preferred_heads == 0) {
@@ -206,6 +210,19 @@ namespace LTXV {
             if (tensor_storage_map.find(prefix + ".transformer_blocks.0.attn2.to_gate_logits.weight") != tensor_storage_map.end() ||
                 tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_attn2.to_gate_logits.weight") != tensor_storage_map.end()) {
                 config.cross_attention_gated = true;
+            }
+            // LTX 2.5 sets ff_bias=false but leaves audio_ff_bias at its default, so the two
+            // branches must be detected separately; older checkpoints ship both sets of biases.
+            if (tensor_storage_map.find(prefix + ".transformer_blocks.0.ff.net.0.proj.bias") == tensor_storage_map.end() &&
+                tensor_storage_map.find(prefix + ".transformer_blocks.0.ff.net.2.bias") == tensor_storage_map.end()) {
+                config.ff_bias = false;
+            }
+            if (tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_ff.net.0.proj.bias") == tensor_storage_map.end() &&
+                tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_ff.net.2.bias") == tensor_storage_map.end()) {
+                config.audio_ff_bias = false;
+            }
+            if (tensor_storage_map.find(prefix + ".keyframes_abs_pos_embedding") != tensor_storage_map.end()) {
+                config.use_keyframes_abs_pos_embedding = true;
             }
             if (tensor_storage_map.find(prefix + ".caption_projection.linear_1.weight") == tensor_storage_map.end() &&
                 tensor_storage_map.find(prefix + ".caption_projection.linear_2.weight") == tensor_storage_map.end()) {
@@ -874,8 +891,7 @@ namespace LTXV {
                          const String2TensorStorage& tensor_storage_map = {},
                          const std::string prefix                       = "") override {
             if (num_learnable_registers > 0) {
-                ggml_type wtype               = get_type(prefix + "learnable_registers", tensor_storage_map, GGML_TYPE_F32);
-                params["learnable_registers"] = ggml_new_tensor_2d(ctx, wtype, hidden_size, num_learnable_registers);
+                params["learnable_registers"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, num_learnable_registers);
             }
         }
 
@@ -1130,7 +1146,9 @@ namespace LTXV {
                                 int64_t a_context_dim,
                                 bool apply_gated_attention,
                                 bool cross_attention_adaln,
-                                bool video_rope_interleaved)
+                                bool video_rope_interleaved,
+                                bool ff_bias       = true,
+                                bool audio_ff_bias = true)
             : v_dim(v_dim),
               a_dim(a_dim),
               cross_attention_adaln(cross_attention_adaln) {
@@ -1140,8 +1158,8 @@ namespace LTXV {
             blocks["audio_attn2"]         = std::make_shared<CrossAttention>(a_dim, a_context_dim, a_heads, ad_head, apply_gated_attention, false);
             blocks["audio_to_video_attn"] = std::make_shared<CrossAttention>(v_dim, a_dim, a_heads, ad_head, apply_gated_attention, false);
             blocks["video_to_audio_attn"] = std::make_shared<CrossAttention>(a_dim, v_dim, a_heads, ad_head, apply_gated_attention, false);
-            blocks["ff"]                  = std::make_shared<FeedForward>(v_dim, v_dim, 4, FeedForward::Activation::GELU);
-            blocks["audio_ff"]            = std::make_shared<FeedForward>(a_dim, a_dim, 4, FeedForward::Activation::GELU);
+            blocks["ff"]                  = std::make_shared<FeedForward>(v_dim, v_dim, 4, FeedForward::Activation::GELU, false, ff_bias);
+            blocks["audio_ff"]            = std::make_shared<FeedForward>(a_dim, a_dim, 4, FeedForward::Activation::GELU, false, audio_ff_bias);
         }
 
         std::vector<ggml_tensor*> get_ada_values(GGMLRunnerContext* ctx,
@@ -1320,6 +1338,12 @@ namespace LTXV {
                                                                    get_type(prefix + "audio_scale_shift_table", tensor_storage_map, GGML_TYPE_F32),
                                                                    config.audio_hidden_size,
                                                                    2);
+            if (config.use_keyframes_abs_pos_embedding) {
+                params["keyframes_abs_pos_embedding"] = ggml_new_tensor_2d(ctx,
+                                                                           get_type(prefix + "keyframes_abs_pos_embedding", tensor_storage_map, GGML_TYPE_F32),
+                                                                           config.hidden_size,
+                                                                           1);
+            }
         }
 
         LTXAVModelBlock(const LTXAVConfig& config)
@@ -1386,7 +1410,9 @@ namespace LTXV {
                                                                                                               config.audio_cross_attention_dim,
                                                                                                               config.self_attention_gated || config.cross_attention_gated,
                                                                                                               config.cross_attention_adaln,
-                                                                                                              config.video_rope_interleaved);
+                                                                                                              config.video_rope_interleaved,
+                                                                                                              config.ff_bias,
+                                                                                                              config.audio_ff_bias);
             }
 
             blocks["norm_out"]       = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
@@ -1534,6 +1560,38 @@ namespace LTXV {
             return {v_context, a_context};
         }
 
+        // The video encoder is causal, so the first latent frame covers a single pixel frame while
+        // every later one covers temporal_scale_factor. LTX 2.5 marks that token class with a
+        // learned embedding added right after patchify_proj.
+        ggml_tensor* apply_keyframes_abs_pos_embedding(GGMLRunnerContext* ctx,
+                                                       ggml_tensor* vx,
+                                                       int64_t tokens_per_latent_frame) {
+            if (!config.use_keyframes_abs_pos_embedding || params.count("keyframes_abs_pos_embedding") == 0) {
+                return vx;
+            }
+            int64_t tokens = vx->ne[1];
+            if (tokens_per_latent_frame <= 0 || tokens_per_latent_frame > tokens) {
+                return vx;
+            }
+            auto embedding = params["keyframes_abs_pos_embedding"];
+            auto first     = ggml_cont(ctx->ggml_ctx,
+                                       ggml_view_3d(ctx->ggml_ctx, vx, vx->ne[0], tokens_per_latent_frame, vx->ne[2], vx->nb[1], vx->nb[2], 0));
+            first          = ggml_add(ctx->ggml_ctx, first, embedding);
+            if (tokens_per_latent_frame == tokens) {
+                return first;
+            }
+            auto rest = ggml_cont(ctx->ggml_ctx,
+                                  ggml_view_3d(ctx->ggml_ctx,
+                                               vx,
+                                               vx->ne[0],
+                                               tokens - tokens_per_latent_frame,
+                                               vx->ne[2],
+                                               vx->nb[1],
+                                               vx->nb[2],
+                                               tokens_per_latent_frame * vx->nb[1]));
+            return ggml_concat(ctx->ggml_ctx, first, rest, 1);
+        }
+
         std::vector<ggml_tensor*> get_output_scale_shift(GGMLRunnerContext* ctx,
                                                          ggml_tensor* table,
                                                          ggml_tensor* embedded_timestep,
@@ -1575,6 +1633,7 @@ namespace LTXV {
 
             vx = patchify_video(ctx, vx, n);
             vx = patchify_proj->forward(ctx, vx);
+            vx = apply_keyframes_abs_pos_embedding(ctx, vx, width * height);
             if (ax != nullptr && ggml_nelements(ax) > 0 && audio_time > 0) {
                 ax = patchify_audio(ctx, ax);
                 ax = audio_patchify_proj->forward(ctx, ax);
