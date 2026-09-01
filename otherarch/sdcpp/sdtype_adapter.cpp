@@ -1168,7 +1168,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     auto info = get_model_info(sd_ctx);
     bool is_img2img = img2img_data != "";
 
-    if (info.is_flux1)
+    if (!remove_limits && info.is_flux1)
     {
         if (!info.is_chroma && sd_params->cfg_scale != 1.0f) {
             //non chroma clamp cfg scale
