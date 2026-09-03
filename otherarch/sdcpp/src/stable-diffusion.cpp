@@ -6902,6 +6902,10 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
         latents.init_latent = pack_ltxav_audio_and_video_latents(latents.init_latent, latents.audio_latent);
     }
 
+    if (sd_ctx->sd->audio_vae_model != nullptr) {
+        sd_ctx->sd->audio_vae_model->runner_done();
+    }
+
     return latents;
 }
 
@@ -7615,6 +7619,10 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         }
         int64_t audio_latent_decode_end = ggml_time_ms();
         LOG_INFO("decoding audio latent completed, taking %.2fs", (audio_latent_decode_end - audio_latent_decode_start) * 1.0f / 1000);
+    }
+
+    if (sd_ctx->sd->audio_vae_model != nullptr) {
+        sd_ctx->sd->audio_vae_model->runner_done();
     }
 
     if (latents.video_conditioning_frame_count > 0) {
