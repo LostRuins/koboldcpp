@@ -364,15 +364,11 @@ namespace sd::backend_fit {
     }
 
     bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params, bool prefer_temporal_tiling) {
-        if (prefer_temporal_tiling) {
-            if (tiling_params.temporal_tiling) {
-                return false;
-            }
+        const char* retry_mode = nullptr;
+        if (prefer_temporal_tiling && !tiling_params.temporal_tiling) {
             tiling_params.temporal_tiling = true;
-        } else {
-            if (tiling_params.enabled) {
-                return false;
-            }
+            retry_mode                    = tiling_params.enabled ? "spatial+temporal" : "temporal";
+        } else if (!tiling_params.enabled) {
             tiling_params.enabled = true;
             if (tiling_params.tile_size_x <= 0) {
                 tiling_params.tile_size_x = 256;
@@ -380,10 +376,13 @@ namespace sd::backend_fit {
             if (tiling_params.tile_size_y <= 0) {
                 tiling_params.tile_size_y = 256;
             }
+            retry_mode = tiling_params.temporal_tiling ? "spatial+temporal" : "spatial";
+        } else {
+            return false;
         }
 
         LOG_WARN("auto-fit: VAE decode failed (likely out of memory); retrying with %s tiling",
-                 tiling_params.temporal_tiling ? "temporal" : "spatial");
+                 retry_mode);
         return true;
     }
 

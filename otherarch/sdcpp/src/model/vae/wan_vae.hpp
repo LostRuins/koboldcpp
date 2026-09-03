@@ -1219,24 +1219,40 @@ namespace WAN {
             return out;
         }
 
-        ggml_tensor* decode_partial(GGMLRunnerContext* ctx,
-                                    ggml_tensor* z,
-                                    int i,
-                                    int64_t b = 1) {
+        ggml_tensor* decode_tiled_chunk(GGMLRunnerContext* ctx,
+                                        ggml_tensor* z,
+                                        int chunk_idx,
+                                        int64_t b = 1) {
             // z: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
 
             auto decoder = std::dynamic_pointer_cast<Decoder3d>(blocks["decoder"]);
             auto conv2   = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv2"]);
 
-            auto x = conv2->forward(ctx, z);
-            // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.decode_partial.prelude", "x");
-            auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
-            _conv_idx = 0;
-            auto out  = decoder->forward(ctx, in, b, _feat_map, _conv_idx, i);
-            out       = unpatchify(ctx->ggml_ctx, out, patch_size, b);
-            // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode_partial.final", "out");
-            return out;
+            ggml_tensor* x;
+            if (is_2D) {
+                auto conv2_2d = std::dynamic_pointer_cast<Conv2dBut3d>(blocks["conv2"]);
+                x             = conv2_2d->forward(ctx, z);
+            } else {
+                x = conv2->forward(ctx, z);
+            }
+
+            ggml_tensor* out = nullptr;
+            for (int64_t frame = 0; frame < x->ne[2]; ++frame) {
+                const int global_frame = chunk_idx + static_cast<int>(frame);
+                auto in                = ggml_ext_slice(ctx->ggml_ctx, x, 2, frame, frame + 1);
+                _conv_idx              = 0;
+                auto out_frame         = decoder->forward(ctx, in, b, _feat_map, _conv_idx, global_frame);
+                if (is_2D && global_frame > 0) {
+                    auto repeated = out_frame;
+                    for (int repeat = 1; repeat < 4; ++repeat) {
+                        repeated = ggml_concat(ctx->ggml_ctx, repeated, out_frame, 2);
+                    }
+                    out_frame = repeated;
+                }
+                out = out == nullptr ? out_frame : ggml_concat(ctx->ggml_ctx, out, out_frame, 2);
+            }
+            return unpatchify(ctx->ggml_ctx, out, patch_size, b);
         }
     };
 
@@ -1270,6 +1286,15 @@ namespace WAN {
 
         std::string get_desc() override {
             return "wan_vae";
+        }
+
+        bool supports_temporal_tiling(VAETemporalDirection direction) const override {
+            return direction == VAETemporalDirection::DECODE;
+        }
+
+        int get_temporal_tile_output_scale(VAETemporalDirection direction) const override {
+            SD_UNUSED(direction);
+            return 4;
         }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
@@ -1346,8 +1371,8 @@ namespace WAN {
             return gf;
         }
 
-        ggml_cgraph* build_graph_partial(const sd::Tensor<float>& z_tensor, bool decode_graph, int i) {
-            ggml_cgraph* gf = new_graph_custom(20480);
+        ggml_cgraph* build_temporal_tile_graph(const sd::Tensor<float>& z_tensor, int chunk_idx) {
+            ggml_cgraph* gf = new_graph_custom(std::max<size_t>(20480, 10240 * z_tensor.shape()[2]));
 
             ae.clear_cache();
 
@@ -1360,7 +1385,7 @@ namespace WAN {
 
             auto runner_ctx = get_context();
 
-            ggml_tensor* out = decode_graph ? ae.decode_partial(&runner_ctx, z, i) : ae.encode(&runner_ctx, z);
+            ggml_tensor* out = ae.decode_tiled_chunk(&runner_ctx, z, chunk_idx);
 
             for (size_t feat_idx = 0; feat_idx < ae._feat_map.size(); feat_idx++) {
                 ggml_tensor* feat_cache = ae._feat_map[feat_idx];
@@ -1375,58 +1400,60 @@ namespace WAN {
             return gf;
         }
 
+        sd::Tensor<float> _compute_temporal_tiled(const int n_threads,
+                                                  const sd::Tensor<float>& input,
+                                                  VAETemporalDirection direction,
+                                                  const VAETemporalTilingConfig& config) override {
+            GGML_ASSERT(direction == VAETemporalDirection::DECODE);
+            VAETemporalTilingConfig stateful_config = config;
+            stateful_config.overlap                 = 0;
+            auto plan                               = make_vae_temporal_tile_plan(input.shape()[2], stateful_config);
+
+            LOG_DEBUG("Wan VAE stateful temporal tiling: tile_frames=%d, total latent frames=%lld, tiles=%d",
+                      plan.tile_frames,
+                      (long long)input.shape()[2],
+                      (int)plan.tiles.size());
+
+            free_cache_ctx_and_buffer();
+            cache_tensor_map.clear();
+            ae.clear_cache();
+
+            auto output = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& input_tile, const VAETemporalTile& tile) {
+                LOG_DEBUG("Wan VAE temporal tile %d/%d: latent frames [%lld, %lld)",
+                          tile.index + 1,
+                          (int)plan.tiles.size(),
+                          (long long)tile.start,
+                          (long long)tile.end);
+                auto get_graph = [&]() -> ggml_cgraph* {
+                    return build_temporal_tile_graph(input_tile, static_cast<int>(tile.start));
+                };
+                return restore_trailing_singleton_dims(
+                    GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
+                    static_cast<size_t>(input.dim()));
+            });
+
+            free_cache_ctx_and_buffer();
+            cache_tensor_map.clear();
+            ae.clear_cache();
+            return output;
+        }
+
         sd::Tensor<float> _compute(const int n_threads,
                                    const sd::Tensor<float>& z,
                                    bool decode_graph) override {
-            if (true) {
-                sd::Tensor<float> input;
-                if (z.dim() == 4) {
-                    input = z.unsqueeze(2);
-                }
-                auto get_graph = [&]() -> ggml_cgraph* {
-                    if (input.empty()) {
-                        return build_graph(z, decode_graph);
-                    } else {
-                        return build_graph(input, decode_graph);
-                    }
-                };
-                auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
-                                                              input.empty() ? z.dim() : input.dim());
-                if (!result.empty() && z.dim() == 4) {
-                    result.squeeze_(2);
-                }
-                return result;
-            } else {  // chunk 1 result is weird
-                ae.clear_cache();
-                int64_t t      = z.shape()[2];
-                int i          = 0;
-                auto get_graph = [&]() -> ggml_cgraph* {
-                    return build_graph_partial(z, decode_graph, i);
-                };
-                auto out_opt = GGMLRunner::compute<float>(get_graph, n_threads, true, true, true);
-                if (!out_opt.has_value()) {
-                    return {};
-                }
-                sd::Tensor<float> out = std::move(*out_opt);
-                ae.clear_cache();
-                if (t == 1) {
-                    return out;
-                }
-
-                sd::Tensor<float> output = std::move(out);
-
-                for (i = 1; i < t; i++) {
-                    auto chunk_opt = GGMLRunner::compute<float>(get_graph, n_threads, true, true, true);
-                    if (!chunk_opt.has_value()) {
-                        return {};
-                    }
-                    out = std::move(*chunk_opt);
-                    ae.clear_cache();
-                    output = sd::ops::concat(output, out, 2);
-                }
-                free_cache_ctx_and_buffer();
-                return output;
+            sd::Tensor<float> input;
+            if (z.dim() == 4) {
+                input = z.unsqueeze(2);
             }
+            auto get_graph = [&]() -> ggml_cgraph* {
+                return build_graph(input.empty() ? z : input, decode_graph);
+            };
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
+                                                          input.empty() ? z.dim() : input.dim());
+            if (!result.empty() && z.dim() == 4) {
+                result.squeeze_(2);
+            }
+            return result;
         }
 
         void test() {
