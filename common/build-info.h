@@ -33,7 +33,7 @@ static inline const char * llama_build_info(void) {
     return s.c_str();
 }
 
-static inline void llama_print_build_info(const char *) {
+static inline void llama_print_build_info(const char *, FILE * = stderr) {
     fprintf(stderr, "%s: build = %d (%s)\n",      __func__, llama_build_number(), llama_commit());
     fprintf(stderr, "%s: built with %s for %s\n", __func__, llama_compiler(), llama_build_target());
 }

@@ -370,11 +370,11 @@ static bool is_webp_file(const unsigned char * buf, size_t len) {
 }
 
 #ifdef MTMD_VIDEO
-static mtmd_bitmap * decode_webp_with_ffmpeg(mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
+static mtmd_bitmap * decode_webp_with_ffmpeg(const mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
                                              const mtmd_helper_video_init_params & params);
 #endif
 
-mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder,
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(const mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder,
                                                             mtmd_helper_init_opt opt) {
     // calculate the hash if needed
     std::string id;
@@ -460,7 +460,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
     return {nullptr, nullptr};
 }
 
-mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder,
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(const mtmd_context * ctx, const char * fname, bool placeholder,
                                                              mtmd_helper_init_opt opt) {
 #ifdef _WIN32
     int wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, NULL, 0);
@@ -505,7 +505,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx,
     return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder, opt);
 }
 
-bool mtmd_helper_support_video(mtmd_context * ctx) {
+bool mtmd_helper_support_video(const mtmd_context * ctx) {
 #ifdef MTMD_VIDEO
     return mtmd_support_vision(ctx);
 #else
@@ -521,7 +521,7 @@ bool mtmd_helper_support_video(mtmd_context * ctx) {
 #ifdef MTMD_VIDEO
 
 struct mtmd_helper_video {
-    mtmd_context * mctx;
+    const mtmd_context * mctx;
     std::string path;
     std::vector<uint8_t> input_buf; // non-empty when initialized from buffer
     std::string ffmpeg_bin;
@@ -887,7 +887,7 @@ static std::string video_resolve_bin(const char * bin_dir, const char * name) {
 }
 
 #ifdef MTMD_VIDEO
-static mtmd_bitmap * decode_webp_with_ffmpeg(mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
+static mtmd_bitmap * decode_webp_with_ffmpeg(const mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
                                              const mtmd_helper_video_init_params & params) {
     mtmd_helper_video vctx;
     vctx.mctx        = mctx;
@@ -914,7 +914,7 @@ static mtmd_bitmap * decode_webp_with_ffmpeg(mtmd_context * mctx, const unsigned
 #endif
 
 mtmd_helper_video * mtmd_helper_video_init(
-        mtmd_context * mctx,
+        const mtmd_context * mctx,
         const char * path,
         mtmd_helper_video_init_params params) {
 #ifdef MTMD_VIDEO
@@ -949,7 +949,7 @@ mtmd_helper_video * mtmd_helper_video_init(
 }
 
 mtmd_helper_video * mtmd_helper_video_init_from_buf(
-        mtmd_context * mctx,
+        const mtmd_context * mctx,
         const unsigned char * buf, size_t len,
         mtmd_helper_video_init_params params) {
 #ifdef MTMD_VIDEO
@@ -1017,7 +1017,7 @@ int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
 #endif
 }
 
-bool mtmd_helper_model_can_chat(llama_context * lctx, mtmd_context * mctx) {
+bool mtmd_helper_model_can_chat(const llama_context * lctx, const mtmd_context * mctx) {
     if (!mctx) {
         return true;
     }
