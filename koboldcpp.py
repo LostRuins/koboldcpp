@@ -1152,14 +1152,15 @@ def tryparseint(value,fallback):
             return 0
     try:
         return int(value)
-    except ValueError:
+    except (TypeError, ValueError, OverflowError):
         return fallback
 def tryparsefloat(value,fallback):
     if value is None:
         return fallback
     try:
-        return float(value)
-    except ValueError:
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else fallback
+    except (TypeError, ValueError, OverflowError):
         return fallback
 
 def replace_last_in_string(text: str, match: str, replacement: str) -> str:
