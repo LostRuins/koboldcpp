@@ -3144,6 +3144,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 || t.first == "[THINK]" || t.first == "[/THINK]"
                 || t.first == "<|eom|>" // muse-glimmer mid-turn delimiter
                 || t.first == "<think>" || t.first == "</think>"
+                // || t.first == "<|tool_calls_section_begin|>" || t.first == "<|tool_calls_section_end|>" // kimi-k2
+                || t.first == "<|tool_call_begin|>" || t.first == "<|tool_call_argument_begin|>" // kimi-k2
                 || t.first == "[CALL_ID]" || t.first == "[TOOL_CONTENT]" || t.first == "[TOOL_CALLS]" || t.first == "[ARGS]") {
                 LLAMA_LOG_WARN("%s: setting token '%s' (%d) attribute to USER_DEFINED (%u), old attributes: %u\n",
                         __func__, t.first.c_str(), t.second, LLAMA_TOKEN_ATTR_USER_DEFINED, attr);
