@@ -1114,9 +1114,24 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     if (candidates_hash_size < hash_cutoff) {
         // Only check stash hash first - these are usually ~24b, and almost always under 64b
         if (auto cache_hit = memo_cache.find(stack_hash); cache_hit != memo_cache.end()) {
-            auto & candidates_memos      = cache_hit->second;
-            auto   candidates_hash_start = reinterpret_cast<const char *>(candidates.data());
-            auto   candidates_hash       = std::hash<bytes>{}({ candidates_hash_start, candidates_hash_size });
+            auto & candidates_memos = cache_hit->second;
+            // Hash candidate content (index, id, partial_utf8, decoded code_points sequence)
+            // rather than raw struct bytes, which include the code_points pointer value.
+            // Pointer values can be reused by the allocator across calls pointing to different
+            // content, causing false cache hits that return stale reject sets.
+            size_t candidates_hash = candidates.size();
+            auto combine = [&](size_t v) {
+                candidates_hash ^= v + 0x9e3779b9 + (candidates_hash << 6) + (candidates_hash >> 2);
+            };
+            for (const auto & c : candidates) {
+                combine(std::hash<size_t>{}(c.index));
+                combine(std::hash<llama_token>{}(c.id));
+                combine(std::hash<uint32_t>{}(c.partial_utf8.value));
+                combine(std::hash<int>{}(c.partial_utf8.n_remain));
+                for (const uint32_t * cp = c.code_points; *cp != 0; ++cp) {
+                    combine(std::hash<uint32_t>{}(*cp));
+                }
+            }
             if (auto cache_hit2 = candidates_memos.find(candidates_hash); cache_hit2 != candidates_memos.end()) {
                 return cache_hit2->second;
             } else {
@@ -1141,6 +1156,11 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
             } else if (!llama_grammar_match_token(stack_pos, tok.id)) {
                 rejects.push_back(tok);
             }
+        }
+        // cache_target was set by operator[] which pre-inserted an empty vector; write the
+        // result here so subsequent lookups don't return an empty reject set.
+        if (cache_target) {
+            *cache_target = rejects;
         }
         return rejects;
     }
