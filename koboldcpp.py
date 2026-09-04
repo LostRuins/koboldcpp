@@ -2940,7 +2940,10 @@ def sd_generate(genparams):
     cfg_scale = tryparsefloat(genparams.get("cfg_scale", 5),5)
     distilled_guidance = tryparsefloat(genparams.get("distilled_guidance", None), None)
     shifted_timestep = tryparseint(genparams.get("shifted_timestep", None), None)
-    flow_shift = tryparsefloat(genparams.get("flow_shift", None), None)
+    kcpp_params = genparams.get("kcpp_extra_args", {})
+    kcpp_params = kcpp_params.get("params", {}) if isinstance(kcpp_params, dict) else {}
+    kcpp_params = kcpp_params if isinstance(kcpp_params, dict) else {}
+    flow_shift = tryparsefloat(kcpp_params.get("flow_shift", genparams.get("flow_shift", None)), None)
     sample_steps = tryparseint(genparams.get("steps", 20),20)
     width = tryparseint(genparams.get("width", 512),512)
     height = tryparseint(genparams.get("height", 512),512)
