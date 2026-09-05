@@ -8503,6 +8503,7 @@ def show_gui():
         togglerope(1,1,1)
         toggleflashattn(1,1,1)
         togglectxshift(1,1,1)
+        togglesmartcache(1,1,1)
         togglehorde(1,1,1)
         toggletaesd(1,1,1)
         togglesdlora(1,1,1)
@@ -9153,6 +9154,11 @@ def show_gui():
     def togglesmartcache(a,b,c):
         if smartcache_var.get()==1:
             fastforward_var.set(1)
+            cacheslots_entry.grid()
+            cacheslots_label.grid()
+        else:
+            cacheslots_entry.grid_remove()
+            cacheslots_label.grid_remove()
 
     def togglefastforward(a,b,c):
         if fastforward_var.get()==0:
@@ -9384,7 +9390,7 @@ def show_gui():
     makecheckbox(context_tab, "Allow SWA", swa_var, 4,tooltiptxt="SWA will be enabled automatically on models that support it. SWA saves memory but cannot be used with context shifting.", command=toggleswa)
     swa_padding_entry,swa_padding_label = makelabelentry(context_tab,"SWA Padding Tokens:", swa_padding_var, 4, 50, padx=300,singleline=True,tooltip="If the SWA is too small, you can expand it with padding, allowing for greater distance context rewinds.",labelpadx=160)
     makecheckbox(context_tab, "Use SmartCache", smartcache_var, 5,tooltiptxt="Enables intelligent context switching by saving KV cache snapshots to RAM. Requires fast forwarding.", command=togglesmartcache)
-    makelabelentry(context_tab, "CacheSlots:", smartcacheslots_var, row=5, padx=(300), singleline=True, tooltip="Number of slots for smartcache",labelpadx=(220))
+    cacheslots_entry, cacheslots_label = makelabelentry(context_tab, "CacheSlots:", smartcacheslots_var, row=5, padx=(300), singleline=True, tooltip="Number of slots for smartcache",labelpadx=(220))
 
     # context size
     makeslider(context_tab, "Context Size:",contextsize_text, context_var, 18, width=280, set=13,tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
@@ -9819,6 +9825,7 @@ def show_gui():
     togglerope(1,1,1)
     toggleflashattn(1,1,1)
     togglectxshift(1,1,1)
+    togglesmartcache(1,1,1)
     togglehorde(1,1,1)
     toggletaesd(1,1,1)
     togglesdlora(1,1,1)
