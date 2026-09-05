@@ -32,7 +32,7 @@ struct std::hash<bytes>
     }
 };
 
-using candidates_memos = std::unordered_map<size_t, llama_grammar_candidates>;
+using candidates_memos = std::unordered_map<size_t, std::vector<size_t>>;
 using stack_memos = std::unordered_map<size_t, candidates_memos>;
 static stack_memos memo_cache;
 
@@ -1099,7 +1099,7 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     auto stack_hash_size  = sizeof(stack[0]) * stack.size();
     auto stack_hash       = std::hash<bytes>{}({ stack_hash_start, stack_hash_size });
 
-    llama_grammar_candidates * cache_target = nullptr;
+    std::vector<size_t> * cache_target = nullptr;
 
     // Tests show that >75% of candidate lists are under 1280 and 50% are under 640b.
     // Most 'problem' loops are under 24b. However, candidate lists can be over 72k,
@@ -1115,10 +1115,25 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         // Only check stash hash first - these are usually ~24b, and almost always under 64b
         if (auto cache_hit = memo_cache.find(stack_hash); cache_hit != memo_cache.end()) {
             auto & candidates_memos      = cache_hit->second;
-            auto   candidates_hash_start = reinterpret_cast<const char *>(candidates.data());
-            auto   candidates_hash       = std::hash<bytes>{}({ candidates_hash_start, candidates_hash_size });
+            size_t candidates_hash = candidates.size();
+            for (const auto & c : candidates) {
+                candidates_hash ^= std::hash<size_t>{}(c.index)                + 0x9e3779b9 + (candidates_hash << 6) + (candidates_hash >> 2);
+                candidates_hash ^= std::hash<int>{}(c.id)                      + 0x9e3779b9 + (candidates_hash << 6) + (candidates_hash >> 2);
+                candidates_hash ^= std::hash<uint32_t>{}(c.partial_utf8.value) + 0x9e3779b9 + (candidates_hash << 6) + (candidates_hash >> 2);
+                candidates_hash ^= std::hash<int>{}(c.partial_utf8.n_remain)   + 0x9e3779b9 + (candidates_hash << 6) + (candidates_hash >> 2);
+                for (const uint32_t * cp = c.code_points; *cp != 0; ++cp) {
+                    candidates_hash ^= std::hash<uint32_t>{}(*cp)              + 0x9e3779b9 + (candidates_hash << 6) + (candidates_hash >> 2);
+                }
+            }
             if (auto cache_hit2 = candidates_memos.find(candidates_hash); cache_hit2 != candidates_memos.end()) {
-                return cache_hit2->second;
+                llama_grammar_candidates result;
+                result.reserve(cache_hit2->second.size());
+                for (size_t idx : cache_hit2->second) {
+                    for (const auto & c : candidates) {
+                        if (c.index == idx) { result.push_back(c); break; }
+                    }
+                }
+                return result;
             } else {
                 cache_target = &(candidates_memos[candidates_hash]);
             }
@@ -1179,7 +1194,10 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     }
 
     if (cache_target) {
-        *cache_target = rejects;
+        std::vector<size_t> indices;
+        indices.reserve(rejects.size());
+        for (const auto & r : rejects) { indices.push_back(r.index); }
+        *cache_target = std::move(indices);
     }
     return rejects;
 }
