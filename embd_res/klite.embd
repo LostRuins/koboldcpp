@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 <head>
 	<script id="init-config">
-	const LITEVER = 343;
+	const LITEVER = 344;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -26461,7 +26461,7 @@ Current version indicated by LITEVER below.
 					for(let i=0;i<chatunits.length;++i)
 					{
 						let curr = chatunits[i];
-						if(localsettings.max_display_chars>0 && i<(chatunits.length-turnsincluded))
+						if(curr.hide_for_display || (localsettings.max_display_chars>0 && i<(chatunits.length-turnsincluded)))
 						{
 							continue;
 						}
@@ -26818,9 +26818,45 @@ Current version indicated by LITEVER below.
 	}
 
 	var toolcall_waiting_approve = null;
-	function repact_instruct_turns_beautify_render(chatunits) //to turn ugly turn calls into nice looking placeholders
+	function repact_instruct_turns_beautify_render(chatunits) //display-only formatting; preserve original turns for editing
 	{
 		toolcall_waiting_approve = null;
+		for(let i=1;i<chatunits.length;++i)
+		{
+			let prev = chatunits[i-1];
+			let curr = chatunits[i];
+			if(!curr.myturn || prev.myturn || prev.issystem || prev.tool_calls || prev.tool_results)
+			{
+				continue;
+			}
+
+			// Only move trailing vision-enabled attachments; generated or unknown media stays put.
+			let media = prev.msg.match(/(?:\s*\[<\|h\|.+?\|h\|>\])+\s*$/);
+			if(media)
+			{
+				let attachments = Array.from(media[0].matchAll(/\s*\[<\|h\|(.+?)\|h\|>\]/g));
+				let shiftStart = prev.msg.length;
+				for(let j=attachments.length-1;j>=0;--j)
+				{
+					let meta = completed_imgs_meta[attachments[j][1]];
+					if(!meta || !(meta.visionmode==1 || meta.visionmode==2 || meta.visionmode==3))
+					{
+						break;
+					}
+					shiftStart = media.index + attachments[j].index;
+				}
+				if(shiftStart==prev.msg.length)
+				{
+					continue;
+				}
+				prev.origmsg = prev.msg;
+				curr.origmsg = curr.msg;
+				curr.msg = prev.msg.slice(shiftStart) + "\n" + curr.msg;
+				prev.msg = prev.msg.slice(0, shiftStart);
+				// Hide only rows emptied by the move; retain their indexes for turn actions.
+				prev.hide_for_display = prev.msg.trim()=="";
+			}
+		}
 		for(let i=0;i<chatunits.length;++i)
 		{
 			if(chatunits[i].tool_calls)
@@ -27369,7 +27405,7 @@ Current version indicated by LITEVER below.
 		for(var i=0;i<chatunits.length;++i)
 		{
 			let curr = chatunits[i];
-			if(localsettings.max_display_chars>0 && i<(chatunits.length-turnsincluded))
+			if(curr.hide_for_display || (localsettings.max_display_chars>0 && i<(chatunits.length-turnsincluded)))
 			{
 				continue;
 			}
@@ -27387,7 +27423,7 @@ Current version indicated by LITEVER below.
 			let bodypart = (corpo_editing_turn == i ?
 				`<div class="corpo_edit_outer">
 				<div class="corpo_edit_inner" id="corpo_edit_inp_lengthtester" style="white-space: nowrap; visibility: hidden; height: 0px; position:absolute; width: auto;"></div>
-				<textarea class="corpo_edit_inner" id="corpo_edit_inp" name="crpeditinp"  role="presentation" autocomplete="noppynop" spellcheck="true" rows="1" wrap="on" placeholder="Edit Message" oninput="corpoedit_resize_input();"/>${stash_image_placeholders(curr.origmsg?curr.origmsg:curr.msg, false)}</textarea>
+				<textarea class="corpo_edit_inner" id="corpo_edit_inp" name="crpeditinp"  role="presentation" autocomplete="noppynop" spellcheck="true" rows="1" wrap="on" placeholder="Edit Message" oninput="corpoedit_resize_input();"/>${stash_image_placeholders(curr.origmsg != null ? curr.origmsg : curr.msg, false)}</textarea>
 				</div>
 				<button type="button" class="btn btn-primary corpoeditbtn" style="float:right;" onclick="corpo_edit_chunk_start(-1)">Cancel</button>
 				${resendbtn}
@@ -27688,7 +27724,7 @@ Current version indicated by LITEVER below.
 		for(var i=0;i<chatunits.length;++i)
 		{
 			let curr = chatunits[i];
-			if(localsettings.max_display_chars>0 && i<(chatunits.length-turnsincluded))
+			if(curr.hide_for_display || (localsettings.max_display_chars>0 && i<(chatunits.length-turnsincluded)))
 			{
 				continue;
 			}
@@ -28913,7 +28949,14 @@ Current version indicated by LITEVER below.
 			return;
 		}
 		let oldname = names[index];
+		if(newname===oldname)
+		{
+			show_groupchat_select();
+			return;
+		}
 		let oldmeta = get_groupchat_bot_meta(oldname);
+		// Capture the displayed portrait before the old name's metadata is pruned.
+		oldmeta.portrait = get_groupchat_portrait(oldname, false);
 		names[index] = newname;
 		set_groupchat_bot_names(names);
 		set_groupchat_bot_meta(newname, oldmeta);
@@ -28955,8 +28998,14 @@ Current version indicated by LITEVER below.
 		}
 		let currname = names[index];
 		let curr_bot_data = get_groupchat_bot_meta(currname);
+		// Preserve the global portrait when creating metadata for a participant.
+		curr_bot_data.portrait = get_groupchat_portrait(currname, false);
 		inputBox(`Set character context memory for ${currname}.`,"Character Context Memory",curr_bot_data.ctx_memory,"Enter participant context",()=>{
 			let userinput = getInputBoxValue();
+			if(userinput===curr_bot_data.ctx_memory)
+			{
+				return;
+			}
 			curr_bot_data.ctx_memory = userinput;
 			set_groupchat_bot_meta(currname, curr_bot_data);
 		},false,true);
@@ -29040,6 +29089,7 @@ Current version indicated by LITEVER below.
 	}
 	function get_groupchat_portrait(name, is_self)
 	{
+		name = sanitize_groupchat_participant_name(name);
 		let portrait = is_self ? aestheticInstructUISettings.you_portrait:aestheticInstructUISettings.AI_portrait;
 		if(!is_self)
 		{
@@ -29913,7 +29963,7 @@ Current version indicated by LITEVER below.
 		{
 			let curr = chatunits[i];
 
-			if(localsettings.max_display_chars>0 && i<(chatunits.length-turnsincluded))
+			if(curr.hide_for_display || (localsettings.max_display_chars>0 && i<(chatunits.length-turnsincluded)))
 			{
 				continue;
 			}
