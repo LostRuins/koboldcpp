@@ -1681,6 +1681,42 @@ def dump_gguf_metadata(file_path): #if you're gonna copy this into your own proj
         print(f"Error Analyzing File: {e}")
         return
 
+def dump_safetensors_metadata(file_path):
+    with open(file_path, 'rb') as f:
+        size_bytes = f.read(8)
+        if len(size_bytes) != 8:
+            raise ValueError("Safetensors file is too small to contain a header.")
+        header_size = struct.unpack('<Q', size_bytes)[0]
+        # Bound the allocation before reading the JSON header. Tensor data is never read.
+        if header_size > 100_000_000:
+            raise ValueError("Safetensors header exceeds the 100 MB limit.")
+        if header_size < 2 or header_size > os.fstat(f.fileno()).st_size - 8:
+            raise ValueError("Invalid safetensors header length.")
+        header_bytes = f.read(header_size)
+        if len(header_bytes) != header_size:
+            raise ValueError("Truncated safetensors header.")
+        if not header_bytes.startswith(b'{'):
+            raise ValueError("Safetensors header must start with a JSON object.")
+        header = json.loads(header_bytes.decode('utf-8'))
+
+    metadata = header.pop('__metadata__', {})
+    if not isinstance(metadata, dict) or any(not isinstance(v, str) for v in metadata.values()):
+        raise ValueError("Invalid safetensors metadata: expected string values.")
+    for name, tensor in header.items():
+        if not isinstance(tensor, dict) or not isinstance(tensor.get('dtype'), str):
+            raise ValueError(f"Invalid safetensors tensor descriptor: {name}")
+        shape = tensor.get('shape')
+        if not isinstance(shape, list) or any(type(d) is not int or d < 0 for d in shape):
+            raise ValueError(f"Invalid safetensors tensor shape: {name}")
+
+    print(f"*** SAFETENSORS FILE METADATA ***\nSafetensors.tensor_count = {len(header)}\nSafetensors.kv_count = {len(metadata)}")
+    for key, value in metadata.items():
+        print(f"str: {key} = {value}")
+    print("\n*** SAFETENSORS TENSOR INFO ***")
+    for kn, (name, tensor) in enumerate(header.items()):
+        print(f"{kn:<3}: {tensor['dtype']:<8} | {name:<30} | {tensor['shape']}")
+    print(f"Metadata and TensorInfo Bytes: {8 + header_size}")
+
 def read_gguf_metadata(file_path):
     chunk_size = 16384  # read only first 16kb of file
     try:
@@ -9733,15 +9769,15 @@ def show_gui():
     # extra tab
     extra_tab = tabcontent["Extra"]
     makelabel(extra_tab, "Extract KoboldCpp Files", 3, 0,tooltiptxt="Unpack KoboldCpp to a local directory to modify its files. You can also launch via koboldcpp.py for faster startup.")
-    ctk.CTkButton(extra_tab , text = "Unpack KoboldCpp To Folder", command = unpack_to_dir ).grid(row=3,column=0, stick="w", padx=(170), pady=2)
+    ctk.CTkButton(extra_tab , text = "Unpack KoboldCpp To Folder", command = unpack_to_dir ).grid(row=3,column=0, stick="w", padx=(210), pady=2)
     makelabel(extra_tab, "Export as .kcppt template", 4, 0,tooltiptxt="Creates a KoboldCpp launch template for others to use.\nEmbeds JSON files directly into exported file when saving.\nWhen loaded, forces the backend to be automatically determined.\nWarning! Not recommended for beginners!")
-    ctk.CTkButton(extra_tab , text = "Generate LaunchTemplate", command = kcpp_export_template ).grid(row=4,column=0, stick="w", padx=(170), pady=2)
-    makelabel(extra_tab, "Analyze GGUF Metadata", 6, 0,tooltiptxt="Reads the metadata, weight types and tensor names in any GGUF file.")
-    ctk.CTkButton(extra_tab , text = "Analyze GGUF", command = analyze_gguf_model_wrapper ).grid(row=6,column=0, stick="w", padx=(170), pady=2)
+    ctk.CTkButton(extra_tab , text = "Generate LaunchTemplate", command = kcpp_export_template ).grid(row=4,column=0, stick="w", padx=(210), pady=2)
+    makelabel(extra_tab, "Analyze GGUF/Safetensors File", 6, 0,tooltiptxt="Reads the metadata, weight types and tensor names in any GGUF or safetensors file.")
+    ctk.CTkButton(extra_tab , text = "Analyze Model", command = analyze_gguf_model_wrapper ).grid(row=6,column=0, stick="w", padx=(210), pady=2)
     if os.name == 'nt':
         makelabel(extra_tab, "File Extensions Handler", 10, 0,tooltiptxt="Makes KoboldCpp the default handler for .kcpps, .kcppt, .ggml and .gguf files.")
-        ctk.CTkButton(extra_tab , text = "Register", width=90, command = register_koboldcpp ).grid(row=10,column=0, stick="w", padx= (170), pady=2)
-        ctk.CTkButton(extra_tab , text = "Unregister", width=90, command = unregister_koboldcpp ).grid(row=10,column=0, stick="w", padx= (264), pady=2)
+        ctk.CTkButton(extra_tab , text = "Register", width=90, command = register_koboldcpp ).grid(row=10,column=0, stick="w", padx= (210), pady=2)
+        ctk.CTkButton(extra_tab , text = "Unregister", width=90, command = unregister_koboldcpp ).grid(row=10,column=0, stick="w", padx= (304), pady=2)
     if sys.platform == "linux":
         def togglezenity(a,b,c):
             global zenity_permitted
@@ -9775,7 +9811,7 @@ def show_gui():
             print(f"Spawn Extra Terminal Failed: {e}")
     if sys.platform == "linux":
         makelabel(extra_tab, "Spawn Terminal Logs", 12, 0,tooltiptxt="A simple terminal logger that duplicates the command line output.")
-        ctk.CTkButton(extra_tab , text = "Spawn Terminal", command = showtermlogs ).grid(row=12,column=0, stick="w", padx= 170, pady=2)
+        ctk.CTkButton(extra_tab , text = "Spawn Terminal", command = showtermlogs ).grid(row=12,column=0, stick="w", padx= 210, pady=2)
 
     # refresh
     runopts_var.trace_add("write", changerunmode)
@@ -11199,7 +11235,10 @@ def download_model_from_url(url, permitted_types=[".gguf",".safetensors", ".ggml
 def analyze_gguf_model(args,filename):
     try:
         stime = datetime.now()
-        dump_gguf_metadata(filename)
+        if os.path.splitext(filename)[1].lower() == '.safetensors':
+            dump_safetensors_metadata(filename)
+        else:
+            dump_gguf_metadata(filename)
         atime = (datetime.now() - stime).total_seconds()
         print(f"---\nAnalyzing completed in {atime:.2f}s.\n---",flush=True)
     except Exception as e:
@@ -11209,11 +11248,11 @@ def analyze_gguf_model(args,filename):
 def analyze_gguf_model_wrapper(filename=""):
     if not filename or filename=="":
         try:
-            filename = zentk_askopenfilename(title="Select GGUF to analyze")
+            filename = zentk_askopenfilename(title="Select GGUF or safetensors file to analyze")
         except Exception as e:
             print(f"Cannot select file to analyze: {e}")
     if not filename or filename=="" or not os.path.exists(filename):
-        print("Selected GGUF file not found. Please select a valid GGUF file to analyze.")
+        print("Selected model file not found. Please select a valid GGUF or safetensors file to analyze.")
         return
     print("---")
     print(f"Analyzing {filename}, please wait...\n---",flush=True)
@@ -12797,7 +12836,7 @@ if __name__ == '__main__':
 
     #more advanced params
     advparser = parser.add_argument_group('Advanced Commands')
-    advparser.add_argument("--analyze", metavar=('[filename]'), help="Reads the metadata, weight types and tensor names in any GGUF file.", default="")
+    advparser.add_argument("--analyze", metavar=('[filename]'), help="Reads the metadata, weight types and tensor names in any GGUF or safetensors file.", default="")
     advparser.add_argument("--autofit","--fit","-fit", help="Forces autofit, which attempts to fit the model in the best possible way. Overrides everything else.", action='store_true')
     advparser.add_argument("--autofitpadding", metavar=('[padding in MB]'), help="How much spare allowance in MB should autofit reserve? If it's too little, the load might fail.", type=int, default=default_autofit_padding)
     advparser.add_argument("--batchsize","--blasbatchsize","--batch-size","-b", help="Sets the batch size used in batched processing (default 512). Setting it to -1 disables batched mode, but keeps other benefits like GPU offload.", type=int,choices=[-1,16,32,64,128,256,512,1024,2048,4096], default=512)
