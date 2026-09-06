@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 <head>
 	<script id="init-config">
-	const LITEVER = 345;
+	const LITEVER = 346;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -70,7 +70,7 @@ Current version indicated by LITEVER below.
 		--img_download:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAMAAADXqc3KAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAOxAAADsQBlSsOGwAAADxQTFRFAAAA////////////+f783ffv/v//3ffv3ffv5Pnz8fz56vr16/r23ffv9v377/v4////3vfw5Pny3ffvbBfD6AAAABR0Uk5TAP+TRfsGWm8m6uDv0U/LfyiIepVDO0gQAAAAbElEQVR4nNWPuQ6AIBAFF+S+j///V0FjWJTEwsqpyEzxFoBXKGnQvwcuQw9B8kkLIRzrgbn2ROGQFwwFbYe3GgUfR4gejyRqzg1D0+2q2gszdb6ql9x2bH54AFW0Lmrxc1BSPvw2gQKZ+BQW7MaRAtfJQ2l0AAAAAElFTkSuQmCC");
 		--img_mic:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAkAgMAAACcbnALAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAOxAAADsQBlSsOGwAAAAxQTFRFAQEB/f39W1tbsrKyhr4L4QAAAAR0Uk5TBv+O8t7TK14AAACVSURBVHicY2BAAatgDK7/C6As3dAKKGtqaByEwXQ1NLyBtizuJiCr6QGQxXsIyGouQGU5AVmNIBZ3EpDVCVLHXTA1NIwXxGKO2Boap3oAZFycduiLrWADpzfta7oGtsP0AQN3DMRrdau2QjzHFBoaCnEBw9bQKKh/maY1wIJjGgM6i+n/9f8Yrt///x9Ui9aqFQzIAACxbkd5KhPnwgAAAABJRU5ErkJggg==");
 		--img_mic_live:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAkAgMAAACcbnALAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAOxAAADsQBlSsOGwAAAAxQTFRFAAAAHvoBSldJTaRCcSDH5wAAAAR0Uk5TBv1875jbENYAAACVSURBVHicY2BAAatgDO7/D6As3dAKKGtqaBiEwXQ1NLyBtizuJiCrCeQG3kNAVnMBkMUKZgWAWE5AViOIxZ0EZHWC1HEWAFm8CUAWc8TW0DjVAyDj4oCu3wo28HrX/0XXwXaYPtDgj4F4LXzVVYjnmENDQw9APLc3tA7qX6brDbDgmMaAzsLq+v///0O1rFoFD0owAADWKEefP5UQnwAAAABJRU5ErkJggg==");
-		--img_mic_off:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAkAgMAAACcbnALAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAOxAAADsQBlSsOGwAAAAxQTFRFAQEBoKCgW1tbmpqa1zTSqAAAAAR0Uk5TBfGLNb6PCuwAAADJSURBVHicXdCxDoIwEAbgi4YBjeEpGHRnNzqbOHgtMSRldOQFCFAnHwBmR8M7mPASfZSOJN7RMmCnL7n/mrsDWLx+xgbfEA2sGFNIjqwWBRjWChGfOHh9M3CSpvBSU5E1SnCStvDyRVIpvaStaieF46RQl9LqnBScrMLmyjqb0esirVNolcEX57amRBGwIiqKmAdN1B4fLX9oKt1pQVijzSG8kXZZLPo25VjBe3AsGWjLOw8Q0TBdPZ+jg3/NHQvRhXzLof8sDvsDMJVHBpRtjD4AAAAASUVORK5CYII=");
+		--img_mic_off:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAkAgMAAACcbnALAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAOxAAADsQBlSsOGwAAAAxQTFRFcHBwycnJoqKixsbG8hQCfAAAAAR0Uk5TBfGLNb6PCuwAAADNSURBVHicVdAxDsIwDAVQ04ohSB05QgfYewFO0MVNh0qpmBjhAKWQO6QzCxLqKYA7ZOcIXTJWIk4TRDNET/qWZRtg9nr3xwOs8EZaVJBi6cRBYeFSfCPihZidgxKuvWI0XqDboERoL4q9dOMVjUJ7tWicmBS6kbXVcodGXPNJLX95CX0isT1yI6iO5Qob/qFRS2XjgdoVGzyYihoq2cmRk9Y1MIFPq7ToVZkdqZD2SFzh3W4ZO0WdHWVwc3W/CwVFYfN/2QtNgm3/mB32C09SSMtkct4EAAAAAElFTkSuQmCC");
 		--img_chat_cust_btn:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgBAMAAACBVGfHAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAA7AAAAOwBeShxvQAAAB5QTFRF////AAAA////////////////////////////////+ZDkTwAAAAp0Uk5T/wAM8dK2SHAtiuAmg50AAADMSURBVHicbZFNEoIwDIUztjjjMvUH3VlH0SXeAPECegPLDeQGsHHLcGJNWxqmmAVJPyZvkjzAKMB+LxpRtQzOeYl4FPUANjnIKitAGA868LHwIB8ANA4UMQgtwrc8IqBijVN4Q0ngQ5pJlVGjrBFS++uN6AoDa0oJDtpPWFGaE3hRdYMlpRmBPVXXKZi0OFHNolu7Wo+4s8MbQNXxYElLo6c8eu+WC/cQOlpfxvfwQLGG/g/sTeUd2AYyqvmNE4xyVqZspTMbDyP3R/EFHDwlDSXkmSQAAAAASUVORK5CYII=');
 		--img_chat_abort_btn:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgBAMAAACBVGfHAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAA7AAAAOwBeShxvQAAAB5QTFRF////AAAA////////////////////////////////+ZDkTwAAAAp0Uk5T/wAGyhCtf+a2XPn1V7sAAADISURBVHicRdE7DoJQEEbhkxh8lJcYewqtLWgsDRswrEArWytqwgpM3LDM/DNAAcnJR3JnLuU3NCWe+n0rnGDKcIYXX6iC1A848AH6BbDzIGJgDvYWMUBFRxAHtByv9p0CbO4UJ/smQKEECTCHIKOABZEAFkQCeEhiwEMSAwoiDhTqUWdZwlm/TBl0yCCsQIQViJBj5tDkHmLoOcSYuRdyD7kXcg9x3J7nMoWTrV+DpnCie2l1UZ2HZwKRLZcFOOmp39U9w/ExNH9CeSgHcv95sAAAAABJRU5ErkJggg==');
 		--img_chat_send_btn:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgBAMAAACBVGfHAAAAAXNSR0IB2cksfwAAAAlwSFlzAAABigAAAYoBM5cwWAAAAB5QTFRFAAAA////////////////////////////////////JHyblQAAAAp0Uk5TAP9vDPYrvduISRPAj7AAAAB4SURBVHichdK7CcAgFIVhVzgg2scFbLKDpZAZQkibFUIWiGTfQArh/hax/EDv4+jcvCVnzq3QDExSqQAdGaA1A/wJUGwAhQpQyYBeqoP2DPAXQDEBFBbAV8qAnj/gFT7KskNjbJ3DcXwuiCsclswYGJSNcggb3+EFzkgkYRPincoAAAAASUVORK5CYII=');
@@ -87,6 +87,9 @@ Current version indicated by LITEVER below.
 		--img_theme_1:url('data:image/png;base64,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');
 		--img_theme_2:url('data:image/png;base64,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');
 		--img_theme_3:url('data:image/png;base64,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');
+		--img_sound:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAQ6wAAEOsBUJTofAAAADxQTFRFAAAA////////////////////////////////////////////////////////////////////////////2EloEwAAABR0Uk5TAP8sHOj12AR6QsYM3ZdXcE1ftKzEB9/EAAAA4ElEQVR4nM2SyRaDIAxFCQg4D/j//9oHCe1RUrdtFhJ895DRmH+zyUbxtrFXdNvRyV70RJumE4kf4A6aXgGHSzcpegasxWeA3ys6gIPDL0R+anUqSg7vkOdRSksB5ukN5PAB5Z5EqVRMF5PwuzGrxOgbwIxEC57GzeoAHp1xdNwKBRj4DCXSF8A/AvgVHkNwkk6SPBpg5U5B8Hn6cRlh3QewaNoIJVEdfpnefGm15VavpiWM2Vk47/MWIntOErntFBN1uggQrgsjhPiz1HgjQq4/W6zLcLPo6trvaVX0H9kLMgsGE4gHdL0AAAAASUVORK5CYII=");
+		--img_mute:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAQ6wAAEOsBUJTofAAAADxQTFRFAAAA////////////////////////////////////////////////////////////////////////////2EloEwAAABR0Uk5TAP/bGi7uMyNWAxQ/9W5GpbrNglAcf/S4AAAAtUlEQVR4nIXTURKEIAgAUFDLrLR29/533dLKQFG+FN8MzAgA3XB+LpPjlM8elebvfkX7XGbFhdsQ0eS7ZkJ/kAImlgE5IOIoX4IsYvkKuEUqXwMQhlOMgwDcfuaIoCCk5FtQMGEh6uAlBJCFBB4hglvI4BINkEQLRGEJWLAQNPInSgK0PWJUDRFj3nvCfXsCftfIraIwqZFQbANrxPBt4I2YOKeVrbwbsXGSgwDALrFYcBLI8QfEjgVA4+zZDwAAAABJRU5ErkJggg==");
+
 
 		/* this is the master theme config, all themes may override some or all of these, but not add to them */
 		--theme_color_topmenu: #32496d;
@@ -1235,6 +1238,34 @@ Current version indicated by LITEVER below.
 		background-color: #6a6a6a;
 	}
 
+	.btnicon-voice, .btnicon-voice:active, .btnicon-voice:hover, .btnicon-voice:focus, .btnicon-voice:active:focus
+	{
+		background-size: 80% 80%;
+		background-position: center;
+		background-repeat: no-repeat;
+		background-image: var(--img_mic);
+		background-color: #15a0ad;
+	}
+	.btnicon-voice.inactive, .btnicon-voice.inactive:active, .btnicon-voice.inactive:hover, .btnicon-voice.inactive:focus, .btnicon-voice.inactive:active:focus
+	{
+		background-color: #6a6a6a;
+		background-image: var(--img_mic_off);
+	}
+
+	.btnicon-tts, .btnicon-tts:active, .btnicon-tts:hover, .btnicon-tts:focus, .btnicon-tts:active:focus
+	{
+		background-size: 80% 80%;
+		background-position: center;
+		background-repeat: no-repeat;
+		background-image: var(--img_sound);
+		background-color: #15a0ad;
+	}
+	.btnicon-tts.inactive, .btnicon-tts.inactive:active, .btnicon-tts.inactive:hover, .btnicon-tts.inactive:focus, .btnicon-tts.inactive:active:focus
+	{
+		background-color: #6a6a6a;
+		background-image: var(--img_mute);
+	}
+
 	/* Help tooltips */
 	.helpicon {
 		display: inline-block;
@@ -1396,7 +1427,7 @@ Current version indicated by LITEVER below.
 		padding-right: 6px;
 	}
 	#actionmenuitems button.slim,#actionmenuitems2 button.slim {
-		width: 34px;
+		width: 32px;
 		padding-left: 4px;
 		padding-right: 4px;
 	}
@@ -4235,7 +4266,6 @@ Current version indicated by LITEVER below.
 	var default_alltalk_base = "http://localhost:7851";
 	var default_comfy_base = "http://localhost:8188";
 
-	//if tts is force disabled, its set to -1
 	const WEBBROWSER_TTS_ID = 1;
 	const KCPP_TTS_ID = 2;
 	const XTTS_ID = 3;
@@ -4466,7 +4496,7 @@ Current version indicated by LITEVER below.
 		inject_randomness_seed: 999,
 		request_logprobs: false,
 		persist_session: true,
-		tts_mode: 0, //0 is off (automatic), -1 is force disable
+		tts_mode: 0, //0 is off
 		xtts_voice: "female_calm",
 		kcpp_tts_voice: "kobo",
 		oai_tts_model: "tts-1",
@@ -4480,7 +4510,7 @@ Current version indicated by LITEVER below.
 		tts_stream: false,
 		voice_end_delay: 300,
 		voice_suppress_nonspeech: false,
-		voice_typing_mode: 0,  //0=off, 1=on, 2=ptt, 3=ttt, -1=forcedisable
+		voice_typing_mode: 0,  //0=off, 1=on, 2=ptt, 3=ttt
 		voice_langcode: "auto",
 		tts_speed: 1.0,
 		image_styles: "",
@@ -5861,7 +5891,7 @@ Current version indicated by LITEVER below.
 
 	//toggle genimg btn
 	update_genimg_button_visiblility();
-	update_websearch_button_visibility();
+	update_mini_action_toggles_visibility();
 
 	//invert colors
 	toggle_theme_colors();
@@ -15141,7 +15171,7 @@ Current version indicated by LITEVER below.
 									let has_password = (data.protected?true:false);
 									koboldcpp_has_txt2img = (data.txt2img?true:false);
 									let no_txt_model = (mdlname=="inactive");
-									update_websearch_button_visibility();
+									update_mini_action_toggles_visibility();
 
 									//also check against kcpp's max true context length
 									fetch(apply_proxy_url(desiredkoboldendpoint + koboldcpp_truemaxctxlen_endpoint),
@@ -15231,38 +15261,6 @@ Current version indicated by LITEVER below.
 									}).catch(error => {
 										console.log("Failed to get local image models: " + error);
 									});
-
-									//check if whisper speech-to-text is enabled, set to PTT if available
-									if(is_using_kcpp_with_whisper())
-									{
-										if(localsettings.voice_typing_mode==0)
-										{
-											localsettings.voice_typing_mode = 2; //set to PTT mode
-										}
-									}
-									else
-									{
-										if(localsettings.voice_typing_mode==2) //don't auto disable the other STT modes for now
-										{
-											localsettings.voice_typing_mode = 0;
-										}
-									}
-
-									//check if kcpp TTS is available, enable it if permitted
-									if(is_using_kcpp_with_tts())
-									{
-										if(localsettings.tts_mode==0)
-										{
-											localsettings.tts_mode = KCPP_TTS_ID;
-										}
-									}
-									else
-									{
-										if(localsettings.tts_mode==KCPP_TTS_ID)
-										{
-											localsettings.tts_mode = 0;
-										}
-									}
 
 									//prompt to request password for kcpp
 									if(localflag && has_password && !localmodekey)
@@ -17682,8 +17680,9 @@ Current version indicated by LITEVER below.
 		}
 	}
 
-	function update_websearch_button_visibility()
+	function update_mini_action_toggles_visibility()
 	{
+		//websearch
 		if(localsettings.websearch_enabled)
 		{
 			document.getElementById("btn_togglesearch").classList.remove("inactive");
@@ -17703,6 +17702,50 @@ Current version indicated by LITEVER below.
 		{
 			document.getElementById("btn_togglesearch").classList.add("hidden");
 			document.getElementById("btn_togglesearch2").classList.add("hidden");
+		}
+
+		//voice
+		if(localsettings.voice_typing_mode>0)
+		{
+			document.getElementById("btn_togglevoice").classList.remove("inactive");
+			document.getElementById("btn_togglevoice2").classList.remove("inactive");
+		}
+		else
+		{
+			document.getElementById("btn_togglevoice").classList.add("inactive");
+			document.getElementById("btn_togglevoice2").classList.add("inactive");
+		}
+		if(is_using_kcpp_with_whisper())
+		{
+			document.getElementById("btn_togglevoice").classList.remove("hidden");
+			document.getElementById("btn_togglevoice2").classList.remove("hidden");
+		}
+		else
+		{
+			document.getElementById("btn_togglevoice").classList.add("hidden");
+			document.getElementById("btn_togglevoice2").classList.add("hidden");
+		}
+
+		//tts
+		if(localsettings.tts_mode>0)
+		{
+			document.getElementById("btn_toggletts").classList.remove("inactive");
+			document.getElementById("btn_toggletts2").classList.remove("inactive");
+		}
+		else
+		{
+			document.getElementById("btn_toggletts").classList.add("inactive");
+			document.getElementById("btn_toggletts2").classList.add("inactive");
+		}
+		if(is_using_kcpp_with_tts())
+		{
+			document.getElementById("btn_toggletts").classList.remove("hidden");
+			document.getElementById("btn_toggletts2").classList.remove("hidden");
+		}
+		else
+		{
+			document.getElementById("btn_toggletts").classList.add("hidden");
+			document.getElementById("btn_toggletts2").classList.add("hidden");
 		}
 	}
 
@@ -17992,7 +18035,7 @@ Current version indicated by LITEVER below.
 		localsettings.disabled_mcp_tools = JSON.parse(JSON.stringify(pending_disabled_mcp_tools));
 
 		update_genimg_button_visiblility();
-		update_websearch_button_visibility();
+		update_mini_action_toggles_visibility();
 
 		localsettings.img_cfgscale = parseFloat(document.getElementById("img_cfgscale").value);
 		localsettings.img_img2imgstr = parseFloat(document.getElementById("img_img2imgstr").value);
@@ -19953,14 +19996,52 @@ Current version indicated by LITEVER below.
 		document.getElementById("addmediacontainer").classList.remove("hidden");
 	}
 
-	function toggle_websearch()
+	function toggle_websearch_minibtn()
 	{
 		if (is_using_kcpp_with_websearch()) {
 			localsettings.websearch_enabled = !localsettings.websearch_enabled;
 		} else {
 			localsettings.websearch_enabled = false;
 		}
-		update_websearch_button_visibility();
+		update_mini_action_toggles_visibility();
+		render_gametext();
+	}
+
+	function toggle_voice_input_minibtn()
+	{
+		if (is_using_kcpp_with_whisper()) {
+			if (localsettings.voice_typing_mode == 0) {
+				localsettings.voice_typing_mode = 1; //set to enabled not ptt
+				if(!isVoiceInputConfigured)
+				{
+					//trigger popup for audio permissions
+					init_voice_typing();
+				}
+			} else {
+				localsettings.voice_typing_mode = 0;
+			}
+		} else {
+			localsettings.voice_typing_mode = 0;
+		}
+		update_mini_action_toggles_visibility();
+		render_gametext();
+	}
+
+	function toggle_tts_minibtn()
+	{
+		if (is_using_kcpp_with_tts()) {
+			if(localsettings.tts_mode==0)
+			{
+				localsettings.tts_mode = KCPP_TTS_ID;
+			}
+			else
+			{
+				localsettings.tts_mode = 0;
+			}
+		} else {
+			localsettings.websearch_enabled = false;
+		}
+		update_mini_action_toggles_visibility();
 		render_gametext();
 	}
 
@@ -24840,13 +24921,13 @@ Current version indicated by LITEVER below.
 	var isVoiceInputInitializing = false;
 	function init_voice_typing()
 	{
+		if (isVoiceInputConfigured || isVoiceInputInitializing) {
+			return;
+		}
 		if(navigator.mediaDevices==null)
 		{
 			msgbox("Cannot initialize microphone. If you're using a non-localhost URL, it needs to be served over HTTPS!","Error Starting Microphone");
 			localsettings.voice_typing_mode = document.getElementById("voice_typing_mode").checked = 0;
-			return;
-		}
-		if (isVoiceInputConfigured || isVoiceInputInitializing) {
 			return;
 		}
 		isVoiceInputInitializing = true;
@@ -26342,7 +26423,7 @@ Current version indicated by LITEVER below.
 		}
 
 		update_genimg_button_visiblility();
-		update_websearch_button_visibility();
+		update_mini_action_toggles_visibility();
 
 		idle_timer = 0;
 		document.getElementById("token-budget").innerText = last_token_budget;
@@ -27585,10 +27666,20 @@ Current version indicated by LITEVER below.
 			let amode = (localsettings.adventure_switch_mode==0?"Story Mode":(localsettings.adventure_switch_mode==1?"Action Mode":"Dice Mode"))
 			panelitems += `<div onclick="btn_adventure_mode()" class="corpo_leftpanel_btn" type="button" >Adventure: ${amode}</div>`;
 		}
+		let mini_toggles = [];
 		if(is_using_kcpp_with_websearch())
 		{
-			panelitems += `<div onclick="toggle_websearch()" class="corpo_leftpanel_btn" type="button" style="background-image: var(--img_websearch_mono); padding-left: 44px;">WebSearch: ${localsettings.websearch_enabled?"<span class='color_green'>On</span>":"<span class='color_gray'>Off</span>"}</div>`;
+			mini_toggles.push(`<div onclick="toggle_websearch_minibtn()" class="corpo_leftpanel_btn" type="button" style="background-image: var(--img_websearch_mono); padding-left: 36px; flex: 1 1 0; min-width: 0;">${localsettings.websearch_enabled?"<span class='color_green'>On</span>":"<span class='color_gray'>Off</span>"}</div>`);
 		}
+		if(is_using_kcpp_with_tts())
+		{
+			mini_toggles.push(`<div onclick="toggle_tts_minibtn()" class="corpo_leftpanel_btn" type="button" style="background-image: var(${localsettings.tts_mode>0?"--img_sound":"--img_mute"}); padding-left: 36px; flex: 1 1 0; min-width: 0;">${localsettings.tts_mode>0?"<span class='color_green'>On</span>":"<span class='color_gray'>Off</span>"}</div>`);
+		}
+		if(is_using_kcpp_with_whisper())
+		{
+			mini_toggles.push(`<div onclick="toggle_voice_input_minibtn()" class="corpo_leftpanel_btn" type="button" style="background-image: var(${localsettings.voice_typing_mode>0?"--img_mic":"--img_mic_off"}); padding-left: 36px; flex: 1 1 0; min-width: 0;">${localsettings.voice_typing_mode>0?"<span class='color_green'>On</span>":"<span class='color_gray'>Off</span>"}</div>`);
+		}
+		panelitems += `<div style="display: flex; width: 100%;">${mini_toggles.join("")}</div>`;
 		panel.innerHTML = panelitems;
 	}
 	function populate_corpo_leftpanel()
@@ -30963,7 +31054,9 @@ Current version indicated by LITEVER below.
 				<button type="button" class="btn actbtn btn-primary mainnav" id="btn_actretry" onclick="btn_retry()">Retry</button>
 				<button type="button" class="btn actbtn btn-primary mainnav" id="btn_actbranch" onclick="btn_branch(this)">Branch</button>
 				<button type="button" class="btn actbtn btn-primary mainnav" id="btn_addmedia" onclick="add_media_btn_menu()">Add File</button>
-				<button type="button" class="btn actbtn btn-primary mainnav slim btnicon-websearch hidden" id="btn_togglesearch" onclick="toggle_websearch()">&nbsp;</button>
+				<button type="button" class="btn actbtn btn-primary mainnav slim btnicon-websearch hidden" id="btn_togglesearch" onclick="toggle_websearch_minibtn()">&nbsp;</button>
+				<button type="button" class="btn actbtn btn-primary mainnav slim btnicon-voice hidden" id="btn_togglevoice" onclick="toggle_voice_input_minibtn()">&nbsp;</button>
+				<button type="button" class="btn actbtn btn-primary mainnav slim btnicon-tts hidden" id="btn_toggletts" onclick="toggle_tts_minibtn()">&nbsp;</button>
 			</div>
 			<div class="borderbox flex push-right">
 				<input type="checkbox" id="allowediting" class="mainnav" onclick="toggle_editable()">
@@ -31011,7 +31104,9 @@ Current version indicated by LITEVER below.
 						<button type="button" class="btn actbtn btn-primary mainnav" id="btn_actretry2" onclick="btn_retry()">Retry</button>
 						<button type="button" class="btn actbtn btn-primary mainnav" id="btn_actbranch2" onclick="btn_branch(this)">Branch</button>
 						<button type="button" class="btn actbtn btn-primary mainnav" id="btn_addmedia2" onclick="add_media_btn_menu()">Add File</button>
-						<button type="button" class="btn actbtn btn-primary mainnav slim btnicon-websearch hidden" id="btn_togglesearch2" onclick="toggle_websearch()">&nbsp;</button>
+						<button type="button" class="btn actbtn btn-primary mainnav slim btnicon-websearch hidden" id="btn_togglesearch2" onclick="toggle_websearch_minibtn()">&nbsp;</button>
+						<button type="button" class="btn actbtn btn-primary mainnav slim btnicon-voice hidden" id="btn_togglevoice2" onclick="toggle_voice_input_minibtn()">&nbsp;</button>
+						<button type="button" class="btn actbtn btn-primary mainnav slim btnicon-tts hidden" id="btn_toggletts2" onclick="toggle_tts_minibtn()">&nbsp;</button>
 						<button type="button" class="btn actbtn btn-primary mainnav" id="btn_editmode" onclick="btn_editmode()">Edit</button>
 					</div>
 				</div>
@@ -32239,7 +32334,6 @@ Current version indicated by LITEVER below.
 								<option value="3">XTTS API Server</option>
 								<option value="4">AllTalk API Server</option>
 								<option value="5">OpenAI-Compat. API Server</option>
-								<option value="-1">Force Disable</option>
 							</select>
 							</div>
 							<button id="manual_tts" type="button" class="bg_green btn btn-primary" style="margin-left: 2px;" onclick="test_tts()">Test</button>
@@ -32380,7 +32474,6 @@ Current version indicated by LITEVER below.
 								<option value="1">Detect Voice</option>
 								<option value="2">Push-To-Talk</option>
 								<option value="3">Toggle-To-Talk</option>
-								<option value="-1">Force Disable</option>
 							</select>
 							</div>
 						</div>
