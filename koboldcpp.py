@@ -11480,6 +11480,11 @@ def main(launch_args, default_args):
         else:
             exitcounter = 999
             exit_with_error(2,"Specified kcpp config file invalid or not found.")
+
+    # --port only sets args.port, but the GUI tracks port_param, so mirror it there before convert_invalid_args syncs the two
+    if args.port != defaultport:
+        args.port_param = args.port
+
     args = convert_invalid_args(args)
 
     #positional handling for kcpps files (drag and drop)
