@@ -98,8 +98,8 @@ musicName = None
 imageName = None
 mmprojName = None
 lastgeneratedcomfyimg = b''
-lastgeneratedcachedimg = b''
-lastgeneratedcachedimgkey = b''
+lastgeneratedcachedpayload = b''
+lastgeneratedcachedpayloadkey = ''
 currgenimgkey = ''
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
@@ -6547,7 +6547,7 @@ Change Mode<br>
     def do_GET(self):
         global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, embedded_kailite_gz, embedded_kcpp_docs_gz, embedded_kcpp_sdui_gz, embedded_lcpp_ui_gz, embedded_musicui, embedded_musicui_gz
         global last_req_time, start_time, cached_chat_template, cached_sd_info, has_vision_support, has_audio_support, has_whisper, friendlymodelname
-        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, currgenimgkey, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname, voicelist
+        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname, voicelist
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
 
         clean_path = self.path.split("?")[0] #for cases where we do not want query params
@@ -6798,13 +6798,12 @@ Change Mode<br>
         elif clean_path=='/view' or clean_path=='/view.png' or clean_path=='/api/view' or clean_path.startswith('/view_image'): #emulate comfyui
             content_type = 'image/png'
             response_body = lastgeneratedcomfyimg
-        elif clean_path.startswith('/sdapi/v1/get_last.png'):
+        elif clean_path.startswith('/sdapi/v1/get_last.json'):
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
-            if genkey and genkey==lastgeneratedcachedimgkey and lastgeneratedcachedimg:
-                content_type = 'image/png'
-                response_body = lastgeneratedcachedimg
+            if genkey and genkey==lastgeneratedcachedpayloadkey and lastgeneratedcachedpayload:
+                response_body = lastgeneratedcachedpayload
             else:
                 response_body = None
         elif clean_path.startswith('/sdapi/v1/progress'):
@@ -6951,7 +6950,7 @@ Change Mode<br>
 
     def do_POST(self):
         global thinkformats
-        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, currgenimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
+        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
         contlenstr = self.headers['content-length']
         content_length = 0
@@ -7918,9 +7917,12 @@ Change Mode<br>
                     return
                 elif is_imggen: #image gen
                     try:
-                        lastgeneratedcachedimg = b''
-                        lastgeneratedcachedimgkey = ''
-                        currgenimgkey = genparams.get('genkey', '')
+                        lastgeneratedcachedpayload = b''
+                        lastgeneratedcachedpayloadkey = ''
+                        recovery_params = copy.deepcopy(genparams)
+                        recovery_genkey = genparams.get('genkey', '')
+                        recovery_model = imageName if autoswapmode and imageName is not None else friendlysdmodelname
+                        currgenimgkey = recovery_genkey
                         if is_comfyui_imggen:
                             lastgeneratedcomfyimg = b''
                             genparams = sd_comfyui_tranform_params(genparams)
@@ -7947,10 +7949,21 @@ Change Mode<br>
                         currgenimgkey = ''
                         genresp = None
                         if gendat:
-                            lastgeneratedcachedimg = base64.b64decode(gendat)
-                            lastgeneratedcachedimgkey = genparams.get('genkey', '')
-                        else:
-                            lastgeneratedcachedimg = b''
+                            recovery_prompt = recovery_params.get('prompt', '')
+                            recovery_negative_prompt = recovery_params.get('negative_prompt', '')
+                            if recovery_negative_prompt:
+                                recovery_prompt = f"{recovery_prompt} ### {recovery_negative_prompt}"
+                            lastgeneratedcachedpayload = json.dumps({
+                                "images": [gendat],
+                                "parameters": recovery_params,
+                                "info": geninfo,
+                                "animated": genanim,
+                                "extra_data": gendatextra,
+                                "final_frame": genfinalframe,
+                                "prompt": recovery_prompt,
+                                "models": [recovery_model],
+                            }).encode()
+                            lastgeneratedcachedpayloadkey = recovery_genkey
                         if is_comfyui_imggen:
                             if gendat:
                                 lastgeneratedcomfyimg = base64.b64decode(gendat)
