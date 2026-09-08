@@ -6833,9 +6833,13 @@ Change Mode<br>
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
             skip_current_image = parse_query_bool(parsed_dict, 'skip_current_image')
-            # with no auth, reveal status without preview image
+            # Only expose progress and previews for the requested active generation.
             auth = bool(genkey and genkey==currgenimgkey)
-            info = a1111_progress_response(auth and not skip_current_image)
+            info = build_a1111_progress_response('idle')
+            if auth:
+                active_info = a1111_progress_response(not skip_current_image)
+                if genkey == currgenimgkey:
+                    info = active_info
             response_body = json.dumps(info).encode()
         elif clean_path=='/history' or clean_path=='/api/history' or clean_path.startswith('/api/history/') or clean_path.startswith('/history/'): #emulate comfyui
             modelNameToReturn = friendlysdmodelname
