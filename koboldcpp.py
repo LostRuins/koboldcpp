@@ -5378,7 +5378,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
 
         try:  # stream response
             while True:
-                chunk = resp.read(self.STREAM_CHUNK)
+                chunk = resp.read1(self.STREAM_CHUNK)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
@@ -6320,11 +6320,26 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 except asyncio.CancelledError:
                     pass
 
-    async def handle_image_request(self, generate_fn, param, cancel_fn):
+    async def send_json_keepalives(self, cancel_fn, interval=15):
+        # Leading whitespace is valid JSON. Padding also helps small proxy buffers
+        # make progress; it cannot bypass a proxy's absolute request time limit.
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                self.wfile.write(b' ' * 4095 + b'\n')
+                self.wfile.flush()
+        except OSError:
+            if cancel_fn:
+                cancel_fn()
+
+    async def handle_image_request(self, generate_fn, param, cancel_fn, keepalive=False):
         monitor_task = None
+        keepalive_task = None
         try:
             if cancel_fn:
                 monitor_task = asyncio.create_task(self.monitor_connection(cancel_fn))
+            if keepalive:
+                keepalive_task = asyncio.create_task(self.send_json_keepalives(cancel_fn))
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, generate_fn, param)
             return result
@@ -6343,6 +6358,13 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 try:
                     await monitor_task
                 except asyncio.CancelledError:
+                    pass
+            if keepalive_task:
+                if not keepalive_task.done():
+                    keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except (asyncio.CancelledError, OSError):
                     pass
 
     def get_multiplayer_idle_state(self,userid):
@@ -7916,9 +7938,12 @@ Change Mode<br>
                         time.sleep(0.2) #short delay
                     return
                 elif is_imggen: #image gen
+                    keepalive_started = False
+                    final_write_started = False
                     try:
                         lastgeneratedcachedpayload = b''
                         lastgeneratedcachedpayloadkey = ''
+                        send_keepalive = bool(tryparseint(genparams.get('keepalive', False), 0))
                         recovery_params = copy.deepcopy(genparams)
                         recovery_genkey = genparams.get('genkey', '')
                         recovery_model = imageName if autoswapmode and imageName is not None else friendlysdmodelname
@@ -7940,7 +7965,16 @@ Change Mode<br>
                         override_abort_gen = genparams.get('kcpp_extra_args', {}).get('keep_image_gen_on_disconnect', gendefaults.get('keep_image_gen_on_disconnect'))
                         if override_abort_gen is not None and tryparseint(override_abort_gen, 1):
                             abort_gen = None
-                        gen = asyncio.run(self.handle_image_request(sd_generate, genparams, abort_gen))
+                        if send_keepalive:
+                            # Close-delimited JSON works with HTTP/1.0 and HTTP/1.1.
+                            # No Content-Length: the body includes periodic whitespace.
+                            self.close_connection = True
+                            self.send_response(200)
+                            self.send_header('connection', 'close')
+                            self.send_header('X-Accel-Buffering', 'no')
+                            self.end_headers(content_type='application/json')
+                            keepalive_started = True
+                        gen = asyncio.run(self.handle_image_request(sd_generate, genparams, abort_gen, send_keepalive))
                         gendat = gen["data"]
                         genanim = gen["animated"]
                         gendatextra = gen["data_extra"]
@@ -7975,12 +8009,20 @@ Change Mode<br>
                             genresp = (json.dumps({"created":int(time.time()),"data":[{"b64_json":gendat}],"background":"opaque","output_format":"png","size":response_size,"quality":"medium"}).encode())
                         else:
                             genresp = (json.dumps({"images":[gendat],"parameters":{},"info":geninfo,"animated":genanim,"extra_data":gendatextra, "final_frame":genfinalframe}).encode())
-                        self.send_response(200)
-                        self.send_header('content-length', str(len(genresp)))
-                        self.end_headers(content_type='application/json')
+                        if not keepalive_started:
+                            self.send_response(200)
+                            self.send_header('content-length', str(len(genresp)))
+                            self.end_headers(content_type='application/json')
+                        final_write_started = True
                         self.wfile.write(genresp)
                     except Exception as ex:
                         currgenimgkey = ''
+                        if keepalive_started and not final_write_started:
+                            # Headers are already committed; finish with a JSON error.
+                            try:
+                                self.wfile.write(json.dumps({"detail": {"msg": "Image generation failed.", "type": "generation_error"}}).encode())
+                            except OSError:
+                                pass
                         utfprint(ex,1)
                         print("Generate Image: The response could not be sent, maybe connection was terminated?")
                         time.sleep(0.2) #short delay
