@@ -24035,8 +24035,59 @@ Current version indicated by LITEVER below.
 		//apply t2i image replacements
 		if (localsettings.img_autogen_type == 2 && localsettings.generate_images_mode != 0)
 		{
+			let image_text = gentxt;
+			if(localsettings.start_thinking_tag && localsettings.stop_thinking_tag)
+			{
+				//Include earlier chunks when continuing a turn, so unfinished thoughts stay masked.
+				let prefix = pending_context_preinjection;
+				const boundary = get_thinking_boundary_regex();
+				if(prefix=="" && localsettings.opmode==4)
+				{
+					prefix = concat_gametext();
+				}
+				else if(prefix=="" && localsettings.opmode==3 && localsettings.allow_continue_chat)
+				{
+					const turns = repack_chat_history(concat_gametext());
+					const last_turn = turns[turns.length - 1];
+					if(last_turn && !last_turn.myturn) prefix = last_turn.msg;
+				}
+				if(localsettings.opmode==4 && boundary)
+				{
+					const turns = new RegExp(boundary, "gi");
+					let match;
+					let turn_start = 0;
+					while((match = turns.exec(prefix)) !== null) turn_start = turns.lastIndex;
+					prefix = prefix.slice(turn_start);
+				}
+				image_text = prefix + gentxt;
+				const start = escapeRegExp(replaceAll(localsettings.start_thinking_tag, "\\n", "\n"));
+				const stop = escapeRegExp(replaceAll(localsettings.stop_thinking_tag, "\\n", "\n"));
+				const has_start = new RegExp(start, "i").test(image_text);
+				const end = boundary ? `${stop}|(?=${boundary})|$` : `${stop}|$`;
+				const thoughts = new RegExp(`${start}[\\s\\S]*?(?:${end})`, "gi");
+				//Preserve offsets into gentxt while excluding complete and unfinished thoughts.
+				image_text = image_text.replace(thoughts, m => " ".repeat(m.length));
+				if(localsettings.opmode==4 && localsettings.handle_mismatched_think && !has_start)
+				{
+					for(let tag of hardcoded_think_closers.concat(localsettings.stop_thinking_tag))
+					{
+						if(!tag) continue;
+						const closer = escapeRegExp(replaceAll(tag, "\\n", "\n"));
+						//Like the renderer, accept only one occurrence and the first eligible closer.
+						if((image_text.match(new RegExp(closer, "gi")) || []).length != 1) continue;
+						const orphan = new RegExp(`^${get_thinking_content_regex()}${closer}`, "i");
+						if(orphan.test(image_text))
+						{
+							image_text = image_text.replace(orphan, m => " ".repeat(m.length));
+							break;
+						}
+					}
+				}
+				image_text = image_text.slice(prefix.length);
+			}
 			const pat = /<t2i>(.*?)<\/t2i>/g;
-			gentxt = gentxt.replace(pat, function (m,p1) {
+			gentxt = gentxt.replace(pat, function (m,p1,offset) {
+				if(image_text.slice(offset, offset + m.length) !== m) return m;
 				let newimgid = generate_new_image(p1, "", false);
 				let nimgtag = m+"[<|p|" + newimgid + "|p|>]";
 				return nimgtag;
