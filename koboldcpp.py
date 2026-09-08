@@ -6320,7 +6320,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 except asyncio.CancelledError:
                     pass
 
-    async def send_json_keepalives(self, cancel_fn, interval=15):
+    async def send_json_keepalives(self, cancel_fn, interval=60):
         # Leading whitespace is valid JSON. Padding also helps small proxy buffers
         # make progress; it cannot bypass a proxy's absolute request time limit.
         try:
@@ -7965,6 +7965,7 @@ Change Mode<br>
                         override_abort_gen = genparams.get('kcpp_extra_args', {}).get('keep_image_gen_on_disconnect', gendefaults.get('keep_image_gen_on_disconnect'))
                         if override_abort_gen is not None and tryparseint(override_abort_gen, 1):
                             abort_gen = None
+                            send_keepalive = True
                         if send_keepalive:
                             # Close-delimited JSON works with HTTP/1.0 and HTTP/1.1.
                             # No Content-Length: the body includes periodic whitespace.
