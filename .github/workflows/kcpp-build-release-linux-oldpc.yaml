@@ -13,6 +13,7 @@ env:
   NOAVX2: 1
   ARCHES_CU11: 1
   KCPP_CUDA: 11.4.0
+  KCPP_PORTABLE: 1
 
 jobs:
   linux:
