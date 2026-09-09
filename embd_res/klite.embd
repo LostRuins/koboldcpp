@@ -26001,7 +26001,7 @@ Current version indicated by LITEVER below.
 				element.innerHTML = pend;
 			});
 		} else {
-			render_gametext(false);
+			render_gametext(false,false);
 		}
 
 		handle_autoscroll(false);
@@ -26083,62 +26083,102 @@ Current version indicated by LITEVER below.
 
 	}
 
-	var autoscrollEnabled = true;
-	var suppressScrollEvent = false;
-	var autoscrollTimeout = null;
+	const autoscrollStates = new Map();
 	let autoscrollRAF = null;
-	var lastScrollTop = 0;
 	function handle_autoscroll(alwaysscroll = true) {
 		if (!localsettings.autoscroll) return;
 
-		// Cancel pending frame to avoid stacking work
-		if (autoscrollRAF) cancelAnimationFrame(autoscrollRAF);
+		// Explicit navigation resets following now, so subsequent user input can
+		// still override it before the frame runs. Streaming never resets it.
+		if (alwaysscroll) {
+			for (let state of autoscrollStates.values()) state.following = true;
+		}
+		if (autoscrollRAF !== null) return;
 
 		autoscrollRAF = requestAnimationFrame(() => {
-			const boxes = [
-				document.getElementById("gametext"),
-				document.getElementById("chat_msg_body"),
-				document.getElementById("corpostylemain")
-			].filter(Boolean);
-
-			if (!boxes.length) return;
-
-			// ---- READ PHASE (no writes) ----
-			const threshold = autoscrollEnabled ? 195 : 70;
-			const scrollData = boxes.map(el => {
-				const maxScrollTop = el.scrollHeight - el.clientHeight + 10;
-				const isAtBottom =
-					el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
-
-				return { el, maxScrollTop, shouldScroll: alwaysscroll || isAtBottom };
-			});
-
-			// ---- WRITE PHASE (no reads) ----
-			suppressScrollEvent = true;
-			for (let item of scrollData) {
-				if (item.shouldScroll) {
-					item.el.scrollTop = item.maxScrollTop;
+			autoscrollRAF = null;
+			if (!localsettings.autoscroll) return;
+			const scrollData = [];
+			for (let [element, state] of autoscrollStates) {
+				if (!element.clientHeight) continue; // Ignore hidden layouts.
+				if (state.following && !state.pointerDown) {
+					scrollData.push({element, state, top: Math.max(0, element.scrollHeight - element.clientHeight)});
 				}
 			}
-			suppressScrollEvent = false;
+			for (let {element, state, top} of scrollData) {
+				// Scroll events arrive asynchronously. Record the position we write
+				// instead of briefly suppressing events around the assignment.
+				state.lastScrollTop = top;
+				element.scrollTop = top;
+			}
 		});
 	}
 	function attach_scroll_detection(element)
 	{
-		element.addEventListener("scroll", () => {
-			const currentScrollTop = element.scrollTop;
-        	const delta = currentScrollTop - lastScrollTop;
-        	lastScrollTop = currentScrollTop;
-			if (suppressScrollEvent) { return; }
-			if (delta>=0) { return; }
-			autoscrollEnabled = false;
-			if (autoscrollTimeout) {
-				clearTimeout(autoscrollTimeout);
+		if (!element || autoscrollStates.has(element)) return;
+		const state = {following: true, lastScrollTop: element.scrollTop, pointerDown: false};
+		autoscrollStates.set(element, state);
+		const pause = () => { state.following = false; };
+
+		// Stop before the next render, even if the browser has not dispatched
+		// the corresponding scroll event yet. Leave native scrolling untouched.
+		element.addEventListener("wheel", event => {
+			if (event.deltaY < 0 && !event.ctrlKey) pause();
+		}, {passive: true});
+		let touchY = null;
+		element.addEventListener("touchstart", event => {
+			touchY = event.touches.length === 1 ? event.touches[0].clientY : null;
+		}, {passive: true});
+		element.addEventListener("touchmove", event => {
+			if (touchY !== null && event.touches.length === 1) {
+				const nextY = event.touches[0].clientY;
+				if (nextY > touchY) pause();
+				touchY = nextY;
 			}
-			autoscrollTimeout = setTimeout(() => {
-				autoscrollEnabled = true;
-			}, 180);
+		}, {passive: true});
+		element.addEventListener("keydown", event => {
+			if (event.defaultPrevented || event.target.closest("input, textarea, select, [contenteditable=true]")) return;
+			if (["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey)) pause();
 		});
+
+		const onScroll = () => {
+			if (!element.clientHeight) return;
+			const maxTop = Math.max(0, element.scrollHeight - element.clientHeight);
+			// Clamp Safari rubber-band overscroll; allow only rounding tolerance.
+			const top = Math.max(0, Math.min(element.scrollTop, maxTop));
+			const previousTop = state.lastScrollTop;
+			state.lastScrollTop = top;
+			// Reflow and scroll anchoring can also move scrollTop upward. Only
+			// mouse/pen interaction makes that a manual scroll; wheel, touch and
+			// keyboard intent is handled directly above.
+			if (state.pointerDown && top < Math.min(previousTop, maxTop) - 1) {
+				pause();
+			} else if (top > previousTop && maxTop - top <= 1) {
+				state.following = true;
+			}
+		};
+		element.addEventListener("scroll", onScroll, {passive: true});
+
+		// Let scrollbar dragging and selection scrolling finish before writing
+		// scrollTop. Listen outside the element too, since a drag can end there.
+		element.addEventListener("pointerdown", event => {
+			if (event.pointerType !== "touch") state.pointerDown = true;
+		}, {passive: true});
+		const releasePointer = () => {
+			if (!state.pointerDown) return;
+			onScroll();
+			state.pointerDown = false;
+			handle_autoscroll(false);
+		};
+		document.addEventListener("pointerup", releasePointer, {passive: true});
+		document.addEventListener("pointercancel", releasePointer, {passive: true});
+
+		// Keep a followed view at the bottom after reflow or late-loading media.
+		if (typeof ResizeObserver !== "undefined") {
+			const observer = new ResizeObserver(() => handle_autoscroll(false));
+			observer.observe(element);
+		}
+		element.addEventListener("load", () => handle_autoscroll(false), true);
 	}
 
 	function render_gametext(save=true, force_scroll=true)

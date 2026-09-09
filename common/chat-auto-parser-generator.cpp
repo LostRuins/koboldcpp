@@ -12,6 +12,8 @@
 
 using json = common_json;
 
+namespace autoparser {
+
 // Helper to iterate over tools/functions
 static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
     for (const auto & tool : tools) {
@@ -21,8 +23,6 @@ static void foreach_function(const json & tools, const std::function<void(const 
         fn(tool);
     }
 }
-
-namespace autoparser {
 
 parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
     p(p),
