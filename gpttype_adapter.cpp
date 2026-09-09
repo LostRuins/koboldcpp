@@ -1684,18 +1684,25 @@ void sample_dry(int n_ctx, int penalty_range, float penalty_multiplier, float pe
     }
 }
 
-void sample_adaptive_p(
+inline void adaptive_p_update_history(float selected_token_prob, float & weighted_sum, float & total_weight, float adaptive_decay) {
+    // decay controls how quickly history influence fades (0.0 to 0.99)
+    weighted_sum = selected_token_prob + adaptive_decay * weighted_sum;
+    total_weight = 1.0f + adaptive_decay * total_weight;
+}
+
+llama_token sample_adaptive_p(
 float target,            // desired average probability (0..1), <=0 disables
 float & weighted_sum,    // persistent EMA state
 float & total_weight,    // persistent EMA state
-llama_token_data_array * cur_p)
+llama_token_data_array * cur_p,
+float adaptive_decay, std::mt19937 & rng)
 {
     const float width = 0.3;              // DISTRIBUTION_WIDTH
     const float peak_logit = 5.0;         // PEAK_LOGIT_VALUE
     const float inv_width = 1.0f / width; // INV_WIDTH
 
     if (target <= 0.0f || cur_p->size == 0) {
-        return;
+        return sample_token(cur_p, rng);
     }
 
     // target is the desired average probability for selected tokens (0.0 to 1.0)
@@ -1703,6 +1710,11 @@ llama_token_data_array * cur_p)
     // lower values favor less probable tokens (more creative)
 
     sample_softmax(cur_p);
+
+    // Save the filtered distribution used by Adaptive-P, not the raw vocabulary.
+    // Keep token IDs because sample_token sorts the transformed logits.
+    static thread_local std::vector<llama_token_data> original_candidates;
+    original_candidates.assign(cur_p->data, cur_p->data + cur_p->size);
 
     // compute the adapted target probability for the current sampling step
     float computed_target = std::clamp(total_weight == 0.0f ? target : 2.0f * target - (weighted_sum / total_weight),0.0f, 1.0f);
@@ -1716,17 +1728,14 @@ llama_token_data_array * cur_p)
     }
 
     cur_p->sorted = false;
-    sample_softmax(cur_p);
-
-    //update EMA history AFTER sampling, update_adaptive_p_history(original_prob[idx])
-}
-inline void adaptive_p_update_history(float selected_token_prob, float & weighted_sum, float & total_weight, float adaptive_decay) {
-    // decay controls how quickly history influence fades (0.0 to 0.99)
-    // lower values = faster adaptation, more reactive to recent tokens
-    // higher values = slower adaptation, more stable over time
-    // keep <= 0.99 to prevent unbounded accumulation
-    weighted_sum = selected_token_prob + adaptive_decay * weighted_sum;
-    total_weight = 1.0f + adaptive_decay * total_weight;
+    const llama_token id = sample_token(cur_p, rng);
+    for (const auto & candidate : original_candidates) {
+        if (candidate.id == id) {
+            adaptive_p_update_history(candidate.p, weighted_sum, total_weight, adaptive_decay);
+            break;
+        }
+    }
+    return id;
 }
 
 
@@ -2320,7 +2329,7 @@ static int apply_reasoning_budget(int id, const std::vector<int> & start_think, 
 
 int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float temp, std::mt19937 & rng,
 int mirostat, float mirostat_tau, float mirostat_eta, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
-const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve, float adaptive_target,
+const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve, float adaptive_target, float adaptive_decay,
 const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq, std::vector<int> & think_end_phrase_toks, int reasoning_budget)
 {
     // printf("SampleLogits called with: n_ctx=%d, n_vocab=%d, rep_pen_range=%d, rep_pen=%f, rep_pen_slope=%f, presence_penalty=%f, top_k=%f, top_a=%f, top_p=%f, min_p=%f, typical_p=%f, tfs=%f, nsigma=%f, temp=%f, mirostat=%d, mirostat_tau=%f, mirostat_eta=%f, dry_multiplier=%f, dry_base=%f, dry_allowed_length=%d, dry_penalty_last_n=%d, xtc_threshold=%f, xtc_probability=%f, sampler_order_size=%zu, dynatemp_range=%f, dynatemp_exponent=%f, smoothing_factor=%f\n",
@@ -2441,8 +2450,7 @@ const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq
         //xtc always last
         sample_xtc(&candidates_p, xtc_threshold, xtc_probability, rng);
         //adaptive p must be last, it messes up all probs
-        sample_adaptive_p(adaptive_target, adaptive_p_weighted_sum, adaptive_p_total_weight, &candidates_p);
-        id = sample_token(&candidates_p, rng);
+        id = sample_adaptive_p(adaptive_target, adaptive_p_weighted_sum, adaptive_p_total_weight, &candidates_p, adaptive_decay, rng);
     }
 
     return id;
@@ -6930,18 +6938,6 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                 }
 
-                //if adaptive p sampling is used, we need to cache the original probabilities
-                std::vector<llama_token_data> original_candidates;
-                if(adaptive_target > 0.0f)
-                {
-                    original_candidates.reserve(n_vocab);
-                    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-                        original_candidates.emplace_back(llama_token_data{token_id, logitsPtr[token_id], 0.0f});
-                    }
-                    llama_token_data_array original_candidates_p = { original_candidates.data(), original_candidates.size(), false };
-                    sample_softmax(&original_candidates_p,false);
-                }
-
                 if(file_format == FileFormat::GGUF_GENERIC && guidance_ctx && negprompt_tokens.size()>0 && inputs.guidance_scale!=1.0f)
                 {
                     sample_guidance(llama_ctx_v4, guidance_ctx, n_vocab, inputs.guidance_scale);
@@ -6986,13 +6982,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta,
                 kcpp_data->dry_multiplier, kcpp_data->dry_base,
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,
-                sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve, adaptive_target,
+                sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve, adaptive_target, adaptive_decay,
                 thinking_start_sequence, thinking_end_sequence, thinking_end_phrase_toksleft, kcpp_data->reasoning_budget);
-
-                if (adaptive_target > 0.0f) {
-                    float original_prob = original_candidates[id].p;
-                    adaptive_p_update_history(original_prob, adaptive_p_weighted_sum, adaptive_p_total_weight, adaptive_decay);
-                }
 
                 if(draft_used)
                 {
