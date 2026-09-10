@@ -1571,6 +1571,11 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         }
     }
 
+    static const std::vector<std::pair<std::string, std::string>> generic_name_map = {
+        {".scale_weight", ".weight_scale"},
+    };
+    replace_with_name_map(name, generic_name_map);
+
     if (is_lora) {
         name = "lora." + name;
     }
