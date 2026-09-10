@@ -1072,6 +1072,34 @@ public:
         return out;
     }
 
+    ggml_tensor* add_lora_to_output(ggml_context* ctx,
+                                    ggml_backend_t backend,
+                                    ggml_tensor* x,
+                                    ggml_tensor* w,
+                                    ggml_tensor* output,
+                                    const std::string& prefix,
+                                    WeightAdapter::ForwardParams forward_params) override {
+        for (auto& lora_model : lora_models) {
+            ggml_tensor* weight_diff = lora_model->get_weight_diff(prefix + "weight", backend, ctx, w, false);
+            if (weight_diff != nullptr) {
+                GGML_ASSERT(forward_params.op_type == ForwardParams::op_type_t::OP_LINEAR);
+                ggml_tensor* out_diff = ggml_ext_linear(ctx,
+                                                        x,
+                                                        weight_diff,
+                                                        nullptr,
+                                                        forward_params.linear.force_prec_f32,
+                                                        forward_params.linear.scale);
+                output                = ggml_add_inplace(ctx, output, out_diff);
+            }
+
+            ggml_tensor* out_diff = lora_model->get_out_diff(ctx, backend, x, w, forward_params, prefix + "weight");
+            if (out_diff != nullptr) {
+                output = ggml_add_inplace(ctx, output, out_diff);
+            }
+        }
+        return output;
+    }
+
     size_t get_extra_graph_size() override {
         size_t lora_tensor_num = 0;
         for (auto& lora_model : lora_models) {
