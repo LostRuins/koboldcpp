@@ -7,6 +7,7 @@
 #include <fstream>
 #include <ostream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -86,18 +87,71 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F64") {
         ttype = GGML_TYPE_F32;
+#if KCPP_MAINLINE_FP8_SCALED
+    } else if (dtype == "F8_E4M3") {
+        ttype = GGML_TYPE_F8_E4M3;
+    } else if (dtype == "F8_E5M2") {
+        ttype = GGML_TYPE_F8_E5M2;
+#else
     } else if (dtype == "F8_E4M3") {
         ttype = GGML_TYPE_F16;
     } else if (dtype == "F8_E5M2") {
         ttype = GGML_TYPE_F16;
+#endif
+#if !KCPP_MAINLINE_INT8_CONVROT
     } else if (dtype == "I8") {
         ttype = GGML_TYPE_F16;
+#endif
     } else if (dtype == "I32") {
         ttype = GGML_TYPE_I32;
     } else if (dtype == "I64") {
         ttype = GGML_TYPE_I32;
+#if KCPP_MAINLINE_INT8_CONVROT
+    } else if (dtype == "I8") {
+        ttype = GGML_TYPE_I8;
+#endif
     }
     return ttype;
+}
+
+struct ComfyQuantConfig {
+    std::string format;
+    bool convrot   = false;
+    int group_size = 0;
+};
+
+static bool read_comfy_quant_config(std::ifstream& file,
+                                    const std::string& file_path,
+                                    const std::string& tensor_name,
+                                    size_t offset,
+                                    size_t size,
+                                    ComfyQuantConfig& config,
+                                    std::string* error) {
+    static constexpr size_t MAX_COMFY_QUANT_CONFIG_SIZE = 64 * 1024;
+    if (size == 0 || size > MAX_COMFY_QUANT_CONFIG_SIZE) {
+        set_error(error, "invalid ComfyUI quantization metadata tensor '" + tensor_name + "' in '" + file_path + "'");
+        return false;
+    }
+
+    std::vector<char> data(size + 1, '\0');
+    file.clear();
+    file.seekg((std::streamoff)offset, std::ios::beg);
+    file.read(data.data(), (std::streamsize)size);
+    if (!file) {
+        set_error(error, "read ComfyUI quantization metadata tensor failed: '" + tensor_name + "'");
+        return false;
+    }
+
+    try {
+        const nlohmann::json json = nlohmann::json::parse(data.data(), data.data() + size);
+        config.format             = json.value("format", "");
+        config.convrot            = json.value("convrot", false);
+        config.group_size         = json.value("convrot_groupsize", 0);
+    } catch (const std::exception&) {
+        set_error(error, "parsing ComfyUI quantization metadata tensor failed: '" + tensor_name + "'");
+        return false;
+    }
+    return true;
 }
 
 // https://huggingface.co/docs/safetensors/index
@@ -166,8 +220,37 @@ bool read_safetensors_file(const std::string& file_path,
         }
     }
 
+    std::unordered_map<std::string, ComfyQuantConfig> comfy_quant_configs;
+    for (const auto& item : header_.items()) {
+        const std::string& name = item.key();
+        if (name == "__metadata__" || !ends_with(name, ".comfy_quant")) {
+            continue;
+        }
+
+        const nlohmann::json& tensor_info = item.value();
+        if (tensor_info.value("dtype", "") != "U8") {
+            set_error(error, "invalid dtype for ComfyUI quantization metadata tensor '" + name + "'");
+            return false;
+        }
+        const size_t begin = tensor_info["data_offsets"][0].get<size_t>();
+        const size_t end   = tensor_info["data_offsets"][1].get<size_t>();
+        if (begin > end || end > file_size_ - data_start) {
+            set_error(error, "data offsets out of bounds for tensor '" + name + "'");
+            return false;
+        }
+
+        ComfyQuantConfig config;
+        if (!read_comfy_quant_config(file, file_path, name, data_start + begin, end - begin, config, error)) {
+            return false;
+        }
+        const std::string module_name = name.substr(0, name.size() - std::string(".comfy_quant").size());
+        comfy_quant_configs.emplace(module_name, std::move(config));
+    }
+
     tensor_storages.clear();
+#if !KCPP_MAINLINE_INT8_CONVROT
     auto quant_layers = kcpp_safetensors_quant::read_quantization_metadata(header_);
+#endif
     for (auto& item : header_.items()) {
         std::string name           = item.key();
         nlohmann::json tensor_info = item.value();
@@ -177,9 +260,11 @@ bool read_safetensors_file(const std::string& file_path,
             continue;
         }
 
+#if !KCPP_MAINLINE_INT8_CONVROT
         if (kcpp_safetensors_quant::should_skip_side_tensor(header_, name, quant_layers)) {
             continue;
         }
+#endif
 
         std::string dtype    = tensor_info["dtype"];
         nlohmann::json shape = tensor_info["shape"];
@@ -228,10 +313,48 @@ bool read_safetensors_file(const std::string& file_path,
         TensorStorage tensor_storage(name, type, ne, n_dims, 0, data_start + begin);
         tensor_storage.reverse_ne();
 
+        #if KCPP_MAINLINE_INT8_CONVROT
+        if (ends_with(name, ".weight")) {
+            const std::string module_name = name.substr(0, name.size() - std::string(".weight").size());
+            auto config                   = comfy_quant_configs.find(module_name);
+            if (config != comfy_quant_configs.end() && config->second.format == "int8_tensorwise") {
+                if (type != GGML_TYPE_I8) {
+                    set_error(error, "ComfyUI int8_tensorwise weight is not I8: '" + name + "'");
+                    return false;
+                }
+                if (config->second.convrot) {
+                    int group_size_remainder = config->second.group_size;
+                    while (group_size_remainder > 1 && group_size_remainder % 4 == 0) {
+                        group_size_remainder /= 4;
+                    }
+                    if (group_size_remainder != 1 || tensor_storage.ne[0] % config->second.group_size != 0) {
+                        set_error(error, "invalid ComfyUI convrot group size for tensor '" + name + "'");
+                        return false;
+                    }
+                }
+                tensor_storage.is_int8_tensorwise      = true;
+                tensor_storage.int8_convrot            = config->second.convrot;
+                tensor_storage.int8_convrot_group_size = config->second.group_size;
+            }
+        } else if (ends_with(name, ".weight_scale")) {
+            const std::string module_name = name.substr(0, name.size() - std::string(".weight_scale").size());
+            auto config                   = comfy_quant_configs.find(module_name);
+            if (config != comfy_quant_configs.end() && config->second.format == "int8_tensorwise" &&
+                tensor_storage.n_dims == 2 && tensor_storage.ne[0] == 1) {
+                tensor_storage.ne[0]  = tensor_storage.ne[1];
+                tensor_storage.ne[1]  = 1;
+                tensor_storage.n_dims = 1;
+            }
+        }
+        #endif // kcpp
+
         size_t tensor_data_size = end - begin;
 
         bool tensor_size_ok;
         if (dtype == "I8") {
+#if KCPP_MAINLINE_INT8_CONVROT
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
+#else
             if (!kcpp_safetensors_quant::fill_i8_tensorwise_storage(header_,
                                                                     file,
                                                                     quant_layers,
@@ -244,6 +367,15 @@ bool read_safetensors_file(const std::string& file_path,
                 return false;
             }
             tensor_size_ok = true;
+#endif
+#if KCPP_MAINLINE_FP8_SCALED
+        } else if (dtype == "F8_E4M3") {
+            tensor_storage.is_f8_e4m3 = true;
+            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
+        } else if (dtype == "F8_E5M2") {
+            tensor_storage.is_f8_e5m2 = true;
+            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
+#else
         } else if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
             // f8 -> f16
@@ -252,6 +384,7 @@ bool read_safetensors_file(const std::string& file_path,
             tensor_storage.is_f8_e5m2 = true;
             // f8 -> f16
             tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+#endif
         } else if (dtype == "F64") {
             tensor_storage.is_f64 = true;
             // f64 -> f32

@@ -142,7 +142,7 @@ namespace Ideogram4 {
     __STATIC_INLINE__ std::shared_ptr<Linear> make_linear(int64_t in_features,
                                                           int64_t out_features,
                                                           bool bias = true) {
-        return std::make_shared<Linear>(in_features, out_features, bias, false, false, 1.f, true);
+        return std::make_shared<Linear>(in_features, out_features, bias);
     }
 
     __STATIC_INLINE__ std::vector<float> gen_ideogram4_pe(int grid_h,

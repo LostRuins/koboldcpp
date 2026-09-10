@@ -1218,8 +1218,16 @@ public:
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
+        bool have_int8_tensorwise = false;
+        for (const auto& [_, tensor_storage] : model_loader.get_tensor_storage_map()) {
+            if (tensor_storage.is_int8_tensorwise) {
+                have_int8_tensorwise = true;
+                break;
+            }
+        }
+
         if (sd_ctx_params->lora_apply_mode == LORA_APPLY_AUTO) {
-            bool have_quantized_weight = false;
+            bool have_quantized_weight = have_int8_tensorwise;
             for (const auto& [type, _] : wtype_stat) {
                 if (ggml_is_quantized(type)) {
                     have_quantized_weight = true;
@@ -1235,12 +1243,19 @@ public:
                 apply_lora_immediately = true;
             }
         } else if (sd_ctx_params->lora_apply_mode == LORA_APPLY_IMMEDIATELY) {
-            if (row_split_active()) {
+            if (have_int8_tensorwise) {
+                LOG_WARN(
+                    "INT8 tensorwise weights do not support the immediately LoRA apply mode; "
+                    "using at_runtime instead");
+                apply_lora_immediately = false;
+            } else if (row_split_active()) {
                 LOG_WARN(
                     "row-split tensors do not support the immediately LoRA apply mode; "
                     "LoRAs will not be applied to them (use --lora-apply-mode at_runtime)");
+                apply_lora_immediately = false;
+            } else {
+                apply_lora_immediately = true;
             }
-            apply_lora_immediately = true;
         } else {
             apply_lora_immediately = false;
         }
