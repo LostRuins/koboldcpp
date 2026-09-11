@@ -1,8 +1,11 @@
 #ifndef __SD_MODEL_DIFFUSION_FLUX_HPP__
 #define __SD_MODEL_DIFFUSION_FLUX_HPP__
 
+#include <cinttypes>
 #include <memory>
 #include <vector>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "core/util.h"
 #include "model/adapter/pulid.hpp"
@@ -123,16 +126,16 @@ namespace Flux {
                     config.guidance_embed = true;
                 }
                 if (name.find("__x0__") != std::string::npos) {
-                    LOG_DEBUG("using x0 prediction");
+                    LOG_VERBOSE("using x0 prediction");
                     config.chroma_radiance_params.use_x0 = true;
                 }
                 if (name.find("__32x32__") != std::string::npos) {
-                    LOG_DEBUG("using patch size 32");
+                    LOG_VERBOSE("using patch size 32");
                     config.patch_size = 32;
                 }
                 if (name.find("img_in_patch.weight") != std::string::npos) {
                     actual_radiance_patch_size = tensor_storage.ne[0];
-                    LOG_DEBUG("actual radiance patch size: %" PRId64, actual_radiance_patch_size);
+                    LOG_VERBOSE("actual radiance patch size: %" PRId64, actual_radiance_patch_size);
                 }
                 if (name.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
                     config.is_chroma = true;
@@ -169,7 +172,7 @@ namespace Flux {
             }
             if (actual_radiance_patch_size > 0 && actual_radiance_patch_size != config.patch_size) {
                 GGML_ASSERT(config.patch_size == 2 * actual_radiance_patch_size);
-                LOG_DEBUG("using fake x2 patch size");
+                LOG_VERBOSE("using fake x2 patch size");
                 config.chroma_radiance_params.fake_patch_size_x2 = true;
             }
             if (head_dim > 0) {
@@ -179,13 +182,13 @@ namespace Flux {
             for (int axis_dim : config.axes_dim) {
                 config.axes_dim_sum += axis_dim;
             }
-            LOG_DEBUG("flux: depth = %d, depth_single_blocks = %d, guidance_embed = %s, context_in_dim = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %d",
-                      config.depth,
-                      config.depth_single_blocks,
-                      config.guidance_embed ? "true" : "false",
-                      config.context_in_dim,
-                      config.hidden_size,
-                      config.num_heads);
+            LOG_VERBOSE("flux: depth = %d, depth_single_blocks = %d, guidance_embed = %s, context_in_dim = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %d",
+                        config.depth,
+                        config.depth_single_blocks,
+                        config.guidance_embed ? "true" : "false",
+                        config.context_in_dim,
+                        config.hidden_size,
+                        config.num_heads);
             return config;
         }
     };
@@ -1560,7 +1563,7 @@ namespace Flux {
                                             config.axes_dim,
                                             sd_version_is_longcat(version));
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
@@ -1626,7 +1629,7 @@ namespace Flux {
                 return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, ref_index_mode, skip_layers, pulid_id, pulid_id_weight);
             };
 
-            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
             return result;
         }
 
@@ -1702,7 +1705,7 @@ namespace Flux {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("flux test done in %lldms", t1 - t0);
+                LOG_VERBOSE("flux test done in %lldms", t1 - t0);
             }
         }
 

@@ -1448,7 +1448,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             }
         }
 
-        // LOG_DEBUG("name %s %d", name.c_str(), version);
+        // LOG_VERBOSE("name %s %d", name.c_str(), version);
 
         if (sd_version_is_unet(version) || is_underline || is_lycoris_underline) {
             name = convert_sep_to_dot(name);

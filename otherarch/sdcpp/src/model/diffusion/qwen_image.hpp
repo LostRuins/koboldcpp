@@ -2,6 +2,8 @@
 #define __SD_MODEL_DIFFUSION_QWEN_IMAGE_HPP__
 
 #include <memory>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "core/util.h"
 #include "model/common/block.hpp"
@@ -49,9 +51,9 @@ namespace Qwen {
                     }
                 }
             }
-            LOG_DEBUG("qwen_image: num_layers = %d, zero_cond_t = %s",
-                      config.num_layers,
-                      config.zero_cond_t ? "true" : "false");
+            LOG_VERBOSE("qwen_image: num_layers = %d, zero_cond_t = %s",
+                        config.num_layers,
+                        config.zero_cond_t ? "true" : "false");
             return config;
         }
     };
@@ -646,7 +648,7 @@ namespace Qwen {
                                                   circular_x_enabled,
                                                   config.axes_dim);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe, true, "pe");
@@ -707,7 +709,7 @@ namespace Qwen {
                 return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,
@@ -760,7 +762,7 @@ namespace Qwen {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("qwen_image test done in %lldms", t1 - t0);
+                LOG_VERBOSE("qwen_image test done in %lldms", t1 - t0);
             }
         }
 

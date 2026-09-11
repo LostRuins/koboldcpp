@@ -49,7 +49,7 @@ struct GenerationExtension {
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>&) {}
     virtual void collect_loras(std::vector<ModelManager::LoraSpec>&) {}
     virtual void add_ignore_tensors(std::set<std::string>&) const {}
-    virtual void runner_done() {}
+    virtual void runner_end() {}
     virtual void reset_runtime_condition() {}
     virtual bool prepare_condition(GenerationExtensionConditionContext&) {
         return false;
