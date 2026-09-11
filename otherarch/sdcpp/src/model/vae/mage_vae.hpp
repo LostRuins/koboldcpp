@@ -490,7 +490,7 @@ namespace MageVAE {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input, decode_graph);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), input.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), input.dim());
         }
 
         int get_encoder_output_channels(int input_channels) override {

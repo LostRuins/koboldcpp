@@ -145,19 +145,24 @@ namespace sd {
         std::vector<int64_t> backend_capacities = graph_cut_layer_split_backend_capacities(split_backends,
                                                                                            backend_vram_limits,
                                                                                            primary_backend_vram_limit);
+        // Existing placements may already occupy the reported free VRAM. Reuse
+        // them; execution checks missing weights and reclaims memory as needed.
+        const bool reuse_assignments = std::all_of(seen_params.begin(), seen_params.end(), [&](ggml_tensor* param) {
+            return param_assignments.count(param) != 0;
+        });
 
         std::vector<ggml_backend_t> backend_by_segment(plan.segments.size(), split_backends[0]);
         size_t current_backend = 0;
         int64_t current_used   = 0;
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); seg_idx++) {
             int64_t bytes = segment_param_bytes[seg_idx];
-            while (current_backend + 1 < split_backends.size() &&
+            while (!reuse_assignments && current_backend + 1 < split_backends.size() &&
                    bytes > 0 &&
                    current_used + bytes > backend_capacities[current_backend]) {
                 current_backend++;
                 current_used = 0;
             }
-            if (bytes > 0 && current_used + bytes > backend_capacities[current_backend]) {
+            if (!reuse_assignments && bytes > 0 && current_used + bytes > backend_capacities[current_backend]) {
                 LOG_ERROR("%s graph-cut layer split: segment %zu needs %.1f MB on %s, but only %.1f MB is available under current VRAM limits",
                           desc,
                           seg_idx,
@@ -167,7 +172,6 @@ namespace sd {
                 return false;
             }
             current_used += bytes;
-            backend_by_segment[seg_idx] = split_backends[current_backend];
 
             for (ggml_tensor* param : segment_params[seg_idx]) {
                 ggml_backend_t target_backend = split_backends[current_backend];
@@ -186,12 +190,16 @@ namespace sd {
                               ggml_get_name(param));
                     return false;
                 }
-                size_t backend_idx                               = (size_t)std::distance(split_backends.begin(), backend_it);
+                size_t backend_idx = (size_t)std::distance(split_backends.begin(), backend_it);
+                if (reuse_assignments) {
+                    current_backend = backend_idx;
+                }
                 assignment.first_segment_by_backend[backend_idx] = std::min(assignment.first_segment_by_backend[backend_idx], seg_idx);
                 assignment.last_segment_by_backend[backend_idx]  = std::max(assignment.last_segment_by_backend[backend_idx], seg_idx + 1);
                 assignment.tensors_by_backend[backend_idx].push_back(param);
                 assignment.bytes_by_backend[backend_idx] += (int64_t)ggml_nbytes(param);
             }
+            backend_by_segment[seg_idx] = split_backends[current_backend];
         }
 
         const int n_nodes = ggml_graph_n_nodes(gf);
@@ -243,13 +251,13 @@ namespace sd {
                          assignment.tensors_by_backend[i].size(),
                          assignment.bytes_by_backend[i] / (1024.0 * 1024.0));
             } else {
-                LOG_DEBUG("%s graph-cut layer split: %s <- segments [%zu, %zu), %zu tensors, %.1f MB",
-                          desc,
-                          layer_split_backend_device_display_name(split_backends[i]).c_str(),
-                          first_segment,
-                          last_segment,
-                          assignment.tensors_by_backend[i].size(),
-                          assignment.bytes_by_backend[i] / (1024.0 * 1024.0));
+                LOG_VERBOSE("%s graph-cut layer split: %s <- segments [%zu, %zu), %zu tensors, %.1f MB",
+                            desc,
+                            layer_split_backend_device_display_name(split_backends[i]).c_str(),
+                            first_segment,
+                            last_segment,
+                            assignment.tensors_by_backend[i].size(),
+                            assignment.bytes_by_backend[i] / (1024.0 * 1024.0));
             }
         }
     }

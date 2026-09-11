@@ -107,6 +107,7 @@ struct ArgOptions {
     void print() const;
 };
 
+void add_log_options(ArgOptions& options, sd_log_level_t& level);
 bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& options_list);
 bool decode_base64_image(const std::string& encoded_input,
                          int target_channels,
@@ -146,17 +147,18 @@ struct SDContextParams {
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
 
-    rng_type_t rng_type         = CUDA_RNG;
-    rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
-    bool offload_params_to_cpu  = false;
-    std::string max_vram        = "0";
-    bool stream_layers          = false;
-    bool eager_load             = false;
+    rng_type_t rng_type            = CUDA_RNG;
+    rng_type_t sampler_rng_type    = RNG_TYPE_COUNT;
+    bool offload_params_to_cpu     = false;
+    std::string max_vram           = "0";
+    bool disable_prefetch          = false;
+    bool disable_segmented_compute = false;
+    bool eager_load                = false;
     std::string backend;
     std::string params_backend;
     std::string split_mode;
     std::string model_args;
-    bool auto_fit = false;
+    bool auto_fit = true;
     std::string rpc_servers;
     std::string effective_backend;
     std::string effective_params_backend;

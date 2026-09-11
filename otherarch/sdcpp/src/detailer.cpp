@@ -715,7 +715,7 @@ std::vector<ADetailerDetection> ADetailerGGML::predict(sd_image_t image,
     LetterboxInput input  = make_letterbox_input(image, params.input_size);
     int64_t start         = ggml_time_ms();
     sd::Tensor<float> raw = detector->compute(n_threads, input.tensor);
-    detector->free_compute_buffer();
+    detector->runner_end();
     if (raw.empty()) {
         LOG_ERROR("YOLOv8 detector inference failed");
         return {};

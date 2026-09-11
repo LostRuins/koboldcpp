@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -9,9 +10,12 @@
 #include <utility>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend_backend.h"
 #include "core/ggml_graph_cut.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
 #include "core/layer_split_partition.h"
+#include "model.h"
 
 #include "core/rng.hpp"
 #include "core/rng_mt19937.hpp"
@@ -252,8 +256,9 @@ public:
     sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
     bool enable_mmap                     = false;
     sd::ggml_graph_cut::MaxVramAssignment max_vram_assignment;
-    bool stream_layers = false;
-    bool eager_load    = false;
+    bool disable_prefetch          = false;
+    bool disable_segmented_compute = false;
+    bool eager_load                = false;
     std::string backend_spec;
     std::string params_backend_spec;
     std::string split_mode_spec;
@@ -438,7 +443,11 @@ public:
         if (split_buft == nullptr) {
             return fall_back_to_layer_split("backend has no split buffer type");
         }
-        model_manager->set_split_buffer_type(main_backend, split_buft);
+        std::vector<std::pair<ggml_backend_t, size_t>> split_device_limits;
+        for (auto backend : module_backends) {
+            split_device_limits.emplace_back(backend, max_vram_assignment.bytes_for_backend(backend));
+        }
+        model_manager->set_split_buffer_type(main_backend, split_buft, split_device_limits);
 
         std::map<std::string, ggml_tensor*> split_tensors;
         if constexpr (std::is_base_of_v<Conditioner, T>) {
@@ -602,6 +611,8 @@ public:
                                                    version,
                                                    "",
                                                    model_manager);
+        control_net->set_max_graph_vram_bytes(
+            max_graph_vram_bytes_for_module(SDBackendModule::CONTROL_NET));
         if (diffusion_conv_direct) {
             LOG_INFO("Using Conv2d direct in the control net");
             control_net->set_conv2d_direct_enabled(true);
@@ -706,7 +717,7 @@ public:
         }
 
         file_alphas_cumprod = std::move(loaded_alphas);
-        LOG_DEBUG("loaded alphas_cumprod from model file");
+        LOG_VERBOSE("loaded alphas_cumprod from model file");
     }
 
     bool init_model_loader(ModelLoader& model_loader,
@@ -1113,14 +1124,15 @@ public:
     }
 
     bool init(const sd_ctx_params_t* sd_ctx_params) {
-        n_threads           = sd_ctx_params->n_threads;
-        enable_mmap         = sd_ctx_params->enable_mmap;
-        stream_layers       = sd_ctx_params->stream_layers;
-        eager_load          = sd_ctx_params->eager_load;
-        backend_spec        = SAFE_STR(sd_ctx_params->backend);
-        params_backend_spec = SAFE_STR(sd_ctx_params->params_backend);
-        split_mode_spec     = SAFE_STR(sd_ctx_params->split_mode);
-        auto_fit_enabled    = sd_ctx_params->auto_fit;
+        n_threads                 = sd_ctx_params->n_threads;
+        enable_mmap               = sd_ctx_params->enable_mmap;
+        disable_prefetch          = sd_ctx_params->disable_prefetch;
+        disable_segmented_compute = sd_ctx_params->disable_segmented_compute;
+        eager_load                = sd_ctx_params->eager_load;
+        backend_spec              = SAFE_STR(sd_ctx_params->backend);
+        params_backend_spec       = SAFE_STR(sd_ctx_params->params_backend);
+        split_mode_spec           = SAFE_STR(sd_ctx_params->split_mode);
+        auto_fit_enabled          = sd_ctx_params->auto_fit && backend_spec.empty() && params_backend_spec.empty();
         max_vram_assignment.reset(0.f);
         {
             std::string error;
@@ -1144,11 +1156,13 @@ public:
             sampler_rng = rng;
         }
 
-        ggml_log_set(ggml_log_callback_default, nullptr);
+        ggml_log_set(sd_ggml_log_callback, nullptr);
 
         model_manager = std::make_shared<ModelManager>();
         model_manager->set_n_threads(n_threads);
         model_manager->set_enable_mmap(enable_mmap);
+        model_manager->set_segmented_compute_disabled(disable_segmented_compute);
+        model_manager->set_prefetch_disabled(disable_prefetch);
         ModelLoader& model_loader = model_manager->loader();
 
         if (!init_model_loader(model_loader, sd_ctx_params, use_tae, use_audio_vae, use_control_net)) {
@@ -1183,10 +1197,6 @@ public:
                 return false;
             }
         }
-        if (stream_layers && !backend_manager.params_backend_is_cpu(SDBackendModule::DIFFUSION)) {
-            LOG_WARN("--stream-layers has no effect unless diffusion params backend is cpu; ignoring");
-            stream_layers = false;
-        }
         if (eager_load && graph_cut_layer_split_active()) {
             LOG_WARN("--eager-load is not supported with graph-cut layer split; weights will be prepared lazily");
             eager_load = false;
@@ -1216,10 +1226,18 @@ public:
         LOG_INFO("Diffusion model weight type stat: %s", wtype_stat_to_str(diffusion_model_wtype_stat).c_str());
         LOG_INFO("VAE weight type stat:             %s", wtype_stat_to_str(vae_wtype_stat).c_str());
 
-        LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
+        LOG_VERBOSE("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
+
+        bool have_int8_tensorwise = false;
+        for (const auto& [_, tensor_storage] : model_loader.get_tensor_storage_map()) {
+            if (tensor_storage.is_int8_tensorwise) {
+                have_int8_tensorwise = true;
+                break;
+            }
+        }
 
         if (sd_ctx_params->lora_apply_mode == LORA_APPLY_AUTO) {
-            bool have_quantized_weight = false;
+            bool have_quantized_weight = have_int8_tensorwise;
             for (const auto& [type, _] : wtype_stat) {
                 if (ggml_is_quantized(type)) {
                     have_quantized_weight = true;
@@ -1228,19 +1246,27 @@ public:
             }
             // Avoid full-model LoRA merge buffers on constrained setups.
             const bool params_offloaded      = params_backend_for(SDBackendModule::DIFFUSION) != backend_for(SDBackendModule::DIFFUSION);
-            const bool streaming_constrained = stream_layers || params_offloaded;
+            const bool streaming_constrained = params_offloaded ||
+                                               backend_manager.params_backend_is_disk(SDBackendModule::DIFFUSION);
             if (have_quantized_weight || streaming_constrained || row_split_active()) {
                 apply_lora_immediately = false;
             } else {
                 apply_lora_immediately = true;
             }
         } else if (sd_ctx_params->lora_apply_mode == LORA_APPLY_IMMEDIATELY) {
-            if (row_split_active()) {
+            if (have_int8_tensorwise) {
+                LOG_WARN(
+                    "INT8 tensorwise weights do not support the immediately LoRA apply mode; "
+                    "using at_runtime instead");
+                apply_lora_immediately = false;
+            } else if (row_split_active()) {
                 LOG_WARN(
                     "row-split tensors do not support the immediately LoRA apply mode; "
                     "LoRAs will not be applied to them (use --lora-apply-mode at_runtime)");
+                apply_lora_immediately = false;
+            } else {
+                apply_lora_immediately = true;
             }
-            apply_lora_immediately = true;
         } else {
             apply_lora_immediately = false;
         }
@@ -1594,7 +1620,6 @@ public:
             }
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
-            diffusion_model->set_stream_layers_enabled(stream_layers);
             if (!register_runner_params("Diffusion model",
                                         diffusion_model,
                                         SDBackendModule::DIFFUSION,
@@ -1604,7 +1629,6 @@ public:
 
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
-                high_noise_diffusion_model->set_stream_layers_enabled(stream_layers);
                 if (!register_runner_params("High noise diffusion model",
                                             high_noise_diffusion_model,
                                             SDBackendModule::DIFFUSION,
@@ -1809,6 +1833,8 @@ public:
                                                            version,
                                                            "",
                                                            model_manager);
+                control_net->set_max_graph_vram_bytes(
+                    max_graph_vram_bytes_for_module(SDBackendModule::CONTROL_NET));
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the control net");
                     control_net->set_conv2d_direct_enabled(true);
@@ -1885,7 +1911,7 @@ public:
             }
         }
 
-        LOG_DEBUG("validating model metadata");
+        LOG_VERBOSE("validating model metadata");
 
         std::set<std::string> ignore_tensors;
         if (use_tae && !tae_preview_only) {
@@ -1942,9 +1968,9 @@ public:
                 LOG_ERROR("model params eager load failed");
                 return false;
             }
-            LOG_DEBUG("model metadata validated; weights pre-loaded to params backend");
+            LOG_VERBOSE("model metadata validated; weights pre-loaded to params backend");
         } else {
-            LOG_DEBUG("model metadata validated; weights will be prepared lazily");
+            LOG_VERBOSE("model metadata validated; weights will be prepared lazily");
         }
 
         {
@@ -2140,15 +2166,15 @@ public:
     }
 
     bool is_using_v_parameterization_for_sd2(bool is_inpaint = false) {
-        struct RunnerDoneOnExit {
+        struct RunnerEndOnExit {
             GGMLRunner* runner = nullptr;
-            ~RunnerDoneOnExit() {
+            ~RunnerEndOnExit() {
                 if (runner != nullptr) {
-                    runner->runner_done();
+                    runner->runner_end();
                 }
             }
         };
-        RunnerDoneOnExit diffusion_runner_done{diffusion_model.get()};
+        RunnerEndOnExit diffusion_runner_end{diffusion_model.get()};
 
         sd::Tensor<float> x_t   = sd::full<float>({8, 8, 4, 1}, 0.5f);
         sd::Tensor<float> c     = sd::full<float>({1024, 2, 1, 1}, 0.5f);
@@ -2174,7 +2200,7 @@ public:
 
         double result = static_cast<double>((out - x_t).mean());
         int64_t t1    = ggml_time_ms();
-        LOG_DEBUG("check is_using_v_parameterization_for_sd2, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        LOG_VERBOSE("check is_using_v_parameterization_for_sd2, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         return result < -1;
     }
 
@@ -2189,7 +2215,7 @@ public:
             return nullptr;
         }
         if (lora_spec.is_high_noise) {
-            LOG_DEBUG("high noise lora: %s", lora_spec.path.c_str());
+            LOG_VERBOSE("high noise lora: %s", lora_spec.path.c_str());
         }
         // kcpp
         // first check the cache
@@ -2382,7 +2408,7 @@ public:
             if (loras[i].is_high_noise) {
                 lora_id = "|high_noise|" + lora_id;
             }
-            LOG_DEBUG("lora %s:%.2f", lora_id.c_str(), loras[i].multiplier);
+            LOG_VERBOSE("lora %s:%.2f", lora_id.c_str(), loras[i].multiplier);
         }
 
         for (auto& extension : generation_extensions) {
@@ -2678,7 +2704,7 @@ public:
             float shifted_t_float = t * (float(shifted_timestep) / float(TIMESTEPS));
             int64_t shifted_t     = static_cast<int64_t>(roundf(shifted_t_float));
             shifted_t             = std::max((int64_t)0, std::min((int64_t)(TIMESTEPS - 1), shifted_t));
-            LOG_DEBUG("shifting timestep from %.2f to %" PRId64 " (sigma: %.4f)", t, shifted_t, sigma);
+            LOG_VERBOSE("shifting timestep from %.2f to %" PRId64 " (sigma: %.4f)", t, shifted_t, sigma);
             return std::vector<float>{(float)shifted_t};
         }
         if (sd_version_is_anima(version)) {
@@ -2798,17 +2824,17 @@ public:
                              const sd_cache_params_t* cache_params,
                              bool preview_final_step,
                              const sd::Tensor<float>& video_positions = {}) {
-        struct RunnerDoneOnExit {
+        struct RunnerEndOnExit {
             GGMLRunner* runner = nullptr;
-            ~RunnerDoneOnExit() {
+            ~RunnerEndOnExit() {
                 if (runner != nullptr) {
-                    runner->runner_done();
+                    runner->runner_end();
                 }
             }
         };
-        RunnerDoneOnExit sample_diffusion_runner_done{work_diffusion_model.get()};
+        RunnerEndOnExit sample_diffusion_runner_end{work_diffusion_model.get()};
 
-        RunnerDoneOnExit sample_control_runner_done{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
+        RunnerEndOnExit sample_control_runner_end{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
 
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
         float cfg_scale     = guidance.txt_cfg;
@@ -2839,7 +2865,7 @@ public:
                 }
             }
             schedule_str += "]";
-            LOG_DEBUG("using guidance schedule: %s", schedule_str.c_str());
+            LOG_VERBOSE("using guidance schedule: %s", schedule_str.c_str());
         }
 
         sd_sample::SampleCacheRuntime cache_runtime = sd_sample::init_sample_cache_runtime(version,
@@ -2896,7 +2922,7 @@ public:
 
         auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
             if (get_cancel_flag() == SD_CANCEL_ALL) {
-                LOG_DEBUG("cancelling generation");
+                LOG_VERBOSE("cancelling generation");
                 return {};
             }
 
@@ -3102,7 +3128,7 @@ public:
                 }
                 const std::vector<int>* uncond_skip_layers = nullptr;
                 if (is_skiplayer_step && slg_uncond) {
-                    LOG_DEBUG("Skipping layers at uncond step %d\n", step);
+                    LOG_VERBOSE("Skipping layers at uncond step %d\n", step);
                     uncond_skip_layers = &skip_layer_guidance.layers();
                 }
                 uncond_out = run_condition(uncond,
@@ -3137,7 +3163,7 @@ public:
             }
 
             if (is_skiplayer_step && slg_scale != 0.0f) {
-                LOG_DEBUG("Skipping layers at step %d\n", step);
+                LOG_VERBOSE("Skipping layers at step %d\n", step);
                 if (!step_cache.is_step_skipped()) {
                     guidance_input.predict_skip_layer = [&]() -> sd::Tensor<float> {
                         return run_condition(cond,
@@ -3180,10 +3206,6 @@ public:
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
                 control_net->free_control_ctx();
-                control_net->free_compute_buffer();
-            }
-            if (work_diffusion_model) {
-                work_diffusion_model->free_compute_buffer();
             }
             return {};
         }
@@ -3197,10 +3219,6 @@ public:
 
         if (control_net) {
             control_net->free_control_ctx();
-            control_net->free_compute_buffer();
-        }
-        if (work_diffusion_model) {
-            work_diffusion_model->free_compute_buffer();
         }
         return x0;
     }
@@ -3349,7 +3367,6 @@ public:
         while (decoded.empty() &&
                auto_fit_enabled &&
                sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
-            first_stage_model->free_compute_buffer();
             decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
         }
         return decoded;
@@ -3824,26 +3841,27 @@ void sd_hires_params_init(sd_hires_params_t* hires_params) {
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
-    *sd_ctx_params                      = {};
-    sd_ctx_params->n_threads            = sd_get_num_physical_cores();
-    sd_ctx_params->wtype                = SD_TYPE_COUNT;
-    sd_ctx_params->rng_type             = CUDA_RNG;
-    sd_ctx_params->sampler_rng_type     = RNG_TYPE_COUNT;
-    sd_ctx_params->prediction           = PREDICTION_COUNT;
-    sd_ctx_params->lora_apply_mode      = LORA_APPLY_AUTO;
-    sd_ctx_params->max_vram             = nullptr;
-    sd_ctx_params->stream_layers        = false;
-    sd_ctx_params->eager_load           = false;
-    sd_ctx_params->enable_mmap          = false;
-    sd_ctx_params->diffusion_flash_attn = false;
-    sd_ctx_params->vae_format           = SD_VAE_FORMAT_AUTO;
-    sd_ctx_params->backend              = nullptr;
-    sd_ctx_params->params_backend       = nullptr;
-    sd_ctx_params->split_mode           = nullptr;
-    sd_ctx_params->auto_fit             = false;
-    sd_ctx_params->rpc_servers          = nullptr;
-    sd_ctx_params->model_args           = nullptr;
-    sd_ctx_params->pulid_weights_path   = nullptr;
+    *sd_ctx_params                           = {};
+    sd_ctx_params->n_threads                 = sd_get_num_physical_cores();
+    sd_ctx_params->wtype                     = SD_TYPE_COUNT;
+    sd_ctx_params->rng_type                  = CUDA_RNG;
+    sd_ctx_params->sampler_rng_type          = RNG_TYPE_COUNT;
+    sd_ctx_params->prediction                = PREDICTION_COUNT;
+    sd_ctx_params->lora_apply_mode           = LORA_APPLY_AUTO;
+    sd_ctx_params->max_vram                  = nullptr;
+    sd_ctx_params->disable_prefetch          = false;
+    sd_ctx_params->disable_segmented_compute = false;
+    sd_ctx_params->eager_load                = false;
+    sd_ctx_params->enable_mmap               = false;
+    sd_ctx_params->diffusion_flash_attn      = false;
+    sd_ctx_params->vae_format                = SD_VAE_FORMAT_AUTO;
+    sd_ctx_params->backend                   = nullptr;
+    sd_ctx_params->params_backend            = nullptr;
+    sd_ctx_params->split_mode                = nullptr;
+    sd_ctx_params->auto_fit                  = true;
+    sd_ctx_params->rpc_servers               = nullptr;
+    sd_ctx_params->model_args                = nullptr;
+    sd_ctx_params->pulid_weights_path        = nullptr;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -3877,7 +3895,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "sampler_rng_type: %s\n"
              "prediction: %s\n"
              "max_vram: %s\n"
-             "stream_layers: %s\n"
+             "disable_prefetch: %s\n"
+             "disable_segmented_compute: %s\n"
              "eager_load: %s\n"
              "backend: %s\n"
              "params_backend: %s\n"
@@ -3911,7 +3930,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
              sd_prediction_name(sd_ctx_params->prediction),
              SAFE_STR(sd_ctx_params->max_vram),
-             BOOL_STR(sd_ctx_params->stream_layers),
+             BOOL_STR(sd_ctx_params->disable_prefetch),
+             BOOL_STR(sd_ctx_params->disable_segmented_compute),
              BOOL_STR(sd_ctx_params->eager_load),
              SAFE_STR(sd_ctx_params->backend),
              SAFE_STR(sd_ctx_params->params_backend),
@@ -4724,7 +4744,7 @@ struct SamplePlan {
                     break;
                 }
             }
-            LOG_DEBUG("switching from high noise model at step %d", high_noise_sample_steps);
+            LOG_VERBOSE("switching from high noise model at step %d", high_noise_sample_steps);
         }
 
         LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
@@ -5136,11 +5156,11 @@ struct ImageGenerationEmbeds {
     SDCondition img_uncond;
 };
 
-struct ConditionerRunnerDoneOnExit {
+struct ConditionerRunnerEndOnExit {
     Conditioner* conditioner = nullptr;
-    ~ConditionerRunnerDoneOnExit() {
+    ~ConditionerRunnerEndOnExit() {
         if (conditioner != nullptr) {
-            conditioner->runner_done();
+            conditioner->runner_end();
         }
     }
 };
@@ -5302,7 +5322,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
                     t_enc--;
                 }
             } else {
-                LOG_DEBUG("Interpreting denoise strength as relative noise level");
+                LOG_VERBOSE("Interpreting denoise strength as relative noise level");
                 // assume x_noised = K * (x * (1-noise_level) + noise * noise_level) = K * lerp(x, noise, noise_level)
                 // K = 1, noise_level = sigma for flow models
                 // K = 1+sigma, noise_level=sigma/(1+sigma) for diffusion models
@@ -5326,7 +5346,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
             sigma_sched.assign(plan->sigmas.begin() + plan->sample_steps - t_enc - 1, plan->sigmas.end());
 
             if (target_sigma > 0 && force_first_sigma && strength_as_noise_level) {
-                LOG_DEBUG("force_first_sigma to %.4f (from %.4f)", target_sigma, sigma_sched[0]);
+                LOG_VERBOSE("force_first_sigma to %.4f (from %.4f)", target_sigma, sigma_sched[0]);
                 sigma_sched[0] = target_sigma;
             }
 
@@ -5428,7 +5448,7 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
         }
         sd::Tensor<float> ref_latent;
         if (ref_image_params.resize_before_vae && !sd_version_is_pid(sd_ctx->sd->version)) {
-            LOG_DEBUG("auto resize ref images");
+            LOG_VERBOSE("auto resize ref images");
             double vae_width;
             double vae_height;
             if (ref_image_params.resize_vae_to_target) {
@@ -5451,12 +5471,12 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
                                                          ref_images[i].shape()[2],
                                                          ref_images[i].shape()[3]});
 
-            LOG_DEBUG("resize vae ref image %d from %" PRId64 "x%" PRId64 " to %" PRId64 "x%" PRId64,
-                      static_cast<int>(i),
-                      ref_images[i].shape()[1],
-                      ref_images[i].shape()[0],
-                      resized_ref_img.shape()[1],
-                      resized_ref_img.shape()[0]);
+            LOG_VERBOSE("resize vae ref image %d from %" PRId64 "x%" PRId64 " to %" PRId64 "x%" PRId64,
+                        static_cast<int>(i),
+                        ref_images[i].shape()[1],
+                        ref_images[i].shape()[0],
+                        resized_ref_img.shape()[1],
+                        resized_ref_img.shape()[0]);
 
             ref_latent = sd_ctx->sd->encode_first_stage(resized_ref_img);
         } else {
@@ -5566,7 +5586,7 @@ static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(sd_c
                                                                             SamplePlan* plan,
                                                                             ImageGenerationLatents* latents,
                                                                             const RefImageParams& ref_image_params) {
-    ConditionerRunnerDoneOnExit conditioner_runner_done{sd_ctx->sd->cond_stage_model.get()};
+    ConditionerRunnerEndOnExit conditioner_runner_end{sd_ctx->sd->cond_stage_model.get()};
 
     ConditionerParams condition_params;
     condition_params.text      = request->prompt;
@@ -6236,6 +6256,15 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
     sd::Tensor<float> start_image;
     sd::Tensor<float> end_image;
 
+    struct RunnerEndGuard {
+        GGMLRunner* runner = nullptr;
+        ~RunnerEndGuard() {
+            if (runner) {
+                runner->runner_end();
+            }
+        }
+    } runner_guard{sd_ctx->sd->audio_vae_model.get()};
+
     if (sd_vid_gen_params->init_image.data) {
         start_image = sd_image_to_tensor(sd_vid_gen_params->init_image, request->width, request->height);
     }
@@ -6902,10 +6931,6 @@ static std::optional<ImageGenerationLatents> prepare_video_generation_latents(sd
         latents.init_latent = pack_ltxav_audio_and_video_latents(latents.init_latent, latents.audio_latent);
     }
 
-    if (sd_ctx->sd->audio_vae_model != nullptr) {
-        sd_ctx->sd->audio_vae_model->runner_done();
-    }
-
     return latents;
 }
 
@@ -6913,7 +6938,7 @@ static ImageGenerationEmbeds prepare_video_generation_embeds(sd_ctx_t* sd_ctx,
                                                              const sd_vid_gen_params_t* sd_vid_gen_params,
                                                              const GenerationRequest& request,
                                                              const ImageGenerationLatents& latents) {
-    ConditionerRunnerDoneOnExit conditioner_runner_done{sd_ctx->sd->cond_stage_model.get()};
+    ConditionerRunnerEndOnExit conditioner_runner_end{sd_ctx->sd->cond_stage_model.get()};
 
     ImageGenerationEmbeds embeds;
     ConditionerParams condition_params;
@@ -6978,11 +7003,11 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
         video_latent.shape()[3] > sd_ctx->sd->get_latent_channel()) {
         video_latent = sd::ops::slice(video_latent, 3, 0, sd_ctx->sd->get_latent_channel());
     }
-    LOG_DEBUG("decode_video_outputs latent %dx%dx%dx%d",
-              (int)video_latent.shape()[0],
-              (int)video_latent.shape()[1],
-              (int)video_latent.shape()[2],
-              (int)video_latent.shape()[3]);
+    LOG_VERBOSE("decode_video_outputs latent %dx%dx%dx%d",
+                (int)video_latent.shape()[0],
+                (int)video_latent.shape()[1],
+                (int)video_latent.shape()[2],
+                (int)video_latent.shape()[3]);
     // auto z = sd::load_tensor_from_file_as_tensor<float>("ltx_vae_z.bin");
     int64_t t4            = ggml_time_ms();
     sd::Tensor<float> vid = sd_ctx->sd->decode_first_stage(video_latent, true);
@@ -6992,11 +7017,11 @@ static sd_image_t* decode_video_outputs(sd_ctx_t* sd_ctx,
         LOG_ERROR("decode_first_stage failed for video");
         return nullptr;
     }
-    LOG_DEBUG("decode_video_outputs decoded %dx%dx%dx%d",
-              (int)vid.shape()[0],
-              (int)vid.shape()[1],
-              (int)vid.shape()[2],
-              (int)vid.shape()[3]);
+    LOG_VERBOSE("decode_video_outputs decoded %dx%dx%dx%d",
+                (int)vid.shape()[0],
+                (int)vid.shape()[1],
+                (int)vid.shape()[2],
+                (int)vid.shape()[3]);
     if (request.frames > 0 &&
         vid.shape()[2] > request.frames) {
         vid = sd::ops::slice(vid, 2, 0, request.frames);
@@ -7346,7 +7371,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
             LOG_ERROR("cancelling generation before high-noise sampling");
             return false;
         }
-        LOG_DEBUG("sample(high noise) %dx%dx%d", W, H, T);
+        LOG_VERBOSE("sample(high noise) %dx%dx%d", W, H, T);
 
         int64_t sampling_start = ggml_time_ms();
         std::vector<float> high_noise_sigmas(plan.sigmas.begin(), plan.sigmas.begin() + plan.high_noise_sample_steps + 1);
@@ -7393,7 +7418,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         LOG_ERROR("cancelling generation before sampling");
         return false;
     }
-    LOG_DEBUG("sample %dx%dx%d", W, H, T);
+    LOG_VERBOSE("sample %dx%dx%d", W, H, T);
     int64_t sampling_start         = ggml_time_ms();
     sd::Tensor<float> final_latent = sd_ctx->sd->sample(sd_ctx->sd->diffusion_model,
                                                         true,
@@ -7536,7 +7561,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                       sd_vid_gen_params->sample_params.eta,
                                       hires_sample_method);
 
-        LOG_DEBUG("sample(latent upscale) %dx%dx%d", W, H, T);
+        LOG_VERBOSE("sample(latent upscale) %dx%dx%d", W, H, T);
         LOG_INFO("LTX latent spatial upscale refine: scheduler_steps=%d, denoising_strength=%.2f, sampler=%s, sigma_sched_size=%zu%s",
                  hires_scheduler_steps,
                  request.hires.denoising_strength,
@@ -7584,6 +7609,15 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
     int64_t latent_end = ggml_time_ms();
     LOG_INFO("generating latent video completed, taking %.2fs", (latent_end - latent_start) * 1.0f / 1000);
 
+    struct RunnerEndGuard {
+        GGMLRunner* runner = nullptr;
+        ~RunnerEndGuard() {
+            if (runner) {
+                runner->runner_end();
+            }
+        }
+    } runner_guard{sd_ctx->sd->audio_vae_model.get()};
+
     sd_audio_t* generated_audio = nullptr;
     if ((sd_version_is_ltxav(sd_ctx->sd->version) || sd_version_is_minimax_h3(sd_ctx->sd->version)) &&
         has_input_audio) {
@@ -7605,11 +7639,11 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                                                             latents.audio_length,
                                                             sd_ctx->sd->get_latent_channel());
         if (!audio_latent.empty()) {
-            LOG_DEBUG("decode audio latent %dx%dx%dx%d",
-                      (int)audio_latent.shape()[0],
-                      (int)audio_latent.shape()[1],
-                      (int)audio_latent.shape()[2],
-                      (int)audio_latent.shape()[3]);
+            LOG_VERBOSE("decode audio latent %dx%dx%dx%d",
+                        (int)audio_latent.shape()[0],
+                        (int)audio_latent.shape()[1],
+                        (int)audio_latent.shape()[2],
+                        (int)audio_latent.shape()[3]);
             auto waveform = sd_ctx->sd->decode_ltx_audio_latent(audio_latent);
             if (!waveform.empty()) {
                 generated_audio = waveform_to_sd_audio(sd_ctx->sd, waveform);
@@ -7619,10 +7653,6 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
         }
         int64_t audio_latent_decode_end = ggml_time_ms();
         LOG_INFO("decoding audio latent completed, taking %.2fs", (audio_latent_decode_end - audio_latent_decode_start) * 1.0f / 1000);
-    }
-
-    if (sd_ctx->sd->audio_vae_model != nullptr) {
-        sd_ctx->sd->audio_vae_model->runner_done();
     }
 
     if (latents.video_conditioning_frame_count > 0) {

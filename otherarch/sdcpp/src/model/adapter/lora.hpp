@@ -2,7 +2,13 @@
 #define __SD_MODEL_ADAPTER_LORA_HPP__
 
 #include <mutex>
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
+#include "model.h"
+#include "model/adapter/lora_ops.h"
 #include "model_loader.h"
 #include "model_manager.h"
 
@@ -120,18 +126,17 @@ struct LoraModel : public GGMLRunner {
             return false;
         }
 
-        LOG_DEBUG("finished loaded lora");
+        LOG_VERBOSE("finished loaded lora");
         return true;
     }
 
     void release_loaded_tensors() {
-        runner_done();
-        free_compute_buffer();
+        runner_end();
         model_manager.reset();
         free_params_ctx();
         alloc_params_ctx();
-        model_manager  = std::make_shared<ModelManager>();
-        weight_manager = model_manager;
+        model_manager     = std::make_shared<ModelManager>();
+        residency_manager = model_manager;
         lora_tensors.clear();
         original_tensor_to_final_tensor.clear();
         applied_lora_tensors.clear();
@@ -243,7 +248,7 @@ struct LoraModel : public GGMLRunner {
                 if (iter != lora_tensors.end()) {
                     float alpha = ggml_ext_backend_tensor_get_f32(iter->second);
                     scale_value = alpha / rank;
-                    // LOG_DEBUG("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
+                    // LOG_VERBOSE("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
                     applied_lora_tensors.insert(alpha_name);
                 }
             }
@@ -799,7 +804,7 @@ struct LoraModel : public GGMLRunner {
                     float alpha       = ggml_ext_backend_tensor_get_f32(iter->second);
                     scale_value       = alpha / rank;
                     scale_tensor_name = alpha_name;
-                    // LOG_DEBUG("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
+                    // LOG_VERBOSE("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
                 }
             }
             scale_value *= multiplier;
@@ -952,16 +957,19 @@ struct LoraModel : public GGMLRunner {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_lora_graph(model_tensors, model_tensor_names, version);
         };
-        GGMLRunner::compute<float>(get_graph, n_threads, false, false, false, true);
-        stat(!warn_unused);
-        for (auto item : original_tensor_to_final_tensor) {
-            ggml_tensor* original_tensor = item.first;
-            ggml_tensor* final_tensor    = item.second;
-
-            ggml_backend_tensor_copy(final_tensor, original_tensor);
+        auto read_outputs = [&]() {
+            for (const auto& item : original_tensor_to_final_tensor) {
+                ggml_backend_tensor_copy(item.second, item.first);
+            }
+            return true;
+        };
+        auto result = GGMLRunner::compute(get_graph, n_threads, false, true, read_outputs);
+        if (!result.has_value()) {
+            LOG_ERROR("LoRA graph execution failed");
         }
+        stat(!warn_unused);
         original_tensor_to_final_tensor.clear();
-        GGMLRunner::free_compute_buffer();
+        runner_end();
     }
 
     void apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads, bool warn_unused = true) {
@@ -1070,6 +1078,34 @@ public:
             out = ggml_add_inplace(ctx, out, out_diff);
         }
         return out;
+    }
+
+    ggml_tensor* add_lora_to_output(ggml_context* ctx,
+                                    ggml_backend_t backend,
+                                    ggml_tensor* x,
+                                    ggml_tensor* w,
+                                    ggml_tensor* output,
+                                    const std::string& prefix,
+                                    WeightAdapter::ForwardParams forward_params) override {
+        for (auto& lora_model : lora_models) {
+            ggml_tensor* weight_diff = lora_model->get_weight_diff(prefix + "weight", backend, ctx, w, false);
+            if (weight_diff != nullptr) {
+                GGML_ASSERT(forward_params.op_type == ForwardParams::op_type_t::OP_LINEAR);
+                ggml_tensor* out_diff = ggml_ext_linear(ctx,
+                                                        x,
+                                                        weight_diff,
+                                                        nullptr,
+                                                        forward_params.linear.force_prec_f32,
+                                                        forward_params.linear.scale);
+                output                = ggml_add_inplace(ctx, output, out_diff);
+            }
+
+            ggml_tensor* out_diff = lora_model->get_out_diff(ctx, backend, x, w, forward_params, prefix + "weight");
+            if (out_diff != nullptr) {
+                output = ggml_add_inplace(ctx, output, out_diff);
+            }
+        }
+        return output;
     }
 
     size_t get_extra_graph_size() override {

@@ -11,8 +11,10 @@
 #include <string>
 #include <utility>
 
-#include "core/ggml_extend.hpp"
+#include "core/rng.hpp"
 #include "core/tensor.hpp"
+#include "core/util.h"
+#include "model.h"
 #include "runtime/gits_noise.h"
 #include "runtime/guidance.h"
 
@@ -311,7 +313,7 @@ struct BetaScheduler : SigmaScheduler {
 
     explicit BetaScheduler(const char* extra_sample_args = nullptr) {
         parse_extra_sample_args(extra_sample_args);
-        LOG_DEBUG("Beta scheduler: alpha=%.4f, beta=%.4f", alpha, beta);
+        LOG_VERBOSE("Beta scheduler: alpha=%.4f, beta=%.4f", alpha, beta);
     }
 
     void parse_extra_sample_args(const char* extra_sample_args) {
@@ -692,7 +694,7 @@ struct LTX2Scheduler : SigmaScheduler {
         float exp_shift                   = std::exp(sigma_shift);
         float target_terminal             = std::clamp(terminal, 0.0f, 0.99f);
 
-        LOG_DEBUG("LTX2 scheduler: tokens=%d, shift=%.4f, stretch=%d, terminal=%.4f", token_count, sigma_shift, stretch ? 1 : 0, target_terminal);
+        LOG_VERBOSE("LTX2 scheduler: tokens=%d, shift=%.4f, stretch=%d, terminal=%.4f", token_count, sigma_shift, stretch ? 1 : 0, target_terminal);
 
         sigmas.reserve(n + 1);
         for (uint32_t i = 0; i <= n; ++i) {
@@ -760,7 +762,7 @@ struct FluxScheduler : SigmaScheduler {
         sigmas.reserve(n + 1);
 
         float mu = compute_mu();
-        LOG_DEBUG("Flux scheduler: image_seq_len=%d, steps=%u, mu=%.3f", image_seq_len, n, mu);
+        LOG_VERBOSE("Flux scheduler: image_seq_len=%d, steps=%u, mu=%.3f", image_seq_len, n, mu);
 
         if (n == 0) {
             sigmas.push_back(1.0f);
@@ -811,7 +813,7 @@ struct Flux2Scheduler : SigmaScheduler {
         sigmas.reserve(n + 1);
 
         float mu = compute_empirical_mu(image_seq_len, n);
-        LOG_DEBUG("Flux2 scheduler: image_seq_len=%d, steps=%u, mu=%.3f", image_seq_len, n, mu);
+        LOG_VERBOSE("Flux2 scheduler: image_seq_len=%d, steps=%u, mu=%.3f", image_seq_len, n, mu);
 
         if (n == 0) {
             sigmas.push_back(1.0f);
@@ -1413,8 +1415,8 @@ struct SefiFlowDenoiser : public FluxFlowDenoiser {
             sem_sigmas.push_back(sigma_sem);
             tex_sigmas.push_back(sigma_tex);
         }
-        LOG_DEBUG("SefiFlowDenoiser: built %u-step dual schedule (alpha=%.2f delta_t=%.2f)",
-                  n, timestep_shift_alpha, delta_t);
+        LOG_VERBOSE("SefiFlowDenoiser: built %u-step dual schedule (alpha=%.2f delta_t=%.2f)",
+                    n, timestep_shift_alpha, delta_t);
         return tex_sigmas;
     }
 };
@@ -2690,7 +2692,7 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
 
     int steps = static_cast<int>(sigmas.size()) - 1;
     max_order = std::min(max_order, steps);  // history can not be larger than steps
-    LOG_DEBUG("linear multi-step sampler: lms_max_order = %i, lms_shift = %i, lms_divisions = %i", max_order, shift, divisions);
+    LOG_VERBOSE("linear multi-step sampler: lms_max_order = %i, lms_shift = %i, lms_divisions = %i", max_order, shift, divisions);
     std::vector<float> lms_coeff(max_order);
     std::vector<sd::Tensor<float>> hist = {};
 
@@ -2793,7 +2795,7 @@ static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
                 LOG_WARN("ignoring invalid euler_ge extra sample arg '%s=%s'", key.c_str(), value.c_str());
                 continue;
             }
-            LOG_DEBUG("setting euler_ge gamma to %.2f", parsed);
+            LOG_VERBOSE("setting euler_ge gamma to %.2f", parsed);
             ge_gamma = parsed;
         }
     }

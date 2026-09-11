@@ -1448,7 +1448,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             }
         }
 
-        // LOG_DEBUG("name %s %d", name.c_str(), version);
+        // LOG_VERBOSE("name %s %d", name.c_str(), version);
 
         if (sd_version_is_unet(version) || is_underline || is_lycoris_underline) {
             name = convert_sep_to_dot(name);
@@ -1570,6 +1570,11 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             name = convert_diffusers_controlnet_to_original_sdxl(name);
         }
     }
+
+    static const std::vector<std::pair<std::string, std::string>> generic_name_map = {
+        {".scale_weight", ".weight_scale"},
+    };
+    replace_with_name_map(name, generic_name_map);
 
     if (is_lora) {
         name = "lora." + name;

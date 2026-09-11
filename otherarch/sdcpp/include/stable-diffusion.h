@@ -136,14 +136,18 @@ enum sd_type_t {
     // SD_TYPE_IQ4_NL_4_4 = 36,
     // SD_TYPE_IQ4_NL_4_8 = 37,
     // SD_TYPE_IQ4_NL_8_8 = 38,
-    SD_TYPE_MXFP4 = 39,  // MXFP4 (1 block)
-    SD_TYPE_NVFP4 = 40,  // NVFP4 (4 blocks, E4M3 scale)
-    SD_TYPE_Q1_0  = 41,
-    SD_TYPE_COUNT = 42,
+    SD_TYPE_MXFP4   = 39,  // MXFP4 (1 block)
+    SD_TYPE_NVFP4   = 40,  // NVFP4 (4 blocks, E4M3 scale)
+    SD_TYPE_Q1_0    = 41,
+    SD_TYPE_Q2_0    = 42,
+    SD_TYPE_F8_E4M3 = 43,
+    SD_TYPE_F8_E5M2 = 44,
+    SD_TYPE_COUNT   = 45,
 };
 
 enum sd_log_level_t {
     SD_LOG_DEBUG,
+    SD_LOG_VERBOSE,
     SD_LOG_INFO,
     SD_LOG_WARN,
     SD_LOG_ERROR
@@ -226,8 +230,8 @@ typedef struct {
     bool vae_conv_direct;
     bool force_sdxl_vae_conv_scale;
     enum sd_vae_format_t vae_format;
-    const char* max_vram;  // GiB budget or backend assignment spec for graph-cut segmented param offload (0 = disabled, -1 = auto)
-    bool stream_layers;  // Enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram)
+    const char* max_vram;  // Optional per-device GiB budget for managed weights and runner buffers; 0 uses live free VRAM without an explicit budget
+    bool disable_prefetch;  // Disable asynchronous next-segment weight prefetch
     bool eager_load;  // Load all params into the params backend at model-load time instead of lazily on first use
     const char* backend;
     const char* params_backend;
@@ -235,6 +239,7 @@ typedef struct {
     bool auto_fit;
     const char* rpc_servers;
     const char* model_args;
+    bool disable_segmented_compute;  // Force monolithic graph execution even when automatic graph cutting would fit memory better
 } sd_ctx_params_t;
 
 typedef struct {

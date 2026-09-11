@@ -1,9 +1,12 @@
 #ifndef __SD_MODEL_DIFFUSION_WAN_HPP__
 #define __SD_MODEL_DIFFUSION_WAN_HPP__
 
+#include <cinttypes>
 #include <map>
 #include <memory>
 #include <utility>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "model/common/block.hpp"
 #include "model/common/rope.hpp"
@@ -75,13 +78,13 @@ namespace WAN {
                     config.flf_pos_embed_token_number = 514;
                 }
             }
-            LOG_DEBUG("wan: model_type = %s, num_layers = %d, vace_layers = %d, dim = %" PRId64 ", ffn_dim = %" PRId64 ", num_heads = %" PRId64,
-                      config.model_type.c_str(),
-                      config.num_layers,
-                      config.vace_layers,
-                      config.dim,
-                      config.ffn_dim,
-                      config.num_heads);
+            LOG_VERBOSE("wan: model_type = %s, num_layers = %d, vace_layers = %d, dim = %" PRId64 ", ffn_dim = %" PRId64 ", num_heads = %" PRId64,
+                        config.model_type.c_str(),
+                        config.num_layers,
+                        config.vace_layers,
+                        config.dim,
+                        config.ffn_dim,
+                        config.num_heads);
             return config;
         }
     };
@@ -909,7 +912,7 @@ namespace WAN {
                                            config.theta,
                                            config.axes_dim);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
@@ -950,7 +953,7 @@ namespace WAN {
                 return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat, vace_context, vace_strength);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,
@@ -1007,7 +1010,7 @@ namespace WAN {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("wan test done in %lldms", t1 - t0);
+                LOG_VERBOSE("wan test done in %lldms", t1 - t0);
             }
         }
 

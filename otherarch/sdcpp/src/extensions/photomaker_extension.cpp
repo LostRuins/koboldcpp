@@ -1,3 +1,4 @@
+#include <cinttypes>
 #include "extensions/generation_extension.h"
 
 #include <algorithm>
@@ -175,9 +176,9 @@ struct PhotoMakerExtension : public GenerationExtension {
         ignore_tensors.insert("pmid.unet.");
     }
 
-    void runner_done() override {
+    void runner_end() override {
         if (pmid_model != nullptr) {
-            pmid_model->runner_done();
+            pmid_model->runner_end();
         }
     }
 

@@ -392,7 +392,7 @@ static bool backend_name_exists(const std::string& name) {
 
 static ggml_backend_t init_named_backend(const std::string& name) {
     ggml_backend_load_all_once();
-    LOG_DEBUG("Initializing backend: %s", name.c_str());
+    LOG_VERBOSE("Initializing backend: %s", name.c_str());
     if (trim_copy(name).empty()) {
         return ggml_backend_init_best();
     }
@@ -542,10 +542,10 @@ static ggml_backend_t sd_get_default_backend() {
         if (dev_count == 0) {
             LOG_ERROR("No devices found!");
         } else {
-            LOG_DEBUG("Found %zu backend devices:", dev_count);
+            LOG_VERBOSE("Found %zu backend devices:", dev_count);
             for (size_t i = 0; i < dev_count; ++i) {
                 auto dev = ggml_backend_dev_get(i);
-                LOG_DEBUG("#%zu: %s", i, ggml_backend_dev_name(dev));
+                LOG_VERBOSE("#%zu: %s", i, ggml_backend_dev_name(dev));
             }
         }
     });
@@ -587,7 +587,7 @@ static ggml_backend_t sd_get_default_backend() {
     }
 
     if (sd_backend_is_cpu(backend)) {
-        LOG_DEBUG("Using CPU backend");
+        LOG_VERBOSE("Using CPU backend");
     }
 
     return backend;
@@ -964,4 +964,36 @@ const char* sd_backend_module_name(SDBackendModule module) {
             return "detector";
     }
     return "unknown";
+}
+
+void ggml_ext_backend_tensor_get_and_sync(ggml_backend_t backend, const ggml_tensor* tensor, void* data, size_t offset, size_t size) {
+    if ((sd_backend_is(backend, "ROCm") || sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "SYCL")) &&
+        !sd_backend_is_cpu(backend)) {
+        ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
+        ggml_backend_synchronize(backend);
+        return;
+    }
+
+    ggml_backend_tensor_get(tensor, data, offset, size);
+}
+
+float ggml_ext_backend_tensor_get_f32(ggml_tensor* tensor) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16 || tensor->type == GGML_TYPE_I32 || tensor->type == GGML_TYPE_BF16);
+    float value;
+    if (tensor->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(tensor, &value, 0, sizeof(value));
+    } else if (tensor->type == GGML_TYPE_BF16) {
+        ggml_bf16_t bf16_value;
+        ggml_backend_tensor_get(tensor, &bf16_value, 0, sizeof(bf16_value));
+        value = ggml_bf16_to_fp32(bf16_value);
+    } else if (tensor->type == GGML_TYPE_F16) {
+        ggml_fp16_t f16_value;
+        ggml_backend_tensor_get(tensor, &f16_value, 0, sizeof(f16_value));
+        value = ggml_fp16_to_fp32(f16_value);
+    } else {  // GGML_TYPE_I32
+        int int32_value;
+        ggml_backend_tensor_get(tensor, &int32_value, 0, sizeof(int32_value));
+        value = (float)int32_value;
+    }
+    return value;
 }
