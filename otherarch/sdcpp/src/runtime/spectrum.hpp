@@ -5,8 +5,8 @@
 #include <cstring>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
 #include "core/tensor.hpp"
+#include "core/util.h"
 
 struct SpectrumConfig {
     float w            = 0.40f;

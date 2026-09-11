@@ -4,7 +4,7 @@
 #include <cmath>
 #include <limits>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_tensor_utils.h"
 
 #define M_PI_ 3.14159265358979323846f
 

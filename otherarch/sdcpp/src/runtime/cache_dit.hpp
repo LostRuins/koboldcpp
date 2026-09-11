@@ -8,8 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
 #include "core/tensor.hpp"
+#include "core/util.h"
 #include "runtime/condition_cache_utils.hpp"
 
 struct DBCacheConfig {

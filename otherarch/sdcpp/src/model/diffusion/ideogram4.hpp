@@ -2,14 +2,18 @@
 #define __SD_MODEL_DIFFUSION_IDEOGRAM4_HPP__
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
 #include "core/ggml_graph_cut.h"
+#include "core/ggml_runner.h"
+#include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
 #include "model/diffusion/model.hpp"
 
@@ -58,11 +62,11 @@ namespace Ideogram4 {
             }
             if (detected_layers > 0) {
                 config.num_layers = detected_layers;
-                LOG_DEBUG("ideogram4: num_layers = %" PRId64 ", emb_dim = %" PRId64 ", num_heads = %" PRId64 ", intermediate_size = %" PRId64,
-                          config.num_layers,
-                          config.emb_dim,
-                          config.num_heads,
-                          config.intermediate_size);
+                LOG_VERBOSE("ideogram4: num_layers = %" PRId64 ", emb_dim = %" PRId64 ", num_heads = %" PRId64 ", intermediate_size = %" PRId64,
+                            config.num_layers,
+                            config.emb_dim,
+                            config.num_heads,
+                            config.intermediate_size);
             }
             return config;
         }
@@ -465,7 +469,7 @@ namespace Ideogram4 {
                 }
             }
             if (has_uncond_model) {
-                LOG_DEBUG("using uncond model");
+                LOG_VERBOSE("using uncond model");
                 uncond_model = Ideogram4Transformer(config);
                 uncond_model.init(params_ctx, tensor_storage_map, uncond_prefix);
             }
@@ -537,7 +541,7 @@ namespace Ideogram4 {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, use_uncond_model);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

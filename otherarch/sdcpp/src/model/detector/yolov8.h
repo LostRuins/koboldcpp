@@ -8,8 +8,9 @@
 #include <string>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_runner.h"
 #include "core/util.h"
+#include "model/common/ggml_block.hpp"
 
 struct YOLOv8Config {
     std::array<int, 23> out_channels{};
@@ -68,12 +69,12 @@ struct YOLOv8Config {
         }
 
         if (config.valid) {
-            LOG_DEBUG("yolov8: classes=%d, reg_max=%d, p3=%d, p4=%d, p5=%d",
-                      config.num_classes,
-                      config.reg_max,
-                      config.out_channels[15],
-                      config.out_channels[18],
-                      config.out_channels[21]);
+            LOG_VERBOSE("yolov8: classes=%d, reg_max=%d, p3=%d, p4=%d, p5=%d",
+                        config.num_classes,
+                        config.reg_max,
+                        config.out_channels[15],
+                        config.out_channels[18],
+                        config.out_channels[21]);
         }
         return config;
     }
@@ -355,7 +356,7 @@ struct YOLOv8Runner : public GGMLRunner {
 
     sd::Tensor<float> compute(int n_threads, const sd::Tensor<float>& input) {
         auto get_graph = [&]() { return build_graph(input); };
-        return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false));
+        return take_or_empty(GGMLRunner::compute(get_graph, n_threads, false));
     }
 };
 

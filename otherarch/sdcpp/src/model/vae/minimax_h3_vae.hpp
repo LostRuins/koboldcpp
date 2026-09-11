@@ -791,11 +791,9 @@ namespace MiniMaxH3VAE {
                 return graph;
             };
             return restore_trailing_singleton_dims(
-                GGMLRunner::compute<float>(get_graph,
-                                           n_threads,
-                                           false,
-                                           false,
-                                           false),
+                GGMLRunner::compute(get_graph,
+                                    n_threads,
+                                    false),
                 5);
         }
     };

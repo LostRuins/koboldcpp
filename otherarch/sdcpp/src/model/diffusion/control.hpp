@@ -423,19 +423,26 @@ struct ControlNet : public GGMLRunner {
             return build_graph(x, hint, timesteps, context, y);
         };
 
-        auto compute_result = GGMLRunner::compute<float>(get_graph, n_threads, false, false, false, true);
+        auto read_outputs = [&]() {
+            controls.clear();
+            controls.reserve(control_outputs_ggml.size());
+            for (ggml_tensor* control : control_outputs_ggml) {
+                auto control_host = restore_trailing_singleton_dims(sd::make_sd_tensor_from_ggml<float>(control), 4);
+                if (control_host.empty()) {
+                    return false;
+                }
+                controls.push_back(std::move(control_host));
+            }
+            return true;
+        };
+        auto compute_result = GGMLRunner::compute(get_graph, n_threads, false, true, read_outputs);
+        control_outputs_ggml.clear();
+        guided_hint_output_ggml = nullptr;
         if (!compute_result.has_value()) {
+            controls.clear();
             return std::nullopt;
         }
-
         guided_hint_cached = get_cache_tensor_by_name(guided_hint_cache_name()) != nullptr;
-        controls.clear();
-        controls.reserve(control_outputs_ggml.size());
-        for (ggml_tensor* control : control_outputs_ggml) {
-            auto control_host = restore_trailing_singleton_dims(sd::make_sd_tensor_from_ggml<float>(control), 4);
-            GGML_ASSERT(!control_host.empty());
-            controls.push_back(std::move(control_host));
-        }
         return controls;
     }
 
@@ -444,10 +451,10 @@ struct ControlNet : public GGMLRunner {
         std::map<std::string, ggml_tensor*> tensors;
         control_net.get_param_tensors(tensors);
 
-        auto manager = std::dynamic_pointer_cast<ModelManager>(weight_manager.lock());
+        auto manager = std::dynamic_pointer_cast<ModelManager>(residency_manager.lock());
         if (manager == nullptr) {
             owned_model_manager = std::make_shared<ModelManager>();
-            weight_manager      = owned_model_manager;
+            residency_manager   = owned_model_manager;
             manager             = owned_model_manager;
         }
 
