@@ -390,6 +390,8 @@ namespace sd::backend_fit {
             retry_mode                    = tiling_params.enabled ? "spatial+temporal" : "temporal";
         } else if (!tiling_params.enabled) {
             tiling_params.enabled = true;
+            tiling_params.rel_size_x = 0.5f;
+            tiling_params.rel_size_y = 0.5f;
             if (tiling_params.tile_size_x <= 0) {
                 tiling_params.tile_size_x = 256;
             }
@@ -401,7 +403,7 @@ namespace sd::backend_fit {
             return false;
         }
 
-        LOG_WARN("auto-fit: VAE decode failed (likely out of memory); retrying with %s tiling",
+        LOG_WARN("VAE decode failed (likely out of memory); retrying with %s tiling",
                  retry_mode);
         return true;
     }

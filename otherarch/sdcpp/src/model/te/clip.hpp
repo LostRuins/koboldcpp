@@ -145,6 +145,10 @@ protected:
         params["position_embedding.weight"] = ggml_new_tensor_2d(ctx, position_wtype, embed_dim, num_positions);
     }
 
+    enum ggml_op param_usage_op(const std::string& name) const override {
+        return name == "token_embedding.weight" ? GGML_OP_GET_ROWS : GGML_OP_NONE;
+    }
+
 public:
     CLIPEmbeddings(int64_t embed_dim,
                    int64_t vocab_size    = 49408,
