@@ -696,6 +696,13 @@ SD_API bool sd_ctx_has_control_net(const sd_ctx_t* sd_ctx) {
     return sd_ctx->sd->control_net != nullptr;
 }
 
+const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_ctx->sd->version >= VERSION_COUNT) {
+        return "Unknown";
+    }
+    return model_version_to_str[sd_ctx->sd->version];
+}
+
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
     return sd::pipeline::default_sample_method(sd_ctx != nullptr ? sd_ctx->sd : nullptr);
 }

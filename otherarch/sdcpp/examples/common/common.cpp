@@ -302,8 +302,12 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    *option.target = std::stoi(argv[i]);
-                    found_arg      = true;
+                    try {
+                        *option.target = std::stoi(argv[i]);
+                    } catch (const std::invalid_argument&) {
+                        invalid_arg = true;
+                    }
+                    found_arg = true;
                 }))
                 break;
 
@@ -312,8 +316,12 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    *option.target = std::stof(argv[i]);
-                    found_arg      = true;
+                    try {
+                        *option.target = std::stof(argv[i]);
+                    } catch (const std::invalid_argument&) {
+                        invalid_arg = true;
+                    }
+                    found_arg = true;
                 }))
                 break;
 
@@ -337,7 +345,8 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
 
         if (invalid_arg) {
             if (!valid) {
-                LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
+                LOG_ERROR("error: invalid parameter for argument \"%s\": \"%s\"",
+                          arg.c_str(), (i >= argc) ? "" : argv[i]);
             }
             return false;
         }

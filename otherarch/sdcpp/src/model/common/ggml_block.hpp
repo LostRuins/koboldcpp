@@ -313,6 +313,7 @@ public:
 __STATIC_INLINE__ bool support_get_rows(ggml_type wtype) {
     switch (wtype) {
         case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q5_0:
