@@ -68,6 +68,8 @@ struct GGMLRunnerContext {
     ggml_backend_t backend                                           = nullptr;
     ggml_context* ggml_ctx                                           = nullptr;
     bool flash_attn_enabled                                          = false;
+    float linear_scale                                               = 0.f;
+    float attn_scale                                                 = 0.f;
     bool conv2d_direct_enabled                                       = false;
     bool circular_x_enabled                                          = false;
     bool circular_y_enabled                                          = false;
@@ -112,6 +114,16 @@ struct GGMLRunnerContext {
         set_backend_tensor_data(tensor, data);
     }
 };
+
+ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
+                                    ggml_tensor* q,
+                                    ggml_tensor* k,
+                                    ggml_tensor* v,
+                                    int64_t n_head,
+                                    ggml_tensor* mask = nullptr,
+                                    bool skip_reshape = false,
+                                    bool flash_attn   = false,
+                                    float kv_scale    = 1.f);
 
 struct GGMLRunner {
 private:
@@ -163,6 +175,8 @@ protected:
     const std::string final_result_name = "ggml_runner_final_result_tensor";
 
     bool flash_attn_enabled    = false;
+    float linear_scale         = 0.f;
+    float attn_scale           = 0.f;
     bool conv2d_direct_enabled = false;
     bool circular_x_enabled    = false;
     bool circular_y_enabled    = false;
@@ -321,6 +335,11 @@ public:
 
     void set_flash_attention_enabled(bool enabled) {
         flash_attn_enabled = enabled;
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) {
+        this->linear_scale = linear_scale;
+        this->attn_scale   = attn_scale;
     }
 
     void set_conv2d_direct_enabled(bool enabled) {

@@ -1073,6 +1073,12 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 }
 
 bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
+    for (float scale : {sd_ctx_params->linear_scale, sd_ctx_params->attn_scale}) {
+        if (!std::isfinite(scale) || scale < 0.f || (scale > 0.f && !std::isfinite(1.f / scale))) {
+            LOG_ERROR("scale overrides must be finite positive values, or 0 to keep model defaults");
+            return false;
+        }
+    }
     auto configuration        = std::make_unique<ModelConfig>(*sd_ctx_params);
     n_threads                 = sd_ctx_params->n_threads;
     enable_mmap               = sd_ctx_params->enable_mmap;
