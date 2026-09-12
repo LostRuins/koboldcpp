@@ -16,6 +16,7 @@
 #include "model/te/llm.hpp"
 #include "model/te/t5.hpp"
 #include "model_loader.h"
+#include "tokenizers/sensenova_u1_tokenizer.h"
 
 struct SDCondition {
     sd::Tensor<float> c_crossattn;
@@ -1620,6 +1621,71 @@ struct MiniT2IConditioner : public Conditioner {
         result.c_crossattn = std::move(hidden_states);
         result.c_vector    = sd::Tensor<float>::from_vector(mask);
         return result;
+    }
+};
+
+struct SenseNovaU1Conditioner : public Conditioner {
+    static constexpr size_t kMaxPromptTokens = 12288;
+    SenseNovaU1Tokenizer tokenizer;
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        SD_UNUSED(tensors);
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        SD_UNUSED(enabled);
+    }
+
+    static std::string build_query(const std::string& text, bool is_negative) {
+        static const std::string kSystemMessage =
+            "You are an image generation and editing assistant that accurately understands and executes user intent.\n\n"
+            "You support two modes:\n\n1. Think Mode:\nIf the task requires reasoning, you MUST start with a "
+            "<think></think> block. Put all reasoning inside the block using plain text. DO NOT include any image tags. "
+            "Keep it reasonable and directly useful for producing the final image.\n\n2. Non-Think Mode:\nIf no reasoning "
+            "is needed, directly produce the final image.\n\nTask Types:\n\nA. Text-to-Image Generation:\n- Generate a "
+            "high-quality image based on the user's description.\n- Ensure visual clarity, semantic consistency, and "
+            "completeness.\n- DO NOT introduce elements that contradict or override the user's intent.\n\nB. Image Editing:\n"
+            "- Use the provided image(s) as input or reference for modification or transformation.\n- The result can be an "
+            "edited image or a new image based on the reference(s).\n- Preserve all unspecified attributes unless explicitly "
+            "changed.\n\nGeneral Rules:\n- For any visible text in the image, follow the language specified for the rendered "
+            "text in the user's description, not the language of the prompt. If no language is specified, use the user's input "
+            "language.";
+
+        std::string query;
+        if (!is_negative) {
+            query += "<|im_start|>system\n";
+            query += kSystemMessage;
+            query += "<|im_end|>\n";
+        }
+        query += "<|im_start|>user\n";
+        query += text;
+        query += "<|im_end|>\n<|im_start|>assistant\n";
+        query += is_negative ? "<img>" : "<think>\n\n</think>\n\n<img>";
+        return query;
+    }
+
+    SDCondition tokenize_condition(const std::string& text, bool is_negative) {
+        auto tokens = tokenizer.encode(build_query(text, is_negative));
+        if (tokens.empty() || tokens.size() > kMaxPromptTokens) {
+            LOG_ERROR("SenseNova U1.5 prompt token count %zu is outside [1, %zu]",
+                      tokens.size(),
+                      kMaxPromptTokens);
+            return {};
+        }
+
+        SDCondition result;
+        result.c_input_ids = sd::Tensor<int32_t>({static_cast<int64_t>(tokens.size())}, tokens);
+        return result;
+    }
+
+    SDCondition get_learned_condition(int n_threads,
+                                      const ConditionerParams& conditioner_params) override {
+        SD_UNUSED(n_threads);
+        return tokenize_condition(conditioner_params.text, false);
+    }
+
+    SDCondition get_unconditional_condition(const std::string& text) {
+        return tokenize_condition(text, true);
     }
 };
 

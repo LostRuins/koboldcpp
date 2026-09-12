@@ -156,6 +156,7 @@ const char* prediction_to_str[] = {
     "flux_flow",
     "sefi_flow",
     "minit2i_flow",
+    "sensenova_u1_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
