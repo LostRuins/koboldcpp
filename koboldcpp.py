@@ -3414,12 +3414,12 @@ def websearch(query):
     global websearch_lastquery
     global websearch_lastresponse
     global nocertify
-    # sanitize query
-    query = re.sub(r'[+\-\"\\/*^|<>~`]', '', query) # Remove blacklisted characters
-    query = re.sub(r'\s+', ' ', query).strip() # Replace multiple spaces with a single space
-    if not query or query=="":
+    # DDG already normalizes whitespace, but we optimize a tiny bit by doing it ourselves.
+    query = re.sub(r'\s+', ' ', query).strip()
+    if not query:
         return []
-    query = query[:300] # only search first 300 chars, due to search engine limits
+    # Clamp query to supported 500 decoded UTF-8 bytes, not codepoints.
+    query = query.encode('utf-8', errors='ignore')[:500].decode('utf-8', errors='ignore')
     if query==websearch_lastquery:
         print("\nReturning cached websearch...")
         return websearch_lastresponse
@@ -3538,7 +3538,11 @@ def websearch(query):
             if self.recordingTitle or self.recordingDesc or self.recordingUrl:
                 self.currsegmenttxt += data
 
-    encoded_query = urllib.parse.quote(query)
+    # DDG supports `+` as spaces, which is more readable and compact than `%20`.
+    # Literal pluses get themselves encoded as `%2B`.
+    # And `_plus` method variant correctly encodes `/` to `%2F` by default.
+    # The variant was practically made for what we do here.
+    encoded_query = urllib.parse.quote_plus(query)
     search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
 
     try:
