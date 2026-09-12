@@ -1341,8 +1341,8 @@ namespace LTXV {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             LOG_INFO("loading ltx audio vae from '%s'", model_path.c_str());
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file(model_path)) {
                 LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
                 return;
@@ -1354,7 +1354,8 @@ namespace LTXV {
                                                                      prefix,
                                                                      model_manager);
 
-            if (!model_manager->register_runner_params("LTX audio VAE test",
+            if (!model_manager->set_loader(std::move(model_loader)) ||
+                !model_manager->register_runner_params(ModelComponent::AudioVAE,
                                                        *ltx_audio_vae,
                                                        ModelManager::ResidencyMode::ParamBackend,
                                                        backend,

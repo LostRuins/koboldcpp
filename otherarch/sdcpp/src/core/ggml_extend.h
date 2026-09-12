@@ -9,7 +9,7 @@
 
 #define EPS 1e-05f
 
-static_assert(GGML_MAX_NAME >= 128, "GGML_MAX_NAME must be at least 128");
+static_assert(GGML_MAX_NAME >= 160, "GGML_MAX_NAME must be at least 160");
 
 // n-mode tensor-matrix product
 // example: 2-mode product
