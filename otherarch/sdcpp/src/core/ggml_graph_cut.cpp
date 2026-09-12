@@ -482,6 +482,16 @@ namespace sd::ggml_graph_cut {
         return ggml_nbytes(cache_src);
     }
 
+    static bool can_ignore_op_params(ggml_op op) {
+        // Exempt only parameters that cannot affect graph layout or backend allocation size.
+        switch (op) {
+            case GGML_OP_SCALE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     std::vector<uint64_t> graph_layout(ggml_cgraph* graph, bool include_bindings) {
         std::vector<const ggml_tensor*> tensors;
         std::unordered_map<const ggml_tensor*, size_t> indices;
@@ -530,8 +540,10 @@ namespace sd::ggml_graph_cut {
             for (auto source : tensor->src) {
                 signature.push_back(source == nullptr ? 0 : indices.at(source));
             }
-            for (int value : tensor->op_params) {
-                signature.push_back(static_cast<uint32_t>(value));
+            if (!can_ignore_op_params(tensor->op)) {
+                for (int value : tensor->op_params) {
+                    signature.push_back(static_cast<uint32_t>(value));
+                }
             }
         }
         return signature;

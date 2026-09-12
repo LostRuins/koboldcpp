@@ -232,8 +232,7 @@ namespace Krea2 {
             q          = ggml_reshape_3d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, q), head_dim_ * heads, Lq, N);
             k          = ggml_reshape_3d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, k), head_dim_ * kv_heads, Lk, N);
             v          = ggml_reshape_3d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, v), head_dim_ * kv_heads, Lk, N);
-            return ggml_ext_attention_ext(ctx->ggml_ctx,
-                                          ctx->backend,
+            return ggml_ext_attention_ext(ctx,
                                           q,
                                           k,
                                           v,

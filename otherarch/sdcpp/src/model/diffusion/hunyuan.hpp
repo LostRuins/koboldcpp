@@ -54,7 +54,7 @@ namespace Hunyuan {
             auto k       = qkv_vec[1];
             auto v       = qkv_vec[2];
 
-            auto attn_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, mask, false, ctx->flash_attn_enabled);
+            auto attn_out = ggml_ext_attention_ext(ctx, q, k, v, num_heads, mask, false, ctx->flash_attn_enabled);
             attn_out      = self_attn_proj->forward(ctx, attn_out);
 
             // adaLN_modulation

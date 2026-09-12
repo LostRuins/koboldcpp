@@ -253,7 +253,7 @@ namespace MageVAE {
             q      = to_patches(ctx->ggml_ctx, q);
             k      = to_patches(ctx->ggml_ctx, k);
             v      = to_patches(ctx->ggml_ctx, v);
-            h      = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
+            h      = ggml_ext_attention_ext(ctx, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
             h      = from_patches(ctx->ggml_ctx, h, np, batch, hp, wp);
             if (pad_h > 0) {
                 h = ggml_ext_slice(ctx->ggml_ctx, h, 1, 0, height);

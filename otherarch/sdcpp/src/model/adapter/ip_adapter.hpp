@@ -95,7 +95,7 @@ namespace IPAdapter {
                 int64_t L          = kv->ne[1];
                 ggml_tensor* k     = ggml_cont(ctx->ggml_ctx, ggml_view_3d(ctx->ggml_ctx, kv, dim, L, N, kv->nb[1], kv->nb[2], 0));
                 ggml_tensor* v     = ggml_cont(ctx->ggml_ctx, ggml_view_3d(ctx->ggml_ctx, kv, dim, L, N, kv->nb[1], kv->nb[2], dim * kv->nb[0]));
-                ggml_tensor* attn  = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, heads, nullptr, false, false);
+                ggml_tensor* attn  = ggml_ext_attention_ext(ctx, q, k, v, heads, nullptr, false, false);
                 attn               = to_out->forward(ctx, attn);
                 latents            = ggml_add(ctx->ggml_ctx, latents, attn);
 

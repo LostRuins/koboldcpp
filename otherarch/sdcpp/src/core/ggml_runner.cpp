@@ -2,6 +2,7 @@
 #include <map>
 #include <utility>
 
+#include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_runner.h"
 #include "core/ggml_tensor_utils.h"
@@ -10,6 +11,21 @@
 #include "core/segment_weight_pipeline.h"
 
 using namespace sd;
+
+ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
+                                    ggml_tensor* q,
+                                    ggml_tensor* k,
+                                    ggml_tensor* v,
+                                    int64_t n_head,
+                                    ggml_tensor* mask,
+                                    bool skip_reshape,
+                                    bool flash_attn,
+                                    float kv_scale) {
+    if (ctx->attn_scale > 0.f) {
+        kv_scale = ctx->attn_scale;
+    }
+    return ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, skip_reshape, flash_attn, kv_scale);
+}
 
 void GGMLRunner::alloc_params_ctx() {
     ggml_init_params params;
@@ -510,6 +526,8 @@ GGMLRunnerContext GGMLRunner::get_context() {
     runner_ctx.ggml_ctx              = compute_ctx;
     runner_ctx.backend               = runtime_backend;
     runner_ctx.flash_attn_enabled    = flash_attn_enabled;
+    runner_ctx.linear_scale          = linear_scale;
+    runner_ctx.attn_scale            = attn_scale;
     runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
     runner_ctx.circular_x_enabled    = circular_x_enabled;
     runner_ctx.circular_y_enabled    = circular_y_enabled;

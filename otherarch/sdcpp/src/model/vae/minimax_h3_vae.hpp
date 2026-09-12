@@ -291,8 +291,7 @@ namespace MiniMaxH3VAE {
             k                   = ggml_rms_norm(ctx->ggml_ctx, k, 1e-5f);
             q                   = apply_partial_rope(ctx->ggml_ctx, q, pe);
             k                   = apply_partial_rope(ctx->ggml_ctx, k, pe);
-            auto out            = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                                         ctx->backend,
+            auto out            = ggml_ext_attention_ext(ctx,
                                                          q,
                                                          k,
                                                          v,

@@ -135,6 +135,7 @@ struct PhotoMakerExtension : public GenerationExtension {
                                                            pm_version,
                                                            20.f,
                                                            ctx.model_manager);
+        pmid_model->set_scale_overrides(ctx.params->linear_scale, ctx.params->attn_scale);
         if (pm_version == PM_VERSION_2) {
             LOG_INFO("using PhotoMaker Version 2");
         }

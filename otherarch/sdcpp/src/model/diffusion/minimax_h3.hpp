@@ -215,8 +215,7 @@ namespace MiniMaxH3 {
                 q = attention_layout(ctx->ggml_ctx, q);
                 k = attention_layout(ctx->ggml_ctx, k);
             }
-            auto out = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                              ctx->backend,
+            auto out = ggml_ext_attention_ext(ctx,
                                               q,
                                               k,
                                               v,

@@ -174,8 +174,7 @@ namespace MiniMaxH3 {
             auto mask        = ggml_diag_mask_inf(ctx->ggml_ctx,
                                                   ggml_ext_zeros(ctx->ggml_ctx, sequence, sequence, 1, 1),
                                                   0);
-            auto attn_out    = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                                      ctx->backend,
+            auto attn_out    = ggml_ext_attention_ext(ctx,
                                                       q,
                                                       k,
                                                       v,

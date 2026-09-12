@@ -504,6 +504,10 @@ namespace HiDreamO1 {
             vision_runner->set_flash_attention_enabled(enabled);
         }
 
+        void set_scale_overrides(float linear_scale, float attn_scale) override {
+            vision_runner->set_scale_overrides(linear_scale, attn_scale);
+        }
+
         void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
             vision_runner->set_weight_adapter(adapter);
         }

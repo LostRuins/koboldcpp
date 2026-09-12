@@ -175,6 +175,8 @@ struct SDContextParams {
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
     bool force_sdxl_vae_conv_scale = false;
+    float linear_scale             = 0.f;
+    float attn_scale               = 0.f;
 
     float flow_shift = INFINITY;
     ArgOptions get_options();

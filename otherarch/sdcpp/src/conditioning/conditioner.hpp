@@ -150,6 +150,7 @@ public:
     virtual void set_graph_cut_layer_split_backend_vram_limits(const std::vector<size_t>& limits) {}
     virtual void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {}
     virtual void set_flash_attention_enabled(bool enabled) = 0;
+    virtual void set_scale_overrides(float linear_scale, float attn_scale) {}
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
     virtual void runner_end() {}
 };
@@ -229,6 +230,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         text_model->set_flash_attention_enabled(enabled);
         if (sd_version_is_sdxl(version)) {
             text_model2->set_flash_attention_enabled(enabled);
+        }
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        text_model->set_scale_overrides(linear_scale, attn_scale);
+        if (sd_version_is_sdxl(version)) {
+            text_model2->set_scale_overrides(linear_scale, attn_scale);
         }
     }
 
@@ -737,6 +745,18 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        if (clip_l) {
+            clip_l->set_scale_overrides(linear_scale, attn_scale);
+        }
+        if (clip_g) {
+            clip_g->set_scale_overrides(linear_scale, attn_scale);
+        }
+        if (t5) {
+            t5->set_scale_overrides(linear_scale, attn_scale);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (clip_l) {
             clip_l->set_weight_adapter(adapter);
@@ -1107,6 +1127,15 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        if (clip_l) {
+            clip_l->set_scale_overrides(linear_scale, attn_scale);
+        }
+        if (t5) {
+            t5->set_scale_overrides(linear_scale, attn_scale);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (clip_l) {
             clip_l->set_weight_adapter(adapter);
@@ -1369,6 +1398,12 @@ struct T5CLIPEmbedder : public Conditioner {
         }
     }
 
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        if (t5) {
+            t5->set_scale_overrides(linear_scale, attn_scale);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (t5) {
             t5->set_weight_adapter(adapter);
@@ -1577,6 +1612,12 @@ struct MiniT2IConditioner : public Conditioner {
         }
     }
 
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        if (t5) {
+            t5->set_scale_overrides(linear_scale, attn_scale);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (t5) {
             t5->set_weight_adapter(adapter);
@@ -1736,6 +1777,10 @@ struct AnimaConditioner : public Conditioner {
 
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        llm->set_scale_overrides(linear_scale, attn_scale);
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
@@ -1939,6 +1984,13 @@ struct LLMEmbedder : public Conditioner {
         llm->set_flash_attention_enabled(enabled);
         if (byt5) {
             byt5->set_flash_attention_enabled(enabled);
+        }
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        llm->set_scale_overrides(linear_scale, attn_scale);
+        if (byt5) {
+            byt5->set_scale_overrides(linear_scale, attn_scale);
         }
     }
 
@@ -3029,6 +3081,11 @@ struct LTXAVEmbedder : public Conditioner {
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
         projector->set_flash_attention_enabled(enabled);
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        llm->set_scale_overrides(linear_scale, attn_scale);
+        projector->set_scale_overrides(linear_scale, attn_scale);
     }
 
     void set_max_graph_vram_bytes(size_t max_vram_bytes) override {

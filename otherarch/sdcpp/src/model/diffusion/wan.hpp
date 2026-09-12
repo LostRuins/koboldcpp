@@ -193,7 +193,7 @@ namespace WAN {
             k      = norm_k->forward(ctx, k);
             auto v = v_proj->forward(ctx, context);  // [N, n_context, dim]
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -255,8 +255,8 @@ namespace WAN {
             k_img      = norm_k_img->forward(ctx, k_img);
             auto v_img = v_img_proj->forward(ctx, context_img);  // [N, context_img_len, dim]
 
-            auto img_x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k_img, v_img, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
-            x          = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);          // [N, n_token, dim]
+            auto img_x = ggml_ext_attention_ext(ctx, q, k_img, v_img, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            x          = ggml_ext_attention_ext(ctx, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);          // [N, n_token, dim]
 
             x = ggml_add(ctx->ggml_ctx, x, img_x);
 
