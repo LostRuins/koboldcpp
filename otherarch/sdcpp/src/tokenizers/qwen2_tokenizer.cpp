@@ -45,16 +45,8 @@ void Qwen2Tokenizer::load_from_merges(const std::string& merges_utf8_str) {
     bpe_len = rank;
 }
 
-Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str) {
-    UNK_TOKEN = "<|endoftext|>";
-    EOS_TOKEN = "<|endoftext|>";
-    PAD_TOKEN = "<|endoftext|>";
-
-    UNK_TOKEN_ID = 151643;
-    EOS_TOKEN_ID = 151643;
-    PAD_TOKEN_ID = 151643;
-
-    special_tokens = {
+static const std::vector<std::string>& qwen2_special_tokens() {
+    static const std::vector<std::string> tokens = {
         "<|endoftext|>",
         "<|im_start|>",
         "<|im_end|>",
@@ -87,6 +79,24 @@ Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str) {
         "<|bot_token|>",
         "<|tms_token|>",
     };
+    return tokens;
+}
+
+Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str)
+    : Qwen2Tokenizer(merges_utf8_str, qwen2_special_tokens()) {
+}
+
+Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str,
+                               const std::vector<std::string>& special_tokens_override) {
+    UNK_TOKEN = "<|endoftext|>";
+    EOS_TOKEN = "<|endoftext|>";
+    PAD_TOKEN = "<|endoftext|>";
+
+    UNK_TOKEN_ID = 151643;
+    EOS_TOKEN_ID = 151643;
+    PAD_TOKEN_ID = 151643;
+
+    special_tokens = special_tokens_override;
 
     if (merges_utf8_str.size() > 0) {
         load_from_merges(merges_utf8_str);
