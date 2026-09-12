@@ -8,6 +8,8 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "model/diffusion/ltxv.hpp"
 #include "model/vae/vae.hpp"
@@ -1126,11 +1128,11 @@ namespace LTXVAE {
                          overlap, window);
                 overlap = window - 1;
             }
-            LOG_DEBUG("Using temporal tiling: temporal_tile_frames = %d, temporal_tile_overlap = %d, total frames = %d, resulting in %d tiles",
-                      window,
-                      overlap,
-                      (int)T,
-                      (T + window - overlap - 1) / (window - overlap));
+            LOG_VERBOSE("Using temporal tiling: temporal_tile_frames = %d, temporal_tile_overlap = %d, total frames = %d, resulting in %d tiles",
+                        window,
+                        overlap,
+                        (int)T,
+                        (T + window - overlap - 1) / (window - overlap));
             ggml_tensor* out = nullptr;
             for (int i = 0; i < (int)T - overlap; i += (window - overlap)) {
                 int feat_idx = 0;
@@ -1327,34 +1329,32 @@ struct LTXVideoVAE : public VAE {
         const int64_t total_frames = input.shape()[2];
         auto plan                  = make_vae_temporal_tile_plan(total_frames, config);
 
-        LOG_DEBUG("Using streaming temporal tiling: temporal_tile_frames=%d, temporal_tile_overlap=%d, total latent frames=%lld, resulting in %d tiles",
-                  plan.tile_frames,
-                  plan.overlap,
-                  (long long)total_frames,
-                  (int)plan.tiles.size());
+        LOG_VERBOSE("Using streaming temporal tiling: temporal_tile_frames=%d, temporal_tile_overlap=%d, total latent frames=%lld, resulting in %d tiles",
+                    plan.tile_frames,
+                    plan.overlap,
+                    (long long)total_frames,
+                    (int)plan.tiles.size());
 
         free_cache_ctx_and_buffer();
-        cache_tensor_map.clear();
 
         auto output = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& z_chunk, const VAETemporalTile& tile) {
-            LOG_DEBUG("LTX VAE temporal tile %lld/%d: latent frames [%lld, %lld), overlap=%d",
-                      (long long)tile.index + 1,
-                      (int)plan.tiles.size(),
-                      (long long)tile.start,
-                      (long long)tile.end,
-                      tile.overlap);
+            LOG_VERBOSE("LTX VAE temporal tile %lld/%d: latent frames [%lld, %lld), overlap=%d",
+                        (long long)tile.index + 1,
+                        (int)plan.tiles.size(),
+                        (long long)tile.start,
+                        (long long)tile.end,
+                        tile.overlap);
 
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_temporal_tile_graph(z_chunk,
                                                  static_cast<int>(tile.start),
                                                  tile.overlap);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true),
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
                                                    expected_dim);
         });
 
         free_cache_ctx_and_buffer();
-        cache_tensor_map.clear();
         return output;
     }
 
@@ -1407,7 +1407,7 @@ struct LTXVideoVAE : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input, decode_graph);
         };
-        auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), expected_dim);
+        auto result = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), expected_dim);
         if (result.empty()) {
             return {};
         }
@@ -1420,7 +1420,7 @@ struct LTXVideoVAE : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_latent_statistics_graph(z, normalize);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false),
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false),
                                                static_cast<size_t>(z.dim()));
     }
 
@@ -1467,7 +1467,7 @@ struct LTXVideoVAE : public VAE {
 
         GGML_ASSERT(!out.empty());
         print_sd_tensor(out, false, "ltx_vae_out");
-        LOG_DEBUG("ltx vae test done in %lldms", t1 - t0);
+        LOG_VERBOSE("ltx vae test done in %lldms", t1 - t0);
     }
 
     static void load_from_file_and_test(const std::string& model_path,
@@ -1476,8 +1476,8 @@ struct LTXVideoVAE : public VAE {
         ggml_backend_t backend = sd_backend_cpu_init();
         LOG_INFO("loading ltx vae from '%s'", model_path.c_str());
 
-        auto model_manager        = std::make_shared<ModelManager>();
-        ModelLoader& model_loader = model_manager->loader();
+        auto model_manager = std::make_shared<ModelManager>();
+        ModelLoader model_loader;
         if (!model_loader.init_from_file_and_convert_name(model_path, "vae.")) {
             LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
             return;
@@ -1491,7 +1491,8 @@ struct LTXVideoVAE : public VAE {
                                                                          VERSION_LTXAV,
                                                                          model_manager);
 
-        if (!model_manager->register_runner_params("LTX VAE test",
+        if (!model_manager->set_loader(model_loader) ||
+            !model_manager->register_runner_params(ModelComponent::VAE,
                                                    *vae,
                                                    ModelManager::ResidencyMode::ParamBackend,
                                                    backend,

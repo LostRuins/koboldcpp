@@ -2,8 +2,14 @@
 #define __SD_MODEL_DIFFUSION_Z_IMAGE_HPP__
 
 #include <algorithm>
+#include <cinttypes>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/diffusion/flux.hpp"
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
@@ -107,14 +113,14 @@ namespace ZImage {
                     config.num_kv_heads = std::max<int64_t>(1, (qkv_heads - config.num_heads) / 2);
                 }
             }
-            LOG_DEBUG("z_image: num_layers = %" PRId64 ", num_refiner_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", num_kv_heads = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
-                      config.num_layers,
-                      config.num_refiner_layers,
-                      config.hidden_size,
-                      config.num_heads,
-                      config.num_kv_heads,
-                      config.in_channels,
-                      config.out_channels);
+            LOG_VERBOSE("z_image: num_layers = %" PRId64 ", num_refiner_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", num_kv_heads = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                        config.num_layers,
+                        config.num_refiner_layers,
+                        config.hidden_size,
+                        config.num_heads,
+                        config.num_kv_heads,
+                        config.in_channels,
+                        config.out_channels);
             return config;
         }
     };
@@ -603,7 +609,7 @@ namespace ZImage {
                                                circular_x_enabled,
                                                config.axes_dim);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe, true, "pe");
@@ -636,7 +642,7 @@ namespace ZImage {
                 return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,
@@ -689,7 +695,7 @@ namespace ZImage {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("z_image test done in %lldms", t1 - t0);
+                LOG_VERBOSE("z_image test done in %lldms", t1 - t0);
             }
         }
 
@@ -700,8 +706,8 @@ namespace ZImage {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -722,7 +728,8 @@ namespace ZImage {
                                                                                    VERSION_QWEN_IMAGE,
                                                                                    model_manager);
 
-            if (!model_manager->register_runner_params("ZImage test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Diffusion,
                                                        *z_image,
                                                        "model.diffusion_model",
                                                        ModelManager::ResidencyMode::ParamBackend,

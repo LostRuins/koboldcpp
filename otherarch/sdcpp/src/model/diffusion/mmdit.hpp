@@ -2,12 +2,18 @@
 #define __SD_MODEL_DIFFUSION_MMDIT_HPP__
 
 #include <algorithm>
+#include <cinttypes>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
+#include "core/ggml_tensor_utils.h"
+#include "core/util.h"
 #include "model/common/block.hpp"
+#include "model/common/ggml_block.hpp"
 #include "model/diffusion/model.hpp"
 #include "model_loader.h"
 
@@ -120,16 +126,16 @@ struct MMDiTConfig {
         }
 
         if (has_weight_config) {
-            LOG_DEBUG("mmdit: num_layers = %" PRId64 ", num_mmdit_x_layers = %" PRId64 ", hidden_size = %" PRId64 ", patch_size = %d, in_channels = %" PRId64 ", out_channels = %" PRId64 ", context_size = %" PRId64 ", adm_in_channels = %" PRId64 ", qk_norm = %s",
-                      config.depth,
-                      config.d_self + 1,
-                      config.hidden_size,
-                      config.patch_size,
-                      config.in_channels,
-                      config.out_channels,
-                      config.context_size,
-                      config.adm_in_channels,
-                      config.qk_norm.empty() ? "none" : config.qk_norm.c_str());
+            LOG_VERBOSE("mmdit: num_layers = %" PRId64 ", num_mmdit_x_layers = %" PRId64 ", hidden_size = %" PRId64 ", patch_size = %d, in_channels = %" PRId64 ", out_channels = %" PRId64 ", context_size = %" PRId64 ", adm_in_channels = %" PRId64 ", qk_norm = %s",
+                        config.depth,
+                        config.d_self + 1,
+                        config.hidden_size,
+                        config.patch_size,
+                        config.in_channels,
+                        config.out_channels,
+                        config.context_size,
+                        config.adm_in_channels,
+                        config.qk_norm.empty() ? "none" : config.qk_norm.c_str());
         }
         return config;
     }
@@ -987,7 +993,7 @@ struct MMDiTRunner : public DiffusionModelRunner {
             return build_graph(x, timesteps, context, y, skip_layers);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
     }
 
     sd::Tensor<float> compute(int n_threads,
@@ -1045,7 +1051,7 @@ struct MMDiTRunner : public DiffusionModelRunner {
             GGML_ASSERT(!out_opt.empty());
             out = std::move(out_opt);
             print_sd_tensor(out);
-            LOG_DEBUG("mmdit test done in %lldms", t1 - t0);
+            LOG_VERBOSE("mmdit test done in %lldms", t1 - t0);
         }
     }
 
@@ -1058,13 +1064,14 @@ struct MMDiTRunner : public DiffusionModelRunner {
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
-            ModelLoader& model_loader = model_manager->loader();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path)) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }
 
-            if (!model_manager->register_runner_params("MMDiT test",
+            if (!model_manager->set_loader(std::move(model_loader)) ||
+                !model_manager->register_runner_params(ModelComponent::Diffusion,
                                                        *mmdit,
                                                        "model.diffusion_model",
                                                        ModelManager::ResidencyMode::ParamBackend,

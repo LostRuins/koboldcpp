@@ -5,7 +5,7 @@
 #include <utility>
 #include <variant>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_runner.h"
 #include "core/tensor_ggml.hpp"
 #include "model/common/rope.hpp"
 #include "model_manager.h"

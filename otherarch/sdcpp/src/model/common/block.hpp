@@ -1,9 +1,11 @@
 #ifndef __SD_MODEL_COMMON_BLOCK_HPP__
 #define __SD_MODEL_COMMON_BLOCK_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
 #include "core/util.h"
 #include "ggml-backend.h"
+#include "model/common/ggml_block.hpp"
 
 class DownSampleBlock : public GGMLBlock {
 protected:
@@ -340,7 +342,7 @@ public:
           enable_ip(enable_ip) {
         int64_t inner_dim = d_head * n_head;
         if (context_dim == 320 && d_head == 320) {
-            // LOG_DEBUG("CrossAttention: temp set dim to 1024 for sdxs_09");
+            // LOG_VERBOSE("CrossAttention: temp set dim to 1024 for sdxs_09");
             xtra_dim    = true;
             context_dim = 1024;
         }
@@ -370,7 +372,7 @@ public:
 
         auto q = to_q->forward(ctx, x);  // [N, n_token, inner_dim]
         if (xtra_dim) {
-            // LOG_DEBUG("CrossAttention: temp set dim to 1024 for sdxs_09");
+            // LOG_VERBOSE("CrossAttention: temp set dim to 1024 for sdxs_09");
             context->ne[0] = 1024;  // patch dim
         }
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
