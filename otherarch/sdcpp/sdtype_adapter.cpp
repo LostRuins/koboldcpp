@@ -1554,6 +1554,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         vid_gen_params.video_frames = vid_req_frames;
         vid_gen_params.fps = vid_fps;
         vid_gen_params.vae_tiling_params = params.vae_tiling_params;
+        vid_gen_params.loras = params.loras;
+        vid_gen_params.lora_count = params.lora_count;
         if (!info.is_minimaxh3 && ref_audio_data.size()>0) {
             input_audio = load_audio_from_b64(ref_audio_data[0]);
             if (input_audio.data == nullptr) {
