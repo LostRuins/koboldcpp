@@ -27,6 +27,7 @@
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/pid.hpp"
 #include "model/diffusion/qwen_image.hpp"
+#include "model/diffusion/sensenova_u1.h"
 #include "model/diffusion/unet.hpp"
 #include "model/diffusion/wan.hpp"
 #include "model/diffusion/z_image.hpp"
@@ -306,6 +307,12 @@ namespace sd::model_builders {
                                                                         tensor_storage_map,
                                                                         "model.diffusion_model.model.net",
                                                                         weight_manager);
+        } else if (sd_version_is_sensenova_u1(version)) {
+            result.conditioner = std::make_shared<SenseNovaU1Conditioner>();
+            result.diffusion   = std::make_shared<SenseNovaU1::SenseNovaU1Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                                tensor_storage_map,
+                                                                                "",
+                                                                                weight_manager);
         } else if (sd_version_is_anima(version)) {
             result.conditioner = std::make_shared<AnimaConditioner>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                     tensor_storage_map,
@@ -493,7 +500,7 @@ namespace sd::model_builders {
             }
         };
 
-        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version)) {
+        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version)) {
             LOG_INFO("using FakeVAE");
             result.vae = std::make_shared<FakeVAE>(version,
                                                    ctx.backends.runtime_backend(SDBackendModule::VAE),

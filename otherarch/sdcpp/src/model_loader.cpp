@@ -70,6 +70,8 @@ const char* unused_tensors[] = {
     // "v_pred", // Used to detect SDXL vpred models
     "text_encoders.llm.output.weight",
     "text_encoders.llm.lm_head.",
+    "language_model.lm_head.",
+    "vision_model.",
 };
 
 bool is_unused_tensor(const std::string& name) {
@@ -262,6 +264,15 @@ bool ModelLoader::parse_file(const std::string& file_path, const std::string& pr
     }
     parsed_dependencies_.push_back(stamp);
     if (is_directory(file_path)) {
+        const std::string diffusers_index_path = path_join(file_path, "model_index.json");
+        const std::string diffusers_unet_path  = path_join(file_path, "unet/diffusion_pytorch_model.safetensors");
+        const bool has_diffusers_layout        = file_exists(diffusers_index_path) || file_exists(diffusers_unet_path);
+
+        const std::string safetensors_index_path = path_join(file_path, "model.safetensors.index.json");
+        if (!has_diffusers_layout && file_exists(safetensors_index_path)) {
+            LOG_INFO("load %s using root safetensors index", file_path.c_str());
+            return parse_file(safetensors_index_path, prefix);
+        }
         LOG_INFO("load %s using diffusers format", file_path.c_str());
         return init_from_diffusers_file(file_path, prefix);
     } else if (is_gguf_file(file_path)) {
@@ -551,6 +562,9 @@ SDVersion ModelLoader::get_sd_version() const {
         }
         if (tensor_storage.name.find("net.img_embedder.proj1.weight") != std::string::npos) {
             return VERSION_MINIT2I;
+        }
+        if (tensor_storage.name.find("language_model.model.layers.0.self_attn.q_proj_mot_gen.weight") != std::string::npos) {
+            return VERSION_SENSENOVA_U1_5;
         }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
             auto img_in = tensor_storage_map.find("model.diffusion_model.img_in.weight");

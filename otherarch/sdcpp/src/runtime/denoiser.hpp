@@ -1488,6 +1488,82 @@ struct MiniT2IFlowDenoiser : public Denoiser {
     }
 };
 
+// SenseNova U1.5 integrates velocity over t=0..1 while the generic sampler
+// integrates over descending sigma. With sigma=1-t, returning
+// denoised=x+sigma*v makes the generic Euler derivative exactly -v, so the
+// descending-sigma update is identical to the official ascending-time update.
+struct SenseNovaU1FlowDenoiser : public DiscreteFlowDenoiser {
+    explicit SenseNovaU1FlowDenoiser(float shift = 3.f)
+        : DiscreteFlowDenoiser(shift) {}
+
+    float sigma_min() override {
+        return 0.f;
+    }
+
+    float sigma_max() override {
+        return 1.f;
+    }
+
+    float sigma_to_t(float sigma) override {
+        return 1.f - sigma;
+    }
+
+    float t_to_sigma(float t) override {
+        float sigma = 1.f - t;
+        return shift * sigma / (1.f + (shift - 1.f) * sigma);
+    }
+
+    std::vector<float> get_scalings(float sigma) override {
+        return {1.f, sigma, 1.f};
+    }
+
+    sd::Tensor<float> noise_scaling(float sigma,
+                                    const sd::Tensor<float>& noise,
+                                    const sd::Tensor<float>& latent) override {
+        SD_UNUSED(sigma);
+        SD_UNUSED(latent);
+        GGML_ASSERT(noise.dim() >= 2);
+        const float token_w     = static_cast<float>(noise.shape()[0]) / 32.f;
+        const float token_h     = static_cast<float>(noise.shape()[1]) / 32.f;
+        const float noise_scale = std::min(16.f, std::sqrt((token_w * token_h) / 64.f));
+        return noise * noise_scale;
+    }
+
+    sd::Tensor<float> inverse_noise_scaling(float sigma,
+                                            const sd::Tensor<float>& latent) override {
+        SD_UNUSED(sigma);
+        return latent;
+    }
+
+    float noise_level_to_sigma(float noise_level) override {
+        SD_UNUSED(noise_level);
+        return 1.f;
+    }
+
+    std::vector<float> get_sigmas(uint32_t n,
+                                  int image_seq_len,
+                                  scheduler_t scheduler_type,
+                                  SDVersion version,
+                                  const char* extra_sample_args = nullptr) override {
+        SD_UNUSED(image_seq_len);
+        SD_UNUSED(scheduler_type);
+        SD_UNUSED(version);
+        SD_UNUSED(extra_sample_args);
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+        if (n == 0) {
+            sigmas.push_back(0.f);
+            return sigmas;
+        }
+        for (uint32_t i = 0; i <= n; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(n);
+            sigmas.push_back(t_to_sigma(t));
+        }
+        sigmas.back() = 0.f;
+        return sigmas;
+    }
+};
+
 typedef std::function<sd::guidance::GuiderOutput(const sd::Tensor<float>&, float, int)> denoise_cb_t;
 
 static std::pair<float, float> get_ancestral_step(float sigma_from,

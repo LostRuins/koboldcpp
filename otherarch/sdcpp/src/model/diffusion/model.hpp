@@ -114,6 +114,10 @@ struct MiniT2IDiffusionExtra {
     const sd::Tensor<float>* mask = nullptr;
 };
 
+struct SenseNovaU1DiffusionExtra {
+    const sd::Tensor<int32_t>* input_ids = nullptr;
+};
+
 struct HunyuanVideoDiffusionExtra {
     const sd::Tensor<float>* guidance   = nullptr;
     const sd::Tensor<float>* byt5       = nullptr;
@@ -131,6 +135,7 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           LTXAVDiffusionExtra,
                                           MiniMaxH3DiffusionExtra,
                                           MiniT2IDiffusionExtra,
+                                          SenseNovaU1DiffusionExtra,
                                           HunyuanVideoDiffusionExtra>;
 
 struct DiffusionParams {

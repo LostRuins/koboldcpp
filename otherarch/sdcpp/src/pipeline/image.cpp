@@ -455,6 +455,9 @@ namespace sd::pipeline {
                 // states with a zeroed prompt mask, so no extra text encode is needed.
                 uncond.c_crossattn = cond.c_crossattn;
                 uncond.c_vector    = sd::Tensor<float>::zeros_like(cond.c_vector);
+            } else if (sd_version_is_sensenova_u1(sd->version)) {
+                auto* sensenova_conditioner = static_cast<SenseNovaU1Conditioner*>(sd->cond_stage_model.get());
+                uncond                      = sensenova_conditioner->get_unconditional_condition(request->negative_prompt);
             } else {
                 bool zero_out_masked = false;
                 if (sd_version_is_sdxl(sd->version) &&
