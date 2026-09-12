@@ -241,6 +241,8 @@ typedef struct {
     const char* rpc_servers;
     const char* model_args;
     bool disable_segmented_compute;  // Force monolithic graph execution even when automatic graph cutting would fit memory better
+    float linear_scale;              // Override linear input scaling; 0 keeps the model default
+    float attn_scale;                // Override flash-attention K/V scaling; 0 keeps the model default
 } sd_ctx_params_t;
 
 typedef struct {

@@ -403,6 +403,21 @@ namespace sd::model_builders {
                                                                              "ip_adapter",
                                                                              weight_manager);
         }
+        if (result.conditioner) {
+            result.conditioner->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.diffusion) {
+            result.diffusion->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.high_noise_diffusion) {
+            result.high_noise_diffusion->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.clip_vision) {
+            result.clip_vision->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.ip_adapter) {
+            result.ip_adapter->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
         runners = std::move(result);
         return true;
     }
@@ -538,6 +553,15 @@ namespace sd::model_builders {
                 result.preview->set_conv2d_direct_enabled(true);
             }
         }
+        if (result.vae) {
+            result.vae->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.preview) {
+            result.preview->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.audio) {
+            result.audio->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
         runners = std::move(result);
         return true;
     }
@@ -559,6 +583,7 @@ namespace sd::model_builders {
             LOG_INFO("Using Conv2d direct in the control net");
             control_net->set_conv2d_direct_enabled(true);
         }
+        control_net->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         runner = std::move(control_net);
         return true;
     }
