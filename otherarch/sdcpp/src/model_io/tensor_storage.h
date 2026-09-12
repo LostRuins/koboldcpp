@@ -34,9 +34,11 @@ struct TensorStorage {
     std::shared_ptr<kcpp_safetensors_quant::TensorStorageExt> kcpp_ext;
 
     std::string storage_key;
-    size_t file_index = 0;
-    int index_in_zip  = -1;  // >= means stored in a zip file
-    uint64_t offset   = 0;   // offset in file
+    size_t file_index      = 0;
+    uint64_t file_id       = 0;
+    uint64_t file_revision = 0;
+    int index_in_zip       = -1;  // >= means stored in a zip file
+    uint64_t offset        = 0;   // offset in file
 
     TensorStorage() = default;
 

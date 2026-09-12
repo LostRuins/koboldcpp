@@ -19,7 +19,7 @@ struct GenerationExtensionInitContext {
     const sd_ctx_params_t* params;
     SDVersion version;
     const String2TensorStorage& tensor_storage_map;
-    ModelLoader& model_loader;
+    bool photomaker_source_available;
     std::shared_ptr<ModelManager> model_manager;
     int n_threads;
     std::function<bool(SDBackendModule)> ensure_backend_pair;
@@ -39,7 +39,8 @@ struct GenerationExtensionConditionContext {
 struct GenerationExtension {
     virtual ~GenerationExtension() = default;
 
-    virtual const char* name() const = 0;
+    virtual ModelComponent component() const = 0;
+    const char* name() const { return model_component_name(component()); }
     virtual bool is_enabled() const {
         return false;
     }

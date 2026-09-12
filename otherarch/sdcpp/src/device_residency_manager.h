@@ -48,9 +48,10 @@ struct DeviceResidencyManager {
                                                const std::vector<ggml_tensor*>& required_params) const = 0;
     virtual bool assign_compute_backend(const std::vector<ggml_tensor*>& tensors,
                                         ggml_backend_t compute_backend)                                = 0;
-    virtual bool prepare_params(const std::vector<ggml_tensor*>& tensors)                              = 0;
-    virtual void release_compute_backend_params(const std::vector<ggml_tensor*>& tensors)              = 0;
-    virtual void evict_compute_backend_params(const std::vector<ggml_tensor*>& tensors)                = 0;
+    virtual ggml_tensor* resolve_param_tensor(ggml_tensor* tensor) const { return nullptr; }
+    virtual bool prepare_params(const std::vector<ggml_tensor*>& tensors)                 = 0;
+    virtual void release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) = 0;
+    virtual void evict_compute_backend_params(const std::vector<ggml_tensor*>& tensors)   = 0;
     virtual WeightResidencyInfo inspect_compute_backend_params(
         const std::vector<ggml_tensor*>& tensors) const          = 0;
     virtual void update_runtime_residency(uintptr_t owner_id,
