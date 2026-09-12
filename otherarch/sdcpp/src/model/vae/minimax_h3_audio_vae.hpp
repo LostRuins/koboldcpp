@@ -174,8 +174,7 @@ namespace MiniMaxH3 {
             auto mask        = ggml_diag_mask_inf(ctx->ggml_ctx,
                                                   ggml_ext_zeros(ctx->ggml_ctx, sequence, sequence, 1, 1),
                                                   0);
-            auto attn_out    = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                                      ctx->backend,
+            auto attn_out    = ggml_ext_attention_ext(ctx,
                                                       q,
                                                       k,
                                                       v,
@@ -480,7 +479,7 @@ namespace MiniMaxH3 {
                 return graph;
             };
             auto result = restore_trailing_singleton_dims(
-                GGMLRunner::compute<float>(get_graph, n_threads, false, false, false),
+                GGMLRunner::compute(get_graph, n_threads, false),
                 4);
             int64_t t1 = ggml_time_ms();
             LOG_INFO("MiniMax-H3 audio VAE encode completed, taking %.2fs",
@@ -500,7 +499,7 @@ namespace MiniMaxH3 {
                 return graph;
             };
             auto result = restore_trailing_singleton_dims(
-                GGMLRunner::compute<float>(get_graph, n_threads, false, false, false),
+                GGMLRunner::compute(get_graph, n_threads, false),
                 4);
             int64_t t1 = ggml_time_ms();
             LOG_INFO("MiniMax-H3 audio VAE decode completed, taking %.2fs",

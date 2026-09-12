@@ -2,6 +2,7 @@
 #define __SD_MODEL_IO_SAFETENSORS_IO_H__
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -12,7 +13,8 @@ bool is_safetensors_file(const std::string& file_path);
 bool read_safetensors_file(const std::string& file_path,
                            std::vector<TensorStorage>& tensor_storages,
                            std::string* error                           = nullptr,
-                           std::map<std::string, std::string>* metadata = nullptr);
+                           std::map<std::string, std::string>* metadata = nullptr,
+                           std::set<std::string>* tensor_names          = nullptr);
 bool read_safetensors_index_file(const std::string& file_path,
                                  std::vector<std::string>& shard_paths,
                                  std::string* error = nullptr);

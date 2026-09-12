@@ -1,6 +1,8 @@
 #ifndef __SD_MODEL_VAE_AUTO_ENCODER_KL_HPP__
 #define __SD_MODEL_VAE_AUTO_ENCODER_KL_HPP__
 
+#include <cinttypes>
+#include "core/ggml_tensor_utils.h"
 #include "model/vae/vae.hpp"
 
 /*================================================== AutoEncoderKL ===================================================*/
@@ -140,7 +142,7 @@ public:
             v = ggml_reshape_3d(ctx->ggml_ctx, v, c, h * w, n);                        // [N, h * w, in_channels]
         }
 
-        h_ = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
+        h_ = ggml_ext_attention_ext(ctx, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
 
         if (use_linear) {
             h_ = proj_out->forward(ctx, h_);  // [N, h * w, in_channels]
@@ -744,7 +746,7 @@ struct AutoEncoderKL : public VAE {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), z.dim());
     }
 
     sd::Tensor<float> gaussian_latent_sample(const sd::Tensor<float>& moments, std::shared_ptr<RNG> rng) {
@@ -864,7 +866,7 @@ struct AutoEncoderKL : public VAE {
             GGML_ASSERT(!out_opt.empty());
             out = std::move(out_opt);
             print_sd_tensor(out);
-            LOG_DEBUG("encode test done in %lldms", t1 - t0);
+            LOG_VERBOSE("encode test done in %lldms", t1 - t0);
         }
 
         if (false) {
@@ -884,7 +886,7 @@ struct AutoEncoderKL : public VAE {
             GGML_ASSERT(!out_opt.empty());
             out = std::move(out_opt);
             print_sd_tensor(out);
-            LOG_DEBUG("decode test done in %lldms", t1 - t0);
+            LOG_VERBOSE("decode test done in %lldms", t1 - t0);
         }
     };
 };

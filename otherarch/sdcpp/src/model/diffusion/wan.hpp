@@ -1,9 +1,12 @@
 #ifndef __SD_MODEL_DIFFUSION_WAN_HPP__
 #define __SD_MODEL_DIFFUSION_WAN_HPP__
 
+#include <cinttypes>
 #include <map>
 #include <memory>
 #include <utility>
+#include "core/ggml_extend_backend.h"
+#include "core/ggml_tensor_utils.h"
 
 #include "model/common/block.hpp"
 #include "model/common/rope.hpp"
@@ -75,13 +78,13 @@ namespace WAN {
                     config.flf_pos_embed_token_number = 514;
                 }
             }
-            LOG_DEBUG("wan: model_type = %s, num_layers = %d, vace_layers = %d, dim = %" PRId64 ", ffn_dim = %" PRId64 ", num_heads = %" PRId64,
-                      config.model_type.c_str(),
-                      config.num_layers,
-                      config.vace_layers,
-                      config.dim,
-                      config.ffn_dim,
-                      config.num_heads);
+            LOG_VERBOSE("wan: model_type = %s, num_layers = %d, vace_layers = %d, dim = %" PRId64 ", ffn_dim = %" PRId64 ", num_heads = %" PRId64,
+                        config.model_type.c_str(),
+                        config.num_layers,
+                        config.vace_layers,
+                        config.dim,
+                        config.ffn_dim,
+                        config.num_heads);
             return config;
         }
     };
@@ -190,7 +193,7 @@ namespace WAN {
             k      = norm_k->forward(ctx, k);
             auto v = v_proj->forward(ctx, context);  // [N, n_context, dim]
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -252,8 +255,8 @@ namespace WAN {
             k_img      = norm_k_img->forward(ctx, k_img);
             auto v_img = v_img_proj->forward(ctx, context_img);  // [N, context_img_len, dim]
 
-            auto img_x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k_img, v_img, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
-            x          = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);          // [N, n_token, dim]
+            auto img_x = ggml_ext_attention_ext(ctx, q, k_img, v_img, num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            x          = ggml_ext_attention_ext(ctx, q, k, v, num_heads, nullptr, false, ctx->flash_attn_enabled);          // [N, n_token, dim]
 
             x = ggml_add(ctx->ggml_ctx, x, img_x);
 
@@ -909,7 +912,7 @@ namespace WAN {
                                            config.theta,
                                            config.axes_dim);
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
@@ -950,7 +953,7 @@ namespace WAN {
                 return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat, vace_context, vace_strength);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,
@@ -1007,7 +1010,7 @@ namespace WAN {
                 GGML_ASSERT(!out_opt.empty());
                 out = std::move(out_opt);
                 print_sd_tensor(out);
-                LOG_DEBUG("wan test done in %lldms", t1 - t0);
+                LOG_VERBOSE("wan test done in %lldms", t1 - t0);
             }
         }
 
@@ -1017,8 +1020,8 @@ namespace WAN {
             ggml_type model_data_type = GGML_TYPE_F16;
             LOG_INFO("loading from '%s'", file_path.c_str());
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -1037,7 +1040,8 @@ namespace WAN {
                                                                          VERSION_WAN2_2_TI2V,
                                                                          model_manager);
 
-            if (!model_manager->register_runner_params("Wan test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Diffusion,
                                                        *wan,
                                                        "model.diffusion_model",
                                                        ModelManager::ResidencyMode::ParamBackend,

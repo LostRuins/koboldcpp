@@ -1,8 +1,10 @@
 #ifndef __PULID_HPP__
 #define __PULID_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
 #include "model/common/block.hpp"
+#include "model/common/ggml_block.hpp"
 
 class PuLIDPerceiverAttentionCA : public GGMLBlock {
 public:
@@ -61,12 +63,11 @@ public:
         k              = ggml_cont(ctx->ggml_ctx, k);
         v              = ggml_cont(ctx->ggml_ctx, v);
 
-        ggml_tensor* attn_out = ggml_ext_attention_ext(
-            ctx->ggml_ctx, ctx->backend,
-            q, k, v,
-            heads,
-            /*mask=*/nullptr,
-            /*diag_mask_inf=*/false);
+        ggml_tensor* attn_out = ggml_ext_attention_ext(ctx,
+                                                       q, k, v,
+                                                       heads,
+                                                       /*mask=*/nullptr,
+                                                       /*diag_mask_inf=*/false);
 
         ggml_tensor* out = to_out->forward(ctx, attn_out);
         return out;

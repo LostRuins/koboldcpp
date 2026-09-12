@@ -2,9 +2,13 @@
 #define __SD_MODEL_COMMON_ROPE_HPP__
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
+#include <set>
 #include <vector>
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
+#include "core/util.h"
 
 namespace Rope {
     enum class EmbedNDLayout {
@@ -1020,7 +1024,7 @@ namespace Rope {
         q = apply_rope(ctx->ggml_ctx, q, pe, rope_interleaved);  // [N*n_head, L, d_head]
         k = apply_rope(ctx->ggml_ctx, k, pe, rope_interleaved);  // [N*n_head, L, d_head]
 
-        auto x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, true, ctx->flash_attn_enabled, kv_scale);  // [N, L, n_head*d_head]
+        auto x = ggml_ext_attention_ext(ctx, q, k, v, n_head, mask, true, ctx->flash_attn_enabled, kv_scale);  // [N, L, n_head*d_head]
         return x;
     }
 };  // namespace Rope

@@ -253,7 +253,7 @@ namespace MageVAE {
             q      = to_patches(ctx->ggml_ctx, q);
             k      = to_patches(ctx->ggml_ctx, k);
             v      = to_patches(ctx->ggml_ctx, v);
-            h      = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
+            h      = ggml_ext_attention_ext(ctx, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
             h      = from_patches(ctx->ggml_ctx, h, np, batch, hp, wp);
             if (pad_h > 0) {
                 h = ggml_ext_slice(ctx->ggml_ctx, h, 1, 0, height);
@@ -490,7 +490,7 @@ namespace MageVAE {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input, decode_graph);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), input.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), input.dim());
         }
 
         int get_encoder_output_channels(int input_channels) override {

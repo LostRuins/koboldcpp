@@ -558,7 +558,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.model_args = "chroma_use_dit_mask=true";
     params.max_vram = max_vram.c_str();
-    params.stream_layers = inputs.stream_layers;
+    //params.stream_layers = inputs.stream_layers; // removed in master-843
     params.eager_load = true; //kcpp should preload everything
     params.enable_mmap = inputs.use_mmap;
     params.backend = backend.c_str();

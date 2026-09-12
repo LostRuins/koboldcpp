@@ -193,7 +193,7 @@ namespace Hunyuan {
             v = ggml_reshape_3d(ctx->ggml_ctx, v, w * h * t, c, b);                                  // [b, c, t*h*w]
             v = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));  // [b, t*h*w, c]
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);  // [b, t*h*w, c]
+            x = ggml_ext_attention_ext(ctx, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);  // [b, t*h*w, c]
 
             x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [b, c, t*h*w]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, t, c * b);                         // [b*c, t, h, w]
@@ -825,11 +825,9 @@ namespace Hunyuan {
             auto get_graph          = [&]() -> ggml_cgraph* {
                 return build_graph(graph_input, decode_graph);
             };
-            auto output = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph,
-                                                                                     n_threads,
-                                                                                     true,
-                                                                                     true,
-                                                                                     true),
+            auto output = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph,
+                                                                              n_threads,
+                                                                              false),
                                                           graph_input.dim());
             if (!output.empty() && input.dim() == 4) {
                 output.squeeze_(2);

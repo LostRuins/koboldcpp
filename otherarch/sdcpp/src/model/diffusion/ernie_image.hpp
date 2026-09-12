@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_ERNIE_IMAGE_HPP__
 #define __SD_MODEL_DIFFUSION_ERNIE_IMAGE_HPP__
 
+#include <cinttypes>
 #include <memory>
 #include <vector>
 
@@ -72,13 +73,13 @@ namespace ErnieImage {
             for (int axis_dim : config.axes_dim) {
                 config.axes_dim_sum += axis_dim;
             }
-            LOG_DEBUG("ernie_image: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", ffn_hidden_size = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
-                      config.num_layers,
-                      config.hidden_size,
-                      config.num_heads,
-                      config.ffn_hidden_size,
-                      config.in_channels,
-                      config.out_channels);
+            LOG_VERBOSE("ernie_image: num_layers = %" PRId64 ", hidden_size = %" PRId64 ", num_heads = %" PRId64 ", ffn_hidden_size = %" PRId64 ", in_channels = %" PRId64 ", out_channels = %" PRId64,
+                        config.num_layers,
+                        config.hidden_size,
+                        config.num_heads,
+                        config.ffn_hidden_size,
+                        config.in_channels,
+                        config.out_channels);
             return config;
         }
     };
@@ -182,7 +183,7 @@ namespace ErnieImage {
             k = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, k, 0, 2, 1, 3));  // [N, heads, S, head_dim]
             k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0], k->ne[1], k->ne[2] * k->ne[3]);
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, ctx->flash_attn_enabled);  // [N, S, hidden_size]
+            x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, attention_mask, true, ctx->flash_attn_enabled);  // [N, S, hidden_size]
             x = to_out_0->forward(ctx, x);
             return x;
         }
@@ -440,7 +441,7 @@ namespace ErnieImage {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

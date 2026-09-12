@@ -1,8 +1,10 @@
 #ifndef __SD_MODEL_DIFFUSION_ANIMATEDIFF_HPP__
 #define __SD_MODEL_DIFFUSION_ANIMATEDIFF_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
 #include "model/common/block.hpp"
+#include "model/common/ggml_block.hpp"
 
 // AnimateDiff (https://arxiv.org/abs/2307.04725) SD 1.5 motion modules.
 namespace AnimateDiff {
@@ -59,7 +61,7 @@ namespace AnimateDiff {
             auto k = to_k->forward(ctx, x_pe);
             auto v = to_v->forward(ctx, x_pe);
 
-            auto a = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, (int)num_heads, nullptr, false);
+            auto a = ggml_ext_attention_ext(ctx, q, k, v, (int)num_heads, nullptr, false);
             return to_out->forward(ctx, a);
         }
     };

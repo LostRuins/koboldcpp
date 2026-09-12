@@ -11,9 +11,11 @@
 #include <utility>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
 #include "core/ggml_graph_cut.h"
+#include "core/ggml_runner.h"
 #include "core/util.h"
+#include "model/common/ggml_block.hpp"
 #include "model/diffusion/dit.hpp"
 #include "model_loader.h"
 
@@ -115,13 +117,13 @@ namespace LTXVUpsampler {
             }
 
             if (inferred) {
-                LOG_DEBUG("ltx latent upsampler: in_channels = %" PRId64 ", mid_channels = %" PRId64 ", num_blocks_per_stage = %d, spatial_scale = %.3f, temporal_up_factor = %d, rational_resampler = %d",
-                          config.in_channels,
-                          config.mid_channels,
-                          config.num_blocks_per_stage,
-                          config.spatial_scale,
-                          config.temporal_up_factor,
-                          config.rational_resampler);
+                LOG_VERBOSE("ltx latent upsampler: in_channels = %" PRId64 ", mid_channels = %" PRId64 ", num_blocks_per_stage = %d, spatial_scale = %.3f, temporal_up_factor = %d, rational_resampler = %d",
+                            config.in_channels,
+                            config.mid_channels,
+                            config.num_blocks_per_stage,
+                            config.spatial_scale,
+                            config.temporal_up_factor,
+                            config.rational_resampler);
             }
             return config;
         }
@@ -431,12 +433,15 @@ namespace LTXVUpsampler {
     struct LatentUpsamplerRunner : public GGMLRunner {
         LatentUpsamplerConfig config;
         std::unique_ptr<LatentUpsampler> model;
+        std::string weight_prefix;
 
         LatentUpsamplerRunner(ggml_backend_t backend,
                               const String2TensorStorage& tensor_storage_map,
+                              const std::string& prefix                           = "",
                               std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : GGMLRunner(backend, weight_manager),
-              config(LatentUpsamplerConfig::detect_from_weights(tensor_storage_map)) {
+              config(LatentUpsamplerConfig::detect_from_weights(tensor_storage_map, prefix)),
+              weight_prefix(prefix) {
             if (config.dims != 3 || (!config.spatial_upsample && !config.temporal_upsample) ||
                 config.spatial_up_num < 1 || config.spatial_down_den < 1 || config.temporal_up_factor < 1) {
                 LOG_ERROR("unsupported LTX latent upsampler config: dims=%d spatial=%d temporal=%d rational=%d scale=%.3f temporal_factor=%d",
@@ -450,7 +455,7 @@ namespace LTXVUpsampler {
             }
 
             model = std::make_unique<LatentUpsampler>(config);
-            model->init(params_ctx, tensor_storage_map, "");
+            model->init(params_ctx, tensor_storage_map, prefix);
         }
 
         std::string get_desc() override {
@@ -459,7 +464,7 @@ namespace LTXVUpsampler {
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
             if (model) {
-                model->get_param_tensors(tensors);
+                model->get_param_tensors(tensors, weight_prefix);
             }
         }
 
@@ -499,7 +504,7 @@ namespace LTXVUpsampler {
             }
             size_t expected_dim = static_cast<size_t>(x.dim());
             auto get_graph      = [&]() -> ggml_cgraph* { return build_graph(x); };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), expected_dim);
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), expected_dim);
         }
     };
 

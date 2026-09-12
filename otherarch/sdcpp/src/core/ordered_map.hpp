@@ -38,9 +38,19 @@ public:
             insert(kv);
     }
 
-    OrderedMap(const OrderedMap&)                = default;
-    OrderedMap(OrderedMap&&) noexcept            = default;
-    OrderedMap& operator=(const OrderedMap&)     = default;
+    OrderedMap(const OrderedMap& other) {
+        for (const auto& value : other) {
+            insert(value);
+        }
+    }
+    OrderedMap(OrderedMap&&) noexcept = default;
+    OrderedMap& operator=(const OrderedMap& other) {
+        if (this != &other) {
+            OrderedMap copy(other);
+            swap(copy);
+        }
+        return *this;
+    }
     OrderedMap& operator=(OrderedMap&&) noexcept = default;
 
     // --- element access ---

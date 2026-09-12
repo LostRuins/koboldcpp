@@ -1,8 +1,10 @@
 #ifndef __SD_MODEL_ADAPTER_IP_ADAPTER_HPP__
 #define __SD_MODEL_ADAPTER_IP_ADAPTER_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
 #include "model/common/block.hpp"
+#include "model/common/ggml_block.hpp"
 #include "model_loader.h"
 
 namespace IPAdapter {
@@ -93,7 +95,7 @@ namespace IPAdapter {
                 int64_t L          = kv->ne[1];
                 ggml_tensor* k     = ggml_cont(ctx->ggml_ctx, ggml_view_3d(ctx->ggml_ctx, kv, dim, L, N, kv->nb[1], kv->nb[2], 0));
                 ggml_tensor* v     = ggml_cont(ctx->ggml_ctx, ggml_view_3d(ctx->ggml_ctx, kv, dim, L, N, kv->nb[1], kv->nb[2], dim * kv->nb[0]));
-                ggml_tensor* attn  = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, heads, nullptr, false, false);
+                ggml_tensor* attn  = ggml_ext_attention_ext(ctx, q, k, v, heads, nullptr, false, false);
                 attn               = to_out->forward(ctx, attn);
                 latents            = ggml_add(ctx->ggml_ctx, latents, attn);
 
@@ -200,7 +202,7 @@ namespace IPAdapter {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(image_embeds);
             };
-            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true, true, true));
+            return take_or_empty(GGMLRunner::compute(get_graph, n_threads, true));
         }
     };
 
