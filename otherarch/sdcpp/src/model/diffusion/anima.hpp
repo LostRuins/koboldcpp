@@ -237,8 +237,7 @@ namespace Anima {
                 }
                 auto q_rope = Rope::apply_rope(ctx->ggml_ctx, q4, pe_q, false);
                 auto k_rope = Rope::apply_rope(ctx->ggml_ctx, k4, pe_k, false);
-                attn_out    = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                                     ctx->backend,
+                attn_out    = ggml_ext_attention_ext(ctx,
                                                      q_rope,
                                                      k_rope,
                                                      v4,
@@ -249,8 +248,7 @@ namespace Anima {
             } else {
                 auto q_flat = ggml_reshape_3d(ctx->ggml_ctx, q4, head_dim * num_heads, L_q, N);
                 auto k_flat = ggml_reshape_3d(ctx->ggml_ctx, k4, head_dim * num_heads, L_k, N);
-                attn_out    = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                                     ctx->backend,
+                attn_out    = ggml_ext_attention_ext(ctx,
                                                      q_flat,
                                                      k_flat,
                                                      v,
