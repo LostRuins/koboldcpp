@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "device_residency_manager.h"
+#include "model_component.h"
 #include "model_loader.h"
 
 class ModelManager : public DeviceResidencyManager {
@@ -24,7 +25,9 @@ public:
         float multiplier   = 1.0f;
         bool is_high_noise = false;
         std::string tensor_name_prefix_filter;
-        bool required = false;
+        bool required               = false;
+        ModelLoader::FileId file_id = 0;
+        uint64_t file_revision      = 0;
     };
 
 private:
@@ -32,8 +35,12 @@ private:
 
     struct TensorState {
         std::string name;
-        ggml_tensor* tensor = nullptr;
-        std::string desc;
+        ggml_tensor* tensor      = nullptr;
+        ModelComponent component = ModelComponent::Count;
+        TensorStorage source;
+        bool has_source                 = false;
+        ModelLoader::FileId source_file = 0;
+        SDVersion source_version        = VERSION_COUNT;
 
         ResidencyMode residency_mode                 = ResidencyMode::ParamBackend;
         ggml_backend_t compute_backend               = nullptr;
@@ -79,7 +86,7 @@ private:
 
     ModelLoader model_loader_;
     std::vector<std::unique_ptr<TensorState>> tensor_states_;
-    std::map<std::string, TensorState*> tensor_states_by_name_;
+    std::map<const ggml_tensor*, TensorState*> tensor_states_by_tensor_;
     std::vector<std::unique_ptr<ParamsStorageBlock>> params_storage_blocks_;
     std::vector<std::unique_ptr<ComputeStagingBlock>> compute_staging_blocks_;
     std::map<ggml_backend_t, ggml_backend_buffer_type_t> split_buffer_types_;
@@ -91,6 +98,8 @@ private:
     bool warned_split_lora_skip_ = false;
     std::set<std::string> common_ignore_tensors_;
     std::vector<LoraSpec> loras_;
+    std::set<ModelLoader::FileId> lora_sources_;
+    bool applying_loras_             = false;
     SDVersion lora_version_          = VERSION_COUNT;
     uint64_t current_lora_epoch_     = 0;
     uint64_t residency_epoch_        = 0;
@@ -102,6 +111,7 @@ private:
 
     void finish_compute_backend_usage(const std::vector<TensorState*>& states);
     void release_all();
+    void invalidate_sources(const std::unordered_set<TensorState*>& states);
 
     ggml_backend_t prefetch_backend_for(ggml_backend_t compute_backend);
     bool populate_prefetch_block(PrefetchBlock& block);
@@ -152,14 +162,26 @@ private:
     void free_params_storage_block(ParamsStorageBlock& block);
     void erase_params_storage_block(ParamsStorageBlock* block);
     void reset_lora_applied_params();
+    bool unregister_tensor_states(const std::unordered_set<TensorState*>& states, size_t* size);
     size_t other_runtime_resident_bytes(uintptr_t owner_id,
                                         ggml_backend_t compute_backend) const;
 
 public:
     ~ModelManager() override;
 
-    ModelLoader& loader() { return model_loader_; }
     const ModelLoader& loader() const { return model_loader_; }
+
+    bool set_loader(ModelLoader loader);
+    bool add_file(const std::string& path, const std::string& prefix = "", ModelLoader::FileId* id = nullptr, bool force = false);
+    bool del_file(ModelLoader::FileId id);
+    bool refresh_files();
+    ModelLoader::FileVersions source_versions(const std::set<ModelComponent>& components, const ModelLoader& loader) const;
+    size_t registered_params_size(const std::set<ModelComponent>& components) const;
+
+    void prepare_file_io() { model_loader_.process_model_files(enable_mmap_, writable_mmap_); }
+    bool load_float_tensor(const std::string& name, std::vector<float>& data) {
+        return model_loader_.load_float_tensor(name, data, n_threads_, enable_mmap_);
+    }
 
     void set_n_threads(int n_threads) {
         n_threads_ = n_threads;
@@ -172,14 +194,15 @@ public:
     void set_enable_mmap(bool enable_mmap) { enable_mmap_ = enable_mmap; }
     void set_writable_mmap(bool writable_mmap) { writable_mmap_ = writable_mmap; }
     void set_common_ignore_tensors(std::set<std::string> ignore_tensors);
-    void set_loras(std::vector<LoraSpec> loras, SDVersion version);
+    bool prepare_lora_sources(std::vector<LoraSpec>& loras);
+    bool set_loras(std::vector<LoraSpec> loras, SDVersion version);
     void set_split_buffer_type(ggml_backend_t compute_backend, ggml_backend_buffer_type_t split_buft, const std::vector<std::pair<ggml_backend_t, size_t>>& device_limits);
 
     static bool tensor_shape_supports_split_buffer(const ggml_tensor* tensor);
 
     std::set<std::string> tensor_names() const;
 
-    bool register_param_tensors(const std::string& desc,
+    bool register_param_tensors(ModelComponent component,
                                 std::map<std::string, ggml_tensor*> tensors,
                                 ResidencyMode residency_mode,
                                 ggml_backend_t compute_backend,
@@ -187,13 +210,18 @@ public:
                                 size_t* registered_tensor_size                         = nullptr,
                                 bool allow_split_buffer                                = false,
                                 bool params_follow_compute_backend                     = false,
-                                const std::map<ggml_tensor*, enum ggml_op>* tensor_ops = nullptr);
+                                const std::map<ggml_tensor*, enum ggml_op>* tensor_ops = nullptr,
+                                ModelLoader::FileId source_file                        = 0,
+                                SDVersion source_version                               = VERSION_COUNT);
 
-    bool unregister_param_tensors(const std::string& desc,
+    ggml_tensor* resolve_param_tensor(ggml_tensor* tensor) const override;
+    bool unregister_param_tensors(const std::vector<ggml_tensor*>& tensors);
+
+    bool unregister_param_tensors(ModelComponent component,
                                   size_t* registered_tensor_size = nullptr);
 
     template <typename Runner>
-    bool register_runner_params(const std::string& desc,
+    bool register_runner_params(ModelComponent component,
                                 Runner& runner,
                                 ResidencyMode residency_mode,
                                 ggml_backend_t compute_backend,
@@ -201,7 +229,7 @@ public:
                                 size_t* registered_tensor_size = nullptr) {
         std::map<std::string, ggml_tensor*> tensors;
         runner.get_param_tensors(tensors);
-        return register_param_tensors(desc,
+        return register_param_tensors(component,
                                       std::move(tensors),
                                       residency_mode,
                                       compute_backend,
@@ -210,7 +238,7 @@ public:
     }
 
     template <typename Runner>
-    bool register_runner_params(const std::string& desc,
+    bool register_runner_params(ModelComponent component,
                                 Runner& runner,
                                 const std::string& prefix,
                                 ResidencyMode residency_mode,
@@ -219,7 +247,7 @@ public:
                                 size_t* registered_tensor_size = nullptr) {
         std::map<std::string, ggml_tensor*> tensors;
         runner.get_param_tensors(tensors, prefix);
-        return register_param_tensors(desc,
+        return register_param_tensors(component,
                                       std::move(tensors),
                                       residency_mode,
                                       compute_backend,

@@ -1494,13 +1494,14 @@ namespace WAN {
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
-                ModelLoader& model_loader = model_manager->loader();
+                ModelLoader model_loader;
                 if (!model_loader.init_from_file_and_convert_name(file_path, "vae.")) {
                     LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                     return;
                 }
 
-                if (!model_manager->register_runner_params("Wan VAE test",
+                if (!model_manager->set_loader(model_loader) ||
+                    !model_manager->register_runner_params(ModelComponent::VAE,
                                                            *vae,
                                                            ModelManager::ResidencyMode::ParamBackend,
                                                            backend,

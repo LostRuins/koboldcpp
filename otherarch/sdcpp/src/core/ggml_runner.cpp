@@ -66,15 +66,9 @@ void GGMLRunner::rebuild_params_tensor_set() {
 }
 
 ggml_tensor* GGMLRunner::canonical_param_tensor(ggml_tensor* tensor) {
-    if (tensor == nullptr) {
-        return nullptr;
-    }
-    if (params_tensor_set_.find(tensor) != params_tensor_set_.end()) {
-        return tensor;
-    }
-    if (tensor->view_src != nullptr &&
-        params_tensor_set_.find(tensor->view_src) != params_tensor_set_.end()) {
-        return tensor->view_src;
+    for (auto* current = tensor; current != nullptr; current = current->view_src) {
+        if (params_tensor_set_.count(current) != 0)
+            return current;
     }
     return nullptr;
 }
@@ -483,9 +477,10 @@ void GGMLRunner::runner_end() {
     if (auto manager = residency_manager.lock()) {
         manager->clear_prefetched_params(reinterpret_cast<uintptr_t>(this));
         std::vector<ggml_tensor*> tensors;
-        for (auto tensor = ggml_get_first_tensor(params_ctx); tensor != nullptr;
-             tensor      = ggml_get_next_tensor(params_ctx, tensor)) {
-            tensors.push_back(tensor);
+        for (auto tensor : params_tensor_set_) {
+            auto* parameter = manager->resolve_param_tensor(const_cast<ggml_tensor*>(tensor));
+            if (parameter != nullptr)
+                tensors.push_back(parameter);
         }
         manager->evict_compute_backend_params(tensors);
         manager->remove_runtime_owner(reinterpret_cast<uintptr_t>(this));
@@ -620,7 +615,15 @@ std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
     if (!prepare_compute_graph(get_graph, &graph)) {
         return std::nullopt;
     }
+    params_tensor_set_dirty_ = true;
     rebuild_params_tensor_set();
+    if (auto manager = residency_manager.lock()) {
+        for (int i = 0; i < sd::ggml_graph_cut::leaf_count(graph); ++i) {
+            auto* parameter = manager->resolve_param_tensor(sd::ggml_graph_cut::leaf_tensor(graph, i));
+            if (parameter != nullptr)
+                params_tensor_set_.insert(parameter);
+        }
+    }
     auto output = execute_graph(graph, n_threads, no_return, read_outputs);
     success     = output.has_value();
     if (success) {

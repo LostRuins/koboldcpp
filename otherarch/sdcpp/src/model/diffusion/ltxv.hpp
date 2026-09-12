@@ -2087,8 +2087,8 @@ namespace LTXV {
             ggml_backend_t backend = sd_backend_cpu_init();
             LOG_INFO("loading ltxav from '%s'", model_path.c_str());
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(model_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
                 return;
@@ -2107,7 +2107,8 @@ namespace LTXV {
                                                                                "model.diffusion_model",
                                                                                model_manager);
 
-            if (!model_manager->register_runner_params("LTXAV test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Diffusion,
                                                        *ltxav,
                                                        "model.diffusion_model",
                                                        ModelManager::ResidencyMode::ParamBackend,

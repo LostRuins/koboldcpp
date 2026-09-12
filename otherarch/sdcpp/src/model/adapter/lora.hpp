@@ -23,25 +23,31 @@ struct LoraModel : public GGMLRunner {
     std::set<std::string> skipped_incompatible_lora_tensors;
     std::set<std::string> warned_incompatible_model_tensors;
     std::string file_path;
-    std::shared_ptr<ModelManager> model_manager;
-    ggml_backend_t params_backend = nullptr;
-    bool load_failed              = false;
-    bool applied                  = false;
-    bool tensor_preprocessed      = false;
+    ggml_backend_t params_backend              = nullptr;
+    bool load_failed                           = false;
+    bool applied                               = false;
+    bool tensor_preprocessed                   = false;
+    ModelLoader::FileId source_file            = 0;
+    SDVersion source_version                   = VERSION_COUNT;
+    ModelManager::ResidencyMode residency_mode = ModelManager::ResidencyMode::ParamBackend;
+    bool params_follow_compute                 = false;
+    std::vector<ggml_tensor*> registered_params;
+    std::map<ggml_tensor*, float> scalar_values;
 
     typedef std::function<bool(const std::string&)> filter_t;
 
-    LoraModel(const std::string& lora_id,
-              ggml_backend_t backend,
-              ggml_backend_t params_backend_,
-              const std::string& file_path          = "",
-              std::string prefix                    = "",
-              SDVersion version                     = VERSION_COUNT,
-              std::shared_ptr<ModelManager> manager = std::make_shared<ModelManager>())
-        : GGMLRunner(backend, manager), lora_id(lora_id), file_path(file_path), model_manager(std::move(manager)), params_backend(params_backend_) {
-        prefix = "lora." + prefix;
-        if (model_manager == nullptr || !model_manager->loader().init_from_file_and_convert_name(file_path, prefix, version)) {
-            load_failed = true;
+    LoraModel(const std::string& id, ggml_backend_t backend, ggml_backend_t params, std::shared_ptr<ModelManager> manager, ModelLoader::FileId file, SDVersion version, ModelManager::ResidencyMode mode = ModelManager::ResidencyMode::ParamBackend, bool follow_compute = false)
+        : GGMLRunner(backend, manager), lora_id(id), params_backend(params), source_file(file), source_version(version), residency_mode(mode), params_follow_compute(follow_compute) {
+        load_failed = source_file == 0 || manager == nullptr || manager->loader().file_revision(source_file) == 0;
+        if (!load_failed) {
+            file_path = manager->loader().file_path(source_file);
+        }
+    }
+
+    ~LoraModel() override {
+        runner_end();
+        if (auto manager = std::dynamic_pointer_cast<ModelManager>(residency_manager.lock())) {
+            GGML_ASSERT(manager->unregister_param_tensors(registered_params));
         }
     }
 
@@ -49,95 +55,65 @@ struct LoraModel : public GGMLRunner {
         return "lora";
     }
 
-    bool load_from_file(int n_threads, filter_t filter = nullptr) {
-        LOG_INFO("loading LoRA from '%s'", file_path.c_str());
-
-        if (load_failed) {
-            LOG_ERROR("init lora model loader from file failed: '%s'", file_path.c_str());
+    bool init_params(int n_threads, filter_t filter = nullptr) {
+        auto model_manager = std::dynamic_pointer_cast<ModelManager>(residency_manager.lock());
+        if (model_manager == nullptr)
             return false;
-        }
-
-        std::unordered_map<std::string, TensorStorage> tensors_to_create;
-        std::mutex lora_mutex;
-        bool dry_run          = true;
-        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
-            if (dry_run) {
-                const std::string& name = tensor_storage.name;
-
-                if (filter && !filter(name)) {
-                    return true;
-                }
-
-                {
-                    std::lock_guard<std::mutex> lock(lora_mutex);
-                    tensors_to_create[name] = tensor_storage;
-                }
-            } else {
-                const std::string& name = tensor_storage.name;
-                auto iter               = lora_tensors.find(name);
-                if (iter != lora_tensors.end()) {
-                    *dst_tensor = iter->second;
-                }
-            }
-            return true;
-        };
-
-        if (model_manager != nullptr) {
-            model_manager->set_n_threads(n_threads);
-        }
-        ModelLoader& model_loader = model_manager->loader();
-        model_loader.load_tensors(on_new_tensor_cb);
-
-        if (tensors_to_create.empty()) {
-            return true;
-        }
-
-        for (const auto& pair : tensors_to_create) {
-            const auto& name   = pair.first;
-            const auto& ts     = pair.second;
-            ggml_tensor* real  = ggml_new_tensor(params_ctx,
-                                                 ts.type,
-                                                 ts.n_dims,
-                                                 ts.ne);
-            lora_tensors[name] = real;
-        }
-
+        if (load_failed || !registered_params.empty())
+            return false;
+        model_manager->set_n_threads(n_threads);
+        const auto sources = model_manager->loader().file_tensors(source_file, source_version);
         std::map<std::string, ggml_tensor*> tensors;
-        for (const auto& pair : lora_tensors) {
-            tensors[pair.first] = pair.second;
+        std::map<std::string, ggml_tensor*> scalars;
+        std::set<std::string> scalar_names;
+        for (const auto& [name, source] : sources) {
+            if (is_unused_tensor(name) || (filter && !filter(name)))
+                continue;
+            const bool scalar  = source.nelements() == 1 && (ends_with(name, ".alpha") || ends_with(name, ".scale"));
+            auto* tensor       = ggml_new_tensor(params_ctx, scalar ? GGML_TYPE_F32 : source.type, source.n_dims, source.ne);
+            lora_tensors[name] = tensor;
+            if (scalar) {
+                tensor->data  = &scalar_values[tensor];
+                scalars[name] = tensor;
+                scalar_names.insert(name);
+            } else {
+                tensors[name] = tensor;
+            }
         }
-        if (model_manager == nullptr ||
-            !model_manager->register_param_tensors("LoRA",
-                                                   std::move(tensors),
-                                                   ModelManager::ResidencyMode::ParamBackend,
-                                                   runtime_backend,
-                                                   params_backend) ||
-            !model_manager->validate_registered_tensors()) {
-            LOG_ERROR("lora model manager registration failed");
+        // These values are consumed while constructing the graph, before weight preparation.
+        if (!scalars.empty()) {
+            auto callback = [&](const TensorStorage& source, ggml_tensor** dst) {
+                auto found = scalars.find(source.name);
+                *dst       = found == scalars.end() ? nullptr : found->second;
+                return true;
+            };
+            if (!model_manager->loader().load_file_tensors(source_file, source_version, callback, scalar_names))
+                return false;
+        }
+        if (!model_manager->register_param_tensors(ModelComponent::LoRA, tensors, residency_mode,
+                                                   runtime_backend, params_backend, nullptr, false, params_follow_compute,
+                                                   nullptr, source_file, source_version))
             return false;
-        }
-        std::vector<ggml_tensor*> lora_params;
-        lora_params.reserve(lora_tensors.size());
-        for (const auto& pair : lora_tensors) {
-            lora_params.push_back(pair.second);
-        }
-        if (!model_manager->prepare_params(lora_params)) {
-            LOG_ERROR("lora model manager prepare params failed");
-            return false;
-        }
+        for (const auto& entry : tensors)
+            registered_params.push_back(entry.second);
+        return model_manager->validate_registered_tensors();
+    }
 
-        LOG_VERBOSE("finished loaded lora");
-        return true;
+    float scalar_value(ggml_tensor* tensor) const {
+        auto found = scalar_values.find(tensor);
+        return found != scalar_values.end() ? found->second : ggml_ext_backend_tensor_get_f32(tensor);
     }
 
     void release_loaded_tensors() {
         runner_end();
-        model_manager.reset();
+        if (auto manager = std::dynamic_pointer_cast<ModelManager>(residency_manager.lock())) {
+            GGML_ASSERT(manager->unregister_param_tensors(registered_params));
+        }
+        registered_params.clear();
         free_params_ctx();
         alloc_params_ctx();
-        model_manager     = std::make_shared<ModelManager>();
-        residency_manager = model_manager;
         lora_tensors.clear();
+        scalar_values.clear();
         original_tensor_to_final_tensor.clear();
         applied_lora_tensors.clear();
         skipped_incompatible_lora_tensors.clear();
@@ -241,12 +217,12 @@ struct LoraModel : public GGMLRunner {
             int64_t rank = lora_down->ne[ggml_n_dims(lora_down) - 1];
             iter         = lora_tensors.find(scale_name);
             if (iter != lora_tensors.end()) {
-                scale_value = ggml_ext_backend_tensor_get_f32(iter->second);
+                scale_value = scalar_value(iter->second);
                 applied_lora_tensors.insert(scale_name);
             } else {
                 iter = lora_tensors.find(alpha_name);
                 if (iter != lora_tensors.end()) {
-                    float alpha = ggml_ext_backend_tensor_get_f32(iter->second);
+                    float alpha = scalar_value(iter->second);
                     scale_value = alpha / rank;
                     // LOG_VERBOSE("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
                     applied_lora_tensors.insert(alpha_name);
@@ -395,7 +371,7 @@ struct LoraModel : public GGMLRunner {
             int64_t rank = hada_1_down->ne[ggml_n_dims(hada_1_down) - 1];
             iter         = lora_tensors.find(alpha_name);
             if (iter != lora_tensors.end()) {
-                float alpha = ggml_ext_backend_tensor_get_f32(iter->second);
+                float alpha = scalar_value(iter->second);
                 scale_value = alpha / rank;
                 applied_lora_tensors.insert(alpha_name);
             }
@@ -508,7 +484,7 @@ struct LoraModel : public GGMLRunner {
             float scale_value = 1.0f;
             iter              = lora_tensors.find(alpha_name);
             if (iter != lora_tensors.end()) {
-                float alpha = ggml_ext_backend_tensor_get_f32(iter->second);
+                float alpha = scalar_value(iter->second);
                 scale_value = alpha / rank;
                 applied_lora_tensors.insert(alpha_name);
             }
@@ -669,7 +645,7 @@ struct LoraModel : public GGMLRunner {
                 float scale_value = 1.0f;
                 iter              = lora_tensors.find(alpha_name);
                 if (iter != lora_tensors.end()) {
-                    float alpha = ggml_ext_backend_tensor_get_f32(iter->second);
+                    float alpha = scalar_value(iter->second);
                     scale_value = alpha / rank;
                 }
 
@@ -796,12 +772,12 @@ struct LoraModel : public GGMLRunner {
             int64_t rank = lora_down->ne[ggml_n_dims(lora_down) - 1];
             iter         = lora_tensors.find(scale_name);
             if (iter != lora_tensors.end()) {
-                scale_value       = ggml_ext_backend_tensor_get_f32(iter->second);
+                scale_value       = scalar_value(iter->second);
                 scale_tensor_name = scale_name;
             } else {
                 iter = lora_tensors.find(alpha_name);
                 if (iter != lora_tensors.end()) {
-                    float alpha       = ggml_ext_backend_tensor_get_f32(iter->second);
+                    float alpha       = scalar_value(iter->second);
                     scale_value       = alpha / rank;
                     scale_tensor_name = alpha_name;
                     // LOG_VERBOSE("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
@@ -949,7 +925,7 @@ struct LoraModel : public GGMLRunner {
         return gf;
     }
 
-    void apply(std::map<std::string, ggml_tensor*> model_tensors,
+    bool apply(std::map<std::string, ggml_tensor*> model_tensors,
                const std::set<std::string>& model_tensor_names,
                SDVersion version,
                int n_threads,
@@ -970,10 +946,11 @@ struct LoraModel : public GGMLRunner {
         stat(!warn_unused);
         original_tensor_to_final_tensor.clear();
         runner_end();
+        return result.has_value();
     }
 
-    void apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads, bool warn_unused = true) {
-        apply(model_tensors, tensor_names(model_tensors), version, n_threads, warn_unused);
+    bool apply(std::map<std::string, ggml_tensor*> model_tensors, SDVersion version, int n_threads, bool warn_unused = true) {
+        return apply(model_tensors, tensor_names(model_tensors), version, n_threads, warn_unused);
     }
 
     void stat(bool at_runntime = false) {

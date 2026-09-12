@@ -773,8 +773,8 @@ namespace Qwen {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -793,7 +793,8 @@ namespace Qwen {
                                                                                             VERSION_QWEN_IMAGE,
                                                                                             model_manager);
 
-            if (!model_manager->register_runner_params("Qwen image test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Diffusion,
                                                        *qwen_image,
                                                        "model.diffusion_model",
                                                        ModelManager::ResidencyMode::ParamBackend,

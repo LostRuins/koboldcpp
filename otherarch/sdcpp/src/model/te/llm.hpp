@@ -2576,8 +2576,8 @@ namespace LLM {
             ggml_backend_t backend    = sd_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
-            auto model_manager        = std::make_shared<ModelManager>();
-            ModelLoader& model_loader = model_manager->loader();
+            auto model_manager = std::make_shared<ModelManager>();
+            ModelLoader model_loader;
             if (!model_loader.init_from_file_and_convert_name(file_path, "text_encoders.llm.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
@@ -2601,7 +2601,8 @@ namespace LLM {
                                                                              true,
                                                                              model_manager);
 
-            if (!model_manager->register_runner_params("LLM test",
+            if (!model_manager->set_loader(model_loader) ||
+                !model_manager->register_runner_params(ModelComponent::Conditioner,
                                                        *llm,
                                                        "text_encoders.llm",
                                                        ModelManager::ResidencyMode::ParamBackend,

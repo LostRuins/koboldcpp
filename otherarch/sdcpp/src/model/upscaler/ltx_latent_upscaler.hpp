@@ -433,12 +433,15 @@ namespace LTXVUpsampler {
     struct LatentUpsamplerRunner : public GGMLRunner {
         LatentUpsamplerConfig config;
         std::unique_ptr<LatentUpsampler> model;
+        std::string weight_prefix;
 
         LatentUpsamplerRunner(ggml_backend_t backend,
                               const String2TensorStorage& tensor_storage_map,
+                              const std::string& prefix                           = "",
                               std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : GGMLRunner(backend, weight_manager),
-              config(LatentUpsamplerConfig::detect_from_weights(tensor_storage_map)) {
+              config(LatentUpsamplerConfig::detect_from_weights(tensor_storage_map, prefix)),
+              weight_prefix(prefix) {
             if (config.dims != 3 || (!config.spatial_upsample && !config.temporal_upsample) ||
                 config.spatial_up_num < 1 || config.spatial_down_den < 1 || config.temporal_up_factor < 1) {
                 LOG_ERROR("unsupported LTX latent upsampler config: dims=%d spatial=%d temporal=%d rational=%d scale=%.3f temporal_factor=%d",
@@ -452,7 +455,7 @@ namespace LTXVUpsampler {
             }
 
             model = std::make_unique<LatentUpsampler>(config);
-            model->init(params_ctx, tensor_storage_map, "");
+            model->init(params_ctx, tensor_storage_map, prefix);
         }
 
         std::string get_desc() override {
@@ -461,7 +464,7 @@ namespace LTXVUpsampler {
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
             if (model) {
-                model->get_param_tensors(tensors);
+                model->get_param_tensors(tensors, weight_prefix);
             }
         }
 

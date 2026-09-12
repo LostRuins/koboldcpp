@@ -6,10 +6,8 @@
 #include "core/util.h"
 #include "model/common/ggml_block.hpp"
 
-#include "model/adapter/lora.hpp"
 #include "model/common/block.hpp"
 #include "model/te/clip.hpp"
-#include "model_loader.h"
 
 struct FuseBlock : public GGMLBlock {
     // network hparams
@@ -562,96 +560,6 @@ public:
         };
 
         return take_or_empty(GGMLRunner::compute(get_graph, n_threads, true));
-    }
-};
-
-struct PhotoMakerIDEmbed : public GGMLRunner {
-    std::map<std::string, ggml_tensor*> tensors;
-    std::string file_path;
-    std::shared_ptr<ModelManager> model_manager;
-    ggml_backend_t params_backend = nullptr;
-    bool load_failed              = false;
-    bool applied                  = false;
-
-    PhotoMakerIDEmbed(ggml_backend_t backend,
-                      ggml_backend_t params_backend_,
-                      std::shared_ptr<ModelManager> manager = std::make_shared<ModelManager>(),
-                      const std::string& file_path          = "",
-                      const std::string& prefix             = "")
-        : GGMLRunner(backend, manager), file_path(file_path), model_manager(std::move(manager)), params_backend(params_backend_) {
-        if (model_manager == nullptr || !model_manager->loader().init_from_file_and_convert_name(file_path, prefix)) {
-            load_failed = true;
-        }
-    }
-
-    std::string get_desc() {
-        return "id_embeds";
-    }
-
-    bool load_from_file(bool filter_tensor, int n_threads) {
-        LOG_INFO("loading PhotoMaker ID Embeds from '%s'", file_path.c_str());
-
-        if (load_failed) {
-            LOG_ERROR("init photomaker id embed from file failed: '%s'", file_path.c_str());
-            return false;
-        }
-
-        bool dry_run = true;
-        std::mutex tensor_mutex;
-        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
-            const std::string& name = tensor_storage.name;
-
-            if (filter_tensor && !contains(name, "pmid.id_embeds")) {
-                // LOG_INFO("skipping LoRA tesnor '%s'", name.c_str());
-                return true;
-            }
-            if (dry_run) {
-                std::lock_guard<std::mutex> lock(tensor_mutex);
-                ggml_tensor* real = ggml_new_tensor(params_ctx,
-                                                    tensor_storage.type,
-                                                    tensor_storage.n_dims,
-                                                    tensor_storage.ne);
-                tensors[name]     = real;
-            } else {
-                auto real   = tensors[name];
-                *dst_tensor = real;
-            }
-
-            return true;
-        };
-
-        model_manager->set_n_threads(n_threads);
-        ModelLoader& model_loader = model_manager->loader();
-        model_loader.load_tensors(on_new_tensor_cb);
-        if (!model_manager->register_param_tensors("PhotoMaker ID embeds",
-                                                   tensors,
-                                                   ModelManager::ResidencyMode::ParamBackend,
-                                                   runtime_backend,
-                                                   params_backend) ||
-            !model_manager->validate_registered_tensors()) {
-            LOG_ERROR("PhotoMaker ID embeds model manager registration failed");
-            return false;
-        }
-        std::vector<ggml_tensor*> id_embed_params;
-        id_embed_params.reserve(tensors.size());
-        for (const auto& pair : tensors) {
-            id_embed_params.push_back(pair.second);
-        }
-        if (!model_manager->prepare_params(id_embed_params)) {
-            LOG_ERROR("PhotoMaker ID embeds model manager prepare params failed");
-            return false;
-        }
-
-        LOG_VERBOSE("finished loading PhotoMaker ID Embeds ");
-        return true;
-    }
-
-    ggml_tensor* get() {
-        std::map<std::string, ggml_tensor*>::iterator pos;
-        pos = tensors.find("pmid.id_embeds");
-        if (pos != tensors.end())
-            return pos->second;
-        return nullptr;
     }
 };
 
