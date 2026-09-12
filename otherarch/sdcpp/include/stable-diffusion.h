@@ -494,6 +494,9 @@ SD_API void free_sd_audio(sd_audio_t* audio);
 SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
 SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
 
+// Requires a loaded context; returns a static string owned by the library, or "Unknown".
+SD_API const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx);
+
 SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
 SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method);
 
