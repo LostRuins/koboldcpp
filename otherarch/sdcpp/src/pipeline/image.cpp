@@ -438,6 +438,10 @@ namespace sd::pipeline {
         condition_params.zero_out_masked = false;
         auto cond                        = sd->cond_stage_model->get_learned_condition(sd->n_threads,
                                                                                        condition_params);
+        if (cond.empty()) {
+            LOG_ERROR("failed to encode prompt");
+            return std::nullopt;
+        }
         if (cond.c_concat.empty() && ref_image_params.pass_to_dit) {
             cond.c_concat = latents->concat_latent;  // TODO: optimize
         }
@@ -469,6 +473,10 @@ namespace sd::pipeline {
                 condition_params.zero_out_masked = zero_out_masked;
                 uncond                           = sd->cond_stage_model->get_learned_condition(sd->n_threads,
                                                                                                condition_params);
+                if (uncond.empty()) {
+                    LOG_ERROR("failed to encode negative prompt");
+                    return std::nullopt;
+                }
             }
             if (uncond.c_concat.empty() && ref_image_params.pass_to_dit) {
                 uncond.c_concat = latents->concat_latent;  // TODO: optimize
@@ -494,6 +502,10 @@ namespace sd::pipeline {
                 }
                 img_uncond = sd->cond_stage_model->get_learned_condition(sd->n_threads,
                                                                          condition_params);
+                if (img_uncond.empty()) {
+                    LOG_ERROR("failed to encode image guidance prompt");
+                    return std::nullopt;
+                }
                 if (img_uncond.c_concat.empty() && ref_image_params.pass_to_dit) {
                     img_uncond.c_concat = latents->img_uncond_concat_latent;  // TODO: optimize
                 }

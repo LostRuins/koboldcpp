@@ -2789,9 +2789,9 @@ static sd::Tensor<float> sample_lms(denoise_cb_t model,
         sd::Tensor<float> d_cur = (x - denoised) / sigma;
         x += d_cur * lms_coeff[0];
         if (max_order > 1) {  // if max_order == 1, the history is not used (order always < 2)
-            int hist_size_p1 = hist.size() + 1;
+            int hist_size_p1 = static_cast<int>(hist.size()) + 1;
             if (i) {  // history does not exist at 1st step
-                int hist_max = hist.size() - 1;
+                int hist_max = static_cast<int>(hist.size()) - 1;
                 for (int c = 2; c <= order; c++)
                     x += hist[std::min(hist_max, hist_size_p1 - c + shift)] * lms_coeff[c - 1];
                 // max_order == 4  =>  hist[] index = 2, 1, 0

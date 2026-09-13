@@ -8,6 +8,7 @@
 #include "core/util.h"
 #include "extensions/generation_extension.h"
 #include "model/adapter/ip_adapter.hpp"
+#include "model/audio/wav2vec2.hpp"
 #include "model/diffusion/anima.hpp"
 #include "model/diffusion/boogu.hpp"
 #include "model/diffusion/control.hpp"
@@ -233,6 +234,16 @@ namespace sd::model_builders {
                 result.clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(ctx.backends.runtime_backend(SDBackendModule::CLIP_VISION),
                                                                                 tensor_storage_map,
                                                                                 weight_manager);
+            }
+            if (version == VERSION_WAN2_2_S2V &&
+                tensor_storage_map.count("wav2vec2.encoder.layer_norm.bias") > 0) {
+                if (!ensure_backend_pair(ctx.backends, SDBackendModule::AUDIO_ENCODER)) {
+                    return false;
+                }
+                result.audio_encoder = std::make_shared<Wav2Vec2::Wav2Vec2ModelRunner>(ctx.backends.runtime_backend(SDBackendModule::AUDIO_ENCODER),
+                                                                                       tensor_storage_map,
+                                                                                       "wav2vec2.",
+                                                                                       weight_manager);
             }
         } else if (sd_version_is_lingbot_video(version)) {
             bool enable_vision = false;

@@ -58,9 +58,15 @@ namespace sd::backend_fit {
         size_t params_device           = SIZE_MAX;
     };
 
+    struct Runtime {
+        std::string name;
+        std::vector<size_t> devices;
+    };
+
     struct Plan {
         bool valid         = false;
         size_t main_device = SIZE_MAX;
+        std::vector<Runtime> runtimes;
         std::vector<Decision> decisions;
     };
 
@@ -121,11 +127,14 @@ namespace sd::backend_fit {
         return name;
     }
 
-    static std::vector<Device> enumerate_gpu_devices(const sd::ggml_graph_cut::MaxVramAssignment& budgets) {
+    static std::vector<Device> enumerate_gpu_devices(const sd::ggml_graph_cut::MaxVramAssignment& budgets,
+                                                     bool include_other_devices) {
         std::vector<Device> out;
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-            if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+            const auto type        = ggml_backend_dev_type(dev);
+            if (type != GGML_BACKEND_DEVICE_TYPE_GPU &&
+                (!include_other_devices || type == GGML_BACKEND_DEVICE_TYPE_CPU)) {
                 continue;
             }
             Device device;
@@ -183,18 +192,29 @@ namespace sd::backend_fit {
         return -1;
     }
 
-    static Plan compute_plan(const std::vector<Component>& components,
-                             const std::vector<Device>& devices,
-                             int64_t ram_budget_bytes) {
-        Plan plan;
+    static size_t select_main_device(const std::vector<Device>& devices) {
+        size_t main_device = SIZE_MAX;
         for (size_t di = 0; di < devices.size(); ++di) {
             if (devices[di].budget_bytes > 0 &&
-                (plan.main_device == SIZE_MAX || devices[di].budget_bytes > devices[plan.main_device].budget_bytes)) {
-                plan.main_device = di;
+                (main_device == SIZE_MAX || devices[di].budget_bytes > devices[main_device].budget_bytes)) {
+                main_device = di;
             }
         }
-        if (plan.main_device == SIZE_MAX) {
-            return plan;
+        return main_device;
+    }
+
+    static Plan compute_plan(const std::vector<Component>& components,
+                             const std::vector<Device>& devices,
+                             int64_t ram_budget_bytes,
+                             const std::vector<Runtime>& runtimes = {}) {
+        Plan plan;
+        plan.main_device = select_main_device(devices);
+        plan.runtimes    = runtimes;
+        if (plan.runtimes.empty()) {
+            if (plan.main_device == SIZE_MAX) {
+                return plan;
+            }
+            plan.runtimes.resize(components.size(), {devices[plan.main_device].name, {plan.main_device}});
         }
 
         std::vector<size_t> order(components.size());
@@ -212,6 +232,27 @@ namespace sd::backend_fit {
         ram_budget_bytes = std::max<int64_t>(ram_budget_bytes, 0);
         plan.decisions.resize(components.size());
 
+        auto uses_device = [&](size_t ci, size_t di) {
+            const auto& runtime_devices = plan.runtimes[ci].devices;
+            return std::find(runtime_devices.begin(), runtime_devices.end(), di) != runtime_devices.end();
+        };
+        auto headroom_for = [&](size_t ci, size_t di) {
+            // Higher-priority offloaded weights need cache space on their compute devices.
+            int64_t headroom = 0;
+            for (size_t other = 0; other < components.size(); ++other) {
+                if (components[other].params_bytes == 0 || !uses_device(other, di)) {
+                    continue;
+                }
+                const bool resident          = other == ci || plan.decisions[other].params_location == ParamsLocation::MAIN_GPU;
+                const int64_t cached_weights = components[other].kind < components[ci].kind
+                                                   ? components[other].params_bytes
+                                                   : components[other].staging_bytes;
+                headroom                     = std::max(headroom, components[other].reserve_bytes +
+                                                                      (resident ? 0 : cached_weights));
+            }
+            return headroom;
+        };
+
         for (size_t ci : order) {
             const Component& comp = components[ci];
             Decision& decision    = plan.decisions[ci];
@@ -219,24 +260,19 @@ namespace sd::backend_fit {
                 continue;
             }
 
-            // Higher-priority offloaded weights need GPU cache space across graph runs.
-            int64_t headroom = 0;
-            for (size_t other = 0; other < components.size(); ++other) {
-                if (components[other].params_bytes == 0) {
-                    continue;
-                }
-                const bool resident          = other == ci || plan.decisions[other].params_location == ParamsLocation::MAIN_GPU;
-                const int64_t cached_weights = components[other].kind < comp.kind
-                                                   ? components[other].params_bytes
-                                                   : components[other].staging_bytes;
-                headroom                     = std::max(headroom, components[other].reserve_bytes +
-                                                                      (resident ? 0 : cached_weights));
-            }
-            int64_t& main_remaining = remaining[plan.main_device];
-            if (headroom <= main_remaining && comp.params_bytes <= main_remaining - headroom) {
+            const auto& runtime_devices = plan.runtimes[ci].devices;
+            const bool fits_runtime     = !runtime_devices.empty() &&
+                                      std::all_of(runtime_devices.begin(), runtime_devices.end(), [&](size_t di) {
+                                          const int64_t headroom = headroom_for(ci, di);
+                                          return headroom <= remaining[di] && comp.params_bytes <= remaining[di] - headroom;
+                                      });
+            if (fits_runtime) {
                 decision.params_location = ParamsLocation::MAIN_GPU;
-                decision.params_device   = plan.main_device;
-                main_remaining -= comp.params_bytes;
+                decision.params_device   = runtime_devices.front();
+                // Exact split allocations are unavailable until the runners build their plans.
+                for (size_t di : runtime_devices) {
+                    remaining[di] -= comp.params_bytes;
+                }
                 continue;
             }
             if (comp.params_bytes <= ram_budget_bytes) {
@@ -244,10 +280,14 @@ namespace sd::backend_fit {
                 ram_budget_bytes -= comp.params_bytes;
                 continue;
             }
+            if (runtime_devices.empty()) {
+                continue;
+            }
 
             size_t best = SIZE_MAX;
             for (size_t di = 0; di < devices.size(); ++di) {
-                if (di != plan.main_device && comp.params_bytes <= remaining[di] &&
+                const int64_t headroom = headroom_for(ci, di);
+                if (!uses_device(ci, di) && headroom <= remaining[di] && comp.params_bytes <= remaining[di] - headroom &&
                     (best == SIZE_MAX || remaining[di] > remaining[best])) {
                     best = di;
                 }
@@ -280,7 +320,7 @@ namespace sd::backend_fit {
                            const std::vector<Device>& devices,
                            int64_t free_ram,
                            int64_t ram_budget) {
-        LOG_INFO("auto-fit plan (single-GPU compute on %s):", devices[plan.main_device].name.c_str());
+        LOG_INFO("auto-fit plan:");
         LOG_INFO("  devices:");
         for (const Device& device : devices) {
             LOG_INFO("    %-12s %-32s free %6lld MiB, budget %6lld MiB",
@@ -293,17 +333,19 @@ namespace sd::backend_fit {
             LOG_INFO("    RAM          free %6lld MiB, params budget %6lld MiB",
                      (long long)(free_ram / MiB), (long long)(ram_budget / MiB));
         }
-        LOG_INFO("  main-GPU weight cache priority: diffusion > te > vae");
-        LOG_INFO("  components (params: main GPU -> RAM -> other GPU -> disk):");
+        LOG_INFO("  compute-device weight cache priority: diffusion > te > vae");
+        LOG_INFO("  components (params: compute device -> RAM -> other GPU -> disk):");
         for (size_t ci = 0; ci < components.size(); ++ci) {
             const Component& comp = components[ci];
             if (comp.params_bytes == 0) {
                 continue;
             }
-            const std::string params = params_backend_name(plan.decisions[ci], devices);
+            const std::string params = plan.decisions[ci].params_location == ParamsLocation::MAIN_GPU
+                                           ? plan.runtimes[ci].name
+                                           : params_backend_name(plan.decisions[ci], devices);
             LOG_INFO("    %-12s params %6lld MiB, compute reserve %5lld MiB -> compute %s, params %s",
                      comp.name, (long long)(comp.params_bytes / MiB), (long long)(comp.reserve_bytes / MiB),
-                     devices[plan.main_device].name.c_str(), params.c_str());
+                     plan.runtimes[ci].name.c_str(), params.c_str());
         }
     }
 
@@ -328,6 +370,51 @@ namespace sd::backend_fit {
         return "";
     }
 
+    static bool resolve_runtimes(const std::vector<Component>& components,
+                                 const std::vector<Device>& devices,
+                                 std::string& runtime_spec,
+                                 std::vector<Runtime>& runtimes,
+                                 std::string& error) {
+        SDBackendAssignment assignment;
+        if (!sd_parse_backend_assignment(runtime_spec, &assignment, &error)) {
+            return false;
+        }
+        const size_t main_device        = select_main_device(devices);
+        const SDBackendModule modules[] = {SDBackendModule::DIFFUSION, SDBackendModule::TE, SDBackendModule::VAE};
+        for (const Component& comp : components) {
+            std::string name = assignment.get(modules[int(comp.kind)]);
+            if (name.empty()) {
+                name = main_device == SIZE_MAX ? "cpu" : devices[main_device].name;
+                if (comp.params_bytes > 0) {
+                    append_assignment(runtime_spec, module_key(comp.kind), name);
+                }
+            }
+            Runtime runtime;
+            for (const std::string& part : split_string(name, '&')) {
+                if (trim(part).empty()) {
+                    continue;
+                }
+                const std::string resolved = sd_backend_resolve_name(part);
+                if (resolved.empty()) {
+                    error = "backend '" + part + "' was not found";
+                    return false;
+                }
+                if (!runtime.name.empty()) {
+                    runtime.name += "&";
+                }
+                runtime.name += resolved;
+                for (size_t di = 0; di < devices.size(); ++di) {
+                    if (devices[di].name == resolved &&
+                        std::find(runtime.devices.begin(), runtime.devices.end(), di) == runtime.devices.end()) {
+                        runtime.devices.push_back(di);
+                    }
+                }
+            }
+            runtimes.push_back(std::move(runtime));
+        }
+        return true;
+    }
+
     bool derive_backend_specs(ModelLoader& loader,
                               ggml_type override_wtype,
                               sd::ggml_graph_cut::MaxVramAssignment& budgets,
@@ -339,12 +426,18 @@ namespace sd::backend_fit {
             return false;
         }
 
-        const auto components    = estimate_components(loader, override_wtype);
-        const auto devices       = enumerate_gpu_devices(budgets);
+        // Resolve once to ensure dynamic backends are loaded before enumerating devices.
+        sd_backend_resolve_name("");
+        const auto components = estimate_components(loader, override_wtype);
+        const auto devices    = enumerate_gpu_devices(budgets, !runtime_spec.empty());
+        std::vector<Runtime> runtimes;
+        if (!runtime_spec.empty() && !resolve_runtimes(components, devices, runtime_spec, runtimes, error)) {
+            LOG_ERROR("%s", error.c_str());
+            return false;
+        }
         const int64_t free_ram   = available_ram_bytes();
         const int64_t ram_budget = std::max<int64_t>(free_ram - std::max<int64_t>(2048 * MiB, free_ram / 10), 0);
-        const auto plan          = compute_plan(components, devices, ram_budget);
-        runtime_spec.clear();
+        const auto plan          = compute_plan(components, devices, ram_budget, runtimes);
         params_spec.clear();
         if (!plan.valid) {
             if (devices.empty()) {
@@ -362,7 +455,9 @@ namespace sd::backend_fit {
                 continue;
             }
             const char* key = module_key(components[ci].kind);
-            append_assignment(runtime_spec, key, devices[plan.main_device].name);
+            if (runtimes.empty()) {
+                append_assignment(runtime_spec, key, plan.runtimes[ci].name);
+            }
             if (plan.decisions[ci].params_location != ParamsLocation::MAIN_GPU) {
                 append_assignment(params_spec, key, params_backend_name(plan.decisions[ci], devices));
             }

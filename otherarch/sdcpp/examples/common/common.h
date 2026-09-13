@@ -131,6 +131,7 @@ struct SDContextParams {
     std::string vae_path;
     std::string vae_format = "auto";
     std::string audio_vae_path;
+    std::string audio_encoder_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string control_net_path;

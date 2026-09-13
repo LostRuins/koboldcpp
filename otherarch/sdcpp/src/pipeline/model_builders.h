@@ -15,6 +15,9 @@ struct DiffusionModelRunner;
 struct VAE;
 struct AudioVAERunner;
 struct ControlNet;
+namespace Wav2Vec2 {
+    class Wav2Vec2ModelRunner;
+}
 struct GenerationExtension;
 struct GenerationExtensionInitContext;
 namespace IPAdapter {
@@ -37,6 +40,7 @@ namespace sd::model_builders {
         std::shared_ptr<DiffusionModelRunner> high_noise_diffusion;
         std::shared_ptr<FrozenCLIPVisionEmbedder> clip_vision;
         std::shared_ptr<IPAdapter::IPAdapterRunner> ip_adapter;
+        std::shared_ptr<Wav2Vec2::Wav2Vec2ModelRunner> audio_encoder;
     };
 
     struct VAEOptions {
