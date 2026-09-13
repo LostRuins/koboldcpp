@@ -1612,14 +1612,19 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         fflush(stdout);
 
         results = nullptr;
-        if (!generate_video(sd_ctx, &vid_gen_params, &results, &generated_num_results, &generated_audio)) {
+        int output_fps = vid_fps;
+        if (!generate_video(sd_ctx, &vid_gen_params, &results, &generated_num_results, &generated_audio, &output_fps)) {
             results = nullptr;
             generated_audio = nullptr;
         }
         if(!sd_is_quiet && sddebugmode==1)
         {
             printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",vid_req_frames, generated_num_results);
+            if (output_fps != vid_fps) {
+                printf("\nRequested FPS: %d, Generated FPS: %d\n", vid_fps, output_fps);
+            }
         }
+        vid_fps = output_fps;
     }
     else if (!is_img2img)
     {
