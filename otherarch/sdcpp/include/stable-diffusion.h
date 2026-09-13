@@ -208,6 +208,7 @@ typedef struct {
     const char* embeddings_connectors_path;
     const char* vae_path;
     const char* audio_vae_path;
+    const char* audio_encoder_path;
     const char* taesd_path;
     const char* control_net_path;
     const char* ip_adapter_path;
@@ -522,11 +523,13 @@ enum sd_cancel_mode_t {
 SD_API void sd_cancel_generation(sd_ctx_t* sd_ctx, enum sd_cancel_mode_t mode);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
+// If non-NULL, fps_out receives the effective encoding frame rate before preview callbacks.
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
                            sd_image_t** frames_out,
                            int* num_frames_out,
-                           sd_audio_t** audio_out);
+                           sd_audio_t** audio_out,
+                           int* fps_out);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

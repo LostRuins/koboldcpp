@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <exception>
 #include <map>
 #include <utility>
 
@@ -642,8 +643,15 @@ std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
                 params_tensor_set_.insert(parameter);
         }
     }
-    auto output = execute_graph(graph, n_threads, no_return, read_outputs);
-    success     = output.has_value();
+    std::optional<sd::Tensor<float>> output;
+    try {
+        output = execute_graph(graph, n_threads, no_return, read_outputs);
+    } catch (const std::exception& error) {
+        LOG_ERROR("%s graph execution failed on %s: %s", get_desc().c_str(),
+                  ggml_backend_name(runtime_backend), error.what());
+        return std::nullopt;
+    }
+    success = output.has_value();
     if (success) {
         cache_.graph_end(true);
     }
@@ -955,6 +963,9 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
                     return fail_segment("output readback");
                 }
             }
+        }
+        if (!workspace_.segment_end()) {
+            return fail_segment("workspace synchronization");
         }
         // Final outputs and their callbacks may still be views of consumed cuts.
         cut_cache_.prune(segment.future_cut_names);

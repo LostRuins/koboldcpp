@@ -69,6 +69,8 @@ struct AnimaDiffusionExtra {
 struct WanDiffusionExtra {
     const sd::Tensor<float>* vace_context = nullptr;
     float vace_strength                   = 1.f;
+    // S2V audio, sd::Tensor layout: [dim, T_latent*4, layers].
+    const sd::Tensor<float>* audio_embed = nullptr;
 };
 
 struct HiDreamO1DiffusionExtra {

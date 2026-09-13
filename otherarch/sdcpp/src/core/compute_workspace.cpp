@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_graph_cut.h"
+#include "core/util.h"
 #include "ggml-cpu.h"
 #include "ggml/src/ggml-impl.h"
 
@@ -228,11 +230,23 @@ namespace sd {
         }
     }
 
-    void ComputeWorkspace::segment_end() {
-        if (active_) {
-            synchronize();
-            active_ = false;
+    bool ComputeWorkspace::segment_end() noexcept {
+        if (!active_) {
+            return true;
         }
+        // Outer cleanup guards must not retry a failed backend submission.
+        active_ = false;
+        try {
+            synchronize();
+            return true;
+        } catch (const std::exception& error) {
+            LOG_ERROR("%s workspace synchronization failed during segment cleanup: %s",
+                      ggml_backend_name(backend_), error.what());
+        } catch (...) {
+            LOG_ERROR("%s workspace synchronization failed during segment cleanup: unknown exception",
+                      ggml_backend_name(backend_));
+        }
+        return false;
     }
 
     bool ComputeWorkspace::release() {

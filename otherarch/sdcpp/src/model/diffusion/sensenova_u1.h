@@ -146,7 +146,7 @@ namespace SenseNovaU1 {
             auto x     = ggml_ext_timestep_embedding(ctx->ggml_ctx,
                                                      timesteps,
                                                      static_cast<int>(frequency_embedding_size),
-                                                     10000.f,
+                                                     10000,
                                                      1.f);
             x          = mlp_0->forward(ctx, x);
             x          = ggml_silu_inplace(ctx->ggml_ctx, x);
