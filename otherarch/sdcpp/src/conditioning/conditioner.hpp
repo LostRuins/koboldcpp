@@ -1254,7 +1254,10 @@ struct FluxCLIPEmbedder : public Conditioner {
                                              true,
                                              clip_skip,
                                              false);
-                    GGML_ASSERT(!pooled.empty());
+                    if (pooled.empty()) {
+                        LOG_ERROR("Flux CLIP-L encoding failed");
+                        return {};
+                    }
                 } else {
                     pooled = sd::Tensor<float>::zeros({768});
                 }
@@ -1273,7 +1276,10 @@ struct FluxCLIPEmbedder : public Conditioner {
                                                   input_ids,
                                                   sd::Tensor<float>(),
                                                   false);
-                GGML_ASSERT(!chunk_hidden_states.empty());
+                if (chunk_hidden_states.empty()) {
+                    LOG_ERROR("Flux T5 encoding failed at chunk %d/%zu", chunk_idx + 1, chunk_count);
+                    return {};
+                }
                 chunk_hidden_states = ::apply_token_weights(std::move(chunk_hidden_states), chunk_weights);
                 if (zero_out_masked) {
                     chunk_hidden_states.fill_(0.0f);

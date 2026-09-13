@@ -139,7 +139,8 @@ namespace LLM {
 
         static LLMConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
                                              const std::string& prefix,
-                                             LLMArch arch) {
+                                             LLMArch arch,
+                                             bool& enable_vision) {
             LLMConfig config;
             config.arch = arch;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
@@ -230,8 +231,9 @@ namespace LLM {
                 config.num_experts_per_tok     = 4;
             }
 
-            config.num_layers          = 0;
-            int detected_vision_layers = 0;
+            config.num_layers             = 0;
+            int detected_vision_layers    = 0;
+            bool out_hidden_size_detected = false;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {
                     continue;
@@ -277,6 +279,7 @@ namespace LLM {
                     if (ends_with(name, "visual.merger.linear_fc2.weight") ||
                         ends_with(name, "visual.merger.mlp.2.weight")) {
                         config.vision.out_hidden_size = tensor_storage.ne[1];
+                        out_hidden_size_detected      = true;
                     }
                     continue;
                 }
@@ -330,6 +333,20 @@ namespace LLM {
                         config.vocab_size,
                         config.hidden_size,
                         config.intermediate_size);
+            if (enable_vision && !config.have_vision_weight) {
+                LOG_WARN("no vision weights detected, vision disabled");
+                enable_vision = false;
+            }
+            // The default would reject valid models, so only compare a detected dim.
+            if (enable_vision && out_hidden_size_detected &&
+                config.vision.out_hidden_size != config.hidden_size) {
+                LOG_ERROR("vision projector output size (%" PRId64 ") does not match LLM hidden size (%" PRId64
+                          "), "
+                          "the vision weights (mmproj) likely belong to a different LLM variant, vision disabled",
+                          config.vision.out_hidden_size,
+                          config.hidden_size);
+                enable_vision = false;
+            }
             return config;
         }
     };
@@ -1886,12 +1903,8 @@ namespace LLM {
                   bool enable_vision_                                 = false,
                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : GGMLRunner(backend, weight_manager),
-              config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch)),
+              config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch, enable_vision_)),
               enable_vision(enable_vision_) {
-            if (enable_vision && !config.have_vision_weight) {
-                LOG_WARN("no vision weights detected, vision disabled");
-                enable_vision = false;
-            }
             if (enable_vision) {
                 LOG_VERBOSE("enable llm vision");
                 if (config.llama_cpp_style) {

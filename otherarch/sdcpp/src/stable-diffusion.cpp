@@ -355,6 +355,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "embeddings_connectors_path: %s\n"
              "vae_path: %s\n"
              "audio_vae_path: %s\n"
+             "audio_encoder_path: %s\n"
              "taesd_path: %s\n"
              "control_net_path: %s\n"
              "photo_maker_path: %s\n"
@@ -392,6 +393,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->embeddings_connectors_path),
              SAFE_STR(sd_ctx_params->vae_path),
              SAFE_STR(sd_ctx_params->audio_vae_path),
+             SAFE_STR(sd_ctx_params->audio_encoder_path),
              SAFE_STR(sd_ctx_params->taesd_path),
              SAFE_STR(sd_ctx_params->control_net_path),
              SAFE_STR(sd_ctx_params->photo_maker_path),
@@ -737,8 +739,12 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
                            sd_image_t** frames_out,
                            int* num_frames_out,
-                           sd_audio_t** audio_out) {
+                           sd_audio_t** audio_out,
+                           int* fps_out) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
+        if (fps_out != nullptr) {
+            *fps_out = 0;
+        }
         return false;
     }
 
@@ -754,10 +760,13 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
     StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
     if (!execution.ready) {
+        if (fps_out != nullptr) {
+            *fps_out = 0;
+        }
         return false;
     }
 
-    return sd::pipeline::generate_video(sd_ctx->sd, sd_vid_gen_params, frames_out, num_frames_out, audio_out);
+    return sd::pipeline::generate_video(sd_ctx->sd, sd_vid_gen_params, frames_out, num_frames_out, audio_out, fps_out);
 }
 
 SD_API void free_sd_images(sd_image_t* result_images, int num_images) {

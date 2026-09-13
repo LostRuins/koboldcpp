@@ -35,6 +35,7 @@ enum SDVersion {
     VERSION_WAN2,
     VERSION_WAN2_2_I2V,
     VERSION_WAN2_2_TI2V,
+    VERSION_WAN2_2_S2V,
     VERSION_LINGBOT_VIDEO,
     VERSION_QWEN_IMAGE,
     VERSION_QWEN_IMAGE_LAYERED,
@@ -130,7 +131,7 @@ static inline bool sd_version_is_minimax_h3(SDVersion version) {
 }
 
 static inline bool sd_version_is_wan(SDVersion version) {
-    if (version == VERSION_WAN2 || version == VERSION_WAN2_2_I2V || version == VERSION_WAN2_2_TI2V) {
+    if (version == VERSION_WAN2 || version == VERSION_WAN2_2_I2V || version == VERSION_WAN2_2_TI2V || version == VERSION_WAN2_2_S2V) {
         return true;
     }
     return false;

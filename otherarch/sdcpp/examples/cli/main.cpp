@@ -419,7 +419,8 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
             LOG_ERROR("save preview image to '%s' failed", path.string().c_str());
         }
     } else {
-        if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps, cli_params->compression_quality) != 0) {
+        int fps = cli_params->preview_method == PREVIEW_PROJ ? cli_params->preview_fps / 4 : cli_params->preview_fps;
+        if (create_video_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, fps, cli_params->compression_quality) != 0) {
             LOG_ERROR("save preview video to '%s' failed", cli_params->preview_path.c_str());
         }
     }
@@ -540,12 +541,16 @@ bool save_results(const SDCliParams& cli_params,
     if (cli_params.mode == VID_GEN && num_results > 1) {
         if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
+        std::string params = gen_params.embed_image_metadata
+                                 ? get_image_params(ctx_params, gen_params, gen_params.seed, cli_params.mode)
+                                 : "";
+
         fs::path video_path = base_path;
         video_path += ext;
         std::string final_ext_lower = ext.string();
         std::transform(final_ext_lower.begin(), final_ext_lower.end(), final_ext_lower.begin(), ::tolower);
         const bool mux_audio = generated_audio != nullptr && (final_ext_lower == ".avi" || final_ext_lower == ".webm");
-        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps, cli_params.compression_quality, mux_audio ? generated_audio : nullptr) == 0) {
+        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps, cli_params.compression_quality, mux_audio ? generated_audio : nullptr, params) == 0) {
             LOG_INFO("save result video to '%s'", video_path.string().c_str());
             if (generated_audio != nullptr && !mux_audio) {
                 fs::path wav_path = video_path;
@@ -687,8 +692,6 @@ int main(int argc, const char* argv[]) {
         }
     }
     cli_params.preview_fps = gen_params.fps;
-    if (cli_params.preview_method == PREVIEW_PROJ)
-        cli_params.preview_fps /= 4;
 
     sd_set_preview_callback(step_callback,
                             cli_params.preview_method,
@@ -951,9 +954,10 @@ int main(int argc, const char* argv[]) {
         } else if (cli_params.mode == VID_GEN) {
             sd_vid_gen_params_t vid_gen_params = gen_params.to_sd_vid_gen_params_t();
             sd_image_t* generated_video        = nullptr;
-            if (!generate_video(sd_ctx.get(), &vid_gen_params, &generated_video, &num_results, &generated_audio)) {
+            if (!generate_video(sd_ctx.get(), &vid_gen_params, &generated_video, &num_results, &generated_audio, &cli_params.preview_fps)) {
                 generated_video = nullptr;
             }
+            gen_params.fps = cli_params.preview_fps;
             results.adopt(generated_video, num_results);
         }
 

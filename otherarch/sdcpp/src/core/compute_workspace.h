@@ -51,7 +51,7 @@ namespace sd {
             const std::function<ggml_backend_t(const ggml_tensor*)>& external_backend,
             const AssignNodes& assign_nodes);
         void synchronize() const;
-        void segment_end();
+        bool segment_end() noexcept;
         bool release();
         bool active() const { return active_; }
         ggml_backend_sched_t scheduler() const { return scheduler_; }

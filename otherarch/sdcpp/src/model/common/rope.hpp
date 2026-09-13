@@ -818,8 +818,9 @@ namespace Rope {
                                                     int pw,
                                                     int bs,
                                                     int theta,
-                                                    const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_vid_ids(t, h, w, pt, ph, pw, bs);
+                                                    const std::vector<int>& axes_dim,
+                                                    int t_offset = 0) {
+        std::vector<std::vector<float>> ids = gen_vid_ids(t, h, w, pt, ph, pw, bs, t_offset);
         return embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
     }
 
