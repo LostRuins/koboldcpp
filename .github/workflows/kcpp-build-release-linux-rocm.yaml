@@ -14,9 +14,6 @@ on:
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-  KCPP_CUDA: rocm
-  ARCHES_CU12: 1
-  KCPP_PORTABLE: 1
 
 jobs:
   linux:
@@ -47,6 +44,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
             -e KCPP_CUDA="rocm" \
+            -e KCPP_PORTABLE="1" \
             -e BRANCH_NAME="${{ github.head_ref || github.ref_name }}" \
             rocm/dev-ubuntu-22.04:7.14.0-full \
             bash -c "
