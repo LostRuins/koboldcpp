@@ -60,6 +60,7 @@ input,textarea{
 }
 textarea{resize:vertical;min-height:90px;}
 label{font-size:12px;color:var(--muted);}
+.hint{font-size:13px;color:var(--muted);line-height:1.5;margin:6px 0 10px;}
 .form-grid{
   display:grid;
   grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
@@ -200,18 +201,18 @@ select{
 <div id="musicTab">
   <h2>Song Setup</h2>
 
-  <label>Caption</label> <div style="float:right"><input title="Rewrite Caption" id="rewrite_caption" type="checkbox" style="width: auto;vertical-align: middle;" checked><label>Rewrite Caption</label></div>
+  <label>Music Description (Caption)</label> <div style="float:right"><input title="Rewrite Caption" id="rewrite_caption" type="checkbox" style="width: auto;vertical-align: middle;" checked><label>Rewrite Caption</label></div>
 
-  <input id="caption" placeholder="Describe the song">
+  <textarea id="caption" style="min-height:60px;" placeholder="Describe the song genre, mood, instruments."></textarea>
 
   <div style="margin-top:10px">
     <label>Lyrics</label>
-    <textarea id="lyrics" placeholder="Enter song lyrics, or press 'Plan' to generate them."></textarea>
+    <textarea id="lyrics" placeholder="Enter song lyrics, or press 'Plan Lyrics' to generate them."></textarea>
   </div>
 
   <div class="form-grid" style="margin-top:12px">
     <div><label>BPM</label><input title="BPM" id="bpm" type="number"></div>
-    <div><label>Duration</label><input title="Duration" id="duration" type="number"></div>
+    <div><label>Duration (s)</label><input title="Duration" id="duration" type="number"></div>
     <div><label>Key</label><input title="Keyscale" id="keyscale"></div>
     <div><label>Time Sig</label><input title="Time Signature" id="timesignature"></div>
     <div><label>Language</label><input title="Vocal Language" id="vocal_language"></div>
@@ -224,9 +225,27 @@ select{
     </div>
   </div>
 
-  <div class="advanced-toggle" onclick="toggleAdvanced()">⚙ Advanced Settings</div>
+  <div style="display:flex; gap:12px; align-items:flex-end; margin-top:12px;">
+    <div style="flex:1; min-width:0;">
+      <label for="planner">Lyrics Planner</label>
+      <select id="planner" title="Song Planner" onchange="updatePlannerOptions()">
+        <option value="music_lm">Music LLM</option>
+        <option value="main_llm">Main LLM</option>
+      </select>
+    </div>
+    <div id="gen_codes_option" style="padding:8px 0;">
+      <label for="gen_codes" style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
+        <input title="Generate Audio Codes" id="gen_codes" type="checkbox" style="width:auto; margin:0;">
+        Generate Audio Codes
+      </label>
+    </div>
+  </div>
+  <p class="hint">Load a large text model as a planner (main LLM) to create better lyrics</p>
 
-  <div id="advanced" class="hidden">
+  <details>
+  <summary class="advanced-toggle">Advanced Settings</summary>
+
+  <div id="advanced">
     <div class="compact-row" style="margin-top:10px">
       <div><label>Temp</label><input title="Temperature" id="lm_temperature" type="number" step="0.01" value="0.9"></div>
       <div><label>CFG</label><input title="CFG Scale" id="lm_cfg_scale" type="number" step="0.1" value="3.0"></div>
@@ -241,8 +260,6 @@ select{
       <div><label>Shift</label><input title="Audio Shift" id="shift" type="number" value="3"></div>
       <div><label>Save as MP3</label><input title="Save as MP3" id="use_mp3" type="checkbox"></div>
       <div><label>Stereo</label><input title="Save as Stereo" id="stereo" type="checkbox" checked></div>
-      <div><label>Gen Codes</label><input title="Generate Audio Codes" id="gen_codes" type="checkbox"></div>
-      <div><label>Plan with LLM</label><input title="Plan with LLM" id="plan_with_main_llm" type="checkbox"></div>
     </div>
     <div>
       <div><label>AudioCodes</label><textarea placeholder="Input or generate audio codes here" id="audio_codes"></textarea></div>
@@ -256,8 +273,10 @@ select{
       <div><label>Reference Audio Strength (0.0 to 1.0)</label><input title="Reference Audio Strength" id="audio_cover_strength" type="number" step="0.1" value="0.5"></div>
     </div>
   </div>
+  </details>
 
-  <div style="margin-top:14px">
+
+  <details style="margin-top:14px"><summary class="advanced-toggle">Connection settings</summary>
     <label>API Base URL (optional)</label>
     <div style="display:flex; gap:6px;">
       <input title="Custom API URL" id="baseUrl" placeholder="http://localhost:5001">
@@ -266,15 +285,19 @@ select{
     <div style="display:flex; gap:6px;">
       <input title="Custom API Key" type="password" id="baseUrlKey" placeholder="(Input Key)">
     </div>
-  </div>
+  </details>
 
   <div class="actions" id="actionContainer">
     <div id="normalActions" style="display:flex; gap:10px; flex-wrap:wrap;">
-      <button class="primary" onclick="planSong()">Plan</button>
-      <button class="primary" onclick="generateSong()">Generate</button>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="primary" onclick="planSong()">Plan Lyrics / Details</button>
+      <button class="primary" onclick="generateSong()">Generate Music</button>
       <button class="danger" onclick="clearFields()">Clear</button>
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
       <button onclick="exportPlan()">Export JSON</button>
       <button onclick="document.getElementById('importFile').click()">Import JSON</button>
+      </div>
     </div>
 
     <button id="abortBtn" class="danger hidden" onclick="abortRequest()">Abort</button>
@@ -283,8 +306,8 @@ select{
     <input title="Import Plan" type="file" id="importFile" hidden accept="application/json" onchange="importPlan(event)">
   </div>
   <div>
-  <p style="font-size:14px">Click 'Plan' first to generate lyrics, BPM and duration. Edit as needed.
-  <br>When satisfied, click 'Generate' to make the music</p>
+  <p style="font-size:14px">Click 'Plan Lyrics' first to generate lyrics, BPM and duration. Edit as needed.
+  <br>When satisfied, click 'Generate Music' to make the music</p>
   </div>
 </div>
 <div id="ttsTab" class="hidden">
@@ -401,7 +424,14 @@ async function fetchVoices(){
 }
 
 var has_llm_loaded = false;
+let statsRequestId = 0;
+let plannerSelectionVersion = 0;
 async function fetchStats(){
+  const requestId = ++statsRequestId;
+  const selectionVersion = plannerSelectionVersion;
+  has_llm_loaded = false;
+  document.getElementById("planner").value = "music_lm";
+  updatePlannerOptions();
   try{
     const base = document.getElementById("baseUrl").value.trim();
     const url = (base ? base.replace(/\/$/,"") : "") + "/api/extra/version";
@@ -419,9 +449,11 @@ async function fetchStats(){
     if(!res.ok) throw new Error();
 
     const perf = await res.json();
-    if(perf && perf.llm)
-    {
-      has_llm_loaded = true;
+    if(requestId !== statsRequestId) return;
+    has_llm_loaded = !!(perf && perf.llm);
+    if(selectionVersion === plannerSelectionVersion){
+      document.getElementById("planner").value = has_llm_loaded ? "main_llm" : "music_lm";
+      updatePlannerOptions();
     }
 
   }catch(e){
@@ -556,10 +588,6 @@ function randomizeSeed(){
   seedInput.value = randomSeed;
 }
 
-function toggleAdvanced(){
-  document.getElementById("advanced").classList.toggle("hidden");
-}
-
 function getFormData(){
   const ids=["caption","lyrics","bpm","duration","keyscale","timesignature",
   "vocal_language","seed","lm_temperature","lm_cfg_scale","lm_top_p","lm_top_k","lm_rep_pen","inference_steps",
@@ -570,7 +598,10 @@ function getFormData(){
     const el=document.getElementById(id);
     if(!el) return;
     const v=el.value;
-    if(v!=="") {data[id]=isNaN(v)?v:Number(v);}
+    if(v!=="") {
+      const isText = ["caption", "lyrics", "keyscale", "vocal_language", "audio_codes"].includes(id);
+      data[id] = isText || isNaN(v) ? v : Number(v);
+    }
   });
   data["stereo"] = (document.getElementById("stereo").checked ? true : false);
   data["use_mp3"] = (document.getElementById("use_mp3").checked ? true : false);
@@ -584,7 +615,12 @@ function updateForm(data){
   Object.keys(data).forEach(k=>{
     if(document.getElementById(k))
     {
-      document.getElementById(k).value=data[k]??"";
+      const el = document.getElementById(k);
+      if(el.type === "checkbox"){
+        el.checked = data[k] === true;
+      }else{
+        el.value=data[k]??"";
+      }
     }else{
       if(k=="input") //for tts input
       {
@@ -617,14 +653,19 @@ function deriveTitle(caption){
   {
     caption = "Untitled";
   }
-  let output = caption.trim().split("\n")[0].slice(0,30);
+  let output = String(caption).trim().split("\n")[0].slice(0,30);
   output += ` ${rnd_id}`;
   return output;
 }
 
+function updatePlannerOptions(){
+  const useLLM = document.getElementById("planner").value === "main_llm";
+  document.getElementById("gen_codes_option").classList.toggle("hidden", useLLM);
+}
+
 async function planSong()
 {
-  const useLLM = document.getElementById("plan_with_main_llm").checked;
+  const useLLM = document.getElementById("planner").value === "main_llm";
   if(useLLM)
   {
     planSongWithLLM();
@@ -694,8 +735,14 @@ async function planSongWithLLM(){
     }
 
     let origPayload = getFormData();
-    let origCaption = (origPayload["caption"] ? origPayload["caption"] : "an interesting song");
-    let payload = {"temperature":1.0, "rep_pen":1.04, "top_p":0.97, "messages":[{"role":"system","content":"Please use the music generation tool to generate the caption and full song lyrics based on the request information provided by the user, with outputs wrapped in a JSON format. Ensure BPM, duration and keyscale values are appropriate to the song length and genre, generation may fail if parameters are unrealistic."},{"role":"user","content":origCaption}],"tool_choice":{"type":"function","function":{"name":"generate_music"}},"tools":[{"type":"function","function":{"name":"generate_music","description":"Generates a new song based on provided request. All output fields are mandatory.","parameters":{"type":"object","properties":{"caption":{"type":"string","description":"Acoustically relevant and detailed description of the song such as the genre and iconic elements."},"lyrics":{"type":"string","description":"The complete full song lyrics, suitably long for its genre. Each line should be on a newline, with double newlines between verses, and stanza headings in square brackets e.g. [Verse 1]"},"bpm":{"type":"integer","description":"The appropriate BPM (beats per minute) for the genre of the song."},"duration":{"type":"integer","description":"Total song duration in seconds, based on BPM and amount of lyrics."},"keyscale":{"type":"string","description":"Keyscale to use for the song. A/B/C/D/E/F/G Major/Minor/Dorian/Pentatonic etc."},"timesignature":{"type":"integer","description":"Time signature to use for the song, as a single integer. Valid values 2,3,4,6"},"vocal_language":{"type":"string","description":"Language code for this song lyrics, e.g. en"}},"required":["caption","lyrics","bpm","duration","keyscale","timesignature","vocal_language"]}}}]};
+    const songDetails = {caption: origPayload.caption || "an interesting song"};
+    ["lyrics", "bpm", "duration", "keyscale", "timesignature", "vocal_language"].forEach(key=>{
+      if(origPayload[key] !== undefined) songDetails[key] = origPayload[key];
+    });
+    let origCaption = "Plan a song using these details. Preserve supplied lyrics and song settings; fill in missing details. " +
+      (origPayload.rewrite_caption ? "You may rewrite the caption.\n" : "Preserve the caption unchanged.\n") +
+      JSON.stringify(songDetails);
+    let payload = {"temperature":1.0, "rep_pen":1.04, "top_p":0.97, "max_tokens":2048, "messages":[{"role":"system","content":"Please use the music generation tool to generate the caption and full song lyrics based on the request information provided by the user, with outputs wrapped in a JSON format. Ensure BPM, duration and keyscale values are appropriate to the song length and genre, generation may fail if parameters are unrealistic."},{"role":"user","content":origCaption}],"tool_choice":{"type":"function","function":{"name":"generate_music"}},"tools":[{"type":"function","function":{"name":"generate_music","description":"Generates a new song based on provided request. All output fields are mandatory.","parameters":{"type":"object","properties":{"caption":{"type":"string","description":"Acoustically relevant and detailed description of the song such as the genre and iconic elements."},"lyrics":{"type":"string","description":"The complete full song lyrics, suitably long for its genre. Each line should be on a newline, with double newlines between verses, and stanza headings in square brackets e.g. [Verse 1]"},"bpm":{"type":"integer","description":"The appropriate BPM (beats per minute) for the genre of the song."},"duration":{"type":"integer","description":"Total song duration in seconds, based on BPM and amount of lyrics."},"keyscale":{"type":"string","description":"Keyscale to use for the song. A/B/C/D/E/F/G Major/Minor/Dorian/Pentatonic etc."},"timesignature":{"type":"integer","description":"Time signature to use for the song, as a single integer. Valid values 2,3,4,6"},"vocal_language":{"type":"string","description":"Language code for this song lyrics, e.g. en"}},"required":["caption","lyrics","bpm","duration","keyscale","timesignature","vocal_language"]}}}]};
 
     let headers =  {"Content-Type":"application/json"};
     if(document.getElementById("baseUrlKey").value!="")
@@ -717,6 +764,9 @@ async function planSongWithLLM(){
     {
       let toolres = data.choices[0].message.tool_calls[0].function.arguments;
       toolres = JSON.parse(toolres);
+      if(!origPayload.rewrite_caption){
+        delete toolres.caption;
+      }
       updateForm(toolres);
       showMessage("Plan generated.");
     }catch(e){
@@ -859,18 +909,22 @@ function loadLibrary(){
         let savfmt = (ismp3?".mp3":".wav");
         let currtrack = `${item.type==="tts" ? "🗣 " : "🎵 "}${item.title}`;
         div.innerHTML=`
-          <h4>${currtrack}</h4>
+          <h4></h4>
           <div class="meta">${new Date(item.date).toLocaleString()}</div>
-          <audio title="Generated Track: ${currtrack}" controls src="${url}"></audio>
+          <audio controls src="${url}"></audio>
           <div style="margin-top:6px;display:flex;gap:6px;">
-            <a href="${url}" download="${item.title}${savfmt}">
+            <a href="${url}">
                 <button class="secondary">Download</button>
             </a>
-            <button class="secondary" onclick="exportTrackJSON(${item.id}, '${item.title}')">JSON</button>
+            <button class="secondary export-json">JSON</button>
             <button class="secondary" onclick="loadTrackJSON(${item.id})">Load</button>
             <button class="danger" onclick="deleteTrack(${item.id})">Delete</button>
           </div>
         `;
+        div.querySelector("h4").textContent = currtrack;
+        div.querySelector("audio").title = `Generated Track: ${currtrack}`;
+        div.querySelector("a").download = `${item.title}${savfmt}`;
+        div.querySelector(".export-json").addEventListener("click", ()=>exportTrackJSON(item.id, item.title));
         container.appendChild(div);
       });
       const totalPages=Math.ceil(totalItems/PAGE_SIZE)||1;
@@ -936,6 +990,11 @@ function importPlan(event){
   reader.readAsText(file);
 }
 
+updatePlannerOptions();
+window.addEventListener("pageshow", updatePlannerOptions);
+document.getElementById("planner").addEventListener("change", ()=>{ plannerSelectionVersion++; });
+document.getElementById("baseUrl").addEventListener("change", fetchStats);
+document.getElementById("baseUrlKey").addEventListener("change", fetchStats);
 initDB().then(loadLibrary);
 fetchVoices();
 fetchStats();

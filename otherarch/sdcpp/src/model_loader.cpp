@@ -79,20 +79,7 @@ bool is_unused_tensor(const std::string& name) {
     return false;
 }
 
-std::string kcpp_fix_wrong_img_tensor_name(const std::string& name) //kcpp function that fixes common wrong tensor names
-{
-    if (starts_with(name, "text_encoders.qwen25_7b.transformer.model.")) {
-        return "text_encoders.llm.model." + name.substr(strlen("text_encoders.qwen25_7b.transformer.model."));
-    }
-    if (starts_with(name, "text_encoders.qwen25_7b.transformer.visual.")) {
-        return "text_encoders.llm.visual." + name.substr(strlen("text_encoders.qwen25_7b.transformer.visual."));
-    }
-    if (starts_with(name, "text_encoders.umt5xxl.")) {
-        return "text_encoders.t5xxl." + name.substr(strlen("text_encoders.umt5xxl."));
-    }
-    return name;
-}
-
+#if !KCPP_MAINLINE_FP8_SCALED
 uint16_t f8_e4m3_to_f16(uint8_t f8) {
     // do we need to support uz?
 
@@ -151,6 +138,21 @@ void f8_e5m2_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
     for (int64_t i = n - 1; i >= 0; i--) {
         dst[i] = f8_e5m2_to_f16(src[i]);
     }
+}
+#endif
+
+std::string kcpp_fix_wrong_img_tensor_name(const std::string& name) //kcpp function that fixes common wrong tensor names
+{
+    if (starts_with(name, "text_encoders.qwen25_7b.transformer.model.")) {
+        return "text_encoders.llm.model." + name.substr(strlen("text_encoders.qwen25_7b.transformer.model."));
+    }
+    if (starts_with(name, "text_encoders.qwen25_7b.transformer.visual.")) {
+        return "text_encoders.llm.visual." + name.substr(strlen("text_encoders.qwen25_7b.transformer.visual."));
+    }
+    if (starts_with(name, "text_encoders.umt5xxl.")) {
+        return "text_encoders.t5xxl." + name.substr(strlen("text_encoders.umt5xxl."));
+    }
+    return name;
 }
 
 void f64_to_f32_vec(double* src, float* dst, int64_t n) {
@@ -958,10 +960,12 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
             if (dst_tensor == nullptr)
                 continue;
 
-            if (tensor_storage.is_f8_e4m3 ||
-                tensor_storage.is_f8_e5m2 ||
-                tensor_storage.is_f64 ||
+            if (tensor_storage.is_f64 ||
                 tensor_storage.is_i64 ||
+                #if !KCPP_MAINLINE_FP8_SCALED
+                tensor_storage.is_f8_e4m3 ||
+                tensor_storage.is_f8_e5m2 ||
+                #endif
                 tensor_storage.kcpp_ext ||
                 tensor_storage.type != dst_tensor->type) {
                 continue;
@@ -1272,11 +1276,15 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                             return;
                         }
                         bytes_processed.fetch_add(scale_nbytes);
-                    } else if (tensor_storage.is_f8_e4m3) {
+                    } else
+#if !KCPP_MAINLINE_FP8_SCALED
+                    if (tensor_storage.is_f8_e4m3) {
                         f8_e4m3_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
                     } else if (tensor_storage.is_f8_e5m2) {
                         f8_e5m2_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
-                    } else if (tensor_storage.is_f64) {
+                    } else
+#endif
+                    if (tensor_storage.is_f64) {
                         f64_to_f32_vec((double*)read_buf, (float*)target_buf, tensor_storage.nelements());
                     } else if (tensor_storage.is_i64) {
                         i64_to_i32_vec((int64_t*)read_buf, (int32_t*)target_buf, tensor_storage.nelements());
@@ -1565,6 +1573,9 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
 
 bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type) {
     const std::string& name = tensor_storage.name;
+    if (tensor_storage.is_int8_tensorwise) {
+        return false;
+    }
     if (type != GGML_TYPE_COUNT) {
         if (ggml_is_quantized(type) && tensor_storage.ne[0] % ggml_blck_size(type) != 0) {
             // Pass, do not convert

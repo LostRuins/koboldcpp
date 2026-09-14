@@ -162,13 +162,12 @@ static std::unordered_multimap<gpt_vocab::id, std::vector<gpt_vocab::id>> dry_se
 static std::vector<int> dry_repeat_count; // Indexed as last_n_tokens
 static std::unordered_map<gpt_vocab::id, int> dry_max_token_repeat;
 static std::vector<TopPicksData> top_picks_history;
+static std::mutex top_picks_history_mtx;
 static int remaining_tokens = 0;
 static std::atomic<bool> early_abort = false;
 static std::mutex concat_output_mtx;
 static std::string concat_output = "";
-static std::string concat_output_reader_copy_poll = ""; //for streaming
 static std::string concat_output_reader_copy_res = ""; //for gen response
-static std::string generated_token_reader_copy = ""; //stable copy for streaming token readers
 static std::vector<logit_bias> logit_biases;
 static bool add_bos_token = true; // if set to false, mmproj handling breaks. dont disable unless you know what you're doing
 static bool load_guidance = false; //whether to enable cfg for negative prompts
@@ -813,13 +812,16 @@ bool ContextRewind(std::vector<int> &embd, std::vector<int> &current_context_tok
         last_n_tokens.resize(last_n_tokens.size() - amount_rewind);
     }
 
-    if(amount_rewind >= top_picks_history.size())
     {
-        top_picks_history.clear();
-    }
-    else
-    {
-        top_picks_history.resize(top_picks_history.size() - amount_rewind);
+        std::lock_guard<std::mutex> lock(top_picks_history_mtx);
+        if(amount_rewind >= top_picks_history.size())
+        {
+            top_picks_history.clear();
+        }
+        else
+        {
+            top_picks_history.resize(top_picks_history.size() - amount_rewind);
+        }
     }
 
     if (amount_rewind >= current_context_tokens.size())
@@ -1112,7 +1114,7 @@ static speculative_draft_result speculative_decoding_eval_chunk(llama_context * 
     auto & dp = common_speculative_get_draft_params(draft_spec, 0);
     dp.drafting = true;
     dp.n_max = n_draft_max;
-    dp.n_past = n_past;
+    dp.pos0 = n_past;
     dp.id_last = embd[0];
     dp.prompt = &prompt_tokens;
     dp.result = &drafted_ids;
@@ -1329,7 +1331,10 @@ llama_token sample_token(llama_token_data_array * candidates, std::mt19937 & rng
         newpick.tokenid.push_back(candidates->data[i].id);
     }
 
-    top_picks_history.push_back(newpick);
+    {
+        std::lock_guard<std::mutex> lock(top_picks_history_mtx);
+        top_picks_history.push_back(newpick);
+    }
 
     llama_token result = candidates->data[idx].id;
     return result;
@@ -1684,18 +1689,25 @@ void sample_dry(int n_ctx, int penalty_range, float penalty_multiplier, float pe
     }
 }
 
-void sample_adaptive_p(
+inline void adaptive_p_update_history(float selected_token_prob, float & weighted_sum, float & total_weight, float adaptive_decay) {
+    // decay controls how quickly history influence fades (0.0 to 0.99)
+    weighted_sum = selected_token_prob + adaptive_decay * weighted_sum;
+    total_weight = 1.0f + adaptive_decay * total_weight;
+}
+
+llama_token sample_adaptive_p(
 float target,            // desired average probability (0..1), <=0 disables
 float & weighted_sum,    // persistent EMA state
 float & total_weight,    // persistent EMA state
-llama_token_data_array * cur_p)
+llama_token_data_array * cur_p,
+float adaptive_decay, std::mt19937 & rng)
 {
     const float width = 0.3;              // DISTRIBUTION_WIDTH
     const float peak_logit = 5.0;         // PEAK_LOGIT_VALUE
     const float inv_width = 1.0f / width; // INV_WIDTH
 
     if (target <= 0.0f || cur_p->size == 0) {
-        return;
+        return sample_token(cur_p, rng);
     }
 
     // target is the desired average probability for selected tokens (0.0 to 1.0)
@@ -1703,6 +1715,11 @@ llama_token_data_array * cur_p)
     // lower values favor less probable tokens (more creative)
 
     sample_softmax(cur_p);
+
+    // Save the filtered distribution used by Adaptive-P, not the raw vocabulary.
+    // Keep token IDs because sample_token sorts the transformed logits.
+    static thread_local std::vector<llama_token_data> original_candidates;
+    original_candidates.assign(cur_p->data, cur_p->data + cur_p->size);
 
     // compute the adapted target probability for the current sampling step
     float computed_target = std::clamp(total_weight == 0.0f ? target : 2.0f * target - (weighted_sum / total_weight),0.0f, 1.0f);
@@ -1716,17 +1733,14 @@ llama_token_data_array * cur_p)
     }
 
     cur_p->sorted = false;
-    sample_softmax(cur_p);
-
-    //update EMA history AFTER sampling, update_adaptive_p_history(original_prob[idx])
-}
-inline void adaptive_p_update_history(float selected_token_prob, float & weighted_sum, float & total_weight, float adaptive_decay) {
-    // decay controls how quickly history influence fades (0.0 to 0.99)
-    // lower values = faster adaptation, more reactive to recent tokens
-    // higher values = slower adaptation, more stable over time
-    // keep <= 0.99 to prevent unbounded accumulation
-    weighted_sum = selected_token_prob + adaptive_decay * weighted_sum;
-    total_weight = 1.0f + adaptive_decay * total_weight;
+    const llama_token id = sample_token(cur_p, rng);
+    for (const auto & candidate : original_candidates) {
+        if (candidate.id == id) {
+            adaptive_p_update_history(candidate.p, weighted_sum, total_weight, adaptive_decay);
+            break;
+        }
+    }
+    return id;
 }
 
 
@@ -2320,7 +2334,7 @@ static int apply_reasoning_budget(int id, const std::vector<int> & start_think, 
 
 int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float temp, std::mt19937 & rng,
 int mirostat, float mirostat_tau, float mirostat_eta, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
-const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve, float adaptive_target,
+const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve, float adaptive_target, float adaptive_decay,
 const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq, std::vector<int> & think_end_phrase_toks, int reasoning_budget)
 {
     // printf("SampleLogits called with: n_ctx=%d, n_vocab=%d, rep_pen_range=%d, rep_pen=%f, rep_pen_slope=%f, presence_penalty=%f, top_k=%f, top_a=%f, top_p=%f, min_p=%f, typical_p=%f, tfs=%f, nsigma=%f, temp=%f, mirostat=%d, mirostat_tau=%f, mirostat_eta=%f, dry_multiplier=%f, dry_base=%f, dry_allowed_length=%d, dry_penalty_last_n=%d, xtc_threshold=%f, xtc_probability=%f, sampler_order_size=%zu, dynatemp_range=%f, dynatemp_exponent=%f, smoothing_factor=%f\n",
@@ -2441,8 +2455,7 @@ const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq
         //xtc always last
         sample_xtc(&candidates_p, xtc_threshold, xtc_probability, rng);
         //adaptive p must be last, it messes up all probs
-        sample_adaptive_p(adaptive_target, adaptive_p_weighted_sum, adaptive_p_total_weight, &candidates_p);
-        id = sample_token(&candidates_p, rng);
+        id = sample_adaptive_p(adaptive_target, adaptive_p_weighted_sum, adaptive_p_total_weight, &candidates_p, adaptive_decay, rng);
     }
 
     return id;
@@ -3556,6 +3569,11 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         }
 
         llama_model * llamamodel = llama_model_load_from_file(kcpp_data->model_filename.c_str(), model_params);
+        if (llamamodel == nullptr)
+        {
+            fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, kcpp_data->model_filename.c_str());
+            return ModelLoadResult::FAIL;
+        }
 
         //now that the model is loaded, immediately check if SWA is used
         bool model_has_swa = (llama_model_n_swa(llamamodel)!=0);
@@ -3590,7 +3608,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         {
             if(savestate_limit>0)
             {
-                printf("RNN or Hyrbid model with FF and shifting flags enabled - SmartCache will be enabled with extra slots. Disable CtxShift if you do not want this.\n",savestate_limit);
+                printf("RNN or Hybrid model with FF and shifting flags enabled - SmartCache will be enabled with extra slots. Disable CtxShift if you do not want this.\n",savestate_limit);
                 kcpp_data->smartcache = true;
                 savestate_limit += 1;
                 rnn_reusable_slot_idx = savestate_limit - 1;
@@ -4321,7 +4339,6 @@ struct BatchGenerateRequest
     bool i_batch_is_prefill = false;
     llama_sampler * sampler = nullptr;
     std::vector<std::string> generated_pieces;
-    std::string stream_reader_copy;
     std::string output;
     int prompt_token_count = 0;
     int completion_token_count = 0;
@@ -5020,29 +5037,33 @@ int gpttype_batch_generate_stream_count(int request_id)
 
 const char * gpttype_batch_generate_new_token(int request_id, int idx)
 {
+    static thread_local std::string reader_copy;
     std::lock_guard<std::mutex> lock(batch_mutex);
     BatchGenerateRequest * req = batch_find_request_locked(request_id);
     if(!req || idx < 0 || idx >= (int) req->generated_pieces.size())
     {
         return nullptr;
     }
-    req->stream_reader_copy = req->generated_pieces[idx];
-    return req->stream_reader_copy.c_str();
+    reader_copy = req->generated_pieces[idx];
+    return reader_copy.c_str();
 }
 
 const char * gpttype_batch_generate_pending_output(int request_id)
 {
+    static thread_local std::string reader_copy;
     std::lock_guard<std::mutex> lock(batch_mutex);
     BatchGenerateRequest * req = batch_find_request_locked(request_id);
     if(!req)
     {
         return batch_empty_string.c_str();
     }
-    return req->output.c_str();
+    reader_copy = req->output;
+    return reader_copy.c_str();
 }
 
 generation_outputs gpttype_batch_generate_result(int request_id)
 {
+    static thread_local std::string reader_copy;
     std::unique_lock<std::mutex> lock(batch_mutex);
     batch_cv.wait(lock, [request_id](){
         BatchGenerateRequest * req = batch_find_request_locked(request_id);
@@ -5059,8 +5080,10 @@ generation_outputs gpttype_batch_generate_result(int request_id)
         output.text = batch_empty_string.c_str();
         return output;
     }
-    req->result.text = req->output.c_str();
-    return req->result;
+    reader_copy = req->output;
+    generation_outputs output = req->result;
+    output.text = reader_copy.c_str();
+    return output;
 }
 
 bool gpttype_batch_generate_abort(int request_id)
@@ -5153,12 +5176,18 @@ std::string gpttype_parse_chat_tool_calls(const std::string & generated_text,
         inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tool_choice.empty() ? "auto" : tool_choice);
         inputs.parallel_tool_calls = parallel_tool_calls;
         inputs.add_generation_prompt = true;
+        // Consume reasoning (including a <think> in the generation prompt) before tools.
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
 
         if(!chat_template_kwargs_json.empty())
         {
             common_json kwargs = common_json::parse(chat_template_kwargs_json);
             if(kwargs.is_object())
             {
+                if(kwargs.contains("enable_thinking") && kwargs["enable_thinking"].is_boolean())
+                {
+                    inputs.enable_thinking = kwargs["enable_thinking"].get<bool>();
+                }
                 for(const auto & item : kwargs.items())
                 {
                     inputs.chat_template_kwargs[item.key()] = item.value().dump();
@@ -5266,14 +5295,15 @@ std::string gpttype_detokenize(const std::vector<int> & inputids, bool render_sp
 
 const std::string & gpttype_get_pending_output()
 {
+    // Keep the returned storage alive until this thread's next call.
+    static thread_local std::string concat_output_reader_copy_poll;
     if(kcpp_data==nullptr)
     {
         printf("\nWarning: KCPP text generation not initialized!\n");
         return concat_output_reader_copy_poll;
     }
-    concat_output_mtx.lock();
+    std::lock_guard<std::mutex> lock(concat_output_mtx);
     concat_output_reader_copy_poll = concat_output;
-    concat_output_mtx.unlock();
     return concat_output_reader_copy_poll;
 }
 
@@ -5285,6 +5315,7 @@ int gpttype_get_stream_count()
 
 const char * gpttype_new_token(int idx)
 {
+    static thread_local std::string generated_token_reader_copy;
     std::lock_guard<std::mutex> lock(concat_output_mtx);
     if (idx < 0 || idx >= (int) generated_tokens.size())
     {
@@ -5296,6 +5327,7 @@ const char * gpttype_new_token(int idx)
 
 const std::vector<TopPicksData> gpttype_get_top_picks_data()
 {
+    std::lock_guard<std::mutex> lock(top_picks_history_mtx);
     return top_picks_history;
 }
 
@@ -5641,13 +5673,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         std::lock_guard<std::mutex> lock(concat_output_mtx);
         generated_tokens.clear(); // New Generation, new tokens
         generated_tokens.reserve(16);
-        generated_token_reader_copy = "";
     }
     delayed_generated_tokens.clear();
 
     concat_output_mtx.lock();
     concat_output = "";
-    concat_output_reader_copy_poll = "";
     concat_output_reader_copy_res = "";
     concat_output_mtx.unlock();
     last_stop_reason = stop_reason::OUT_OF_TOKENS;
@@ -5656,7 +5686,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     dry_repeat_count.clear();
     dry_sequence_breakers.clear();
     dry_max_token_repeat.clear();
-    top_picks_history.clear();
+    {
+        std::lock_guard<std::mutex> lock(top_picks_history_mtx);
+        top_picks_history.clear();
+    }
     early_abort = false;
 
     double init_time = 0, process_time = 0, gen_time = 0;
@@ -6930,18 +6963,6 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                 }
 
-                //if adaptive p sampling is used, we need to cache the original probabilities
-                std::vector<llama_token_data> original_candidates;
-                if(adaptive_target > 0.0f)
-                {
-                    original_candidates.reserve(n_vocab);
-                    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-                        original_candidates.emplace_back(llama_token_data{token_id, logitsPtr[token_id], 0.0f});
-                    }
-                    llama_token_data_array original_candidates_p = { original_candidates.data(), original_candidates.size(), false };
-                    sample_softmax(&original_candidates_p,false);
-                }
-
                 if(file_format == FileFormat::GGUF_GENERIC && guidance_ctx && negprompt_tokens.size()>0 && inputs.guidance_scale!=1.0f)
                 {
                     sample_guidance(llama_ctx_v4, guidance_ctx, n_vocab, inputs.guidance_scale);
@@ -6986,13 +7007,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta,
                 kcpp_data->dry_multiplier, kcpp_data->dry_base,
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,
-                sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve, adaptive_target,
+                sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve, adaptive_target, adaptive_decay,
                 thinking_start_sequence, thinking_end_sequence, thinking_end_phrase_toksleft, kcpp_data->reasoning_budget);
-
-                if (adaptive_target > 0.0f) {
-                    float original_prob = original_candidates[id].p;
-                    adaptive_p_update_history(original_prob, adaptive_p_weighted_sum, adaptive_p_total_weight, adaptive_decay);
-                }
 
                 if(draft_used)
                 {

@@ -98,8 +98,8 @@ musicName = None
 imageName = None
 mmprojName = None
 lastgeneratedcomfyimg = b''
-lastgeneratedcachedimg = b''
-lastgeneratedcachedimgkey = b''
+lastgeneratedcachedpayload = b''
+lastgeneratedcachedpayloadkey = ''
 currgenimgkey = ''
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
@@ -118,6 +118,8 @@ maxctx = default_maxctx
 maxhordectx = 0 #set to whatever maxctx is if 0
 maxhordelen = 1024
 modelbusy = threading.Lock()
+token_count_lock = threading.Lock()
+detokenize_lock = threading.Lock()
 batched_lock = threading.Lock()
 batched_cond = threading.Condition(batched_lock)
 batched_request_runner_count = 0 #incremented when a batched request is running, prevents all non-batched requests
@@ -2314,6 +2316,8 @@ def generate(genparams, stream_flag=False):
         reasoning_budget = tryparseint(0.25 * max_length,-1)  # 25% of gen amount
     elif reasoning_effort == "medium":
         reasoning_budget = tryparseint(0.5 * max_length,-1)  # 50% of gen amount
+    elif reasoning_effort == "high":
+        reasoning_budget = tryparseint(0.75 * max_length,-1)  # 75% of gen amount
     else:
         pass #unrestricted
 
@@ -3436,14 +3440,16 @@ def music_generate_audio(genparams):
     return outstr
 
 def tokenize_ids(countprompt,tcaddspecial):
-    rawcountdata = handle.token_count(countprompt.encode("UTF-8"),tcaddspecial)
-    count = rawcountdata.count
-    hardlimit = (2**31) - 1
-    countlimit = count if (count>=0 and count<=hardlimit) else 0
-    if count > hardlimit:
-        utfprint("Warning: TokenCount exceeds max limit.")
-    # the above protects the server in case the count limit got corrupted
-    countdata = [rawcountdata.ids[i] for i in range(countlimit)]
+    # The native result points into a shared vector; keep it locked until copied.
+    with token_count_lock:
+        rawcountdata = handle.token_count(countprompt.encode("UTF-8"),tcaddspecial)
+        count = rawcountdata.count
+        hardlimit = (2**31) - 1
+        countlimit = count if (count>=0 and count<=hardlimit) else 0
+        if count > hardlimit:
+            utfprint("Warning: TokenCount exceeds max limit.")
+        # the above protects the server in case the count limit got corrupted
+        countdata = [rawcountdata.ids[i] for i in range(countlimit)]
     return countdata
 
 def detokenize_ids(tokids,addspecial):
@@ -3456,8 +3462,10 @@ def detokenize_ids(tokids,addspecial):
         inputs.ids = (ctypes.c_int * tokidslen)()
         for i, cid in enumerate(tokids):
             inputs.ids[i] = cid
-        detok = handle.detokenize(inputs)
-        detokstr = ctypes.string_at(detok).decode("UTF-8","ignore")
+        # The native function writes a shared string; serialize calls and copying.
+        with detokenize_lock:
+            detok = handle.detokenize(inputs)
+            detokstr = ctypes.string_at(detok).decode("UTF-8","ignore")
     return detokstr
 
 # Performs a web search using DuckDuckGo and extracts text content from the top results.
@@ -3465,12 +3473,12 @@ def websearch(query):
     global websearch_lastquery
     global websearch_lastresponse
     global nocertify
-    # sanitize query
-    query = re.sub(r'[+\-\"\\/*^|<>~`]', '', query) # Remove blacklisted characters
-    query = re.sub(r'\s+', ' ', query).strip() # Replace multiple spaces with a single space
-    if not query or query=="":
+    # DDG already normalizes whitespace, but we optimize a tiny bit by doing it ourselves.
+    query = re.sub(r'\s+', ' ', query).strip()
+    if not query:
         return []
-    query = query[:300] # only search first 300 chars, due to search engine limits
+    # Clamp query to supported 500 decoded UTF-8 bytes, not codepoints.
+    query = query.encode('utf-8', errors='ignore')[:500].decode('utf-8', errors='ignore')
     if query==websearch_lastquery:
         print("\nReturning cached websearch...")
         return websearch_lastresponse
@@ -3589,7 +3597,11 @@ def websearch(query):
             if self.recordingTitle or self.recordingDesc or self.recordingUrl:
                 self.currsegmenttxt += data
 
-    encoded_query = urllib.parse.quote(query)
+    # DDG supports `+` as spaces, which is more readable and compact than `%20`.
+    # Literal pluses get themselves encoded as `%2B`.
+    # And `_plus` method variant correctly encodes `/` to `%2F` by default.
+    # The variant was practically made for what we do here.
+    encoded_query = urllib.parse.quote_plus(query)
     search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
 
     try:
@@ -4695,6 +4707,9 @@ ws ::= | " " | "\n" [ \t]{0,20}
                         break
                 if jinjatools and len(jinjatools)>0:
                     genparams["using_openai_tools"] = True
+                    if api_format == 4 and args.jinja_tools:
+                        # Default Jinja tool requests to 0.5 and cap their temperature at 1.0.
+                        genparams["temperature"] = min(tryparsefloat(genparams.get("temperature", adapter_obj.get("temperature", 0.5)), 0.5), 1.0)
                 # handle media
                 images_added, audio_added = sweep_media_from_messages(messages_array)
             else:
@@ -5378,7 +5393,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
 
         try:  # stream response
             while True:
-                chunk = resp.read(self.STREAM_CHUNK)
+                chunk = resp.read1(self.STREAM_CHUNK)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
@@ -5637,6 +5652,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         utfprint("\nOutput: " + recvtxt,1)
 
+        # The native parser needs the full output to match reasoning in the generation prompt.
+        native_toolcall_text = recvtxt
         #handle potential think tags, but only chat completions will return them. the others just drop them
         reasoningtxt = ""
         if api_format==4 or api_format==8 or api_format==9: #chat completions, responses and anthropic messages, but only chat has reasoning returned
@@ -5662,7 +5679,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             using_openai_tools = genparams.get('using_openai_tools', False)
             if using_openai_tools:
                 # first, let llama.cpp's chat parser handle known template-specific tool formats
-                tool_calls = native_parse_toolcall_tags(recvtxt, genparams)
+                tool_calls = native_parse_toolcall_tags(native_toolcall_text, genparams)
                 # fallback: check and potentially segment multiple tags for multi-tool calls
                 if not tool_calls:
                     tool_calls = repack_toolcall_tags(recvtxt,genparams.get('tools', []))
@@ -6320,11 +6337,26 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 except asyncio.CancelledError:
                     pass
 
-    async def handle_image_request(self, generate_fn, param, cancel_fn):
+    async def send_json_keepalives(self, cancel_fn, interval=50):
+        # Leading whitespace is valid JSON. Padding also helps small proxy buffers
+        # make progress; it cannot bypass a proxy's absolute request time limit.
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                self.wfile.write(b' ' * 2047 + b'\n')
+                self.wfile.flush()
+        except OSError:
+            if cancel_fn:
+                cancel_fn()
+
+    async def handle_image_request(self, generate_fn, param, cancel_fn, keepalive=False):
         monitor_task = None
+        keepalive_task = None
         try:
             if cancel_fn:
                 monitor_task = asyncio.create_task(self.monitor_connection(cancel_fn))
+            if keepalive:
+                keepalive_task = asyncio.create_task(self.send_json_keepalives(cancel_fn))
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, generate_fn, param)
             return result
@@ -6343,6 +6375,13 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 try:
                     await monitor_task
                 except asyncio.CancelledError:
+                    pass
+            if keepalive_task:
+                if not keepalive_task.done():
+                    keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except (asyncio.CancelledError, OSError):
                     pass
 
     def get_multiplayer_idle_state(self,userid):
@@ -6547,7 +6586,7 @@ Change Mode<br>
     def do_GET(self):
         global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, embedded_kailite_gz, embedded_kcpp_docs_gz, embedded_kcpp_sdui_gz, embedded_lcpp_ui_gz, embedded_musicui, embedded_musicui_gz
         global last_req_time, start_time, cached_chat_template, cached_sd_info, has_vision_support, has_audio_support, has_whisper, friendlymodelname
-        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, currgenimgkey, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname, voicelist
+        global savedata_obj, has_multiplayer, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, maxctx, maxhordelen, friendlymodelname, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, KcppVersion, totalgens, preloaded_story, exitcounter, currentusergenkey, friendlysdmodelname, fullsdmodelpath, password, friendlyembeddingsmodelname, voicelist
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
 
         clean_path = self.path.split("?")[0] #for cases where we do not want query params
@@ -6798,13 +6837,12 @@ Change Mode<br>
         elif clean_path=='/view' or clean_path=='/view.png' or clean_path=='/api/view' or clean_path.startswith('/view_image'): #emulate comfyui
             content_type = 'image/png'
             response_body = lastgeneratedcomfyimg
-        elif clean_path.startswith('/sdapi/v1/get_last.png'):
+        elif clean_path.startswith('/sdapi/v1/get_last.json'):
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
-            if genkey and genkey==lastgeneratedcachedimgkey and lastgeneratedcachedimg:
-                content_type = 'image/png'
-                response_body = lastgeneratedcachedimg
+            if genkey and genkey==lastgeneratedcachedpayloadkey and lastgeneratedcachedpayload:
+                response_body = lastgeneratedcachedpayload
             else:
                 response_body = None
         elif clean_path.startswith('/sdapi/v1/progress'):
@@ -6812,9 +6850,13 @@ Change Mode<br>
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
             skip_current_image = parse_query_bool(parsed_dict, 'skip_current_image')
-            # with no auth, reveal status without preview image
+            # Only expose progress and previews for the requested active generation.
             auth = bool(genkey and genkey==currgenimgkey)
-            info = a1111_progress_response(auth and not skip_current_image)
+            info = build_a1111_progress_response('idle')
+            if auth:
+                active_info = a1111_progress_response(not skip_current_image)
+                if genkey == currgenimgkey:
+                    info = active_info
             response_body = json.dumps(info).encode()
         elif clean_path=='/history' or clean_path=='/api/history' or clean_path.startswith('/api/history/') or clean_path.startswith('/history/'): #emulate comfyui
             modelNameToReturn = friendlysdmodelname
@@ -6951,7 +6993,7 @@ Change Mode<br>
 
     def do_POST(self):
         global thinkformats
-        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedimg, lastgeneratedcachedimgkey, currgenimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
+        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
         contlenstr = self.headers['content-length']
         content_length = 0
@@ -7917,10 +7959,16 @@ Change Mode<br>
                         time.sleep(0.2) #short delay
                     return
                 elif is_imggen: #image gen
+                    keepalive_started = False
+                    final_write_started = False
                     try:
-                        lastgeneratedcachedimg = b''
-                        lastgeneratedcachedimgkey = ''
-                        currgenimgkey = genparams.get('genkey', '')
+                        lastgeneratedcachedpayload = b''
+                        lastgeneratedcachedpayloadkey = ''
+                        send_keepalive = bool(tryparseint(genparams.get('keepalive', False), 0))
+                        recovery_params = copy.deepcopy(genparams)
+                        recovery_genkey = genparams.get('genkey', '')
+                        recovery_model = imageName if autoswapmode and imageName is not None else friendlysdmodelname
+                        currgenimgkey = recovery_genkey
                         if is_comfyui_imggen:
                             lastgeneratedcomfyimg = b''
                             genparams = sd_comfyui_tranform_params(genparams)
@@ -7936,9 +7984,22 @@ Change Mode<br>
                                 genparams['lora'] = lora_map_name_to_path(loras)
                         abort_gen = handle.sd_abort_generation
                         override_abort_gen = genparams.get('kcpp_extra_args', {}).get('keep_image_gen_on_disconnect', gendefaults.get('keep_image_gen_on_disconnect'))
-                        if override_abort_gen is not None and tryparseint(override_abort_gen, 1):
+                        if override_abort_gen is not None and tryparseint(override_abort_gen, 1): #enable keepalive on poor connection mode
                             abort_gen = None
-                        gen = asyncio.run(self.handle_image_request(sd_generate, genparams, abort_gen))
+                            send_keepalive = True
+                        # Cloudflare proxy heuristic, trigger keepalive if cloudflare is detected
+                        if self.headers.get('CF-Connecting-IP'):
+                            send_keepalive = True
+                        if send_keepalive:
+                            # Close-delimited JSON works with HTTP/1.0 and HTTP/1.1.
+                            # No Content-Length: the body includes periodic whitespace.
+                            self.close_connection = True
+                            self.send_response(200)
+                            self.send_header('connection', 'close')
+                            self.send_header('X-Accel-Buffering', 'no')
+                            self.end_headers(content_type='application/json')
+                            keepalive_started = True
+                        gen = asyncio.run(self.handle_image_request(sd_generate, genparams, abort_gen, send_keepalive))
                         gendat = gen["data"]
                         genanim = gen["animated"]
                         gendatextra = gen["data_extra"]
@@ -7947,10 +8008,21 @@ Change Mode<br>
                         currgenimgkey = ''
                         genresp = None
                         if gendat:
-                            lastgeneratedcachedimg = base64.b64decode(gendat)
-                            lastgeneratedcachedimgkey = genparams.get('genkey', '')
-                        else:
-                            lastgeneratedcachedimg = b''
+                            recovery_prompt = recovery_params.get('prompt', '')
+                            recovery_negative_prompt = recovery_params.get('negative_prompt', '')
+                            if recovery_negative_prompt:
+                                recovery_prompt = f"{recovery_prompt} ### {recovery_negative_prompt}"
+                            lastgeneratedcachedpayload = json.dumps({
+                                "images": [gendat],
+                                "parameters": recovery_params,
+                                "info": geninfo,
+                                "animated": genanim,
+                                "extra_data": gendatextra,
+                                "final_frame": genfinalframe,
+                                "prompt": recovery_prompt,
+                                "models": [recovery_model],
+                            }).encode()
+                            lastgeneratedcachedpayloadkey = recovery_genkey
                         if is_comfyui_imggen:
                             if gendat:
                                 lastgeneratedcomfyimg = base64.b64decode(gendat)
@@ -7962,12 +8034,20 @@ Change Mode<br>
                             genresp = (json.dumps({"created":int(time.time()),"data":[{"b64_json":gendat}],"background":"opaque","output_format":"png","size":response_size,"quality":"medium"}).encode())
                         else:
                             genresp = (json.dumps({"images":[gendat],"parameters":{},"info":geninfo,"animated":genanim,"extra_data":gendatextra, "final_frame":genfinalframe}).encode())
-                        self.send_response(200)
-                        self.send_header('content-length', str(len(genresp)))
-                        self.end_headers(content_type='application/json')
+                        if not keepalive_started:
+                            self.send_response(200)
+                            self.send_header('content-length', str(len(genresp)))
+                            self.end_headers(content_type='application/json')
+                        final_write_started = True
                         self.wfile.write(genresp)
                     except Exception as ex:
                         currgenimgkey = ''
+                        if keepalive_started and not final_write_started:
+                            # Headers are already committed; finish with a JSON error.
+                            try:
+                                self.wfile.write(json.dumps({"detail": {"msg": "Image generation failed.", "type": "generation_error"}}).encode())
+                            except OSError:
+                                pass
                         utfprint(ex,1)
                         print("Generate Image: The response could not be sent, maybe connection was terminated?")
                         time.sleep(0.2) #short delay
@@ -8923,7 +9003,7 @@ def show_gui():
             try:
                 selected_index = searchbox2.cget("values").index(modelsearch2_var.get())
                 pickedsize = searchedsizes[selected_index]
-                fileinfotxt_var.set(f"Size: {round(pickedsize/1024/1024/1024,2)} GB")
+                fileinfotxt_var.set(f"Size: {round(pickedsize/1024/1024/1024,2)} GiB" if pickedsize is not None else "Size: Unknown (missing file metadata or parts)")
             except Exception:
                 fileinfotxt_var.set("")
         def fetch_search_quants(a,b,c):
@@ -8933,13 +9013,22 @@ def show_gui():
                     return
                 searchedmodels = []
                 searchedsizes = []
-                resp = make_url_request(f"https://huggingface.co/api/models/{modelsearch1_var.get()}/tree/main?recursive=true",None,'GET',{},10)
-                for m in resp:
-                    if m["type"]=="file" and ".gguf" in m["path"]:
-                        if "-of-0" in m["path"] and "00001" not in m["path"]:
+                # Model metadata includes all files, avoiding a truncated tree page.
+                resp = make_url_request(f"https://huggingface.co/api/models/{modelsearch1_var.get()}/revision/main?blobs=true",None,'GET',{},10)
+                files = {m["rfilename"]: m.get("size") for m in resp["siblings"]}
+                for filename, size in files.items():
+                    if not filename.lower().endswith(".gguf"):
+                        continue
+                    match = re.search(r'-(\d{5})-of-(\d{5})\.gguf$', filename, re.IGNORECASE)
+                    if match:
+                        if int(match.group(1)) != 1:
                             continue
-                        searchedmodels.append(m["path"])
-                        searchedsizes.append(m["size"])
+                        # Sum actual sizes: the final shard is usually smaller.
+                        sizes = [files.get(filename[:match.start(1)] + f"{part:05d}" + filename[match.end(1):])
+                                 for part in range(1, int(match.group(2)) + 1)]
+                        size = sum(sizes) if sizes and all(s is not None for s in sizes) else None
+                    searchedmodels.append(filename)
+                    searchedsizes.append(size)
                 searchbox2.configure(values=searchedmodels)
                 if len(searchedmodels)>0:
                     quants = ["q4k","q4_k","q4", "q3", "q5", "q6", "q8"] #autopick priority
@@ -8973,18 +9062,19 @@ def show_gui():
                 searchbox1.configure(values=[])
                 searchbox2.configure(values=[])
                 searchedmodels = []
-                searchbase = model_search.get()
-                if searchbase.strip()=="":
+                searchbase = model_search.get().strip()
+                if searchbase=="":
                     return
-                urlcode = urllib.parse.urlencode({"search":( "GGUF " + searchbase),"limit":10}, doseq=True)
-                urlcode2 = urllib.parse.urlencode({"search":searchbase,"limit":6}, doseq=True)
+                urlcode = urllib.parse.urlencode({"search":searchbase,"filter":"gguf","limit":100}, doseq=True)
+                urlcode2 = urllib.parse.urlencode({"search":searchbase,"limit":100}, doseq=True)
                 resp = make_url_request(f"https://huggingface.co/api/models?{urlcode}",None,'GET',{},10)
                 for m in resp:
                     searchedmodels.append(m["id"])
-                if len(resp)<=3: #too few results, repeat search without GGUF in the string
+                if len(resp)<=3: # Include repositories whose GGUF tag is missing.
                     resp2 = make_url_request(f"https://huggingface.co/api/models?{urlcode2}",None,'GET',{},10)
                     for m in resp2:
-                        searchedmodels.append(m["id"])
+                        if m["id"] not in searchedmodels:
+                            searchedmodels.append(m["id"])
 
                 if len(searchedmodels)==0:
                     messagebox.showinfo("No Results Found", "Search found no results")
@@ -9504,7 +9594,7 @@ def show_gui():
     jinja_think_choices = ['default', 'true', 'false']
     jinjathinkbox, jinjathinklbl = makelabelcombobox(context_tab, "Jinja Thinking:", jinja_think_var, 45, command=togglejinjathink,labelpadx=(280), padx=370, width=100, tooltiptxt="Tries to enable or disable thinking in Jinja mode. This is a shortcut to setting Jinja Kwargs directly.", values=jinja_think_choices)
     jinjakwargsbox,jinjakwargsboxlbl = makelabelentry(context_tab, "Jinja Kwargs:", jinja_kwargs_var, row=47, width=160, labelpadx=(210), padx=(300), singleline=True, tooltip='Set additiona fields for Jinja JSON template parser, must be a valid json object.\nSpecified as JSON fields: {"KEY1":"VALUE1", "KEY2":"VALUE2"...}')
-    think_effort_choices = ['default', 'high', 'medium', 'low', 'minimal', 'none']
+    think_effort_choices = ['default', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none']
     makelabelcombobox(context_tab, "Think Effort:", think_effort_var, 47, command=togglethinkeffort, padx=84, width=100, tooltiptxt="Set the default thinking effort, can be overridden by the API.", values=think_effort_choices)
     jinja_var.trace_add("write", togglejinja)
     jinja_kwargs_var.trace_add("write", updatejinjathinktoggle)
@@ -9537,7 +9627,35 @@ def show_gui():
     makecheckbox(model_tab, "GPU", embeddings_gpu_var, 15, 0,padx=(390),tooltiptxt="Uses the GPU for Embeddings.")
     embeddings_gpu_var.trace_add("write", gui_changed_modelfile)
     makefileentry(model_tab, "Preload Story:", "Select Preloaded Story File", preloadstory_var, 17,width=280,singlerow=True,tooltiptxt="Select an optional KoboldAI JSON savefile \nto be served on launch to any client.")
-    makefileentry(model_tab, "SaveData File:", "Select or Create New SaveData Database File", savedatafile_var, 19,width=280,filetypes=[("KoboldCpp SaveDB", "*.jsondb")],singlerow=True,dialog_type=1,tooltiptxt="Selecting a file will allow data to be loaded and saved persistently to this KoboldCpp server remotely. File is created if it does not exist.")
+    savedatafile_tooltip = "Allows connected users to save and load data on this server. File is created automatically on launch if it does not exist. Clear the filename to disable."
+    savedatafile_label, savedatafile_entry, savedatafile_button = makefileentry(model_tab, "SaveData File:", "Select or Create New SaveData Database File", savedatafile_var, 19,width=280,filetypes=[("KoboldCpp SaveDB", "*.jsondb")],singlerow=True,dialog_type=1,tooltiptxt=savedatafile_tooltip)
+    savedatafile_enabled_var = ctk.IntVar(value=0)
+    savedatafile_checkbox = makecheckbox(model_tab, "Enable Server Side SaveData File", savedatafile_enabled_var, row=19, tooltiptxt=savedatafile_tooltip)
+    savedatafile_checkbox.configure(command=lambda: savedatafile_var.set("savedatafile.jsondb"))
+    savedatafile_editing = False
+
+    def update_savedatafile_row(*unused):
+        show_file = bool(savedatafile_var.get()) or savedatafile_editing
+        for widget in (savedatafile_label, savedatafile_entry, savedatafile_button):
+            if show_file:
+                widget.grid()
+            else:
+                widget.grid_remove()
+        if show_file:
+            savedatafile_checkbox.grid_remove()
+        else:
+            savedatafile_enabled_var.set(0)
+            savedatafile_checkbox.grid()
+
+    def savedatafile_focus_changed(editing):
+        nonlocal savedatafile_editing
+        savedatafile_editing = editing
+        update_savedatafile_row()
+
+    savedatafile_entry.bind("<FocusIn>", lambda event: savedatafile_focus_changed(True))
+    savedatafile_entry.bind("<FocusOut>", lambda event: savedatafile_focus_changed(False))
+    savedatafile_var.trace_add("write", update_savedatafile_row)
+    update_savedatafile_row()
     makefileentry(model_tab, "MCP JSON:", "Select a mcp.json configuration file", mcpfile_var, 21,width=280,filetypes=[("MCP JSON", "*.json")],singlerow=True,tooltiptxt="Specify path to mcp.json which contains the Claude Desktop compatible MCP server config.")
     makefileentry(model_tab, "Chat Adapter:", "Select ChatCompletions Adapter File", chatcompletionsadapter_var, 24, width=184, filetypes=[("JSON Adapter", "*.json")], singlerow=True, tooltiptxt="Select an optional ChatCompletions Adapter JSON file to force custom instruct tags.")
     def pickpremadetemplate():
@@ -11491,6 +11609,11 @@ def main(launch_args, default_args):
         else:
             exitcounter = 999
             exit_with_error(2,"Specified kcpp config file invalid or not found.")
+
+    # --port only sets args.port, but the GUI tracks port_param, so mirror it there before convert_invalid_args syncs the two
+    if args.port != defaultport:
+        args.port_param = args.port
+
     args = convert_invalid_args(args)
 
     #positional handling for kcpps files (drag and drop)
@@ -12293,16 +12416,16 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             print("WARNING: Selected Text Model does not seem to be a GGUF file! Are you sure you picked the right file?")
         loadok = load_model(modelname)
         print("Load Text Model OK: " + str(loadok))
+        if not loadok:
+            exitcounter = 999
+            exit_with_error(3,"Could not load text model: " + modelname)
+
         if args.mmproj and args.mmproj!="": # multimodal vision and audio support is only known at runtime
             has_audio_support = handle.has_audio_support()
             has_vision_support = handle.has_vision_support()
         else:
             has_audio_support = False
             has_vision_support = False
-
-        if not loadok:
-            exitcounter = 999
-            exit_with_error(3,"Could not load text model: " + modelname)
 
         # The chat completions adapter is a list that needs derivation from chat templates
         # Try to derive chat completions adapter from chat template, now that we have the model loaded
@@ -12926,7 +13049,7 @@ if __name__ == '__main__':
     advparser.add_argument("--quantkv", help="Sets the KV cache data type quantization, options are f16/bf16/q8_0/q5_1/q4_0. Requires Flash Attention for full effect, otherwise only K cache is quantized.",metavar=('[quantization level f16/bf16/q8_0/q5_1/q4_0]'), type=str, choices=["f16","bf16","q8_0","q5_1","q4_0","0","1","2","3"], default="f16")
     advparser.add_argument("--quiet", help="Enable quiet mode, which hides generation inputs and outputs in the terminal. Quiet mode is automatically enabled when running a horde worker.", action='store_true')
     advparser.add_argument("--ratelimit", metavar=('[seconds]'), help="If enabled, rate limit generative request by IP address. Each IP can only send a new request once per X seconds.", type=int, default=0)
-    advparser.add_argument("--reasoningeffort", help="A quick way to set the default reasoning effort. API values override this.", type=str, choices=['default','none','low','medium','high'], default="default")
+    advparser.add_argument("--reasoningeffort", help="A quick way to set the default reasoning effort. API values override this.", type=str, choices=['default','none','low','medium','high','xhigh'], default="default")
     advparser.add_argument("--remotetunnel", help="Uses Cloudflare to create a remote tunnel, allowing you to access koboldcpp remotely over the internet even behind a firewall.", action='store_true')
     advparser.add_argument("--ropeconfig", help="If set, uses customized RoPE scaling from configured frequency scale and frequency base (e.g. --ropeconfig 0.25 10000). Otherwise, uses NTK-Aware scaling set automatically based on context size. For linear rope, simply set the freq-scale and ignore the freq-base",metavar=('[rope-freq-scale]', '[rope-freq-base]'), default=[0.0, 10000.0], type=float, nargs='+')
     advparser.add_argument("--savedatafile", metavar=('[savefile]'), help="If enabled, creates or opens a persistent database file on the server, that allows users to save and load their data remotely. A new file is created if it does not exist.", default="")

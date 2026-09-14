@@ -906,7 +906,7 @@
                 },
                 "/api/extra/generate/stream": {
                    "post": {
-                      "description": "Generates text given a prompt and generation settings, with SSE streaming.\n\nUnspecified values are set to defaults.\n\nSSE streaming establishes a persistent connection, returning ongoing process in the form of message events.\n\n``` \nevent: message\ndata: {data}\n\n```",
+                      "description": "Generates text given a prompt and generation settings, with Server-Sent Events (SSE) streaming.\n\nUnspecified values are set to defaults.\n\nThe response uses `text/event-stream`. Each event has `event: message` and a JSON `data` object containing `token` (a generated text fragment) and `finish_reason`. Events are separated by a blank line. Concatenate the `token` values to obtain the generated text.\n\n`finish_reason` is `null` while generation is in progress. The final event has an empty `token` and a `finish_reason` of `stop`, `length`, or `error`. The server then closes the connection; no `[DONE]` sentinel is sent.",
                       "requestBody": {
                          "content": {
                             "application/json": {
@@ -925,20 +925,14 @@
                       "responses": {
                          "200": {
                             "content": {
-                               "application/json": {
-                                  "example": {
-                                     "results": [
-                                        {
-                                           "text": " Holding up his tail to keep it from dragging in the dirty snow that covered the cobblestone, he waited patiently for the butcher to turn his attention from his stall so that he could pilfer his next meal: a tender-looking chicken."
-                                        }
-                                     ]
-                                  },
+                               "text/event-stream": {
+                                  "example": "event: message\ndata: {\"token\": \" Holding\", \"finish_reason\": null}\n\nevent: message\ndata: {\"token\": \" up his tail\", \"finish_reason\": null}\n\nevent: message\ndata: {\"token\": \"\", \"finish_reason\": \"length\"}\n\n",
                                   "schema": {
-                                     "$ref": "#/components/schemas/GenerationOutput"
+                                     "type": "string"
                                   }
                                }
                             },
-                            "description": "Successful request"
+                            "description": "Generated text streamed as SSE message events"
                          },
                          "503": {
                             "content": {

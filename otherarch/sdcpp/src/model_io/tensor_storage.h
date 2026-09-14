@@ -20,14 +20,17 @@ struct TensorStorageExt;
 
 struct TensorStorage {
     std::string name;
-    ggml_type type          = GGML_TYPE_F32;
-    ggml_type expected_type = GGML_TYPE_COUNT;
-    bool is_f8_e4m3         = false;
-    bool is_f8_e5m2         = false;
-    bool is_f64             = false;
-    bool is_i64             = false;
-    int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
-    int n_dims              = 0;
+    ggml_type type              = GGML_TYPE_F32;
+    ggml_type expected_type     = GGML_TYPE_COUNT;
+    bool is_f8_e4m3             = false;
+    bool is_f8_e5m2             = false;
+    bool is_f64                 = false;
+    bool is_i64                 = false;
+    bool is_int8_tensorwise     = false;
+    bool int8_convrot           = false;
+    int int8_convrot_group_size = 0;
+    int64_t ne[SD_MAX_DIMS]     = {1, 1, 1, 1, 1};
+    int n_dims                  = 0;
     std::shared_ptr<kcpp_safetensors_quant::TensorStorageExt> kcpp_ext;
 
     std::string storage_key;
@@ -57,12 +60,14 @@ struct TensorStorage {
     }
 
     int64_t nbytes_to_read() const {
-        if (is_f8_e4m3 || is_f8_e5m2) {
+        if (is_f64 || is_i64) {
+            return nbytes() * 2;
+#if !KCPP_MAINLINE_FP8_SCALED
+        } else if (is_f8_e4m3 || is_f8_e5m2) {
             return nbytes() / 2;
+#endif
         } else if (kcpp_ext) {
             return nelements();
-        } else if (is_f64 || is_i64) {
-            return nbytes() * 2;
         } else {
             return nbytes();
         }

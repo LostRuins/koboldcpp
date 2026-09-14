@@ -322,6 +322,11 @@ std::string gguf_get_model_arch(const std::string & gguf_filename)
         ggufparams.ctx = NULL;
 
         auto ctx  = gguf_init_from_file(fname.c_str(), ggufparams);
+        if (ctx == nullptr)
+        {
+            fprintf(stderr, "%s: error: failed to read GGUF file '%s'\n", __func__, fname.c_str());
+            return FileFormat::BADFORMAT;
+        }
 
         auto keyidx = gguf_find_key(ctx, "general.architecture");
         std::string modelarch = "";

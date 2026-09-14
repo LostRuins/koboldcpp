@@ -327,7 +327,7 @@ ifdef LLAMA_METAL
 CFLAGS   += -DGGML_USE_METAL -DGGML_METAL_NDEBUG
 CXXFLAGS += -DGGML_USE_METAL
 LDFLAGS  += -framework Foundation -framework Metal -framework MetalKit -framework MetalPerformanceShaders
-OBJS     += ggml-metal.o ggml-metal-device.o ggml-metal-device-m.o ggml-metal-context-m.o ggml-metal-common.o ggml-metal-ops.o ggml-metal-tuning.o
+OBJS     += ggml-metal.o ggml-metal-device.o ggml-metal-device-m.o ggml-metal-context-m.o ggml-metal-common.o ggml-metal-ops.o ggml-metal-tuning.o ggml-metal-fusion.o
 
 ggml-metal-common.o: ggml/src/ggml-metal/ggml-metal-common.cpp ggml/src/ggml-metal/ggml-metal-common.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -336,6 +336,9 @@ ggml-metal-ops.o: ggml/src/ggml-metal/ggml-metal-ops.cpp ggml/src/ggml-metal/ggm
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 ggml-metal-tuning.o: ggml/src/ggml-metal/ggml-metal-tuning.cpp ggml/src/ggml-metal/ggml-metal-tuning.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+ggml-metal-fusion.o: ggml/src/ggml-metal/ggml-metal-fusion.cpp ggml/src/ggml-metal/ggml-metal-fusion.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 ggml-metal.o: ggml/src/ggml-metal/ggml-metal.cpp
