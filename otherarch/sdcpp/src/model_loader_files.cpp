@@ -147,7 +147,7 @@ bool ModelLoader::add_file_impl(const std::string& path, const std::string& pref
         }
         if (tensor.index_in_zip < 0) {
             const auto& stamp = physical_files[tensor.file_index];
-            if (tensor.offset > stamp.size || elements / block_size * type_size > stamp.size - tensor.offset) {
+            if (tensor.offset > stamp.size || static_cast<uint64_t>(tensor.nbytes_to_read()) > stamp.size - tensor.offset) { //kcpp int8 fp8
                 LOG_ERROR("tensor '%s' extends beyond its model file", tensor.name.c_str());
                 return false;
             }
