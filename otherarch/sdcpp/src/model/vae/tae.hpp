@@ -1,8 +1,12 @@
 #ifndef __SD_MODEL_VAE_TAE_HPP__
 #define __SD_MODEL_VAE_TAE_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
+#include "core/rng.hpp"
+#include "core/util.h"
 #include "model.h"
+#include "model/common/ggml_block.hpp"
 
 /*
     ===================================    TinyAutoEncoder  ===================================
@@ -65,7 +69,7 @@ public:
 
         if (n_in != n_out) {
             auto skip = std::dynamic_pointer_cast<Conv2d>(blocks["skip"]);
-            LOG_DEBUG("skip");
+            LOG_VERBOSE("skip");
             x = skip->forward(ctx, x);
         }
 
@@ -560,7 +564,7 @@ public:
             int64_t chunk_frames = 5 * decoder->t_upscale;
             int64_t pad          = (chunk_frames - (num_frames % chunk_frames)) % chunk_frames;
 
-            result = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, result, 0, 0, 0, 0, 0, 0, 0, pad, false, false);
+            result = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, result, 0, 0, 0, 0, 0, 0, 0, static_cast<int>(pad), false, false);
 
             int64_t num_chunks                  = (num_frames + pad) / chunk_frames;
             auto to_trim                        = decoder->t_upscale - 1;
@@ -787,7 +791,7 @@ struct TinyImageAutoEncoder : public VAE {
             return build_graph(z_tensor, decode_graph);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z_tensor.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), z_tensor.dim());
     }
 };
 
@@ -872,7 +876,7 @@ struct TinyVideoAutoEncoder : public VAE {
             return build_graph(z_tensor, decode_graph);
         };
 
-        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), z_tensor.dim());
+        return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), z_tensor.dim());
     }
 };
 

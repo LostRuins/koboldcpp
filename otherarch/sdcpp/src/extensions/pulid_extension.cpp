@@ -79,8 +79,8 @@ struct PuLIDExtension : public GenerationExtension {
     sd::Tensor<float> id_embedding;
     float id_weight = 1.0f;
 
-    const char* name() const override {
-        return "pulid";
+    ModelComponent component() const override {
+        return ModelComponent::PuLID;
     }
 
     bool is_enabled() const override {

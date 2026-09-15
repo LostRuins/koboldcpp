@@ -1,6 +1,7 @@
 #include "core/util.h"
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cmath>
 #include <codecvt>
 #include <cstdarg>
@@ -16,6 +17,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include "core/ggml_tensor_utils.h"
 #include "runtime/preprocessing.hpp"
 
 #include <inttypes.h>
@@ -518,7 +520,7 @@ bool parse_strict_bool(const std::string& text, bool& value) {
 }
 
 // { kcpp
-static int sdloglevel = 0; //-1 = hide all, 0 = normal, 1 = showall
+static int sdloglevel = INT_MAX; // -1 = hide all, 0 = normal, 1 = showall, INT_MAX = sdcpp
 static bool sdquiet = false;
 // } kcpp
 
@@ -618,18 +620,17 @@ void* sd_log_cb_data         = nullptr;
 
 #define LOG_BUFFER_SIZE 4096
 
-void log_message(const char* format, ...) {
-    if (sdloglevel>0) {
+void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
+    if (sdloglevel > 0 && sdloglevel != INT_MAX) {
         printf("\n");
         va_list args;
         va_start(args, format);
         vprintf(format, args);
         va_end(args);
         fflush(stdout);
+        return;
     }
-}
 
-void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
     va_list args;
     va_start(args, format);
 
@@ -649,6 +650,25 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     }
 
     va_end(args);
+}
+
+void sd_ggml_log_callback(ggml_log_level level, const char* text, void*) {
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG:
+            LOG_VERBOSE(text);
+            break;
+        case GGML_LOG_LEVEL_INFO:
+            LOG_INFO(text);
+            break;
+        case GGML_LOG_LEVEL_WARN:
+            LOG_WARN(text);
+            break;
+        case GGML_LOG_LEVEL_ERROR:
+            LOG_ERROR(text);
+            break;
+        default:
+            LOG_VERBOSE(text);
+    }
 }
 
 void sd_set_log_callback(sd_log_cb_t cb, void* data) {
@@ -834,7 +854,11 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     float round_bracket_multiplier  = 1.1f;
     float square_bracket_multiplier = 1 / 1.1f;
 
-    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|\bBREAK\b|[^\\()\[\]:B]+|:|\bB)");
+    // libstdc++ std::regex recurses per matched character, so unbounded runs
+    // overflow the stack. Split runs are merged back below.
+    const int max_plain_text_run = 1024;
+    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|\)|\]|\bBREAK\b|[^\\()\[\]:B]{1,)" +
+                            std::to_string(max_plain_text_run) + R"(}|:|\bB)");
     std::regex re_break(R"(\s*\bBREAK\b\s*)");
 
     auto multiply_range = [&](int start_position, float multiplier) {
@@ -843,22 +867,55 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
         }
     };
 
+    // Kept out of the regex: bounding the repetition rejects valid long weights,
+    // leaving it unbounded overflows the stack.
+    auto lex_weight = [](const std::string& s, float& value) -> size_t {
+        size_t end = 0;
+        if (end < s.size() && (s[end] == '+' || s[end] == '-')) {
+            ++end;
+        }
+        while (end < s.size() && (std::isdigit((unsigned char)s[end]) || s[end] == '.')) {
+            ++end;
+        }
+        if (end >= s.size() || s[end] != ')') {
+            return 0;
+        }
+        std::string number   = s.substr(0, end);
+        char* number_end     = nullptr;
+        float parsed         = std::strtof(number.c_str(), &number_end);
+        const char* expected = number.c_str() + number.size();
+        // Without this ".", "+." and "1.2.3" would silently become weights.
+        if (number.empty() || number_end != expected || !std::isfinite(parsed)) {
+            return 0;
+        }
+        value = parsed;
+        return end + 1;
+    };
+
     std::smatch m, m2;
     std::string remaining_text = text;
 
     while (std::regex_search(remaining_text, m, re_attention)) {
         std::string text   = m[0];
-        std::string weight = m[1];
+        std::string suffix = m.suffix();
+
+        if (text == ":") {
+            float weight_value   = 1.0f;
+            size_t weight_length = lex_weight(suffix, weight_value);
+            if (weight_length > 0) {
+                if (!round_brackets.empty()) {
+                    multiply_range(round_brackets.back(), weight_value);
+                    round_brackets.pop_back();
+                }
+                remaining_text = suffix.substr(weight_length);
+                continue;
+            }
+        }
 
         if (text == "(") {
             round_brackets.push_back((int)res.size());
         } else if (text == "[") {
             square_brackets.push_back((int)res.size());
-        } else if (!weight.empty()) {
-            if (!round_brackets.empty()) {
-                multiply_range(round_brackets.back(), std::stof(weight));
-                round_brackets.pop_back();
-            }
         } else if (text == ")" && !round_brackets.empty()) {
             multiply_range(round_brackets.back(), round_bracket_multiplier);
             round_brackets.pop_back();
@@ -873,7 +930,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
             res.push_back({text, 1.0f});
         }
 
-        remaining_text = m.suffix();
+        remaining_text = suffix;
     }
 
     for (int pos : round_brackets) {

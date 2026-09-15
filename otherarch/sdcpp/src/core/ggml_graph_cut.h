@@ -3,22 +3,17 @@
 
 #include <array>
 #include <cstdint>
+#include <list>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "ggml-backend.h"
 #include "ggml.h"
 
 namespace sd::ggml_graph_cut {
-
-    // Streaming residency for a segment's params.
-    enum class SegmentResidency : uint8_t {
-        STREAMED = 0,
-        RESIDENT = 1,
-    };
-
     struct Segment {
         enum InputType {
             INPUT_EXTERNAL = 0,
@@ -33,38 +28,29 @@ namespace sd::ggml_graph_cut {
             int node_index = -1;
         };
 
-        size_t compute_buffer_size      = 0;
-        size_t output_bytes             = 0;
-        size_t input_external_bytes     = 0;
-        size_t input_previous_cut_bytes = 0;
-        size_t input_param_bytes        = 0;
+        size_t compute_buffer_size = 0;
         std::string group_name;
         std::vector<int> internal_node_indices;
         std::vector<int> output_node_indices;
         std::vector<InputRef> input_refs;
-        SegmentResidency residency = SegmentResidency::STREAMED;
+        std::unordered_set<std::string> future_cut_names;
+        std::unordered_set<std::string> live_cut_names;
     };
 
     struct Plan {
-        struct InputShape {
-            int leaf_index                        = -1;
-            ggml_type type                        = GGML_TYPE_COUNT;
-            std::array<int64_t, GGML_MAX_DIMS> ne = {0, 0, 0, 0};
-        };
-
-        bool available = false;
-        bool has_cuts  = false;
-        bool valid     = true;
-        int n_nodes    = 0;
-        int n_leafs    = 0;
-        std::vector<InputShape> input_shapes;
+        bool available             = false;
+        bool has_cuts              = false;
+        bool valid                 = true;
+        size_t compute_buffer_size = 0;
+        std::vector<uint64_t> layout;
+        std::vector<std::string> leaf_names;
+        std::vector<std::pair<int, std::string>> cut_markers;
         std::vector<Segment> segments;
     };
 
     struct PlanCache {
-        Plan graph_cut_plan;
-        Plan budgeted_graph_cut_plan;
-        size_t budgeted_graph_cut_plan_max_vram_bytes = 0;
+        static constexpr size_t MAX_PLANS = 4;
+        std::list<Plan> graph_cut_plans;
     };
 
     static constexpr const char* GGML_RUNNER_CUT_PREFIX = "ggml_runner_cut:";
@@ -89,13 +75,12 @@ namespace sd::ggml_graph_cut {
     ggml_backend_buffer_t tensor_buffer(const ggml_tensor* tensor);
     ggml_tensor* cache_source_tensor(ggml_tensor* tensor);
     size_t cache_tensor_bytes(const ggml_tensor* tensor);
+    // Plans ignore runtime bindings; allocator reservations must include them.
+    std::vector<uint64_t> graph_layout(ggml_cgraph* graph, bool include_bindings);
     bool plan_matches_graph(ggml_cgraph* gf, const Plan& plan);
     ggml_tensor* output_tensor(ggml_cgraph* gf, const Segment& segment, size_t output_index);
     ggml_tensor* input_tensor(ggml_cgraph* gf, const Segment::InputRef& input_ref);
     std::vector<ggml_tensor*> param_tensors(ggml_cgraph* gf, const Segment& segment);
-    std::unordered_set<std::string> collect_future_input_names(ggml_cgraph* gf,
-                                                               const Plan& plan,
-                                                               size_t current_segment_index);
     ggml_cgraph* build_segment_graph(ggml_cgraph* gf,
                                      const Segment& segment,
                                      ggml_context** graph_ctx_out);
@@ -109,21 +94,12 @@ namespace sd::ggml_graph_cut {
                     ggml_cgraph* gf,
                     const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                     const char* log_desc);
-    Plan apply_max_vram_budget(ggml_cgraph* gf,
-                               const Plan& base_plan,
-                               size_t max_graph_vram_bytes,
-                               ggml_backend_t backend,
-                               const std::unordered_set<const ggml_tensor*>& params_tensor_set,
-                               const char* log_desc);
     Plan resolve_plan(ggml_backend_t backend,
                       ggml_cgraph* gf,
                       PlanCache* cache,
-                      size_t max_graph_vram_bytes,
                       const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                       const char* log_desc);
 
-    // Mark leading segments resident when they fit after streamed-segment headroom.
-    void annotate_residency(Plan& plan, size_t max_graph_vram_bytes);
 }  // namespace sd::ggml_graph_cut
 
 #endif  // __SD_CORE_GGML_GRAPH_CUT_H__

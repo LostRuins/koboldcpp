@@ -11,7 +11,7 @@ void Qwen2Tokenizer::load_from_merges(const std::string& merges_utf8_str) {
     }
 
     std::vector<std::u32string> merges = split_utf32(merges_utf8_str);
-    LOG_DEBUG("merges size %zu", merges.size());
+    LOG_VERBOSE("merges size %zu", merges.size());
     std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
     for (const auto& merge : merges) {
         size_t space_pos = merge.find(' ');
@@ -36,7 +36,7 @@ void Qwen2Tokenizer::load_from_merges(const std::string& merges_utf8_str) {
         i++;
     }
     encoder_len = i;
-    LOG_DEBUG("vocab size: %d", encoder_len);
+    LOG_VERBOSE("vocab size: %d", encoder_len);
 
     int rank = 0;
     for (const auto& merge : merge_pairs) {
@@ -45,16 +45,8 @@ void Qwen2Tokenizer::load_from_merges(const std::string& merges_utf8_str) {
     bpe_len = rank;
 }
 
-Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str) {
-    UNK_TOKEN = "<|endoftext|>";
-    EOS_TOKEN = "<|endoftext|>";
-    PAD_TOKEN = "<|endoftext|>";
-
-    UNK_TOKEN_ID = 151643;
-    EOS_TOKEN_ID = 151643;
-    PAD_TOKEN_ID = 151643;
-
-    special_tokens = {
+static const std::vector<std::string>& qwen2_special_tokens() {
+    static const std::vector<std::string> tokens = {
         "<|endoftext|>",
         "<|im_start|>",
         "<|im_end|>",
@@ -87,6 +79,24 @@ Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str) {
         "<|bot_token|>",
         "<|tms_token|>",
     };
+    return tokens;
+}
+
+Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str)
+    : Qwen2Tokenizer(merges_utf8_str, qwen2_special_tokens()) {
+}
+
+Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str,
+                               const std::vector<std::string>& special_tokens_override) {
+    UNK_TOKEN = "<|endoftext|>";
+    EOS_TOKEN = "<|endoftext|>";
+    PAD_TOKEN = "<|endoftext|>";
+
+    UNK_TOKEN_ID = 151643;
+    EOS_TOKEN_ID = 151643;
+    PAD_TOKEN_ID = 151643;
+
+    special_tokens = special_tokens_override;
 
     if (merges_utf8_str.size() > 0) {
         load_from_merges(merges_utf8_str);

@@ -676,7 +676,7 @@ bool ADetailerGGML::load_from_file(const std::string& detector_path) {
     model_manager = std::make_shared<ModelManager>();
     model_manager->set_n_threads(n_threads);
     model_manager->set_enable_mmap(false);
-    ModelLoader& loader = model_manager->loader();
+    ModelLoader loader;
     if (!loader.init_from_file(detector_path)) {
         LOG_ERROR("failed to load ADetailer detector: '%s'", detector_path.c_str());
         return false;
@@ -696,7 +696,8 @@ bool ADetailerGGML::load_from_file(const std::string& detector_path) {
 
     std::map<std::string, ggml_tensor*> tensors;
     detector->get_param_tensors(tensors);
-    if (!model_manager->register_param_tensors("YOLOv8",
+    if (!model_manager->set_loader(loader) ||
+        !model_manager->register_param_tensors(ModelComponent::Detector,
                                                std::move(tensors),
                                                backend_manager.params_backend_is_disk(SDBackendModule::DETECTOR)
                                                    ? ModelManager::ResidencyMode::Disk
@@ -715,7 +716,7 @@ std::vector<ADetailerDetection> ADetailerGGML::predict(sd_image_t image,
     LetterboxInput input  = make_letterbox_input(image, params.input_size);
     int64_t start         = ggml_time_ms();
     sd::Tensor<float> raw = detector->compute(n_threads, input.tensor);
-    detector->free_compute_buffer();
+    detector->runner_end();
     if (raw.empty()) {
         LOG_ERROR("YOLOv8 detector inference failed");
         return {};

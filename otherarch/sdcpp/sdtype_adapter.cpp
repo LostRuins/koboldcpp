@@ -558,7 +558,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.model_args = "chroma_use_dit_mask=true";
     params.max_vram = max_vram.c_str();
-    params.stream_layers = inputs.stream_layers;
+    //params.stream_layers = inputs.stream_layers; // removed in master-843
     params.eager_load = true; //kcpp should preload everything
     params.enable_mmap = inputs.use_mmap;
     params.backend = backend.c_str();
@@ -1612,14 +1612,19 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         fflush(stdout);
 
         results = nullptr;
-        if (!generate_video(sd_ctx, &vid_gen_params, &results, &generated_num_results, &generated_audio)) {
+        int output_fps = vid_fps;
+        if (!generate_video(sd_ctx, &vid_gen_params, &results, &generated_num_results, &generated_audio, &output_fps)) {
             results = nullptr;
             generated_audio = nullptr;
         }
         if(!sd_is_quiet && sddebugmode==1)
         {
             printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",vid_req_frames, generated_num_results);
+            if (output_fps != vid_fps) {
+                printf("\nRequested FPS: %d, Generated FPS: %d\n", vid_fps, output_fps);
+            }
         }
+        vid_fps = output_fps;
     }
     else if (!is_img2img)
     {

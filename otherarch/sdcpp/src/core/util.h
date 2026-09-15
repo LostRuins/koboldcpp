@@ -11,6 +11,14 @@
 #include "ggml-backend.h"
 #include "stable-diffusion.h"
 
+#ifndef __STATIC_INLINE__
+#define __STATIC_INLINE__ static inline
+#endif
+
+#ifndef SD_UNUSED
+#define SD_UNUSED(x) (void)(x)
+#endif
+
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
@@ -35,7 +43,6 @@ std::u32string unicode_value_to_utf32(int unicode_value);
 std::string sd_get_u8path(const std::string& file_path);
 
 sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index = 0);
-
 
 sd::Tensor<float> sd_image_to_tensor(sd_image_t image,
                                      int target_width  = -1,
@@ -82,6 +89,7 @@ void pretty_progress(int step, int steps, float time);
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds);
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
+void sd_ggml_log_callback(ggml_log_level level, const char* text, void*);
 
 ggml_type sd_type_to_ggml_type(sd_type_t sdtype);
 
@@ -107,13 +115,9 @@ void* sd_get_backend_eval_callback_data();
 // test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
 bool sd_backend_is(ggml_backend_t backend, const std::string& name);
 
-void log_message(const char* format, ...);
-#define LOG_DEBUG(...)  log_message(__VA_ARGS__)
-#define LOG_INFO(...)  log_message(__VA_ARGS__)
-#define LOG_WARN(...)  log_message(__VA_ARGS__)
-#define LOG_ERROR(...)  log_message(__VA_ARGS__)
-// #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
-// #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
-// #define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
-// #define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_VERBOSE(format, ...) log_printf(SD_LOG_VERBOSE, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #endif  // __SD_CORE_UTIL_H__

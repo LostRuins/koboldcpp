@@ -77,7 +77,7 @@ private:
 
             if (align_val != 0 && (align_val & (align_val - 1)) == 0) {
                 alignment_ = align_val;
-                LOG_DEBUG("Found alignment: %zu", alignment_);
+                LOG_VERBOSE("Found alignment: %zu", alignment_);
             } else {
                 LOG_ERROR("Invalid alignment value %u, fallback to default %zu", align_val, alignment_);
             }
@@ -197,8 +197,8 @@ public:
         if (!safe_read(fin, metadata_kv_count))
             return false;
 
-        LOG_DEBUG("GGUF v%u, tensor_count=%llu, metadata_kv_count=%llu",
-                  version, (unsigned long long)tensor_count, (unsigned long long)metadata_kv_count);
+        LOG_VERBOSE("GGUF v%u, tensor_count=%llu, metadata_kv_count=%llu",
+                    version, (unsigned long long)tensor_count, (unsigned long long)metadata_kv_count);
 
         // --- Read Metadata ---
         for (uint64_t i = 0; i < metadata_kv_count; i++) {

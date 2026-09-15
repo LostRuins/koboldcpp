@@ -239,6 +239,26 @@ void ArgOptions::print() const {
     }
 }
 
+void add_log_options(ArgOptions& options, sd_log_level_t& level) {
+    options.manual_options.push_back({"", "--log-level",
+                                      "minimum log level, one of [debug, verbose, info, warn, error] (default: info)",
+                                      [&level](int argc, const char** argv, int index) {
+                                          if (++index >= argc) {
+                                              return -1;
+                                          }
+                                          if (!parse_log_level(argv[index], level)) {
+                                              LOG_ERROR("invalid log level %s, must be one of [debug, verbose, info, warn, error]", argv[index]);
+                                              return -1;
+                                          }
+                                          return 1;
+                                      }});
+    options.manual_options.push_back({"-v", "--verbose", "equivalent to --log-level verbose",
+                                      [&level](int, const char**, int) {
+                                          level = SD_LOG_VERBOSE;
+                                          return 0;
+                                      }});
+}
+
 bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& options_list) {
     bool invalid_arg = false;
     std::string arg;
@@ -282,8 +302,12 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    *option.target = std::stoi(argv[i]);
-                    found_arg      = true;
+                    try {
+                        *option.target = std::stoi(argv[i]);
+                    } catch (const std::invalid_argument&) {
+                        invalid_arg = true;
+                    }
+                    found_arg = true;
                 }))
                 break;
 
@@ -292,8 +316,12 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    *option.target = std::stof(argv[i]);
-                    found_arg      = true;
+                    try {
+                        *option.target = std::stof(argv[i]);
+                    } catch (const std::invalid_argument&) {
+                        invalid_arg = true;
+                    }
+                    found_arg = true;
                 }))
                 break;
 
@@ -317,7 +345,8 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
 
         if (invalid_arg) {
             if (!valid) {
-                LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
+                LOG_ERROR("error: invalid parameter for argument \"%s\": \"%s\"",
+                          arg.c_str(), (i >= argc) ? "" : argv[i]);
             }
             return false;
         }
@@ -328,6 +357,25 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
     }
 
     return true;
+}
+
+static int parse_scale_override(int argc, const char** argv, int index, float& scale) {
+    if (++index >= argc) {
+        return -1;
+    }
+    try {
+        size_t end              = 0;
+        const std::string value = argv[index];
+        float parsed            = std::stof(value, &end);
+        if (end != value.size() || !std::isfinite(parsed) || parsed < 0.f ||
+            (parsed > 0.f && !std::isfinite(1.f / parsed))) {
+            return -1;
+        }
+        scale = parsed;
+    } catch (const std::exception&) {
+        return -1;
+    }
+    return 1;
 }
 
 ArgOptions SDContextParams::get_options() {
@@ -412,6 +460,11 @@ ArgOptions SDContextParams::get_options() {
          "path to standalone LTX audio vae model",
          0,
          &audio_vae_path},
+        {"",
+         "--audio-encoder",
+         "path to wav2vec2 audio encoder model (Wan2.2 S2V)",
+         0,
+         &audio_encoder_path},
         {"",
          "--taesd",
          "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
@@ -502,7 +555,7 @@ ArgOptions SDContextParams::get_options() {
          &rpc_servers},
         {"",
          "--max-vram",
-         "maximum VRAM budget in GiB for graph-cut segmented execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 disables graph splitting; a negative value auto-detects free VRAM, sparing the specified value",
+         "optional per-device budget in GiB for managed weights and runner buffers during automatic graph-cut execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 uses live free VRAM without an explicit budget; a negative value reserves that much free VRAM",
          0,
          &max_vram},
     };
@@ -517,19 +570,17 @@ ArgOptions SDContextParams::get_options() {
 
     options.bool_options = {
         {"",
-         "--stream-layers",
-         "enable residency+prefetch streaming on top of --max-vram (no effect without --max-vram; defaults to false)",
-         true, &stream_layers},
+         "--disable-prefetch",
+         "disable asynchronous next-segment weight prefetch (defaults to false)",
+         true, &disable_prefetch},
+        {"",
+         "--disable-segmented-compute",
+         "force monolithic graph execution even when automatic graph cutting is needed (defaults to false)",
+         true, &disable_segmented_compute},
         {"",
          "--eager-load",
          "load all params into the params backend at model-load time instead of lazily on first use (defaults to false)",
          true, &eager_load},
-        {"",
-         "--auto-fit",
-         "pick the diffusion/te/vae device placements automatically from the model size and the per-device "
-         "memory budgets (--max-vram; defaults to free memory minus a small margin). Overrides --backend and "
-         "--params-backend; may split modules across GPUs (--split-mode still selects layer or row)",
-         true, &auto_fit},
         {"",
          "--force-sdxl-vae-conv-scale",
          "force use of conv scale on sdxl vae",
@@ -570,6 +621,23 @@ ArgOptions SDContextParams::get_options() {
          "--vae-conv-direct",
          "use ggml_conv2d_direct in the vae model",
          true, &vae_conv_direct},
+    };
+
+    auto on_auto_fit_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            LOG_ERROR("--auto-fit requires 'on' or 'off'");
+            return -1;
+        }
+        const std::string arg = argv[index];
+        if (arg == "on") {
+            auto_fit = true;
+        } else if (arg == "off") {
+            auto_fit = false;
+        } else {
+            LOG_ERROR("invalid --auto-fit value '%s'; expected 'on' or 'off'", argv[index]);
+            return -1;
+        }
+        return 1;
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -643,6 +711,24 @@ ArgOptions SDContextParams::get_options() {
     };
 
     options.manual_options = {
+        {"",
+         "--linear-scale",
+         "linear input scale override (float, default: 0 = model default, 1 = no scaling)",
+         [this](int argc, const char** argv, int index) {
+             return parse_scale_override(argc, argv, index, linear_scale);
+         }},
+        {"",
+         "--attn-scale",
+         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); requires --fa or --diffusion-fa",
+         [this](int argc, const char** argv, int index) {
+             return parse_scale_override(argc, argv, index, attn_scale);
+         }},
+        {"",
+         "--auto-fit",
+         "on|off (default: on). Preserve --backend (otherwise select one GPU) and place weights on the compute GPU, "
+         "RAM, another GPU, or disk in that order, according to available memory (--max-vram limits GPU budgets). "
+         "Disabled by explicit --params-backend; uses automatic graph segmentation when needed",
+         on_auto_fit_arg},
         {"",
          "--type",
          "weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). "
@@ -817,6 +903,7 @@ std::string SDContextParams::to_string() const {
         << "  vae_path: \"" << vae_path << "\",\n"
         << "  vae_format: \"" << vae_format << "\",\n"
         << "  audio_vae_path: \"" << audio_vae_path << "\",\n"
+        << "  audio_encoder_path: \"" << audio_encoder_path << "\",\n"
         << "  taesd_path: \"" << taesd_path << "\",\n"
         << "  esrgan_path: \"" << esrgan_path << "\",\n"
         << "  control_net_path: \"" << control_net_path << "\",\n"
@@ -831,7 +918,8 @@ std::string SDContextParams::to_string() const {
         << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: \"" << max_vram << "\",\n"
-        << "  stream_layers: " << (stream_layers ? "true" : "false") << ",\n"
+        << "  disable_prefetch: " << (disable_prefetch ? "true" : "false") << ",\n"
+        << "  disable_segmented_compute: " << (disable_segmented_compute ? "true" : "false") << ",\n"
         << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
@@ -844,6 +932,8 @@ std::string SDContextParams::to_string() const {
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
+        << "  linear_scale: " << linear_scale << ",\n"
+        << "  attn_scale: " << attn_scale << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
         << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
         << "  prediction: " << sd_prediction_name(prediction) << ",\n"
@@ -879,6 +969,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.embeddings_connectors_path      = embeddings_connectors_path.c_str();
     sd_ctx_params.vae_path                        = vae_path.c_str();
     sd_ctx_params.audio_vae_path                  = audio_vae_path.c_str();
+    sd_ctx_params.audio_encoder_path              = audio_encoder_path.c_str();
     sd_ctx_params.taesd_path                      = taesd_path.c_str();
     sd_ctx_params.control_net_path                = control_net_path.c_str();
     sd_ctx_params.ip_adapter_path                 = ip_adapter_path.c_str();
@@ -897,13 +988,16 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.enable_mmap                     = enable_mmap;
     sd_ctx_params.flash_attn                      = flash_attn;
     sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.linear_scale                    = linear_scale;
+    sd_ctx_params.attn_scale                      = attn_scale;
     sd_ctx_params.tae_preview_only                = taesd_preview;
     sd_ctx_params.diffusion_conv_direct           = diffusion_conv_direct;
     sd_ctx_params.vae_conv_direct                 = vae_conv_direct;
     sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
     sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
     sd_ctx_params.max_vram                        = max_vram.c_str();
-    sd_ctx_params.stream_layers                   = stream_layers;
+    sd_ctx_params.disable_prefetch                = disable_prefetch;
+    sd_ctx_params.disable_segmented_compute       = disable_segmented_compute;
     sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();
@@ -1428,6 +1522,14 @@ ArgOptions SDGenerationParams::get_options() {
         return 1;
     };
 
+    auto on_audio_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        ref_audio_paths.push_back(argv[index]);
+        return 1;
+    };
+
     auto on_cache_mode_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
@@ -1617,6 +1719,10 @@ ArgOptions SDGenerationParams::get_options() {
          "--ref-audio",
          "standalone WAV reference for MiniMax-H3 Ref2VA (can be used multiple times)",
          on_ref_audio_arg},
+        {"",
+         "--audio",
+         "driving audio track (Wan2.2 S2V; can be used once)",
+         on_audio_arg},
         {"",
          "--cache-mode",
          "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level), 'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)",

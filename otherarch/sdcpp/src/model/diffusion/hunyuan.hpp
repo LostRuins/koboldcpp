@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_HUNYUAN_HPP__
 #define __SD_MODEL_DIFFUSION_HUNYUAN_HPP__
 
+#include <cinttypes>
 #include <memory>
 
 #include "model/common/block.hpp"
@@ -53,7 +54,7 @@ namespace Hunyuan {
             auto k       = qkv_vec[1];
             auto v       = qkv_vec[2];
 
-            auto attn_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, mask, false, ctx->flash_attn_enabled);
+            auto attn_out = ggml_ext_attention_ext(ctx, q, k, v, num_heads, mask, false, ctx->flash_attn_enabled);
             attn_out      = self_attn_proj->forward(ctx, attn_out);
 
             // adaLN_modulation
@@ -266,16 +267,16 @@ namespace Hunyuan {
             GGML_ASSERT(config.hidden_size / config.num_heads == config.axes_dim_sum);
 
             if (inferred) {
-                LOG_DEBUG("hunyuan video: depth = %d, single depth = %d, in_channels = %" PRId64 ", out_channels = %" PRId64 ", hidden_size = %" PRId64 ", context_in_dim = %" PRId64 ", patch_size = %dx%dx%d",
-                          config.depth,
-                          config.depth_single_blocks,
-                          config.in_channels,
-                          config.out_channels,
-                          config.hidden_size,
-                          config.context_in_dim,
-                          std::get<0>(config.patch_size),
-                          std::get<1>(config.patch_size),
-                          std::get<2>(config.patch_size));
+                LOG_VERBOSE("hunyuan video: depth = %d, single depth = %d, in_channels = %" PRId64 ", out_channels = %" PRId64 ", hidden_size = %" PRId64 ", context_in_dim = %" PRId64 ", patch_size = %dx%dx%d",
+                            config.depth,
+                            config.depth_single_blocks,
+                            config.in_channels,
+                            config.out_channels,
+                            config.hidden_size,
+                            config.context_in_dim,
+                            std::get<0>(config.patch_size),
+                            std::get<1>(config.patch_size),
+                            std::get<2>(config.patch_size));
             }
             return config;
         }
@@ -615,7 +616,7 @@ namespace Hunyuan {
                                                          config.theta,
                                                          config.axes_dim);
             int64_t pos_len = static_cast<int64_t>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_DEBUG("pos_len %d", pos_len);
+            // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe, true, "pe");
@@ -654,7 +655,7 @@ namespace Hunyuan {
                 return build_graph(x, timesteps, context, c_concat, y, guidance, byt5, vision, timestep_r);
             };
 
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,

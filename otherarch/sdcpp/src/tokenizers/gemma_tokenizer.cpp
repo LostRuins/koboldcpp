@@ -29,7 +29,7 @@ void GemmaTokenizer::load_from_merges(const std::string& merges_utf8_str, const 
         decoder[i]           = token;
     }
     encoder_len = static_cast<int>(vocab.size());
-    LOG_DEBUG("vocab size: %d", encoder_len);
+    LOG_VERBOSE("vocab size: %d", encoder_len);
 
     std::vector<std::u32string> merges = split_utf32(merges_utf8_str);
     std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
@@ -37,7 +37,7 @@ void GemmaTokenizer::load_from_merges(const std::string& merges_utf8_str, const 
         size_t space_pos = merge.find(' ');
         merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
     }
-    LOG_DEBUG("merges size %zu", merge_pairs.size());
+    LOG_VERBOSE("merges size %zu", merge_pairs.size());
 
     int rank = 0;
     for (const auto& merge : merge_pairs) {
@@ -214,7 +214,7 @@ void Gemma2Tokenizer::load_from_merges(const std::string& merges_utf8_str, const
         decoder[i]           = token;
     }
     encoder_len = static_cast<int>(vocab.size());
-    LOG_DEBUG("vocab size: %d", encoder_len);
+    LOG_VERBOSE("vocab size: %d", encoder_len);
 
     std::vector<std::u32string> merges = split_utf32(merges_utf8_str);
     std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
@@ -222,7 +222,7 @@ void Gemma2Tokenizer::load_from_merges(const std::string& merges_utf8_str, const
         size_t space_pos = merge.find(' ');
         merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
     }
-    LOG_DEBUG("merges size %zu", merge_pairs.size());
+    LOG_VERBOSE("merges size %zu", merge_pairs.size());
 
     int rank = 0;
     for (const auto& merge : merge_pairs) {
