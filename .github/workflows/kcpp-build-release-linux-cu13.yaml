@@ -12,6 +12,7 @@ env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   KCPP_CUDA: 13.0.0
   ARCHES_CU13: 1
+  KCPP_PORTABLE: 1
 
 jobs:
   linux:
