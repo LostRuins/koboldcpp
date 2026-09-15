@@ -40,9 +40,9 @@ struct SDCliParams {
     std::string image_path;
     std::string metadata_format = "text";
 
-    bool verbose          = false;
-    bool canny_preprocess = false;
-    bool convert_name     = false;
+    sd_log_level_t log_level = SD_LOG_INFO;
+    bool canny_preprocess    = false;
+    bool convert_name        = false;
 
     preview_t preview_method = PREVIEW_NONE;
     int preview_interval     = 1;
@@ -115,10 +115,6 @@ struct SDCliParams {
              "--convert-name",
              "convert tensor name (for convert mode)",
              true, &convert_name},
-            {"-v",
-             "--verbose",
-             "print extra info",
-             true, &verbose},
             {"",
              "--color",
              "colors the logging tags according to level",
@@ -220,6 +216,7 @@ struct SDCliParams {
              on_imatrix_in_arg},
         };
 
+        add_log_options(options, log_level);
         return options;
     };
 
@@ -269,7 +266,7 @@ struct SDCliParams {
             << "  output_path: \"" << output_path << "\",\n"
             << "  image_path: \"" << image_path << "\",\n"
             << "  metadata_format: \"" << metadata_format << "\",\n"
-            << "  verbose: " << (verbose ? "true" : "false") << ",\n"
+            << "  log_level: " << log_level_name(log_level) << ",\n"
             << "  color: " << (color ? "true" : "false") << ",\n"
             << "  canny_preprocess: " << (canny_preprocess ? "true" : "false") << ",\n"
             << "  convert_name: " << (convert_name ? "true" : "false") << ",\n"
@@ -307,6 +304,9 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
         exit(cli_params.normal_exit ? 0 : 1);
     }
 
+    log_level = cli_params.log_level;
+    log_color = cli_params.color;
+
     bool valid = cli_params.resolve_and_validate();
     if (valid && cli_params.mode != METADATA) {
         valid = ctx_params.resolve_and_validate(cli_params.mode) &&
@@ -323,15 +323,14 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
 
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     SDCliParams* cli_params = (SDCliParams*)data;
-    log_print(level, log, cli_params->verbose, cli_params->color);
+    log_print(level, log, cli_params->log_level, cli_params->color);
 }
 
 bool load_images_from_dir(const std::string dir,
                           std::vector<SDImageOwner>& images,
                           int expected_width  = 0,
                           int expected_height = 0,
-                          int max_image_num   = 0,
-                          bool verbose        = false) {
+                          int max_image_num   = 0) {
     if (!fs::exists(dir) || !fs::is_directory(dir)) {
         LOG_ERROR("'%s' is not a valid directory\n", dir.c_str());
         return false;
@@ -355,7 +354,7 @@ bool load_images_from_dir(const std::string dir,
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
         if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".webp") {
-            LOG_DEBUG("load image %zu from '%s'", images.size(), path.c_str());
+            LOG_VERBOSE("load image %zu from '%s'", images.size(), path.c_str());
             int width             = 0;
             int height            = 0;
             uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height, expected_width, expected_height);
@@ -651,8 +650,6 @@ int main(int argc, const char* argv[]) {
 
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
     sd_set_log_callback(sd_log_cb, (void*)&cli_params);
-    log_verbose = cli_params.verbose;
-    log_color   = cli_params.color;
 
     if (cli_params.mode == METADATA) {
         MetadataReadOptions options;
@@ -700,11 +697,11 @@ int main(int argc, const char* argv[]) {
                             cli_params.preview_noisy,
                             (void*)&cli_params);
 
-    LOG_DEBUG("version: %s", version_string().c_str());
-    LOG_DEBUG("%s", sd_get_system_info());
-    LOG_DEBUG("%s", cli_params.to_string().c_str());
-    LOG_DEBUG("%s", ctx_params.to_string().c_str());
-    LOG_DEBUG("%s", gen_params.to_string().c_str());
+    LOG_VERBOSE("version: %s", version_string().c_str());
+    LOG_VERBOSE("%s", sd_get_system_info());
+    LOG_VERBOSE("%s", cli_params.to_string().c_str());
+    LOG_VERBOSE("%s", ctx_params.to_string().c_str());
+    LOG_VERBOSE("%s", gen_params.to_string().c_str());
 
     if (!cli_params.imatrix_out.empty()) {
         if (fs::exists(cli_params.imatrix_out) &&
@@ -808,7 +805,7 @@ int main(int argc, const char* argv[]) {
         gen_params.ref_videos.reserve(gen_params.ref_video_paths.size());
         for (const auto& path : gen_params.ref_video_paths) {
             std::vector<SDImageOwner> frames;
-            if (!load_images_from_dir(path, frames, 0, 0, 0, cli_params.verbose) || frames.empty()) {
+            if (!load_images_from_dir(path, frames) || frames.empty()) {
                 LOG_ERROR("load reference video frames from '%s' failed", path.c_str());
                 return 1;
             }
@@ -890,8 +887,7 @@ int main(int argc, const char* argv[]) {
                                   gen_params.control_frames,
                                   gen_params.get_resolved_width(),
                                   gen_params.get_resolved_height(),
-                                  gen_params.video_frames,
-                                  cli_params.verbose)) {
+                                  gen_params.video_frames)) {
             return 1;
         }
     }
@@ -902,8 +898,7 @@ int main(int argc, const char* argv[]) {
                                   gen_params.pm_id_images,
                                   0,
                                   0,
-                                  0,
-                                  cli_params.verbose)) {
+                                  0)) {
             return 1;
         }
     }

@@ -2,8 +2,8 @@
 
 #include <vector>
 
-bool log_verbose = false;
-bool log_color   = false;
+sd_log_level_t log_level = SD_LOG_INFO;
+bool log_color           = false;
 
 std::string sd_basename(const std::string& path) {
     size_t pos = path.find_last_of('/');
@@ -51,12 +51,40 @@ void print_utf8(FILE* stream, const char* utf8) {
 #endif
 }
 
-void log_print(enum sd_log_level_t level, const char* log, bool verbose, bool color) {
+const char* log_level_name(sd_log_level_t level) {
+    switch (level) {
+        case SD_LOG_DEBUG:
+            return "debug";
+        case SD_LOG_VERBOSE:
+            return "verbose";
+        case SD_LOG_INFO:
+            return "info";
+        case SD_LOG_WARN:
+            return "warn";
+        case SD_LOG_ERROR:
+            return "error";
+        default:
+            return "unknown";
+    }
+}
+
+bool parse_log_level(const std::string& name, sd_log_level_t& level) {
+    const sd_log_level_t levels[] = {SD_LOG_DEBUG, SD_LOG_VERBOSE, SD_LOG_INFO, SD_LOG_WARN, SD_LOG_ERROR};
+    for (sd_log_level_t candidate : levels) {
+        if (name == log_level_name(candidate)) {
+            level = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+void log_print(enum sd_log_level_t level, const char* log, sd_log_level_t min_level, bool color) {
     int tag_color;
     const char* level_str;
     FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
 
-    if (!log || (!verbose && level <= SD_LOG_DEBUG)) {
+    if (!log || level < min_level) {
         return;
     }
 
@@ -64,6 +92,10 @@ void log_print(enum sd_log_level_t level, const char* log, bool verbose, bool co
         case SD_LOG_DEBUG:
             tag_color = 37;
             level_str = "DEBUG";
+            break;
+        case SD_LOG_VERBOSE:
+            tag_color = 37;
+            level_str = "VERBOSE";
             break;
         case SD_LOG_INFO:
             tag_color = 34;
@@ -84,10 +116,11 @@ void log_print(enum sd_log_level_t level, const char* log, bool verbose, bool co
     }
 
     if (color) {
-        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
+        fprintf(out_stream, "\033[%d;1m[%-7s]\033[0m ", tag_color, level_str);
     } else {
-        fprintf(out_stream, "[%-5s] ", level_str);
+        fprintf(out_stream, "[%-7s] ", level_str);
     }
+    fflush(out_stream);
     print_utf8(out_stream, log);
     fflush(out_stream);
 }
@@ -109,7 +142,7 @@ void example_log_printf(sd_log_level_t level, const char* file, int line, const 
         strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
     }
 
-    log_print(level, log_buffer, log_verbose, log_color);
+    log_print(level, log_buffer, log_level, log_color);
 
     va_end(args);
 }

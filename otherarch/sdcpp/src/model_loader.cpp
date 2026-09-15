@@ -242,7 +242,7 @@ void ModelLoader::add_tensor_storage(const TensorStorage& tensor_storage) {
 
 void ModelLoader::set_n_threads(int n_threads) {
     n_threads_ = n_threads > 0 ? n_threads : sd_get_num_physical_cores();
-    LOG_DEBUG("using %d threads for model loading", n_threads_);
+    LOG_VERBOSE("using %d threads for model loading", n_threads_);
 }
 
 bool ModelLoader::init_from_file(const std::string& file_path, const std::string& prefix) {
@@ -282,7 +282,7 @@ void ModelLoader::convert_tensors_name() {
 
     for (auto& [_, tensor_storage] : tensor_storage_map) {
         auto new_name = convert_tensor_name(tensor_storage.name, version);
-        // LOG_DEBUG("%s -> %s", tensor_storage.name.c_str(), new_name.c_str());
+        // LOG_VERBOSE("%s -> %s", tensor_storage.name.c_str(), new_name.c_str());
         tensor_storage.name = new_name;
         new_map[new_name]   = std::move(tensor_storage);
     }
@@ -304,7 +304,7 @@ bool ModelLoader::init_from_file_and_convert_name(const std::string& file_path, 
 /*================================================= GGUFModelLoader ==================================================*/
 
 bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::string& prefix) {
-    LOG_DEBUG("init from '%s'", file_path.c_str());
+    LOG_VERBOSE("init from '%s'", file_path.c_str());
 
     std::vector<TensorStorage> tensor_storages;
     std::string error;
@@ -316,7 +316,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
     size_t file_index = add_file_path(file_path);
 
     for (auto& tensor_storage : tensor_storages) {
-        // LOG_DEBUG("%s", tensor_storage.name.c_str());
+        // LOG_VERBOSE("%s", tensor_storage.name.c_str());
 
         if (!starts_with(tensor_storage.name, prefix)) {
             tensor_storage.name = prefix + tensor_storage.name;
@@ -332,7 +332,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
 /*================================================= SafeTensorsModelLoader ==================================================*/
 
 bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const std::string& prefix) {
-    LOG_DEBUG("init from '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
+    LOG_VERBOSE("init from '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
 
     std::vector<TensorStorage> tensor_storages;
     std::string error;
@@ -357,14 +357,14 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
         add_tensor_storage(tensor_storage);
 
-        // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
+        // LOG_VERBOSE("%s", tensor_storage.to_string().c_str());
     }
 
     return true;
 }
 
 bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path, const std::string& prefix) {
-    LOG_DEBUG("init from safetensors index '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
+    LOG_VERBOSE("init from safetensors index '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
 
     std::vector<std::string> shard_paths;
     std::string error;
@@ -385,7 +385,7 @@ bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path,
 /*================================================= TorchLegacyModelLoader ==================================================*/
 
 bool ModelLoader::init_from_torch_legacy_file(const std::string& file_path, const std::string& prefix) {
-    LOG_DEBUG("init from torch legacy '%s'", file_path.c_str());
+    LOG_VERBOSE("init from torch legacy '%s'", file_path.c_str());
 
     std::vector<TensorStorage> tensor_storages;
     std::string error;
@@ -417,7 +417,7 @@ bool ModelLoader::init_from_torch_legacy_file(const std::string& file_path, cons
 /*================================================= TorchZipModelLoader ==================================================*/
 
 bool ModelLoader::init_from_torch_zip_file(const std::string& file_path, const std::string& prefix) {
-    LOG_DEBUG("init from '%s'", file_path.c_str());
+    LOG_VERBOSE("init from '%s'", file_path.c_str());
 
     std::vector<TensorStorage> tensor_storages;
     std::string error;
@@ -436,7 +436,7 @@ bool ModelLoader::init_from_torch_zip_file(const std::string& file_path, const s
 
         add_tensor_storage(tensor_storage);
 
-        // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
+        // LOG_VERBOSE("%s", tensor_storage.to_string().c_str());
     }
 
     return true;
@@ -473,7 +473,7 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
         // return false;
     }
     if (!init_from_safetensors_file(clip_g_path, "te.1.")) {
-        LOG_DEBUG("Couldn't find working second text encoder in %s", file_path.c_str());
+        LOG_VERBOSE("Couldn't find working second text encoder in %s", file_path.c_str());
     }
     return true;
 }
@@ -637,7 +637,7 @@ SDVersion ModelLoader::get_sd_version() {
         }
     }
     if (is_wan) {
-        LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);
+        LOG_VERBOSE("patch_embedding_channels %d", patch_embedding_channels);
         if (patch_embedding_channels == 184320 && !has_img_emb) {
             return VERSION_WAN2_2_I2V;
         }
@@ -894,7 +894,7 @@ void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
         fdata.tensors       = std::move(file_tensors);
 
         if (enable_mmap && !is_zip) {
-            LOG_DEBUG("using mmap for I/O");
+            LOG_VERBOSE("using mmap for I/O");
             std::unique_ptr<MmapWrapper> mmapped = MmapWrapper::create(file_path, writable_mmap);
             if (mmapped) {
                 uint8_t* mmap_data             = static_cast<uint8_t*>(mmapped->writable_data());
@@ -926,7 +926,7 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
     uint64_t mapped_bytes = 0;
     size_t mapped_tensors = 0;
 
-    LOG_DEBUG("memory-mapping tensors...");
+    LOG_VERBOSE("memory-mapping tensors...");
 
     int64_t t_start = ggml_time_ms();
 
@@ -1073,10 +1073,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
         if (tensors_to_process.empty()) {
             continue;
         }
-        LOG_DEBUG("loading %zu/%zu tensors from %s",
-                  tensors_to_process.size(),
-                  file_tensors.size(),
-                  file_path.c_str());
+        LOG_VERBOSE("loading %zu/%zu tensors from %s",
+                    tensors_to_process.size(),
+                    file_tensors.size(),
+                    file_path.c_str());
 
         bool is_zip = fdata.is_zip;
 
@@ -1504,7 +1504,7 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
     std::mutex tensor_names_mutex;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
         const std::string& name = tensor_storage.name;
-        // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
+        // LOG_VERBOSE("%s", tensor_storage.to_string().c_str());
         {
             std::lock_guard<std::mutex> lock(tensor_names_mutex);
             tensor_names_in_file.insert(name);

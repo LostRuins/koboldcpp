@@ -325,13 +325,11 @@ namespace HiDreamO1 {
 
         sd::Tensor<float> compute(int n_threads,
                                   const sd::Tensor<float>& image,
-                                  bool auto_free           = true,
-                                  bool free_compute_buffer = true,
-                                  bool free_compute_params = true) {
+                                  bool auto_runner_end = true) {
             auto get_graph = [&]() {
                 return build_graph(image);
             };
-            auto output = GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params);
+            auto output = GGMLRunner::compute(get_graph, n_threads, auto_runner_end);
             return output.has_value() ? std::move(output.value()) : sd::Tensor<float>();
         }
     };
@@ -459,7 +457,7 @@ namespace HiDreamO1 {
             auto get_graph = [&]() {
                 return build_graph(x, timestep, input_ids, input_pos, token_types, vinput_mask, image_embeds, ref_images);
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         }
 
         sd::Tensor<float> compute(int n_threads,
@@ -510,8 +508,8 @@ namespace HiDreamO1 {
             vision_runner->set_weight_adapter(adapter);
         }
 
-        void runner_done() override {
-            vision_runner->runner_done();
+        void runner_end() override {
+            vision_runner->runner_end();
         }
 
         SDCondition get_learned_condition(int n_threads,
@@ -659,7 +657,7 @@ namespace HiDreamO1 {
             result.c_vinput_mask  = sd::Tensor<int32_t>(vinput_mask_shape, std::move(vinput_mask));
             result.c_image_embeds.reserve(vlm_images.size());
             for (const auto& vlm_image : vlm_images) {
-                auto image_embed = vision_runner->compute(n_threads, vlm_image.second, false, true, true);
+                auto image_embed = vision_runner->compute(n_threads, vlm_image.second, false);
                 if (image_embed.empty()) {
                     LOG_ERROR("hidream_o1 conditioner: encode VLM image failed");
                     return SDCondition();

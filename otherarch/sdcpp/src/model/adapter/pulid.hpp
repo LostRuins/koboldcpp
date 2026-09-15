@@ -1,8 +1,10 @@
 #ifndef __PULID_HPP__
 #define __PULID_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
 #include "model/common/block.hpp"
+#include "model/common/ggml_block.hpp"
 
 class PuLIDPerceiverAttentionCA : public GGMLBlock {
 public:

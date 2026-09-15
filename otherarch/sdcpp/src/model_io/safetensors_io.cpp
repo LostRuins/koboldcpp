@@ -254,7 +254,7 @@ bool read_safetensors_file(const std::string& file_path,
     for (auto& item : header_.items()) {
         std::string name           = item.key();
         nlohmann::json tensor_info = item.value();
-        // LOG_DEBUG("%s %s\n", name.c_str(), tensor_info.dump().c_str());
+        // LOG_VERBOSE("%s %s\n", name.c_str(), tensor_info.dump().c_str());
 
         if (name == "__metadata__") {
             continue;
@@ -403,7 +403,7 @@ bool read_safetensors_file(const std::string& file_path,
 
         tensor_storages.push_back(tensor_storage);
 
-        // LOG_DEBUG("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
+        // LOG_VERBOSE("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
     }
 
     return true;
