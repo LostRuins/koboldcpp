@@ -825,11 +825,9 @@ namespace Hunyuan {
             auto get_graph          = [&]() -> ggml_cgraph* {
                 return build_graph(graph_input, decode_graph);
             };
-            auto output = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph,
-                                                                                     n_threads,
-                                                                                     true,
-                                                                                     true,
-                                                                                     true),
+            auto output = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph,
+                                                                              n_threads,
+                                                                              false),
                                                           graph_input.dim());
             if (!output.empty() && input.dim() == 4) {
                 output.squeeze_(2);

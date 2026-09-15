@@ -7,8 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
 #include "core/util.h"
+#include "model/common/ggml_block.hpp"
 
 /*
     ===================================    ESRGAN  ===================================
@@ -74,13 +76,13 @@ struct ESRGANConfig {
         }
 
         if (has_model_tensor || has_conv_up1 || has_conv_up2) {
-            LOG_DEBUG("esrgan: scale = %d, num_block = %d, num_in_ch = %d, num_out_ch = %d, num_feat = %d, num_grow_ch = %d",
-                      config.scale,
-                      config.num_block,
-                      config.num_in_ch,
-                      config.num_out_ch,
-                      config.num_feat,
-                      config.num_grow_ch);
+            LOG_VERBOSE("esrgan: scale = %d, num_block = %d, num_in_ch = %d, num_out_ch = %d, num_feat = %d, num_grow_ch = %d",
+                        config.scale,
+                        config.num_block,
+                        config.num_in_ch,
+                        config.num_out_ch,
+                        config.num_feat,
+                        config.num_grow_ch);
         }
         return config;
     }
@@ -265,7 +267,7 @@ struct ESRGAN : public GGMLRunner {
     sd::Tensor<float> compute(const int n_threads,
                               const sd::Tensor<float>& x) {
         auto get_graph = [&]() -> ggml_cgraph* { return build_graph(x); };
-        auto result    = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false, false, false), x.dim());
+        auto result    = restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
         return result;
     }
 };

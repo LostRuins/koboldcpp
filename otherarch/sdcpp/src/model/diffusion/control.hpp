@@ -2,8 +2,6 @@
 #define __SD_MODEL_DIFFUSION_CONTROL_HPP__
 
 #include "model/common/block.hpp"
-#include "model_loader.h"
-#include "model_manager.h"
 
 // Match main UNet's MAX_GRAPH_SIZE so SDXL ControlNet (transformer_depth={1,2,10}) fits.
 #define CONTROL_NET_GRAPH_SIZE MAX_GRAPH_SIZE
@@ -317,20 +315,17 @@ struct ControlNet : public GGMLRunner {
     ggml_tensor* guided_hint_output_ggml = nullptr;
     std::vector<sd::Tensor<float>> controls;
     bool guided_hint_cached = false;
-    std::shared_ptr<ModelManager> owned_model_manager;
-    ggml_backend_t params_backend = nullptr;
 
     static const char* guided_hint_cache_name() {
         return "controlnet.guided_hint";
     }
 
     ControlNet(ggml_backend_t backend,
-               ggml_backend_t params_backend_,
                const String2TensorStorage& tensor_storage_map      = {},
                SDVersion version                                   = VERSION_SD1,
                const std::string& prefix                           = "",
                std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
-        : GGMLRunner(backend, weight_manager), version(version), control_net(version), weight_prefix(prefix), params_backend(params_backend_) {
+        : GGMLRunner(backend, weight_manager), version(version), control_net(version), weight_prefix(prefix) {
         control_net.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -423,53 +418,27 @@ struct ControlNet : public GGMLRunner {
             return build_graph(x, hint, timesteps, context, y);
         };
 
-        auto compute_result = GGMLRunner::compute<float>(get_graph, n_threads, false, false, false, true);
+        auto read_outputs = [&]() {
+            controls.clear();
+            controls.reserve(control_outputs_ggml.size());
+            for (ggml_tensor* control : control_outputs_ggml) {
+                auto control_host = restore_trailing_singleton_dims(sd::make_sd_tensor_from_ggml<float>(control), 4);
+                if (control_host.empty()) {
+                    return false;
+                }
+                controls.push_back(std::move(control_host));
+            }
+            return true;
+        };
+        auto compute_result = GGMLRunner::compute(get_graph, n_threads, false, true, read_outputs);
+        control_outputs_ggml.clear();
+        guided_hint_output_ggml = nullptr;
         if (!compute_result.has_value()) {
+            controls.clear();
             return std::nullopt;
         }
-
         guided_hint_cached = get_cache_tensor_by_name(guided_hint_cache_name()) != nullptr;
-        controls.clear();
-        controls.reserve(control_outputs_ggml.size());
-        for (ggml_tensor* control : control_outputs_ggml) {
-            auto control_host = restore_trailing_singleton_dims(sd::make_sd_tensor_from_ggml<float>(control), 4);
-            GGML_ASSERT(!control_host.empty());
-            controls.push_back(std::move(control_host));
-        }
         return controls;
-    }
-
-    bool load_from_file(const std::string& file_path, int n_threads) {
-        LOG_INFO("loading control net from '%s'", file_path.c_str());
-        std::map<std::string, ggml_tensor*> tensors;
-        control_net.get_param_tensors(tensors);
-
-        auto manager = std::dynamic_pointer_cast<ModelManager>(weight_manager.lock());
-        if (manager == nullptr) {
-            owned_model_manager = std::make_shared<ModelManager>();
-            weight_manager      = owned_model_manager;
-            manager             = owned_model_manager;
-        }
-
-        ModelLoader& model_loader = manager->loader();
-        if (!model_loader.init_from_file_and_convert_name(file_path)) {
-            LOG_ERROR("init control net model loader from file failed: '%s'", file_path.c_str());
-            return false;
-        }
-
-        manager->set_n_threads(n_threads);
-        if (!manager->register_param_tensors("ControlNet",
-                                             std::move(tensors),
-                                             ModelManager::ResidencyMode::ParamBackend,
-                                             runtime_backend,
-                                             params_backend) ||
-            !manager->validate_registered_tensors()) {
-            LOG_ERROR("register control net tensors with model manager failed");
-            return false;
-        }
-
-        LOG_INFO("control net model loaded");
-        return true;
     }
 };
 

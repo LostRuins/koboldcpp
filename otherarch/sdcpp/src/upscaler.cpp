@@ -1,7 +1,8 @@
 #include "upscaler.h"
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "model_loader.h"
+#include "runtime/tiling.h"
 #include "stable-diffusion.h"
 
 #include <cstdlib>
@@ -32,16 +33,9 @@ void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
     }
 }
 
-void UpscalerGGML::set_stream_layers_enabled(bool enabled) {
-    stream_layers_enabled = enabled;
-    if (esrgan_upscaler) {
-        esrgan_upscaler->set_stream_layers_enabled(enabled);
-    }
-}
-
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   int n_threads) {
-    ggml_log_set(ggml_log_callback_default, nullptr);
+    ggml_log_set(sd_ggml_log_callback, nullptr);
 
     std::string error;
     if (!backend_manager.init(backend_spec.c_str(),
@@ -79,7 +73,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
     model_manager->set_n_threads(n_threads);
     model_manager->set_enable_mmap(false);
 
-    ModelLoader& model_loader = model_manager->loader();
+    ModelLoader model_loader;
     if (!model_loader.init_from_file_and_convert_name(esrgan_path, "", VERSION_ESRGAN)) {
         LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
         return false;
@@ -94,14 +88,14 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
         return false;
     }
     esrgan_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
-    esrgan_upscaler->set_stream_layers_enabled(stream_layers_enabled);
     if (direct) {
         esrgan_upscaler->set_conv2d_direct_enabled(true);
     }
 
     std::map<std::string, ggml_tensor*> tensors;
     esrgan_upscaler->get_param_tensors(tensors);
-    if (!model_manager->register_param_tensors("ESRGAN",
+    if (!model_manager->set_loader(model_loader) ||
+        !model_manager->register_param_tensors(ModelComponent::Upscaler,
                                                std::move(tensors),
                                                backend_manager.params_backend_is_disk(SDBackendModule::UPSCALER) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
                                                backend_for(SDBackendModule::UPSCALER),
@@ -139,7 +133,7 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
                                     false,
                                     on_processing);
     }
-    esrgan_upscaler->free_compute_buffer();
+    esrgan_upscaler->runner_end();
     if (upscaled.empty()) {
         LOG_ERROR("esrgan compute failed");
         return {};

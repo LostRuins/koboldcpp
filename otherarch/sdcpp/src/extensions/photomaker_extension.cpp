@@ -1,3 +1,4 @@
+#include <cinttypes>
 #include "extensions/generation_extension.h"
 
 #include <algorithm>
@@ -108,8 +109,8 @@ struct PhotoMakerExtension : public GenerationExtension {
     SDCondition id_condition;
     int start_merge_step = -1;
 
-    const char* name() const override {
-        return "photomaker";
+    ModelComponent component() const override {
+        return ModelComponent::PhotoMaker;
     }
 
     bool is_enabled() const override {
@@ -118,7 +119,7 @@ struct PhotoMakerExtension : public GenerationExtension {
 
     bool init(const GenerationExtensionInitContext& ctx) override {
         model_path = SAFE_STR(ctx.params->photo_maker_path);
-        if (model_path.empty()) {
+        if (model_path.empty() || !ctx.photomaker_source_available) {
             return true;
         }
 
@@ -127,13 +128,7 @@ struct PhotoMakerExtension : public GenerationExtension {
         }
 
         PMVersion pm_version = std::strstr(model_path.c_str(), "v2") != nullptr ? PM_VERSION_2 : PM_VERSION_1;
-        LOG_INFO("loading stacked ID embedding (PHOTOMAKER) model file from '%s'", model_path.c_str());
-        if (!ctx.model_loader.init_from_file_and_convert_name(model_path, "pmid.")) {
-            LOG_WARN("loading stacked ID embedding from '%s' failed", model_path.c_str());
-            return true;
-        }
-
-        pmid_model = std::make_shared<PhotoMakerIDEncoder>(ctx.backend_for(SDBackendModule::PHOTOMAKER),
+        pmid_model           = std::make_shared<PhotoMakerIDEncoder>(ctx.backend_for(SDBackendModule::PHOTOMAKER),
                                                            ctx.tensor_storage_map,
                                                            "pmid",
                                                            ctx.version,
@@ -175,9 +170,9 @@ struct PhotoMakerExtension : public GenerationExtension {
         ignore_tensors.insert("pmid.unet.");
     }
 
-    void runner_done() override {
+    void runner_end() override {
         if (pmid_model != nullptr) {
-            pmid_model->runner_done();
+            pmid_model->runner_end();
         }
     }
 

@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_SEFI_IMAGE_HPP__
 #define __SD_MODEL_DIFFUSION_SEFI_IMAGE_HPP__
 
+#include <cinttypes>
 #include <memory>
 
 #include "model/common/block.hpp"
@@ -34,10 +35,10 @@ namespace SefiImage {
                     config.hidden_size              = tensor_storage.ne[1] * 2;
                 }
             }
-            LOG_DEBUG("sefi_image: semantic_channels = %" PRId64 ", texture_latent_channels = %" PRId64 ", hidden_size = %" PRId64,
-                      config.semantic_channels,
-                      config.texture_latent_channels,
-                      config.hidden_size);
+            LOG_VERBOSE("sefi_image: semantic_channels = %" PRId64 ", texture_latent_channels = %" PRId64 ", hidden_size = %" PRId64,
+                        config.semantic_channels,
+                        config.texture_latent_channels,
+                        config.hidden_size);
             return config;
         }
     };

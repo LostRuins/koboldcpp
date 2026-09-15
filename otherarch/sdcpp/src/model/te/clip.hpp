@@ -1,8 +1,11 @@
 #ifndef __SD_MODEL_TE_CLIP_HPP__
 #define __SD_MODEL_TE_CLIP_HPP__
 
-#include "core/ggml_extend.hpp"
+#include "core/ggml_extend.h"
+#include "core/ggml_runner.h"
+#include "core/util.h"
 #include "model.h"
+#include "model/common/ggml_block.hpp"
 #include "tokenizers/clip_tokenizer.h"
 
 /*================================================ FrozenCLIPEmbedder ================================================*/
@@ -100,13 +103,13 @@ public:
                          const std::string& graph_cut_prefix = "") {
         // x: [N, n_token, d_model]
         int layer_idx = n_layer - 1;
-        // LOG_DEBUG("clip_skip %d", clip_skip);
+        // LOG_VERBOSE("clip_skip %d", clip_skip);
         if (clip_skip > 0) {
             layer_idx = n_layer - clip_skip;
         }
 
         for (int i = 0; i < n_layer; i++) {
-            // LOG_DEBUG("layer %d", i);
+            // LOG_VERBOSE("layer %d", i);
             if (i == layer_idx + 1) {
                 break;
             }
@@ -116,7 +119,7 @@ public:
             if (!graph_cut_prefix.empty()) {
                 sd::ggml_graph_cut::mark_graph_cut(x, graph_cut_prefix + ".layers." + std::to_string(i), "x");
             }
-            // LOG_DEBUG("layer %d", i);
+            // LOG_VERBOSE("layer %d", i);
         }
         return x;
     }
@@ -320,7 +323,7 @@ public:
             if (text_projection != nullptr) {
                 pooled = ggml_ext_linear(ctx->ggml_ctx, pooled, text_projection, nullptr);
             } else {
-                LOG_DEBUG("identity projection");
+                LOG_VERBOSE("identity projection");
             }
             return pooled;  // [hidden_size, 1, 1]
         }
@@ -568,13 +571,11 @@ struct CLIPTextModelRunner : public GGMLRunner {
                               size_t max_token_idx,
                               bool return_pooled,
                               int clip_skip,
-                              bool auto_free           = true,
-                              bool free_compute_buffer = true,
-                              bool free_compute_params = true) {
+                              bool auto_runner_end = true) {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip);
         };
-        auto result = GGMLRunner::compute<float>(get_graph, n_threads, auto_free, free_compute_buffer, free_compute_params);
+        auto result = GGMLRunner::compute(get_graph, n_threads, auto_runner_end);
         if (return_pooled) {
             return take_or_empty(std::move(result));
         }
