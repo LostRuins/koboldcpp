@@ -7,6 +7,7 @@
 #include <list>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -750,6 +751,8 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
             tempver = model_loader.get_sd_version();
         }
 
+        std::string kcpp_main_tokenizer;
+
         auto toLowerCase = [](const std::string& str) -> std::string {
             std::string result;
             std::locale loc;
@@ -834,6 +837,12 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
             else if(is_ideogram)
             {
                 std::swap(p.uncond_diffusion_model_path, p.clip_g_path);
+            }
+            else if (is_lens && kcpp_main_tokenizer.empty())
+            {
+                    // accept a tokenizer.json on clip_2
+                    kcpp_main_tokenizer = p.clip_g_path;
+                    p.clip_g_path = "";
             }
         }
 
@@ -920,6 +929,19 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         }
 
         p.taesd_path = kcpp_taesd_path.c_str();
+
+        if (!kcpp_main_tokenizer.empty()) {
+            // assemble the tokenizer config
+            if (!file_exists(kcpp_main_tokenizer)) {
+                printf("\nKCPP: tokenizer not found: %s\n", kcpp_main_tokenizer.c_str());
+            }
+            if (!kcpp_tokenizer_path.empty()) {
+                kcpp_tokenizer_path += ",";
+            }
+            kcpp_tokenizer_path += "main=";
+            kcpp_tokenizer_path += kcpp_main_tokenizer;
+            p.tokenizer = kcpp_tokenizer_path.c_str();
+        }
 
         // patch hidream to fix broken images on vulkan
         // https://github.com/leejet/stable-diffusion.cpp/issues/1496

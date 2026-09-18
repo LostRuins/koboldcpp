@@ -90,6 +90,7 @@ public:
     std::map<std::string, std::shared_ptr<LoraModel>> kcpp_lora_cache;
     bool kcpp_lora_cache_populate = false;
     std::string kcpp_taesd_path;
+    std::string kcpp_tokenizer_path;
     // kcpp
 
     std::string taesd_path;
