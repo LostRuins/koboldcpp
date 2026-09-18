@@ -1,7 +1,9 @@
 #ifndef __SD_CORE_RNG_MT19937_HPP__
 #define __SD_CORE_RNG_MT19937_HPP__
 
+#include <array>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include "core/rng.hpp"
@@ -122,6 +124,10 @@ class MT19937RNG : public RNG {
 
 public:
     MT19937RNG(uint64_t seed = 0) { manual_seed(seed); }
+
+    std::shared_ptr<RNG> clone() const override {
+        return std::make_shared<MT19937RNG>(*this);
+    }
 
     void manual_seed(uint64_t seed) override {
         s.seed_     = seed;
