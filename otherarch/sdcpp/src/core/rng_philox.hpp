@@ -19,13 +19,6 @@ private:
     float two_pow32_inv            = 2.3283064e-10f;
     float two_pow32_inv_2pi        = 2.3283064e-10f * 6.2831855f;
 
-    std::vector<uint32_t> uint32(uint64_t x) {
-        std::vector<uint32_t> result(2);
-        result[0] = static_cast<uint32_t>(x & 0xFFFFFFFF);
-        result[1] = static_cast<uint32_t>(x >> 32);
-        return result;
-    }
-
     std::vector<std::vector<uint32_t>> uint32(const std::vector<uint64_t>& x) {
         uint32_t N = (uint32_t)x.size();
         std::vector<std::vector<uint32_t>> result(2, std::vector<uint32_t>(N));
@@ -43,13 +36,13 @@ private:
                        const std::vector<std::vector<uint32_t>>& key) {
         uint32_t N = (uint32_t)counter[0].size();
         for (uint32_t i = 0; i < N; i++) {
-            std::vector<uint32_t> v1 = uint32(static_cast<uint64_t>(counter[0][i]) * static_cast<uint64_t>(philox_m[0]));
-            std::vector<uint32_t> v2 = uint32(static_cast<uint64_t>(counter[2][i]) * static_cast<uint64_t>(philox_m[1]));
+            const uint64_t v1 = static_cast<uint64_t>(counter[0][i]) * static_cast<uint64_t>(philox_m[0]);
+            const uint64_t v2 = static_cast<uint64_t>(counter[2][i]) * static_cast<uint64_t>(philox_m[1]);
 
-            counter[0][i] = v2[1] ^ counter[1][i] ^ key[0][i];
-            counter[1][i] = v2[0];
-            counter[2][i] = v1[1] ^ counter[3][i] ^ key[1][i];
-            counter[3][i] = v1[0];
+            counter[0][i] = static_cast<uint32_t>(v2 >> 32) ^ counter[1][i] ^ key[0][i];
+            counter[1][i] = static_cast<uint32_t>(v2);
+            counter[2][i] = static_cast<uint32_t>(v1 >> 32) ^ counter[3][i] ^ key[1][i];
+            counter[3][i] = static_cast<uint32_t>(v1);
         }
     }
 
@@ -91,6 +84,10 @@ public:
     PhiloxRNG(uint64_t seed = 0) {
         this->seed   = seed;
         this->offset = 0;
+    }
+
+    std::shared_ptr<RNG> clone() const override {
+        return std::make_shared<PhiloxRNG>(*this);
     }
 
     void manual_seed(uint64_t seed) override {

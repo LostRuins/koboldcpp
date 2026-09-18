@@ -12,6 +12,8 @@
 #include <utility>
 
 #include "core/rng.hpp"
+#include "core/rng_mt19937.hpp"
+#include "core/rng_philox.hpp"
 #include "core/tensor.hpp"
 #include "core/util.h"
 #include "model.h"
@@ -1632,12 +1634,18 @@ static std::tuple<float, float, float> get_ancestral_step(float sigma_from,
     }
 }
 
+class NoiseSampler {
+public:
+    virtual sd::Tensor<float> operator()(double sigma_from, double sigma_to) = 0;
+    virtual ~NoiseSampler()                                                  = default;
+};
+
 static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
                                                 sd::Tensor<float> x,
                                                 const std::vector<float>& sigmas,
-                                                std::shared_ptr<RNG> rng = nullptr,
-                                                bool is_flow_denoiser    = false,
-                                                float eta                = 0.f) {
+                                                NoiseSampler& noise_sampler,
+                                                bool is_flow_denoiser = false,
+                                                float eta             = 0.f) {
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
         float sigma       = sigmas[i];
@@ -1660,7 +1668,7 @@ static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
                 if (is_flow_denoiser) {
                     x *= alpha_scale;
                 }
-                x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+                x += noise_sampler(sigma, sigma_to) * sigma_up;
             }
         }
     }
@@ -1778,7 +1786,7 @@ static sd::Tensor<float> sample_dpm2(denoise_cb_t model,
 static sd::Tensor<float> sample_dpmpp_2s_ancestral(denoise_cb_t model,
                                                    sd::Tensor<float> x,
                                                    const std::vector<float>& sigmas,
-                                                   std::shared_ptr<RNG> rng,
+                                                   NoiseSampler& noise_sampler,
                                                    float eta) {
     auto t_fn     = [](float sigma) -> float { return -log(sigma); };
     auto sigma_fn = [](float t) -> float { return exp(-t); };
@@ -1810,7 +1818,7 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral(denoise_cb_t model,
         }
 
         if (sigmas[i + 1] > 0) {
-            x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            x += noise_sampler(sigmas[i], sigmas[i + 1]) * sigma_up;
         }
     }
     return x;
@@ -1819,7 +1827,7 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral(denoise_cb_t model,
 static sd::Tensor<float> sample_dpmpp_2s_ancestral_flow(denoise_cb_t model,
                                                         sd::Tensor<float> x,
                                                         const std::vector<float>& sigmas,
-                                                        std::shared_ptr<RNG> rng,
+                                                        NoiseSampler& noise_sampler,
                                                         float eta = 1.0f) {
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
@@ -1902,7 +1910,7 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral_flow(denoise_cb_t model,
             x                        = (x * sigma_down_i_ratio) + (D_i * (1.0f - sigma_down_i_ratio));
 
             if (sigma_to > 0.0f && eta > 0.0f) {
-                x = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+                x = alpha_scale * x + noise_sampler(sigma, sigma_to) * sigma_up;
             }
         }
     }
@@ -1978,165 +1986,13 @@ static sd::Tensor<float> sample_dpmpp_2m_v2(denoise_cb_t model,
     return x;
 }
 
-// DPM-Solver++(2M) SDE, midpoint variant. Ref: Lu et al. arXiv:2211.01095;
-// k-diffusion sample_dpmpp_2m_sde.
+// DPM-Solver++(2M) SDE, midpoint variant.
+// Ref: Lu et al. arXiv:2211.01095; k-diffusion sample_dpmpp_2m_sde
 static sd::Tensor<float> sample_dpmpp_2m_sde(denoise_cb_t model,
                                              sd::Tensor<float> x,
                                              const std::vector<float>& sigmas,
-                                             std::shared_ptr<RNG> rng,
+                                             NoiseSampler& noise_sampler,
                                              float eta) {
-    sd::Tensor<float> old_denoised;
-    bool have_old_denoised = false;
-    float h_last           = 0.f;
-
-    int steps = static_cast<int>(sigmas.size()) - 1;
-    for (int i = 0; i < steps; i++) {
-        auto denoised_opt = model(x, sigmas[i], i + 1);
-        if (denoised_opt.pred.empty()) {
-            return {};
-        }
-        sd::Tensor<float> denoised = std::move(denoised_opt.pred);
-
-        if (sigmas[i + 1] == 0.f) {
-            x = denoised;
-        } else {
-            float t     = -std::log(sigmas[i]);
-            float s     = -std::log(sigmas[i + 1]);
-            float h     = s - t;
-            float eta_h = eta * h;
-            float a     = sigmas[i + 1] / sigmas[i] * std::exp(-eta_h);
-            float b     = -std::expm1(-h - eta_h);
-
-            x = a * x + b * denoised;
-
-            if (have_old_denoised) {
-                float r = h_last / h;
-                x += (0.5f * b / r) * (denoised - old_denoised);
-            }
-            if (eta > 0.f) {
-                x += sd::Tensor<float>::randn_like(x, rng) * (sigmas[i + 1] * std::sqrt(-std::expm1(-2.f * eta_h)));
-            }
-            h_last = h;
-        }
-        old_denoised      = denoised;
-        have_old_denoised = true;
-    }
-    return x;
-}
-
-// Seeded Brownian tree providing deterministic, step-count-stable Gaussian
-// increments for stochastic samplers. Constructed once per generation; each
-// call returns unit-variance noise for interval [sigma_a, sigma_b].
-// Reference: torchsde BrownianTree; k-diffusion BatchedBrownianTree.
-class BrownianTreeNoiseSampler {
-public:
-    BrownianTreeNoiseSampler(const sd::Tensor<float>& x_template,
-                             double sigma_min,
-                             double sigma_max,
-                             uint64_t seed)
-        : t_min_(sigma_min),
-          t_max_(sigma_max),
-          shape_(x_template.shape()),
-          root_seed_(mix64(seed, 0x9E3779B97F4A7C15ULL)) {
-        auto rng = std::make_shared<STDDefaultRNG>();
-        rng->manual_seed(mix64(seed, 0xBF58476D1CE4E5B9ULL));
-        w_at_tmax_ = sd::Tensor<float>::randn(shape_, rng) * std::sqrt(static_cast<float>(t_max_ - t_min_));
-    }
-
-    sd::Tensor<float> operator()(double sigma_a, double sigma_b) {
-        double a   = clamp(std::min(sigma_a, sigma_b));
-        double b   = clamp(std::max(sigma_a, sigma_b));
-        auto dW    = w(b) - w(a);
-        float span = static_cast<float>(std::max(std::abs(sigma_b - sigma_a), 1e-12));
-        return dW * (1.0f / std::sqrt(span));
-    }
-
-private:
-    static constexpr int kMaxDepth = 24;
-
-    static uint64_t mix64(uint64_t v, uint64_t salt) {
-        uint64_t z = v + salt;
-        z          = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-        z          = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-        return z ^ (z >> 31);
-    }
-
-    double clamp(double t) const {
-        return std::min(std::max(t, t_min_), t_max_);
-    }
-
-    sd::Tensor<float> w(double t) {
-        auto it = cache_.find(t);
-        if (it != cache_.end()) {
-            return it->second;
-        }
-        sd::Tensor<float> zero = sd::Tensor<float>::zeros(shape_);
-        sd::Tensor<float> out  = bridge(t_min_, t_max_, zero, w_at_tmax_, t, root_seed_, kMaxDepth);
-        cache_.emplace(t, out);
-        return out;
-    }
-
-    sd::Tensor<float> bridge(double a,
-                             double c,
-                             const sd::Tensor<float>& w_a,
-                             const sd::Tensor<float>& w_c,
-                             double t,
-                             uint64_t node_seed,
-                             int depth) {
-        if (depth <= 0 || c - a < 1e-9) {
-            float alpha = (c > a) ? static_cast<float>((t - a) / (c - a)) : 0.5f;
-            return (1.0f - alpha) * w_a + alpha * w_c;
-        }
-        double m       = 0.5 * (a + c);
-        double std_dev = std::sqrt((c - m) * (m - a) / (c - a));
-        auto rng       = std::make_shared<STDDefaultRNG>();
-        rng->manual_seed(node_seed);
-        auto z   = sd::Tensor<float>::randn(shape_, rng);
-        auto w_m = 0.5f * (w_a + w_c) + static_cast<float>(std_dev) * z;
-        if (t == m) {
-            return w_m;
-        }
-        if (t < m) {
-            return bridge(a, m, w_a, w_m, t, mix64(node_seed, 1), depth - 1);
-        }
-        return bridge(m, c, w_m, w_c, t, mix64(node_seed, 2), depth - 1);
-    }
-
-    double t_min_;
-    double t_max_;
-    std::vector<int64_t> shape_;
-    uint64_t root_seed_;
-    sd::Tensor<float> w_at_tmax_;
-    std::map<double, sd::Tensor<float>> cache_;
-};
-
-// DPM-Solver++(2M) SDE, midpoint variant, with step-count-stable Brownian-tree
-// noise. Same trajectory shape at any step count for a given seed. Aliased in
-// k-diffusion / ComfyUI as sample_dpmpp_2m_sde_gpu.
-// Ref: Lu et al. arXiv:2211.01095; torchsde BrownianTree.
-static sd::Tensor<float> sample_dpmpp_2m_sde_bt(denoise_cb_t model,
-                                                sd::Tensor<float> x,
-                                                const std::vector<float>& sigmas,
-                                                std::shared_ptr<RNG> rng,
-                                                float eta) {
-    double sigma_max = 0.0;
-    double sigma_min = std::numeric_limits<double>::infinity();
-    for (float s : sigmas) {
-        if (s > 0.0f) {
-            sigma_max = std::max(sigma_max, static_cast<double>(s));
-            sigma_min = std::min(sigma_min, static_cast<double>(s));
-        }
-    }
-    if (sigma_max <= sigma_min) {
-        return x;
-    }
-    uint64_t tree_seed = 0;
-    {
-        auto draw = rng->randn(2);
-        std::memcpy(&tree_seed, draw.data(), sizeof(tree_seed));
-    }
-    BrownianTreeNoiseSampler noise_sampler(x, sigma_min, sigma_max, tree_seed);
-
     sd::Tensor<float> old_denoised;
     bool have_old_denoised = false;
     float h_last           = 0.f;
@@ -2181,7 +2037,7 @@ using SamplerExtraArgs = KeyValueArgs;
 static sd::Tensor<float> sample_lcm(denoise_cb_t model,
                                     sd::Tensor<float> x,
                                     const std::vector<float>& sigmas,
-                                    std::shared_ptr<RNG> rng,
+                                    NoiseSampler& noise_sampler,
                                     bool is_flow_denoiser,
                                     const SamplerExtraArgs& extra_sample_args) {
     struct LCMSampleArgs {
@@ -2234,7 +2090,7 @@ static sd::Tensor<float> sample_lcm(denoise_cb_t model,
             if (is_flow_denoiser) {
                 x *= (1 - sigmas[i + 1]);
             }
-            auto noise = sd::Tensor<float>::randn_like(x, rng);
+            auto noise = noise_sampler(sigmas[i], sigmas[i + 1]);
             if (args.noise_clip_std > 0.0f && noise.numel() > 0) {
                 double mean = 0.0;
                 for (int64_t j = 0; j < noise.numel(); ++j) {
@@ -2352,7 +2208,7 @@ static sd::Tensor<float> sample_ipndm_v(denoise_cb_t model,
 static sd::Tensor<float> sample_res_multistep(denoise_cb_t model,
                                               sd::Tensor<float> x,
                                               const std::vector<float>& sigmas,
-                                              std::shared_ptr<RNG> rng,
+                                              NoiseSampler& noise_sampler,
                                               bool is_flow_denoiser,
                                               float eta) {
     sd::Tensor<float> old_denoised = x;
@@ -2417,7 +2273,7 @@ static sd::Tensor<float> sample_res_multistep(denoise_cb_t model,
             if (is_flow_denoiser) {
                 x *= alpha_scale;
             }
-            x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            x += noise_sampler(sigma_from, sigma_to) * sigma_up;
         }
 
         old_denoised   = denoised;
@@ -2430,7 +2286,7 @@ static sd::Tensor<float> sample_res_multistep(denoise_cb_t model,
 static sd::Tensor<float> sample_res_2s(denoise_cb_t model,
                                        sd::Tensor<float> x,
                                        const std::vector<float>& sigmas,
-                                       std::shared_ptr<RNG> rng,
+                                       NoiseSampler& noise_sampler,
                                        bool is_flow_denoiser,
                                        float eta) {
     const float c2 = 0.5f;
@@ -2493,7 +2349,7 @@ static sd::Tensor<float> sample_res_2s(denoise_cb_t model,
             if (is_flow_denoiser) {
                 x *= alpha_scale;
             }
-            x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            x += noise_sampler(sigma_from, sigma_to) * sigma_up;
         }
     }
     return x;
@@ -2502,7 +2358,7 @@ static sd::Tensor<float> sample_res_2s(denoise_cb_t model,
 static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
                                        sd::Tensor<float> x,
                                        std::vector<float> sigmas,
-                                       std::shared_ptr<RNG> rng,
+                                       NoiseSampler& noise_sampler,
                                        bool is_flow_denoiser,
                                        float eta) {
     constexpr int max_stage                  = 3;
@@ -2624,7 +2480,7 @@ static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
             float noise_scale_sq = er_lambda_t * er_lambda_t - er_lambda_s * er_lambda_s * r * r;
             if (s_noise > 0.0f && noise_scale_sq > 0.0f) {
                 float noise_scale = alpha_t * std::sqrt(std::max(noise_scale_sq, 0.0f));
-                x += sd::Tensor<float>::randn_like(x, rng) * noise_scale;
+                x += noise_sampler(sigmas[i], sigmas[i + 1]) * noise_scale;
             }
         }
 
@@ -2637,7 +2493,7 @@ static sd::Tensor<float> sample_er_sde(denoise_cb_t model,
 static sd::Tensor<float> sample_tcd(denoise_cb_t model,
                                     sd::Tensor<float> x,
                                     const std::vector<float>& sigmas,
-                                    std::shared_ptr<RNG> rng,
+                                    NoiseSampler& noise_sampler,
                                     float eta) {
     float beta_start = 0.00085f;
     float beta_end   = 0.0120f;
@@ -2694,7 +2550,7 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
 
         if (eta > 0 && sigma_to > 0.0f) {
             x = std::sqrt(alpha_prod_t_prev / alpha_prod_s) * x +
-                std::sqrt(1.0f / alpha_prod_t_prev - 1.0f / alpha_prod_s) * sd::Tensor<float>::randn_like(x, rng);
+                std::sqrt(1.0f / alpha_prod_t_prev - 1.0f / alpha_prod_s) * noise_sampler(sigma, sigma_to);
         }
     }
     return x;
@@ -2829,7 +2685,7 @@ static sd::Tensor<float> sample_euler_cfg_pp(denoise_cb_t model,
 static sd::Tensor<float> sample_euler_ancestral_cfg_pp(denoise_cb_t model,
                                                        sd::Tensor<float> x,
                                                        const std::vector<float>& sigmas,
-                                                       std::shared_ptr<RNG> rng,
+                                                       NoiseSampler& noise_sampler,
                                                        float eta) {
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
@@ -2848,7 +2704,7 @@ static sd::Tensor<float> sample_euler_ancestral_cfg_pp(denoise_cb_t model,
         x = denoised + d * sigma_down;
 
         if (sigmas[i + 1] > 0) {
-            x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+            x += noise_sampler(sigmas[i], sigmas[i + 1]) * sigma_up;
         }
     }
     return x;
@@ -2858,7 +2714,7 @@ static sd::Tensor<float> sample_euler_ancestral_cfg_pp(denoise_cb_t model,
 static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
                                                     sd::Tensor<float> x,
                                                     const std::vector<float>& sigmas,
-                                                    std::shared_ptr<RNG> rng,
+                                                    NoiseSampler& noise_sampler,
                                                     bool is_flow_denoiser,
                                                     float eta,
                                                     const SamplerExtraArgs& extra_sample_args) {
@@ -2905,11 +2761,178 @@ static sd::Tensor<float> sample_gradient_estimation(denoise_cb_t model,
                 if (is_flow_denoiser) {
                     x *= alpha_scale;
                 }
-                x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+                x += noise_sampler(sigma, sigma_to) * sigma_up;
             }
         }
     }
     return x;
+}
+
+// independent and identically distributed Gaussian noise (default for most samplers)
+class IIDGaussianNoiseSampler : public NoiseSampler {
+public:
+    IIDGaussianNoiseSampler(const sd::Tensor<float>& x_template, std::shared_ptr<RNG> r)
+        : rng(std::move(r)), shape(x_template.shape()) {}
+    sd::Tensor<float> operator()(double sigma_from, double sigma_to) override {
+        (void)sigma_from;
+        (void)sigma_to;
+        return sd::Tensor<float>::randn(shape, rng);
+    }
+
+private:
+    std::shared_ptr<RNG> rng;
+    std::vector<int64_t> shape;
+};
+
+// A fixed tree seed, shape and sigma range give consistent increments across
+// interval subdivisions. Each query returns normalized Gaussian noise.
+// Reference: torchsde BrownianTree; k-diffusion BatchedBrownianTree.
+class BrownianTreeNoiseSampler : public NoiseSampler {
+public:
+    BrownianTreeNoiseSampler(const sd::Tensor<float>& x_template,
+                             double sigma_min,
+                             double sigma_max,
+                             std::shared_ptr<RNG> seed_rng,
+                             std::shared_ptr<RNG> node_rng)
+        : t_min_(sigma_min),
+          t_max_(sigma_max),
+          shape_(x_template.shape()),
+          seed_rng_(std::move(seed_rng)),
+          node_rng_(std::move(node_rng)) {}
+
+    sd::Tensor<float> operator()(double sigma_a, double sigma_b) override {
+        if (!initialized_) {
+            uint64_t seed = 0;
+            auto draw     = seed_rng_->randn(2);
+            std::memcpy(&seed, draw.data(), sizeof(seed));
+            root_seed_ = mix64(seed, 0x9E3779B97F4A7C15ULL);
+            node_rng_->manual_seed(mix64(seed, 0xBF58476D1CE4E5B9ULL));
+            w_at_tmax_   = sd::Tensor<float>::randn(shape_, node_rng_) * std::sqrt(static_cast<float>(t_max_ - t_min_));
+            initialized_ = true;
+        }
+        double a   = clamp(std::min(sigma_a, sigma_b));
+        double b   = clamp(std::max(sigma_a, sigma_b));
+        auto dW    = w(b) - w(a);
+        float span = static_cast<float>(std::max(std::abs(sigma_b - sigma_a), 1e-12));
+        return dW * (1.0f / std::sqrt(span));
+    }
+
+private:
+    static constexpr int kMaxDepth = 24;
+
+    static uint64_t mix64(uint64_t v, uint64_t salt) {
+        uint64_t z = v + salt;
+        z          = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        z          = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+        return z ^ (z >> 31);
+    }
+
+    double clamp(double t) const {
+        return std::min(std::max(t, t_min_), t_max_);
+    }
+
+    sd::Tensor<float> w(double t) {
+        auto it = cache_.find(t);
+        if (it != cache_.end()) {
+            return it->second;
+        }
+        sd::Tensor<float> zero = sd::Tensor<float>::zeros(shape_);
+        sd::Tensor<float> out  = bridge(t_min_, t_max_, zero, w_at_tmax_, t, root_seed_, kMaxDepth);
+        cache_.emplace(t, out);
+        return out;
+    }
+
+    sd::Tensor<float> bridge(double a,
+                             double c,
+                             const sd::Tensor<float>& w_a,
+                             const sd::Tensor<float>& w_c,
+                             double t,
+                             uint64_t node_seed,
+                             int depth) {
+        if (depth <= 0 || c - a < 1e-9) {
+            float alpha = (c > a) ? static_cast<float>((t - a) / (c - a)) : 0.5f;
+            return (1.0f - alpha) * w_a + alpha * w_c;
+        }
+        double m       = 0.5 * (a + c);
+        double std_dev = std::sqrt((c - m) * (m - a) / (c - a));
+        node_rng_->manual_seed(node_seed);
+        auto z   = sd::Tensor<float>::randn(shape_, node_rng_);
+        auto w_m = 0.5f * (w_a + w_c) + static_cast<float>(std_dev) * z;
+        if (t == m) {
+            return w_m;
+        }
+        if (t < m) {
+            return bridge(a, m, w_a, w_m, t, mix64(node_seed, 1), depth - 1);
+        }
+        return bridge(m, c, w_m, w_c, t, mix64(node_seed, 2), depth - 1);
+    }
+
+    double t_min_;
+    double t_max_;
+    std::vector<int64_t> shape_;
+    std::shared_ptr<RNG> seed_rng_;
+    std::shared_ptr<RNG> node_rng_;
+    uint64_t root_seed_ = 0;
+    bool initialized_   = false;
+    sd::Tensor<float> w_at_tmax_;
+    std::map<double, sd::Tensor<float>> cache_;
+};
+
+static std::unique_ptr<NoiseSampler> make_noise_sampler(const sd::Tensor<float>& x, std::shared_ptr<RNG> rng, sample_method_t method, const std::vector<float>& sigmas, const SamplerExtraArgs& extra_args) {
+    bool brownian_tree            = (method == DPMPP2M_SDE_BT_SAMPLE_METHOD);
+    bool def_brownian_tree        = brownian_tree;
+    std::string brownian_tree_rng = "cpu";
+
+    for (const auto& [key, value] : extra_args) {
+        if (key == "noise_sampler") {
+            if (value == "iid") {
+                brownian_tree = false;
+            } else if (value == "brownian_tree") {
+                brownian_tree = true;
+            } else {
+                LOG_WARN("unknown noise_sampler value '%s'; using default", value.c_str());
+            }
+        } else if (key == "brownian_tree_rng") {
+            if (value == "cpu" || value == "cuda" || value == "std_default" || value == "sampler_rng") {
+                brownian_tree_rng = value;
+            } else {
+                LOG_WARN("ignoring invalid brownian_tree_rng value '%s'; expected cpu, cuda, std_default or sampler_rng", value.c_str());
+            }
+        }
+    }
+
+    if (brownian_tree) {
+        double sigma_max = 0.0;
+        double sigma_min = std::numeric_limits<double>::infinity();
+        for (float s : sigmas) {
+            if (s > 0.0f) {
+                sigma_max = std::max(sigma_max, static_cast<double>(s));
+                sigma_min = std::min(sigma_min, static_cast<double>(s));
+            }
+        }
+
+        if (sigma_max > sigma_min) {
+            std::shared_ptr<RNG> node_rng;
+            if (brownian_tree_rng == "sampler_rng") {
+                node_rng = rng->clone();
+            } else if (brownian_tree_rng == "std_default") {
+                node_rng = std::make_shared<STDDefaultRNG>();
+            } else if (brownian_tree_rng == "cuda") {
+                node_rng = std::make_shared<PhiloxRNG>();
+            } else {
+                node_rng = std::make_shared<MT19937RNG>();
+            }
+            if (!def_brownian_tree) {
+                LOG_INFO("setting noise sampler to Brownian tree (%s RNG)", brownian_tree_rng.c_str());
+            }
+            return std::make_unique<BrownianTreeNoiseSampler>(x, sigma_min, sigma_max, rng, std::move(node_rng));
+        }
+    }
+
+    if (def_brownian_tree) {
+        LOG_INFO("setting noise sampler to independent and identically distributed (iid)");
+    }
+    return std::make_unique<IIDGaussianNoiseSampler>(x, rng);
 }
 
 // k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
@@ -2928,9 +2951,12 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
         }
     }
     SamplerExtraArgs extra_args = parse_key_value_args(extra_sample_args, "extra sample arg");
+
+    std::unique_ptr<NoiseSampler> noise_sampler = make_noise_sampler(x, rng, method, sigmas, extra_args);
+
     switch (method) {
         case EULER_A_SAMPLE_METHOD:
-            return sample_euler_ancestral(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
+            return sample_euler_ancestral(model, std::move(x), sigmas, *noise_sampler, is_flow_denoiser, eta);
         case EULER_SAMPLE_METHOD:
             return sample_euler(model, std::move(x), sigmas);
         case HEUN_SAMPLE_METHOD:
@@ -2939,42 +2965,41 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
             return sample_dpm2(model, std::move(x), sigmas);
         case DPMPP2S_A_SAMPLE_METHOD:
             if (is_flow_denoiser)
-                return sample_dpmpp_2s_ancestral_flow(model, std::move(x), sigmas, rng, eta);
+                return sample_dpmpp_2s_ancestral_flow(model, std::move(x), sigmas, *noise_sampler, eta);
             else
-                return sample_dpmpp_2s_ancestral(model, std::move(x), sigmas, rng, eta);
+                return sample_dpmpp_2s_ancestral(model, std::move(x), sigmas, *noise_sampler, eta);
         case DPMPP2M_SAMPLE_METHOD:
             return sample_dpmpp_2m(model, std::move(x), sigmas);
         case DPMPP2Mv2_SAMPLE_METHOD:
             return sample_dpmpp_2m_v2(model, std::move(x), sigmas);
         case LCM_SAMPLE_METHOD:
-            return sample_lcm(model, std::move(x), sigmas, rng, is_flow_denoiser, extra_args);
+            return sample_lcm(model, std::move(x), sigmas, *noise_sampler, is_flow_denoiser, extra_args);
         case IPNDM_SAMPLE_METHOD:
             return sample_ipndm(model, std::move(x), sigmas);
         case IPNDM_V_SAMPLE_METHOD:
             return sample_ipndm_v(model, std::move(x), sigmas);
         case RES_MULTISTEP_SAMPLE_METHOD:
-            return sample_res_multistep(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
+            return sample_res_multistep(model, std::move(x), sigmas, *noise_sampler, is_flow_denoiser, eta);
         case RES_2S_SAMPLE_METHOD:
-            return sample_res_2s(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
+            return sample_res_2s(model, std::move(x), sigmas, *noise_sampler, is_flow_denoiser, eta);
         case ER_SDE_SAMPLE_METHOD:
-            return sample_er_sde(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
+            return sample_er_sde(model, std::move(x), sigmas, *noise_sampler, is_flow_denoiser, eta);
         case DPMPP2M_SDE_SAMPLE_METHOD:
-            return sample_dpmpp_2m_sde(model, std::move(x), sigmas, rng, eta);
         case DPMPP2M_SDE_BT_SAMPLE_METHOD:
-            return sample_dpmpp_2m_sde_bt(model, std::move(x), sigmas, rng, eta);
+            return sample_dpmpp_2m_sde(model, std::move(x), sigmas, *noise_sampler, eta);
         case DDIM_TRAILING_SAMPLE_METHOD:
             // DDIM is equivalent to Euler Ancestral with the Simple scheduler
-            return sample_euler_ancestral(model, std::move(x), sigmas, rng, is_flow_denoiser, eta);
+            return sample_euler_ancestral(model, std::move(x), sigmas, *noise_sampler, is_flow_denoiser, eta);
         case TCD_SAMPLE_METHOD:
-            return sample_tcd(model, std::move(x), sigmas, rng, eta);
+            return sample_tcd(model, std::move(x), sigmas, *noise_sampler, eta);
         case LMS_SAMPLE_METHOD:
             return sample_lms(model, std::move(x), sigmas, extra_args);
         case EULER_CFG_PP_SAMPLE_METHOD:
             return sample_euler_cfg_pp(model, std::move(x), sigmas);
         case EULER_A_CFG_PP_SAMPLE_METHOD:
-            return sample_euler_ancestral_cfg_pp(model, std::move(x), sigmas, rng, eta);
+            return sample_euler_ancestral_cfg_pp(model, std::move(x), sigmas, *noise_sampler, eta);
         case EULER_GE_SAMPLE_METHOD:
-            return sample_gradient_estimation(model, std::move(x), sigmas, rng, is_flow_denoiser, eta, extra_args);
+            return sample_gradient_estimation(model, std::move(x), sigmas, *noise_sampler, is_flow_denoiser, eta, extra_args);
         default:
             return {};
     }

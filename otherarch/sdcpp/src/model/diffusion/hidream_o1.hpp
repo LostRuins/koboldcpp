@@ -484,13 +484,19 @@ namespace HiDreamO1 {
     };
 
     struct HiDreamO1Conditioner : public Conditioner {
-        Qwen2Tokenizer tokenizer;
+        std::shared_ptr<Tokenizer> tokenizer;
         std::shared_ptr<HiDreamO1VisionRunner> vision_runner;
 
         HiDreamO1Conditioner(ggml_backend_t backend,
                              const String2TensorStorage& tensor_storage_map      = {},
-                             std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
-            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, tensor_storage_map, "model.visual", weight_manager)) {}
+                             std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                             const TokenizerConfig& tokenizers                   = {})
+            : vision_runner(std::make_shared<HiDreamO1VisionRunner>(backend, tensor_storage_map, "model.visual", weight_manager)) {
+            tokenizer = tokenizers.create(TokenizerConfig::MAIN, HiDreamO1Config::detect_from_weights(tensor_storage_map, "").llm.vocab_size, 151643);
+            if (!tokenizer) {
+                tokenizer = std::make_shared<Qwen2Tokenizer>();
+            }
+        }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
             vision_runner->get_param_tensors(tensors);
@@ -538,7 +544,10 @@ namespace HiDreamO1 {
             if (ref_images.empty()) {
                 prompt += conditioner_params.text;
                 prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
-                auto input_ids = tokenizer.encode(prompt, nullptr);
+                std::vector<int> input_ids;
+                if (!tokenizer->encode(prompt, input_ids, nullptr)) {
+                    return {};
+                }
 
                 std::vector<int32_t> input_ids_pad = input_ids;
                 input_ids_pad.push_back(VISION_START_TOKEN_ID);
@@ -612,7 +621,11 @@ namespace HiDreamO1 {
 
                 auto patch_img = resized_ref * 2.0f - 1.0f;
                 result.c_ref_images.push_back(std::move(patch_img));
-                int64_t prompt_start = static_cast<int64_t>(tokenizer.encode(prompt + "<|vision_start|>", nullptr).size());
+                std::vector<int> prefix_tokens;
+                if (!tokenizer->encode(prompt + "<|vision_start|>", prefix_tokens, nullptr)) {
+                    return {};
+                }
+                int64_t prompt_start = static_cast<int64_t>(prefix_tokens.size());
                 prompt += "<|vision_start|>";
                 prompt += repeat_special_token("<|image_pad|>", image_tokens);
                 prompt += "<|vision_end|>";
@@ -623,7 +636,10 @@ namespace HiDreamO1 {
 
             prompt += conditioner_params.text;
             prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
-            auto input_ids = tokenizer.encode(prompt, nullptr);
+            std::vector<int> input_ids;
+            if (!tokenizer->encode(prompt, input_ids, nullptr)) {
+                return {};
+            }
 
             std::vector<int32_t> input_ids_pad = input_ids;
             input_ids_pad.push_back(VISION_START_TOKEN_ID);
