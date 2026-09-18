@@ -7,6 +7,7 @@
 #include <list>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <type_traits>
 #include <unordered_set>
 #include <utility>
@@ -921,6 +922,59 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         }
 
         p.taesd_path = kcpp_taesd_path.c_str();
+
+        // extract the 'kcpp=' tokenizer slot (value = Koboldcpp base dir);
+        // the published value must stay valid upstream 'main=FILE,clip-l=FILE,clip-g=FILE'
+        std::string kcpp_dir;
+        bool kcpp_tokenizer_has_main = false;
+        if (!path_empty(p.tokenizer) && std::string(p.tokenizer).find('=') != std::string::npos) {
+            std::string out;
+            std::stringstream ss(p.tokenizer);
+            std::string entry;
+            while (std::getline(ss, entry, ',')) {
+                size_t eq = entry.find('=');
+                if (eq == std::string::npos) {
+                    // malformed entry (assignment form needs key=value): keep it, upstream will report it
+                    if (!out.empty()) out += ",";
+                    out += entry;
+                    continue;
+                }
+                if (entry.compare(0, eq, "kcpp") == 0) {
+                    kcpp_dir = entry.substr(eq + 1);
+                    continue;
+                }
+                if (entry.compare(0, eq, "main") == 0) {
+                    kcpp_tokenizer_has_main = true;
+                }
+                if (!out.empty()) out += ",";
+                out += entry;
+            }
+            kcpp_tokenizer_path = out;
+            p.tokenizer = kcpp_tokenizer_path.c_str();
+        }
+
+        // models without an embedded main tokenizer get one from embd_res/
+        if (!kcpp_dir.empty() && !kcpp_tokenizer_has_main) {
+            std::string tokenizer_file;
+            if (is_lens) {
+                tokenizer_file = "tokenizer_gpt_oss_json.embd";
+            } else if (sd_version_is_pid(tempver)) {
+                tokenizer_file = "tokenizer_gemma2_json.embd";
+            }
+
+            if (!tokenizer_file.empty()) {
+                std::string main_path = kcpp_dir + "embd_res/" + tokenizer_file;
+                if (!file_exists(main_path)) {
+                    printf("\nKCPP: tokenizer not found: %s\n", main_path.c_str());
+                }
+                if (!kcpp_tokenizer_path.empty()) {
+                    kcpp_tokenizer_path += ",";
+                }
+                kcpp_tokenizer_path += "main=";
+                kcpp_tokenizer_path += main_path;
+                p.tokenizer = kcpp_tokenizer_path.c_str();
+            }
+        }
 
         // patch hidream to fix broken images on vulkan
         // https://github.com/leejet/stable-diffusion.cpp/issues/1496
