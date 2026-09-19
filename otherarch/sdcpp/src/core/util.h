@@ -120,4 +120,7 @@ bool sd_backend_is(ggml_backend_t backend, const std::string& name);
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
+
+void kcpp_sd_ggml_log_set(void);
+
 #endif  // __SD_CORE_UTIL_H__

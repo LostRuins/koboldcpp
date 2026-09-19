@@ -539,6 +539,14 @@ bool parse_strict_bool(const std::string& text, bool& value) {
 // { kcpp
 static int sdloglevel = INT_MAX; // -1 = hide all, 0 = normal, 1 = showall, INT_MAX = sdcpp
 static bool sdquiet = false;
+
+void kcpp_sd_ggml_log_set(void) {
+    /* block ggml log changes on Koboldcpp */
+    if (sdloglevel == INT_MAX) {
+        ggml_log_set(sd_ggml_log_callback, nullptr);
+    }
+}
+
 // } kcpp
 
 static std::string build_progress_bar(int step, int steps, char progress_char = '=', bool show_head = true) {
@@ -635,7 +643,23 @@ std::string trim(const std::string& s) {
 static sd_log_cb_t sd_log_cb = nullptr;
 void* sd_log_cb_data         = nullptr;
 
+static void kcpp_sd_log_dispatch(sd_log_level_t level, const std::string& origin, const std::string& text) {
+    (void) level;
+    (void) origin;
+    if (sdloglevel == 0)
+        return;
+    std::string message = text;
+    if (message.empty() || message.back() != '\n') {
+        message += '\n';
+    }
+    fputs(message.c_str(), stdout);
+}
+
 static void sd_log_dispatch(sd_log_level_t level, const std::string& origin, const std::string& text) {
+    if (sdloglevel != INT_MAX) {
+        kcpp_sd_log_dispatch(level, origin, text);
+        return;
+    }
     if (sd_log_cb == nullptr)
         return;
     std::string message = origin + " - " + text;
