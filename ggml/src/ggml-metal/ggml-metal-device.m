@@ -1809,6 +1809,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->type         == GGML_TYPE_F32 &&
                 op->src[0]->ne[1] == 4 &&
                 op->src[1]->ne[0] == 4 &&
+                op->src[1]->ne[2] == 1 &&
                 ggml_is_contiguous_rows(op->src[0]) &&
                 ggml_is_contiguous_rows(op->src[1]);
         case GGML_OP_DSV4_HC_POST:
@@ -1816,6 +1817,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[0]->type == GGML_TYPE_F32 &&
                 op->src[1]->type == GGML_TYPE_F32 &&
                 op->src[2]->type == GGML_TYPE_F32 &&
+                op->src[3] != NULL &&
                 op->src[3]->type == GGML_TYPE_F32 &&
                 op->type         == GGML_TYPE_F32 &&
                 op->src[1]->ne[1] == 4 &&
