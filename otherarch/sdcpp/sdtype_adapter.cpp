@@ -688,6 +688,14 @@ static inline int roundup_to(int n, int fac) {
     return ((n + fac - 1) / fac) * fac;
 }
 
+// round a float/double avoiding too many decimal places
+// (like 6/10 -> 0.6000000238418579)
+static inline double round_for_info(double v) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.6f", v);
+    return strtod(buf, nullptr);
+}
+
 const int img_side_min = 64;
 
 //scale dimensions to ensure width and height stay within limits
@@ -1732,7 +1740,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         if (*params.negative_prompt)
             jsoninfo["negative_prompt"] = params.negative_prompt;
         jsoninfo["seed"] = params.seed;
-        jsoninfo["cfg_scale"] = params.sample_params.guidance.txt_cfg;
+        jsoninfo["cfg_scale"] = round_for_info(params.sample_params.guidance.txt_cfg);
         jsoninfo["width"] = params.width;
         jsoninfo["height"] = params.height;
         jsoninfo["steps"] = params.sample_params.sample_steps;
@@ -1743,9 +1751,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         if (params.sample_params.scheduler != scheduler_t::SCHEDULER_COUNT)
             jsoninfo["extra_generation_params"]["Schedule type"] = get_scheduler_name(params.sample_params.scheduler);
         if (params.sample_params.eta >= 0 && params.sample_params.eta <= 1)
-            jsoninfo["eta"] = params.sample_params.eta;
+            jsoninfo["eta"] = round_for_info(params.sample_params.eta);
         if (is_img2img)
-            jsoninfo["denoising_strength"] = params.strength;
+            jsoninfo["denoising_strength"] = round_for_info(params.strength);
         if (sd_params->model_path.empty())
             jsoninfo["sd_model_name"] = friendly_model_name(sd_params->diffusion_model_path);
         else
