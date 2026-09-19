@@ -714,14 +714,12 @@ SOURCES_SDMAIN := $(foreach f,$(SDCPP_MAIN_BASENAMES),otherarch/sdcpp/$(f))
 HEADERS_SDMAIN := $(filter %.h,$(SOURCES_SDMAIN)) $(filter %.hpp, $(SOURCES_SDMAIN))
 OBJS_SDMAIN := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDMAIN)))
 
-otherarch/sdcpp/%.o: $(HEADERS_SDCOMMON)
+$(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON))): $(HEADERS_SDCOMMON)
 
 $(OBJS_SDMAIN): $(HEADERS_SDMAIN)
 
 otherarch/sdcpp/src/%.o: otherarch/sdcpp/src/%.cpp
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
-
-otherarch/sdcpp/src/stable-diffusion.o otherarch/sdcpp/src/upscaler.o: CXXFLAGS += -Dsd_ggml_log_callback=kcpp_sd_ggml_log_callback
 
 sdcpp_logger_adapter.o: sdcpp_logger_adapter.cpp sdcpp_logger_adapter.h otherarch/sdcpp/src/core/util.h
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src $(CXXFLAGS) -c $< -o $@

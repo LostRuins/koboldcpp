@@ -531,10 +531,12 @@ add_library(sdtype_adapter
             otherarch/sdcpp/examples/cli/image_metadata.cpp
             otherarch/sdcpp/src/detailer.cpp
             otherarch/sdcpp/src/model_manager.cpp
+            otherarch/sdcpp/src/model_manager_files.cpp
             otherarch/sdcpp/src/model_manager.h
             otherarch/sdcpp/src/model_manager_prefetch.cpp
             otherarch/sdcpp/src/extensions/pulid_extension.cpp
             otherarch/sdcpp/src/model_loader.cpp
+            otherarch/sdcpp/src/model_loader_files.cpp
             otherarch/sdcpp/src/model/adapter/lora_ops.cpp
             otherarch/sdcpp/src/extensions/photomaker_extension.cpp
             otherarch/sdcpp/src/runtime/sample-cache.cpp
@@ -546,6 +548,11 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/runtime/guidance.h
             otherarch/sdcpp/src/runtime/imatrix.cpp
             otherarch/sdcpp/src/runtime/imatrix.h
+            otherarch/sdcpp/src/pipeline/diffusion_engine.cpp
+            otherarch/sdcpp/src/pipeline/image.cpp
+            otherarch/sdcpp/src/pipeline/model_builders.cpp
+            otherarch/sdcpp/src/pipeline/request.cpp
+            otherarch/sdcpp/src/pipeline/video.cpp
             otherarch/sdcpp/src/stable-diffusion.cpp
             otherarch/sdcpp/thirdparty/zip.c
             otherarch/sdcpp/src/model_io/gguf_io.cpp
@@ -565,11 +572,6 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/core/backend_fit.cpp
             otherarch/sdcpp/src/core/layer_split_partition.cpp
             otherarch/sdcpp/src/core/ggml_extend_backend.cpp)
-set_source_files_properties(
-            otherarch/sdcpp/src/stable-diffusion.cpp
-            otherarch/sdcpp/src/upscaler.cpp
-            PROPERTIES COMPILE_DEFINITIONS
-            "sd_ggml_log_callback=kcpp_sd_ggml_log_callback")
 target_include_directories(sdtype_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/include ./otherarch/sdcpp/src ./otherarch/sdcpp/examples ./tools ./common)
 target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(sdtype_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})

@@ -26,6 +26,7 @@
 #include "model_builders.h"
 #include "model_loader.h"
 #include "model_manager.h"
+#include "sdcpp_logger_adapter.h"
 #include "stable-diffusion.h"
 
 #include "conditioning/conditioner.hpp"
@@ -1098,7 +1099,7 @@ bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
         sampler_rng = rng;
     }
 
-    ggml_log_set(sd_ggml_log_callback, nullptr);
+    ggml_log_set(kcpp_sd_ggml_log_callback, nullptr);
 
     model_manager = std::make_shared<ModelManager>();
     model_manager->set_n_threads(n_threads);
