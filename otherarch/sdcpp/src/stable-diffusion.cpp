@@ -156,6 +156,7 @@ const char* prediction_to_str[] = {
     "flux_flow",
     "sefi_flow",
     "minit2i_flow",
+    "sensenova_u1_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -322,6 +323,8 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->eager_load                = false;
     sd_ctx_params->enable_mmap               = false;
     sd_ctx_params->diffusion_flash_attn      = false;
+    sd_ctx_params->linear_scale              = 0.f;
+    sd_ctx_params->attn_scale                = 0.f;
     sd_ctx_params->vae_format                = SD_VAE_FORMAT_AUTO;
     sd_ctx_params->backend                   = nullptr;
     sd_ctx_params->params_backend            = nullptr;
@@ -352,6 +355,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "embeddings_connectors_path: %s\n"
              "vae_path: %s\n"
              "audio_vae_path: %s\n"
+             "audio_encoder_path: %s\n"
              "taesd_path: %s\n"
              "control_net_path: %s\n"
              "photo_maker_path: %s\n"
@@ -373,6 +377,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "auto_fit: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
+             "linear_scale: %g\n"
+             "attn_scale: %g\n"
              "vae_format: %s\n",
              SAFE_STR(sd_ctx_params->model_path),
              SAFE_STR(sd_ctx_params->clip_l_path),
@@ -387,6 +393,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->embeddings_connectors_path),
              SAFE_STR(sd_ctx_params->vae_path),
              SAFE_STR(sd_ctx_params->audio_vae_path),
+             SAFE_STR(sd_ctx_params->audio_encoder_path),
              SAFE_STR(sd_ctx_params->taesd_path),
              SAFE_STR(sd_ctx_params->control_net_path),
              SAFE_STR(sd_ctx_params->photo_maker_path),
@@ -408,6 +415,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
+             sd_ctx_params->linear_scale,
+             sd_ctx_params->attn_scale,
              sd_vae_format_name(sd_ctx_params->vae_format));
 
     return buf;
@@ -696,6 +705,13 @@ SD_API bool sd_ctx_has_control_net(const sd_ctx_t* sd_ctx) {
     return sd_ctx->sd->control_net != nullptr;
 }
 
+const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_ctx->sd->version >= VERSION_COUNT) {
+        return "Unknown";
+    }
+    return model_version_to_str[sd_ctx->sd->version];
+}
+
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
     return sd::pipeline::default_sample_method(sd_ctx != nullptr ? sd_ctx->sd : nullptr);
 }
@@ -723,8 +739,12 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
                            sd_image_t** frames_out,
                            int* num_frames_out,
-                           sd_audio_t** audio_out) {
+                           sd_audio_t** audio_out,
+                           int* fps_out) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
+        if (fps_out != nullptr) {
+            *fps_out = 0;
+        }
         return false;
     }
 
@@ -740,10 +760,13 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
     StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
     if (!execution.ready) {
+        if (fps_out != nullptr) {
+            *fps_out = 0;
+        }
         return false;
     }
 
-    return sd::pipeline::generate_video(sd_ctx->sd, sd_vid_gen_params, frames_out, num_frames_out, audio_out);
+    return sd::pipeline::generate_video(sd_ctx->sd, sd_vid_gen_params, frames_out, num_frames_out, audio_out, fps_out);
 }
 
 SD_API void free_sd_images(sd_image_t* result_images, int num_images) {

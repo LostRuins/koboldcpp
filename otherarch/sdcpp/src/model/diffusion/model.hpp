@@ -69,6 +69,8 @@ struct AnimaDiffusionExtra {
 struct WanDiffusionExtra {
     const sd::Tensor<float>* vace_context = nullptr;
     float vace_strength                   = 1.f;
+    // S2V audio, sd::Tensor layout: [dim, T_latent*4, layers].
+    const sd::Tensor<float>* audio_embed = nullptr;
 };
 
 struct HiDreamO1DiffusionExtra {
@@ -114,6 +116,10 @@ struct MiniT2IDiffusionExtra {
     const sd::Tensor<float>* mask = nullptr;
 };
 
+struct SenseNovaU1DiffusionExtra {
+    const sd::Tensor<int32_t>* input_ids = nullptr;
+};
+
 struct HunyuanVideoDiffusionExtra {
     const sd::Tensor<float>* guidance   = nullptr;
     const sd::Tensor<float>* byt5       = nullptr;
@@ -131,6 +137,7 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           LTXAVDiffusionExtra,
                                           MiniMaxH3DiffusionExtra,
                                           MiniT2IDiffusionExtra,
+                                          SenseNovaU1DiffusionExtra,
                                           HunyuanVideoDiffusionExtra>;
 
 struct DiffusionParams {

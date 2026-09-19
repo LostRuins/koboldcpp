@@ -10,6 +10,7 @@ enum class ModelComponent {
     VAE,
     PreviewVAE,
     AudioVAE,
+    AudioEncoder,
     ControlNet,
     PhotoMaker,
     PuLID,
@@ -38,6 +39,8 @@ inline const char* model_component_name(ModelComponent component) {
             return "preview VAE";
         case ModelComponent::AudioVAE:
             return "audio VAE";
+        case ModelComponent::AudioEncoder:
+            return "audio encoder";
         case ModelComponent::ControlNet:
             return "ControlNet";
         case ModelComponent::PhotoMaker:

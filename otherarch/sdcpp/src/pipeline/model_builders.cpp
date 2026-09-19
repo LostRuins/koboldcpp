@@ -8,6 +8,7 @@
 #include "core/util.h"
 #include "extensions/generation_extension.h"
 #include "model/adapter/ip_adapter.hpp"
+#include "model/audio/wav2vec2.hpp"
 #include "model/diffusion/anima.hpp"
 #include "model/diffusion/boogu.hpp"
 #include "model/diffusion/control.hpp"
@@ -27,6 +28,7 @@
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/pid.hpp"
 #include "model/diffusion/qwen_image.hpp"
+#include "model/diffusion/sensenova_u1.h"
 #include "model/diffusion/unet.hpp"
 #include "model/diffusion/wan.hpp"
 #include "model/diffusion/z_image.hpp"
@@ -233,6 +235,16 @@ namespace sd::model_builders {
                                                                                 tensor_storage_map,
                                                                                 weight_manager);
             }
+            if (version == VERSION_WAN2_2_S2V &&
+                tensor_storage_map.count("wav2vec2.encoder.layer_norm.bias") > 0) {
+                if (!ensure_backend_pair(ctx.backends, SDBackendModule::AUDIO_ENCODER)) {
+                    return false;
+                }
+                result.audio_encoder = std::make_shared<Wav2Vec2::Wav2Vec2ModelRunner>(ctx.backends.runtime_backend(SDBackendModule::AUDIO_ENCODER),
+                                                                                       tensor_storage_map,
+                                                                                       "wav2vec2.",
+                                                                                       weight_manager);
+            }
         } else if (sd_version_is_lingbot_video(version)) {
             bool enable_vision = false;
             for (const auto& [name, _] : tensor_storage_map) {
@@ -306,6 +318,12 @@ namespace sd::model_builders {
                                                                         tensor_storage_map,
                                                                         "model.diffusion_model.model.net",
                                                                         weight_manager);
+        } else if (sd_version_is_sensenova_u1(version)) {
+            result.conditioner = std::make_shared<SenseNovaU1Conditioner>();
+            result.diffusion   = std::make_shared<SenseNovaU1::SenseNovaU1Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                                tensor_storage_map,
+                                                                                "",
+                                                                                weight_manager);
         } else if (sd_version_is_anima(version)) {
             result.conditioner = std::make_shared<AnimaConditioner>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                     tensor_storage_map,
@@ -395,6 +413,21 @@ namespace sd::model_builders {
                                                                              tensor_storage_map,
                                                                              "ip_adapter",
                                                                              weight_manager);
+        }
+        if (result.conditioner) {
+            result.conditioner->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.diffusion) {
+            result.diffusion->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.high_noise_diffusion) {
+            result.high_noise_diffusion->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.clip_vision) {
+            result.clip_vision->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.ip_adapter) {
+            result.ip_adapter->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         }
         runners = std::move(result);
         return true;
@@ -493,7 +526,7 @@ namespace sd::model_builders {
             }
         };
 
-        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version)) {
+        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version)) {
             LOG_INFO("using FakeVAE");
             result.vae = std::make_shared<FakeVAE>(version,
                                                    ctx.backends.runtime_backend(SDBackendModule::VAE),
@@ -531,6 +564,15 @@ namespace sd::model_builders {
                 result.preview->set_conv2d_direct_enabled(true);
             }
         }
+        if (result.vae) {
+            result.vae->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.preview) {
+            result.preview->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
+        if (result.audio) {
+            result.audio->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
+        }
         runners = std::move(result);
         return true;
     }
@@ -552,6 +594,7 @@ namespace sd::model_builders {
             LOG_INFO("Using Conv2d direct in the control net");
             control_net->set_conv2d_direct_enabled(true);
         }
+        control_net->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         runner = std::move(control_net);
         return true;
     }

@@ -34,12 +34,14 @@
 #include "extensions/generation_extension.h"
 #include "model/adapter/ip_adapter.hpp"
 #include "model/adapter/lora.hpp"
+#include "model/audio/wav2vec2.hpp"
 #include "model/diffusion/animatediff.hpp"
 #include "model/diffusion/control.hpp"
 #include "model/diffusion/model.hpp"
 #include "model/vae/audio_vae.hpp"
 #include "model/vae/ltx_vae.hpp"
 #include "model/vae/vae.hpp"
+#include "runtime/audio_processing.h"
 #include "runtime/denoiser.hpp"
 #include "runtime/guidance.h"
 #include "runtime/preview_interval.h"
@@ -75,6 +77,7 @@ const char* model_version_to_str[] = {
     "Wan 2.x",
     "Wan 2.2 I2V",
     "Wan 2.2 TI2V",
+    "Wan 2.2 S2V",
     "LingBot Video",
     "Qwen Image",
     "Qwen Image Layered",
@@ -97,8 +100,12 @@ const char* model_version_to_str[] = {
     "SeFi-Image",
     "Krea2",
     "Mage Flow",
+    "SenseNova U1.5",
     "ESRGAN",
 };
+
+static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
+              "\nnumber of elements in model_version_to_str[] != VERSION_COUNT");
 
 void calculate_alphas_cumprod(float* alphas_cumprod,
                               float linear_start = 0.00085f,
@@ -133,7 +140,7 @@ StableDiffusionGGML::~StableDiffusionGGML() = default;
 
 const std::map<StableDiffusionGGML::RunnerGroup, std::set<ModelComponent>>& StableDiffusionGGML::runner_components() {
     static const std::map<RunnerGroup, std::set<ModelComponent>> components{
-        {RunnerGroup::Core, {ModelComponent::Conditioner, ModelComponent::Diffusion, ModelComponent::HighNoiseDiffusion, ModelComponent::CLIPVision, ModelComponent::IPAdapter}},
+        {RunnerGroup::Core, {ModelComponent::Conditioner, ModelComponent::Diffusion, ModelComponent::HighNoiseDiffusion, ModelComponent::CLIPVision, ModelComponent::IPAdapter, ModelComponent::AudioEncoder}},
         {RunnerGroup::VAE, {ModelComponent::VAE, ModelComponent::PreviewVAE, ModelComponent::AudioVAE}},
         {RunnerGroup::ControlNet, {ModelComponent::ControlNet}},
         {RunnerGroup::Extensions, {ModelComponent::PhotoMaker, ModelComponent::PuLID}},
@@ -1027,6 +1034,13 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         }
     }
 
+    if (strlen(SAFE_STR(sd_ctx_params->audio_encoder_path)) > 0) {
+        LOG_INFO("loading audio encoder (wav2vec2) from '%s'", sd_ctx_params->audio_encoder_path);
+        if (!model_loader.init_from_file(sd_ctx_params->audio_encoder_path, "wav2vec2.")) {
+            LOG_WARN("loading audio encoder weights from '%s' failed", sd_ctx_params->audio_encoder_path);
+        }
+    }
+
     if (strlen(SAFE_STR(sd_ctx_params->motion_module_path)) > 0) {
         LOG_INFO("loading motion module (AnimateDiff) from '%s'", sd_ctx_params->motion_module_path);
         if (!model_loader.init_from_file(sd_ctx_params->motion_module_path,
@@ -1070,6 +1084,12 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 }
 
 bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
+    for (float scale : {sd_ctx_params->linear_scale, sd_ctx_params->attn_scale}) {
+        if (!std::isfinite(scale) || scale < 0.f || (scale > 0.f && !std::isfinite(1.f / scale))) {
+            LOG_ERROR("scale overrides must be finite positive values, or 0 to keep model defaults");
+            return false;
+        }
+    }
     auto configuration        = std::make_unique<ModelConfig>(*sd_ctx_params);
     n_threads                 = sd_ctx_params->n_threads;
     enable_mmap               = sd_ctx_params->enable_mmap;
@@ -1079,7 +1099,7 @@ bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
     backend_spec              = SAFE_STR(sd_ctx_params->backend);
     params_backend_spec       = SAFE_STR(sd_ctx_params->params_backend);
     split_mode_spec           = SAFE_STR(sd_ctx_params->split_mode);
-    auto_fit_enabled          = sd_ctx_params->auto_fit && backend_spec.empty() && params_backend_spec.empty();
+    auto_fit_enabled          = sd_ctx_params->auto_fit && params_backend_spec.empty();
     max_vram_assignment.reset(0.f);
     {
         std::string error;
@@ -1227,6 +1247,7 @@ bool StableDiffusionGGML::build_core_runners() {
     high_noise_diffusion_model = std::move(runners.high_noise_diffusion);
     clip_vision                = std::move(runners.clip_vision);
     ip_adapter                 = std::move(runners.ip_adapter);
+    audio_encoder              = std::move(runners.audio_encoder);
 
     cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::TE));
     diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::DIFFUSION));
@@ -1236,11 +1257,15 @@ bool StableDiffusionGGML::build_core_runners() {
     if (clip_vision) {
         clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::CLIP_VISION));
     }
+    if (audio_encoder) {
+        audio_encoder->set_max_graph_vram_bytes(max_graph_vram_bytes_for_module(SDBackendModule::AUDIO_ENCODER));
+    }
     return register_runner_params(ModelComponent::Conditioner, cond_stage_model, SDBackendModule::TE) &&
            register_runner_params(ModelComponent::Diffusion, diffusion_model, SDBackendModule::DIFFUSION) &&
            register_runner_params(ModelComponent::HighNoiseDiffusion, high_noise_diffusion_model, SDBackendModule::DIFFUSION) &&
            register_runner_params(ModelComponent::CLIPVision, clip_vision, SDBackendModule::CLIP_VISION) &&
-           register_runner_params(ModelComponent::IPAdapter, ip_adapter, SDBackendModule::DIFFUSION);
+           register_runner_params(ModelComponent::IPAdapter, ip_adapter, SDBackendModule::DIFFUSION) &&
+           register_runner_params(ModelComponent::AudioEncoder, audio_encoder, SDBackendModule::AUDIO_ENCODER);
 }
 
 bool StableDiffusionGGML::build_vae_runners() {
@@ -1340,6 +1365,12 @@ bool StableDiffusionGGML::validate_and_load_runners() {
     ignore_tensors.insert("model.diffusion_model.__x0__");
     ignore_tensors.insert("model.diffusion_model.__32x32__");
     ignore_tensors.insert("model.diffusion_model.__index_timestep_zero__");
+
+    if (audio_encoder != nullptr) {
+        // These wav2vec2 tensors are unused during feature extraction.
+        ignore_tensors.insert("wav2vec2.lm_head.");
+        ignore_tensors.insert("wav2vec2.masked_spec_embed");
+    }
 
     if (audio_vae_model) {
         if (!sd_version_is_minimax_h3(version) && !sd_version_is_ltxav(version)) { // kcpp
@@ -1536,6 +1567,9 @@ bool StableDiffusionGGML::build_denoiser() {
             pred_type = SEFI_FLOW_PRED;
         } else if (sd_version_is_minit2i(version)) {
             pred_type = MINIT2I_FLOW_PRED;
+        } else if (sd_version_is_sensenova_u1(version)) {
+            pred_type          = SENSENOVA_U1_FLOW_PRED;
+            default_flow_shift = 3.f;
         } else {
             pred_type = EPS_PRED;
         }
@@ -1579,6 +1613,11 @@ bool StableDiffusionGGML::build_denoiser() {
         case MINIT2I_FLOW_PRED: {
             LOG_INFO("running in MiniT2I FLOW mode");
             denoiser = std::make_shared<MiniT2IFlowDenoiser>();
+            break;
+        }
+        case SENSENOVA_U1_FLOW_PRED: {
+            LOG_INFO("running in SenseNova U1.5 FLOW mode");
+            denoiser = std::make_shared<SenseNovaU1FlowDenoiser>(default_flow_shift);
             break;
         }
         default: {
@@ -1985,6 +2024,29 @@ sd::Tensor<float> StableDiffusionGGML::get_clip_vision_output(const sd::Tensor<f
     return output;
 }
 
+// Returns 50 Hz wav2vec2 states in sd::Tensor layout: [dim, frames, layers].
+sd::Tensor<float> StableDiffusionGGML::get_audio_embedding(const sd_audio_t& audio) {
+    if (audio_encoder == nullptr) {
+        LOG_ERROR("audio encoder model is not loaded");
+        return {};
+    }
+    if (audio.data == nullptr || audio.sample_count == 0 || audio.channels == 0 || audio.sample_rate == 0) {
+        LOG_ERROR("invalid driving audio");
+        return {};
+    }
+    auto mono = sd::audio::downmix_to_mono(audio.data, audio.sample_count, audio.channels);
+    if (mono.empty()) {
+        LOG_ERROR("audio mono downmix failed");
+        return {};
+    }
+    mono = sd::audio::resample_audio(mono.data(), mono.size(), audio.sample_rate, 16000);
+    if (mono.empty()) {
+        LOG_ERROR("audio resample to 16 kHz failed");
+        return {};
+    }
+    return audio_encoder->compute(n_threads, mono);
+}
+
 void StableDiffusionGGML::compute_ip_adapter_tokens(const sd_image_t& image, float strength) {
     ip_adapter_tokens        = {};
     ip_adapter_uncond_tokens = {};
@@ -2040,6 +2102,10 @@ std::vector<float> StableDiffusionGGML::process_timesteps(const std::vector<floa
             }
         }
         return new_timesteps;
+    }
+    if (diffusion_model->get_desc() == "Wan2.2-S2V-14B") {
+        int64_t frame_count = init_latent.shape()[2];
+        return std::vector<float>(static_cast<size_t>(frame_count), timesteps[0]);
     } else {
         return timesteps;
     }
@@ -2548,7 +2614,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                                              condition.c_t5_weights.empty() ? nullptr : &condition.c_t5_weights};
             } else if (sd_version_is_wan(version)) {
                 diffusion_params.extra = WanDiffusionExtra{vace_context.empty() ? nullptr : &vace_context,
-                                                           vace_strength};
+                                                           vace_strength,
+                                                           condition.c_ref_audios.empty() ? nullptr : &condition.c_ref_audios[0]};
             } else if (sd_version_is_hunyuan_video(version)) {
                 diffusion_params.extra = HunyuanVideoDiffusionExtra{
                     &guidance_tensor,
@@ -2581,6 +2648,9 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             } else if (sd_version_is_minit2i(version)) {
                 diffusion_params.extra = MiniT2IDiffusionExtra{
                     condition.c_vector.empty() ? nullptr : &condition.c_vector};
+            } else if (sd_version_is_sensenova_u1(version)) {
+                diffusion_params.extra = SenseNovaU1DiffusionExtra{
+                    condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids};
             } else {
                 diffusion_params.extra = std::monostate{};
             }
@@ -2737,7 +2807,9 @@ int StableDiffusionGGML::get_vae_scale_factor() {
 int StableDiffusionGGML::get_diffusion_model_down_factor() {
     int down_factor = 8;  // unet
     if (sd_version_is_dit(version)) {
-        if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
+        if (sd_version_is_sensenova_u1(version)) {
+            down_factor = 32;
+        } else if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
             down_factor = 2;
         } else {
             down_factor = 1;
@@ -2762,6 +2834,8 @@ int StableDiffusionGGML::get_latent_channel() {
         } else if (version == VERSION_CHROMA_RADIANCE) {
             latent_channel = 3;
         } else if (sd_version_is_minit2i(version)) {
+            latent_channel = 3;
+        } else if (sd_version_is_sensenova_u1(version)) {
             latent_channel = 3;
         } else if (sd_version_is_pid(version)) {
             latent_channel = 3;
@@ -2869,7 +2943,6 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
     auto decoded                      = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
     const bool prefer_temporal_tiling = decode_video && first_stage_model->can_temporal_tile_decode();
     while (decoded.empty() &&
-           auto_fit_enabled &&
            sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
         decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
     }
