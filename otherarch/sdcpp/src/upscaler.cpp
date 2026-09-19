@@ -73,7 +73,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
     model_manager->set_n_threads(n_threads);
     model_manager->set_enable_mmap(false);
 
-    ModelLoader& model_loader = model_manager->loader();
+    ModelLoader model_loader;
     if (!model_loader.init_from_file_and_convert_name(esrgan_path, "", VERSION_ESRGAN)) {
         LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
         return false;
@@ -94,7 +94,8 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
 
     std::map<std::string, ggml_tensor*> tensors;
     esrgan_upscaler->get_param_tensors(tensors);
-    if (!model_manager->register_param_tensors("ESRGAN",
+    if (!model_manager->set_loader(model_loader) ||
+        !model_manager->register_param_tensors(ModelComponent::Upscaler,
                                                std::move(tensors),
                                                backend_manager.params_backend_is_disk(SDBackendModule::UPSCALER) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
                                                backend_for(SDBackendModule::UPSCALER),

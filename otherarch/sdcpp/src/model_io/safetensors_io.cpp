@@ -158,7 +158,8 @@ static bool read_comfy_quant_config(std::ifstream& file,
 bool read_safetensors_file(const std::string& file_path,
                            std::vector<TensorStorage>& tensor_storages,
                            std::string* error,
-                           std::map<std::string, std::string>* metadata) {
+                           std::map<std::string, std::string>* metadata,
+                           std::set<std::string>* tensor_names) {
     std::ifstream file(file_path, std::ios::binary);
     if (!file.is_open()) {
         set_error(error, "failed to open '" + file_path + "'");
@@ -269,15 +270,31 @@ bool read_safetensors_file(const std::string& file_path,
         std::string dtype    = tensor_info["dtype"];
         nlohmann::json shape = tensor_info["shape"];
 
-        if (dtype == "U8") {
-            continue;
-        }
-
         size_t begin = tensor_info["data_offsets"][0].get<size_t>();
         size_t end   = tensor_info["data_offsets"][1].get<size_t>();
         if (begin > end || end > file_size_ - data_start) {
             set_error(error, "data offsets out of bounds for tensor '" + name + "'");
             return false;
+        }
+
+        if (tensor_names != nullptr) {
+            tensor_names->insert(name);
+        }
+        if (dtype == "U8") {
+            uint64_t bytes = 1;
+            for (const auto& dimension : shape) {
+                const int64_t size = dimension.get<int64_t>();
+                if (size < 0 || (bytes != 0 && static_cast<uint64_t>(size) > UINT64_MAX / bytes)) {
+                    set_error(error, "invalid dimensions for tensor '" + name + "'");
+                    return false;
+                }
+                bytes *= size;
+            }
+            if (bytes != end - begin) {
+                set_error(error, "size mismatch for tensor '" + name + "'");
+                return false;
+            }
+            continue;
         }
 
         ggml_type type = safetensors_dtype_to_ggml_type(dtype);
@@ -293,8 +310,20 @@ bool read_safetensors_file(const std::string& file_path,
 
         int n_dims              = (int)shape.size();
         int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
+        uint64_t elements       = 1;
         for (int i = 0; i < n_dims; i++) {
             ne[i] = shape[i].get<int64_t>();
+            if (ne[i] < 0 || (elements != 0 && static_cast<uint64_t>(ne[i]) > INT64_MAX / elements)) {
+                set_error(error, "invalid dimensions for tensor '" + name + "'");
+                return false;
+            }
+            elements *= ne[i];
+        }
+        const uint64_t storage_size = ggml_type_size(type) * ((dtype == "F64" || dtype == "I64") ? 2 : 1);
+        if (elements % ggml_blck_size(type) != 0 ||
+            elements / ggml_blck_size(type) > INT64_MAX / storage_size) {
+            set_error(error, "invalid storage size for tensor '" + name + "'");
+            return false;
         }
 
         if (n_dims == 5) {

@@ -404,6 +404,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         lora_dynamic = !!(inputs.lora_apply_mode & (1<<3));
         lora_cache   = lora_dynamic && !!(inputs.lora_apply_mode & (1<<4));
     }
+    // TODO: LoRA caching produces errors after a preloaded LoRA is later removed on a request
+    lora_cache = false;
 
     if(lora_map.items.size() > 0)
     {
