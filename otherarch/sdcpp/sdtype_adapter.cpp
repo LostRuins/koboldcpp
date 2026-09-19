@@ -365,6 +365,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     sddebugmode = inputs.debugmode;
     set_sd_log_level(sddebugmode);
+    ggml_log_set(kcpp_sd_ggml_log_callback);
 
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
@@ -1941,6 +1942,7 @@ void sdtype_request_ongoing_generation_preview()
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 {
     set_sd_log_level(sddebugmode);
+    ggml_log_set(kcpp_sd_ggml_log_callback);
 
     sd_generation.reset();
 
