@@ -5632,6 +5632,10 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         }
         return ret
 
+    def make_openai_generation_error(self):
+        return {"error": {"message": "The model failed to generate a response.",
+                          "type": "server_error", "param": None, "code": "server_error"}}
+
     async def generate_text(self, genparams, api_format, stream_flag):
         global friendlymodelname, chatcompl_adapter, currfinishreason, thinkformats
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
@@ -5651,19 +5655,27 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             return generate(genparams=genparams,stream_flag=stream_flag)
 
         genout = {"text": "", "status": -1, "stopreason": -1, "prompt_tokens":0, "completion_tokens": 0, "total_tokens": 0}
-        if stream_flag:
-            loop = asyncio.get_event_loop()
-            executor = ThreadPoolExecutor()
-            genout = await loop.run_in_executor(executor, run_blocking)
-        else:
-            genout = run_blocking()
+        if api_format in (3, 4):
+            genparams['_oai_generation_pending'] = True
+        try:
+            if stream_flag:
+                loop = asyncio.get_event_loop()
+                executor = ThreadPoolExecutor()
+                genout = await loop.run_in_executor(executor, run_blocking)
+            else:
+                genout = run_blocking()
+        finally:
+            genparams.pop('_oai_generation_pending', None)
 
         recvtxt = genout['text']
         if recvtxt is not None and not isinstance(recvtxt, str):
             recvtxt = recvtxt.decode("UTF-8", "ignore") if isinstance(recvtxt, bytes) else str(recvtxt)
         prompttokens = genout['prompt_tokens'] if genout['prompt_tokens'] > 0 else 0
         comptokens = genout['completion_tokens'] if genout['completion_tokens'] > 0 else 0
-        currfinishreason = "error" if (genout['stopreason'] == -2) else ("length" if (genout['stopreason'] != 1) else "stop")
+        currfinishreason = "error" if (genout['stopreason'] == -2) else ("stop" if genout['stopreason'] in (1, 2) else "length")
+        if api_format in (3, 4) and (genout['stopreason'] == -2 or genout['status'] == 0):
+            genparams['_oai_generation_error'] = True
+            return self.make_openai_generation_error()
 
         # grab logprobs if not streaming
         logprobsdict = None
@@ -5896,6 +5908,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("connection", "keep-alive")
         stream_content_type = 'application/x-ndjson' if api_format == 6 or api_format == 7 else 'text/event-stream'
         self.end_headers(content_type=stream_content_type)
+        genparams['_sse_stream_started'] = True
 
         # if tools, do not send anything else - OAI tool calls will be handled with fakestreaming!
         # only exception is if we know the exact toolcall tag to segment!
@@ -5937,16 +5950,24 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             while True:
                 if batch_request_id < 0:
                     batch_request_id = genparams.get('_batch_request_id', -1)
-                    if genparams.get('_batch_expected', False) and batch_request_id < 0 and not genparams.get('_batch_fallback', False):
-                        await asyncio.sleep(async_sleep_short)
-                        continue
+                if api_format in (3, 4) and genparams.get('_oai_generation_error', False):
+                    break
+                if genparams.get('_batch_expected', False) and batch_request_id < 0 and not genparams.get('_batch_fallback', False):
+                    await asyncio.sleep(async_sleep_short)
+                    continue
                 using_batch_stream = batch_request_id >= 0
                 streamDone = handle.batch_generate_has_finished(batch_request_id) if using_batch_stream else handle.has_finished() #exit next loop on done
+                if streamDone and api_format in (3, 4) and genparams.get('_oai_generation_pending', False):
+                    await asyncio.sleep(async_sleep_short) # wait for the request's success/error result
+                    continue
                 if streamDone:
                     if using_batch_stream and batch_final_result is None:
                         batch_final_result = handle.batch_generate_result(batch_request_id)
                     sr = batch_final_result.stopreason if using_batch_stream else handle.get_last_stop_reason()
-                    currfinishreason = "error" if sr==-2 else ("length" if (sr!=1) else "stop")
+                    currfinishreason = "error" if sr==-2 else ("stop" if sr in (1, 2) else "length")
+                    if api_format in (3, 4) and (sr == -2 or (using_batch_stream and batch_final_result.status == 0)):
+                        # The completed generation result will be sent as an error in do_POST.
+                        break
                     prompttokens = batch_final_result.prompt_tokens if using_batch_stream else handle.get_last_input_count()
                 tokenStr = ""
                 streamcount = handle.batch_generate_stream_count(batch_request_id) if using_batch_stream else handle.get_stream_count()
@@ -6126,6 +6147,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                     await asyncio.sleep(async_sleep_short)
                                     return
 
+                            if api_format in (4, 9) and genparams.get('sync_toolcall_potential_triggered', False):
+                                need_split_final_msg = False # the fake-stream path owns the final chunk
                             if need_split_final_msg: #we need to send one message without the finish reason, then send a finish reason with no msg to follow standards
                                 if api_format == 4:  # if oai chat, set format to expected openai streaming response
                                     event_str = json.dumps({"id":chatcmpl_id,"object":"chat.completion.chunk","created":int(time.time()),"model":modelNameToReturn,"choices":[{"index":0,"finish_reason":None,"delta":delta}]})
@@ -6175,7 +6198,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                     logprobsdict = parse_last_logprobs(lastlogprobs)
                                     addonstr = json.dumps({"id":chatcmpl_id,"object":"chat.completion.chunk","created":int(time.time()),"model":modelNameToReturn,"choices":[{"index":0,"finish_reason":None,"delta":{'role':'assistant','content':''},"logprobs":logprobsdict}]})
                                     await self.send_oai_sse_event(addonstr)
-                                event_str = json.dumps({"id":chatcmpl_id,"object":"chat.completion.chunk","created":int(time.time()),"model":modelNameToReturn,"choices":[{"index":0,"finish_reason":currfinishreason,"delta":delta}]})
+                                finish_reason = currfinishreason if streamDone and not genparams.get('sync_toolcall_potential_triggered', False) else None
+                                event_str = json.dumps({"id":chatcmpl_id,"object":"chat.completion.chunk","created":int(time.time()),"model":modelNameToReturn,"choices":[{"index":0,"finish_reason":finish_reason,"delta":delta}]})
                                 genparams['sync_toolcall_first_role_sent'] = True
                                 await self.send_oai_sse_event(event_str)
                             elif api_format == 3:  # non chat completions
@@ -6184,7 +6208,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                     logprobsdict = parse_last_logprobs(lastlogprobs)
                                     addonstr = json.dumps({"id":cmpl_id,"object":"text_completion","created":int(time.time()),"model":modelNameToReturn,"choices":[{"index":0,"finish_reason":None,"text":"","logprobs":logprobsdict}]})
                                     await self.send_oai_sse_event(addonstr)
-                                event_str = json.dumps({"id":cmpl_id,"object":"text_completion","created":int(time.time()),"model":modelNameToReturn,"choices":[{"index":0,"finish_reason":currfinishreason,"text":tokenStr}]})
+                                event_str = json.dumps({"id":cmpl_id,"object":"text_completion","created":int(time.time()),"model":modelNameToReturn,"choices":[{"index":0,"finish_reason":currfinishreason if streamDone else None,"text":tokenStr}]})
                                 await self.send_oai_sse_event(event_str)
                             elif api_format == 6 or api_format == 7: # Ollama newline-delimited JSON streaming
                                 created_at = str(datetime.now(timezone.utc).isoformat())
@@ -6260,7 +6284,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                 if anthropic_first_loop:
                                     await self.send_anthropic_sse_event("message_start", json.dumps({"type":"message_start","message":{"type":"message","id":f"msg_A{req_id_suffix}","role":"assistant","model":modelNameToReturn,"usage":{"input_tokens":prompttokens,"output_tokens":0}}}))
                                     anthropic_first_loop = False
-                                if not genparams.get("sync_toolcall_potential_triggered", False):
+                                if not genparams.get("sync_toolcall_potential_triggered", False) or sync_potential_toolcall_splitmatch:
                                     reasoning = delta.get("reasoning_content", "")
                                     content = delta.get("content", "")
                                     if reasoning and genparams.get('encapsulate_thinking', True):
@@ -6288,7 +6312,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                         # edge case: stream ended with only thinking or no content at all — open a text block so we always close one
                                         await self.send_anthropic_sse_event("content_block_start", json.dumps({"type":"content_block_start","index":anthropic_block_index,"content_block":{"type":"text","text":""}}))
                                     await self.send_anthropic_sse_event("content_block_stop", json.dumps({"type":"content_block_stop","index":anthropic_block_index}))
-                                    await self.send_anthropic_sse_event("message_delta", json.dumps({"type":"message_delta","delta":{"stop_reason":anthropic_reason,"stop_sequence":None},"usage":{"output_tokens":current_token}}))
+                                    await self.send_anthropic_sse_event("message_delta", json.dumps({"type":"message_delta","delta":{"stop_reason":anthropic_reason,"stop_sequence":None},"usage":{"input_tokens":prompttokens,"output_tokens":current_token}}))
                                     await self.send_anthropic_sse_event("message_stop", json.dumps({"type":"message_stop"}))
                             else:
                                 event_str = json.dumps({"token": tokenStr, "finish_reason":currfinishreason})
@@ -6300,6 +6324,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                     await asyncio.sleep(async_sleep_short) #this should keep things responsive
 
                 if streamDone:
+                    if api_format in (4, 9) and genparams.get('sync_toolcall_potential_triggered', False):
+                        return # finish and usage follow after the buffered tool calls are parsed
                     if api_format == 4 or api_format == 3:  # if oai chat, send last [DONE] message consistent with openai format
                         strop = genparams.get("stream_options",None)
                         if (strop and strop.get("include_usage",False)):  # Send a final chunk with usage info, only if requested
@@ -6311,6 +6337,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                             await self.send_oai_sse_event(usage_str)
                         await self.send_oai_sse_event('[DONE]')
                         await asyncio.sleep(async_sleep_short)
+                    genparams['_sse_stream_finished'] = not genparams.get('sync_toolcall_potential_triggered', False)
                     break
         except Exception as ex:
             print("Token streaming was interrupted or aborted!")
@@ -6321,6 +6348,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 handle.abort_generate()
             await asyncio.sleep(0.1) #short delay
         finally:
+            if api_format == 9:
+                genparams['_anthropic_stream_state'] = (not anthropic_first_loop, anthropic_block_index,
+                                                       anthropic_thinking_block_open or anthropic_text_block_started)
             if batch_request_id >= 0:
                 handle.batch_generate_release(batch_request_id)
                 genparams.pop('_batch_request_id', None)
@@ -6365,12 +6395,26 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
     async def handle_request(self, genparams, api_format, stream_flag):
         tasks = []
         genparams["oai_uniqueid"] = random.randint(100000, 999999)
+        for key in ('_sse_stream_started', '_sse_stream_finished', '_oai_generation_pending', '_oai_generation_error', '_anthropic_stream_state'):
+            genparams.pop(key, None)
         monitor_task = None
         tool_keepalive_task = None
+
+        async def run_generation():
+            try:
+                return await self.generate_text(genparams, api_format, stream_flag)
+            except Exception as ex:
+                if api_format not in (3, 4):
+                    raise
+                print(f"Generate: Error while generating: {ex}")
+                genparams['_oai_generation_error'] = True
+                handle.abort_generate()
+                return self.make_openai_generation_error()
+
         try:
             if stream_flag:
                 tasks.append(self.handle_sse_stream(genparams, api_format))
-            generate_task = asyncio.create_task(self.generate_text(genparams, api_format, stream_flag))
+            generate_task = asyncio.create_task(run_generation())
             tasks.append(generate_task)
             if stream_flag:
                 monitor_task = asyncio.create_task(self.monitor_connection(handle.abort_generate))
@@ -6386,6 +6430,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             await asyncio.sleep(0.1) #short delay
         except Exception as e:
             print(e)
+            if api_format in (3, 4):
+                handle.abort_generate()
+                return self.make_openai_generation_error()
         finally:
             if monitor_task and not monitor_task.done():
                 monitor_task.cancel()
@@ -7780,6 +7827,18 @@ Change Mode<br>
                         modelNameToReturn = friendlymodelname
                         if autoswapmode and textName is not None:
                             modelNameToReturn = textName
+                        if api_format in (3, 4) and gendat and gendat.get('error'):
+                            genresp = json.dumps(gendat).encode()
+                            if genparams.get('_sse_stream_started', False):
+                                self.wfile.write(b'data: ' + genresp + b'\n\ndata: [DONE]\n\n')
+                                self.wfile.flush()
+                                self.close_connection = True
+                            else:
+                                self.send_response(500)
+                                self.send_header('content-length', str(len(genresp)))
+                                self.end_headers(content_type='application/json')
+                                self.wfile.write(genresp)
+                            return
                         # Headers are already sent when streaming
                         if not sse_stream_flag:
                             self.send_response(200)
@@ -7788,6 +7847,8 @@ Change Mode<br>
                             self.end_headers(content_type='application/json')
                             self.wfile.write(genresp)
                         elif (api_format == 4 or api_format == 7 or api_format == 9) and genparams.get('using_openai_tools', False): #special case, fake streaming for tool calls
+                            if genparams.get('_sse_stream_finished', False):
+                                return
                             # we only send content_text and reasoning_text if tools aren't used. they contain the balance of the output after sync_toolcall_potential_triggered was triggered
                             content_text = genparams.get('sync_toolcall_extra_content', "") #populated by the sse call, we don't use gendat['choices'][0]['message'].get('content', None)
                             reasoning_text = genparams.get('sync_toolcall_extra_reasoning_content', "")
@@ -7832,12 +7893,18 @@ Change Mode<br>
 
                             elif api_format == 9: # Anthropic fake-stream for tool calls
                                 req_id_suffix = genparams.get('oai_uniqueid', 1)
-                                start_msg = {"type": "message", "id": f"msg_A{req_id_suffix}", "role": "assistant", "model": modelNameToReturn, "usage": {"input_tokens": 0, "output_tokens": 0}}
-                                self.wfile.write(f'event: message_start\ndata: {json.dumps({"type":"message_start","message":start_msg})}\n\n'.encode())
-                                block_index = 0
+                                message_started, block_index, block_open = genparams.get('_anthropic_stream_state', (False, 0, False))
+                                if not message_started:
+                                    start_msg = {"type": "message", "id": f"msg_A{req_id_suffix}", "role": "assistant", "model": modelNameToReturn, "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": gendat['usage']['input_tokens'], "output_tokens": 0}}
+                                    self.wfile.write(f'event: message_start\ndata: {json.dumps({"type":"message_start","message":start_msg})}\n\n'.encode())
+                                if block_open:
+                                    self.wfile.write(f'event: content_block_stop\ndata: {json.dumps({"type":"content_block_stop","index":block_index})}\n\n'.encode())
+                                    block_index += 1
 
                                 # optional leading text (content that arrived before the tool tag)
                                 content_text = genparams.get('sync_toolcall_extra_content', "")
+                                if genparams.get('sync_toolcall_stream_ineligible', False):
+                                    content_text = ''.join(block.get('text', '') for block in gendat['content'] if block['type'] == 'text')
 
                                 # tool_use blocks
                                 if toolsdata_res and len(toolsdata_res) > 0:
@@ -7866,17 +7933,17 @@ Change Mode<br>
                                         block_index += 1
 
                                 stop_reason = "tool_use" if toolsdata_res else ("end_turn" if currfinishreason == "stop" else "max_tokens")
-                                usage_pp = handle.get_last_input_count()
-                                self.wfile.write(f'event: message_delta\ndata: {json.dumps({"type":"message_delta","delta":{"stop_reason":stop_reason,"stop_sequence":None},"usage":{"output_tokens":usage_pp}})}\n\n'.encode())
+                                self.wfile.write(f'event: message_delta\ndata: {json.dumps({"type":"message_delta","delta":{"stop_reason":stop_reason,"stop_sequence":None},"usage":gendat["usage"]})}\n\n'.encode())
                                 self.wfile.write(f'event: message_stop\ndata: {json.dumps({"type":"message_stop"})}\n\n'.encode())
                                 self.wfile.flush()
 
                             # OpenAI fake-stream path (format 4)
                             else:
-                                if genparams.get('sync_toolcall_first_role_sent', False): # Send role chunk first, if needed
+                                chatcmpl_id = gendat['id']
+                                if not genparams.get('sync_toolcall_first_role_sent', False): # Send role chunk first, if needed
                                     genparams['sync_toolcall_first_role_sent'] = True
                                     chunk_role = json.dumps({
-                                        "id": "koboldcpp",
+                                        "id": chatcmpl_id,
                                         "object": "chat.completion.chunk",
                                         "created": int(time.time()),
                                         "model": modelNameToReturn,
@@ -7910,7 +7977,7 @@ Change Mode<br>
 
                                     if temp_reasoning:
                                         chunk_content = json.dumps({
-                                            "id": "koboldcpp",
+                                            "id": chatcmpl_id,
                                             "object": "chat.completion.chunk",
                                             "created": int(time.time()),
                                             "model": modelNameToReturn,
@@ -7920,7 +7987,7 @@ Change Mode<br>
                                         self.wfile.flush()
                                     if temp_content:
                                         chunk_content = json.dumps({
-                                            "id": "koboldcpp",
+                                            "id": chatcmpl_id,
                                             "object": "chat.completion.chunk",
                                             "created": int(time.time()),
                                             "model": modelNameToReturn,
@@ -7942,7 +8009,7 @@ Change Mode<br>
                                             }
                                         }
                                         chunk_meta = json.dumps({
-                                            "id": "koboldcpp",
+                                            "id": chatcmpl_id,
                                             "object": "chat.completion.chunk",
                                             "created": int(time.time()),
                                             "model": modelNameToReturn,
@@ -7959,7 +8026,7 @@ Change Mode<br>
                                             "function": {"arguments": args_str}
                                         }
                                         chunk_args = json.dumps({
-                                            "id": "koboldcpp",
+                                            "id": chatcmpl_id,
                                             "object": "chat.completion.chunk",
                                             "created": int(time.time()),
                                             "model": modelNameToReturn,
@@ -7971,7 +8038,7 @@ Change Mode<br>
                                     # Send remaining buffered content if no tool calls were made
                                     if reasoning_text:
                                         chunk_content = json.dumps({
-                                            "id": "koboldcpp",
+                                            "id": chatcmpl_id,
                                             "object": "chat.completion.chunk",
                                             "created": int(time.time()),
                                             "model": modelNameToReturn,
@@ -7981,7 +8048,7 @@ Change Mode<br>
                                         self.wfile.flush()
                                     if content_text:
                                         chunk_content = json.dumps({
-                                            "id": "koboldcpp",
+                                            "id": chatcmpl_id,
                                             "object": "chat.completion.chunk",
                                             "created": int(time.time()),
                                             "model": modelNameToReturn,
@@ -7992,17 +8059,17 @@ Change Mode<br>
 
                                 # Final chunk
                                 chunk_final = json.dumps({
-                                    "id": "koboldcpp",
+                                    "id": chatcmpl_id,
                                     "object": "chat.completion.chunk",
                                     "created": int(time.time()),
                                     "model": modelNameToReturn,
-                                    "choices": [{"index": 0, "finish_reason": "tool_calls" if (len(toolsdata_res) > 0) else currfinishreason, "delta": {}}]
+                                    "choices": [{"index": 0, "finish_reason": gendat['choices'][0]['finish_reason'], "delta": {}}]
                                 })
                                 self.wfile.write(f"data: {chunk_final}\n\n".encode())
                                 strop = genparams.get("stream_options", None)
                                 if strop and strop.get("include_usage", False):
                                     chunk_usage = json.dumps({
-                                        "id": "koboldcpp",
+                                        "id": chatcmpl_id,
                                         "object": "chat.completion.chunk",
                                         "created": int(time.time()),
                                         "model": modelNameToReturn,
