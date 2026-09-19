@@ -363,7 +363,8 @@ static bool is_video_model(kcpp_sd::model_info info)
 
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
-    kcpp_sd_preserve_ggml_logger();
+    sddebugmode = inputs.debugmode;
+    set_sd_log_level(sddebugmode);
 
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
@@ -536,10 +537,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
             sd_params->model_path = "";
         }
     }
-
-    sddebugmode = inputs.debugmode;
-
-    set_sd_log_level(sddebugmode);
 
     sd_ctx_params_t params = {};
     sd_ctx_params_init(&params);
@@ -1943,6 +1940,8 @@ void sdtype_request_ongoing_generation_preview()
 
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 {
+    set_sd_log_level(sddebugmode);
+
     sd_generation.reset();
 
     if(sd_ctx == nullptr || upscaler_ctx == nullptr || sd_params == nullptr)

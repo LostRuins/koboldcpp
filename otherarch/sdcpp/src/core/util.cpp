@@ -522,6 +522,14 @@ bool parse_strict_bool(const std::string& text, bool& value) {
 // { kcpp
 static int sdloglevel = INT_MAX; // -1 = hide all, 0 = normal, 1 = showall, INT_MAX = sdcpp
 static bool sdquiet = false;
+
+void kcpp_sd_ggml_log_set(void) {
+    /* block ggml log changes on Koboldcpp */
+    if (sdloglevel == INT_MAX) {
+        ggml_log_set(sd_ggml_log_callback, nullptr);
+    }
+}
+
 // } kcpp
 
 static std::string build_progress_bar(int step, int steps, char progress_char = '=', bool show_head = true) {
