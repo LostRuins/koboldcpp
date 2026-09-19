@@ -890,7 +890,7 @@ function loadTrack(id, callback) {
       showMessage("No JSON data found.");
       return;
     }
-    callback(item.params);
+    callback(item.params, item);
   };
 
   req.onerror = function(){
@@ -899,7 +899,14 @@ function loadTrack(id, callback) {
 }
 
 function loadTrackJSON(id){
-  loadTrack(id, updateForm);
+  loadTrack(id, function(data, item) {
+    // Empty values are omitted from saved params, so clear audio codes before
+    // applying the loaded song to avoid reusing codes from another track.
+    if(item.type !== "tts") {
+      document.getElementById("audio_codes").value = "";
+    }
+    updateForm(data);
+  });
 }
 
 function exportTrackJSON(id, title) {

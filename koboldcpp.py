@@ -7999,6 +7999,17 @@ Change Mode<br>
                                     "choices": [{"index": 0, "finish_reason": "tool_calls" if (len(toolsdata_res) > 0) else currfinishreason, "delta": {}}]
                                 })
                                 self.wfile.write(f"data: {chunk_final}\n\n".encode())
+                                strop = genparams.get("stream_options", None)
+                                if strop and strop.get("include_usage", False):
+                                    chunk_usage = json.dumps({
+                                        "id": "koboldcpp",
+                                        "object": "chat.completion.chunk",
+                                        "created": int(time.time()),
+                                        "model": modelNameToReturn,
+                                        "choices": [],
+                                        "usage": gendat["usage"]
+                                    })
+                                    self.wfile.write(f"data: {chunk_usage}\n\n".encode())
                                 self.wfile.write("data: [DONE]\n\n".encode())
                                 self.wfile.flush()
                             self.close_connection = True
