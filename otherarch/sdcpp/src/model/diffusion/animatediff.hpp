@@ -61,7 +61,7 @@ namespace AnimateDiff {
             auto k = to_k->forward(ctx, x_pe);
             auto v = to_v->forward(ctx, x_pe);
 
-            auto a = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, (int)num_heads, nullptr, false);
+            auto a = ggml_ext_attention_ext(ctx, q, k, v, (int)num_heads, nullptr, false);
             return to_out->forward(ctx, a);
         }
     };

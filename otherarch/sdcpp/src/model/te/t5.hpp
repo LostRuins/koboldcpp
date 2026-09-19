@@ -251,7 +251,7 @@ public:
 
         k = ggml_ext_scale(ctx->ggml_ctx, k, ::sqrtf(static_cast<float>(d_head)), true);
 
-        x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
+        x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
 
         x = out_proj->forward(ctx, x);  // [N, n_token, model_dim]
         return {x, past_bias};
@@ -567,7 +567,10 @@ struct T5Embedder {
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
-            std::vector<int> curr_tokens = tokenizer.encode(curr_text);
+            std::vector<int> curr_tokens;
+            if (!tokenizer.encode(curr_text, curr_tokens)) {
+                return {};
+            }
             tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
         }

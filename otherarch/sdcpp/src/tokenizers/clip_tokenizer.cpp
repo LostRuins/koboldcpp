@@ -8,10 +8,10 @@
 
 #include "core/util.h"
 #include "ggml.h"
-#include "tokenize_util.h"
 #include "vocab/vocab.h"
 
-CLIPTokenizer::CLIPTokenizer(int pad_token_id, const std::string& merges_utf8_str) {
+CLIPTokenizer::CLIPTokenizer(int pad_token_id, const std::string& merges_utf8_str)
+    : BPETokenizer(R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|\p{L}+|\p{N}|[^\s\p{L}\p{N}]+)") {
     UNK_TOKEN = "<|endoftext|>";
     BOS_TOKEN = "<|startoftext|>";
     EOS_TOKEN = "<|endoftext|>";
@@ -100,18 +100,4 @@ std::string CLIPTokenizer::normalize(const std::string& text) const {
     auto normalized_text = whitespace_clean(text);
     std::transform(normalized_text.begin(), normalized_text.end(), normalized_text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return normalized_text;
-}
-
-std::vector<std::string> CLIPTokenizer::token_split(const std::string& text) const {
-    std::regex clip_pat(R"('s|'t|'re|'ve|'m|'ll|'d|[[:alpha:]]+|[[:digit:]]|[^[:space:][:alpha:][:digit:]]+)",
-                        std::regex::icase);
-    std::sregex_iterator iter(text.begin(), text.end(), clip_pat);
-    std::sregex_iterator end;
-
-    std::vector<std::string> result;
-    for (; iter != end; ++iter) {
-        result.emplace_back(iter->str());
-    }
-
-    return result;
 }

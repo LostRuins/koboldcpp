@@ -564,7 +564,7 @@ public:
             int64_t chunk_frames = 5 * decoder->t_upscale;
             int64_t pad          = (chunk_frames - (num_frames % chunk_frames)) % chunk_frames;
 
-            result = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, result, 0, 0, 0, 0, 0, 0, 0, pad, false, false);
+            result = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, result, 0, 0, 0, 0, 0, 0, 0, static_cast<int>(pad), false, false);
 
             int64_t num_chunks                  = (num_frames + pad) / chunk_frames;
             auto to_trim                        = decoder->t_upscale - 1;

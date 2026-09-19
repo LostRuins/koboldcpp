@@ -18,12 +18,15 @@ tokenize_photomaker_trigger(FrozenCLIPEmbedderWithCustomWords& clip_conditioner,
     auto tokens_and_weights           = clip_conditioner.tokenize(text);
     std::vector<int> source_tokens    = std::move(tokens_and_weights.first);
     std::vector<float> source_weights = std::move(tokens_and_weights.second);
+    if (source_tokens.empty()) {
+        return {};
+    }
 
-    if (!source_tokens.empty() && source_tokens.front() == clip_conditioner.tokenizer.BOS_TOKEN_ID) {
+    if (!source_tokens.empty() && source_tokens.front() == clip_conditioner.tokenizer->BOS_TOKEN_ID) {
         source_tokens.erase(source_tokens.begin());
         source_weights.erase(source_weights.begin());
     }
-    if (!source_tokens.empty() && source_tokens.back() == clip_conditioner.tokenizer.EOS_TOKEN_ID) {
+    if (!source_tokens.empty() && source_tokens.back() == clip_conditioner.tokenizer->EOS_TOKEN_ID) {
         source_tokens.pop_back();
         source_weights.pop_back();
     }
@@ -49,12 +52,12 @@ tokenize_photomaker_trigger(FrozenCLIPEmbedderWithCustomWords& clip_conditioner,
         weights.push_back(source_weights[i]);
     }
 
-    clip_conditioner.tokenizer.pad_tokens(tokens,
-                                          &weights,
-                                          nullptr,
-                                          clip_conditioner.text_model->model.n_token,
-                                          clip_conditioner.text_model->model.n_token,
-                                          true);
+    clip_conditioner.tokenizer->pad_tokens(tokens,
+                                           &weights,
+                                           nullptr,
+                                           clip_conditioner.text_model->model.n_token,
+                                           clip_conditioner.text_model->model.n_token,
+                                           true);
     std::vector<bool> class_token_mask;
     for (int i = 0; i < tokens.size(); i++) {
         class_token_mask.push_back(class_idx >= 0 && class_idx + 1 <= i && i < class_idx + 1 + trigger_token_count);
@@ -69,8 +72,14 @@ get_photomaker_condition_with_trigger(FrozenCLIPEmbedderWithCustomWords& clip_co
                                       const ConditionerParams& conditioner_params,
                                       const std::string& trigger_word,
                                       int trigger_token_count) {
-    auto image_tokens = clip_conditioner.convert_token_to_id(trigger_word);
-    GGML_ASSERT(image_tokens.size() == 1);
+    std::vector<int> image_tokens;
+    if (!clip_conditioner.convert_token_to_id(trigger_word, image_tokens)) {
+        return {};
+    }
+    if (image_tokens.size() != 1) {
+        LOG_ERROR("PhotoMaker trigger word must encode to one token");
+        return {};
+    }
     auto tokens_and_weights         = tokenize_photomaker_trigger(clip_conditioner,
                                                                   conditioner_params.text,
                                                                   trigger_token_count,
@@ -78,27 +87,43 @@ get_photomaker_condition_with_trigger(FrozenCLIPEmbedderWithCustomWords& clip_co
     std::vector<int>& tokens        = std::get<0>(tokens_and_weights);
     std::vector<float>& weights     = std::get<1>(tokens_and_weights);
     std::vector<bool>& trigger_mask = std::get<2>(tokens_and_weights);
-    auto cond                       = clip_conditioner.get_learned_condition_common(n_threads,
-                                                                                    tokens,
-                                                                                    weights,
-                                                                                    conditioner_params.clip_skip,
-                                                                                    conditioner_params.width,
-                                                                                    conditioner_params.height,
-                                                                                    conditioner_params.zero_out_masked);
+    if (tokens.empty()) {
+        return {};
+    }
+    auto cond = clip_conditioner.get_learned_condition_common(n_threads,
+                                                              tokens,
+                                                              weights,
+                                                              conditioner_params.clip_skip,
+                                                              conditioner_params.width,
+                                                              conditioner_params.height,
+                                                              conditioner_params.zero_out_masked);
     return std::make_tuple(std::move(cond), trigger_mask);
 }
 
-static std::string remove_photomaker_trigger_from_prompt(FrozenCLIPEmbedderWithCustomWords& clip_conditioner,
-                                                         const std::string& prompt,
-                                                         const std::string& trigger_word) {
-    auto image_tokens = clip_conditioner.convert_token_to_id(trigger_word);
-    GGML_ASSERT(image_tokens.size() == 1);
+static bool remove_photomaker_trigger_from_prompt(FrozenCLIPEmbedderWithCustomWords& clip_conditioner,
+                                                  const std::string& prompt,
+                                                  const std::string& trigger_word,
+                                                  std::string& result) {
+    std::vector<int> image_tokens;
+    if (!clip_conditioner.convert_token_to_id(trigger_word, image_tokens)) {
+        return false;
+    }
+    if (image_tokens.size() != 1) {
+        LOG_ERROR("PhotoMaker trigger word must encode to one token");
+        return false;
+    }
     auto tokens_and_weights  = clip_conditioner.tokenize(prompt);
     std::vector<int>& tokens = tokens_and_weights.first;
-    auto it                  = std::find(tokens.begin(), tokens.end(), image_tokens[0]);
-    GGML_ASSERT(it != tokens.end());
+    if (tokens.empty()) {
+        return false;
+    }
+    auto it = std::find(tokens.begin(), tokens.end(), image_tokens[0]);
+    if (it == tokens.end()) {
+        LOG_ERROR("PhotoMaker trigger word was not found in tokenized prompt");
+        return false;
+    }
     tokens.erase(it);
-    return clip_conditioner.decode(tokens);
+    return clip_conditioner.decode(tokens, result);
 }
 
 struct PhotoMakerExtension : public GenerationExtension {
@@ -135,6 +160,7 @@ struct PhotoMakerExtension : public GenerationExtension {
                                                            pm_version,
                                                            20.f,
                                                            ctx.model_manager);
+        pmid_model->set_scale_overrides(ctx.params->linear_scale, ctx.params->attn_scale);
         if (pm_version == PM_VERSION_2) {
             LOG_INFO("using PhotoMaker Version 2");
         }
@@ -222,6 +248,10 @@ struct PhotoMakerExtension : public GenerationExtension {
                                                                                   trigger_token_count);
         SDCondition prepared_id_condition = std::get<0>(cond_tup);
         auto class_tokens_mask            = std::get<1>(cond_tup);
+        if (prepared_id_condition.empty()) {
+            LOG_ERROR("failed to encode PhotoMaker prompt");
+            return false;
+        }
         if (std::find(class_tokens_mask.begin(), class_tokens_mask.end(), true) == class_tokens_mask.end()) {
             LOG_WARN("PhotoMaker trigger word '%s' was not found in prompt", trigger_word.c_str());
             LOG_WARN("Turn off PhotoMaker for this request");
@@ -262,11 +292,16 @@ struct PhotoMakerExtension : public GenerationExtension {
 
         prepared_id_condition.c_crossattn = std::move(res);
         int64_t t1                        = ggml_time_ms();
-        id_condition                      = std::move(prepared_id_condition);
-        start_merge_step                  = int(ctx.pm_params.style_strength / 100.f * ctx.total_steps);
-        ctx.condition_params.text         = remove_photomaker_trigger_from_prompt(*clip_conditioner,
-                                                                                  ctx.condition_params.text,
-                                                                                  trigger_word);
+        std::string prompt;
+        if (!remove_photomaker_trigger_from_prompt(*clip_conditioner,
+                                                   ctx.condition_params.text,
+                                                   trigger_word,
+                                                   prompt)) {
+            return false;
+        }
+        id_condition              = std::move(prepared_id_condition);
+        start_merge_step          = int(ctx.pm_params.style_strength / 100.f * ctx.total_steps);
+        ctx.condition_params.text = std::move(prompt);
         LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
         LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);
 

@@ -124,6 +124,7 @@ struct SDContextParams {
     std::string t5xxl_path;
     std::string llm_path;
     std::string llm_vision_path;
+    std::string tokenizer;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
     std::string uncond_diffusion_model_path;
@@ -131,6 +132,7 @@ struct SDContextParams {
     std::string vae_path;
     std::string vae_format = "auto";
     std::string audio_vae_path;
+    std::string audio_encoder_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string control_net_path;
@@ -175,6 +177,8 @@ struct SDContextParams {
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
     bool force_sdxl_vae_conv_scale = false;
+    float linear_scale             = 0.f;
+    float attn_scale               = 0.f;
 
     float flow_shift = INFINITY;
     ArgOptions get_options();

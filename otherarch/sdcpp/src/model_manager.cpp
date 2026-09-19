@@ -1584,18 +1584,35 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
     if (request.compute_backend == nullptr || sd_backend_is_cpu(request.compute_backend)) {
         return result;
     }
-    auto add                     = [](size_t a, size_t b) { return b > SIZE_MAX - a ? SIZE_MAX : a + b; };
-    const size_t missing         = compute_backend_alloc_size(states, true);
-    result.required_device_bytes = add(request.pending_allocation_bytes, missing);
-    result.required_budget_bytes = add(request.runtime_peak_bytes(), missing);
-    auto device                  = ggml_backend_get_device(request.compute_backend);
-    if (device != nullptr) {
+    auto add             = [](size_t a, size_t b) { return b > SIZE_MAX - a ? SIZE_MAX : a + b; };
+    const size_t missing = compute_backend_alloc_size(states, true);
+    // Backend scratch buffers and pipelines are not included in graph measurements.
+    constexpr size_t safety_margin = 512ULL * 1024ULL * 1024ULL;
+    result.required_device_bytes   = add(add(request.pending_allocation_bytes, missing), safety_margin);
+    result.required_budget_bytes   = add(request.runtime_peak_bytes(), missing);
+    auto available_device_bytes    = [&](ggml_backend_t backend) {
+        auto device = ggml_backend_get_device(backend);
+        if (device == nullptr) {
+            return SIZE_MAX;
+        }
         size_t free_bytes = 0, total_bytes = 0;
         ggml_backend_dev_memory(device, &free_bytes, &total_bytes);
-        if (free_bytes != 0 || total_bytes != 0) {
-            result.available_device_bytes = free_bytes;
+        if (free_bytes == 0 && total_bytes == 0) {
+            return SIZE_MAX;
         }
-    }
+        // Vulkan's heap budget subtraction can underflow when usage exceeds the budget.
+        if (total_bytes > 0 && free_bytes > total_bytes) {
+            return size_t{0};
+        }
+        const size_t resident = add(compute_backend_resident_bytes(backend),
+                                       add(other_runtime_resident_bytes(request.owner_id, backend),
+                                           request.runtime_resident_bytes));
+        if (total_bytes > 0) {
+            free_bytes = std::min(free_bytes, resident < total_bytes ? total_bytes - resident : 0);
+        }
+        return free_bytes;
+    };
+    result.available_device_bytes = available_device_bytes(request.compute_backend);
     if (request.max_backend_bytes > 0) {
         const size_t resident         = add(compute_backend_resident_bytes(request.compute_backend),
                                             other_runtime_resident_bytes(request.owner_id, request.compute_backend));
@@ -1619,11 +1636,7 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
     // GGML exposes only a split buffer's total size, not per-device allocations.
     // Charge that upper bound on every participant instead of undercounting a shard.
     for (const auto& entry : split_devices) {
-        size_t free_bytes = 0, total_bytes = 0;
-        ggml_backend_dev_memory(ggml_backend_get_device(entry.first), &free_bytes, &total_bytes);
-        if (free_bytes != 0 || total_bytes != 0) {
-            result.available_device_bytes = std::min(result.available_device_bytes, free_bytes);
-        }
+        result.available_device_bytes = std::min(result.available_device_bytes, available_device_bytes(entry.first));
         if (entry.second > 0) {
             const size_t resident         = add(compute_backend_resident_bytes(entry.first),
                                                 other_runtime_resident_bytes(request.owner_id, entry.first));
@@ -1739,12 +1752,18 @@ bool ModelManager::ensure_compute_backend_capacity(
         }
     }
 
-    const auto capacity = check_capacity(request, required_states);
-    LOG_WARN("model manager cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget, available %.2f MB device / %.2f MB budget",
+    const auto capacity                = check_capacity(request, required_states);
+    const std::string available_device = capacity.available_device_bytes == SIZE_MAX
+                                             ? "unknown"
+                                             : sd_format("%.2f MB", capacity.available_device_bytes / (1024.0 * 1024.0));
+    const std::string available_budget = capacity.available_budget_bytes == SIZE_MAX
+                                             ? "unlimited"
+                                             : sd_format("%.2f MB", capacity.available_budget_bytes / (1024.0 * 1024.0));
+    LOG_WARN("model manager cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget, available %s device / %s budget",
              ggml_backend_name(compute_backend),
              capacity.required_device_bytes / (1024.0 * 1024.0),
              capacity.required_budget_bytes / (1024.0 * 1024.0),
-             capacity.available_device_bytes / (1024.0 * 1024.0),
-             capacity.available_budget_bytes / (1024.0 * 1024.0));
+             available_device.c_str(),
+             available_budget.c_str());
     return false;
 }

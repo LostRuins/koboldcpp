@@ -106,6 +106,8 @@ struct SDParams {
     std::string audio_vae_path;
     std::string taesd_path;
     std::string stacked_id_embeddings_path;
+    // kcpp: holds the 'kcpp=<dir>' tokenizer argument published in params.tokenizer
+    std::string tokenizer_arg;
     sd_type_t wtype = SD_TYPE_COUNT;
 
     std::string prompt;
@@ -252,16 +254,6 @@ std::string load_gemma_vocab_json()
     static std::string cache;
     return load_embd_file(cache, "embd_res/gemma_vocab_json.embd");
 }
-std::string load_gemma2_merges()
-{
-    static std::string cache;
-    return load_embd_file(cache, "embd_res/gemma2_merges_utf8_c_str.embd");
-}
-std::string load_gemma2_vocab_json()
-{
-    static std::string cache;
-    return load_embd_file(cache, "embd_res/gemma2_vocab_json.embd");
-}
 std::string load_mistral_merges()
 {
     static std::string cache;
@@ -282,17 +274,6 @@ std::string load_umt5_tokenizer_json()
     static std::string cache;
     return load_embd_file(cache, "embd_res/umt5_tokenizer_json.embd");
 }
-std::string load_gpt_oss_merges()
-{
-    static std::string cache;
-    return load_embd_file(cache, "embd_res/gpt_oss_merges_utf8_c_str.embd");
-}
-std::string load_gpt_oss_vocab_json()
-{
-    static std::string cache;
-    return load_embd_file(cache, "embd_res/gpt_oss_vocab_json.embd");
-}
-
 static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data);
 
 // 0 disable, 1 initial, 2 denoised
@@ -553,6 +534,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.audio_vae_path = sd_params->audio_vae_path.c_str();
     params.taesd_path = sd_params->taesd_path.c_str();
     params.photo_maker_path = sd_params->stacked_id_embeddings_path.c_str();
+    // kcpp: virtual 'kcpp' tokenizer slot (value = Koboldcpp dir); the engine strips it and,
+    // for models without an embedded main tokenizer, resolves embd_res/<file> (see init_model_loader)
+    sd_params->tokenizer_arg = "kcpp=" + executable_path;
+    params.tokenizer = sd_params->tokenizer_arg.c_str();
 
     params.rng_type = CUDA_RNG;
 
@@ -1617,14 +1602,19 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         fflush(stdout);
 
         results = nullptr;
-        if (!generate_video(sd_ctx, &vid_gen_params, &results, &generated_num_results, &generated_audio)) {
+        int output_fps = vid_fps;
+        if (!generate_video(sd_ctx, &vid_gen_params, &results, &generated_num_results, &generated_audio, &output_fps)) {
             results = nullptr;
             generated_audio = nullptr;
         }
         if(!sd_is_quiet && sddebugmode==1)
         {
             printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",vid_req_frames, generated_num_results);
+            if (output_fps != vid_fps) {
+                printf("\nRequested FPS: %d, Generated FPS: %d\n", vid_fps, output_fps);
+            }
         }
+        vid_fps = output_fps;
     }
     else if (!is_img2img)
     {

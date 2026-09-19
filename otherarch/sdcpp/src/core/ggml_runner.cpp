@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <exception>
 #include <map>
 #include <utility>
 
+#include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_runner.h"
 #include "core/ggml_tensor_utils.h"
@@ -10,6 +12,21 @@
 #include "core/segment_weight_pipeline.h"
 
 using namespace sd;
+
+ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
+                                    ggml_tensor* q,
+                                    ggml_tensor* k,
+                                    ggml_tensor* v,
+                                    int64_t n_head,
+                                    ggml_tensor* mask,
+                                    bool skip_reshape,
+                                    bool flash_attn,
+                                    float kv_scale) {
+    if (ctx->attn_scale > 0.f) {
+        kv_scale = ctx->attn_scale;
+    }
+    return ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, skip_reshape, flash_attn, kv_scale);
+}
 
 void GGMLRunner::alloc_params_ctx() {
     ggml_init_params params;
@@ -510,6 +527,8 @@ GGMLRunnerContext GGMLRunner::get_context() {
     runner_ctx.ggml_ctx              = compute_ctx;
     runner_ctx.backend               = runtime_backend;
     runner_ctx.flash_attn_enabled    = flash_attn_enabled;
+    runner_ctx.linear_scale          = linear_scale;
+    runner_ctx.attn_scale            = attn_scale;
     runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
     runner_ctx.circular_x_enabled    = circular_x_enabled;
     runner_ctx.circular_y_enabled    = circular_y_enabled;
@@ -624,8 +643,15 @@ std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
                 params_tensor_set_.insert(parameter);
         }
     }
-    auto output = execute_graph(graph, n_threads, no_return, read_outputs);
-    success     = output.has_value();
+    std::optional<sd::Tensor<float>> output;
+    try {
+        output = execute_graph(graph, n_threads, no_return, read_outputs);
+    } catch (const std::exception& error) {
+        LOG_ERROR("%s graph execution failed on %s: %s", get_desc().c_str(),
+                  ggml_backend_name(runtime_backend), error.what());
+        return std::nullopt;
+    }
+    success = output.has_value();
     if (success) {
         cache_.graph_end(true);
     }
@@ -937,6 +963,9 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
                     return fail_segment("output readback");
                 }
             }
+        }
+        if (!workspace_.segment_end()) {
+            return fail_segment("workspace synchronization");
         }
         // Final outputs and their callbacks may still be views of consumed cuts.
         cut_cache_.prune(segment.future_cut_names);

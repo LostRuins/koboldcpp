@@ -15,6 +15,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,9 +32,9 @@
 #include "model_manager.h"
 #include "tokenizers/bpe_tokenizer.h"
 #include "tokenizers/gemma_tokenizer.h"
-#include "tokenizers/gpt_oss_tokenizer.h"
 #include "tokenizers/mistral_tokenizer.h"
 #include "tokenizers/qwen2_tokenizer.h"
+#include "tokenizers/tokenizer_config.h"
 
 namespace LLM {
     constexpr int LLM_GRAPH_SIZE = 65536;
@@ -139,7 +140,8 @@ namespace LLM {
 
         static LLMConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
                                              const std::string& prefix,
-                                             LLMArch arch) {
+                                             LLMArch arch,
+                                             bool& enable_vision) {
             LLMConfig config;
             config.arch = arch;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
@@ -230,8 +232,9 @@ namespace LLM {
                 config.num_experts_per_tok     = 4;
             }
 
-            config.num_layers          = 0;
-            int detected_vision_layers = 0;
+            config.num_layers             = 0;
+            int detected_vision_layers    = 0;
+            bool out_hidden_size_detected = false;
             for (const auto& [name, tensor_storage] : tensor_storage_map) {
                 if (!starts_with(name, prefix)) {
                     continue;
@@ -277,6 +280,7 @@ namespace LLM {
                     if (ends_with(name, "visual.merger.linear_fc2.weight") ||
                         ends_with(name, "visual.merger.mlp.2.weight")) {
                         config.vision.out_hidden_size = tensor_storage.ne[1];
+                        out_hidden_size_detected      = true;
                     }
                     continue;
                 }
@@ -330,6 +334,20 @@ namespace LLM {
                         config.vocab_size,
                         config.hidden_size,
                         config.intermediate_size);
+            if (enable_vision && !config.have_vision_weight) {
+                LOG_WARN("no vision weights detected, vision disabled");
+                enable_vision = false;
+            }
+            // The default would reject valid models, so only compare a detected dim.
+            if (enable_vision && out_hidden_size_detected &&
+                config.vision.out_hidden_size != config.hidden_size) {
+                LOG_ERROR("vision projector output size (%" PRId64 ") does not match LLM hidden size (%" PRId64
+                          "), "
+                          "the vision weights (mmproj) likely belong to a different LLM variant, vision disabled",
+                          config.vision.out_hidden_size,
+                          config.hidden_size);
+                enable_vision = false;
+            }
             return config;
         }
     };
@@ -1359,7 +1377,7 @@ namespace LLM {
                 x        = ggml_ext_cont(ctx->ggml_ctx, kqv);
                 x        = ggml_reshape_3d(ctx->ggml_ctx, x, head_dim * num_heads, n_token, N);
             } else {
-                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
+                x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
             }
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
@@ -1886,12 +1904,8 @@ namespace LLM {
                   bool enable_vision_                                 = false,
                   std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : GGMLRunner(backend, weight_manager),
-              config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch)),
+              config(LLMConfig::detect_from_weights(tensor_storage_map, prefix, arch, enable_vision_)),
               enable_vision(enable_vision_) {
-            if (enable_vision && !config.have_vision_weight) {
-                LOG_WARN("no vision weights detected, vision disabled");
-                enable_vision = false;
-            }
             if (enable_vision) {
                 LOG_VERBOSE("enable llm vision");
                 if (config.llama_cpp_style) {
@@ -2338,7 +2352,7 @@ namespace LLM {
     };
 
     struct LLMEmbedder {
-        std::shared_ptr<BPETokenizer> tokenizer;
+        std::shared_ptr<Tokenizer> tokenizer;
         LLMRunner model;
 
         LLMEmbedder(LLMArch arch,
@@ -2346,14 +2360,27 @@ namespace LLM {
                     const String2TensorStorage& tensor_storage_map      = {},
                     const std::string prefix                            = "",
                     bool enable_vision                                  = false,
-                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                    const TokenizerConfig& tokenizers                   = {})
             : model(arch, backend, tensor_storage_map, prefix, enable_vision, weight_manager) {
+            int pad_id = 151643;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
-                tokenizer = std::make_shared<MistralTokenizer>();
+                pad_id = 11;
             } else if (arch == LLMArch::GPT_OSS_20B) {
-                tokenizer = std::make_shared<GPTOSSTokenizer>();
-            } else {
-                tokenizer = std::make_shared<Qwen2Tokenizer>();
+                pad_id = 199999;
+            } else if (arch == LLMArch::GEMMA2_2B) {
+                pad_id = 0;
+            }
+            tokenizer = tokenizers.create(TokenizerConfig::MAIN, model.config.vocab_size, pad_id);
+            if (!tokenizer) {
+                if (arch == LLMArch::GPT_OSS_20B || arch == LLMArch::GEMMA2_2B) {
+                    throw std::runtime_error("GPT-OSS and Gemma 2 require an external tokenizer.json in the main tokenizer slot");
+                }
+                if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
+                    tokenizer = std::make_shared<MistralTokenizer>();
+                } else {
+                    tokenizer = std::make_shared<Qwen2Tokenizer>();
+                }
             }
         }
 
@@ -2389,7 +2416,10 @@ namespace LLM {
             for (const auto& item : parsed_attention) {
                 const std::string& curr_text = item.first;
                 float curr_weight            = item.second;
-                std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
+                std::vector<int> curr_tokens;
+                if (!tokenizer->tokenize(curr_text, curr_tokens, nullptr)) {
+                    return {};
+                }
                 tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
                 weights.insert(weights.end(), curr_tokens.size(), curr_weight);
             }

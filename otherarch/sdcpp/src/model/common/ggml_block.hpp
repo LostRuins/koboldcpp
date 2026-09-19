@@ -206,6 +206,7 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w            = params["weight"];
+        const float scale         = ctx->linear_scale > 0.f ? ctx->linear_scale : this->scale;
         ggml_tensor* weight_scale = has_weight_scale ? params["weight_scale"] : nullptr;
         #if KCPP_MAINLINE_FP8_SCALED
         if (w->type == GGML_TYPE_F8_E4M3 || w->type == GGML_TYPE_F8_E5M2) {
@@ -313,6 +314,7 @@ public:
 __STATIC_INLINE__ bool support_get_rows(ggml_type wtype) {
     switch (wtype) {
         case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q5_0:
@@ -367,6 +369,61 @@ public:
 
         // [N, n_token, embedding_dim]
         return embedding;
+    }
+};
+
+class Conv1d : public UnaryBlock {
+protected:
+    int64_t in_channels;
+    int64_t out_channels;
+    int64_t groups;
+    int kernel_size;
+    int stride;
+    int padding;
+    int dilation;
+    bool bias;
+    bool force_prec_f32;
+
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        ggml_type wtype  = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F16);
+        params["weight"] = ggml_new_tensor_3d(ctx, wtype, kernel_size, in_channels / groups, out_channels);
+        if (bias) {
+            params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+        }
+    }
+
+public:
+    Conv1d(int64_t in_channels,
+           int64_t out_channels,
+           int kernel_size,
+           int stride          = 1,
+           int padding         = 0,
+           int dilation        = 1,
+           int64_t groups      = 1,
+           bool bias           = true,
+           bool force_prec_f32 = false)
+        : in_channels(in_channels),
+          out_channels(out_channels),
+          groups(groups),
+          kernel_size(kernel_size),
+          stride(stride),
+          padding(padding),
+          dilation(dilation),
+          bias(bias),
+          force_prec_f32(force_prec_f32) {
+        GGML_ASSERT(in_channels > 0 && out_channels > 0 && groups > 0);
+        GGML_ASSERT(in_channels % groups == 0 && out_channels % groups == 0);
+        GGML_ASSERT(kernel_size > 0 && stride > 0 && padding >= 0 && dilation > 0);
+    }
+
+    std::string get_desc() override {
+        return "Conv1d";
+    }
+
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
+        GGML_ASSERT(x->ne[1] == in_channels);
+        return ggml_ext_conv_1d(ctx->ggml_ctx, x, params["weight"], bias ? params["bias"] : nullptr,
+                                stride, padding, dilation, groups, force_prec_f32);
     }
 };
 
@@ -768,7 +825,7 @@ public:
                 b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
         }
-        return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups);
+        return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups, eps);
     }
 };
 
@@ -873,7 +930,7 @@ public:
             v = v_proj->forward(ctx, x);
         }
 
-        x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, false);  // [N, n_token, embed_dim]
+        x = ggml_ext_attention_ext(ctx, q, k, v, n_head, mask, false);  // [N, n_token, embed_dim]
 
         x = out_proj->forward(ctx, x);  // [N, n_token, embed_dim]
         return x;
