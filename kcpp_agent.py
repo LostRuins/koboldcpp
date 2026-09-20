@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A tiny, cross-platform OpenAI Chat Completions-compatible local agent.
+"""A tiny, cross-platform OpenAI Chat Completions-compatible local agent, for use in KoboldCpp.
 
 Eight tools:
   - read
@@ -813,7 +813,7 @@ def confirm_tool_call(
     auto_approve: bool,
     verbose: bool = False,
 ) -> bool:
-    preview_limit = MAX_TOOL_RESULT_CHARS if verbose else min(512, MAX_TOOL_RESULT_CHARS)
+    preview_limit = MAX_TOOL_RESULT_CHARS if verbose else min(1024, MAX_TOOL_RESULT_CHARS)
     delimiter = "--- Tool call --------------------------------------------------"
     print("\n" + color(delimiter, ANSI_YELLOW))
     print(color("Tool:", ANSI_YELLOW) + f" {name}")
@@ -1043,6 +1043,7 @@ def run_agent(
     confirmation = "OFF (--yes)" if auto_approve else "ON"
     confirmation_color = ANSI_YELLOW if auto_approve else ANSI_GREEN
     print(color("Confirmation:", ANSI_CYAN) + " " + color(confirmation, confirmation_color))
+    print("KoboldCpp Agent has full shell access, exercise caution when approving commands.")
     print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
 
     while True:

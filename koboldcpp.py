@@ -34,6 +34,7 @@ import random
 import hashlib
 import urllib.parse
 import urllib.request
+import shlex
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -70,7 +71,7 @@ lora_filenames_max = 10
 multiuser_concurrent_limit = 10
 swa_padding_default = 0
 default_reqtimeout = 600 # 10 min default
-default_maxctx = 12288
+default_maxctx = 16384
 
 # abuse prevention
 stop_token_max = 256
@@ -80,7 +81,7 @@ dry_seq_break_max = 128
 extra_images_max = 4 # for kontext/qwen img
 
 # global vars
-KcppVersion = "1.121"
+KcppVersion = "1.122"
 showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False}
@@ -8351,7 +8352,7 @@ Change Mode<br>
             self.send_header('content-type', content_type)
         return super(KcppServerRequestHandler, self).end_headers()
 
-def RunServerMultiThreaded(addr, port, server_handler):
+def RunServerMultiThreaded(addr, port, server_handler, on_ready=None):
     global exitcounter, sslvalid, global_memory, num_server_threads
     if is_port_in_use(port):
         print(f"Warning: Port {port} already appears to be in use by another program.")
@@ -8429,6 +8430,8 @@ def RunServerMultiThreaded(addr, port, server_handler):
     threadArr = []
     for i in range(num_server_threads):
         threadArr.append(Thread(i))
+    if on_ready:
+        on_ready()
     while 1:
         try:
             time.sleep(10)
@@ -8581,7 +8584,7 @@ def save_config_dict(filename, savdict, template):
         filenamestr += ".kcpps"
     if not filenamestr.endswith(".kcppt") and template:
         filenamestr += ".kcppt"
-    do_not_save = {'allow_config_onready', 'analyze', 'config', 'exportconfig', 'exporttemplate', 'testmemory', 'unpack', 'version'}
+    do_not_save = {'agent_base_url', 'allow_config_onready', 'analyze', 'config', 'exportconfig', 'exporttemplate', 'run_agent', 'testmemory', 'unpack', 'version'}
     filtered = {k: v for k, v in savdict.items() if k not in do_not_save}
     if 'gendefaults' in filtered:
         gendefaults = parse_json_object(filtered['gendefaults'], 'gendefaults')
@@ -8992,6 +8995,7 @@ def show_gui():
     embeddings_gpu_var = ctk.IntVar(value=0)
 
     admin_var = ctk.IntVar(value=0)
+    agent_var = ctk.IntVar(value=1 if args.agent else 0)
     admin_dir_var = ctk.StringVar()
     baseconfig_var = ctk.StringVar()
     admin_password_var = ctk.StringVar()
@@ -9575,7 +9579,7 @@ def show_gui():
         makecheckbox(quick_tab, name, properties[0], int(idx/2) + 20, idx % 2, tooltiptxt=properties[1])
 
     # context size
-    makeslider(quick_tab, "Context Size:", contextsize_text, context_var, 40, width=280, set=13, tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
+    makeslider(quick_tab, "Context Size:", contextsize_text, context_var, 40, width=280, set=17, tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
 
     # load model
     makefileentry(quick_tab, "GGUF Text Model:", "Select GGUF or GGML Model File", model_var, 50, 280, onchoosefile=on_picked_model_file,tooltiptxt="Select a GGUF or GGML model file on disk to be loaded.")
@@ -9667,7 +9671,7 @@ def show_gui():
     cacheslots_entry, cacheslots_label = makelabelentry(context_tab, "CacheSlots:", smartcacheslots_var, row=5, padx=(300), singleline=True, tooltip="Number of slots for smartcache",labelpadx=(220))
 
     # context size
-    makeslider(context_tab, "Context Size:",contextsize_text, context_var, 18, width=280, set=13,tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
+    makeslider(context_tab, "Context Size:",contextsize_text, context_var, 18, width=280, set=17,tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
     context_var.trace_add("write", changed_gpulayers_estimate)
     makelabelentry(context_tab, "Default Gen Amt:", defaultgenamt_var, row=20, padx=(120), singleline=True, tooltip="How many tokens to generate by default, if not specified. Must be smaller than context size. Usually, your frontend GUI will override this.")
     makelabelentry(context_tab, "Prompt Limit:", genlimit_var, row=20, padx=(300), singleline=True, tooltip="If set, restricts max output tokens to this limit regardless of API request. Set to 0 to disable.",labelpadx=(210))
@@ -10059,9 +10063,10 @@ def show_gui():
     makefileentry(admin_tab, "Base config .kcpps (Optional, for reloading):", "", baseconfig_var, 7, width=280, dialog_type=0, tooltiptxt="Specify a base .kcpps config to apply, if no custom base config is selected during a model swap.")
     makelabelentry(admin_tab, "Auto Unload Timeout:" , admin_unload_timeout_var, 17, 70,padx=(150),singleline=True,tooltip="Set an idle timeout in seconds after which KoboldCpp will automatically unload the current model.")
     makecheckbox(admin_tab, "SingleInstance Mode", singleinstance_var, 19, 0,tooltiptxt="Allows this server to be shut down by another KoboldCpp instance with singleinstance starting on the same port.")
-    router_mode_box = makecheckbox(admin_tab, "Router Mode", router_mode_var, 21, 0, command=togglerouter, tooltiptxt="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.")
-    autoswap_mode_box = makecheckbox(admin_tab, "Autoswap Mode", autoswap_mode_var, 23, 0, command=toggleautoswap, tooltiptxt="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.")
-    autoswap_threshold_entry, autoswap_threshold_label = makelabelentry(admin_tab, "Autoswap Threshold (MB):", autoswap_threshold_var, 25, 70, padx=(180), singleline=True, tooltip="Model families at or below this combined file size remain loaded as sidecars. Only one model family above the threshold is loaded at a time.")
+    makecheckbox(admin_tab, "Launch KoboldCpp Agent", agent_var, 21, 0, tooltiptxt="Open the local tool-using agent in a new terminal after the KoboldCpp API is ready.")
+    router_mode_box = makecheckbox(admin_tab, "Router Mode", router_mode_var, 31, 0, command=togglerouter, tooltiptxt="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.")
+    autoswap_mode_box = makecheckbox(admin_tab, "Autoswap Mode", autoswap_mode_var, 33, 0, command=toggleautoswap, tooltiptxt="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.")
+    autoswap_threshold_entry, autoswap_threshold_label = makelabelentry(admin_tab, "Autoswap Threshold (MB):", autoswap_threshold_var, 35, 70, padx=(180), singleline=True, tooltip="Model families at or below this combined file size remain loaded as sidecars. Only one model family above the threshold is loaded at a time.")
 
     def kcpp_export_template():
         nonlocal kcpp_exporting_template
@@ -10400,6 +10405,7 @@ def show_gui():
         args.musiclowvram = musiclowvram_var.get()==1
 
         args.admin = (admin_var.get()==1 and not args.cli)
+        args.agent = agent_var.get()==1
         args.admindir = admin_dir_var.get()
         args.adminpassword = admin_password_var.get()
         args.singleinstance = (singleinstance_var.get()==1)
@@ -10713,6 +10719,7 @@ def show_gui():
         embeddings_gpu_var.set(mydict["embeddingsgpu"] if ("embeddingsgpu" in mydict) else 0)
 
         admin_var.set(mydict["admin"] if ("admin" in mydict) else 0)
+        agent_var.set(mydict["agent"] if ("agent" in mydict) else 0)
         router_mode_var.set(mydict["routermode"] if ("routermode" in mydict) else 0)
         autoswap_mode_var.set(mydict["autoswapmode"] if ("autoswapmode" in mydict) else 0)
         autoswap_threshold_var.set(mydict["autoswapthreshold"] if ("autoswapthreshold" in mydict) else default_autoswap_threshold)
@@ -11588,6 +11595,75 @@ def analyze_gguf_model_wrapper(filename=""):
     dumpthread.start()
 
 
+def get_kobold_agent_path():
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath(os.path.dirname(__file__)))
+    return os.path.join(base_path, "kcpp_agent.py")
+
+
+def run_kobold_agent(base_url=None):
+    agent_path = get_kobold_agent_path()
+    if not os.path.isfile(agent_path):
+        raise FileNotFoundError(f"Kobold Agent script not found: {agent_path}")
+
+    # The packaged executable cannot invoke the bundled script through a separate
+    # Python interpreter, so execute it as __main__ inside the child process.
+    import runpy
+    old_argv = sys.argv
+    try:
+        sys.argv = [agent_path]
+        if base_url:
+            sys.argv.extend(["--base-url", base_url])
+        runpy.run_path(agent_path, run_name="__main__")
+    finally:
+        sys.argv = old_argv
+
+
+def launch_kobold_agent(base_url=None):
+    agent_path = get_kobold_agent_path()
+    if not os.path.isfile(agent_path):
+        print(f"Cannot launch Kobold Agent: script not found at {agent_path}")
+        return False
+
+    if getattr(sys, 'frozen', False):
+        command = [sys.executable, "--run-agent"]
+    else:
+        command = [sys.executable, agent_path]
+    if base_url:
+        if getattr(sys, 'frozen', False):
+            command.extend(["--agent-base-url", base_url])
+        else:
+            command.extend(["--base-url", base_url])
+
+    try:
+        if os.name == 'nt':
+            subprocess.Popen(command, cwd=os.getcwd(), creationflags=subprocess.CREATE_NEW_CONSOLE)
+        elif sys.platform == 'darwin':
+            shell_command = f"cd {shlex.quote(os.getcwd())} && exec {shlex.join(command)}"
+            apple_script = f'tell application "Terminal" to do script {json.dumps(shell_command)}'
+            subprocess.Popen(["osascript", "-e", apple_script], start_new_session=True)
+        else:
+            terminal_commands = [
+                ("x-terminal-emulator", ["-e"]),
+                ("gnome-terminal", ["--"]),
+                ("konsole", ["-e"]),
+                ("mate-terminal", ["--"]),
+                ("xfce4-terminal", ["-x"]),
+                ("xterm", ["-e"]),
+            ]
+            for terminal, terminal_args in terminal_commands:
+                terminal_path = shutil.which(terminal)
+                if terminal_path:
+                    subprocess.Popen([terminal_path, *terminal_args, *command], cwd=os.getcwd(), start_new_session=True)
+                    break
+            else:
+                print("Cannot launch Kobold Agent: no supported terminal emulator was found.")
+                return False
+        return True
+    except Exception as e:
+        print(f"Cannot launch Kobold Agent: {e}")
+        return False
+
+
 def register_koboldcpp():
     try:
         exe_path = ""
@@ -11732,6 +11808,14 @@ def unregister_koboldcpp():
 def main(launch_args, default_args):
     global args, showdebug, kcpp_instance, exitcounter, using_gui_launcher, sslvalid, global_memory
     args = launch_args #note: these are NOT shared with the child processes!
+
+    if args.run_agent:
+        run_kobold_agent(args.agent_base_url)
+        return
+
+    if args.agent and len(sys.argv) == 2:
+        launch_kobold_agent()
+        return
 
     if (args.version) and len(sys.argv) <= 2:
         print(f"{KcppVersion}") # just print version and exit
@@ -13046,6 +13130,14 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 LaunchWebbrowser(endpoint_url,"--launch was set, but could not launch web browser automatically.")
             browser_thread = threading.Timer(2, launch_browser_thread) #2 second delay
             browser_thread.start()
+        agent_base_url = None
+        if args.agent:
+            agent_host = args.host
+            if agent_host in ("", "0.0.0.0", "::", "[::]"):
+                agent_host = "127.0.0.1"
+            elif ":" in agent_host and not agent_host.startswith("["):
+                agent_host = f"[{agent_host}]"
+            agent_base_url = f"{httpsaffix}://{agent_host}:{displayedport}/v1"
 
         if args.hordekey and args.hordekey!="":
             if args.hordeworkername and args.hordeworkername!="":
@@ -13181,7 +13273,11 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         else:
             # Flush stdout for previous win32 issue so the client can see output.
             print(f"======\nPlease connect to custom endpoint at {endpoint_url}", flush=True)
-        asyncio.run(RunServerMultiThreaded(args.host, args.port, KcppServerRequestHandler))
+        on_server_ready = None
+        if agent_base_url:
+            def on_server_ready():
+                return launch_kobold_agent(agent_base_url)
+        asyncio.run(RunServerMultiThreaded(args.host, args.port, KcppServerRequestHandler, on_server_ready))
     else:
         # Flush stdout for previous win32 issue so the client can see output.
         if not args.prompt or args.benchmark or args.cli:
@@ -13224,6 +13320,7 @@ if __name__ == '__main__':
 
     #more advanced params
     advparser = parser.add_argument_group('Advanced Commands')
+    advparser.add_argument("--agent", help="Launches the simple KoboldCpp Agent in a new terminal window.", action='store_true')
     advparser.add_argument("--analyze", metavar=('[filename]'), help="Reads the metadata, weight types and tensor names in any GGUF or safetensors file.", default="")
     advparser.add_argument("--autofit","--fit","-fit", help="Forces autofit, which attempts to fit the model in the best possible way. Overrides everything else.", action='store_true')
     advparser.add_argument("--autofitpadding", metavar=('[padding in MB]'), help="How much spare allowance in MB should autofit reserve? If it's too little, the load might fail.", type=int, default=default_autofit_padding)
@@ -13407,5 +13504,7 @@ if __name__ == '__main__':
 
     debuggroup = parser.add_argument_group('Debug Commands')
     debuggroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')
+    debuggroup.add_argument("--run-agent", help=argparse.SUPPRESS, action='store_true')
+    debuggroup.add_argument("--agent-base-url", help=argparse.SUPPRESS, default=None)
 
     main(launch_args=parser.parse_args(),default_args=parser.parse_args([]))
