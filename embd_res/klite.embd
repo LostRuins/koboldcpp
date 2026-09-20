@@ -4609,7 +4609,7 @@ Current version indicated by LITEVER below.
 		second_ep_model:"gpt2",
 		second_ep_url:"",
 
-		max_context_length: (localflag?12288:6144),
+		max_context_length: (localflag?16384:6144),
 		max_length: (localflag?2048:768),
 		last_maxctx: 0,
 		auto_ctxlen: true,
@@ -15188,12 +15188,12 @@ Current version indicated by LITEVER below.
 											document.getElementById("max_context_length_slide").max = ep_maxctx;
 											document.getElementById("max_context_length_slide_label").innerText = ep_maxctx;
 										}
-										if(ep_maxctx && ep_maxctx>=12288 && document.getElementById("max_length_slide").max < Math.floor(ep_maxctx/4))
+										if(ep_maxctx && ep_maxctx>=16384 && document.getElementById("max_length_slide").max < Math.floor(ep_maxctx/4))
 										{
 											document.getElementById("max_length_slide").max = Math.floor(ep_maxctx/4);
 											document.getElementById("max_length_slide_label").innerText = Math.floor(ep_maxctx/4);
 										}
-										if(localflag && ep_maxctx>=12288 && localsettings.max_context_length<ep_maxctx && (localsettings.last_maxctx!=ep_maxctx || localsettings.max_context_length==defaultsettings.max_context_length))
+										if(localflag && ep_maxctx>=16384 && localsettings.max_context_length<ep_maxctx && (localsettings.last_maxctx!=ep_maxctx || localsettings.max_context_length==defaultsettings.max_context_length))
 										{
 											localsettings.max_context_length = ep_maxctx;
 											localsettings.last_maxctx = ep_maxctx;
@@ -31942,11 +31942,11 @@ Current version indicated by LITEVER below.
 									<input title="Context Size" inputmode="numeric" class="justifyright push-right" id="max_context_length" style="width: 8ch;" oninput="
 									document.getElementById('max_context_length_slide').value = this.value;">
 								</div>
-								<div><input title="Context Size Slider" type="range" min="512" max="12288" step="8" id="max_context_length_slide" oninput="
+								<div><input title="Context Size Slider" type="range" min="512" max="16384" step="8" id="max_context_length_slide" oninput="
 									document.getElementById('max_context_length').value = this.value;"></div>
 								<div class="settingminmax">
 									<div class="justifyleft">512</div>
-									<div class="justifyright" id="max_context_length_slide_label">12288</div>
+									<div class="justifyright" id="max_context_length_slide_label">16384</div>
 								</div>
 								<div id="auto_ctxlen_panel" class="settinglabel">
 									<div class="justifyleft" title="Automatically lowers settings if incompatible with existing workers">Auto-Adjust Limits </div>

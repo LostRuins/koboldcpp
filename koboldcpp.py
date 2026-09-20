@@ -8837,6 +8837,7 @@ def show_gui():
     batchsize_text = ["Don't Batch","16","32","64","128","256","512","1024","2048","4096"]
     ubatchsize_text = ["Match Batch Size","16","32","64","128","256","512","1024","2048","4096"]
     contextsize_text = ["256", "512", "1024", "2048", "3072", "4096", "5120", "6144", "7168", "8192", "9216", "10240", "11264", "12288", "13312", "14336", "15360", "16384", "18432", "20480", "22528", "24576", "26624", "28672", "30720", "32768", "36864", "40960", "45056", "49152", "53248", "57344", "61440", "65536", "73728", "81920", "90112", "98304", "106496", "114688", "122880", "131072", "147456", "163840", "180224", "196608", "212992", "229376", "245760", "262144" ]
+    default_contextsize_index = contextsize_text.index(str(default_maxctx))
     quantkv_text = ["f16","bf16","q8_0","q5_1","q4_0"]
 
     if not any(runopts):
@@ -9579,7 +9580,7 @@ def show_gui():
         makecheckbox(quick_tab, name, properties[0], int(idx/2) + 20, idx % 2, tooltiptxt=properties[1])
 
     # context size
-    makeslider(quick_tab, "Context Size:", contextsize_text, context_var, 40, width=280, set=17, tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
+    makeslider(quick_tab, "Context Size:", contextsize_text, context_var, 40, width=280, set=default_contextsize_index, tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
 
     # load model
     makefileentry(quick_tab, "GGUF Text Model:", "Select GGUF or GGML Model File", model_var, 50, 280, onchoosefile=on_picked_model_file,tooltiptxt="Select a GGUF or GGML model file on disk to be loaded.")
@@ -9671,7 +9672,7 @@ def show_gui():
     cacheslots_entry, cacheslots_label = makelabelentry(context_tab, "CacheSlots:", smartcacheslots_var, row=5, padx=(300), singleline=True, tooltip="Number of slots for smartcache",labelpadx=(220))
 
     # context size
-    makeslider(context_tab, "Context Size:",contextsize_text, context_var, 18, width=280, set=17,tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
+    makeslider(context_tab, "Context Size:",contextsize_text, context_var, 18, width=280, set=default_contextsize_index,tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
     context_var.trace_add("write", changed_gpulayers_estimate)
     makelabelentry(context_tab, "Default Gen Amt:", defaultgenamt_var, row=20, padx=(120), singleline=True, tooltip="How many tokens to generate by default, if not specified. Must be smaller than context size. Usually, your frontend GUI will override this.")
     makelabelentry(context_tab, "Prompt Limit:", genlimit_var, row=20, padx=(300), singleline=True, tooltip="If set, restricts max output tokens to this limit regardless of API request. Set to 0 to disable.",labelpadx=(210))
