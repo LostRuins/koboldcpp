@@ -20341,9 +20341,36 @@ Current version indicated by LITEVER below.
 	var tts_speak_output_queue = [];
 	var tts_queue_embed = false;
 	var tts_queue_download = false;
-	var ttsAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-	var ttsMasterGain = ttsAudioContext.createGain();
-	ttsMasterGain.connect(ttsAudioContext.destination);
+	var ttsAudioContext = null;
+	var ttsMasterGain = null;
+	function ensure_tts_audio_context()
+	{
+		if(ttsAudioContext)
+		{
+			return true;
+		}
+		const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+		if(!AudioContextConstructor)
+		{
+			return false;
+		}
+		try
+		{
+			const audioContext = new AudioContextConstructor();
+			const masterGain = audioContext.createGain();
+			masterGain.connect(audioContext.destination);
+			ttsAudioContext = audioContext;
+			ttsMasterGain = masterGain;
+			return true;
+		}
+		catch(error)
+		{
+			ttsAudioContext = null;
+			ttsMasterGain = null;
+			console.warn("Web Audio is unavailable; audio-based TTS is disabled.", error);
+			return false;
+		}
+	}
 	function tts_speak(text, do_download=false, do_embed_tts=false, is_test=false)
 	{
 		if(!text || text=="" || text.trim()=="")
@@ -20466,6 +20493,11 @@ Current version indicated by LITEVER below.
 
 		if(ssval==XTTS_ID || ssval==ALLTALK_ID || ssval==OAI_TTS_ID || ssval==KCPP_TTS_ID) //xtts api server
 		{
+			if(!ensure_tts_audio_context())
+			{
+				console.warn("Unable to use audio-based TTS because Web Audio is unavailable.");
+				return;
+			}
 			let is_xtts = (ssval==XTTS_ID);
 			let is_oai_tts = (ssval==OAI_TTS_ID);
 			let is_kcpp_tts = (ssval==KCPP_TTS_ID);
@@ -21074,7 +21106,7 @@ Current version indicated by LITEVER below.
 			}
 		}
 
-		const user_input_empty = (newgen.trim()=="");
+		let user_input_empty = (newgen.trim()=="");
 		pending_context_postinjection = "";
 
 		if (!user_input_empty || gametext_arr.length > 0 || current_memory != "" || current_anote != "")
@@ -21092,6 +21124,37 @@ Current version indicated by LITEVER below.
 
 			if (localsettings.opmode == 4)
 			{
+				// An empty send with a trailing vision attachment is an image-only user turn.
+				// Move the attachment in the stored history so both prompts and rendering see it there.
+				if(newgen=="" && !is_impersonate_user)
+				{
+					let history = concat_gametext();
+					let shiftStart = get_trailing_vision_media_start(history,true);
+					if(shiftStart<history.length)
+					{
+						let media = history.slice(shiftStart);
+						if(media.includes("[<|p|"))
+						{
+							msgbox("Attachment is still processing. Please send again when it is ready.");
+							return;
+						}
+						if(!is_instruct_latest_human_turn())
+						{
+							let remaining = media.length;
+							while(remaining>0 && gametext_arr.length>0)
+							{
+								let last = gametext_arr.length-1;
+								let segment = gametext_arr[last];
+								let removed = Math.min(remaining, segment.length);
+								gametext_arr[last] = segment.slice(0, segment.length-removed);
+								if(gametext_arr[last]=="") gametext_arr.pop();
+								remaining -= removed;
+							}
+							newgen = media;
+							user_input_empty = false;
+						}
+					}
+				}
 				newgen = wrap_newgen_instruct_format(newgen,true);
 				let latest_human = is_instruct_latest_human_turn();
 				if(!localsettings.allow_continue_user_turn && newgen=="" && latest_human && !is_impersonate_user) //assume the user is trying to get the AI to respond even though there's no output tag
@@ -27050,6 +27113,25 @@ Current version indicated by LITEVER below.
 	}
 
 	var toolcall_waiting_approve = null;
+	function get_trailing_vision_media_start(text, includePendingUploads=false)
+	{
+		let media = text.match(/(?:\s*\[<\|([hp])\|.+?\|\1\|>\])+\s*$/);
+		if(!media) return text.length;
+		let attachments = Array.from(media[0].matchAll(/\s*\[<\|([hp])\|(.+?)\|\1\|>\]/g));
+		let shiftStart = text.length;
+		for(let j=attachments.length-1;j>=0;--j)
+		{
+			let type = attachments[j][1];
+			let hash = attachments[j][2];
+			let meta = completed_imgs_meta[hash];
+			let pending = image_db[hash];
+			if(type=="h" && (!meta || !(meta.visionmode==1 || meta.visionmode==2 || meta.visionmode==3))) break;
+			if(type=="p" && (!includePendingUploads || !pending || pending.imsource!=1)) break;
+			shiftStart = media.index + attachments[j].index;
+		}
+		return shiftStart;
+	}
+
 	function repact_instruct_turns_beautify_render(chatunits) //display-only formatting; preserve original turns for editing
 	{
 		toolcall_waiting_approve = null;
@@ -27063,24 +27145,9 @@ Current version indicated by LITEVER below.
 			}
 
 			// Only move trailing vision-enabled attachments; generated or unknown media stays put.
-			let media = prev.msg.match(/(?:\s*\[<\|h\|.+?\|h\|>\])+\s*$/);
-			if(media)
+			let shiftStart = get_trailing_vision_media_start(prev.msg);
+			if(shiftStart<prev.msg.length)
 			{
-				let attachments = Array.from(media[0].matchAll(/\s*\[<\|h\|(.+?)\|h\|>\]/g));
-				let shiftStart = prev.msg.length;
-				for(let j=attachments.length-1;j>=0;--j)
-				{
-					let meta = completed_imgs_meta[attachments[j][1]];
-					if(!meta || !(meta.visionmode==1 || meta.visionmode==2 || meta.visionmode==3))
-					{
-						break;
-					}
-					shiftStart = media.index + attachments[j].index;
-				}
-				if(shiftStart==prev.msg.length)
-				{
-					continue;
-				}
 				prev.origmsg = prev.msg;
 				curr.origmsg = curr.msg;
 				curr.msg = prev.msg.slice(shiftStart) + "\n" + curr.msg;
@@ -33574,10 +33641,10 @@ Current version indicated by LITEVER below.
 					<div style="display: inline-block;">
 					Main Message Role:
 					<select title="Main Message Role" class="form-control" style="height: 25px; font-size:12px; margin-bottom: 2px; margin-right:4px; padding:4px;display:inline;width:100px" id="oairoledropdown">
-						<option value="0" selected>User</option>
+						<option value="0">User</option>
 						<option value="1">Assistant</option>
 						<option value="2">System</option>
-						<option value="3">AutoRole</option>
+						<option value="3" selected>AutoRole</option>
 					</select>
 					</div>
 					<div style="display: inline-block;">
