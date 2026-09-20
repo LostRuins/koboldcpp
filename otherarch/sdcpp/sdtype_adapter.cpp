@@ -1911,13 +1911,52 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
     }
 
     std::string preview;
-    if (image != nullptr) {
+    if (image != nullptr && frame_count > 0) {
+        constexpr uint32_t preview_max_dimension = 128;
+        std::vector<sd_image_t> resized_images(image, image + frame_count);
+        std::vector<std::vector<uint8_t>> resized_image_data(static_cast<size_t>(frame_count));
+        bool resize_ok = true;
+
+        for (int i = 0; i < frame_count; ++i) {
+            const sd_image_t& source = image[i];
+            if (source.width <= preview_max_dimension && source.height <= preview_max_dimension) {
+                continue;
+            }
+
+            uint32_t resized_width;
+            uint32_t resized_height;
+            if (source.width >= source.height) {
+                resized_width = preview_max_dimension;
+                resized_height = std::max(1u, static_cast<uint32_t>(
+                    static_cast<uint64_t>(source.height) * preview_max_dimension / source.width));
+            } else {
+                resized_height = preview_max_dimension;
+                resized_width = std::max(1u, static_cast<uint32_t>(
+                    static_cast<uint64_t>(source.width) * preview_max_dimension / source.height));
+            }
+
+            auto& pixels = resized_image_data[static_cast<size_t>(i)];
+            pixels.resize(static_cast<size_t>(resized_width) * resized_height * source.channel);
+            if (source.data == nullptr || source.channel == 0 ||
+                !stbir_resize_uint8(source.data, source.width, source.height, 0,
+                                    pixels.data(), resized_width, resized_height, 0, source.channel)) {
+                resize_ok = false;
+                break;
+            }
+            resized_images[static_cast<size_t>(i)] = {
+                resized_width, resized_height, source.channel, pixels.data()
+            };
+        }
+
+        sd_image_t* preview_images = resize_ok ? resized_images.data() : nullptr;
         if (frame_count == 1) {
-            preview = raw_image_to_png_base64(*image);
-        } else {
+            if (preview_images != nullptr) {
+                preview = raw_image_to_png_base64(*preview_images);
+            }
+        } else if (preview_images != nullptr) {
             uint8_t * out_data = nullptr;
             size_t out_len = 0;
-            if (create_gif_buf_from_sd_images_msf(image, frame_count, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
+            if (create_gif_buf_from_sd_images_msf(preview_images, frame_count, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
                 preview = kcpp_base64_encode(out_data, out_len);
             }
             if (out_data) {
