@@ -8584,7 +8584,7 @@ def save_config_dict(filename, savdict, template):
         filenamestr += ".kcpps"
     if not filenamestr.endswith(".kcppt") and template:
         filenamestr += ".kcppt"
-    do_not_save = {'agent_base_url', 'allow_config_onready', 'analyze', 'config', 'exportconfig', 'exporttemplate', 'run_agent', 'testmemory', 'unpack', 'version'}
+    do_not_save = {'agent_api_key', 'agent_base_url', 'allow_config_onready', 'analyze', 'config', 'exportconfig', 'exporttemplate', 'run_agent', 'testmemory', 'unpack', 'version'}
     filtered = {k: v for k, v in savdict.items() if k not in do_not_save}
     if 'gendefaults' in filtered:
         gendefaults = parse_json_object(filtered['gendefaults'], 'gendefaults')
@@ -11601,7 +11601,7 @@ def get_kobold_agent_path():
     return os.path.join(base_path, "kcpp_agent.py")
 
 
-def run_kobold_agent(base_url=None):
+def run_kobold_agent(base_url=None, api_key=None):
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
         raise FileNotFoundError(f"Kobold Agent script not found: {agent_path}")
@@ -11614,12 +11614,14 @@ def run_kobold_agent(base_url=None):
         sys.argv = [agent_path]
         if base_url:
             sys.argv.extend(["--base-url", base_url])
+        if api_key:
+            sys.argv.extend(["--api-key", api_key])
         runpy.run_path(agent_path, run_name="__main__")
     finally:
         sys.argv = old_argv
 
 
-def launch_kobold_agent(base_url=None):
+def launch_kobold_agent(base_url=None, api_key=None):
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
         print(f"Cannot launch Kobold Agent: script not found at {agent_path}")
@@ -11634,6 +11636,11 @@ def launch_kobold_agent(base_url=None):
             command.extend(["--agent-base-url", base_url])
         else:
             command.extend(["--base-url", base_url])
+    if api_key:
+        if getattr(sys, 'frozen', False):
+            command.extend(["--agent-api-key", api_key])
+        else:
+            command.extend(["--api-key", api_key])
 
     try:
         if os.name == 'nt':
@@ -11811,7 +11818,7 @@ def main(launch_args, default_args):
     args = launch_args #note: these are NOT shared with the child processes!
 
     if args.run_agent:
-        run_kobold_agent(args.agent_base_url)
+        run_kobold_agent(args.agent_base_url, args.agent_api_key)
         return
 
     if args.agent and len(sys.argv) == 2:
@@ -13277,7 +13284,13 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         on_server_ready = None
         if agent_base_url:
             def on_server_ready():
-                return launch_kobold_agent(agent_base_url)
+                if args.mcpfile:
+                    agent_timer = threading.Timer(
+                        2, launch_kobold_agent, args=(agent_base_url, args.password)
+                    )
+                    agent_timer.start()
+                    return True
+                return launch_kobold_agent(agent_base_url, args.password)
         asyncio.run(RunServerMultiThreaded(args.host, args.port, KcppServerRequestHandler, on_server_ready))
     else:
         # Flush stdout for previous win32 issue so the client can see output.
@@ -13507,5 +13520,6 @@ if __name__ == '__main__':
     debuggroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')
     debuggroup.add_argument("--run-agent", help=argparse.SUPPRESS, action='store_true')
     debuggroup.add_argument("--agent-base-url", help=argparse.SUPPRESS, default=None)
+    debuggroup.add_argument("--agent-api-key", help=argparse.SUPPRESS, default=None)
 
     main(launch_args=parser.parse_args(),default_args=parser.parse_args([]))

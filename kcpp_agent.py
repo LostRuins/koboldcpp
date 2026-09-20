@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A tiny, cross-platform OpenAI Chat Completions-compatible local agent, for use in KoboldCpp.
 
-Eight tools:
+Eight built-in tools, plus tools exposed by KoboldCpp's MCP proxy:
   - read
   - write
   - edit
@@ -157,7 +157,7 @@ class Throbber:
 
 def system_prompt() -> str:
     return f"""You are a small, careful local computer assistant running on {platform.system()}.
-You have eight tools: read, write, edit, shell, list_directory, glob, grep, and web_fetch.
+You have eight built-in tools: read, write, edit, shell, list_directory, glob, grep, and web_fetch. The server may also supply MCP tools.
 
 Rules:
 - Use tools when needed instead of pretending an action happened.
@@ -858,6 +858,7 @@ def chat_completion(
     api_key: str,
     model: str,
     messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
     temperature: float,
     max_tokens: int | None,
     request_timeout: int,
@@ -867,7 +868,7 @@ def chat_completion(
     payload = {
         "model": model,
         "messages": messages,
-        "tools": TOOLS,
+        "tools": tools,
         "tool_choice": "auto",
         "temperature": temperature,
     }
@@ -922,6 +923,117 @@ def api_url(base_url: str, resource: str) -> str:
         path += "/v1"
     path += "/" + resource.lstrip("/")
     return urllib.parse.urlunsplit(parsed._replace(path=path))
+
+
+def mcp_url(base_url: str) -> str:
+    """Return the KoboldCpp MCP proxy URL for an OpenAI-compatible base URL."""
+    parsed = urllib.parse.urlsplit(normalize_base_url(base_url))
+    return urllib.parse.urlunsplit(parsed._replace(path="/mcp", query="", fragment=""))
+
+
+def mcp_request(
+    base_url: str,
+    api_key: str,
+    method: str,
+    params: dict[str, Any],
+    timeout: int,
+) -> dict[str, Any]:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params,
+    }
+    request = urllib.request.Request(
+        mcp_url(base_url),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            value = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"MCP HTTP {exc.code}: {limit_text(body, 'error response')}") from exc
+    except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+        raise RuntimeError(f"Could not reach KoboldCpp MCP proxy: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"KoboldCpp MCP proxy returned invalid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("KoboldCpp MCP proxy returned a non-object response")
+    if value.get("error") is not None:
+        raise RuntimeError(f"MCP error: {json.dumps(value['error'], ensure_ascii=False)}")
+    return value
+
+
+def discover_mcp_tools(
+    base_url: str, api_key: str, timeout: int
+) -> tuple[list[dict[str, Any]], set[str], list[str]]:
+    response = mcp_request(base_url, api_key, "tools/list", {}, timeout)
+    result = response.get("result", {})
+    raw_tools = result.get("tools", []) if isinstance(result, dict) else []
+    if not isinstance(raw_tools, list):
+        raise RuntimeError("MCP tools/list result does not contain a tools list")
+
+    tools: list[dict[str, Any]] = []
+    names: set[str] = set()
+    warnings: list[str] = []
+    reserved = set(TOOL_IMPL)
+    for item in raw_tools:
+        if not isinstance(item, dict):
+            warnings.append("Skipped a malformed MCP tool entry")
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+            warnings.append(f"Skipped MCP tool with unsupported name: {name!r}")
+            continue
+        if name in reserved or name in names:
+            warnings.append(f"Skipped conflicting MCP tool name: {name}")
+            continue
+        description = item.get("description", "")
+        if not isinstance(description, str):
+            description = str(description)
+        parameters = item.get("inputSchema", {"type": "object"})
+        if not isinstance(parameters, dict):
+            warnings.append(f"Skipped MCP tool with invalid input schema: {name}")
+            continue
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": f"[MCP] {description}".strip(),
+                    "parameters": parameters,
+                },
+            }
+        )
+        names.add(name)
+    return tools, names, warnings
+
+
+def call_mcp_tool(
+    base_url: str,
+    api_key: str,
+    name: str,
+    arguments: dict[str, Any],
+    timeout: int,
+) -> str:
+    response = mcp_request(
+        base_url,
+        api_key,
+        "tools/call",
+        {"name": name, "arguments": arguments},
+        timeout,
+    )
+    result = response.get("result")
+    if isinstance(result, str):
+        return result
+    return json.dumps(result, ensure_ascii=False)
 
 
 def probe_endpoint(base_url: str, api_key: str, timeout: int) -> tuple[bool, str]:
@@ -987,7 +1099,7 @@ def print_runtime_help(
     print(
         "\n" + color("Runtime commands:", ANSI_BOLD_CYAN) + "\n"
         "  /help               Show this help\n"
-        "  /clear              Clear conversation history\n"
+        "  /clear              Clear history and refresh MCP tools\n"
         "  /confirm            Show confirmation status\n"
         "  /confirm on         Require approval for every tool call\n"
         "  /confirm off        Auto-approve tool calls\n"
@@ -1042,6 +1154,27 @@ def run_agent(
             return
         base_url = replacement
 
+    available_tools = list(TOOLS)
+    mcp_tool_names: set[str] = set()
+
+    def refresh_mcp_tools() -> None:
+        nonlocal available_tools, mcp_tool_names
+        available_tools = list(TOOLS)
+        mcp_tool_names = set()
+        try:
+            mcp_tools, mcp_tool_names, warnings = discover_mcp_tools(
+                base_url, api_key, request_timeout
+            )
+            available_tools.extend(mcp_tools)
+            for warning in warnings:
+                print(color("MCP warning:", ANSI_YELLOW) + f" {warning}")
+            if mcp_tools:
+                print(color("MCP tools:", ANSI_CYAN) + f" {len(mcp_tools)} loaded")
+        except Exception as exc:
+            print(color("MCP unavailable:", ANSI_YELLOW) + f" {exc}")
+
+    refresh_mcp_tools()
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt()}
     ]
@@ -1076,6 +1209,7 @@ def run_agent(
             continue
         if command == "/clear" and not command_arg:
             messages[:] = [{"role": "system", "content": system_prompt()}]
+            refresh_mcp_tools()
             print("Conversation cleared.\n")
             continue
         if command == "/confirm":
@@ -1136,12 +1270,14 @@ def run_agent(
             if reachable:
                 base_url = candidate
                 print(f"Connected to {base_url} ({detail}).\n")
+                refresh_mcp_tools()
                 continue
             replacement = prompt_for_endpoint(
                 candidate, api_key, request_timeout, detail
             )
             if replacement is not None:
                 base_url = replacement
+                refresh_mcp_tools()
             continue
 
         messages.append({"role": "user", "content": user_text})
@@ -1155,6 +1291,7 @@ def run_agent(
                         api_key=api_key,
                         model=model,
                         messages=messages,
+                        tools=available_tools,
                         temperature=temperature,
                         max_tokens=max_tokens,
                         request_timeout=request_timeout,
@@ -1168,6 +1305,7 @@ def run_agent(
                 if replacement is None:
                     break
                 base_url = replacement
+                refresh_mcp_tools()
                 continue
             except APIResponseError as exc:
                 label = color("API error:", ANSI_RED, stderr=True)
@@ -1232,6 +1370,7 @@ def run_agent(
                 call_id = call.get("id", "tool_call")
                 function = call.get("function") or {}
                 name = function.get("name", "")
+                display_name = f"MCP: {name}" if name in mcp_tool_names else name
                 raw_args = function.get("arguments", "{}")
 
                 try:
@@ -1241,13 +1380,22 @@ def run_agent(
                 except Exception as exc:
                     result = f"ERROR: invalid tool arguments: {exc}"
                 else:
-                    if name not in TOOL_IMPL:
+                    if name not in TOOL_IMPL and name not in mcp_tool_names:
                         result = f"ERROR: unknown tool: {name}"
-                    elif not confirm_tool_call(name, args, auto_approve, verbose):
+                    elif not confirm_tool_call(display_name, args, auto_approve, verbose):
                         result = "DENIED BY USER: The user did not approve this tool call."
                     else:
                         try:
-                            result = TOOL_IMPL[name](args)
+                            if name in mcp_tool_names:
+                                result = call_mcp_tool(
+                                    base_url,
+                                    api_key,
+                                    name,
+                                    args,
+                                    request_timeout,
+                                )
+                            else:
+                                result = TOOL_IMPL[name](args)
                         except subprocess.TimeoutExpired:
                             result = "ERROR: shell command timed out"
                         except Exception as exc:
@@ -1257,7 +1405,7 @@ def run_agent(
                 # listings and any future tools that forget to limit themselves.
                 result = limit_text(str(result), "tool result")
 
-                print_tool_result(name, result, verbose)
+                print_tool_result(display_name, result, verbose)
                 messages.append(
                     {
                         "role": "tool",
@@ -1279,7 +1427,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--api-key",
         default=DEFAULT_API_KEY,
-        help="API key (default: OPENAI_API_KEY or 'local')",
+        help="API key for model requests and the KoboldCpp MCP proxy (default: OPENAI_API_KEY or 'local')",
     )
     parser.add_argument(
         "--model",
