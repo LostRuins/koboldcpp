@@ -859,6 +859,7 @@ def chat_completion(
     model: str,
     messages: list[dict[str, Any]],
     temperature: float,
+    max_tokens: int | None,
     request_timeout: int,
 ) -> dict[str, Any]:
     url = api_url(base_url, "chat/completions")
@@ -870,6 +871,8 @@ def chat_completion(
         "tool_choice": "auto",
         "temperature": temperature,
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
 
     request = urllib.request.Request(
         url,
@@ -1020,6 +1023,7 @@ def run_agent(
     model: str,
     auto_approve: bool,
     temperature: float,
+    max_tokens: int | None,
     request_timeout: int,
 ) -> None:
     base_url = normalize_base_url(base_url)
@@ -1044,6 +1048,8 @@ def run_agent(
 
     print(color("Model:", ANSI_CYAN) + f" {model}")
     print(color("Endpoint:", ANSI_CYAN) + f" {base_url}")
+    if max_tokens is not None:
+        print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens}")
     confirmation = "OFF (--yes)" if auto_approve else "ON"
     confirmation_color = ANSI_YELLOW if auto_approve else ANSI_GREEN
     print(color("Confirmation:", ANSI_CYAN) + " " + color(confirmation, confirmation_color))
@@ -1150,6 +1156,7 @@ def run_agent(
                         model=model,
                         messages=messages,
                         temperature=temperature,
+                        max_tokens=max_tokens,
                         request_timeout=request_timeout,
                     )
             except EndpointUnavailableError as exc:
@@ -1293,6 +1300,13 @@ def parse_args() -> argparse.Namespace:
         help="Maximum characters in tool argument previews and tool results (default: %(default)s)",
     )
     parser.add_argument(
+        "--max-tokens",
+        type=positive_int,
+        default=None,
+        metavar="TOKENS",
+        help="Maximum output tokens per model response (omitted by default)",
+    )
+    parser.add_argument(
         "--request-timeout",
         type=positive_int,
         default=300,
@@ -1345,6 +1359,7 @@ def main() -> None:
             model=args.model,
             auto_approve=args.yes,
             temperature=args.temperature,
+            max_tokens=args.max_tokens,
             request_timeout=args.request_timeout,
         )
     except KeyboardInterrupt:
