@@ -63,6 +63,7 @@ default_sdvaedevice = 'main'
 default_sdclipdevice = 'CPU'
 default_native_ctx = 16384
 default_genlen = 2048
+default_autoswap_threshold = 256
 overridekv_max = 16
 default_autofit_padding = 1024
 lora_filenames_max = 10
@@ -82,7 +83,7 @@ extra_images_max = 4 # for kontext/qwen img
 KcppVersion = "1.121"
 showdebug = True
 kcpp_instance = None #global running instance
-global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "autoswapmode": False}
+global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False}
 using_gui_launcher = False
 
 handle = None
@@ -5321,27 +5322,32 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                 musicReqs = ["/api/extra/music/prepare","/api/extra/music/generate"]
                 imageReqs = ["/images/generations", "/v1/images/generations", "/images/edits", "/v1/images/edits", "/sdapi/v1/txt2img", "/sdapi/v1/img2img", "/sdapi/v1/upscale"] # "/sdapi/v1/sd-models", "/sdapi/v1/options", "/sdapi/v1/samplers"
 
-                swapModeChanged = False
-                if any(clean_path.endswith(e) for e in textReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "text"):
-                    global_memory["swapReqType"] = "text"
-                    swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in sttReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "stt"):
-                    global_memory["swapReqType"] = "stt"
-                    swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in ttsReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "tts"):
-                    global_memory["swapReqType"] = "tts"
-                    swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in embedReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "embed"):
-                    global_memory["swapReqType"] = "embed"
-                    swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in musicReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "music"):
-                    global_memory["swapReqType"] = "music"
-                    swapModeChanged = True
-                elif any(clean_path.endswith(e) for e in imageReqs) and (global_memory["swapReqType"] is None or global_memory["swapReqType"] != "image"):
-                    global_memory["swapReqType"] = "image"
-                    swapModeChanged = True
+                requestedType = None
+                if any(clean_path.endswith(e) for e in textReqs):
+                    requestedType = "text"
+                elif any(clean_path.endswith(e) for e in sttReqs):
+                    requestedType = "stt"
+                elif any(clean_path.endswith(e) for e in ttsReqs):
+                    requestedType = "tts"
+                elif any(clean_path.endswith(e) for e in embedReqs):
+                    requestedType = "embed"
+                elif any(clean_path.endswith(e) for e in musicReqs):
+                    requestedType = "music"
+                elif any(clean_path.endswith(e) for e in imageReqs):
+                    requestedType = "image"
+
+                # A worker may contain several below-threshold model families. Only
+                # restart when the requested family is neither resident nor the
+                # family most recently requested for this configuration.
+                loadedReqTypes = list(global_memory.get("loadedReqTypes", []))
+                swapModeChanged = (requestedType is not None
+                    and requestedType not in loadedReqTypes
+                    and requestedType != global_memory["swapReqType"])
+                if swapModeChanged:
+                    global_memory["swapReqType"] = requestedType
 
                 if (global_memory["swapReqType"] is not None and swapModeChanged):
+                    global_memory["triggered_sleeping"] = False
                     reqbody = json.dumps({"filename":global_memory["current_model"], "baseconfig": global_memory["base_config"]})
                     reqheaders = {
                         'Content-Type': 'application/json',
@@ -8992,6 +8998,7 @@ def show_gui():
     singleinstance_var = ctk.IntVar(value=0)
     router_mode_var = ctk.IntVar(value=0)
     autoswap_mode_var = ctk.IntVar(value=0)
+    autoswap_threshold_var = ctk.StringVar(value=str(default_autoswap_threshold))
     admin_unload_timeout_var = ctk.StringVar(value=str(0))
 
     nozenity_var = ctk.IntVar(value=0)
@@ -10036,6 +10043,15 @@ def show_gui():
             autoswap_mode_box.grid()
         else:
             autoswap_mode_box.grid_remove()
+        toggleautoswap(1,1,1)
+
+    def toggleautoswap(a,b,c):
+        if autoswap_mode_var.get()==1 and router_mode_var.get()==1 and admin_var.get()==1:
+            autoswap_threshold_entry.grid()
+            autoswap_threshold_label.grid()
+        else:
+            autoswap_threshold_entry.grid_remove()
+            autoswap_threshold_label.grid_remove()
 
     makecheckbox(admin_tab, "Enable Model Administration", admin_var, 1, 0, command=toggleadmin,tooltiptxt="Enable a admin server, allowing you to remotely relaunch and swap models and configs.")
     makelabelentry(admin_tab, "Admin Password:" , admin_password_var, 3, 150,padx=(120),singleline=True,tooltip="Require a password to access admin functions. You are strongly advised to use one for publically accessible instances!")
@@ -10044,7 +10060,8 @@ def show_gui():
     makelabelentry(admin_tab, "Auto Unload Timeout:" , admin_unload_timeout_var, 17, 70,padx=(150),singleline=True,tooltip="Set an idle timeout in seconds after which KoboldCpp will automatically unload the current model.")
     makecheckbox(admin_tab, "SingleInstance Mode", singleinstance_var, 19, 0,tooltiptxt="Allows this server to be shut down by another KoboldCpp instance with singleinstance starting on the same port.")
     router_mode_box = makecheckbox(admin_tab, "Router Mode", router_mode_var, 21, 0, command=togglerouter, tooltiptxt="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.")
-    autoswap_mode_box = makecheckbox(admin_tab, "Autoswap Mode", autoswap_mode_var, 23, 0,tooltiptxt="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.")
+    autoswap_mode_box = makecheckbox(admin_tab, "Autoswap Mode", autoswap_mode_var, 23, 0, command=toggleautoswap, tooltiptxt="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.")
+    autoswap_threshold_entry, autoswap_threshold_label = makelabelentry(admin_tab, "Autoswap Threshold (MB):", autoswap_threshold_var, 25, 70, padx=(180), singleline=True, tooltip="Model families at or below this combined file size remain loaded as sidecars. Only one model family above the threshold is loaded at a time.")
 
     def kcpp_export_template():
         nonlocal kcpp_exporting_template
@@ -10388,6 +10405,7 @@ def show_gui():
         args.singleinstance = (singleinstance_var.get()==1)
         args.routermode = (router_mode_var.get()==1 and admin_var.get()==1)
         args.autoswapmode = (autoswap_mode_var.get()==1 and router_mode_var.get()==1 and admin_var.get()==1)
+        args.autoswapthreshold = (default_autoswap_threshold if autoswap_threshold_var.get()=="" else max(0, int(autoswap_threshold_var.get())))
         args.baseconfig = baseconfig_var.get()
         args.adminunloadtimeout = (0 if admin_unload_timeout_var.get()=="" else int(admin_unload_timeout_var.get()))
         args.showgui = False #prevent showgui from leaking into configs, its cli only
@@ -10697,6 +10715,7 @@ def show_gui():
         admin_var.set(mydict["admin"] if ("admin" in mydict) else 0)
         router_mode_var.set(mydict["routermode"] if ("routermode" in mydict) else 0)
         autoswap_mode_var.set(mydict["autoswapmode"] if ("autoswapmode" in mydict) else 0)
+        autoswap_threshold_var.set(mydict["autoswapthreshold"] if ("autoswapthreshold" in mydict) else default_autoswap_threshold)
         admin_dir_var.set(mydict["admindir"] if ("admindir" in mydict and mydict["admindir"]) else "")
         baseconfig_var.set(mydict["baseconfig"] if ("baseconfig" in mydict and mydict["baseconfig"]) else "")
         admin_password_var.set(mydict["adminpassword"] if ("adminpassword" in mydict and mydict["adminpassword"]) else "")
@@ -11868,7 +11887,7 @@ def main(launch_args, default_args):
             input()
     else:  # manager command queue for admin mode
         with multiprocessing.Manager() as mp_manager:
-            global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "autoswapmode": False})
+            global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False})
 
             if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
                 setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel) else False)
@@ -11896,12 +11915,13 @@ def main(launch_args, default_args):
                                 kcpp_instance.terminate()
                                 kcpp_instance.join(timeout=10)  # Ensure process is stopped
                                 kcpp_instance = None
-                            kcpp_instance = multiprocessing.Process(target=kcpp_main_process,kwargs={"launch_args": args, "g_memory": global_memory, "gui_launcher": False})
-                            kcpp_instance.daemon = True
-                            kcpp_instance.start()
                             global_memory["restart_target"] = ""
                             global_memory["restart_override_base_config"] = ""
                             global_memory["swapReqType"] = None
+                            global_memory["loadedReqTypes"] = []
+                            kcpp_instance = multiprocessing.Process(target=kcpp_main_process,kwargs={"launch_args": args, "g_memory": global_memory, "gui_launcher": False})
+                            kcpp_instance.daemon = True
+                            kcpp_instance.start()
                             time.sleep(3)
                         else:
                             break # kill the program
@@ -11920,6 +11940,8 @@ def main(launch_args, default_args):
                                     print(f"[Unload Timeout] Inactive for over {time_since_last_active}s, unloading models via autoswap...")
                                     global_memory["swapReqType"] = "nomodel"
                                     global_memory["triggered_sleeping"] = True
+                                    restart_target = global_memory["current_model"]
+                                    restart_override_base_config = global_memory["base_config"]
                             elif global_memory["current_model"]!="unload_model":
                                 print(f"[Unload Timeout] Inactive for over {time_since_last_active}s, unloading models...")
                                 restart_target = "unload_model"
@@ -11950,6 +11972,7 @@ def main(launch_args, default_args):
                             if (os.path.exists(maintarget_filepath) or restart_target=="unload_model" or restart_target=="initial_model") and (restart_override_base_config=="" or os.path.exists(basecfg_filepath)):
                                 print("Terminating old process...")
                                 global_memory["load_complete"] = False
+                                global_memory["loadedReqTypes"] = []
                                 kcpp_instance.terminate()
                                 kcpp_instance.join(timeout=10)  # Ensure process is stopped
                                 kcpp_instance = None
@@ -12078,26 +12101,74 @@ def mk_lora_info(imgloras, multipliers):
             preloaded_table.append(lora_entry)
     return preloaded_table, lora_path_map, lora_name_map
 
+autoswap_model_fields = {
+    "text": ["model", "model_param", "lora", "mmproj", "draftmodel"],
+    "stt": ["whispermodel"],
+    "tts": ["ttsmodel", "ttswavtokenizer"],
+    "embed": ["embeddingsmodel"],
+    "music": ["musicllm", "musicembeddings", "musicdiffusion", "musicvae"],
+    "image": ["sdmodel", "sdt5xxl", "sdclip1", "sdclip2", "sdphotomaker", "sdupscaler", "sdvae", "sdaudiovae", "sdlora"],
+}
+
+autoswap_primary_fields = {
+    "text": ["model", "model_param"],
+    "stt": ["whispermodel"],
+    "tts": ["ttsmodel"],
+    "embed": ["embeddingsmodel"],
+    "music": ["musicllm", "musicdiffusion"],
+    "image": ["sdmodel"],
+}
+
+def getAutoswapModelTypes(args):
+    result = []
+    for model_type, fields in autoswap_primary_fields.items():
+        if any(getattr(args, field, None) for field in fields):
+            result.append(model_type)
+    return result
+
+def getAutoswapModelSize(args, model_type):
+    """Return the combined on-disk size for a model family, or None if unknown."""
+    paths = set()
+    for field in autoswap_model_fields[model_type]:
+        value = getattr(args, field, None)
+        values = value if isinstance(value, (list, tuple)) else [value]
+        for path in values:
+            if isinstance(path, str) and path:
+                fullpath = os.path.abspath(path)
+                if os.path.isfile(fullpath):
+                    paths.add(os.path.normcase(fullpath))
+                elif os.path.isdir(fullpath) and field not in autoswap_primary_fields[model_type]:
+                    for root, _, filenames in os.walk(fullpath):
+                        for filename in filenames:
+                            paths.add(os.path.normcase(os.path.join(root, filename)))
+                else:
+                    return None
+    if not paths:
+        return None
+    try:
+        return sum(os.path.getsize(path) for path in paths)
+    except OSError:
+        return None
+
 def disableSwappedFieldsInConfig(args, swapReqType):
-    print(f"Swapping to type: {swapReqType}")
-    if swapReqType != "text":
-        for e in ["model", "model_param", "lora", "mmproj"]:
-            setattr(args, e, "")
-    if swapReqType != "stt":
-        for e in ["whispermodel"]:
-            setattr(args, e, "")
-    if swapReqType != "tts":
-        for e in ["ttsmodel", "ttswavtokenizer"]:
-            setattr(args, e, "")
-    if swapReqType != "embed":
-        for e in ["embeddingsmodel"]:
-            setattr(args, e, "")
-    if swapReqType != "music":
-        for e in ["musicllm", "musicembeddings", "musicdiffusion", "musicvae"]:
-            setattr(args, e, "")
-    if swapReqType != "image":
-        for e in ["sdmodel", "sdt5xxl", "sdclip1", "sdclip2", "sdphotomaker", "sdupscaler", "sdvae", "sdaudiovae", "sdlora"]:
-            setattr(args, e, "")
+    threshold_mb = max(0, getattr(args, "autoswapthreshold", default_autoswap_threshold))
+    threshold_bytes = threshold_mb * 1024 * 1024
+    configured_types = getAutoswapModelTypes(args)
+    keep_types = set()
+
+    if swapReqType != "nomodel":
+        if swapReqType in configured_types:
+            keep_types.add(swapReqType)
+        for model_type in configured_types:
+            model_size = getAutoswapModelSize(args, model_type)
+            if model_size is not None and model_size <= threshold_bytes:
+                keep_types.add(model_type)
+
+    print(f"Swapping to type: {swapReqType}; resident types: {', '.join(sorted(keep_types)) or 'none'} (threshold {threshold_mb} MB)")
+    for model_type, fields in autoswap_model_fields.items():
+        if model_type not in keep_types:
+            for field in fields:
+                setattr(args, field, "")
 
 
 def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
@@ -12943,6 +13014,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         endpoint_url = f"{httpsaffix}://{args.host}:{displayedport}"
 
     if start_server:
+        if global_memory is not None:
+            global_memory["loadedReqTypes"] = getAutoswapModelTypes(args) if autoswapmode else []
         if not args.remotetunnel:
             if displayedport!=11434:
                 print("Note: For third party Ollama API Emulation, you should set the port to 11434.")
@@ -13314,6 +13387,7 @@ if __name__ == '__main__':
     admingroup.add_argument("--routermode", help="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.", action='store_true')
     admingroup.add_argument("--reqtimeout", metavar=('[seconds]'), help="Timeout in seconds for HTTP requests.", type=int, default=default_reqtimeout)
     admingroup.add_argument("--autoswapmode", help="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.", action='store_true')
+    admingroup.add_argument("--autoswapthreshold", help=f"Keep model families at or below this combined file size resident in autoswap mode, in MB (default {default_autoswap_threshold}). Only one model family above the threshold is loaded at a time.", type=check_range(int,0,1048576), default=default_autoswap_threshold)
     admingroup.add_argument("--baseconfig", help="Specify a base .kcpps config to apply, if no custom base config is selected during a model swap", default="")
 
     deprecatedgroup = parser.add_argument_group('Deprecated Commands, DO NOT USE!')
