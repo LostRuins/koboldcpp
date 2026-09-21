@@ -154,6 +154,25 @@ class Throbber:
         self.stream.flush()
 
 
+def resolve_shell() -> tuple[str | None, str]:
+    """Return the shell executable and its description for the model."""
+    if os.name == "nt":
+        executable = shutil.which("pwsh") or shutil.which("powershell.exe")
+        description = f"PowerShell ({executable})" if executable else "PowerShell (unavailable)"
+    else:
+        configured_shell = os.environ.get("SHELL")
+        executable = (
+            configured_shell
+            if configured_shell and Path(configured_shell).is_file()
+            else shutil.which("sh")
+        )
+        description = executable or "sh (unavailable)"
+    return executable, description
+
+
+SHELL_EXECUTABLE, SHELL_DESCRIPTION = resolve_shell()
+
+
 def system_prompt() -> str:
     return f"""You are a small, careful local computer assistant running on {platform.system()}.
 You have seven built-in tools: read, write, edit, shell, glob, grep, and web_fetch. The server may also supply MCP tools.
@@ -168,7 +187,7 @@ Rules:
 - Keep tool calls simple and make only the calls necessary for the user's request.
 - Paths may be relative or absolute. Relative paths are relative to the directory where this program was started.
 - The current working directory is {Path.cwd()}.
-- The shell tool uses the platform's native command shell; write commands for {platform.system()}.
+- The shell tool uses {SHELL_DESCRIPTION}; write commands using that shell's syntax.
 - For edit, replace an exact old_text string with new_text. If the old text is not unique, the edit will fail unless replace_all is true.
 - After finishing tool use, briefly tell the user what was done.
 """
@@ -248,7 +267,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "shell",
-            "description": "Run a command in the platform's native shell and return stdout, stderr, and exit code. Can be used to execute arbitary commands or applications on the local system. Large output may be truncated, so prefer focused commands.",
+            "description": f"Run a command in {SHELL_DESCRIPTION} and return stdout, stderr, and exit code. Can be used to execute arbitrary commands or applications on the local system. Large output may be truncated, so prefer focused commands.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -449,8 +468,8 @@ def tool_shell(args: dict[str, Any]) -> str:
     if not 1 <= timeout <= 3600:
         raise ValueError("timeout must be between 1 and 3600 seconds")
 
+    executable = SHELL_EXECUTABLE
     if os.name == "nt":
-        executable = shutil.which("pwsh") or shutil.which("powershell.exe")
         if executable is None:
             raise RuntimeError("PowerShell was not found on PATH")
         argv = [
@@ -461,12 +480,6 @@ def tool_shell(args: dict[str, Any]) -> str:
             command,
         ]
     else:
-        configured_shell = os.environ.get("SHELL")
-        executable = (
-            configured_shell
-            if configured_shell and Path(configured_shell).is_file()
-            else shutil.which("sh")
-        )
         if executable is None:
             raise RuntimeError("No POSIX command shell was found")
         argv = [executable, "-c", command]
@@ -1399,8 +1412,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--temperature",
         type=temperature_value,
-        default=0.5,
-        help="Sampling temperature (default: 0.5)",
+        default=0.3,
+        help="Sampling temperature (default: 0.3)",
     )
     parser.add_argument(
         "--max-tool-result-chars",
