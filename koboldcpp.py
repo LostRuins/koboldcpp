@@ -11704,14 +11704,40 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None):
                 ("xfce4-terminal", ["-x"]),
                 ("xterm", ["-e"]),
             ]
+            attempted = set()
+            failures = []
             for terminal, terminal_args in terminal_commands:
                 terminal_path = shutil.which(terminal)
-                if terminal_path:
-                    subprocess.Popen([terminal_path, *terminal_args, *command], cwd=os.getcwd(), start_new_session=True)
-                    break
+                if not terminal_path:
+                    continue
+                # Distributions often link x-terminal-emulator to xterm. Do not
+                # retry the same broken terminal under a second name.
+                resolved_path = os.path.realpath(terminal_path)
+                if resolved_path in attempted:
+                    continue
+                attempted.add(resolved_path)
+                # xterm's default bitmap font is often absent in minimal WSL
+                # installations; request a fontconfig-backed font instead.
+                launch_args = (["-fa", "monospace"] if os.path.basename(resolved_path) == "xterm" else []) + terminal_args
+                try:
+                    terminal_process = subprocess.Popen(
+                        [terminal_path, *launch_args, *command],
+                        cwd=os.getcwd(), start_new_session=True)
+                    try:
+                        exit_code = terminal_process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        return True  # The terminal is still open.
+                    if exit_code == 0:
+                        return True  # Some terminals hand off to a background process.
+                    failures.append(f"{terminal} exited with code {exit_code}")
+                except OSError as exc:
+                    failures.append(f"{terminal}: {exc}")
+            if failures:
+                print(f"Cannot launch Kobold Agent: {'; '.join(failures)}.")
             else:
                 print("Cannot launch Kobold Agent: no supported terminal emulator was found.")
-                return False
+            print("Try running kcpp_agent.py in another terminal window.")
+            return False
         return True
     except Exception as e:
         print(f"Cannot launch Kobold Agent: {e}")
