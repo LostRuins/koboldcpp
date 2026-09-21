@@ -29,23 +29,5 @@ void kcpp_sd_ggml_log_callback(ggml_log_level level, const char* text, void*) {
         return;
     }
 
-    // stable-diffusion.cpp's standalone tools still use the SD logger. GGML
-    // supplies an already formatted string, so it must be passed as data.
-    switch (level) {
-        case GGML_LOG_LEVEL_DEBUG:
-            LOG_VERBOSE("%s", text);
-            break;
-        case GGML_LOG_LEVEL_INFO:
-            LOG_INFO("%s", text);
-            break;
-        case GGML_LOG_LEVEL_WARN:
-            LOG_WARN("%s", text);
-            break;
-        case GGML_LOG_LEVEL_ERROR:
-            LOG_ERROR("%s", text);
-            break;
-        default:
-            LOG_VERBOSE("%s", text);
-            break;
-    }
+    sd_ggml_log_callback(level, text, nullptr);
 }
