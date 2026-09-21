@@ -295,12 +295,17 @@ TOOLS = [
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Relative glob pattern. Use ** for recursive matching.",
+                        "description": "Relative glob pattern. Supports {jpg,png} alternatives. Filename-only patterns search subdirectories by default; use ** in path patterns for recursion.",
                     },
                     "path": {
                         "type": "string",
                         "description": "Directory to search (default: current directory).",
                         "default": ".",
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "description": "Search subdirectories for filename-only patterns (default: true).",
+                        "default": True,
                     },
                     "max_results": {
                         "type": "integer",
@@ -517,6 +522,7 @@ def result_limit(args: dict[str, Any], default: int = 200) -> int:
 def tool_glob(args: dict[str, Any]) -> str:
     root = Path(args.get("path", "."))
     pattern = str(args["pattern"])
+    recursive = args.get("recursive", True)
     max_results = result_limit(args)
     if not root.is_dir():
         raise NotADirectoryError(f"Not a directory: {root}")
@@ -524,22 +530,44 @@ def tool_glob(args: dict[str, Any]) -> str:
         raise ValueError("pattern must not be empty")
     if Path(pattern).is_absolute():
         raise ValueError("pattern must be relative; use path for the search directory")
+    if not isinstance(recursive, bool):
+        raise ValueError("recursive must be true or false")
 
-    matches: list[Path] = []
+    patterns = [pattern]
+    while any(re.search(r"\{[^{}]+\}", item) for item in patterns):
+        expanded = []
+        for item in patterns:
+            group = re.search(r"\{([^{}]+)\}", item)
+            if group:
+                expanded.extend(
+                    item[:group.start()] + alternative + item[group.end():]
+                    for alternative in group.group(1).split(",")
+                )
+            else:
+                expanded.append(item)
+        if len(expanded) > 256:
+            raise ValueError("glob pattern expands to more than 256 alternatives")
+        patterns = expanded
+
+    matches: set[Path] = set()
     try:
-        candidates = root.glob(pattern)
-        for candidate in candidates:
-            if candidate.is_file():
-                matches.append(candidate)
-                if len(matches) >= max_results:
-                    break
+        for item in patterns:
+            filename_only = len(Path(item).parts) == 1
+            candidates = root.rglob(item) if recursive and filename_only else root.glob(item)
+            for candidate in candidates:
+                if candidate.is_file():
+                    matches.add(candidate)
+                    if len(matches) >= max_results:
+                        break
+            if len(matches) >= max_results:
+                break
     except (OSError, ValueError) as exc:
         raise ValueError(f"invalid or unreadable glob: {exc}") from exc
 
-    matches.sort(key=lambda item: str(item).casefold())
+    ordered_matches = sorted(matches, key=lambda item: str(item).casefold())
     if not matches:
         return "No files matched."
-    output = "\n".join(str(item) for item in matches)
+    output = "\n".join(str(item) for item in ordered_matches)
     if len(matches) == max_results:
         output += f"\n...[stopped after {max_results} results]"
     return output
