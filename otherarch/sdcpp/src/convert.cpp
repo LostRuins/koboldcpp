@@ -362,6 +362,9 @@ bool convert_with_components(const char* model_path,
                              const char* tensor_type_rules,
                              bool convert_name,
                              int n_threads) {
+    if (!validate_tensor_types(output_type, tensor_type_rules)) {
+        return false;
+    }
     ModelLoader model_loader;
     bool loaded_any = false;
 

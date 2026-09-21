@@ -87,6 +87,7 @@ private:
 
 bool sd_backend_is(ggml_backend_t backend, const std::string& name);
 bool sd_backend_is_cpu(ggml_backend_t backend);
+bool sd_backend_supports_cuda_mma(ggml_backend_t backend);
 ggml_backend_t sd_backend_cpu_init();
 bool sd_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads);
 ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,

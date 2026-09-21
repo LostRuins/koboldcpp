@@ -8,8 +8,12 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef SD_USE_CUDA
+#include <cuda.h>
+#endif
+
 #include "core/util.h"
-#include "ggml/src/ggml-impl.h"
+#include "ggml-impl.h"
 #include "stable-diffusion.h"
 
 static std::string trim_copy(const std::string& value) {
@@ -427,6 +431,70 @@ bool sd_backend_is_cpu(ggml_backend_t backend) {
     }
     auto dev = ggml_backend_get_device(backend);
     return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
+bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
+#ifdef SD_USE_CUDA
+    if (!sd_backend_is(backend, "CUDA")) {
+        return false;
+    }
+    auto dev = ggml_backend_get_device(backend);
+    if (dev == nullptr) {
+        return false;
+    }
+    static std::mutex mutex;
+    static std::unordered_map<ggml_backend_dev_t, bool> cache;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(dev);
+    if (it != cache.end()) {
+        return it->second;
+    }
+    const bool supported = [&]() {
+        ggml_backend_dev_props props{};
+        ggml_backend_dev_get_props(dev, &props);
+        CUdevice device;
+        int major = 0, minor = 0;
+        if (props.device_id == nullptr || cuInit(0) != CUDA_SUCCESS ||
+            cuDeviceGetByPCIBusId(&device, props.device_id) != CUDA_SUCCESS ||
+            cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device) != CUDA_SUCCESS ||
+            cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device) != CUDA_SUCCESS) {
+            return false;
+        }
+        auto reg          = ggml_backend_dev_backend_reg(dev);
+        auto get_features = reinterpret_cast<ggml_backend_get_features_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features"));
+        if (get_features == nullptr) {
+            return false;
+        }
+        // Match ggml's highest compiled architecture for this device, including PTX fallback.
+        const int cc      = 100 * major + 10 * minor;
+        int compiled_arch = 0;
+        for (auto feature = get_features(reg); feature != nullptr && feature->name != nullptr; ++feature) {
+            if (std::strcmp(feature->name, "ARCHS") != 0 || feature->value == nullptr) {
+                continue;
+            }
+            const char* arch = feature->value;
+            while (*arch != '\0') {
+                char* end        = nullptr;
+                const long value = std::strtol(arch, &end, 10);
+                if (end == arch) {
+                    ++arch;
+                    continue;
+                }
+                if (value <= cc && value > compiled_arch) {
+                    compiled_arch = static_cast<int>(value);
+                }
+                arch = end;
+            }
+        }
+        return compiled_arch == 700 || compiled_arch >= 750;
+    }();
+    cache.emplace(dev, supported);
+    return supported;
+#else
+    (void)backend;
+    return false;
+#endif
 }
 
 ggml_backend_t sd_backend_cpu_init() {

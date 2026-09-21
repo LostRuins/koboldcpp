@@ -285,7 +285,8 @@ namespace sd::pipeline {
                     vae_width  = request->width;
                     vae_height = request->height;
                 } else {
-                    int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : 1024 * 1024;
+                    int default_pixels = sd->version == VERSION_QWEN_IMAGE_2_1 ? request->width * request->height : 1024 * 1024;
+                    int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : default_pixels;
                     int vae_image_size = std::min(target_pixels, request->width * request->height);
                     vae_width          = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
                     vae_height         = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
@@ -309,6 +310,9 @@ namespace sd::pipeline {
                             resized_ref_img.shape()[0]);
 
                 ref_latent = sd->encode_first_stage(resized_ref_img);
+                if (sd->version == VERSION_QWEN_IMAGE_2_1) {
+                    ref_images[i] = std::move(resized_ref_img);
+                }
             } else {
                 ref_latent = sd->encode_first_stage(ref_images[i]);
             }

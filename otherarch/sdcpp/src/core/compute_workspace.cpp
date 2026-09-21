@@ -11,7 +11,7 @@
 #include "core/ggml_graph_cut.h"
 #include "core/util.h"
 #include "ggml-cpu.h"
-#include "ggml/src/ggml-impl.h"
+#include "ggml-impl.h"
 
 namespace sd {
     ComputeWorkspace::~ComputeWorkspace() {

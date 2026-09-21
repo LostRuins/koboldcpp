@@ -71,6 +71,7 @@ struct GGMLRunnerContext {
     float linear_scale                                               = 0.f;
     float attn_scale                                                 = 0.f;
     bool conv2d_direct_enabled                                       = false;
+    bool conv3d_direct_enabled                                       = false;
     bool circular_x_enabled                                          = false;
     bool circular_y_enabled                                          = false;
     ggml_tensor* ip_context                                          = nullptr;
@@ -178,6 +179,7 @@ protected:
     float linear_scale         = 0.f;
     float attn_scale           = 0.f;
     bool conv2d_direct_enabled = false;
+    bool conv3d_direct_enabled = false;
     bool circular_x_enabled    = false;
     bool circular_y_enabled    = false;
 
@@ -263,11 +265,9 @@ protected:
 
     void copy_data_to_backend_tensor(ggml_cgraph* gf, bool clear_after_copy = true);
 
-    bool resolve_graph_cut_plan(ggml_cgraph* gf,
-                                GraphCutPlan* plan_out);
+    const GraphCutPlan& resolve_graph_cut_plan(ggml_cgraph* gf);
 
-    bool resolve_graph_cut_layer_split_plan(ggml_cgraph* gf,
-                                            GraphCutPlan* plan_out);
+    const GraphCutPlan& resolve_graph_cut_layer_split_plan(ggml_cgraph* gf);
 
     bool assign_graph_cut_layer_split_backends(ggml_cgraph* gf);
 
@@ -344,6 +344,10 @@ public:
 
     void set_conv2d_direct_enabled(bool enabled) {
         conv2d_direct_enabled = enabled;
+    }
+
+    void set_conv3d_direct_enabled(bool enabled) {
+        conv3d_direct_enabled = enabled;
     }
 
     void set_circular_axes(bool circular_x, bool circular_y) {

@@ -26,13 +26,26 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
 }
 
 const char* sd_type_name(enum sd_type_t type) {
-    if ((int)type < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
-        return ggml_type_name((ggml_type)type);
+    if (type == SD_TYPE_F8_E4M3) {
+        return "f8_e4m3";
+    }
+    if (type == SD_TYPE_F8_E5M2) {
+        return "f8_e5m2";
+    }
+    const auto ggml_type = sd_type_to_ggml_type(type);
+    if (ggml_type != GGML_TYPE_COUNT) {
+        return ggml_type_name(ggml_type);
     }
     return NONE_STR;
 }
 
 enum sd_type_t str_to_sd_type(const char* str) {
+    if (!strcmp(str, "f8_e4m3")) {
+        return SD_TYPE_F8_E4M3;
+    }
+    if (!strcmp(str, "f8_e5m2")) {
+        return SD_TYPE_F8_E5M2;
+    }
     for (int i = 0; i < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT); i++) {
         auto trait = ggml_get_type_traits((ggml_type)i);
         if (!strcmp(str, trait->type_name)) {

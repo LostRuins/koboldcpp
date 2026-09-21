@@ -66,6 +66,10 @@ struct AnimaDiffusionExtra {
     const sd::Tensor<float>* t5_weights = nullptr;
 };
 
+struct QwenImage21DiffusionExtra {
+    const sd::Tensor<int32_t>* image_slots = nullptr;
+};
+
 struct WanDiffusionExtra {
     const sd::Tensor<float>* vace_context = nullptr;
     float vace_strength                   = 1.f;
@@ -132,6 +136,7 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           SkipLayerDiffusionExtra,
                                           FluxDiffusionExtra,
                                           AnimaDiffusionExtra,
+                                          QwenImage21DiffusionExtra,
                                           WanDiffusionExtra,
                                           HiDreamO1DiffusionExtra,
                                           LTXAVDiffusionExtra,
