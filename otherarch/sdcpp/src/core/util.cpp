@@ -646,7 +646,7 @@ void* sd_log_cb_data         = nullptr;
 static void kcpp_sd_log_dispatch(sd_log_level_t level, const std::string& origin, const std::string& text) {
     (void) level;
     (void) origin;
-    if (sdloglevel == 0)
+    if (sdloglevel <= 0)
         return;
     std::string message = text;
     if (message.empty() || message.back() != '\n') {
