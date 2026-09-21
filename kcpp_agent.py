@@ -249,7 +249,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "shell",
-            "description": "Run a command in the platform's native shell and return stdout, stderr, and exit code. Large output may be truncated, so prefer focused commands.",
+            "description": "Run a command in the platform's native shell and return stdout, stderr, and exit code. Can be used to execute arbitary applications on the local system. Large output may be truncated, so prefer focused commands.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1437,8 +1437,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--temperature",
         type=temperature_value,
-        default=0.0,
-        help="Sampling temperature (default: 0.0)",
+        default=0.5,
+        help="Sampling temperature (default: 0.5)",
     )
     parser.add_argument(
         "--max-tool-result-chars",
