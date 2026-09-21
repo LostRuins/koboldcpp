@@ -57,6 +57,18 @@ bool read_gguf_file(const std::string& file_path,
 
         size_t data_offset = gguf_reader.data_offset();
         for (const auto& gguf_tensor_info : gguf_reader.tensors()) {
+#ifdef SD_USE_UPSTREAM_GGML
+            if (static_cast<int>(gguf_tensor_info.type) == SD_TYPE_F8_E4M3 ||
+                static_cast<int>(gguf_tensor_info.type) == SD_TYPE_F8_E5M2) {
+                set_error(error, "FP8 is not supported by this ggml build (tensor '" + gguf_tensor_info.name + "')");
+                return false;
+            }
+#endif
+            if (static_cast<unsigned>(gguf_tensor_info.type) >= GGML_TYPE_COUNT ||
+                ggml_get_type_traits(gguf_tensor_info.type)->type_size == 0) {
+                set_error(error, "unsupported GGUF tensor type (tensor '" + gguf_tensor_info.name + "')");
+                return false;
+            }
             TensorStorage tensor_storage(
                 gguf_tensor_info.name,
                 gguf_tensor_info.type,

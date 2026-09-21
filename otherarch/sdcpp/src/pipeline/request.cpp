@@ -65,7 +65,7 @@ namespace sd::pipeline {
             return LCM_SCHEDULER;
         } else if (sample_method == DDIM_TRAILING_SAMPLE_METHOD) {
             return SIMPLE_SCHEDULER;
-        } else if (sd != nullptr && sd_version_is_flux(sd->version)) {
+        } else if (sd != nullptr && (sd_version_is_flux(sd->version) || sd->version == VERSION_QWEN_IMAGE_2_1)) {
             return FLUX_SCHEDULER;
         } else if (sd != nullptr && sd_version_is_flux2(sd->version)) {
             return FLUX2_SCHEDULER;

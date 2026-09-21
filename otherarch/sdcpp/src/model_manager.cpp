@@ -274,6 +274,7 @@ bool ModelManager::register_param_tensors(ModelComponent component,
         new_states.push_back(std::move(state));
     }
 
+    resolved_tensor_states_.clear();
     for (auto& state : new_states) {
         TensorState* registered_state                      = state.get();
         tensor_states_by_tensor_[registered_state->tensor] = registered_state;
@@ -369,6 +370,7 @@ bool ModelManager::unregister_tensor_states(const std::unordered_set<TensorState
         }
     }
 
+    resolved_tensor_states_.clear();
     for (auto it = tensor_states_by_tensor_.begin(); it != tensor_states_by_tensor_.end();) {
         if (target_states.count(it->second) > 0) {
             it = tensor_states_by_tensor_.erase(it);
@@ -1199,22 +1201,52 @@ bool ModelManager::resolve_required_tensor_states(const std::vector<ggml_tensor*
                                                   std::vector<TensorState*>& required_states,
                                                   ggml_backend_t compute_backend) const {
     required_states.clear();
+    required_states.reserve(tensors.size());
+    auto append_states = [&](const std::vector<TensorState*>& states) {
+        for (TensorState* state : states) {
+            if (compute_backend == nullptr || state->compute_backend == nullptr ||
+                state->compute_backend == compute_backend) {
+                required_states.push_back(state);
+            }
+        }
+    };
+    for (auto it = resolved_tensor_states_.begin(); it != resolved_tensor_states_.end(); ++it) {
+        if (it->tensors == tensors) {
+            append_states(it->states);
+            resolved_tensor_states_.splice(resolved_tensor_states_.begin(), resolved_tensor_states_, it);
+            return true;
+        }
+    }
+    std::vector<TensorState*> states;
+    states.reserve(tensors.size());
     std::unordered_set<TensorState*> seen;
+    seen.reserve(tensors.size());
+    bool cacheable = true;
     for (ggml_tensor* tensor : tensors) {
         if (tensor == nullptr) {
             continue;
         }
-        auto param = resolve_param_tensor(tensor);
-        auto found = tensor_states_by_tensor_.find(param);
+        auto found = tensor_states_by_tensor_.find(tensor);
+        // Unregistered views can be rebound without changing the parameter list.
+        cacheable &= found != tensor_states_by_tensor_.end();
+        for (auto view = tensor->view_src; found == tensor_states_by_tensor_.end() && view != nullptr; view = view->view_src) {
+            found = tensor_states_by_tensor_.find(view);
+        }
         if (found == tensor_states_by_tensor_.end()) {
             LOG_ERROR("model manager tensor '%s' is not registered", ggml_get_name(tensor));
             return false;
         }
         TensorState* state = found->second;
-        if ((compute_backend == nullptr || state->compute_backend == nullptr ||
-             state->compute_backend == compute_backend) &&
-            seen.insert(state).second) {
-            required_states.push_back(state);
+        if (seen.insert(state).second) {
+            states.push_back(state);
+        }
+    }
+    append_states(states);
+    if (cacheable && !tensors.empty()) {
+        static constexpr size_t MAX_RESOLVED_LISTS = 4;
+        resolved_tensor_states_.push_front({tensors, std::move(states)});
+        if (resolved_tensor_states_.size() > MAX_RESOLVED_LISTS) {
+            resolved_tensor_states_.pop_back();
         }
     }
     return true;
@@ -1274,8 +1306,7 @@ size_t ModelManager::compute_backend_alloc_size(const std::vector<TensorState*>&
     size_t total_size = 0;
     std::unordered_set<TensorState*> seen;
     for (TensorState* state : states) {
-        if (state == nullptr || state->tensor == nullptr || !seen.insert(state).second ||
-            should_ignore(*state) || is_optional_missing_tensor(state->name)) {
+        if (state == nullptr || state->tensor == nullptr) {
             continue;
         }
         const bool compute_resident =
@@ -1283,6 +1314,9 @@ size_t ModelManager::compute_backend_alloc_size(const std::vector<TensorState*>&
                 ? state->loaded_to_params_backend
                 : state->staged_to_compute_backend;
         if (missing_only && compute_resident) {
+            continue;
+        }
+        if (!seen.insert(state).second || should_ignore(*state) || is_optional_missing_tensor(state->name)) {
             continue;
         }
 

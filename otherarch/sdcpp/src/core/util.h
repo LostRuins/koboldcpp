@@ -92,6 +92,7 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
 void sd_ggml_log_callback(ggml_log_level level, const char* text, void*);
 
 ggml_type sd_type_to_ggml_type(sd_type_t sdtype);
+bool validate_tensor_types(sd_type_t type, const char* tensor_type_rules);
 
 std::string trim(const std::string& s);
 

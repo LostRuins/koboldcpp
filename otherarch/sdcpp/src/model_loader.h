@@ -28,8 +28,6 @@ struct MmapTensorStore {
     std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
 };
 
-bool is_unused_tensor(const std::string& name);
-
 class ModelLoader {
 public:
     using FileId       = uint64_t;

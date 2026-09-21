@@ -624,7 +624,7 @@ ArgOptions SDContextParams::get_options() {
          true, &diffusion_conv_direct},
         {"",
          "--vae-conv-direct",
-         "use ggml_conv2d_direct in the vae model",
+         "use direct 2D and 3D convolutions in the vae model",
          true, &vae_conv_direct},
     };
 
