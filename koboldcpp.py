@@ -1563,6 +1563,17 @@ def get_current_admindir_list():
     return opts
 
 
+def get_initial_admin_model(config_path, admin_dir):
+    if not config_path or not admin_dir or not os.path.isdir(admin_dir):
+        return "initial_model"
+    dirpath = os.path.abspath(admin_dir)
+    config_path = os.path.normcase(os.path.abspath(config_path))
+    for name in scan_directory(dirpath, (".kcpps", ".kcppt"), 1):
+        if os.path.normcase(os.path.abspath(os.path.join(dirpath, name))) == config_path:
+            return name
+    return "initial_model"
+
+
 def dump_gguf_metadata(file_path): #if you're gonna copy this into your own project at least credit concedo
     chunk_size = 1024*1024*20  # read first 20mb of file
     try:
@@ -11908,6 +11919,7 @@ def main(launch_args, default_args):
         return
 
     cfgname = ""
+    initial_config_path = ""
     if args.config and len(args.config)==1: #handle initial config loading for launch
         cfgname = args.config[0] #store first so baseconfig wont overwrite it
 
@@ -11918,6 +11930,7 @@ def main(launch_args, default_args):
                 cfgname = dlfile
         if isinstance(cfgname, str) and os.path.exists(cfgname):
            load_config_cli(cfgname)
+           initial_config_path = cfgname
         elif args.ignoremissing:
             print("Ignoring missing kcpp config file...")
         else:
@@ -11935,6 +11948,7 @@ def main(launch_args, default_args):
         dlfile = download_model_from_url(args.model_param,[".kcpps",".kcppt"]) # maybe download from url
         if dlfile:
             args.model_param = dlfile
+        initial_config_path = args.model_param
         load_config_cli(args.model_param)
 
     if args.exportconfig:
@@ -12016,7 +12030,8 @@ def main(launch_args, default_args):
             input()
     else:  # manager command queue for admin mode
         with multiprocessing.Manager() as mp_manager:
-            global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False})
+            initial_model = get_initial_admin_model(initial_config_path, args.admindir)
+            global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":initial_model, "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False})
 
             if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
                 setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel) else False)
