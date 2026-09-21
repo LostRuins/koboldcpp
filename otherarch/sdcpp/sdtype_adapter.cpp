@@ -42,9 +42,9 @@ using namespace kcpp_sd;
 // early callback log initialization
 namespace {
     const bool _ = [] {
-        // take control of the log output (future proofing, in case any other
-        // sd.cpp function emit logs on other code paths, and prevent sd.cpp
-        // to set the ggml logging callback
+        // activate kcpp logging backend, and prevent sd.cpp setting ggml logging
+        // callback (will keep using the default)
+        // the debug flag will be reset on the first image generation call
         set_sd_log_level(1);
         return true;
     }();
@@ -1990,8 +1990,6 @@ void sdtype_request_ongoing_generation_preview()
 
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 {
-    set_sd_log_level(sddebugmode);
-
     sd_generation.reset();
 
     if(sd_ctx == nullptr || upscaler_ctx == nullptr || sd_params == nullptr)
