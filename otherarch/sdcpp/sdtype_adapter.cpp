@@ -42,9 +42,9 @@ using namespace kcpp_sd;
 // early callback log initialization
 namespace {
     const bool _ = [] {
-        // set ggml log callback only once
-        ggml_log_set(sd_ggml_log_callback, nullptr);
-        // and take control of the log output
+        // take control of the log output (future proofing, in case any other
+        // sd.cpp function emit logs on other code paths, and prevent sd.cpp
+        // to set the ggml logging callback
         set_sd_log_level(1);
         return true;
     }();
