@@ -23,6 +23,7 @@
 #include "parsers/kimi-k2.cpp"
 #include "parsers/kimi-k3.cpp"
 #include "parsers/lfm2.cpp"
+#include "parsers/ling3.cpp"
 #include "parsers/minicpm5.cpp"
 #include "parsers/minimax-m3.cpp"
 #include "parsers/ministral3.cpp"
@@ -1162,6 +1163,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         src.find("<|end_of_msg|>") != std::string::npos) {
         LOG_DBG("Using specialized template: Kimi K3\n");
         return common_chat_params_init_kimi_k3(tmpl, params);
+    }
+
+    // Ling 3.0 / Bailing V3 - <role>X</role> sections with <arg_key>/<arg_value> tagged
+    // tool calls. <role> sections are unique to this family among the tagged-arg templates.
+    if (src.find("<role>ASSISTANT</role>") != std::string::npos &&
+        src.find("<arg_key>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Ling 3.0 (Bailing V3)\n");
+        return common_chat_params_init_ling3(tmpl, params);
     }
 
     // Cohere2 MoE / North Code - marker-wrapped format with <|START_TEXT|> content and
