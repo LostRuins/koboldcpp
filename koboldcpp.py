@@ -11361,12 +11361,12 @@ def apply_agent_launch_safeguards(launch_args):
         return
 
     adjustments = []
-    if launch_args.defaultgenamt < 4096:
-        adjustments.append(f"default generation amount increased from {launch_args.defaultgenamt} to 4096")
-        launch_args.defaultgenamt = 4096
-    if launch_args.contextsize < 16384:
-        adjustments.append(f"context size increased from {launch_args.contextsize} to 16384")
-        launch_args.contextsize = 16384
+    if launch_args.defaultgenamt < 5120:
+        adjustments.append(f"default generation amount increased from {launch_args.defaultgenamt} to 5120")
+        launch_args.defaultgenamt = 5120
+    if launch_args.contextsize < 20480:
+        adjustments.append(f"context size increased from {launch_args.contextsize} to 20480")
+        launch_args.contextsize = 20480
     if not launch_args.jinja:
         adjustments.append("Jinja chat templates enabled")
         launch_args.jinja = True

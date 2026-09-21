@@ -249,7 +249,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "shell",
-            "description": "Run a command in the platform's native shell and return stdout, stderr, and exit code. Can be used to execute arbitary applications on the local system. Large output may be truncated, so prefer focused commands.",
+            "description": "Run a command in the platform's native shell and return stdout, stderr, and exit code. Can be used to execute arbitary commands or applications on the local system. Large output may be truncated, so prefer focused commands.",
             "parameters": {
                 "type": "object",
                 "properties": {
