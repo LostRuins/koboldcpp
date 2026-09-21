@@ -772,6 +772,7 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         bool is_ernie = sd_version_is_ernie_image(tempver);
         bool is_longcat = sd_version_is_longcat(tempver);
         bool is_lens = sd_version_is_lens(tempver);
+        bool is_pid = sd_version_is_pid(tempver);
         bool is_ltx = sd_version_is_ltxav(tempver);
         bool is_ideogram = sd_version_is_ideogram4(tempver);
         bool is_boogu = sd_version_is_boogu_image(tempver);
@@ -779,7 +780,7 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         bool is_sefi = sd_version_is_sefi_image(tempver);
         bool is_mageflow = sd_version_is_mage_flow(tempver);
         bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid);
         bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
@@ -838,7 +839,7 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
             {
                 std::swap(p.uncond_diffusion_model_path, p.clip_g_path);
             }
-            else if (is_lens && kcpp_main_tokenizer.empty())
+            else if ((is_lens || is_pid) && kcpp_main_tokenizer.empty())
             {
                     // accept a tokenizer.json on clip_2
                     kcpp_main_tokenizer = p.clip_g_path;

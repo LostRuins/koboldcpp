@@ -812,7 +812,7 @@ namespace kcpp_sd {
     model_info get_model_info(sd_ctx_t* ctx)
     {
         model_info res = {};
-        auto loadedsdver = get_loaded_sd_version(ctx);
+        SDVersion loadedsdver = (SDVersion)get_loaded_sd_version(ctx);
         res.is_wan = (loadedsdver == SDVersion::VERSION_WAN2 || loadedsdver == SDVersion::VERSION_WAN2_2_I2V || loadedsdver == SDVersion::VERSION_WAN2_2_TI2V);
         res.is_qwenimg = (loadedsdver == SDVersion::VERSION_QWEN_IMAGE);
         res.is_chroma = loaded_model_is_chroma(ctx);
@@ -823,11 +823,11 @@ namespace kcpp_sd {
         res.is_sdxs = (loadedsdver == SDVersion::VERSION_SDXS_512_DS || loadedsdver == SDVersion::VERSION_SDXS_09);
         res.is_sd1 = (loadedsdver == SDVersion::VERSION_SD1);
         res.is_sd2 = (loadedsdver == SDVersion::VERSION_SD2);
-        res.is_sdxl = sd_version_is_sdxl((SDVersion)loadedsdver);
-        res.is_ltx = sd_version_is_ltxav((SDVersion)loadedsdver);
-        res.is_minimaxh3 = sd_version_is_minimax_h3((SDVersion)loadedsdver);
-        res.is_boogu = sd_version_is_boogu_image((SDVersion)loadedsdver);
-        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg((SDVersion)loadedsdver);
+        res.is_sdxl = sd_version_is_sdxl(loadedsdver);
+        res.is_ltx = sd_version_is_ltxav(loadedsdver);
+        res.is_minimaxh3 = sd_version_is_minimax_h3(loadedsdver);
+        res.is_boogu = sd_version_is_boogu_image(loadedsdver);
+        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg(loadedsdver) || sd_version_is_pid(loadedsdver);
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
         res.spatial_multiple = get_spatial_multiple(ctx);
         return res;
