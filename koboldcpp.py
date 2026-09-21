@@ -8584,7 +8584,7 @@ def save_config_dict(filename, savdict, template):
         filenamestr += ".kcpps"
     if not filenamestr.endswith(".kcppt") and template:
         filenamestr += ".kcppt"
-    do_not_save = {'agent_api_key', 'agent_base_url', 'allow_config_onready', 'analyze', 'config', 'exportconfig', 'exporttemplate', 'run_agent', 'testmemory', 'unpack', 'version'}
+    do_not_save = {'agent_api_key', 'agent_base_url', 'allow_config_onready', 'analyze', 'config', 'exportconfig', 'exporttemplate', 'run_bundled_agent', 'testmemory', 'unpack', 'version'}
     filtered = {k: v for k, v in savdict.items() if k not in do_not_save}
     if 'gendefaults' in filtered:
         gendefaults = parse_json_object(filtered['gendefaults'], 'gendefaults')
@@ -11356,6 +11356,30 @@ def load_config_cli(filename):
                 print("Automatically selecting your backend...")
                 auto_set_backend_cli()
 
+def apply_agent_launch_safeguards(launch_args):
+    if not launch_args.agent:
+        return
+
+    adjustments = []
+    if launch_args.defaultgenamt < 4096:
+        adjustments.append(f"default generation amount increased from {launch_args.defaultgenamt} to 4096")
+        launch_args.defaultgenamt = 4096
+    if launch_args.contextsize < 16384:
+        adjustments.append(f"context size increased from {launch_args.contextsize} to 16384")
+        launch_args.contextsize = 16384
+    if not launch_args.jinja:
+        adjustments.append("Jinja chat templates enabled")
+        launch_args.jinja = True
+    if not launch_args.jinja_tools:
+        adjustments.append("Jinja tool formatting enabled")
+        launch_args.jinja_tools = True
+
+    if adjustments:
+        print("\nWARNING: KoboldCpp Agent adjusted launch settings for reliable tool use:")
+        for adjustment in adjustments:
+            print(f"  - {adjustment}")
+        print()
+
 def convert_args_to_template(savdict):
     savdict["istemplate"] = True
     savdict["gpulayers"] = -1
@@ -11601,13 +11625,12 @@ def get_kobold_agent_path():
     return os.path.join(base_path, "kcpp_agent.py")
 
 
-def run_kobold_agent(base_url=None, api_key=None):
+def run_bundled_kobold_agent(base_url=None, api_key=None):
+    """Run the bundled agent script inside a frozen KoboldCpp process."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
         raise FileNotFoundError(f"Kobold Agent script not found: {agent_path}")
 
-    # The packaged executable cannot invoke the bundled script through a separate
-    # Python interpreter, so execute it as __main__ inside the child process.
     import runpy
     old_argv = sys.argv
     try:
@@ -11621,26 +11644,20 @@ def run_kobold_agent(base_url=None, api_key=None):
         sys.argv = old_argv
 
 
-def launch_kobold_agent(base_url=None, api_key=None):
+def launch_kobold_agent_terminal(base_url=None, api_key=None):
+    """Open the agent in a new terminal, using the bundled runner when frozen."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
         print(f"Cannot launch Kobold Agent: script not found at {agent_path}")
         return False
 
-    if getattr(sys, 'frozen', False):
-        command = [sys.executable, "--run-agent"]
-    else:
-        command = [sys.executable, agent_path]
+    is_frozen = getattr(sys, 'frozen', False)
+    command = ([sys.executable, "--run-bundled-agent"] if is_frozen
+               else [sys.executable, agent_path])
     if base_url:
-        if getattr(sys, 'frozen', False):
-            command.extend(["--agent-base-url", base_url])
-        else:
-            command.extend(["--base-url", base_url])
+        command.extend(["--agent-base-url" if is_frozen else "--base-url", base_url])
     if api_key:
-        if getattr(sys, 'frozen', False):
-            command.extend(["--agent-api-key", api_key])
-        else:
-            command.extend(["--api-key", api_key])
+        command.extend(["--agent-api-key" if is_frozen else "--api-key", api_key])
 
     try:
         if os.name == 'nt':
@@ -11817,12 +11834,12 @@ def main(launch_args, default_args):
     global args, showdebug, kcpp_instance, exitcounter, using_gui_launcher, sslvalid, global_memory
     args = launch_args #note: these are NOT shared with the child processes!
 
-    if args.run_agent:
-        run_kobold_agent(args.agent_base_url, args.agent_api_key)
+    if args.run_bundled_agent:
+        run_bundled_kobold_agent(args.agent_base_url, args.agent_api_key)
         return
 
     if args.agent and len(sys.argv) == 2:
-        launch_kobold_agent()
+        launch_kobold_agent_terminal()
         return
 
     if (args.version) and len(sys.argv) <= 2:
@@ -11925,6 +11942,8 @@ def main(launch_args, default_args):
                 print("Note: In order to use --skiplauncher, you need to specify a model with --model")
             time.sleep(3)
             sys.exit(2)
+
+    apply_agent_launch_safeguards(args)
 
     if args.ssl: #need to duplicate here for the tunnel
         if len(args.ssl)==2 and isinstance(args.ssl[0], str) and os.path.exists(args.ssl[0]) and isinstance(args.ssl[1], str) and os.path.exists(args.ssl[1]):
@@ -13286,11 +13305,11 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             def on_server_ready():
                 if args.mcpfile:
                     agent_timer = threading.Timer(
-                        2, launch_kobold_agent, args=(agent_base_url, args.password)
+                        2, launch_kobold_agent_terminal, args=(agent_base_url, args.password)
                     )
                     agent_timer.start()
                     return True
-                return launch_kobold_agent(agent_base_url, args.password)
+                return launch_kobold_agent_terminal(agent_base_url, args.password)
         asyncio.run(RunServerMultiThreaded(args.host, args.port, KcppServerRequestHandler, on_server_ready))
     else:
         # Flush stdout for previous win32 issue so the client can see output.
@@ -13516,10 +13535,10 @@ if __name__ == '__main__':
     deprecatedgroup.add_argument("--flashattention","--flash-attn","-fa", help=argparse.SUPPRESS, action='store_true') #flash attention now default on
     deprecatedgroup.add_argument("--useswa", help=argparse.SUPPRESS, action='store_true')
 
-    debuggroup = parser.add_argument_group('Debug Commands')
-    debuggroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')
-    debuggroup.add_argument("--run-agent", help=argparse.SUPPRESS, action='store_true')
-    debuggroup.add_argument("--agent-base-url", help=argparse.SUPPRESS, default=None)
-    debuggroup.add_argument("--agent-api-key", help=argparse.SUPPRESS, default=None)
+    internalgroup = parser.add_argument_group('Internal Commands')
+    internalgroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')
+    internalgroup.add_argument("--run-bundled-agent", "--run-agent", dest="run_bundled_agent", help=argparse.SUPPRESS, action='store_true')
+    internalgroup.add_argument("--agent-base-url", help=argparse.SUPPRESS, default=None)
+    internalgroup.add_argument("--agent-api-key", help=argparse.SUPPRESS, default=None)
 
     main(launch_args=parser.parse_args(),default_args=parser.parse_args([]))
