@@ -185,7 +185,7 @@ Rules:
 - Never claim a tool succeeded unless you received a successful tool result.
 - If a tool result ends with a truncation marker, do not treat it as complete; make narrower follow-up calls to retrieve what you still need.
 - Keep tool calls simple and make only the calls necessary for the user's request.
-- Paths may be relative or absolute. Relative paths are relative to the directory where this program was started.
+- Paths may be relative or absolute. Relative paths are relative to the current working directory.
 - The current working directory is {Path.cwd()}.
 - The shell tool uses {SHELL_DESCRIPTION}; write commands using that shell's syntax.
 - For edit, replace an exact old_text string with new_text. If the old text is not unique, the edit will fail unless replace_all is true.
@@ -844,10 +844,11 @@ def chat_completion(
     payload = {
         "model": model,
         "messages": messages,
-        "tools": tools,
-        "tool_choice": "auto",
         "temperature": temperature,
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
 
@@ -1076,6 +1077,9 @@ def print_runtime_help(
         "\n" + color("Runtime commands:", ANSI_BOLD_CYAN) + "\n"
         "  /help               Show this help\n"
         "  /clear              Clear history and refresh MCP tools\n"
+        "  /compact            Summarize history to save context space\n"
+        "  /workdir            Show the current working directory\n"
+        "  /workdir PATH       Change directory and clear the session\n"
         "  /confirm            Show confirmation status\n"
         "  /confirm on         Require approval for every tool call\n"
         "  /confirm off        Auto-approve tool calls\n"
@@ -1091,6 +1095,7 @@ def print_runtime_help(
         f"\nConfirmation is currently {confirmation}.\n"
         f"Reasoning display is currently {reasoning}.\n"
         f"Verbose tool display is currently {verbosity}.\n"
+        f"Working directory: {Path.cwd()}\n"
     )
 
 
@@ -1103,6 +1108,51 @@ def reasoning_text(message: dict[str, Any]) -> str:
         if value is not None:
             return json.dumps(value, ensure_ascii=False, indent=2)
     return ""
+
+
+def compact_session(
+    messages: list[dict[str, Any]],
+    base_url: str,
+    api_key: str,
+    model: str,
+    temperature: float,
+    max_tokens: int | None,
+    request_timeout: int,
+) -> str:
+    """Summarize the complete conversation without changing it on failure."""
+    summary_request = [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "Summarize this session for your future self so you can continue the work "
+                "with the earlier messages removed. Be concise and accurate. Include the "
+                "overall and current goals, decisions, completed work, important findings "
+                "and file paths, and remaining steps or blockers. Preserve details needed "
+                "to act; do not invent progress. Return only the summary."
+            ),
+        },
+    ]
+    response = chat_completion(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        messages=summary_request,
+        tools=[],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        request_timeout=request_timeout,
+    )
+    try:
+        choice = response["choices"][0]
+        summary = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise APIResponseError("summary response was malformed") from exc
+    if choice.get("finish_reason") == "length":
+        raise APIResponseError("summary was cut off by the output token limit")
+    if not isinstance(summary, str) or not summary.strip():
+        raise APIResponseError("model returned an empty summary")
+    return summary.strip()
 
 
 def run_agent(
@@ -1157,6 +1207,7 @@ def run_agent(
 
     print(color("Model:", ANSI_CYAN) + f" {model}")
     print(color("Endpoint:", ANSI_CYAN) + f" {base_url}")
+    print(color("Working directory:", ANSI_CYAN) + f" {Path.cwd()}")
     if max_tokens is not None:
         print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens}")
     confirmation = "OFF (--yes)" if auto_approve else "ON"
@@ -1187,6 +1238,48 @@ def run_agent(
             messages[:] = [{"role": "system", "content": system_prompt()}]
             refresh_mcp_tools()
             print("Conversation cleared.\n")
+            continue
+        if command == "/compact":
+            if command_arg:
+                print("Usage: /compact\n")
+                continue
+            if len(messages) == 1:
+                print("Nothing to compact.\n")
+                continue
+            try:
+                with Throbber("Summarizing session"):
+                    summary = compact_session(
+                        messages, base_url, api_key, model, temperature,
+                        max_tokens, request_timeout,
+                    )
+            except (EndpointUnavailableError, APIResponseError) as exc:
+                print(f"Compaction failed: {exc}. Conversation unchanged.\n")
+                continue
+            messages[:] = [
+                {"role": "system", "content": system_prompt()},
+                {"role": "assistant", "content": f"Summary of the earlier session:\n{summary}"},
+            ]
+            print(f"Session compacted:\n{summary}\n")
+            continue
+        if command == "/workdir":
+            if not command_arg:
+                print(f"Working directory: {Path.cwd()}\n")
+                continue
+            requested = command_arg
+            if len(requested) >= 2 and requested[0] == requested[-1] and requested[0] in "\"'":
+                requested = requested[1:-1]
+            target = Path(requested).expanduser()
+            try:
+                if not target.is_dir():
+                    raise NotADirectoryError(f"Not a directory: {target}")
+                os.chdir(target)
+            except OSError as exc:
+                print(f"Cannot change working directory: {exc}\n")
+                continue
+            messages[:] = [{"role": "system", "content": system_prompt()}]
+            refresh_mcp_tools()
+            print(f"Working directory: {Path.cwd()}")
+            print("Conversation cleared (/clear fresh session).\n")
             continue
         if command == "/confirm":
             setting = command_arg.lower()
@@ -1412,8 +1505,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--temperature",
         type=temperature_value,
-        default=0.3,
-        help="Sampling temperature (default: 0.3)",
+        default=0.4,
+        help="Sampling temperature (default: 0.4)",
     )
     parser.add_argument(
         "--max-tool-result-chars",
