@@ -11661,6 +11661,24 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None):
 
     try:
         if os.name == 'nt':
+            # Prefer Windows Terminal's Unicode/font fallback support over a
+            # fresh classic console, which may have different fonts from CMD.
+            terminal_path = shutil.which("wt.exe")
+            # wt treats semicolons as command separators, even within arguments.
+            # Use the direct launcher for these paths/credentials to preserve them.
+            if terminal_path and not any(";" in value for value in [os.getcwd(), *command]):
+                try:
+                    terminal_process = subprocess.Popen(
+                        [terminal_path, "-w", "-1", "new-tab", "-d", os.getcwd(), *command],
+                        cwd=os.getcwd(), creationflags=subprocess.CREATE_NO_WINDOW)
+                    try:
+                        if terminal_process.wait(timeout=3) == 0:
+                            return True
+                    except subprocess.TimeoutExpired:
+                        # Some versions keep the launcher alive with the window.
+                        return True
+                except OSError:
+                    pass  # An unavailable/broken execution alias can still be on PATH.
             subprocess.Popen(command, cwd=os.getcwd(), creationflags=subprocess.CREATE_NEW_CONSOLE)
         elif sys.platform == 'darwin':
             shell_command = f"cd {shlex.quote(os.getcwd())} && exec {shlex.join(command)}"
