@@ -18,7 +18,6 @@
 
 #include "otherarch/utils.h"
 #include "model_adapter.h"
-#include "sdcpp_logger_adapter.h"
 
 #include "stable-diffusion.h"
 #include "src/kcpp_sd_extensions.h"

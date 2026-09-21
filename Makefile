@@ -708,7 +708,7 @@ SDCPP_MAIN_BASENAMES := examples/cli/image_metadata.cpp examples/cli/image_metad
 
 SOURCES_SDCOMMON := $(foreach f,$(SDCPP_COMMON_BASENAMES),otherarch/sdcpp/$(f))
 HEADERS_SDCOMMON := $(filter %.h,$(SOURCES_SDCOMMON)) $(filter %.hpp, $(SOURCES_SDCOMMON))
-OBJS_SDCOMMON := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON))) otherarch/sdcpp/thirdparty/zip.o sdcpp_logger_adapter.o
+OBJS_SDCOMMON := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON))) otherarch/sdcpp/thirdparty/zip.o
 
 SOURCES_SDMAIN := $(foreach f,$(SDCPP_MAIN_BASENAMES),otherarch/sdcpp/$(f))
 HEADERS_SDMAIN := $(filter %.h,$(SOURCES_SDMAIN)) $(filter %.hpp, $(SOURCES_SDMAIN))
@@ -720,9 +720,6 @@ $(OBJS_SDMAIN): $(HEADERS_SDMAIN)
 
 otherarch/sdcpp/src/%.o: otherarch/sdcpp/src/%.cpp
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
-
-sdcpp_logger_adapter.o: sdcpp_logger_adapter.cpp sdcpp_logger_adapter.h otherarch/sdcpp/src/core/util.h
-	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src $(CXXFLAGS) -c $< -o $@
 
 otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@

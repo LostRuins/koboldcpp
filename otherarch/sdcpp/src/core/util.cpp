@@ -653,6 +653,7 @@ static void kcpp_sd_log_dispatch(sd_log_level_t level, const std::string& origin
         message += '\n';
     }
     fputs(message.c_str(), stdout);
+    fflush(stdout);
 }
 
 static void sd_log_dispatch(sd_log_level_t level, const std::string& origin, const std::string& text) {

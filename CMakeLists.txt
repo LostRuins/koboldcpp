@@ -517,7 +517,6 @@ endif()
 set_source_files_properties(vendor/hash/sha256/sha256.c PROPERTIES COMPILE_OPTIONS ${KCPP_HASH_NO_WARN_FLAG})
 
 add_library(sdtype_adapter
-            sdcpp_logger_adapter.cpp
             otherarch/sdcpp/sdtype_adapter.cpp
             otherarch/sdcpp/src/core/compute_workspace.cpp
             otherarch/sdcpp/src/core/ggml_extend.cpp
