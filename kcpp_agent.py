@@ -1516,12 +1516,37 @@ def prompt_for_connection(
     return candidate_url, candidate_key, candidate_model
 
 
-def print_runtime_help(
-    confirmation_mode: str, show_reasoning: bool, verbose: bool
+def confirmation_status(mode: str) -> str:
+    return color(mode.upper(), ANSI_GREEN if mode == "on" else ANSI_YELLOW)
+
+
+def print_runtime_status(
+    base_url: str,
+    model: str,
+    confirmation_mode: str,
+    show_reasoning: bool,
+    verbose: bool,
+    max_tokens: int | None,
 ) -> None:
-    confirmation = confirmation_mode.upper()
-    reasoning = toggle_status(show_reasoning)
-    verbosity = toggle_status(verbose)
+    max_tokens_status = str(max_tokens) if max_tokens is not None else "server default"
+    print(color("Current status:", ANSI_BOLD_CYAN))
+    print(color("Model:", ANSI_CYAN) + f" {model}")
+    print(color("Endpoint:", ANSI_CYAN) + f" {base_url}")
+    print(color("Working directory:", ANSI_CYAN) + f" {Path.cwd()}")
+    print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens_status}")
+    print(color("Confirmation:", ANSI_CYAN) + f" {confirmation_status(confirmation_mode)}")
+    print(color("Reasoning display:", ANSI_CYAN) + f" {toggle_status(show_reasoning)}")
+    print(color("Verbose tool display:", ANSI_CYAN) + f" {toggle_status(verbose)}")
+
+
+def print_runtime_help(
+    base_url: str,
+    model: str,
+    confirmation_mode: str,
+    show_reasoning: bool,
+    verbose: bool,
+    max_tokens: int | None,
+) -> None:
     print(
         "\n" + color("Runtime commands:", ANSI_BOLD_CYAN) + "\n"
         "  /help               Show this help\n"
@@ -1543,11 +1568,11 @@ def print_runtime_help(
         "  /verbose off        Use compact tool displays\n"
         "  /connect            Set endpoint, API key, and model interactively\n"
         "  /exit or /quit      Stop the agent\n"
-        f"\nConfirmation is currently {confirmation}.\n"
-        f"Reasoning display is currently {reasoning}.\n"
-        f"Verbose tool display is currently {verbosity}.\n"
-        f"Working directory: {Path.cwd()}\n"
     )
+    print_runtime_status(
+        base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens
+    )
+    print()
 
 
 def reasoning_text(message: dict[str, Any]) -> str:
@@ -1663,15 +1688,10 @@ def run_agent(
     ]
     pending_interruption = False
 
-    print(color("Model:", ANSI_CYAN) + f" {model}")
-    print(color("Endpoint:", ANSI_CYAN) + f" {base_url}")
-    print(color("Working directory:", ANSI_CYAN) + f" {Path.cwd()}")
-    if max_tokens is not None:
-        print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens}")
-    confirmation = confirmation_mode.upper()
-    confirmation_color = ANSI_GREEN if confirmation_mode == "on" else ANSI_YELLOW
-    print(color("Confirmation:", ANSI_CYAN) + " " + color(confirmation, confirmation_color))
-    print("KoboldCpp Agent has full shell access, exercise caution when approving commands.")
+    print_runtime_status(
+        base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens
+    )
+    print("\nKoboldCpp Agent has full shell access, exercise caution when approving commands.")
     print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
 
     while True:
@@ -1690,7 +1710,10 @@ def run_agent(
         command = command_parts[0].lower()
         command_arg = command_parts[1].strip() if len(command_parts) == 2 else ""
         if command == "/help":
-            print_runtime_help(confirmation_mode, show_reasoning, verbose)
+            print_runtime_help(
+                base_url, model, confirmation_mode, show_reasoning, verbose,
+                max_tokens,
+            )
             continue
         if command == "/tools":
             parts = command_arg.split()
