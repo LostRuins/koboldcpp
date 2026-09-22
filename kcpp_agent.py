@@ -411,9 +411,9 @@ TOOLS = [
                         "type": "string",
                         "description": "Path to a local image file, relative to the current working directory or absolute.",
                     },
-                    "inquiry": {
+                    "inquiry_prompt": {
                         "type": "string",
-                        "description": "Optional question or detail to focus on within the image. Defaults to obtaining a detailed image description.",
+                        "description": "Optional question to ask the vision AI about the image. Use this field to extract more specific information about an image (e.g. In the image, how many yellow flowers are in the vase?). If omitted, defaults to obtaining a detailed image description.",
                     },
                 },
                 "required": ["path"],
@@ -970,7 +970,7 @@ def review_tool_call(
         model=model,
         messages=review_messages,
         tools=tools,
-        temperature=0.0,
+        temperature=DEFAULT_TEMPERATURE,
         max_tokens=min(max_tokens, 256) if max_tokens is not None else 256,
         request_timeout=request_timeout,
         tool_choice="none",
@@ -985,7 +985,7 @@ def review_tool_call(
         choice.get("finish_reason") != "length"
         and not choice["message"].get("tool_calls")
         and isinstance(content, str)
-        and content.strip().upper() == "APPROVED"
+        and re.match(r"\s*APPROVED[^\w\s]*(?:\s|$)", content, re.IGNORECASE) is not None
     )
 
 
@@ -1000,7 +1000,7 @@ def tool_view_image(
     path = Path(args["path"]).expanduser()
     if not path.is_file():
         raise FileNotFoundError(f"No such image file: {path}")
-    inquiry = args.get("inquiry")
+    inquiry = args.get("inquiry_prompt")
     if inquiry is not None and not isinstance(inquiry, str):
         raise ValueError("inquiry must be a string")
     inquiry = (inquiry or "").strip() or "Describe this image in detail."
