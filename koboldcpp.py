@@ -5677,12 +5677,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         if api_format in (3, 4):
             genparams['_oai_generation_pending'] = True
         try:
-            if stream_flag:
-                loop = asyncio.get_event_loop()
-                executor = ThreadPoolExecutor()
-                genout = await loop.run_in_executor(executor, run_blocking)
-            else:
-                genout = run_blocking()
+            # Keep the event loop free so disconnections can abort non-streaming requests too.
+            loop = asyncio.get_running_loop()
+            genout = await loop.run_in_executor(None, run_blocking)
         finally:
             genparams.pop('_oai_generation_pending', None)
 
@@ -6435,10 +6432,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 tasks.append(self.handle_sse_stream(genparams, api_format))
             generate_task = asyncio.create_task(run_generation())
             tasks.append(generate_task)
-            if stream_flag:
-                monitor_task = asyncio.create_task(self.monitor_connection(handle.abort_generate))
-                if api_format in (4, 7, 9) and genparams.get('using_openai_tools', False):
-                    tool_keepalive_task = asyncio.create_task(self.send_tool_stream_keepalives(genparams, api_format))
+            monitor_task = asyncio.create_task(self.monitor_connection(handle.abort_generate))
+            if stream_flag and api_format in (4, 7, 9) and genparams.get('using_openai_tools', False):
+                tool_keepalive_task = asyncio.create_task(self.send_tool_stream_keepalives(genparams, api_format))
             await asyncio.gather(*tasks)
             generate_result = generate_task.result()
             return generate_result
