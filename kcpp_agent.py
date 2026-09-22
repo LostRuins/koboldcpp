@@ -1204,8 +1204,12 @@ def print_runtime_help(
         "  /verbose            Show verbose display status\n"
         "  /verbose on         Expand arguments and show result contents\n"
         "  /verbose off        Use compact tool displays\n"
-        "  /endpoint           Show the current model endpoint\n"
+        "  /endpoint           Show the current endpoint\n"
         "  /endpoint URL       Switch model endpoints\n"
+        "  /model              Show the selected model\n"
+        "  /model NAME         Change the selected model\n"
+        "  /apikey             Show API key status\n"
+        "  /apikey KEY         Set the API key\n"
         "  /exit or /quit      Stop the agent\n"
         f"\nConfirmation is currently {confirmation}.\n"
         f"Reasoning display is currently {reasoning}.\n"
@@ -1437,6 +1441,21 @@ def run_agent(
                 print("Verbose tool display disabled.\n")
             else:
                 print("Usage: /verbose [on|off]\n")
+            continue
+        if command == "/model":
+            if not command_arg:
+                print(f"Selected model: {model}\n")
+            else:
+                model = command_arg
+                print(f"Selected model: {model}\n")
+            continue
+        if command == "/apikey":
+            if not command_arg:
+                print(f"API key: {'set (hidden)' if api_key else 'not set'}\n")
+                continue
+            api_key = command_arg
+            refresh_mcp_tools()
+            print("API key updated (hidden).\n")
             continue
         if command == "/endpoint":
             requested = command_arg
