@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 from html.parser import HTMLParser
 import ipaddress
 import json
@@ -1328,38 +1329,81 @@ def probe_endpoint(base_url: str, api_key: str, timeout: int) -> tuple[bool, str
         return False, str(exc)
 
 
-def prompt_for_endpoint(
-    current: str,
+def recover_connection(
+    current_url: str,
     api_key: str,
-    request_timeout: int,
+    model: str,
+    timeout: int,
     reason: str,
-) -> str | None:
-    message = color(
-        f"Endpoint unavailable ({reason}).", ANSI_RED, stderr=True
-    )
-    print(f"\n{message}", file=sys.stderr)
+) -> tuple[str, str, str] | None:
+    """Offer retry, connection settings, or cancellation after a failure."""
     while True:
+        print("\n" + color("Connection unavailable:", ANSI_RED) + f" {reason}")
+        print(f"Current endpoint: {current_url}")
+        print("  [R] Retry current connection")
+        print("  [W] Open connection wizard")
+        print("  [C] Cancel")
         try:
-            answer = input(
-                f"New endpoint URL, Enter to retry {current}, or 'q' to cancel: "
-            ).strip()
+            answer = input("Choose [r/w/c]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return None
-
-        if answer.lower() in {"q", "quit", "cancel"}:
+        if answer in {"c", "cancel"}:
             return None
-        candidate = answer or current
-        try:
-            candidate = normalize_base_url(candidate)
-            reachable, detail = probe_endpoint(candidate, api_key, request_timeout)
-        except ValueError as exc:
-            print(f"Invalid endpoint: {exc}")
+        if answer in {"w", "wizard"}:
+            connection = prompt_for_connection(current_url, api_key, model, timeout)
+            if connection is not None:
+                return connection
             continue
-        if reachable:
-            print(f"Connected to {candidate} ({detail}).\n")
-            return candidate
-        print(f"Still unavailable: {detail}")
+        if answer in {"", "r", "retry", "reconnect"}:
+            reachable, detail = probe_endpoint(current_url, api_key, timeout)
+            if reachable:
+                print(f"Endpoint responded: {current_url} ({detail}).\n")
+                return current_url, api_key, model
+            reason = detail
+            continue
+        print("Choose r, w, or c.")
+
+
+def prompt_for_connection(
+    current_url: str, current_key: str, current_model: str, timeout: int
+) -> tuple[str, str, str] | None:
+    """Collect and check connection settings before applying any of them."""
+    print("\nConnect to a model endpoint. Press Enter to keep a value, or type /cancel.")
+    try:
+        while True:
+            requested_url = input(f"Endpoint URL [{current_url}]: ").strip()
+            if requested_url.lower() == "/cancel":
+                print("Connection unchanged.\n")
+                return None
+            try:
+                candidate_url = normalize_base_url(requested_url or current_url)
+                break
+            except ValueError as exc:
+                print(f"Invalid endpoint: {exc}")
+
+        key_status = "set" if current_key else "not set"
+        requested_key = getpass.getpass(f"API key [{key_status}; Enter to keep]: ")
+        if requested_key.strip().lower() == "/cancel":
+            print("Connection unchanged.\n")
+            return None
+        candidate_key = requested_key if requested_key else current_key
+
+        requested_model = input(f"Model [{current_model}]: ").strip()
+        if requested_model.lower() == "/cancel":
+            print("Connection unchanged.\n")
+            return None
+        candidate_model = requested_model or current_model
+    except (EOFError, KeyboardInterrupt):
+        print("\nConnection unchanged.\n")
+        return None
+
+    reachable, detail = probe_endpoint(candidate_url, candidate_key, timeout)
+    if not reachable:
+        print(f"Connection failed: {detail}. Settings unchanged.\n")
+        return None
+    print(f"Endpoint responded: {candidate_url} ({detail}).\n")
+    return candidate_url, candidate_key, candidate_model
 
 
 def print_runtime_help(
@@ -1387,12 +1431,7 @@ def print_runtime_help(
         "  /verbose            Show verbose display status\n"
         "  /verbose on         Expand arguments and show result contents\n"
         "  /verbose off        Use compact tool displays\n"
-        "  /endpoint           Show the current endpoint\n"
-        "  /endpoint URL       Switch model endpoints\n"
-        "  /model              Show the selected model\n"
-        "  /model NAME         Change the selected model\n"
-        "  /apikey             Show API key status\n"
-        "  /apikey KEY         Set the API key\n"
+        "  /connect            Set endpoint, API key, and model interactively\n"
         "  /exit or /quit      Stop the agent\n"
         f"\nConfirmation is currently {confirmation}.\n"
         f"Reasoning display is currently {reasoning}.\n"
@@ -1475,13 +1514,13 @@ def run_agent(
     print(color("***", ANSI_BOLD_CYAN) + "\n")
     reachable, detail = probe_endpoint(base_url, api_key, request_timeout)
     if not reachable:
-        replacement = prompt_for_endpoint(
-            base_url, api_key, request_timeout, detail
+        connection = recover_connection(
+            base_url, api_key, model, request_timeout, detail
         )
-        if replacement is None:
+        if connection is None:
             print("No reachable endpoint selected. Exiting.")
             return
-        base_url = replacement
+        base_url, api_key, model = connection
 
     disabled_tools: set[str] = set()
     all_tools = list(TOOLS)
@@ -1524,7 +1563,7 @@ def run_agent(
     confirmation_color = ANSI_YELLOW if auto_approve else ANSI_GREEN
     print(color("Confirmation:", ANSI_CYAN) + " " + color(confirmation, confirmation_color))
     print("KoboldCpp Agent has full shell access, exercise caution when approving commands.")
-    print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands. Press X while waiting for the model to interrupt.\n")
+    print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
 
     while True:
         try:
@@ -1670,45 +1709,22 @@ def run_agent(
             else:
                 print("Usage: /verbose [on|off]\n")
             continue
-        if command == "/model":
-            if not command_arg:
-                print(f"Selected model: {model}\n")
-            else:
-                model = command_arg
-                print(f"Selected model: {model}\n")
-            continue
-        if command == "/apikey":
-            if not command_arg:
-                print(f"API key: {'set (hidden)' if api_key else 'not set'}\n")
+        if command == "/connect":
+            if command_arg:
+                print("Usage: /connect\n")
                 continue
-            api_key = command_arg
-            refresh_mcp_tools()
-            print("API key updated (hidden).\n")
-            continue
-        if command == "/endpoint":
-            requested = command_arg
-            if not requested:
-                print(f"Current endpoint: {base_url}\n")
-                continue
-            try:
-                candidate = normalize_base_url(requested)
-                reachable, detail = probe_endpoint(
-                    candidate, api_key, request_timeout
-                )
-            except ValueError as exc:
-                print(f"Invalid endpoint: {exc}\n")
-                continue
-            if reachable:
-                base_url = candidate
-                print(f"Connected to {base_url} ({detail}).\n")
-                refresh_mcp_tools()
-                continue
-            replacement = prompt_for_endpoint(
-                candidate, api_key, request_timeout, detail
+            connection = prompt_for_connection(
+                base_url, api_key, model, request_timeout
             )
-            if replacement is not None:
-                base_url = replacement
-                refresh_mcp_tools()
+            if connection is not None:
+                previous_url, previous_key = base_url, api_key
+                base_url, api_key, model = connection
+                if base_url != previous_url or api_key != previous_key:
+                    refresh_mcp_tools()
+                print(f"Connection updated. Model: {model}; API key: {'set' if api_key else 'not set'}.\n")
+            continue
+        if command in {"/model", "/apikey", "/endpoint"}:
+            print("Use /connect to set the endpoint, API key, and model.\n")
             continue
 
         if pending_interruption:
@@ -1742,15 +1758,17 @@ def run_agent(
                 print("\nInterrupted. Enter new instruction.\n")
                 break
             except EndpointUnavailableError as exc:
-                label = color("Model request failed:", ANSI_RED, stderr=True)
-                print(f"\n{label} {exc}\n", file=sys.stderr)
-                replacement = prompt_for_endpoint(
-                    base_url, api_key, request_timeout, str(exc)
+                connection = recover_connection(
+                    base_url, api_key, model, request_timeout, str(exc)
                 )
-                if replacement is None:
+                if connection is None:
+                    pending_interruption = True
+                    print("Request stopped. Enter a new instruction.\n")
                     break
-                base_url = replacement
-                refresh_mcp_tools()
+                previous_url, previous_key = base_url, api_key
+                base_url, api_key, model = connection
+                if base_url != previous_url or api_key != previous_key:
+                    refresh_mcp_tools()
                 continue
             except APIResponseError as exc:
                 label = color("API error:", ANSI_RED, stderr=True)
