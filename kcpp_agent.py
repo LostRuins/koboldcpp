@@ -35,7 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 DEFAULT_MAX_TOOL_RESULT_CHARS = 20000
@@ -68,6 +68,10 @@ class EndpointUnavailableError(RuntimeError):
 
 class APIResponseError(RuntimeError):
     """The server responded, but the API request or response was invalid."""
+
+
+class AgentInterrupted(Exception):
+    """The user stopped the current model request."""
 
 
 def stream_supports_color(stream: Any) -> bool:
@@ -157,6 +161,69 @@ class Throbber:
             self.thread.join(timeout=0.3)
         self.stream.write("\r" + " " * (len(self.label) + 2) + "\r")
         self.stream.flush()
+
+
+def run_interruptible_request(operation: Callable[[], Any]) -> Any:
+    """Let X return to the prompt while a model request is in progress."""
+    if not (stream_is_interactive(sys.stdin) and stream_is_interactive(sys.stdout)):
+        with Throbber():
+            return operation()
+
+    if os.name == "nt":
+        import msvcrt
+
+        def pressed_x() -> bool:
+            if not msvcrt.kbhit():
+                return False
+            key = msvcrt.getwch()
+            if key in ("\x00", "\xe0"):
+                msvcrt.getwch()
+            return key.lower() == "x"
+
+        def restore_input() -> None:
+            pass
+
+    else:
+        import select
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        previous_mode = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+
+        def pressed_x() -> bool:
+            ready, _, _ = select.select([fd], [], [], 0)
+            return bool(ready) and os.read(fd, 1).lower() == b"x"
+
+        def restore_input() -> None:
+            termios.tcsetattr(fd, termios.TCSADRAIN, previous_mode)
+
+    finished = threading.Event()
+    outcome: dict[str, Any] = {}
+
+    def request_worker() -> None:
+        try:
+            outcome["value"] = operation()
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            finished.set()
+
+    try:
+        worker = threading.Thread(target=request_worker, daemon=True)
+        worker.start()
+        with Throbber("Waiting for model (press X to interrupt)"):
+            while not finished.wait(0.1):
+                if pressed_x():
+                    raise AgentInterrupted
+            if pressed_x():
+                raise AgentInterrupted
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
+    finally:
+        restore_input()
 
 
 def resolve_shell() -> tuple[str | None, str]:
@@ -1388,7 +1455,7 @@ def run_agent(
     confirmation_color = ANSI_YELLOW if auto_approve else ANSI_GREEN
     print(color("Confirmation:", ANSI_CYAN) + " " + color(confirmation, confirmation_color))
     print("KoboldCpp Agent has full shell access, exercise caution when approving commands.")
-    print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
+    print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands. Press X while waiting for the model to interrupt.\n")
 
     while True:
         try:
@@ -1545,17 +1612,22 @@ def run_agent(
         # Continue calling the model until it returns a normal assistant answer.
         for _ in range(MAX_AGENT_STEPS):
             try:
-                with Throbber():
-                    response = chat_completion(
-                        base_url=base_url,
-                        api_key=api_key,
-                        model=model,
-                        messages=messages,
-                        tools=available_tools,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        request_timeout=request_timeout,
-                    )
+                request_args = dict(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model,
+                    messages=list(messages),
+                    tools=list(available_tools),
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    request_timeout=request_timeout,
+                )
+                response = run_interruptible_request(
+                    lambda: chat_completion(**request_args)
+                )
+            except AgentInterrupted:
+                print("\nInterrupted. Enter directions at User>.\n")
+                break
             except EndpointUnavailableError as exc:
                 label = color("Model request failed:", ANSI_RED, stderr=True)
                 print(f"\n{label} {exc}\n", file=sys.stderr)
