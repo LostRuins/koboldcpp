@@ -2000,10 +2000,10 @@ def run_agent(
                 label = color("API error:", ANSI_RED, stderr=True)
                 print(f"\n{label} malformed tool call.\n", file=sys.stderr)
                 break
+            content = assistant.get("content") or ""
+            if content:
+                print("\n" + color("Agent>", ANSI_GREEN) + f" {content}\n")
             if not tool_calls:
-                content = assistant.get("content") or ""
-                if content:
-                    print("\n" + color("Agent>", ANSI_GREEN) + f" {content}\n")
                 break
 
             awaiting_answer = any(
