@@ -6421,17 +6421,18 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
     async def handle_request(self, genparams, api_format, stream_flag):
         tasks = []
         genparams["oai_uniqueid"] = random.randint(100000, 999999)
-        for key in ('_sse_stream_started', '_sse_stream_finished', '_oai_generation_pending', '_oai_generation_error', '_anthropic_stream_state', '_client_disconnected'):
+        for key in ('_sse_stream_started', '_sse_stream_finished', '_oai_generation_pending', '_oai_generation_error', '_anthropic_stream_state', '_client_disconnected', '_json_keepalive_started'):
             genparams.pop(key, None)
         monitor_task = None
         tool_keepalive_task = None
+        json_keepalive_task = None
         batch_expected = genparams.get('_batch_expected', False)
 
-        async def monitor_generation():
-            def disconnected():
-                genparams['_client_disconnected'] = True
-                self.close_connection = True
+        def disconnected():
+            genparams['_client_disconnected'] = True
+            self.close_connection = True
 
+        async def monitor_generation():
             await self.monitor_connection(disconnected)
             # Keep waiting for the generator to finish. An early abort can be
             # reset during native startup, or precede publication of a batch ID.
@@ -6464,6 +6465,19 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             monitor_task = asyncio.create_task(monitor_generation())
             if stream_flag and api_format in (4, 7, 9) and genparams.get('using_openai_tools', False):
                 tool_keepalive_task = asyncio.create_task(self.send_tool_stream_keepalives(genparams, api_format))
+            elif not stream_flag and self.headers.get('X-KoboldCpp-Keepalive', '').lower() == 'true':
+                def start_keepalive():
+                    # Commit headers only if the request outlasts the first
+                    # interval. Fast errors can still return their HTTP status.
+                    self.close_connection = True
+                    self.send_response(200)
+                    self.send_header('connection', 'close')
+                    self.send_header('X-Accel-Buffering', 'no')
+                    self.end_headers(content_type='application/json')
+                    genparams['_json_keepalive_started'] = True
+
+                json_keepalive_task = asyncio.create_task(
+                    self.send_json_keepalives(disconnected, interval=15, start_fn=start_keepalive))
             await asyncio.gather(*tasks)
             generate_result = generate_task.result()
             return generate_result
@@ -6491,13 +6505,23 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                     await tool_keepalive_task
                 except (asyncio.CancelledError, OSError):
                     pass
+            if json_keepalive_task:
+                if not json_keepalive_task.done():
+                    json_keepalive_task.cancel()
+                try:
+                    await json_keepalive_task
+                except (asyncio.CancelledError, OSError):
+                    pass
 
-    async def send_json_keepalives(self, cancel_fn, interval=50):
+    async def send_json_keepalives(self, cancel_fn, interval=50, start_fn=None):
         # Leading whitespace is valid JSON. Padding also helps small proxy buffers
         # make progress; it cannot bypass a proxy's absolute request time limit.
         try:
             while True:
                 await asyncio.sleep(interval)
+                if start_fn:
+                    start_fn()
+                    start_fn = None
                 self.wfile.write(b' ' * 2047 + b'\n')
                 self.wfile.flush()
         except OSError:
@@ -7880,17 +7904,21 @@ Change Mode<br>
                                 self.wfile.flush()
                                 self.close_connection = True
                             else:
-                                self.send_response(500)
-                                self.send_header('content-length', str(len(genresp)))
-                                self.end_headers(content_type='application/json')
+                                # Once keepalives start, errors use the same JSON
+                                # body and the already committed HTTP 200 status.
+                                if not genparams.get('_json_keepalive_started', False):
+                                    self.send_response(500)
+                                    self.send_header('content-length', str(len(genresp)))
+                                    self.end_headers(content_type='application/json')
                                 self.wfile.write(genresp)
                             return
                         # Headers are already sent when streaming
                         if not sse_stream_flag:
-                            self.send_response(200)
                             genresp = (json.dumps(gendat).encode())
-                            self.send_header('content-length', str(len(genresp)))
-                            self.end_headers(content_type='application/json')
+                            if not genparams.get('_json_keepalive_started', False):
+                                self.send_response(200)
+                                self.send_header('content-length', str(len(genresp)))
+                                self.end_headers(content_type='application/json')
                             self.wfile.write(genresp)
                         elif (api_format == 4 or api_format == 7 or api_format == 9) and genparams.get('using_openai_tools', False): #special case, fake streaming for tool calls
                             if genparams.get('_sse_stream_finished', False):
@@ -10964,7 +10992,7 @@ def show_gui_yesnobox(title,message,icon='error'):
 def print_with_time(txt):
     print(f"{datetime.now().strftime('[%H:%M:%S]')} " + txt, flush=True)
 
-def make_url_request(url, data, method='POST', headers={}, timeout=300):
+def make_url_request(url, data, method='POST', headers={}, timeout=600):
     global nocertify
     try:
         request = None

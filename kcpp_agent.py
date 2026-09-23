@@ -1165,6 +1165,9 @@ def chat_completion(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            # KoboldCpp can pad a non-streaming response with JSON whitespace
+            # while generating. Other endpoints can ignore this extension.
+            "X-KoboldCpp-Keepalive": "true",
         },
         method="POST",
     )
@@ -1205,7 +1208,13 @@ def chat_completion(
         if exc.code >= 500:
             raise EndpointUnavailableError(message) from exc
         raise APIResponseError(message) from exc
-    except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+    except TimeoutError as exc:
+        raise EndpointUnavailableError(
+            f"Model request timed out waiting for response data "
+            f"(--request-timeout {request_timeout}). "
+            "The server may still be generating; this does not necessarily mean it is unreachable."
+        ) from exc
+    except (urllib.error.URLError, ConnectionError) as exc:
         raise EndpointUnavailableError(f"Could not reach model server: {exc}") from exc
 
 def review_tool_call(
@@ -2128,7 +2137,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--request-timeout",
         type=positive_int,
-        default=300,
+        default=600,
         metavar="SECONDS",
         help="Model request timeout in seconds (default: %(default)s)",
     )
