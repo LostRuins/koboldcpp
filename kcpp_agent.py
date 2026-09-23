@@ -34,6 +34,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -54,6 +55,9 @@ DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "local-model")
 COLOR_STDOUT = False
 COLOR_STDERR = False
 DEFAULT_TEMPERATURE = 0.4
+ESCAPE_DISAMBIGUATION_SECONDS = 0.05
+ESCAPE_SEQUENCE_QUIET_SECONDS = 0.01
+ESCAPE_SEQUENCE_DRAIN_SECONDS = 0.10
 INTERRUPTED_TASK_NOTICE = "[Task was interrupted before the agent finished. Follow the new instruction below.]"
 
 ANSI_RESET = "\033[0m"
@@ -246,7 +250,7 @@ class Throbber:
 def run_interruptible_request(
     operation: Callable[[], Any], on_interrupt: Callable[[], None] | None = None
 ) -> Any:
-    """Let X close a model request and return to the prompt."""
+    """Let a standalone Escape close a model request and return to the prompt."""
     if not (stream_is_interactive(sys.stdin) and stream_is_interactive(sys.stdout)):
         with Throbber():
             return operation()
@@ -254,13 +258,14 @@ def run_interruptible_request(
     if os.name == "nt":
         import msvcrt
 
-        def pressed_x() -> bool:
+        def pressed_escape() -> bool:
             if not msvcrt.kbhit():
                 return False
             key = msvcrt.getwch()
             if key in ("\x00", "\xe0"):
                 msvcrt.getwch()
-            return key.lower() == "x"
+                return False
+            return key == "\x1b"
 
         def restore_input() -> None:
             pass
@@ -274,9 +279,34 @@ def run_interruptible_request(
         previous_mode = termios.tcgetattr(fd)
         tty.setcbreak(fd)
 
-        def pressed_x() -> bool:
+        def pressed_escape() -> bool:
             ready, _, _ = select.select([fd], [], [], 0)
-            return bool(ready) and os.read(fd, 1).lower() == b"x"
+            if not ready or os.read(fd, 1) != b"\x1b":
+                return False
+
+            # Escape prefixes arrow, function, and Alt-key sequences on POSIX
+            # terminals. Only treat it as an interrupt when it arrives alone.
+            ready, _, _ = select.select(
+                [fd], [], [], ESCAPE_DISAMBIGUATION_SECONDS
+            )
+            if not ready:
+                return True
+
+            # Discard the rest of the terminal-generated sequence so fragments
+            # such as "[A" cannot leak into the next input prompt. Stop after a
+            # short quiet period, with a hard deadline for unusual terminals.
+            deadline = time.monotonic() + ESCAPE_SEQUENCE_DRAIN_SECONDS
+            while time.monotonic() < deadline:
+                os.read(fd, 1)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                ready, _, _ = select.select(
+                    [fd], [], [], min(ESCAPE_SEQUENCE_QUIET_SECONDS, remaining)
+                )
+                if not ready:
+                    break
+            return False
 
         def restore_input() -> None:
             termios.tcsetattr(fd, termios.TCSADRAIN, previous_mode)
@@ -301,11 +331,11 @@ def run_interruptible_request(
                 on_interrupt()
             raise AgentInterrupted
 
-        with Throbber("Waiting for model (press X to interrupt)"):
+        with Throbber("Waiting for model (press Esc to interrupt)"):
             while not finished.wait(0.1):
-                if pressed_x():
+                if pressed_escape():
                     interrupt()
-            if pressed_x():
+            if pressed_escape():
                 interrupt()
         if "error" in outcome:
             raise outcome["error"]
@@ -1195,10 +1225,10 @@ def review_tool_call(
         {
             "role": "user",
             "content": (
-                f"Tool danger classification check: Please review the proposed '{name}' function call requested immediately above, as well as the earlier request. Is it risky to execute? "
+                f"Tool danger classification check: Please review the proposed '{name}' function call requested immediately above, considering the earlier request. Is it risky to execute? "
                 "Reply with a single word 'APPROVED' only if its full effect is clearly completely safe and harmless. "
-                "Otherwise, reply with a single word 'CAUTION' for any incorrect, potentially risky external side effects, credential access or disclosure, or any task uncertainty. "
-                "Finally, reply with a single word 'DANGER' for any dangerous, irreversible, potentially destructive or hard to reverse actions. Remember, only reply with a single word of text!"
+                "Otherwise, reply with a single word 'CAUTION' for any security concerns, correctness concerns, potentially risky side effects, or task uncertainty. "
+                "Finally, reply with a single word 'DANGER' for any potentially dangerous, irreversible, destructive or hard to reverse actions. Remember, only reply with a single word of text!"
             ),
         },
     ]
