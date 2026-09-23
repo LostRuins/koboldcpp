@@ -10902,7 +10902,7 @@ def show_gui():
         ctk.CTkButton(popup, text="Load Template", command=load_easy_template).pack(pady=5)
         newbdesc1 = ctk.CTkLabel(popup, text="LowSpec = Recommend 6GB VRAM\nMidSpec = Recommend 12GB VRAM\nHighSpec = Recommend 24GB VRAM")
         newbdesc1.pack(pady=(10, 0))
-        newbdesc2 = ctk.CTkLabel(popup, text="Everything = All Features         Text = Text Generation\nImages = Image Generation         Vision = Image Recognition\nVoice = Speech Generation         Audio = Speech Recognition")
+        newbdesc2 = ctk.CTkLabel(popup, text="Quickly get started with basic templates.\nSelect your desired use case.")
         newbdesc2.pack(pady=(10, 0))
         commdesc = ctk.CTkLabel(popup, text="Templates here are subject to change from time to time.\n\nFound a broken template? Want to contribute one?\nVisit https://huggingface.co/koboldcpp/popular-templates/")
         commdesc.pack_forget()
