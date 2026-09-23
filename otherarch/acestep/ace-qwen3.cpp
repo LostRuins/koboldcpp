@@ -1400,7 +1400,11 @@ std::string acestep_prepare_request(const music_generation_inputs inputs)
     std::vector<AcePrompt> aces;  // populated by Phase 1 (simple or partial)
 
     caption_tokens.clear();
-    if(ace.caption!="" && !rewrite_caption)
+    // Keep lyric generation conditioned on the user's caption. Rewriting the
+    // caption in this same pass can turn it into an arrangement description,
+    // which then makes the model emit stage directions instead of sung lyrics.
+    // Simple mode rewrites the caption later in a separate metadata-only pass.
+    if(ace.caption!="" && (!rewrite_caption || is_simple))
     {
         caption_tokens = bpe_encode(&acestep_bpe, ace.caption+"\n", false);
     }
@@ -1431,6 +1435,36 @@ std::string acestep_prepare_request(const music_generation_inputs inputs)
             seed, batch_size, use_fsm ? &fsm : nullptr, true);
 
         parse_phase1_into_aces(phase1_texts, ace, aces, seed, "Simple", true);
+
+        if (rewrite_caption && !aces.empty()) {
+            fprintf(stderr, "[Simple] Separate caption rewrite pass\n");
+
+            // Lyrics are already fixed. Run the original inspiration prompt a
+            // second time with caption generation enabled, stopping at
+            // </think>, and copy only the rewritten caption into the result.
+            caption_tokens.clear();
+            MetadataFSM caption_fsm;
+            caption_fsm.init(acestep_bpe, acestep_llm.cfg.vocab_size, true);
+            caption_fsm.reset();
+            if (aces[0].vocal_language != "unknown" && !aces[0].vocal_language.empty())
+                caption_fsm.force_language(acestep_bpe, aces[0].vocal_language);
+
+            auto caption_texts = generate_phase1_batch(
+                &acestep_llm, &acestep_bpe, prompt, 768,
+                temperature, top_p, top_k, rep_pen,
+                seed, batch_size, use_fsm ? &caption_fsm : nullptr, false,
+                1.0f, nullptr, true);
+
+            AcePrompt rewritten = {};
+            if (!caption_texts.empty() &&
+                parse_cot_and_lyrics(caption_texts[0], &rewritten) &&
+                !rewritten.caption.empty()) {
+                aces[0].caption = rewritten.caption;
+            } else {
+                fprintf(stderr,
+                        "[Simple] Caption rewrite failed; preserving original caption\n");
+            }
+        }
 
         for (int i = 0; i < batch_size; i++) qw3lm_reset_kv(&acestep_llm, i);
     }
