@@ -5504,6 +5504,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.port = port
 
     def __call__(self, *args, **kwargs):
+        # Each server worker reuses this handler across connections. A failed
+        # header write leaves the previous response's buffer uncleared.
+        self._headers_buffer = []
         super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args):
@@ -5677,12 +5680,10 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         if api_format in (3, 4):
             genparams['_oai_generation_pending'] = True
         try:
-            if stream_flag:
-                loop = asyncio.get_event_loop()
-                executor = ThreadPoolExecutor()
-                genout = await loop.run_in_executor(executor, run_blocking)
-            else:
-                genout = run_blocking()
+            # Leave the event loop free to monitor non-streaming requests too.
+            # asyncio.run waits for this executor before the request handler returns.
+            loop = asyncio.get_running_loop()
+            genout = await loop.run_in_executor(None, run_blocking)
         finally:
             genparams.pop('_oai_generation_pending', None)
 
@@ -6384,10 +6385,14 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     async def monitor_connection(self, cancel_fn): #Poll the socket to detect client disconnection
         import select
+        import ssl
+        sock = self.connection
+        # SSLSocket.recv rejects MSG_PEEK. Readability alone is not a disconnect.
+        if isinstance(sock, ssl.SSLSocket):
+            return
         loop = asyncio.get_event_loop()
         def check_connection_closed():
             try:
-                sock = self.connection
                 readable, _, exceptional = select.select([sock], [], [sock], 0)
                 if exceptional:
                     return True
@@ -6397,8 +6402,10 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                     if len(data) == 0:
                         return True
                 return False
-            except (OSError, Exception):
-                return True  # Treat any error as disconnected
+            except (BlockingIOError, InterruptedError):
+                return False
+            except OSError:
+                return True
         while True:
             try:
                 await asyncio.sleep(0.5)
@@ -6414,10 +6421,29 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
     async def handle_request(self, genparams, api_format, stream_flag):
         tasks = []
         genparams["oai_uniqueid"] = random.randint(100000, 999999)
-        for key in ('_sse_stream_started', '_sse_stream_finished', '_oai_generation_pending', '_oai_generation_error', '_anthropic_stream_state'):
+        for key in ('_sse_stream_started', '_sse_stream_finished', '_oai_generation_pending', '_oai_generation_error', '_anthropic_stream_state', '_client_disconnected'):
             genparams.pop(key, None)
         monitor_task = None
         tool_keepalive_task = None
+        batch_expected = genparams.get('_batch_expected', False)
+
+        async def monitor_generation():
+            def disconnected():
+                genparams['_client_disconnected'] = True
+                self.close_connection = True
+
+            await self.monitor_connection(disconnected)
+            # Keep waiting for the generator to finish. An early abort can be
+            # reset during native startup, or precede publication of a batch ID.
+            while genparams.get('_client_disconnected', False) and not generate_task.done():
+                batch_request_id = genparams.get('_batch_request_id', -1)
+                if batch_request_id >= 0:
+                    handle.batch_generate_abort(batch_request_id)
+                elif not batch_expected:
+                    handle.abort_generate()
+                # Never use a global abort for an expected batch without an ID:
+                # it may be starting or already released by the worker thread.
+                await asyncio.sleep(0.1)
 
         async def run_generation():
             try:
@@ -6435,10 +6461,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 tasks.append(self.handle_sse_stream(genparams, api_format))
             generate_task = asyncio.create_task(run_generation())
             tasks.append(generate_task)
-            if stream_flag:
-                monitor_task = asyncio.create_task(self.monitor_connection(handle.abort_generate))
-                if api_format in (4, 7, 9) and genparams.get('using_openai_tools', False):
-                    tool_keepalive_task = asyncio.create_task(self.send_tool_stream_keepalives(genparams, api_format))
+            monitor_task = asyncio.create_task(monitor_generation())
+            if stream_flag and api_format in (4, 7, 9) and genparams.get('using_openai_tools', False):
+                tool_keepalive_task = asyncio.create_task(self.send_tool_stream_keepalives(genparams, api_format))
             await asyncio.gather(*tasks)
             generate_result = generate_task.result()
             return generate_result
@@ -7841,6 +7866,8 @@ Change Mode<br>
                             batched_request_runner_count += 1
 
                     gendat = asyncio.run(self.handle_request(genparams, api_format, sse_stream_flag))
+                    if genparams.pop('_client_disconnected', False):
+                        return
 
                     try:
                         modelNameToReturn = friendlymodelname
