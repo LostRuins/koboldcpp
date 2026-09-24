@@ -31,6 +31,7 @@ import platform
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -59,6 +60,8 @@ MAX_PROJECT_INSTRUCTION_CHARS = 10000
 DEFAULT_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:5001/v1")
 DEFAULT_API_KEY = os.getenv("OPENAI_API_KEY", "local")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "local-model")
+# Accept self-signed endpoint certificates for now; web_fetch keeps verification.
+API_SSL_CONTEXT = ssl._create_unverified_context()
 COLOR_STDOUT = False
 COLOR_STDERR = False
 DEFAULT_TEMPERATURE = 0.4
@@ -151,7 +154,7 @@ class CancellableHTTPHandler(urllib.request.HTTPHandler):
 
 class CancellableHTTPSHandler(urllib.request.HTTPSHandler):
     def __init__(self, cancellation: RequestCancellation) -> None:
-        super().__init__()
+        super().__init__(context=API_SSL_CONTEXT)
         self.cancellation = cancellation
 
     def https_open(self, request: urllib.request.Request) -> Any:
@@ -161,7 +164,7 @@ class CancellableHTTPSHandler(urllib.request.HTTPSHandler):
 
         return self.do_open(
             make_connection, request,
-            context=self._context, check_hostname=self._check_hostname,
+            context=self._context,
         )
 
 
@@ -1231,7 +1234,9 @@ def chat_completion(
         )
         opened = (
             opener.open(request, timeout=request_timeout)
-            if opener is not None else urllib.request.urlopen(request, timeout=request_timeout)
+            if opener is not None else urllib.request.urlopen(
+                request, timeout=request_timeout, context=API_SSL_CONTEXT
+            )
         )
         with opened as response:
             if cancellation is not None:
@@ -1428,7 +1433,7 @@ def mcp_request(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=API_SSL_CONTEXT) as response:
             value = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
@@ -1517,7 +1522,7 @@ def probe_endpoint(base_url: str, api_key: str, timeout: int) -> tuple[bool, str
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=min(timeout, 5)) as response:
+        with urllib.request.urlopen(request, timeout=min(timeout, 5), context=API_SSL_CONTEXT) as response:
             response.read(1)
             return True, f"HTTP {response.status}"
     except urllib.error.HTTPError as exc:
