@@ -1613,7 +1613,8 @@ void ModelManager::remove_runtime_owner(uintptr_t owner_id) {
 
 ModelManager::CapacityCheck ModelManager::check_capacity(
     const DeviceMemoryRequest& request,
-    const std::vector<TensorState*>& states) const {
+    const std::vector<TensorState*>& states,
+    bool log_details) const {
     CapacityCheck result;
     if (request.compute_backend == nullptr || sd_backend_is_cpu(request.compute_backend)) {
         return result;
@@ -1631,16 +1632,23 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
         }
         size_t free_bytes = 0, total_bytes = 0;
         ggml_backend_dev_memory(device, &free_bytes, &total_bytes);
+        const size_t weights_resident = compute_backend_resident_bytes(backend);
+        const size_t other_runtime    = other_runtime_resident_bytes(request.owner_id, backend);
+        const size_t resident         = add(weights_resident, add(other_runtime, request.runtime_resident_bytes));
+        if (log_details) {
+            LOG_WARN("model manager memory on %s: reported free %.2f MB / total %.2f MB, tracked weights %.2f MB / other runtime %.2f MB / current runtime %.2f MB",
+                        ggml_backend_name(backend),
+                        free_bytes / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0),
+                        weights_resident / (1024.0 * 1024.0), other_runtime / (1024.0 * 1024.0),
+                        request.runtime_resident_bytes / (1024.0 * 1024.0));
+        }
         if (free_bytes == 0 && total_bytes == 0) {
             return SIZE_MAX;
         }
         // Vulkan's heap budget subtraction can underflow when usage exceeds the budget.
-        if (total_bytes > 0 && free_bytes > total_bytes) {
+        if (total_bytes > 0 && free_bytes > total_bytes && sd_backend_is(backend, "Vulkan")) {
             return size_t{0};
         }
-        const size_t resident = add(compute_backend_resident_bytes(backend),
-                                       add(other_runtime_resident_bytes(request.owner_id, backend),
-                                           request.runtime_resident_bytes));
         if (total_bytes > 0) {
             free_bytes = std::min(free_bytes, resident < total_bytes ? total_bytes - resident : 0);
         }
@@ -1786,7 +1794,7 @@ bool ModelManager::ensure_compute_backend_capacity(
         }
     }
 
-    const auto capacity                = check_capacity(request, required_states);
+    const auto capacity                = check_capacity(request, required_states, true);
     const std::string available_device = capacity.available_device_bytes == SIZE_MAX
                                              ? "unknown"
                                              : sd_format("%.2f MB", capacity.available_device_bytes / (1024.0 * 1024.0));

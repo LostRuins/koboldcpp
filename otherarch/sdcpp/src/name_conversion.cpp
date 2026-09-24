@@ -103,6 +103,8 @@ std::string convert_open_clip_to_hf_clip_name(std::string name) {
     return name;
 }
 
+std::string convert_llada2_moe_te_name(std::string name);
+
 std::string convert_cond_stage_model_name(std::string name, std::string prefix) {
     static const std::vector<std::pair<std::string, std::string>> clip_name_map{
         {"transformer.text_projection.weight", "transformer.text_model.text_projection"},
@@ -177,6 +179,7 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
             replace_with_name_map(name, llm_vision_name_map);
         } else {
             replace_with_name_map(name, llm_name_map);
+            name = convert_llada2_moe_te_name(name);
         }
     } else {
         name = convert_open_clip_to_hf_clip_name(name);
@@ -749,6 +752,52 @@ std::string convert_hunyuan_video_to_original_flux(std::string name) {
     return name;
 }
 
+// LLaDA-Image's LLaDA2-MoE text encoder. Both published layouts use these names; the ComfyUI
+// GGUF repack differs only by appending ".weight" to the bare 3-D expert parameters.
+// Called with the "text_encoders." prefix already stripped, so the name still carries "llm.".
+std::string convert_llada2_moe_te_name(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {"model.language_model.word_embeddings.", "model.embed_tokens."},
+        {"model.language_model.norm.", "model.norm."},
+        {"model.language_model.lm_head.", "lm_head."},
+        {"model.language_model.layers.", "model.layers."},
+        {"attention.query_key_value.", "self_attn.query_key_value."},
+        {"attention.dense.", "self_attn.o_proj."},
+        {"attention.query_layernorm.", "self_attn.q_norm."},
+        {"attention.key_layernorm.", "self_attn.k_norm."},
+    };
+    replace_with_name_map(name, name_map);
+
+    // The HF checkpoint stores the stacked experts as bare nn.Parameters with no ".weight".
+    static const std::vector<std::string> bare_expert_params = {
+        "mlp.experts.gate_proj",
+        "mlp.experts.up_proj",
+        "mlp.experts.down_proj",
+    };
+    for (const auto& suffix : bare_expert_params) {
+        if (ends_with(name, suffix)) {
+            name += ".weight";
+            break;
+        }
+    }
+
+    return name;
+}
+
+// The attention projections keep their diffusers names (JointAttention's split_qkv mode), so
+// only the patch-size-keyed dicts need flattening. Latents arrive already patchified from the
+// Flux2 VAE, so the only patch key is 1-1.
+std::string convert_diffusers_dit_to_original_llada_image(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> prefix_map = {
+        {"all_x_embedder.1-1.", "x_embedder."},
+        {"all_final_layer.1-1.", "final_layer."},
+    };
+
+    replace_with_prefix_map(name, prefix_map);
+
+    return name;
+}
+
 std::string convert_diffusers_dit_to_original_lumina2(std::string name) {
     int num_layers         = 30;
     int num_refiner_layers = 2;
@@ -896,6 +945,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_hunyuan_video_to_original_flux(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
+    } else if (sd_version_is_llada_image(version)) {
+        name = convert_diffusers_dit_to_original_llada_image(name);
     } else if (sd_version_is_anima(version)) {
         name = convert_other_dit_to_original_anima(name);
     } else if (sd_version_is_krea2(version)) {

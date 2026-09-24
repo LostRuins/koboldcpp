@@ -318,6 +318,7 @@ public:
     bool init_model_loader(ModelLoader& model_loader, ModelConfig& configuration);
 
     bool init(const sd_ctx_params_t* sd_ctx_params);
+    bool set_sage_attention_enabled(bool enabled);
 
     bool uses_tae() const;
 

@@ -131,16 +131,30 @@ namespace ZImage {
         int64_t num_heads;
         int64_t num_kv_heads;
         bool qk_norm;
+        bool split_qkv;
 
     public:
-        JointAttention(int64_t hidden_size, int64_t head_dim, int64_t num_heads, int64_t num_kv_heads, bool qk_norm)
-            : head_dim(head_dim), num_heads(num_heads), num_kv_heads(num_kv_heads), qk_norm(qk_norm) {
-            blocks["qkv"] = std::make_shared<Linear>(hidden_size, (num_heads + num_kv_heads * 2) * head_dim, false);
-            float scale   = 1.f;
-            blocks["out"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false, false, false, scale);
+        JointAttention(int64_t hidden_size,
+                       int64_t head_dim,
+                       int64_t num_heads,
+                       int64_t num_kv_heads,
+                       bool qk_norm,
+                       bool norm_elementwise_affine = true,
+                       bool split_qkv               = false)
+            : head_dim(head_dim), num_heads(num_heads), num_kv_heads(num_kv_heads), qk_norm(qk_norm), split_qkv(split_qkv) {
+            float scale = 1.f;
+            if (split_qkv) {
+                blocks["to_q"]     = std::make_shared<Linear>(hidden_size, num_heads * head_dim, false);
+                blocks["to_k"]     = std::make_shared<Linear>(hidden_size, num_kv_heads * head_dim, false);
+                blocks["to_v"]     = std::make_shared<Linear>(hidden_size, num_kv_heads * head_dim, false);
+                blocks["to_out.0"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false, false, false, scale);
+            } else {
+                blocks["qkv"] = std::make_shared<Linear>(hidden_size, (num_heads + num_kv_heads * 2) * head_dim, false);
+                blocks["out"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false, false, false, scale);
+            }
             if (qk_norm) {
-                blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim);
-                blocks["k_norm"] = std::make_shared<RMSNorm>(head_dim);
+                blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim, 1e-06f, norm_elementwise_affine);
+                blocks["k_norm"] = std::make_shared<RMSNorm>(head_dim, 1e-06f, norm_elementwise_affine);
             }
         }
 
@@ -151,8 +165,35 @@ namespace ZImage {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
-            auto qkv_proj   = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
-            auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks["out"]);
+            auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks[split_qkv ? "to_out.0" : "out"]);
+
+            if (split_qkv) {
+                auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
+                auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
+                auto v_proj = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
+
+                if (sd_backend_is(ctx->backend, "ROCm")) {
+                    out_proj->set_scale(1.f / 16.f);
+                    out_proj->set_force_prec_f32(true);
+                    q_proj->set_force_prec_f32(true);
+                    k_proj->set_force_prec_f32(true);
+                    v_proj->set_force_prec_f32(true);
+                }
+
+                auto q = ggml_reshape_4d(ctx->ggml_ctx, q_proj->forward(ctx, x), head_dim, num_heads, n_token, N);
+                auto k = ggml_reshape_4d(ctx->ggml_ctx, k_proj->forward(ctx, x), head_dim, num_kv_heads, n_token, N);
+                auto v = ggml_reshape_4d(ctx->ggml_ctx, v_proj->forward(ctx, x), head_dim, num_kv_heads, n_token, N);
+
+                if (qk_norm) {
+                    q = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"])->forward(ctx, q);
+                    k = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"])->forward(ctx, k);
+                }
+
+                auto out = Rope::attention(ctx, q, k, v, pe, mask, 1.f / 128.f);
+                return out_proj->forward(ctx, out);
+            }
+
+            auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
             if (sd_backend_is(ctx->backend, "ROCm")) {
                 out_proj->set_scale(1.f / 16.f);
@@ -252,9 +293,12 @@ namespace ZImage {
                                             ggml_tensor* x,
                                             ggml_tensor* scale) {
         // x: [N, L, C]
-        // scale: [N, C]
-        scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
-        x     = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+        // scale: [N, C], or [N, L, C] when the caller modulates per token (LLaDA-Image editing
+        // feeds a per-token timestep embedding so each segment carries its own modulation).
+        if (scale->ne[1] != x->ne[1]) {
+            scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
+        }
+        x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
         return x;
     }
 
@@ -272,14 +316,16 @@ namespace ZImage {
                               float ffn_dim_multiplier,
                               float norm_eps,
                               bool qk_norm,
-                              bool modulation = true)
+                              bool modulation              = true,
+                              bool norm_elementwise_affine = true,
+                              bool split_qkv               = false)
             : modulation(modulation) {
-            blocks["attention"]       = std::make_shared<JointAttention>(hidden_size, head_dim, num_heads, num_kv_heads, qk_norm);
+            blocks["attention"]       = std::make_shared<JointAttention>(hidden_size, head_dim, num_heads, num_kv_heads, qk_norm, norm_elementwise_affine, split_qkv);
             blocks["feed_forward"]    = std::make_shared<FeedForward>(hidden_size, hidden_size, multiple_of, ffn_dim_multiplier);
-            blocks["attention_norm1"] = std::make_shared<RMSNorm>(hidden_size, norm_eps);
-            blocks["ffn_norm1"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps);
-            blocks["attention_norm2"] = std::make_shared<RMSNorm>(hidden_size, norm_eps);
-            blocks["ffn_norm2"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps);
+            blocks["attention_norm1"] = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["ffn_norm1"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["attention_norm2"] = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["ffn_norm2"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
             if (modulation) {
                 blocks["adaLN_modulation.0"] = std::make_shared<Linear>(MIN(hidden_size, ADALN_EMBED_DIM), 4 * hidden_size);
             }

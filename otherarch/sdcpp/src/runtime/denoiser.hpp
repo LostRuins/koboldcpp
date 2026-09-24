@@ -786,6 +786,54 @@ struct FluxScheduler : SigmaScheduler {
 };
 
 // https://github.com/black-forest-labs/flux2/blob/main/src/flux2/sampling.py#L244
+// LLaDA-Image does not use a shift-based flow schedule. The reference pipeline builds a
+// Kumaraswamy-shaped grid over t = linspace(0.001, 1, n + 1)[:-1]:
+//     schedule = (1 - (1 - t^1.17)^0.8)^1.1
+//     sigma    = 1 - schedule
+// Its scheduler config can also set use_uniform_sigmas, which replaces the whole curve with a
+// plain linspace(1, 0, n + 1)[:-1] pre-shift grid.
+struct LLaDAImageScheduler : SigmaScheduler {
+    bool uniform_sigmas = false;
+
+    explicit LLaDAImageScheduler(const char* extra_sample_args = nullptr) {
+        parse_extra_sample_args(extra_sample_args);
+    }
+
+    void parse_extra_sample_args(const char* extra_sample_args) {
+        for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "llada_image scheduler arg")) {
+            if (key == "uniform") {
+                if (!parse_strict_bool(value, uniform_sigmas)) {
+                    LOG_WARN("ignoring invalid llada_image scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            }
+        }
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t /*t_to_sigma*/) override {
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+
+        if (n == 0) {
+            sigmas.push_back(1.0f);
+            return sigmas;
+        }
+
+        for (uint32_t i = 0; i < n; ++i) {
+            float progress = static_cast<float>(i) / static_cast<float>(n);
+            if (uniform_sigmas) {
+                sigmas.push_back(1.0f - progress);
+            } else {
+                float t        = 0.001f + progress * (1.0f - 0.001f);
+                float schedule = powf(1.0f - powf(1.0f - powf(t, 1.17f), 0.8f), 1.1f);
+                sigmas.push_back(1.0f - schedule);
+            }
+        }
+
+        sigmas.push_back(0.0f);
+        return sigmas;
+    }
+};
+
 struct Flux2Scheduler : SigmaScheduler {
     int image_seq_len = 0;
 
@@ -1121,6 +1169,11 @@ struct Denoiser {
             case FLUX2_SCHEDULER: {
                 LOG_INFO("get_sigmas with Flux2 scheduler");
                 scheduler = std::make_shared<Flux2Scheduler>(image_seq_len);
+                break;
+            }
+            case LLADA_IMAGE_SCHEDULER: {
+                LOG_INFO("get_sigmas with LLaDA-Image scheduler");
+                scheduler = std::make_shared<LLaDAImageScheduler>(extra_sample_args);
                 break;
             }
             case FLUX_SCHEDULER: {

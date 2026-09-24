@@ -475,8 +475,12 @@ namespace sd::pipeline {
                 }
                 condition_params.text            = request->negative_prompt;
                 condition_params.zero_out_masked = zero_out_masked;
-                uncond                           = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                                               condition_params);
+                if (sd_version_is_llada_image(sd->version)) {
+                    // LLaDA-Image CFG keeps the source latent but drops its SigVQ features.
+                    condition_params.ref_images = nullptr;
+                }
+                uncond = sd->cond_stage_model->get_learned_condition(sd->n_threads,
+                                                                     condition_params);
                 if (uncond.empty()) {
                     LOG_ERROR("failed to encode negative prompt");
                     return std::nullopt;
@@ -785,15 +789,9 @@ namespace sd::pipeline {
             return false;
         }
 
-        // MiniMax-H3 is video-only. Its denoiser always splits the packed latent into a video and an
-        // audio half, and only generate_video ever computes the audio length, so reaching this
-        // function with an H3 checkpoint is guaranteed to die on
-        // GGML_ASSERT(!audio_input_cache.empty()) with a core dump, after the several minutes it
-        // takes to load the weights, and with nothing in the output pointing at the missing --mode.
-        // (The AnimateDiff path below routes vid_gen back through here, but that is SD1.5 plus a
-        // motion module, never H3.)
-        if (sd_version_is_minimax_h3(sd->version)) {
-            LOG_ERROR("MiniMax-H3 is a video model and cannot be run in img_gen mode; use --mode vid_gen");
+        if (!sd_version_supports_image_generation(sd->version)) {
+            LOG_ERROR("%s cannot be run with generate_image(); use generate_video() or --mode vid_gen in the CLI",
+                      model_version_to_str[sd->version]);
             return false;
         }
 

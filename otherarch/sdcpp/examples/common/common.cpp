@@ -619,6 +619,10 @@ ArgOptions SDContextParams::get_options() {
          "use flash attention in the diffusion model only",
          true, &diffusion_flash_attn},
         {"",
+         "--sage-attn",
+         "use native CUDA SageAttention in the diffusion model, with flash/default attention fallback",
+         true, &sage_attn},
+        {"",
          "--diffusion-conv-direct",
          "use ggml_conv2d_direct in the diffusion model",
          true, &diffusion_conv_direct},
@@ -938,6 +942,7 @@ std::string SDContextParams::to_string() const {
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
         << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
         << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
+        << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
         << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -995,6 +1000,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.enable_mmap                     = enable_mmap;
     sd_ctx_params.flash_attn                      = flash_attn;
     sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.sage_attn                       = sage_attn;
     sd_ctx_params.linear_scale                    = linear_scale;
     sd_ctx_params.attn_scale                      = attn_scale;
     sd_ctx_params.tae_preview_only                = taesd_preview;
@@ -1109,7 +1115,7 @@ ArgOptions SDGenerationParams::get_options() {
          &hires_upscaler},
         {"",
          "--extra-sample-args",
-         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; lms supports lms_max_order, lms_shift, lms_divisions; noise-injecting samplers support noise_sampler with value iid (default except for dpm++2m_sde_bt) or brownian_tree; brownian_tree_rng supports cpu (default), cuda, std_default or sampler_rng",
+         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; llada_image supports uniform; lms supports lms_max_order, lms_shift, lms_divisions; noise-injecting samplers support noise_sampler with value iid (default except for dpm++2m_sde_bt) or brownian_tree; brownian_tree_rng supports cpu (default), cuda, std_default or sampler_rng",
          (int)',',
          &extra_sample_args},
         {"",
@@ -1748,7 +1754,7 @@ ArgOptions SDGenerationParams::get_options() {
          on_scm_policy_arg},
         {"",
          "--vae-tile-size",
-         "tile size for vae tiling, format [X]x[Y] (default: 32x32)",
+         "tile size for vae tiling in latent units, not image pixels, format [X]x[Y] (default: 32x32)",
          on_tile_size_arg},
         {"",
          "--vae-relative-tile-size",
@@ -1842,20 +1848,22 @@ bool decode_base64_image(const std::string& encoded_input,
         return false;
     }
 
-    int decoded_width  = 0;
-    int decoded_height = 0;
-    uint8_t* raw_data  = load_image_from_memory(reinterpret_cast<const char*>(image_bytes.data()),
-                                                static_cast<int>(image_bytes.size()),
-                                                decoded_width,
-                                                decoded_height,
-                                                expected_width,
-                                                expected_height,
-                                                target_channels);
+    int decoded_width    = 0;
+    int decoded_height   = 0;
+    int resolved_channel = target_channels;
+    uint8_t* raw_data    = load_image_from_memory(reinterpret_cast<const char*>(image_bytes.data()),
+                                                  static_cast<int>(image_bytes.size()),
+                                                  decoded_width,
+                                                  decoded_height,
+                                                  resolved_channel,
+                                                  expected_width,
+                                                  expected_height,
+                                                  target_channels);
     if (raw_data == nullptr) {
         return false;
     }
 
-    out_image.reset({(uint32_t)decoded_width, (uint32_t)decoded_height, (uint32_t)target_channels, raw_data});
+    out_image.reset({(uint32_t)decoded_width, (uint32_t)decoded_height, (uint32_t)resolved_channel, raw_data});
     return true;
 }
 
@@ -2209,7 +2217,7 @@ bool SDGenerationParams::from_json_str(
         LOG_ERROR("invalid lora");
         return false;
     }
-    if (!parse_image_json_field(j, "init_image", 3, width, height, init_image)) {
+    if (!parse_image_json_field(j, "init_image", 0, width, height, init_image)) {
         LOG_ERROR("invalid init_image");
         return false;
     }
@@ -2217,7 +2225,12 @@ bool SDGenerationParams::from_json_str(
         LOG_ERROR("invalid end_image");
         return false;
     }
-    if (!parse_image_array_json_field(j, "ref_images", 3, width, height, ref_images)) {
+    if (!parse_image_array_json_field(j,
+                                      "ref_images",
+                                      0,
+                                      auto_resize_ref_image ? width : 0,
+                                      auto_resize_ref_image ? height : 0,
+                                      ref_images)) {
         LOG_ERROR("invalid ref_images");
         return false;
     }
