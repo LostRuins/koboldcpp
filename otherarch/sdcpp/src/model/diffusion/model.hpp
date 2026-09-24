@@ -7,7 +7,7 @@
 
 #include "core/ggml_runner.h"
 #include "core/tensor_ggml.hpp"
-#include "model/common/rope.hpp"
+#include "model/common/rope_circular.hpp"
 #include "model_manager.h"
 
 enum class RefImageResizeMode {
@@ -183,6 +183,11 @@ static inline const sd::Tensor<T>& tensor_or_empty(const sd::Tensor<T>* tensor) 
 struct DiffusionModelRunner : public GGMLRunner {
 protected:
     std::string prefix;
+
+    std::vector<float> finish_rope_pe(Rope::Embedding embedding) {
+        Rope::apply_circular(embedding, circular_x_enabled, circular_y_enabled);
+        return std::move(embedding.values);
+    }
 
 public:
     DiffusionModelRunner(ggml_backend_t backend,

@@ -21,11 +21,12 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
                                     ggml_tensor* mask,
                                     bool skip_reshape,
                                     bool flash_attn,
-                                    float kv_scale) {
+                                    float kv_scale,
+                                    bool* used_flash_attn) {
     if (ctx->attn_scale > 0.f) {
         kv_scale = ctx->attn_scale;
     }
-    return ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, skip_reshape, flash_attn, kv_scale, ctx->sage_attn_enabled);
+    return ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, mask, skip_reshape, flash_attn, kv_scale, ctx->sage_attn_enabled, used_flash_attn);
 }
 
 void GGMLRunner::alloc_params_ctx() {
@@ -515,9 +516,10 @@ GGMLRunner::~GGMLRunner() {
     free_params_ctx();
 }
 
-GGMLRunnerContext GGMLRunner::get_context() {
+GGMLRunnerContext GGMLRunner::get_context(ggml_cgraph* graph) {
     GGMLRunnerContext runner_ctx;
     runner_ctx.ggml_ctx              = compute_ctx;
+    runner_ctx.graph                 = graph;
     runner_ctx.backend               = runtime_backend;
     runner_ctx.flash_attn_enabled    = flash_attn_enabled;
     runner_ctx.sage_attn_enabled     = sage_attn_enabled;
@@ -532,8 +534,8 @@ GGMLRunnerContext GGMLRunner::get_context() {
     runner_ctx.get_cache_tensor      = [this](const std::string& name) {
         return this->get_cache_tensor_by_name(name);
     };
-    runner_ctx.cache_tensor = [this](const std::string& name, ggml_tensor* tensor) {
-        this->cache(name, tensor);
+    runner_ctx.cache_tensor = [this, graph](const std::string& name, ggml_tensor* tensor) {
+        this->cache(name, tensor, graph);
     };
     runner_ctx.set_backend_tensor_data = [this](ggml_tensor* tensor, const void* data) {
         this->set_backend_tensor_data(tensor, data);
@@ -575,7 +577,7 @@ ggml_tensor* GGMLRunner::to_backend(ggml_tensor* tensor) {
     }
 }
 
-void GGMLRunner::cache(const std::string name, ggml_tensor* tensor) {
+void GGMLRunner::cache(const std::string name, ggml_tensor* tensor, ggml_cgraph* graph) {
     if (tensor != nullptr && tensor->view_src != nullptr) {
         tensor = ggml_cont(compute_ctx, tensor);
     }
@@ -583,6 +585,10 @@ void GGMLRunner::cache(const std::string name, ggml_tensor* tensor) {
         ggml_set_output(tensor);
     }
     cache_.stage(name, tensor);
+    if (graph != nullptr && tensor != nullptr) {
+        // Schedule the cache output here so its source can be reused before graph end.
+        ggml_build_forward_expand(graph, tensor);
+    }
 }
 
 std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
@@ -831,11 +837,20 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
         last_compute_status_ = GGML_STATUS_ALLOC_FAILED;
         return std::nullopt;
     }
+    auto fits_monolithic = [&]() {
+        // Planning headroom absorbs allocation estimate drift; execution keeps the normal limits.
+        constexpr size_t planning_headroom = 128ULL * 1024ULL * 1024ULL;
+        auto requests                      = memory_requests(full_measurement.buffers, cache_.pending_bytes(graph));
+        for (auto& request : requests) {
+            request.pending_allocation_bytes = add_bytes(request.pending_allocation_bytes, planning_headroom);
+        }
+        return fits(requests, params);
+    };
     auto manager         = residency_manager.lock();
     const bool segmented = !is_multi_device() && !sd_backend_is_cpu(runtime_backend) &&
                            manager != nullptr && manager->segmented_compute_enabled() &&
                            cached_plan.valid && cached_plan.has_cuts && cached_plan.segments.size() > 1 &&
-                           !fits(memory_requests(full_measurement.buffers, cache_.pending_bytes(graph)), params);
+                           !fits_monolithic();
     ggml_graph_cut::Plan monolithic_plan;
     if (!segmented) {
         monolithic_plan.segments.emplace_back();

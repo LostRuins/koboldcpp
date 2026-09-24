@@ -275,6 +275,26 @@ namespace sd_sample {
         }
     }
 
+    void SampleStepCacheDispatcher::invalidate_condition(const void* condition) {
+        if (condition == nullptr) {
+            return;
+        }
+
+        switch (runtime.mode) {
+            case SampleCacheMode::EASYCACHE:
+                runtime.easycache.cache_diffs.erase(condition);
+                break;
+            case SampleCacheMode::UCACHE:
+                runtime.ucache.cache_diffs.erase(condition);
+                break;
+            case SampleCacheMode::CACHEDIT:
+                runtime.cachedit.cache_diffs.erase(condition);
+                break;
+            case SampleCacheMode::NONE:
+                break;
+        }
+    }
+
     bool SampleStepCacheDispatcher::is_step_skipped() const {
         switch (runtime.mode) {
             case SampleCacheMode::EASYCACHE:

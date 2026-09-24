@@ -635,18 +635,16 @@ namespace Qwen {
                 ref_index_mode = Rope::RefIndexMode::DECREASE;
             }
 
-            pe_vec      = Rope::gen_qwen_image_pe(time_len,
-                                                  static_cast<int>(x->ne[1]),
-                                                  static_cast<int>(x->ne[0]),
-                                                  config.patch_size,
-                                                  batch_size,
-                                                  static_cast<int>(context->ne[1]),
-                                                  ref_latents,
-                                                  ref_index_mode,
-                                                  config.theta,
-                                                  circular_y_enabled,
-                                                  circular_x_enabled,
-                                                  config.axes_dim);
+            pe_vec      = finish_rope_pe(Rope::gen_qwen_image_pe(time_len,
+                                                                 static_cast<int>(x->ne[1]),
+                                                                 static_cast<int>(x->ne[0]),
+                                                                 config.patch_size,
+                                                                 batch_size,
+                                                                 static_cast<int>(context->ne[1]),
+                                                                 ref_latents,
+                                                                 ref_index_mode,
+                                                                 config.theta,
+                                                                 config.axes_dim));
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);

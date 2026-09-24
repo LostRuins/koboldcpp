@@ -2710,6 +2710,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                 timesteps_tensor,
                                 cond,
                                 &controls);
+        bool uncond_controls_ready = false;
 
         static const std::vector<sd::Tensor<float>> empty_ref_latents;
         bool uncond_without_ref_latents = !img_uncond.empty() &&
@@ -2799,6 +2800,17 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 return std::move(cached_output);
             }
 
+            // A re-enabled condition can miss the cache even when the positive pass was reused.
+            if (!uncond_controls_ready && !uncond.empty() &&
+                (&condition == &uncond || &condition == &img_uncond)) {
+                compute_sample_controls(control_image,
+                                        noised_input,
+                                        timesteps_tensor,
+                                        uncond,
+                                        &controls);
+                uncond_controls_ready = true;
+            }
+
             for (const auto& extension : generation_extensions) {
                 extension->before_diffusion(diffusion_params, step);
             }
@@ -2838,41 +2850,69 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             }
         }
 
+        float effective_guidance_scale = guidance_schedule.empty()
+                                             ? cfg_scale
+                                             : guidance_schedule[guidance_schedule.size() - 1 - step];
+
+        float image_guidance_scale = img_cfg_scale;
+
+        constexpr float kEpsilon = 1e-5f;
+
+        bool skip_uncond = false;
+        if (!uncond.empty() && !needs_uncond_denoised && !use_apg_guidance) {
+            if (!img_uncond.empty()) {
+                skip_uncond = std::abs(image_guidance_scale - effective_guidance_scale) < kEpsilon;
+            } else {
+                skip_uncond = std::abs(effective_guidance_scale - 1.0f) < kEpsilon;
+            }
+        }
+
+        bool skip_img_uncond = false;
+        if (!img_uncond.empty() && !needs_uncond_denoised && !use_apg_guidance) {
+            if (!uncond.empty()) {
+                skip_img_uncond = std::abs(image_guidance_scale - 1.0f) < kEpsilon;
+            } else {
+                skip_img_uncond = std::abs(effective_guidance_scale - 1.0f) < kEpsilon;
+            }
+        }
+
         cond_out = run_condition(*positive_condition, c_concat_override);
         if (cond_out.empty()) {
             return {};
         }
 
         if (!uncond.empty()) {
-            if (!step_cache.is_step_skipped()) {
-                compute_sample_controls(control_image,
-                                        noised_input,
-                                        timesteps_tensor,
-                                        uncond,
-                                        &controls);
-            }
-            const std::vector<int>* uncond_skip_layers = nullptr;
-            if (is_skiplayer_step && slg_uncond) {
-                LOG_VERBOSE("Skipping layers at uncond step %d\n", step);
-                uncond_skip_layers = &skip_layer_guidance.layers();
-            }
-            uncond_out = run_condition(uncond,
-                                       uncond.c_concat.empty() ? nullptr : &uncond.c_concat,
-                                       uncond_skip_layers,
-                                       nullptr,
-                                       true);
-            if (uncond_out.empty()) {
-                return {};
+            if (!skip_uncond) {
+                const std::vector<int>* uncond_skip_layers = nullptr;
+                if (is_skiplayer_step && slg_uncond) {
+                    LOG_VERBOSE("Skipping layers at uncond step %d\n", step);
+                    uncond_skip_layers = &skip_layer_guidance.layers();
+                }
+                uncond_out = run_condition(uncond,
+                                           uncond.c_concat.empty() ? nullptr : &uncond.c_concat,
+                                           uncond_skip_layers,
+                                           nullptr,
+                                           true);
+                if (uncond_out.empty()) {
+                    return {};
+                }
+            } else {
+                step_cache.invalidate_condition(&uncond);
             }
         }
+
         if (!img_uncond.empty()) {
-            img_uncond_out = run_condition(img_uncond,
-                                           img_uncond.c_concat.empty() ? nullptr : &img_uncond.c_concat,
-                                           nullptr,
-                                           uncond_without_ref_latents ? &empty_ref_latents : nullptr,
-                                           true);
-            if (img_uncond_out.empty()) {
-                return {};
+            if (!skip_img_uncond) {
+                img_uncond_out = run_condition(img_uncond,
+                                               img_uncond.c_concat.empty() ? nullptr : &img_uncond.c_concat,
+                                               nullptr,
+                                               uncond_without_ref_latents ? &empty_ref_latents : nullptr,
+                                               true);
+                if (img_uncond_out.empty()) {
+                    return {};
+                }
+            } else {
+                step_cache.invalidate_condition(&img_uncond);
             }
         }
         sd::guidance::GuidanceInput guidance_input;
@@ -2882,7 +2922,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         guidance_input.pred_uncond     = uncond_out.empty() ? nullptr : &uncond_out;
         guidance_input.pred_img_uncond = img_uncond_out.empty() ? nullptr : &img_uncond_out;
 
-        sd::guidance::GuiderOutput guided = guidance_schedule.empty() ? primary_guidance.forward(guidance_input, {}) : primary_guidance.forward(guidance_input, {}, guidance_schedule[guidance_schedule.size() - 1 - step]);
+        sd::guidance::GuiderOutput guided = primary_guidance.forward(guidance_input, {}, effective_guidance_scale);
         if (guided.pred.empty()) {
             return {};
         }

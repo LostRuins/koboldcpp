@@ -1349,9 +1349,8 @@ bool is_first_stage_model_name(const std::string& name) {
 }
 
 static std::string convert_esrgan_tensor_name(std::string name) {
-    static std::unordered_map<std::string, std::string> esrgan_name_map;
-
-    if (esrgan_name_map.empty()) {
+    static const auto esrgan_name_map = [] {
+        std::unordered_map<std::string, std::string> esrgan_name_map;
         esrgan_name_map["model.0."] = "conv_first.";
 
         constexpr int max_num_blocks = 64;
@@ -1377,7 +1376,8 @@ static std::string convert_esrgan_tensor_name(std::string name) {
         esrgan_name_map["model.7."]  = "conv_last.";
         esrgan_name_map["model.8."]  = "conv_hr.";
         esrgan_name_map["model.10."] = "conv_last.";
-    }
+        return esrgan_name_map;
+    }();
 
     replace_with_prefix_map(name, esrgan_name_map);
     return name;

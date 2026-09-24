@@ -1548,20 +1548,18 @@ namespace Flux {
             } else if (version == VERSION_OVIS_IMAGE) {
                 txt_arange_dims = {1, 2};
             }
-            pe_vec      = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
-                                            static_cast<int>(x->ne[0]),
-                                            config.patch_size,
-                                            static_cast<int>(x->ne[3]),
-                                            static_cast<int>(context->ne[1]),
-                                            txt_arange_dims,
-                                            ref_latents,
-                                            ref_index_mode,
-                                            config.ref_index_scale,
-                                            config.theta,
-                                            circular_y_enabled,
-                                            circular_x_enabled,
-                                            config.axes_dim,
-                                            sd_version_is_longcat(version));
+            pe_vec      = finish_rope_pe(Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
+                                                           static_cast<int>(x->ne[0]),
+                                                           config.patch_size,
+                                                           static_cast<int>(x->ne[3]),
+                                                           static_cast<int>(context->ne[1]),
+                                                           txt_arange_dims,
+                                                           ref_latents,
+                                                           ref_index_mode,
+                                                           config.ref_index_scale,
+                                                           config.theta,
+                                                           config.axes_dim,
+                                                           sd_version_is_longcat(version)));
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             // LOG_VERBOSE("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);

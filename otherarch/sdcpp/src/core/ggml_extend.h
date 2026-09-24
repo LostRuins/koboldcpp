@@ -217,11 +217,12 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
                                     ggml_tensor* k,
                                     ggml_tensor* v,
                                     int64_t n_head,
-                                    ggml_tensor* mask = nullptr,
-                                    bool skip_reshape = false,
-                                    bool flash_attn   = false,
-                                    float kv_scale    = 1.0f,
-                                    bool sage_attn    = false);
+                                    ggml_tensor* mask     = nullptr,
+                                    bool skip_reshape     = false,
+                                    bool flash_attn       = false,
+                                    float kv_scale        = 1.0f,
+                                    bool sage_attn        = false,
+                                    bool* used_flash_attn = nullptr);
 
 ggml_tensor* ggml_ext_layer_norm(ggml_context* ctx,
                                  ggml_tensor* x,
