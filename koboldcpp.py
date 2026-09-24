@@ -4084,6 +4084,20 @@ def native_parse_toolcall_tags(text: str, genparams: dict) -> list:
     except Exception:
         return []
 
+def extract_toolcall_prose_prefix_content(text: str):
+    """Keep only the prose before the first recognized tool-call marker."""
+    if not text:
+        return None
+    boundary = len(text)
+    for start, _, required_match_txt, _ in tool_call_pairs:
+        if required_match_txt and cached_chat_template and required_match_txt not in cached_chat_template:
+            continue
+        index = text.find(start)
+        if index != -1:
+            boundary = min(boundary, index)
+    return (text[:boundary].strip() or None) if boundary < len(text) else None
+
+
 def repack_toolcall_tags(text: str, original_tools:list):
     global thinkformats, tool_call_pairs
     tool_calls = []
@@ -5757,7 +5771,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                         tc["id"] = f"call_{random.randint(10000, 99999)}"
                         if tcarg is not None and not isinstance(tcarg, str):
                             tc["function"]["arguments"] = json.dumps(tcarg)
-                    recvtxt = None
+                    recvtxt = extract_toolcall_prose_prefix_content(recvtxt)
                     currfinishreason = "tool_calls"
                     utfprint(f"\nExecute Toolcall: {json.dumps(tool_calls)}",1)
         if recvtxt:
