@@ -58,6 +58,7 @@
 #include "models/kimivl.cpp"
 #include "models/kimik25.cpp"
 #include "models/nemotron-v2-vl.cpp"
+#include "models/ling3vl.cpp"
 #include "models/llama4.cpp"
 #include "models/llava.cpp"
 #include "models/minicpmv.cpp"
