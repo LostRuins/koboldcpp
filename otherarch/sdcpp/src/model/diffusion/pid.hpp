@@ -135,13 +135,13 @@ namespace Pid {
         return Rope::flatten(Rope::rope(Rope::linspace(0.f, static_cast<float>(length - 1), length), dim, theta));
     }
 
-    inline std::vector<float> make_rope_2d(int height,
-                                           int width,
-                                           int dim,
-                                           float theta    = 10000.f,
-                                           float scale    = 16.f,
-                                           int ref_grid_h = 0,
-                                           int ref_grid_w = 0) {
+    inline Rope::Embedding make_rope_2d(int height,
+                                        int width,
+                                        int dim,
+                                        float theta    = 10000.f,
+                                        float scale    = 16.f,
+                                        int ref_grid_h = 0,
+                                        int ref_grid_w = 0) {
         GGML_ASSERT(dim % 4 == 0);
         return Rope::embed_2d_interleaved(height, width, dim, theta, scale, ref_grid_h, ref_grid_w);
     }
@@ -867,13 +867,13 @@ namespace Pid {
             int64_t Hs = Hp / config.patch_size;
             int64_t Ws = Wp / config.patch_size;
 
-            pos_img_vec  = make_rope_2d(static_cast<int>(Hs),
-                                        static_cast<int>(Ws),
-                                        static_cast<int>(config.hidden_size / config.num_groups),
-                                        10000.f,
-                                        16.f,
-                                        static_cast<int>(config.rope_ref_grid_h),
-                                        static_cast<int>(config.rope_ref_grid_w));
+            pos_img_vec  = finish_rope_pe(make_rope_2d(static_cast<int>(Hs),
+                                                       static_cast<int>(Ws),
+                                                       static_cast<int>(config.hidden_size / config.num_groups),
+                                                       10000.f,
+                                                       16.f,
+                                                       static_cast<int>(config.rope_ref_grid_h),
+                                                       static_cast<int>(config.rope_ref_grid_w)));
             auto pos_img = ggml_new_tensor_4d(compute_ctx,
                                               GGML_TYPE_F32,
                                               2,
@@ -904,13 +904,13 @@ namespace Pid {
                                                 1);
             set_backend_tensor_data(pixel_pos, pixel_pos_vec.data());
 
-            pixel_pos_comp_vec  = make_rope_2d(static_cast<int>(Hs),
-                                               static_cast<int>(Ws),
-                                               static_cast<int>(config.pixel_attn_hidden_size / config.pixel_num_groups),
-                                               10000.f,
-                                               16.f,
-                                               static_cast<int>(config.rope_ref_grid_h),
-                                               static_cast<int>(config.rope_ref_grid_w));
+            pixel_pos_comp_vec  = finish_rope_pe(make_rope_2d(static_cast<int>(Hs),
+                                                              static_cast<int>(Ws),
+                                                              static_cast<int>(config.pixel_attn_hidden_size / config.pixel_num_groups),
+                                                              10000.f,
+                                                              16.f,
+                                                              static_cast<int>(config.rope_ref_grid_h),
+                                                              static_cast<int>(config.rope_ref_grid_w)));
             auto pixel_pos_comp = ggml_new_tensor_4d(compute_ctx,
                                                      GGML_TYPE_F32,
                                                      2,

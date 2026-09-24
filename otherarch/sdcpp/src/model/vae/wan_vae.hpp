@@ -1443,15 +1443,14 @@ namespace WAN {
 
             ggml_tensor* z = make_input(z_tensor);
 
-            auto runner_ctx = get_context();
+            auto runner_ctx = get_context(gf);
 
             ggml_tensor* out = ae.decode_tiled_chunk(&runner_ctx, z, chunk_idx);
 
             for (size_t feat_idx = 0; feat_idx < ae._feat_map.size(); feat_idx++) {
                 ggml_tensor* feat_cache = ae._feat_map[feat_idx];
                 if (feat_cache != nullptr) {
-                    cache("feat_idx:" + std::to_string(feat_idx), feat_cache);
-                    ggml_build_forward_expand(gf, feat_cache);
+                    runner_ctx.persist_cache_tensor("feat_idx:" + std::to_string(feat_idx), feat_cache);
                 }
             }
 

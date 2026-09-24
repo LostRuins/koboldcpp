@@ -376,7 +376,7 @@ struct ControlNet : public GGMLRunner {
             hint = make_input(hint_tensor);
         }
 
-        auto runner_ctx = get_context();
+        auto runner_ctx = get_context(gf);
 
         auto outs = control_net.forward(&runner_ctx,
                                         x,
@@ -389,8 +389,7 @@ struct ControlNet : public GGMLRunner {
         if (guided_hint_input == nullptr && !outs.empty()) {
             guided_hint_output_ggml = outs[0];
             ggml_set_output(guided_hint_output_ggml);
-            cache(guided_hint_cache_name(), guided_hint_output_ggml);
-            ggml_build_forward_expand(gf, guided_hint_output_ggml);
+            runner_ctx.persist_cache_tensor(guided_hint_cache_name(), guided_hint_output_ggml);
         }
 
         control_outputs_ggml.reserve(outs.size() > 0 ? outs.size() - 1 : 0);

@@ -412,16 +412,14 @@ namespace LLaDAImage {
             GGML_ASSERT(!context_tensor.empty());
             ggml_tensor* context = make_input(context_tensor);
 
-            pe_vec      = Rope::gen_llada_image_pe(static_cast<int>(x->ne[1]),
-                                                   static_cast<int>(x->ne[0]),
-                                                   config.patch_size,
-                                                   static_cast<int>(x->ne[3]),
-                                                   static_cast<int>(context->ne[1]),
-                                                   ZImage::SEQ_MULTI_OF,
-                                                   config.theta,
-                                                   circular_y_enabled,
-                                                   circular_x_enabled,
-                                                   config.axes_dim);
+            pe_vec      = finish_rope_pe(Rope::gen_llada_image_pe(static_cast<int>(x->ne[1]),
+                                                                  static_cast<int>(x->ne[0]),
+                                                                  config.patch_size,
+                                                                  static_cast<int>(x->ne[3]),
+                                                                  static_cast<int>(context->ne[1]),
+                                                                  ZImage::SEQ_MULTI_OF,
+                                                                  config.theta,
+                                                                  config.axes_dim));
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());
@@ -461,14 +459,14 @@ namespace LLaDAImage {
             ggml_tensor* source    = make_input(source_tensor);
             GGML_ASSERT(x->ne[3] == 1);
 
-            pe_vec      = Rope::gen_llada_image_edit_pe(static_cast<int>(x->ne[1]),
-                                                        static_cast<int>(x->ne[0]),
-                                                        config.patch_size,
-                                                        static_cast<int>(context->ne[1]),
-                                                   semantic != nullptr ? static_cast<int>(semantic->ne[1]) : 0,
-                                                        ZImage::SEQ_MULTI_OF,
-                                                        config.theta,
-                                                        config.axes_dim);
+            pe_vec      = finish_rope_pe(Rope::gen_llada_image_edit_pe(static_cast<int>(x->ne[1]),
+                                                                       static_cast<int>(x->ne[0]),
+                                                                       config.patch_size,
+                                                                       static_cast<int>(context->ne[1]),
+                                                                  semantic != nullptr ? static_cast<int>(semantic->ne[1]) : 0,
+                                                                       ZImage::SEQ_MULTI_OF,
+                                                                       config.theta,
+                                                                       config.axes_dim));
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());

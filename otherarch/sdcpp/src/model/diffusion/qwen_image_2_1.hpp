@@ -68,6 +68,7 @@ namespace Qwen {
         std::vector<QwenImage21Segment> segments;
         std::vector<std::vector<float>> positions;
         int64_t prefix_length = 0;
+        Rope::PositionLayout rope_layout;
 
         static QwenImage21Layout build(int64_t text_length,
                                        const sd::Tensor<int32_t>& image_slots,
@@ -82,6 +83,7 @@ namespace Qwen {
                 auto [height, width] = image_shapes[index];
                 int64_t start        = static_cast<int64_t>(layout.positions.size());
                 layout.segments.push_back({start, start + height * width, context_start, index});
+                layout.rope_layout.append_image(static_cast<int>(height), static_cast<int>(width));
                 for (int64_t h = 0; h < height; ++h) {
                     for (int64_t w = 0; w < width; ++w) {
                         layout.positions.push_back({static_cast<float>(position),
@@ -106,6 +108,7 @@ namespace Qwen {
                 } else {
                     int64_t start = static_cast<int64_t>(layout.positions.size());
                     layout.segments.push_back({start, start + i - begin, begin, -1});
+                    layout.rope_layout.append_tokens(i - begin);
                     for (int64_t j = begin; j < i; ++j, ++position) {
                         float p = static_cast<float>(position);
                         layout.positions.push_back({p, p, p});
@@ -131,6 +134,8 @@ namespace Qwen {
         std::string name;
         std::string cut_group;
         int64_t prefix_length = 0;
+        ggml_type type        = GGML_TYPE_F32;
+        bool* flash_attn_used = nullptr;
     };
 
     class QwenImage21ZeroCenterRMSNorm : public RMSNorm {
@@ -186,10 +191,15 @@ namespace Qwen {
             q      = Rope::apply_rope(ctx->ggml_ctx, q, pe);
             k      = Rope::apply_rope(ctx->ggml_ctx, k, pe);
             if (cache.mode == QwenImage21PrefixCache::Mode::STORE) {
+                // Preserve query-first attention evaluation while writing each layer's
+                // prefix before its full-sequence K/V can accumulate across layers.
+                ctx->expand_graph(q);
                 auto persist = [&](ggml_tensor* tensor, int axis, const char* name) {
                     auto part = ggml_ext_slice(ctx->ggml_ctx, tensor, axis, 0, cache.prefix_length);
-                    auto copy = ggml_new_tensor(ctx->ggml_ctx, GGML_TYPE_F32, 4, part->ne);
-                    copy      = ggml_cpy(ctx->ggml_ctx, part, copy);
+                    // Pack the contiguous data into wider rows so quantization blocks
+                    // can exceed head_dim without padding or changing element order.
+                    part      = ggml_reshape_2d(ctx->ggml_ctx, part, x->ne[0], cache.prefix_length);
+                    auto copy = ggml_cast(ctx->ggml_ctx, part, cache.type);
                     // Keep the copy in this layer's segment so graph cuts do not
                     // retain or recompute the full-sequence K/V in the final segment.
                     sd::ggml_graph_cut::mark_graph_cut(copy, cache.cut_group, name);
@@ -198,21 +208,37 @@ namespace Qwen {
                 persist(k, 1, "k");
                 persist(v, 2, "v");
             }
+            auto attend = [&](ggml_tensor* aq, ggml_tensor* ak, ggml_tensor* av, ggml_tensor* mask) {
+                bool used_flash_attn = false;
+                auto out             = ggml_ext_attention_ext(ctx, aq, ak, av, heads, mask, true, ctx->flash_attn_enabled, 1.f, &used_flash_attn);
+                if (cache.flash_attn_used != nullptr) {
+                    *cache.flash_attn_used &= used_flash_attn;
+                }
+                return out;
+            };
             ggml_tensor* result = nullptr;
             if (cache.mode == QwenImage21PrefixCache::Mode::REUSE) {
                 auto prefix_k = ctx->load_cache_tensor(cache.name + ".k");
                 auto prefix_v = ctx->load_cache_tensor(cache.name + ".v");
                 GGML_ASSERT(prefix_k != nullptr && prefix_v != nullptr);
-                k      = ggml_concat(ctx->ggml_ctx, prefix_k, k, 1);
-                v      = ggml_concat(ctx->ggml_ctx, prefix_v, v, 2);
-                result = ggml_ext_attention_ext(ctx, q, k, v, heads, nullptr, true, ctx->flash_attn_enabled);
+                if (prefix_k->type != k->type) {
+                    prefix_k = ggml_cast(ctx->ggml_ctx, prefix_k, k->type);
+                }
+                if (prefix_v->type != v->type) {
+                    prefix_v = ggml_cast(ctx->ggml_ctx, prefix_v, v->type);
+                }
+                prefix_k = ggml_reshape_4d(ctx->ggml_ctx, prefix_k, dim_head, cache.prefix_length, heads, k->ne[3]);
+                prefix_v = ggml_reshape_4d(ctx->ggml_ctx, prefix_v, dim_head, heads, cache.prefix_length, v->ne[3]);
+                k        = ggml_concat(ctx->ggml_ctx, prefix_k, k, 1);
+                v        = ggml_concat(ctx->ggml_ctx, prefix_v, v, 2);
+                result   = attend(q, k, v, nullptr);
             } else {
                 for (size_t i = 0; i < segments.size(); ++i) {
                     const auto& segment = segments[i];
                     auto sq             = ggml_ext_slice(ctx->ggml_ctx, q, 1, segment.start, segment.end);
                     auto sk             = ggml_ext_slice(ctx->ggml_ctx, k, 1, 0, segment.end);
                     auto sv             = ggml_ext_slice(ctx->ggml_ctx, v, 2, 0, segment.end);
-                    auto out            = ggml_ext_attention_ext(ctx, sq, sk, sv, heads, masks[i], true, ctx->flash_attn_enabled);
+                    auto out            = attend(sq, sk, sv, masks[i]);
                     result              = result == nullptr ? out : ggml_concat(ctx->ggml_ctx, result, out, 1);
                 }
             }
@@ -348,8 +374,35 @@ namespace Qwen {
         QwenImage21Model model;
         std::vector<float> pe_data;
         std::vector<sd::Tensor<float>> mask_data;
-        bool prefix_cache_enabled  = true;
-        bool prefix_cache_disabled = false;
+        ggml_type prefix_cache_type = GGML_TYPE_COUNT;
+        bool prefix_cache_enabled   = true;
+        bool prefix_cache_disabled  = false;
+        bool prefix_cache_auto_f32  = false;
+
+        static bool supports_prefix_cache_type(ggml_type type) {
+            if (type == GGML_TYPE_F32) {
+                return true;
+            }
+            const auto* traits = ggml_get_type_traits(type);
+            if (traits->from_float_ref == nullptr || traits->to_float == nullptr) {
+                return false;
+            }
+            auto cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            if (cpu == nullptr) {
+                return false;
+            }
+            auto ctx = std::unique_ptr<ggml_context, decltype(&ggml_free)>(
+                ggml_init({3 * ggml_tensor_overhead(), nullptr, true}), ggml_free);
+            if (ctx == nullptr) {
+                return false;
+            }
+            // Some reference quantizers have no runtime copy support. Query the
+            // device through the registry so dynamically loaded CPU backends work.
+            auto source  = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, ggml_blck_size(type));
+            auto encoded = ggml_cast(ctx.get(), source, type);
+            auto decoded = ggml_cast(ctx.get(), encoded, GGML_TYPE_F32);
+            return ggml_backend_dev_supports_op(cpu, encoded) && ggml_backend_dev_supports_op(cpu, decoded);
+        }
 
         QwenImage21Runner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr, const char* model_args = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
@@ -358,6 +411,22 @@ namespace Qwen {
             for (const auto& [key, value] : parse_key_value_args(model_args, "model arg")) {
                 if (key == "qwen_image_2_1_prefix_cache" && !parse_strict_bool(value, prefix_cache_enabled)) {
                     LOG_WARN("ignoring invalid Qwen Image 2.1 model arg '%s=%s'", key.c_str(), value.c_str());
+                } else if (key == "qwen_image_2_1_prefix_cache_type") {
+                    if (value == "auto") {
+                        prefix_cache_type = GGML_TYPE_COUNT;
+                        continue;
+                    }
+                    const auto type = sd_type_to_ggml_type(str_to_sd_type(value.c_str()));
+                    if (type == GGML_TYPE_COUNT) {
+                        LOG_WARN("ignoring unknown Qwen Image 2.1 cache type '%s'", value.c_str());
+                    } else if (!supports_prefix_cache_type(type)) {
+                        LOG_WARN("ignoring Qwen Image 2.1 cache type '%s': runtime conversion to and from F32 is unavailable", value.c_str());
+                    } else if (config.hidden_size % ggml_blck_size(type) != 0) {
+                        LOG_WARN("ignoring Qwen Image 2.1 cache type '%s': block size %" PRId64 " does not divide hidden size %" PRId64,
+                                 value.c_str(), ggml_blck_size(type), config.hidden_size);
+                    } else {
+                        prefix_cache_type = type;
+                    }
                 }
             }
             model.init(params_ctx, weights, prefix);
@@ -374,11 +443,9 @@ namespace Qwen {
                 const auto name = cache.name + "." + std::to_string(i);
                 auto k          = get_cache_tensor_by_name(name + ".k");
                 auto v          = get_cache_tensor_by_name(name + ".v");
-                if (k == nullptr || v == nullptr || k->type != GGML_TYPE_F32 || v->type != GGML_TYPE_F32 ||
-                    k->ne[0] != config.head_dim || k->ne[1] != cache.prefix_length ||
-                    k->ne[2] != config.hidden_size / config.head_dim || k->ne[3] != 1 ||
-                    v->ne[0] != config.head_dim || v->ne[1] != config.hidden_size / config.head_dim ||
-                    v->ne[2] != cache.prefix_length || v->ne[3] != 1) {
+                if (k == nullptr || v == nullptr || k->type != cache.type || v->type != cache.type ||
+                    k->ne[0] != config.hidden_size || k->ne[1] != cache.prefix_length || k->ne[2] != 1 || k->ne[3] != 1 ||
+                    v->ne[0] != config.hidden_size || v->ne[1] != cache.prefix_length || v->ne[2] != 1 || v->ne[3] != 1) {
                     return false;
                 }
             }
@@ -415,17 +482,42 @@ namespace Qwen {
             }
             if (!runner_started()) {
                 prefix_cache_disabled = false;
+                prefix_cache_auto_f32 = false;
             }
             QwenImage21PrefixCache cache;
             if (prefix_cache_enabled && !prefix_cache_disabled && extra != nullptr && extra->prefix_id != 0 && layout.prefix_length > 0) {
-                cache.name          = "qwen_image_2_1.prefix." + std::to_string(extra->prefix_id);
+                cache.name = "qwen_image_2_1.prefix." + std::to_string(extra->prefix_id) +
+                             ".circular." + std::to_string(circular_x_enabled) + std::to_string(circular_y_enabled);
                 cache.prefix_length = layout.prefix_length;
-                cache.mode          = has_prefix_cache(cache) ? QwenImage21PrefixCache::Mode::REUSE : QwenImage21PrefixCache::Mode::STORE;
+                if (prefix_cache_type != GGML_TYPE_COUNT) {
+                    cache.type = prefix_cache_type;
+                } else if (!prefix_cache_auto_f32 && flash_attn_enabled && !sage_attn_enabled &&
+                           (attn_scale <= 0.f || attn_scale == 1.f)) {
+                    cache.type = GGML_TYPE_F16;
+                }
+                cache.mode = has_prefix_cache(cache) ? QwenImage21PrefixCache::Mode::REUSE : QwenImage21PrefixCache::Mode::STORE;
             }
-            auto run = [&](const QwenImage21PrefixCache& active_cache) {
+            bool flash_attn_used = true;
+            auto run             = [&](const QwenImage21PrefixCache& active_cache) {
+                flash_attn_used    = true;
+                auto checked_cache = active_cache;
+                if (prefix_cache_type == GGML_TYPE_COUNT && active_cache.type == GGML_TYPE_F16) {
+                    checked_cache.flash_attn_used = &flash_attn_used;
+                }
                 const bool cached         = active_cache.mode == QwenImage21PrefixCache::Mode::REUSE;
                 const auto first_position = layout.positions.begin() + (cached ? layout.prefix_length : 0);
-                pe_data                   = Rope::embed_nd(std::vector<std::vector<float>>(first_position, layout.positions.end()), 1, 10000.f, config.axes_dim);
+                Rope::Embedding embedding;
+                embedding.ids.assign(first_position, layout.positions.end());
+                const size_t offset             = cached ? static_cast<size_t>(layout.prefix_length) : 0;
+                embedding.positions.token_count = embedding.ids.size();
+                for (auto region : layout.rope_layout.images) {
+                    if (region.begin >= offset) {
+                        region.begin -= offset;
+                        embedding.positions.images.push_back(region);
+                    }
+                }
+                embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, config.axes_dim, embedding.layout, &embedding.frequencies);
+                pe_data          = finish_rope_pe(std::move(embedding));
                 mask_data.clear();
                 if (!cached) {
                     for (const auto& segment : layout.segments) {
@@ -444,7 +536,7 @@ namespace Qwen {
                 auto build = [&]() {
                     auto graph = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE * 2);
                     auto pe    = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2,
-                                                    layout.positions.size() - (cached ? layout.prefix_length : 0));
+                                                                layout.positions.size() - (cached ? layout.prefix_length : 0));
                     set_backend_tensor_data(pe, pe_data.data());
                     std::vector<ggml_tensor*> masks, ref_inputs;
                     for (const auto& mask : mask_data) {
@@ -455,15 +547,28 @@ namespace Qwen {
                             ref_inputs.push_back(make_input(ref));
                         }
                     }
-                    auto ctx = get_context();
+                    auto ctx = get_context(graph);
                     auto out = model.forward(&ctx, make_input(x), make_input(*inputs.timesteps), cached ? nullptr : make_input(context),
-                                             ref_inputs, pe, layout, masks, active_cache);
+                                                         ref_inputs, pe, layout, masks, checked_cache);
+                    if (!flash_attn_used) {
+                        return static_cast<ggml_cgraph*>(nullptr);
+                    }
                     ggml_build_forward_expand(graph, out);
                     return graph;
                 };
                 return restore_trailing_singleton_dims(GGMLRunner::compute(build, n_threads, false), x.dim());
             };
             auto result = run(cache);
+            if (result.empty() && !flash_attn_used) {
+                // Casting an F16 cache back to F32 cannot recover its original values.
+                // Recompute the prefix before executing a graph that falls back from FA.
+                free_cache_ctx_and_buffer();
+                prefix_cache_auto_f32 = true;
+                cache.type            = GGML_TYPE_F32;
+                cache.mode            = QwenImage21PrefixCache::Mode::STORE;
+                LOG_DEBUG("Qwen Image 2.1: Flash Attention unavailable; using F32 prefix caching for this sampling run");
+                result = run(cache);
+            }
             if (result.empty() && last_compute_status() == GGML_STATUS_ALLOC_FAILED &&
                 (cache.mode != QwenImage21PrefixCache::Mode::NONE || !cache_.empty())) {
                 // The failed graph has ended before persistent inputs are released.
@@ -478,7 +583,7 @@ namespace Qwen {
                     prefix_cache_disabled = true;
                     LOG_WARN("Qwen Image 2.1: incomplete prefix cache; disabling it for this sampling run");
                 } else {
-                    LOG_DEBUG("Qwen Image 2.1: cached prefix %" PRIu64 " (%" PRId64 " tokens)", extra->prefix_id, layout.prefix_length);
+                    LOG_DEBUG("Qwen Image 2.1: cached prefix %" PRIu64 " (%" PRId64 " tokens, %s)", extra->prefix_id, layout.prefix_length, ggml_type_name(cache.type));
                 }
             }
             return result;

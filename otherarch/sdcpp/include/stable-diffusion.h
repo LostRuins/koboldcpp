@@ -559,6 +559,8 @@ SD_API bool upscale(upscaler_ctx_t* upscaler_ctx,
                     int* num_images_out);
 
 SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
+// Reads model metadata only; returns 0 if the file is not a recognized RGB ESRGAN model.
+SD_API int get_upscaler_model_scale(const char* model_path);
 
 typedef struct adetailer_ctx_t adetailer_ctx_t;
 

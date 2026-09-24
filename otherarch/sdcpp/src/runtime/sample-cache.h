@@ -46,6 +46,7 @@ namespace sd_sample {
 
         bool before_condition(const void* condition, const sd::Tensor<float>& input, sd::Tensor<float>* output);
         void after_condition(const void* condition, const sd::Tensor<float>& input, const sd::Tensor<float>& output);
+        void invalidate_condition(const void* condition);
         bool is_step_skipped() const;
     };
 

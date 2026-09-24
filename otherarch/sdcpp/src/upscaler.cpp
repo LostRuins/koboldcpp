@@ -262,6 +262,30 @@ int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {
     return upscaler_ctx->upscaler->esrgan_upscaler->config.scale;
 }
 
+int get_upscaler_model_scale(const char* model_path) {
+    if (model_path == nullptr || model_path[0] == '\0') {
+        return 0;
+    }
+    try {
+        ModelLoader loader;
+        if (!loader.init_from_file_and_convert_name(model_path, "", VERSION_ESRGAN)) {
+            return 0;
+        }
+        const auto& tensors = loader.get_tensor_storage_map();
+        auto first          = tensors.find("conv_first.weight");
+        auto last           = tensors.find("conv_last.weight");
+        if (first == tensors.end() || last == tensors.end() ||
+            tensors.count("body.0.rdb1.conv1.weight") == 0 ||
+            first->second.n_dims != 4 || last->second.n_dims != 4 ||
+            first->second.ne[2] != 3 || last->second.ne[3] != 3) {
+            return 0;
+        }
+        return ESRGANConfig::detect_from_weights(tensors).scale;
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx) {
     if (upscaler_ctx->upscaler != nullptr) {
         delete upscaler_ctx->upscaler;
