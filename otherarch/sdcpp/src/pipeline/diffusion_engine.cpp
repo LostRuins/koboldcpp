@@ -101,6 +101,7 @@ const char* model_version_to_str[] = {
     "Krea2",
     "Mage Flow",
     "SenseNova U1.5",
+    "LLaDA-Image",
     "ESRGAN",
 };
 
@@ -1105,6 +1106,47 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
     return true;
 }
 
+bool StableDiffusionGGML::set_sage_attention_enabled(bool enabled) {
+    if (!diffusion_model) {
+        return false;
+    }
+    if (enabled) {
+#ifndef SD_USE_UPSTREAM_GGML
+        auto* ctx = ggml_init({4 * ggml_tensor_overhead(), nullptr, true});
+        if (ctx == nullptr) {
+            return false;
+        }
+        auto* q        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* k        = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 128, 128, 1, 1);
+        auto* v        = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 128, 128, 1, 1);
+        auto* op       = ggml_sage_attn(ctx, q, k, v, 1.f / sqrtf(128.f), GGML_SAGE_ATTN_AUTO);
+        bool supported = true;
+        for (auto backend : backend_manager.runtime_backends(SDBackendModule::DIFFUSION)) {
+            if (!ggml_backend_supports_op(backend, op)) {
+                LOG_ERROR("SageAttention is unavailable on %s; it requires patched GGML, CUDA Toolkit 12.0 or newer, and SM80 or newer kernels",
+                          ggml_backend_name(backend));
+                supported = false;
+            }
+        }
+        ggml_free(ctx);
+        if (!supported) {
+            return false;
+        }
+#else
+        LOG_ERROR("SageAttention requires -DSD_USE_UPSTREAM_GGML=OFF and a CUDA backend");
+        return false;
+#endif
+    }
+    diffusion_model->set_sage_attention_enabled(enabled);
+    if (high_noise_diffusion_model) {
+        high_noise_diffusion_model->set_sage_attention_enabled(enabled);
+    }
+    if (enabled) {
+        LOG_INFO("Using SageAttention in the diffusion model; CUDA selects the supported kernel, unsupported layers use flash/default attention");
+    }
+    return true;
+}
+
 bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
 #ifdef SD_USE_UPSTREAM_GGML
     LOG_WARN(
@@ -1386,6 +1428,9 @@ bool StableDiffusionGGML::validate_and_load_runners() {
             high_noise_diffusion_model->set_flash_attention_enabled(true);
         }
     }
+    if (sd_ctx_params->sage_attn && !set_sage_attention_enabled(true)) {
+        return false;
+    }
     LOG_VERBOSE("validating model metadata");
 
     std::set<std::string> ignore_tensors;
@@ -1549,6 +1594,7 @@ bool StableDiffusionGGML::build_denoiser() {
                    sd_version_is_anima(version) ||
                    sd_version_is_ernie_image(version) ||
                    sd_version_is_z_image(version) ||
+                   sd_version_is_llada_image(version) ||
                    sd_version_is_boogu_image(version) ||
                    sd_version_is_pid(version) ||
                    sd_version_is_ideogram4(version)) {
@@ -1569,6 +1615,8 @@ bool StableDiffusionGGML::build_denoiser() {
                 default_flow_shift = 3.16f;
             } else if (sd_version_is_mage_flow(version)) {
                 default_flow_shift = 6.f;
+            } else if (sd_version_is_llada_image(version)) {
+                default_flow_shift = 1.0f;  // unused: LLADA_IMAGE_SCHEDULER builds a fixed grid
             } else {
                 default_flow_shift = 3.f;
             }
@@ -2668,6 +2716,9 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     condition.c_token_types.empty() ? nullptr : &condition.c_token_types,
                     condition.c_vinput_mask.empty() ? nullptr : &condition.c_vinput_mask,
                     condition.c_image_embeds.empty() ? nullptr : &condition.c_image_embeds};
+            } else if (sd_version_is_llada_image(version)) {
+                diffusion_params.extra = LLaDAImageDiffusionExtra{
+                    condition.extra_c_crossattns.empty() ? nullptr : &condition.extra_c_crossattns[0]};
             } else if (sd_version_is_minimax_h3(version)) {
                 diffusion_params.extra = MiniMaxH3DiffusionExtra{
                     condition.c_token_types.empty() ? nullptr : &condition.c_token_types,
@@ -2984,7 +3035,8 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
     auto decoded                      = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
     const bool prefer_temporal_tiling = decode_video && first_stage_model->can_temporal_tile_decode();
     while (decoded.empty() &&
-           sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling)) {
+           sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling,
+                                                            first_stage_model->last_compute_status())) {
         decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
     }
     return decoded;
@@ -3047,6 +3099,8 @@ std::string StableDiffusionGGML::get_default_ref_image_preset(SDVersion version)
         return "mage_flow";
     } else if (sd_version_is_z_image(version) || sd_version_is_boogu_image(version)) {
         return "z_image_omni";
+    } else if (sd_version_is_llada_image(version)) {
+        return "llada_image";
     } else if (sd_version_is_krea2(version)) {
         // have to make a choice between "krea2_edit" mode (for lbouaraba/krea2edit)
         // and "krea2_ostris_edit" (for krea2 ostris edit)

@@ -555,11 +555,15 @@ namespace sd::pipeline {
         } runner_guard{sd->audio_vae_model.get()};
 
         if (sd_vid_gen_params->init_image.data) {
-            start_image = sd_image_to_tensor(sd_vid_gen_params->init_image, request->width, request->height);
+            start_image = ensure_image_tensor_channels(
+                sd_image_to_tensor(sd_vid_gen_params->init_image, request->width, request->height),
+                sd->get_image_channels());
         }
 
         if (sd_vid_gen_params->end_image.data) {
-            end_image = sd_image_to_tensor(sd_vid_gen_params->end_image, request->width, request->height);
+            end_image = ensure_image_tensor_channels(
+                sd_image_to_tensor(sd_vid_gen_params->end_image, request->width, request->height),
+                sd->get_image_channels());
         }
 
         if (sd_version_is_minimax_h3(sd->version)) {
@@ -1548,7 +1552,9 @@ namespace sd::pipeline {
         sd::Tensor<float> video_mask = make_ltxav_video_denoise_mask(video_latent, 1.f);
 
         if (sd_vid_gen_params->init_image.data != nullptr) {
-            sd::Tensor<float> start_image = sd_image_to_tensor(sd_vid_gen_params->init_image, image_width, image_height);
+            sd::Tensor<float> start_image = ensure_image_tensor_channels(
+                sd_image_to_tensor(sd_vid_gen_params->init_image, image_width, image_height),
+                sd->get_image_channels());
             if (!apply_ltxav_condition_image_by_latent_index(sd,
                                                              start_image,
                                                              &video_latent,
@@ -1561,7 +1567,9 @@ namespace sd::pipeline {
         }
 
         if (sd_vid_gen_params->end_image.data != nullptr) {
-            sd::Tensor<float> end_image        = sd_image_to_tensor(sd_vid_gen_params->end_image, image_width, image_height);
+            sd::Tensor<float> end_image = ensure_image_tensor_channels(
+                sd_image_to_tensor(sd_vid_gen_params->end_image, image_width, image_height),
+                sd->get_image_channels());
             sd::Tensor<float> end_image_latent = encode_ltxav_condition_image(sd, end_image, "end");
             if (end_image_latent.empty()) {
                 return false;

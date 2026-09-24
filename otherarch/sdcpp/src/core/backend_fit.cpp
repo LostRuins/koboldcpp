@@ -478,7 +478,11 @@ namespace sd::backend_fit {
         return true;
     }
 
-    bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params, bool prefer_temporal_tiling) {
+    bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params, bool prefer_temporal_tiling, ggml_status status) {
+        // Execution failures can leave the device unusable; tiling only helps with allocation failures.
+        if (status != GGML_STATUS_ALLOC_FAILED) {
+            return false;
+        }
         const char* retry_mode = nullptr;
         if (prefer_temporal_tiling && !tiling_params.temporal_tiling) {
             tiling_params.temporal_tiling = true;
@@ -498,7 +502,7 @@ namespace sd::backend_fit {
             return false;
         }
 
-        LOG_WARN("VAE decode failed (likely out of memory); retrying with %s tiling",
+        LOG_WARN("VAE decode ran out of memory; retrying with %s tiling",
                  retry_mode);
         return true;
     }

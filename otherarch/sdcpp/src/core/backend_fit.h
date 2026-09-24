@@ -16,7 +16,8 @@ namespace sd::backend_fit {
                               std::string& params_spec);
 
     bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params,
-                                         bool prefer_temporal_tiling);
+                                         bool prefer_temporal_tiling,
+                                         ggml_status status);
 
 }  // namespace sd::backend_fit
 

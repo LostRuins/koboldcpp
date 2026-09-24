@@ -68,6 +68,7 @@ struct GGMLRunnerContext {
     ggml_backend_t backend                                           = nullptr;
     ggml_context* ggml_ctx                                           = nullptr;
     bool flash_attn_enabled                                          = false;
+    bool sage_attn_enabled                                           = false;
     float linear_scale                                               = 0.f;
     float attn_scale                                                 = 0.f;
     bool conv2d_direct_enabled                                       = false;
@@ -129,7 +130,8 @@ ggml_tensor* ggml_ext_attention_ext(GGMLRunnerContext* ctx,
 struct GGMLRunner {
 private:
     std::map<ggml_backend_t, size_t> logged_compute_bytes_;
-    size_t logged_segment_count_ = 0;
+    size_t logged_segment_count_     = 0;
+    ggml_status last_compute_status_ = GGML_STATUS_SUCCESS;
 
     sd::ComputeWorkspace::Measurement measure(ggml_cgraph* graph, size_t direct_bytes);
     std::vector<DeviceMemoryRequest> memory_requests(const std::vector<sd::BackendBufferSize>& sizes,
@@ -176,6 +178,7 @@ protected:
     const std::string final_result_name = "ggml_runner_final_result_tensor";
 
     bool flash_attn_enabled    = false;
+    bool sage_attn_enabled     = false;
     float linear_scale         = 0.f;
     float attn_scale           = 0.f;
     bool conv2d_direct_enabled = false;
@@ -333,8 +336,18 @@ public:
                                              bool no_return                            = false,
                                              const std::function<bool()>& read_outputs = {});
 
+    ggml_status last_compute_status() const { return last_compute_status_; }
+
     void set_flash_attention_enabled(bool enabled) {
         flash_attn_enabled = enabled;
+    }
+
+    void set_sage_attention_enabled(bool enabled) {
+        if (sage_attn_enabled != enabled) {
+            free_cache_ctx_and_buffer();
+            graph_cut_plan_cache_.graph_cut_plans.clear();
+            sage_attn_enabled = enabled;
+        }
     }
 
     void set_scale_overrides(float linear_scale, float attn_scale) {

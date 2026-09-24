@@ -1070,11 +1070,11 @@ namespace WAN {
             }
 
             if (version == VERSION_QWEN_IMAGE_2_1) {
-                wan2_2              = true;
-                dec_dim             = 144;
-                z_dim               = 64;
-                input_channels      = 4;
-                dim_mult            = {1, 2, 4, 8, 8};
+                wan2_2         = true;
+                dec_dim        = 144;
+                z_dim          = 64;
+                input_channels = 4;
+                dim_mult       = {1, 2, 4, 8, 8};
             }
 
             if (is_2D) {

@@ -357,7 +357,8 @@ bool load_images_from_dir(const std::string dir,
             LOG_VERBOSE("load image %zu from '%s'", images.size(), path.c_str());
             int width             = 0;
             int height            = 0;
-            uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height, expected_width, expected_height);
+            int loaded_channel    = 0;
+            uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height, loaded_channel, expected_width, expected_height);
             if (image_buffer == nullptr) {
                 LOG_ERROR("load image from '%s' failed", path.c_str());
                 return false;
@@ -365,7 +366,7 @@ bool load_images_from_dir(const std::string dir,
 
             images.emplace_back(sd_image_t{(uint32_t)width,
                                            (uint32_t)height,
-                                           3,
+                                           (uint32_t)loaded_channel,
                                            image_buffer});
 
             if (max_image_num > 0 && static_cast<int>(images.size()) >= max_image_num) {
@@ -781,7 +782,8 @@ int main(int argc, const char* argv[]) {
     };
 
     if (gen_params.init_image_path.size() > 0) {
-        if (!load_image_and_update_size(gen_params.init_image_path, gen_params.init_image)) {
+        const bool native_init = cli_params.mode == IMG_GEN || cli_params.mode == ADETAILER;
+        if (!load_image_and_update_size(gen_params.init_image_path, gen_params.init_image, true, native_init ? 0 : 3)) {
             return 1;
         }
     }
@@ -795,8 +797,8 @@ int main(int argc, const char* argv[]) {
     if (gen_params.ref_image_paths.size() > 0) {
         gen_params.ref_images.clear();
         for (auto& path : gen_params.ref_image_paths) {
-            SDImageOwner ref_image({0, 0, 3, nullptr});
-            if (!load_image_and_update_size(path, ref_image, false)) {
+            SDImageOwner ref_image({0, 0, 0, nullptr});
+            if (!load_image_and_update_size(path, ref_image, false, 0)) {
                 return 1;
             }
             gen_params.ref_images.push_back(std::move(ref_image));

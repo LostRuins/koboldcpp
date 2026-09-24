@@ -39,6 +39,9 @@ const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
     {"z_image_omni", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
     {"krea2_ostris_edit", {true, true, Rope::RefIndexMode::INCREASE, true, true, -1, RefImageResizeMode::AREA, -1, -1}},
     {"krea2_edit", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::LONGEST_SIDE, 768, 768}},
+    // pass_to_vlm routes the reference image to the conditioner, which is where LLaDA-Image's
+    // SigVQ encoder lives; it does its own half-resolution resize.
+    {"llada_image", {true, true, Rope::RefIndexMode::FIXED, true, true, -1, RefImageResizeMode::NONE, -1, -1, true}},
     {"cosmos_reference", {false, true, Rope::RefIndexMode::INCREASE, false, false, -1, RefImageResizeMode::NONE, -1, -1}},
 };
 
@@ -131,6 +134,11 @@ struct HunyuanVideoDiffusionExtra {
     const sd::Tensor<float>* timestep_r = nullptr;
 };
 
+struct LLaDAImageDiffusionExtra {
+    // SigVQ semantic features of the reference image; present only in editing mode.
+    const sd::Tensor<float>* semantic = nullptr;
+};
+
 using DiffusionExtraParams = std::variant<std::monostate,
                                           UNetDiffusionExtra,
                                           SkipLayerDiffusionExtra,
@@ -143,7 +151,8 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           MiniMaxH3DiffusionExtra,
                                           MiniT2IDiffusionExtra,
                                           SenseNovaU1DiffusionExtra,
-                                          HunyuanVideoDiffusionExtra>;
+                                          HunyuanVideoDiffusionExtra,
+                                          LLaDAImageDiffusionExtra>;
 
 struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;

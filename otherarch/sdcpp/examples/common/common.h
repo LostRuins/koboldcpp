@@ -170,6 +170,7 @@ struct SDContextParams {
     bool vae_on_cpu            = false;
     bool flash_attn            = false;
     bool diffusion_flash_attn  = false;
+    bool sage_attn             = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
 

@@ -541,6 +541,9 @@ SDVersion ModelLoader::get_sd_version() const {
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.0.img_mlp.gate_proj.weight") != std::string::npos) {
             return VERSION_OVIS_IMAGE;
         }
+        if (tensor_storage.name.find("model.diffusion_model.sigvq_embedder.1.weight") != std::string::npos) {
+            return VERSION_LLADA_IMAGE;
+        }
         if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
             return VERSION_Z_IMAGE;
         }
@@ -1599,6 +1602,9 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
             // Pass, do not convert. For Unet
         } else if (contains(name, "embedding")) {
             // Pass, do not convert embedding
+        } else if (ends_with(name, "_pad_token")) {
+            // Pass, do not convert. LLaDA-Image stores its pad tokens far outside the f16
+            // range, so any format with an f16 scale or payload turns them into inf.
         } else {
             return true;
         }

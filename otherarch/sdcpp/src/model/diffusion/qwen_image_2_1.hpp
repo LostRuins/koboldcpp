@@ -193,16 +193,16 @@ namespace Qwen {
     class QwenImage21TransformerBlock : public GGMLBlock {
     public:
         QwenImage21TransformerBlock(const QwenImage21Config& config) {
-            blocks["img_norm1"]          = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
-            blocks["img_norm2"]          = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
-            blocks["attn"]               = std::make_shared<QwenImage21Attention>(config);
+            blocks["img_norm1"] = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
+            blocks["img_norm2"] = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
+            blocks["attn"]      = std::make_shared<QwenImage21Attention>(config);
             if (config.fused_mlp) {
                 blocks["img_mlp.gate_up"] = std::make_shared<Linear>(config.hidden_size, 2 * config.intermediate_size, false);
             } else {
                 blocks["img_mlp.proj"]       = std::make_shared<Linear>(config.hidden_size, config.intermediate_size, false);
                 blocks["img_mlp.gate_layer"] = std::make_shared<Linear>(config.hidden_size, config.intermediate_size, false);
             }
-            blocks["img_mlp.out"]        = std::make_shared<Linear>(config.intermediate_size, config.hidden_size, false);
+            blocks["img_mlp.out"] = std::make_shared<Linear>(config.intermediate_size, config.hidden_size, false);
         }
 
         static ggml_tensor* modulate(ggml_context* ctx, ggml_tensor* x, ggml_tensor* params, int64_t prefix_length, bool gate = false) {
@@ -220,12 +220,12 @@ namespace Qwen {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, const std::vector<ggml_tensor*>& modulation, ggml_tensor* pe, const QwenImage21Layout& layout, const std::vector<ggml_tensor*>& masks) {
-            auto h    = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm1"])->forward(ctx, x);
-            h         = modulate(ctx->ggml_ctx, h, modulation[0], layout.prefix_length);
-            h         = std::dynamic_pointer_cast<QwenImage21Attention>(blocks["attn"])->forward(ctx, h, pe, layout.segments, masks);
-            x         = ggml_add(ctx->ggml_ctx, x, modulate(ctx->ggml_ctx, h, modulation[1], layout.prefix_length, true));
-            h         = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm2"])->forward(ctx, x);
-            h         = modulate(ctx->ggml_ctx, h, modulation[2], layout.prefix_length);
+            auto h = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm1"])->forward(ctx, x);
+            h      = modulate(ctx->ggml_ctx, h, modulation[0], layout.prefix_length);
+            h      = std::dynamic_pointer_cast<QwenImage21Attention>(blocks["attn"])->forward(ctx, h, pe, layout.segments, masks);
+            x      = ggml_add(ctx->ggml_ctx, x, modulate(ctx->ggml_ctx, h, modulation[1], layout.prefix_length, true));
+            h      = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm2"])->forward(ctx, x);
+            h      = modulate(ctx->ggml_ctx, h, modulation[2], layout.prefix_length);
             ggml_tensor* gate;
             auto fused = blocks.find("img_mlp.gate_up");
             if (fused != blocks.end()) {
@@ -237,8 +237,8 @@ namespace Qwen {
                 gate = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.gate_layer"])->forward(ctx, h);
                 h    = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.proj"])->forward(ctx, h);
             }
-            h         = ggml_mul(ctx->ggml_ctx, h, ggml_silu(ctx->ggml_ctx, gate));
-            h         = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.out"])->forward(ctx, h);
+            h = ggml_mul(ctx->ggml_ctx, h, ggml_silu(ctx->ggml_ctx, gate));
+            h = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.out"])->forward(ctx, h);
             return ggml_add(ctx->ggml_ctx, x, modulate(ctx->ggml_ctx, h, modulation[3], layout.prefix_length, true));
         }
     };

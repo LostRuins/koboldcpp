@@ -622,7 +622,8 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
                                     ggml_tensor* mask,
                                     bool skip_reshape,
                                     bool flash_attn,
-                                    float kv_scale) {  // avoid overflow
+                                    float kv_scale,
+                                    bool sage_attn) {  // avoid overflow
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -713,7 +714,37 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         return out;
     };
 
-    if (flash_attn) {
+#ifndef SD_USE_UPSTREAM_GGML
+    if (sage_attn && mask == nullptr && d_head > 0 && d_head <= 128) {
+        auto q_in                 = ggml_reshape_4d(ctx, ggml_ext_cont(ctx, q->type == GGML_TYPE_F32 ? q : ggml_cast(ctx, q, GGML_TYPE_F32)), d_head, L_q, n_head, N);
+        auto k_in                 = ggml_reshape_4d(ctx, ggml_ext_cont(ctx, k->type == GGML_TYPE_F32 ? k : ggml_cast(ctx, k, GGML_TYPE_F32)), d_head, L_k, n_kv_head, N);
+        auto v_in                 = ggml_ext_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
+        const int64_t padded_head = d_head <= 64 ? 64 : 128;
+        if ((padded_head != d_head || kv_scale != 1.0f) && v_in->type != GGML_TYPE_F32) {
+            v_in = ggml_cast(ctx, v_in, GGML_TYPE_F32);
+        }
+        if (padded_head != d_head) {
+            // Keep the original head's softmax scale when padding for the CUDA kernel.
+            q_in = ggml_pad(ctx, q_in, padded_head - d_head, 0, 0, 0);
+            k_in = ggml_pad(ctx, k_in, padded_head - d_head, 0, 0, 0);
+            v_in = ggml_pad(ctx, v_in, padded_head - d_head, 0, 0, 0);
+        }
+        if (kv_scale != 1.0f) {
+            k_in = ggml_ext_scale(ctx, k_in, kv_scale);
+            v_in = ggml_ext_scale(ctx, v_in, kv_scale);
+        }
+        v_in     = ggml_cast(ctx, v_in, GGML_TYPE_F16);
+        auto out = ggml_sage_attn(ctx, q_in, k_in, v_in, scale / kv_scale, GGML_SAGE_ATTN_AUTO);
+        if (ggml_backend_supports_op(backend, out)) {
+            kqv = kv_scale != 1.0f ? ggml_ext_scale(ctx, out, 1.0f / kv_scale) : out;
+            if (padded_head != d_head) {
+                kqv = ggml_ext_slice(ctx, kqv, 0, 0, d_head);
+            }
+        }
+    }
+#endif
+
+    if (kqv == nullptr && (flash_attn || sage_attn)) {
         // LOG_VERBOSE("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         bool can_use_flash_attn = true;
         if (mask != nullptr) {

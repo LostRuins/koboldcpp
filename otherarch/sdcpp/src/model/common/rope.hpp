@@ -929,6 +929,145 @@ namespace Rope {
         return ids;
     }
 
+    // LLaDA-Image shares Lumina2/z_image's axes layout, but assigns position (0,0,0) to the
+    // padding slots of the caption stream instead of continuing the caption ramp through them.
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_llada_image_ids(int h,
+                                                                          int w,
+                                                                          int patch_size,
+                                                                          int bs,
+                                                                          int context_len,
+                                                                          int seq_multi_of) {
+        int context_pad_len    = bound_mod(context_len, seq_multi_of);
+        int padded_context_len = context_len + context_pad_len;
+        auto txt_ids           = std::vector<std::vector<float>>(bs * padded_context_len, std::vector<float>(3, 0.0f));
+        for (int i = 0; i < bs * padded_context_len; i++) {
+            int pos = i % padded_context_len;
+            if (pos < context_len) {
+                txt_ids[i][0] = pos + 1.f;
+            }
+        }
+
+        int axes_dim_num = 3;
+        int index        = padded_context_len + 1;
+        auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, index);
+
+        int img_pad_len = bound_mod(static_cast<int>(img_ids.size() / bs), seq_multi_of);
+        if (img_pad_len > 0) {
+            std::vector<std::vector<float>> img_pad_ids(bs * img_pad_len, std::vector<float>(3, 0.f));
+            img_ids = concat_ids(img_ids, img_pad_ids, bs);
+        }
+
+        return concat_ids(txt_ids, img_ids, bs);
+    }
+
+    // LLaDA-Image editing packs two caption copies (clean and noisy), the source and target
+    // latents anchored at their own caption's end position, and the SigVQ stream after both.
+    // Padding slots keep position (0,0,0), as in the text-only layout.
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_llada_image_edit_ids(int h,
+                                                                               int w,
+                                                                               int patch_size,
+                                                                               int context_len,
+                                                                               int sigvq_len,
+                                                                               int seq_multi_of) {
+        const int context_pad    = bound_mod(context_len, seq_multi_of);
+        const int padded_context = context_len + context_pad;
+        const int h_len          = (h + (patch_size / 2)) / patch_size;
+        const int w_len          = (w + (patch_size / 2)) / patch_size;
+        const int image_len      = h_len * w_len;
+        const int image_pad      = bound_mod(image_len, seq_multi_of);
+        const int padded_image   = image_len + image_pad;
+        const int sigvq_pad      = bound_mod(sigvq_len, seq_multi_of);
+
+        std::vector<std::vector<float>> cap_ids;
+        std::vector<int> cap_end_positions;
+        int cursor = 1;
+        for (int copy = 0; copy < 2; ++copy) {
+            for (int i = 0; i < padded_context; ++i) {
+                std::vector<float> id(3, 0.f);
+                if (i < context_len) {
+                    id[0] = static_cast<float>(cursor + i);
+                }
+                cap_ids.push_back(id);
+            }
+            cursor += context_len;
+            cap_end_positions.push_back(cursor);
+            cursor += 2;
+        }
+
+        std::vector<std::vector<float>> img_ids;
+        for (int copy = 0; copy < 2; ++copy) {
+            auto ids = gen_flux_img_ids(h, w, patch_size, 1, 3, cap_end_positions[copy]);
+            img_ids.insert(img_ids.end(), ids.begin(), ids.end());
+            img_ids.insert(img_ids.end(), image_pad, std::vector<float>(3, 0.f));
+        }
+
+        const int sigvq_start = static_cast<int>(cap_ids.size() + img_ids.size()) + 1;
+        std::vector<std::vector<float>> sigvq_ids;
+        for (int i = 0; i < sigvq_len + sigvq_pad; ++i) {
+            std::vector<float> id(3, 0.f);
+            if (i < sigvq_len) {
+                id[0] = static_cast<float>(sigvq_start + i);
+            }
+            sigvq_ids.push_back(id);
+        }
+
+        std::vector<std::vector<float>> ids;
+        ids.reserve(cap_ids.size() + img_ids.size() + sigvq_ids.size());
+        ids.insert(ids.end(), cap_ids.begin(), cap_ids.end());
+        ids.insert(ids.end(), img_ids.begin(), img_ids.end());
+        ids.insert(ids.end(), sigvq_ids.begin(), sigvq_ids.end());
+        SD_UNUSED(padded_image);
+        return ids;
+    }
+
+    __STATIC_INLINE__ std::vector<float> gen_llada_image_edit_pe(int h,
+                                                                 int w,
+                                                                 int patch_size,
+                                                                 int context_len,
+                                                                 int sigvq_len,
+                                                                 int seq_multi_of,
+                                                                 int theta,
+                                                                 const std::vector<int>& axes_dim) {
+        auto ids = gen_llada_image_edit_ids(h, w, patch_size, context_len, sigvq_len, seq_multi_of);
+        return embed_nd(ids, 1, static_cast<float>(theta), axes_dim, {});
+    }
+
+    __STATIC_INLINE__ std::vector<float> gen_llada_image_pe(int h,
+                                                            int w,
+                                                            int patch_size,
+                                                            int bs,
+                                                            int context_len,
+                                                            int seq_multi_of,
+                                                            int theta,
+                                                            bool circular_h,
+                                                            bool circular_w,
+                                                            const std::vector<int>& axes_dim) {
+        std::vector<std::vector<float>> ids = gen_llada_image_ids(h, w, patch_size, bs, context_len, seq_multi_of);
+        std::vector<std::vector<int>> wrap_dims;
+        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
+            int pad_h = (patch_size - (h % patch_size)) % patch_size;
+            int pad_w = (patch_size - (w % patch_size)) % patch_size;
+            int h_len = (h + pad_h) / patch_size;
+            int w_len = (w + pad_w) / patch_size;
+            if (h_len > 0 && w_len > 0) {
+                size_t pos_len = ids.size() / bs;
+                wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
+                size_t cursor     = context_len + bound_mod(context_len, seq_multi_of);
+                size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
+                    if (circular_h) {
+                        wrap_dims[1][cursor + token_i] = h_len;
+                    }
+                    if (circular_w) {
+                        wrap_dims[2][cursor + token_i] = w_len;
+                    }
+                }
+            }
+        }
+
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
+    }
+
     // Generate z_image positional embeddings
     __STATIC_INLINE__ std::vector<float> gen_z_image_pe(int h,
                                                         int w,
