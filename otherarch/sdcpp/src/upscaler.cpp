@@ -111,10 +111,22 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
 
 sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_tensor) {
     sd::ParallelScope tensor_scope(&tensor_executor);
+    if (input_tensor.empty() || input_tensor.dim() != 4 ||
+        (input_tensor.shape()[2] != 3 && input_tensor.shape()[2] != 4)) {
+        LOG_ERROR("esrgan expects a 4D RGB or RGBA image tensor");
+        return {};
+    }
+
+    const bool has_alpha = input_tensor.shape()[2] == 4;
+    sd::Tensor<float> rgb;
+    if (has_alpha) {
+        rgb = sd::ops::slice(input_tensor, 2, 0, 3);
+    }
+    const sd::Tensor<float>& model_input = has_alpha ? rgb : input_tensor;
     sd::Tensor<float> upscaled;
     const int scale = esrgan_upscaler->config.scale;
     if (tile_size <= 0 || (input_tensor.shape()[0] <= tile_size && input_tensor.shape()[1] <= tile_size)) {
-        upscaled = esrgan_upscaler->compute(n_threads, input_tensor);
+        upscaled = esrgan_upscaler->compute(n_threads, model_input);
     } else {
         auto on_processing = [&](const sd::Tensor<float>& input_tile) -> sd::Tensor<float> {
             auto output_tile = esrgan_upscaler->compute(n_threads, input_tile);
@@ -125,7 +137,7 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
             return output_tile;
         };
 
-        upscaled = process_tiles_2d(input_tensor,
+        upscaled = process_tiles_2d(model_input,
                                     static_cast<int>(input_tensor.shape()[0] * scale),
                                     static_cast<int>(input_tensor.shape()[1] * scale),
                                     scale,
@@ -140,6 +152,14 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
     if (upscaled.empty()) {
         LOG_ERROR("esrgan compute failed");
         return {};
+    }
+    if (has_alpha) {
+        auto alpha       = sd::ops::slice(input_tensor, 2, 3, 4);
+        auto alpha_shape = alpha.shape();
+        alpha_shape[0]   = upscaled.shape()[0];
+        alpha_shape[1]   = upscaled.shape()[1];
+        alpha            = sd::ops::interpolate(alpha, alpha_shape, sd::ops::InterpolateMode::Bilinear);
+        upscaled         = sd::ops::concat(upscaled, alpha, 2);
     }
     return upscaled;
 }

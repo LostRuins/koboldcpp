@@ -970,6 +970,7 @@ bool adetail_image(adetailer_ctx_t* context,
         generation.pm_params           = {};
         generation.pulid_params        = {};
         generation.hires.enabled       = false;
+        generation.image_preprocess    = {};
         if (params.steps > 0) {
             generation.sample_params.sample_steps        = params.steps;
             generation.sample_params.custom_sigmas       = nullptr;

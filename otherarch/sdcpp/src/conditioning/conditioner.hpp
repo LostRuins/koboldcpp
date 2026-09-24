@@ -3166,6 +3166,7 @@ struct LLMEmbedder : public Conditioner {
             int64_t tag_count    = static_cast<int64_t>(tags.size());
             result.c_token_types = sd::Tensor<int32_t>({tag_count}, std::move(tags));
         }
+
         return result;
     }
 };

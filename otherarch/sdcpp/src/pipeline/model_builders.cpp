@@ -291,7 +291,8 @@ namespace sd::model_builders {
                 result.diffusion = std::make_shared<Qwen::QwenImage21Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                              tensor_storage_map,
                                                                              "model.diffusion_model",
-                                                                             weight_manager);
+                                                                             weight_manager,
+                                                                             sd_ctx_params->model_args);
             } else {
                 result.diffusion = std::make_shared<Qwen::QwenImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                            tensor_storage_map,

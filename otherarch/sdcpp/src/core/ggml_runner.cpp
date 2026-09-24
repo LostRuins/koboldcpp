@@ -644,6 +644,10 @@ std::optional<sd::Tensor<float>> GGMLRunner::compute(get_graph_cb_t get_graph,
     std::optional<sd::Tensor<float>> output;
     try {
         output = execute_graph(graph, n_threads, no_return, read_outputs);
+    } catch (const std::bad_alloc&) {
+        last_compute_status_ = GGML_STATUS_ALLOC_FAILED;
+        LOG_ERROR("%s graph allocation failed", get_desc().c_str());
+        return std::nullopt;
     } catch (const std::exception& error) {
         last_compute_status_ = GGML_STATUS_FAILED;
         LOG_ERROR("%s graph execution failed on %s: %s", get_desc().c_str(),
@@ -964,10 +968,16 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
         }
         LOG_DEBUG("%s executing segment %zu/%zu: %s", get_desc().c_str(),
                   index + 1, plan.segments.size(), segment.group_name.c_str());
-        if (!execute_segment(segment_graph, n_threads) ||
-            !cache_.capture(segment_graph) ||
-            !cut_cache_.capture(graph, segment, get_desc().c_str())) {
-            return fail_segment("execution or output caching");
+        if (!execute_segment(segment_graph, n_threads)) {
+            return fail_segment("execution");
+        }
+        auto cache_status = cache_.capture(segment_graph);
+        if (cache_status == GGML_STATUS_SUCCESS) {
+            cache_status = cut_cache_.capture(graph, segment, get_desc().c_str());
+        }
+        if (cache_status != GGML_STATUS_SUCCESS) {
+            last_compute_status_ = cache_status;
+            return fail_segment("output caching");
         }
         sync_runtime_residency();
         if (last) {

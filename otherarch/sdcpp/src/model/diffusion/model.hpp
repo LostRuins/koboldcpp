@@ -71,6 +71,8 @@ struct AnimaDiffusionExtra {
 
 struct QwenImage21DiffusionExtra {
     const sd::Tensor<int32_t>* image_slots = nullptr;
+    // Nonzero IDs identify immutable prefix inputs within one sampling run.
+    uint64_t prefix_id = 0;
 };
 
 struct WanDiffusionExtra {

@@ -26,10 +26,13 @@ namespace sd {
 
     std::unique_ptr<CachedTensor> CachedTensor::copy(ggml_backend_t backend,
                                                      const std::string& name,
-                                                     ggml_tensor* source) {
+                                                     ggml_tensor* source,
+                                                     ggml_status& status) {
+        status = GGML_STATUS_FAILED;
         if (ggml_graph_cut::tensor_buffer(source) == nullptr) {
             return nullptr;
         }
+        status         = GGML_STATUS_ALLOC_FAILED;
         auto entry     = std::make_unique<CachedTensor>();
         entry->context = ggml_init({2 * ggml_tensor_overhead(), nullptr, true});
         if (entry->context == nullptr) {
@@ -50,6 +53,7 @@ namespace sd {
         } else {
             ggml_backend_tensor_copy(source, entry->tensor);
         }
+        status = GGML_STATUS_SUCCESS;
         return entry;
     }
 
@@ -106,9 +110,9 @@ namespace sd {
         return pending > SIZE_MAX - committed ? SIZE_MAX : committed + pending;
     }
 
-    bool RunnerCache::capture(ggml_cgraph* graph) {
+    ggml_status RunnerCache::capture(ggml_cgraph* graph) {
         if (outputs_.empty()) {
-            return true;
+            return GGML_STATUS_SUCCESS;
         }
         const auto tensors = cache_graph_tensors(graph);
         for (const auto& output : outputs_) {
@@ -116,14 +120,15 @@ namespace sd {
                 continue;
             }
             GGML_ASSERT(ggml_is_contiguous(output.second));
-            auto entry = CachedTensor::copy(backend_, output.first, output.second);
+            ggml_status status;
+            auto entry = CachedTensor::copy(backend_, output.first, output.second, status);
             if (entry == nullptr) {
-                return false;
+                return status;
             }
             pending_[output.first] = std::move(entry);
         }
         ggml_backend_synchronize(backend_);
-        return true;
+        return GGML_STATUS_SUCCESS;
     }
 
     void RunnerCache::graph_end(bool success) {
@@ -180,9 +185,9 @@ namespace sd {
         }
     }
 
-    bool GraphCutTensorCache::capture(ggml_cgraph* graph,
-                                      const ggml_graph_cut::Segment& segment,
-                                      const char* log_desc) {
+    ggml_status GraphCutTensorCache::capture(ggml_cgraph* graph,
+                                             const ggml_graph_cut::Segment& segment,
+                                             const char* log_desc) {
         size_t copied_bytes = 0;
         size_t copied_count = 0;
         for (int index : segment.output_node_indices) {
@@ -191,10 +196,11 @@ namespace sd {
                 !segment.future_cut_names.count(output->name)) {
                 continue;
             }
-            auto entry = CachedTensor::copy(backend_, output->name, ggml_graph_cut::cache_source_tensor(output));
+            ggml_status status;
+            auto entry = CachedTensor::copy(backend_, output->name, ggml_graph_cut::cache_source_tensor(output), status);
             if (entry == nullptr) {
                 LOG_ERROR("%s failed to capture graph cut tensor: %s", log_desc, output->name);
-                return false;
+                return status;
             }
             const size_t size = ggml_backend_buffer_get_size(entry->buffer);
             copied_bytes      = size > SIZE_MAX - copied_bytes ? SIZE_MAX : copied_bytes + size;
@@ -206,6 +212,6 @@ namespace sd {
             LOG_DEBUG("%s graph cut cache added %6.2f MB (%zu tensors)",
                       log_desc, copied_bytes / (1024.f * 1024.f), copied_count);
         }
-        return true;
+        return GGML_STATUS_SUCCESS;
     }
 }

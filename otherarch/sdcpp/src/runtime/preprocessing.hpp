@@ -165,16 +165,18 @@ static inline sd::Tensor<float> convolve_tensor(const sd::Tensor<float>& input, 
     return output;
 }
 
-static inline sd::Tensor<float> grayscale_tensor(const sd::Tensor<float>& rgb_img) {
-    GGML_ASSERT(rgb_img.dim() == 4);
-    GGML_ASSERT(rgb_img.shape()[2] >= 3);
-    sd::Tensor<float> grayscale({rgb_img.shape()[0], rgb_img.shape()[1], 1, rgb_img.shape()[3]});
-    for (int64_t iy = 0; iy < rgb_img.shape()[1]; ++iy) {
-        for (int64_t ix = 0; ix < rgb_img.shape()[0]; ++ix) {
-            float r    = preprocessing_get_4d(rgb_img, ix, iy, 0, 0);
-            float g    = preprocessing_get_4d(rgb_img, ix, iy, 1, 0);
-            float b    = preprocessing_get_4d(rgb_img, ix, iy, 2, 0);
-            float gray = 0.2989f * r + 0.5870f * g + 0.1140f * b;
+static inline sd::Tensor<float> grayscale_tensor(const sd::Tensor<float>& image) {
+    GGML_ASSERT(image.dim() == 4);
+    GGML_ASSERT(image.shape()[2] >= 1);
+    sd::Tensor<float> grayscale({image.shape()[0], image.shape()[1], 1, image.shape()[3]});
+    for (int64_t iy = 0; iy < image.shape()[1]; ++iy) {
+        for (int64_t ix = 0; ix < image.shape()[0]; ++ix) {
+            float gray = preprocessing_get_4d(image, ix, iy, 0, 0);
+            if (image.shape()[2] >= 3) {
+                float g = preprocessing_get_4d(image, ix, iy, 1, 0);
+                float b = preprocessing_get_4d(image, ix, iy, 2, 0);
+                gray    = 0.2989f * gray + 0.5870f * g + 0.1140f * b;
+            }
             preprocessing_set_4d(grayscale, gray, ix, iy, 0, 0);
         }
     }
@@ -317,11 +319,12 @@ bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold,
     image_gray              = non_max_supression(G, theta);
     threshold_hystersis(&image_gray, high_threshold, low_threshold, weak, strong);
 
+    const uint32_t color_channels = img.channel == 2 || img.channel == 4 ? img.channel - 1 : img.channel;
     for (uint32_t iy = 0; iy < img.height; ++iy) {
         for (uint32_t ix = 0; ix < img.width; ++ix) {
             float gray = preprocessing_get_4d(image_gray, ix, iy, 0, 0);
             gray       = inverse ? 1.0f - gray : gray;
-            for (uint32_t c = 0; c < img.channel; ++c) {
+            for (uint32_t c = 0; c < color_channels; ++c) {
                 preprocessing_set_4d(image, gray, ix, iy, c, 0);
             }
         }

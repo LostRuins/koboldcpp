@@ -13,6 +13,7 @@
 #endif
 
 #include "core/util.h"
+#include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "stable-diffusion.h"
 
@@ -431,6 +432,24 @@ bool sd_backend_is_cpu(ggml_backend_t backend) {
     }
     auto dev = ggml_backend_get_device(backend);
     return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
+ggml_backend_buffer_t sd_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device,
+                                                          void* ptr,
+                                                          size_t size,
+                                                          size_t max_tensor_size) {
+    ggml_backend_buffer_t buffer = ggml_backend_dev_buffer_from_host_ptr(device, ptr, size, max_tensor_size);
+    if (buffer != nullptr && buffer->context == nullptr) {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
+        if (reg != nullptr && std::strcmp(ggml_backend_reg_name(reg), "Metal") == 0) {
+            // Metal can wrap a failed mapping in a non-null buffer. Its free callback also
+            // dereferences the missing context, so only release the outer buffer.
+            buffer->iface.free_buffer = nullptr;
+            ggml_backend_buffer_free(buffer);
+            return nullptr;
+        }
+    }
+    return buffer;
 }
 
 bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
