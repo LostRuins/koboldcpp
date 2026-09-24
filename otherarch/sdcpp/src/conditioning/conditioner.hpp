@@ -16,6 +16,7 @@
 #include "model/te/llm.hpp"
 #include "model/te/t5.hpp"
 #include "model_loader.h"
+#include "tokenizers/sensenova_u1_tokenizer.h"
 
 struct SDCondition {
     sd::Tensor<float> c_crossattn;
@@ -149,6 +150,7 @@ public:
     virtual void set_graph_cut_layer_split_backend_vram_limits(const std::vector<size_t>& limits) {}
     virtual void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {}
     virtual void set_flash_attention_enabled(bool enabled) = 0;
+    virtual void set_scale_overrides(float linear_scale, float attn_scale) {}
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
     virtual void runner_end() {}
 };
@@ -228,6 +230,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         text_model->set_flash_attention_enabled(enabled);
         if (sd_version_is_sdxl(version)) {
             text_model2->set_flash_attention_enabled(enabled);
+        }
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        text_model->set_scale_overrides(linear_scale, attn_scale);
+        if (sd_version_is_sdxl(version)) {
+            text_model2->set_scale_overrides(linear_scale, attn_scale);
         }
     }
 
@@ -736,6 +745,18 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        if (clip_l) {
+            clip_l->set_scale_overrides(linear_scale, attn_scale);
+        }
+        if (clip_g) {
+            clip_g->set_scale_overrides(linear_scale, attn_scale);
+        }
+        if (t5) {
+            t5->set_scale_overrides(linear_scale, attn_scale);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (clip_l) {
             clip_l->set_weight_adapter(adapter);
@@ -1106,6 +1127,15 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        if (clip_l) {
+            clip_l->set_scale_overrides(linear_scale, attn_scale);
+        }
+        if (t5) {
+            t5->set_scale_overrides(linear_scale, attn_scale);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (clip_l) {
             clip_l->set_weight_adapter(adapter);
@@ -1224,7 +1254,10 @@ struct FluxCLIPEmbedder : public Conditioner {
                                              true,
                                              clip_skip,
                                              false);
-                    GGML_ASSERT(!pooled.empty());
+                    if (pooled.empty()) {
+                        LOG_ERROR("Flux CLIP-L encoding failed");
+                        return {};
+                    }
                 } else {
                     pooled = sd::Tensor<float>::zeros({768});
                 }
@@ -1243,7 +1276,10 @@ struct FluxCLIPEmbedder : public Conditioner {
                                                   input_ids,
                                                   sd::Tensor<float>(),
                                                   false);
-                GGML_ASSERT(!chunk_hidden_states.empty());
+                if (chunk_hidden_states.empty()) {
+                    LOG_ERROR("Flux T5 encoding failed at chunk %d/%zu", chunk_idx + 1, chunk_count);
+                    return {};
+                }
                 chunk_hidden_states = ::apply_token_weights(std::move(chunk_hidden_states), chunk_weights);
                 if (zero_out_masked) {
                     chunk_hidden_states.fill_(0.0f);
@@ -1365,6 +1401,12 @@ struct T5CLIPEmbedder : public Conditioner {
     void set_flash_attention_enabled(bool enabled) override {
         if (t5) {
             t5->set_flash_attention_enabled(enabled);
+        }
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        if (t5) {
+            t5->set_scale_overrides(linear_scale, attn_scale);
         }
     }
 
@@ -1576,6 +1618,12 @@ struct MiniT2IConditioner : public Conditioner {
         }
     }
 
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        if (t5) {
+            t5->set_scale_overrides(linear_scale, attn_scale);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (t5) {
             t5->set_weight_adapter(adapter);
@@ -1620,6 +1668,71 @@ struct MiniT2IConditioner : public Conditioner {
         result.c_crossattn = std::move(hidden_states);
         result.c_vector    = sd::Tensor<float>::from_vector(mask);
         return result;
+    }
+};
+
+struct SenseNovaU1Conditioner : public Conditioner {
+    static constexpr size_t kMaxPromptTokens = 12288;
+    SenseNovaU1Tokenizer tokenizer;
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        SD_UNUSED(tensors);
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        SD_UNUSED(enabled);
+    }
+
+    static std::string build_query(const std::string& text, bool is_negative) {
+        static const std::string kSystemMessage =
+            "You are an image generation and editing assistant that accurately understands and executes user intent.\n\n"
+            "You support two modes:\n\n1. Think Mode:\nIf the task requires reasoning, you MUST start with a "
+            "<think></think> block. Put all reasoning inside the block using plain text. DO NOT include any image tags. "
+            "Keep it reasonable and directly useful for producing the final image.\n\n2. Non-Think Mode:\nIf no reasoning "
+            "is needed, directly produce the final image.\n\nTask Types:\n\nA. Text-to-Image Generation:\n- Generate a "
+            "high-quality image based on the user's description.\n- Ensure visual clarity, semantic consistency, and "
+            "completeness.\n- DO NOT introduce elements that contradict or override the user's intent.\n\nB. Image Editing:\n"
+            "- Use the provided image(s) as input or reference for modification or transformation.\n- The result can be an "
+            "edited image or a new image based on the reference(s).\n- Preserve all unspecified attributes unless explicitly "
+            "changed.\n\nGeneral Rules:\n- For any visible text in the image, follow the language specified for the rendered "
+            "text in the user's description, not the language of the prompt. If no language is specified, use the user's input "
+            "language.";
+
+        std::string query;
+        if (!is_negative) {
+            query += "<|im_start|>system\n";
+            query += kSystemMessage;
+            query += "<|im_end|>\n";
+        }
+        query += "<|im_start|>user\n";
+        query += text;
+        query += "<|im_end|>\n<|im_start|>assistant\n";
+        query += is_negative ? "<img>" : "<think>\n\n</think>\n\n<img>";
+        return query;
+    }
+
+    SDCondition tokenize_condition(const std::string& text, bool is_negative) {
+        auto tokens = tokenizer.encode(build_query(text, is_negative));
+        if (tokens.empty() || tokens.size() > kMaxPromptTokens) {
+            LOG_ERROR("SenseNova U1.5 prompt token count %zu is outside [1, %zu]",
+                      tokens.size(),
+                      kMaxPromptTokens);
+            return {};
+        }
+
+        SDCondition result;
+        result.c_input_ids = sd::Tensor<int32_t>({static_cast<int64_t>(tokens.size())}, tokens);
+        return result;
+    }
+
+    SDCondition get_learned_condition(int n_threads,
+                                      const ConditionerParams& conditioner_params) override {
+        SD_UNUSED(n_threads);
+        return tokenize_condition(conditioner_params.text, false);
+    }
+
+    SDCondition get_unconditional_condition(const std::string& text) {
+        return tokenize_condition(text, true);
     }
 };
 
@@ -1670,6 +1783,10 @@ struct AnimaConditioner : public Conditioner {
 
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        llm->set_scale_overrides(linear_scale, attn_scale);
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
@@ -1873,6 +1990,13 @@ struct LLMEmbedder : public Conditioner {
         llm->set_flash_attention_enabled(enabled);
         if (byt5) {
             byt5->set_flash_attention_enabled(enabled);
+        }
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        llm->set_scale_overrides(linear_scale, attn_scale);
+        if (byt5) {
+            byt5->set_scale_overrides(linear_scale, attn_scale);
         }
     }
 
@@ -2963,6 +3087,11 @@ struct LTXAVEmbedder : public Conditioner {
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
         projector->set_flash_attention_enabled(enabled);
+    }
+
+    void set_scale_overrides(float linear_scale, float attn_scale) override {
+        llm->set_scale_overrides(linear_scale, attn_scale);
+        projector->set_scale_overrides(linear_scale, attn_scale);
     }
 
     void set_max_graph_vram_bytes(size_t max_vram_bytes) override {

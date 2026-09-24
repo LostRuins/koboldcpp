@@ -161,7 +161,10 @@ namespace sd::pipeline {
         frames           = sd->align_video_frames(requested_frames);
         clip_skip        = sd_vid_gen_params->clip_skip;
         fps              = std::max(1, sd_vid_gen_params->fps);
-        if (sd_version_is_minimax_h3(sd->version) && fps != 24) {
+        if (sd->version == VERSION_WAN2_2_S2V && sd_vid_gen_params->fps != 16) {
+            LOG_WARN("Wan2.2 S2V uses 16 fps; overriding requested fps %d", sd_vid_gen_params->fps);
+            fps = 16;
+        } else if (sd_version_is_minimax_h3(sd->version) && fps != 24) {
             LOG_WARN("MiniMax-H3 uses 24 fps; overriding requested fps %d", fps);
             fps = 24;
         }

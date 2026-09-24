@@ -70,6 +70,8 @@ const char* unused_tensors[] = {
     // "v_pred", // Used to detect SDXL vpred models
     "text_encoders.llm.output.weight",
     "text_encoders.llm.lm_head.",
+    "language_model.lm_head.",
+    "vision_model.",
 };
 
 bool is_unused_tensor(const std::string& name) {
@@ -262,6 +264,15 @@ bool ModelLoader::parse_file(const std::string& file_path, const std::string& pr
     }
     parsed_dependencies_.push_back(stamp);
     if (is_directory(file_path)) {
+        const std::string diffusers_index_path = path_join(file_path, "model_index.json");
+        const std::string diffusers_unet_path  = path_join(file_path, "unet/diffusion_pytorch_model.safetensors");
+        const bool has_diffusers_layout        = file_exists(diffusers_index_path) || file_exists(diffusers_unet_path);
+
+        const std::string safetensors_index_path = path_join(file_path, "model.safetensors.index.json");
+        if (!has_diffusers_layout && file_exists(safetensors_index_path)) {
+            LOG_INFO("load %s using root safetensors index", file_path.c_str());
+            return parse_file(safetensors_index_path, prefix);
+        }
         LOG_INFO("load %s using diffusers format", file_path.c_str());
         return init_from_diffusers_file(file_path, prefix);
     } else if (is_gguf_file(file_path)) {
@@ -513,6 +524,7 @@ SDVersion ModelLoader::get_sd_version() const {
     bool is_flux2                    = false;
     bool has_single_block_47         = false;
     bool is_wan                      = false;
+    bool is_s2v                      = false;
     int64_t patch_embedding_channels = 0;
     bool has_img_emb                 = false;
     bool has_middle_block_1          = false;
@@ -551,6 +563,9 @@ SDVersion ModelLoader::get_sd_version() const {
         }
         if (tensor_storage.name.find("net.img_embedder.proj1.weight") != std::string::npos) {
             return VERSION_MINIT2I;
+        }
+        if (tensor_storage.name.find("language_model.model.layers.0.self_attn.q_proj_mot_gen.weight") != std::string::npos) {
+            return VERSION_SENSENOVA_U1_5;
         }
         if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
             auto img_in = tensor_storage_map.find("model.diffusion_model.img_in.weight");
@@ -598,6 +613,11 @@ SDVersion ModelLoader::get_sd_version() const {
         }
         if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
             is_wan = true;
+        }
+        if (tensor_storage.name.find("casual_audio_encoder.weights") != std::string::npos ||
+            tensor_storage.name.find("audio_injector.injector.0.q.weight") != std::string::npos) {
+            // S2V and T2V-14B share patch_embedding shapes.
+            is_s2v = true;
         }
         if (tensor_storage.name.find("model.diffusion_model.patch_embedder.weight") != std::string::npos) {
             return VERSION_LINGBOT_VIDEO;
@@ -662,6 +682,9 @@ SDVersion ModelLoader::get_sd_version() const {
     }
     if (is_wan) {
         LOG_VERBOSE("patch_embedding_channels %d", patch_embedding_channels);
+        if (is_s2v) {
+            return VERSION_WAN2_2_S2V;
+        }
         if (patch_embedding_channels == 184320 && !has_img_emb) {
             return VERSION_WAN2_2_I2V;
         }

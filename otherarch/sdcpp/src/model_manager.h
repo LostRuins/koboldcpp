@@ -31,7 +31,7 @@ public:
     };
 
 private:
-    static constexpr size_t MAX_RESIDENCY_BLOCK_BYTES = 64ULL * 1024ULL * 1024ULL;
+    static constexpr size_t MAX_RESIDENCY_BLOCK_BYTES = 1024ULL * 1024ULL * 1024ULL;
 
     struct TensorState {
         std::string name;
