@@ -518,6 +518,7 @@ set_source_files_properties(vendor/hash/sha256/sha256.c PROPERTIES COMPILE_OPTIO
 
 add_library(sdtype_adapter
             otherarch/sdcpp/sdtype_adapter.cpp
+            otherarch/sdcpp/src/conditioning/wan_audio.cpp
             otherarch/sdcpp/src/core/compute_workspace.cpp
             otherarch/sdcpp/src/core/ggml_extend.cpp
             otherarch/sdcpp/src/core/ggml_runner.cpp
@@ -540,6 +541,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/extensions/photomaker_extension.cpp
             otherarch/sdcpp/src/runtime/sample-cache.cpp
             otherarch/sdcpp/src/runtime/tiling.cpp
+            otherarch/sdcpp/src/runtime/audio_processing.cpp
             otherarch/sdcpp/src/core/util.cpp
             otherarch/sdcpp/src/name_conversion.cpp
             otherarch/sdcpp/src/upscaler.cpp
@@ -563,6 +565,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/tokenizers/clip_tokenizer.cpp
             otherarch/sdcpp/src/tokenizers/mistral_tokenizer.cpp
             otherarch/sdcpp/src/tokenizers/qwen2_tokenizer.cpp
+            otherarch/sdcpp/src/tokenizers/sensenova_u1_tokenizer.cpp
             otherarch/sdcpp/src/tokenizers/t5_unigram_tokenizer.cpp
             otherarch/sdcpp/src/tokenizers/gemma_tokenizer.cpp
             otherarch/sdcpp/src/tokenizers/gpt_oss_tokenizer.cpp
