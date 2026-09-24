@@ -326,6 +326,7 @@ void sd_hires_params_init(sd_hires_params_t* hires_params) {
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     *sd_ctx_params                           = {};
     sd_ctx_params->n_threads                 = sd_get_num_physical_cores();
+    sd_ctx_params->conditioning_cache_size   = 4;
     sd_ctx_params->wtype                     = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                  = CUDA_RNG;
     sd_ctx_params->sampler_rng_type          = RNG_TYPE_COUNT;
@@ -378,6 +379,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "pulid_weights_path: %s\n"
              "tensor_type_rules: %s\n"
              "n_threads: %d\n"
+             "conditioning_cache_size: %d\n"
              "wtype: %s\n"
              "rng_type: %s\n"
              "sampler_rng_type: %s\n"
@@ -418,6 +420,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->pulid_weights_path),
              SAFE_STR(sd_ctx_params->tensor_type_rules),
              sd_ctx_params->n_threads,
+             sd_ctx_params->conditioning_cache_size,
              sd_type_name(sd_ctx_params->wtype),
              sd_rng_type_name(sd_ctx_params->rng_type),
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
@@ -752,28 +755,20 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            int* num_frames_out,
                            sd_audio_t** audio_out,
                            int* fps_out) {
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
-        if (fps_out != nullptr) {
-            *fps_out = 0;
-        }
-        return false;
-    }
-
-    if (frames_out != nullptr) {
+    if (frames_out != nullptr)
         *frames_out = nullptr;
-    }
-    if (audio_out != nullptr) {
+    if (audio_out != nullptr)
         *audio_out = nullptr;
-    }
-    if (num_frames_out != nullptr) {
+    if (num_frames_out != nullptr)
         *num_frames_out = 0;
+    if (fps_out != nullptr)
+        *fps_out = 0;
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
+        return false;
     }
 
     StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
     if (!execution.ready) {
-        if (fps_out != nullptr) {
-            *fps_out = 0;
-        }
         return false;
     }
 

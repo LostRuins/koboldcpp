@@ -518,7 +518,7 @@ ArgOptions SDContextParams::get_options() {
         {"",
          "--model-args",
          "extra model args, key=value list. Supports chroma_use_dit_mask, chroma_use_t5_mask, "
-         "chroma_t5_mask_pad, qwen_image_zero_cond_t",
+         "chroma_t5_mask_pad, qwen_image_zero_cond_t, qwen_image_2_1_prefix_cache",
          (int)',',
          &model_args},
         {"",
@@ -571,6 +571,10 @@ ArgOptions SDContextParams::get_options() {
          "number of threads to use during computation (default: -1). "
          "If threads <= 0, then threads will be set to the number of CPU physical cores",
          &n_threads},
+        {"",
+         "--conditioning-cache-size",
+         "maximum number of conditioning results cached per model context (default: " + std::to_string(conditioning_cache_size) + ", 0 disables caching)",
+         &conditioning_cache_size},
     };
 
     options.bool_options = {
@@ -822,6 +826,10 @@ bool SDContextParams::resolve(SDMode mode) {
 }
 
 bool SDContextParams::validate(SDMode mode) {
+    if (conditioning_cache_size < 0) {
+        LOG_ERROR("error: conditioning-cache-size must be non-negative");
+        return false;
+    }
     if (mode == CONVERT) {
         const bool has_convert_input = model_path.length() != 0 ||
                                        clip_l_path.length() != 0 ||
@@ -898,6 +906,7 @@ std::string SDContextParams::to_string() const {
     std::ostringstream oss;
     oss << "SDContextParams {\n"
         << "  n_threads: " << n_threads << ",\n"
+        << "  conditioning_cache_size: " << conditioning_cache_size << ",\n"
         << "  model_path: \"" << model_path << "\",\n"
         << "  clip_l_path: \"" << clip_l_path << "\",\n"
         << "  clip_g_path: \"" << clip_g_path << "\",\n"
@@ -992,6 +1001,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.pulid_weights_path              = pulid_weights_path.c_str();
     sd_ctx_params.tensor_type_rules               = tensor_type_rules.c_str();
     sd_ctx_params.n_threads                       = n_threads;
+    sd_ctx_params.conditioning_cache_size         = conditioning_cache_size;
     sd_ctx_params.wtype                           = wtype;
     sd_ctx_params.rng_type                        = rng_type;
     sd_ctx_params.sampler_rng_type                = sampler_rng_type;
@@ -1128,6 +1138,9 @@ ArgOptions SDGenerationParams::get_options() {
          "Key-value list to set up the way the reference images are processed (empty = auto-detect from model weigths)",
          (int)',',
          &ref_image_args},
+        {"", "--image-preprocess",
+         "Image preprocessing rule: target=init|end|mask|control|ref|ip-adapter|id|control-frame,index=N,mode=auto|none|stretch|crop|crop-resize|fit-pad,filter=auto|nearest|nearest-exact|bilinear|bicubic|lanczos,antialias=auto|true|false,width=W,height=H,anchor=center|top|bottom|left|right,pad_color=#RRGGBB[AA],canny=true|false. Repeat for multiple rules.",
+         (int)';', &image_preprocess},
     };
 
     options.int_options = {
@@ -1308,11 +1321,6 @@ ArgOptions SDGenerationParams::get_options() {
          "automatically increase the indices of references images based on the order they are listed (starting with 1).",
          true,
          &increase_ref_index},
-        {"",
-         "--disable-auto-resize-ref-image",
-         "disable auto resize of ref images",
-         false,
-         &auto_resize_ref_image},
         {"",
          "--circular",
          "enable circular padding on both axes for tileable output",
@@ -1870,8 +1878,6 @@ bool decode_base64_image(const std::string& encoded_input,
 static bool parse_image_json_field(const json& parent,
                                    const char* key,
                                    int channels,
-                                   int expected_width,
-                                   int expected_height,
                                    SDImageOwner& out_image) {
     if (!parent.contains(key)) {
         return true;
@@ -1883,14 +1889,12 @@ static bool parse_image_json_field(const json& parent,
     if (!parent.at(key).is_string()) {
         return false;
     }
-    return decode_base64_image(parent.at(key).get<std::string>(), channels, expected_width, expected_height, out_image);
+    return decode_base64_image(parent.at(key).get<std::string>(), channels, 0, 0, out_image);
 }
 
 static bool parse_image_array_json_field(const json& parent,
                                          const char* key,
                                          int channels,
-                                         int expected_width,
-                                         int expected_height,
                                          std::vector<SDImageOwner>& out_images) {
     if (!parent.contains(key)) {
         return true;
@@ -1909,7 +1913,7 @@ static bool parse_image_array_json_field(const json& parent,
             return false;
         }
         SDImageOwner image;
-        if (!decode_base64_image(item.get<std::string>(), channels, expected_width, expected_height, image)) {
+        if (!decode_base64_image(item.get<std::string>(), channels, 0, 0, image)) {
             return false;
         }
         out_images.push_back(std::move(image));
@@ -2008,6 +2012,29 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
     return false;
 }
 
+bool SDGenerationParams::parse_image_preprocess_json(const std::string& json_str) {
+    const auto value = json::parse(json_str, nullptr, false);
+    std::string rules;
+    if (value.is_string()) {
+        rules = value.get<std::string>();
+    } else if (value.is_array()) {
+        for (const auto& item : value) {
+            if (!item.is_string()) {
+                LOG_ERROR("image_preprocess must contain rule strings");
+                return false;
+            }
+            if (!rules.empty())
+                rules += ";";
+            rules += item.get<std::string>();
+        }
+    } else {
+        LOG_ERROR("image_preprocess must be a string or array of strings");
+        return false;
+    }
+    image_preprocess = std::move(rules);
+    return true;
+}
+
 bool SDGenerationParams::from_json_str(
     const std::string& json_str,
     const std::function<std::string(const std::string&)>& lora_path_resolver) {
@@ -2018,6 +2045,9 @@ bool SDGenerationParams::from_json_str(
         LOG_ERROR("json parse failed %s", json_str.c_str());
         return false;
     }
+
+    if (j.contains("image_preprocess") && !parse_image_preprocess_json(j["image_preprocess"].dump()))
+        return false;
 
     auto load_if_exists = [&](const char* key, auto& out) {
         if (j.contains(key)) {
@@ -2056,6 +2086,7 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("cache_mode", cache_mode);
     load_if_exists("cache_option", cache_option);
     load_if_exists("scm_mask", scm_mask);
+    load_if_exists("ref_image_args", ref_image_args);
 
     load_if_exists("clip_skip", clip_skip);
     load_if_exists("width", width);
@@ -2073,7 +2104,6 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("moe_boundary", moe_boundary);
     load_if_exists("vace_strength", vace_strength);
 
-    load_if_exists("auto_resize_ref_image", auto_resize_ref_image);
     load_if_exists("increase_ref_index", increase_ref_index);
     load_if_exists("embed_image_metadata", embed_image_metadata);
 
@@ -2217,37 +2247,23 @@ bool SDGenerationParams::from_json_str(
         LOG_ERROR("invalid lora");
         return false;
     }
-    if (!parse_image_json_field(j, "init_image", 0, width, height, init_image)) {
-        LOG_ERROR("invalid init_image");
+    auto load_image = [&](const char* key, int channels, SDImageOwner& image) {
+        if (!parse_image_json_field(j, key, channels, image)) {
+            LOG_ERROR("invalid %s", key);
+            return false;
+        }
+        return true;
+    };
+    if (!load_image("init_image", 0, init_image) ||
+        !load_image("end_image", 3, end_image) ||
+        !load_image("mask_image", 1, mask_image) ||
+        !load_image("control_image", 3, control_image) ||
+        !load_image("ip_adapter_image", 3, ip_adapter_image)) {
         return false;
     }
-    if (!parse_image_json_field(j, "end_image", 3, width, height, end_image)) {
-        LOG_ERROR("invalid end_image");
-        return false;
-    }
-    if (!parse_image_array_json_field(j,
-                                      "ref_images",
-                                      0,
-                                      auto_resize_ref_image ? width : 0,
-                                      auto_resize_ref_image ? height : 0,
-                                      ref_images)) {
-        LOG_ERROR("invalid ref_images");
-        return false;
-    }
-    if (!parse_image_array_json_field(j, "control_frames", 3, width, height, control_frames)) {
-        LOG_ERROR("invalid control_frames");
-        return false;
-    }
-    if (!parse_image_json_field(j, "mask_image", 1, width, height, mask_image)) {
-        LOG_ERROR("invalid mask_image");
-        return false;
-    }
-    if (!parse_image_json_field(j, "control_image", 3, width, height, control_image)) {
-        LOG_ERROR("invalid control_image");
-        return false;
-    }
-    if (!parse_image_json_field(j, "ip_adapter_image", 3, width, height, ip_adapter_image)) {
-        LOG_ERROR("invalid ip_adapter_image");
+    if (!parse_image_array_json_field(j, "ref_images", 0, ref_images) ||
+        !parse_image_array_json_field(j, "control_frames", 3, control_frames)) {
+        LOG_ERROR("invalid input image array");
         return false;
     }
 
@@ -2491,6 +2507,10 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
 }
 
 bool SDGenerationParams::validate(SDMode mode) {
+    if (!image_preprocess.empty() && mode != IMG_GEN && mode != VID_GEN) {
+        LOG_ERROR("--image-preprocess requires img_gen or vid_gen mode");
+        return false;
+    }
     if (batch_count <= 0) {
         LOG_ERROR("error: batch_count must be greater than 0");
         return false;
@@ -2666,14 +2686,6 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
         pulid_id_weight,
     };
 
-    if (!auto_resize_ref_image) {
-        if (!ref_image_args.empty()) {
-            ref_image_args += ",";
-        }
-        ref_image_args += "resize_before_vae=0";
-        LOG_WARN("Notice: --disable-auto-resize-ref-image is deprecated. Use --ref-image-args \"resize_before_vae=off\" instead.");
-    }
-
     if (increase_ref_index) {
         if (!ref_image_args.empty()) {
             ref_image_args += ",";
@@ -2721,6 +2733,7 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
     params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
     params.circular_x                = circular || circular_x;
     params.circular_y                = circular || circular_y;
+    params.image_preprocess          = {image_preprocess.c_str()};
     return params;
 }
 
@@ -2823,6 +2836,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
     params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
     params.circular_x                = circular || circular_x;
     params.circular_y                = circular || circular_y;
+    params.image_preprocess          = {image_preprocess.c_str()};
     return params;
 }
 
@@ -2879,7 +2893,8 @@ std::string SDGenerationParams::to_string() const {
         << "  ref_video_audio_paths: " << vec_str_to_string(ref_video_audio_paths) << ",\n"
         << "  ref_audio_paths: " << vec_str_to_string(ref_audio_paths) << ",\n"
         << "  control_video_path: \"" << control_video_path << "\",\n"
-        << "  auto_resize_ref_image: " << (auto_resize_ref_image ? "true" : "false") << ",\n"
+        << "  image_preprocess: " << image_preprocess << ",\n"
+        << "  ref_image_args: " << ref_image_args << ",\n"
         << "  increase_ref_index: " << (increase_ref_index ? "true" : "false") << ",\n"
         << "  pm_id_images_dir: \"" << pm_id_images_dir << "\",\n"
         << "  pm_id_embed_path: \"" << pm_id_embed_path << "\",\n"
@@ -3030,12 +3045,13 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
     set_json_basename_if_not_empty(models, "control_net", ctx_params.control_net_path);
     root["models"] = std::move(models);
 
-    root["clip_skip"]             = gen_params.clip_skip;
-    root["strength"]              = gen_params.strength;
-    root["control_strength"]      = gen_params.control_strength;
-    root["ip_adapter_strength"]   = gen_params.ip_adapter_strength;
-    root["auto_resize_ref_image"] = gen_params.auto_resize_ref_image;
-    root["increase_ref_index"]    = gen_params.increase_ref_index;
+    root["clip_skip"]           = gen_params.clip_skip;
+    root["strength"]            = gen_params.strength;
+    root["control_strength"]    = gen_params.control_strength;
+    root["ip_adapter_strength"] = gen_params.ip_adapter_strength;
+    root["ref_image_args"]      = gen_params.ref_image_args;
+    root["image_preprocess"]    = gen_params.image_preprocess;
+    root["increase_ref_index"]  = gen_params.increase_ref_index;
     if (mode == VID_GEN) {
         root["video"] = {
             {"frame_count", gen_params.video_frames},

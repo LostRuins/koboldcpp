@@ -4,6 +4,86 @@
 #include "core/tensor.hpp"
 #include "ggml.h"
 
+// RGB is projected to [-1, 1]; alpha is projected directly to [0, 1].
+const float qwen21_latent_rgb_proj[64][3] = {
+    {0.00860495522f, 0.01219501462f, -0.00321337196f},
+    {0.01889233090f, 0.01246581216f, 0.01074959482f},
+    {0.1255941446f, 0.1176879344f, -0.0332212352f},
+    {0.0418238528f, 0.1043427754f, 0.0121666316f},
+    {0.02025338f, 0.01453670296f, -0.000224336044f},
+    {-0.01896720702f, -0.0206099030f, -0.0322728584f},
+    {0.00438984796f, -0.01374969766f, 0.02849196f},
+    {-0.0374495856f, -0.0286777126f, -0.0693192810f},
+    {0.01511914734f, 0.0242979386f, 0.0553878870f},
+    {-0.1138629518f, -0.020391466f, 0.001550520522f},
+    {-0.0233650696f, -0.0417292018f, -0.0362361182f},
+    {-0.0351603342f, -0.0243595924f, -0.00216261038f},
+    {0.01093355288f, -0.0373466924f, 0.00241315350f},
+    {0.01778704744f, -0.00401984678f, -0.0343259192f},
+    {0.0486059334f, 0.0253144f, 0.0672564966f},
+    {0.0309463558f, 0.0277963166f, 0.0520869622f},
+    {0.0374485008f, 0.0551753676f, 0.0225853902f},
+    {-0.0090809962f, -0.004756176f, 0.00636443612f},
+    {-0.0270455652f, -0.0384966954f, -0.00905908082f},
+    {-0.00553493756f, 0.01484553684f, -0.0211502468f},
+    {0.01319502562f, 0.00948005666f, 0.0483789212f},
+    {-0.00931847104f, -0.00276452734f, -0.01011985302f},
+    {0.0180478258f, 0.01614954356f, -0.0209424690f},
+    {-0.0214530434f, -0.00272961176f, 0.0217887476f},
+    {-0.0636772304f, -0.0208893548f, 0.0479167742f},
+    {-0.0250321236f, -0.0286715676f, 0.0530110146f},
+    {-0.01853078078f, 0.01647272818f, -0.00207747588f},
+    {0.0023101082f, 0.01228800748f, 0.01303505006f},
+    {-0.01243671408f, -0.0258638728f, -0.0379116264f},
+    {0.00598934710f, 0.00642563550f, -0.01234514304f},
+    {-0.0296733996f, -0.0234698050f, 0.00060018212f},
+    {-0.0322019498f, -0.0529200462f, -0.00344987414f},
+    {-0.00205026458f, -0.00846599446f, 0.00455971038f},
+    {-0.01082227064f, 0.0315661948f, -0.0677753362f},
+    {0.0645553474f, 0.1109666998f, 0.0674744864f},
+    {0.01036801108f, -0.00484841210f, -0.001529168474f},
+    {0.01264353566f, 0.01548126338f, -0.00966374324f},
+    {-0.0223892408f, -0.00871751526f, -0.000306421670f},
+    {0.0271322742f, 0.03496524f, -0.0089692858f},
+    {0.0512178672f, 0.0173080034f, 0.00804227746f},
+    {0.01210987192f, 0.00758025926f, -0.00281712586f},
+    {0.1897278390f, 0.1210261828f, 0.062603892f},
+    {0.0208058822f, 0.00547548182f, 0.01262955638f},
+    {0.00813332858f, 0.01015930914f, 0.01301771290f},
+    {-0.000927236014f, -0.00152540594f, -0.00599213302f},
+    {0.01663314616f, -0.00582789626f, 0.0163958132f},
+    {-0.0252546342f, -0.0604193732f, -0.1606919922f},
+    {-0.091722686f, -0.0409201224f, -0.0959576198f},
+    {0.0282963112f, -0.01387223872f, -0.01648814464f},
+    {0.0552316818f, 0.0967547788f, 0.0413586632f},
+    {0.00922849292f, 0.00451467542f, -0.0529172378f},
+    {0.0558600768f, 0.0122988308f, -0.01445942422f},
+    {0.000210660902f, -0.01295958782f, -0.01804761764f},
+    {0.0358136250f, -0.0472505970f, -0.1156405142f},
+    {-0.0506390696f, -0.0471914842f, 0.0349791468f},
+    {-0.0480143168f, 0.00628389868f, -0.0545163826f},
+    {0.0315499582f, 0.0564846606f, -0.0430850488f},
+    {-0.0362330316f, -0.01267788554f, 0.0061024772f},
+    {0.0038627542f, 0.00911055916f, -0.00758526008f},
+    {-0.0447103298f, -0.00835411408f, 0.01545872328f},
+    {-0.015006738f, 0.00270612302f, -0.00784361356f},
+    {-0.0221755048f, -0.0513344748f, -0.0475317424f},
+    {-0.01036656294f, -0.00422146068f, -0.0213499052f},
+    {0.01788952706f, 0.01191944190f, 0.0397205238f},
+};
+float qwen21_latent_rgb_bias[3] = {-0.043293118f, -0.02695978f, -0.11986706f};
+
+const float qwen21_latent_alpha_proj[64] = {
+    -0.0416241114f, -0.00678954612f, -0.0169095515f, -0.0230551401f, 0.0100882595f, 0.00655586802f, 0.0401166874f, -0.0055510216f,
+    0.0224234441f, -0.0389640963f, -0.0114492163f, -0.00721128977f, -0.0029064082f, 0.0150300547f, -0.00321615308f, -0.0498856338f,
+    -0.0215251401f, 0.0240220482f, 0.0117338008f, -0.0460420624f, 0.0387872889f, 0.0131517207f, 0.0147100836f, 0.0266985286f,
+    0.0153097324f, -0.0418119757f, 0.0421013917f, 0.0401724499f, 0.00972515915f, 0.011718495f, 0.0117622291f, 0.0136505134f,
+    -0.0350017363f, -0.0100692606f, -0.0131582529f, -0.00660639315f, 0.00253611396f, -0.0195736368f, -0.04240184f, 0.0321299262f,
+    0.0106089414f, -0.0179845306f, -0.00806212708f, 0.0135889057f, -0.0157393098f, -0.0267791344f, 0.0109068534f, 0.0283931966f,
+    -0.0435370078f, 0.00187883536f, -0.0108995378f, -0.0450757676f, -0.0699481501f, 0.0123562106f, -0.0222592249f, 0.0216155907f,
+    0.0563755424f, -0.0073379912f, 0.0160012921f, 0.0411637742f, 0.0189607258f, -0.024025029f, -0.0161487905f, -0.016913203f};
+const float qwen21_latent_alpha_bias = 0.871268134f;
+
 const float minimax_latent_rgb_proj[24][3] = {
     {0.19819857f, 0.11584999f, 0.07929777f},
     {-0.16047224f, -0.10601170f, -0.15996324f},
@@ -324,7 +404,7 @@ const float sd_latent_rgb_proj[4][3] = {
     {-0.178022f, -0.200862f, -0.678514f}};
 float sd_latent_rgb_bias[3] = {-0.017478f, -0.055834f, -0.105825f};
 
-void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size) {
+void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size, const float* latent_alpha_proj = nullptr, float latent_alpha_bias = 1.f) {
     size_t buffer_head = 0;
 
     uint32_t latent_width  = static_cast<uint32_t>(latents->ne[0]);
@@ -338,7 +418,8 @@ void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*l
     uint32_t rgb_width  = latent_width * patch_size;
     uint32_t rgb_height = latent_height * patch_size;
 
-    uint32_t unpatched_dim = dim / (patch_size * patch_size);
+    uint32_t unpatched_dim         = dim / (patch_size * patch_size);
+    const uint32_t output_channels = latent_alpha_proj != nullptr ? 4 : 3;
 
     for (uint32_t k = 0; k < frames; k++) {
         for (uint32_t rgb_x = 0; rgb_x < rgb_width; rgb_x++) {
@@ -356,13 +437,16 @@ void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*l
                 // should be incremented by 1 for each pixel
                 size_t pixel_id = k * rgb_width * rgb_height + rgb_y * rgb_width + rgb_x;
 
-                float r = 0, g = 0, b = 0;
+                float r = 0, g = 0, b = 0, a = 0;
                 if (latent_rgb_proj != nullptr) {
                     for (uint32_t d = 0; d < unpatched_dim; d++) {
                         float value = *(float*)((char*)latents->data + latent_id + (d * patch_size * patch_size + channel_offset) * latents->nb[ggml_n_dims(latents) - 1]);
                         r += value * latent_rgb_proj[d][0];
                         g += value * latent_rgb_proj[d][1];
                         b += value * latent_rgb_proj[d][2];
+                        if (latent_alpha_proj != nullptr) {
+                            a += value * latent_alpha_proj[d];
+                        }
                     }
                 } else {
                     // interpret first 3 channels as RGB
@@ -386,9 +470,13 @@ void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*l
                 g = g >= 0 ? g <= 1 ? g : 1 : 0;
                 b = b >= 0 ? b <= 1 ? b : 1 : 0;
 
-                buffer[pixel_id * 3 + 0] = (uint8_t)(r * 255);
-                buffer[pixel_id * 3 + 1] = (uint8_t)(g * 255);
-                buffer[pixel_id * 3 + 2] = (uint8_t)(b * 255);
+                buffer[pixel_id * output_channels + 0] = (uint8_t)(r * 255);
+                buffer[pixel_id * output_channels + 1] = (uint8_t)(g * 255);
+                buffer[pixel_id * output_channels + 2] = (uint8_t)(b * 255);
+                if (latent_alpha_proj != nullptr) {
+                    a                                      = std::min(1.0f, std::max(0.0f, a + latent_alpha_bias));
+                    buffer[pixel_id * output_channels + 3] = (uint8_t)(a * 255);
+                }
             }
         }
     }
@@ -398,16 +486,17 @@ static inline bool preview_latent_tensor_is_video(const sd::Tensor<float>& laten
     return latents.dim() == 5;
 }
 
-void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size) {
+void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size, const float* latent_alpha_proj = nullptr, float latent_alpha_bias = 1.f) {
     uint32_t latent_width  = static_cast<uint32_t>(latents.shape()[0]);
     uint32_t latent_height = static_cast<uint32_t>(latents.shape()[1]);
     bool is_video          = preview_latent_tensor_is_video(latents);
     uint32_t frames        = is_video ? static_cast<uint32_t>(latents.shape()[2]) : 1;
     uint32_t dim           = is_video ? static_cast<uint32_t>(latents.shape()[3]) : static_cast<uint32_t>(latents.shape()[2]);
 
-    uint32_t rgb_width     = latent_width * patch_size;
-    uint32_t rgb_height    = latent_height * patch_size;
-    uint32_t unpatched_dim = dim / (patch_size * patch_size);
+    uint32_t rgb_width             = latent_width * patch_size;
+    uint32_t rgb_height            = latent_height * patch_size;
+    uint32_t unpatched_dim         = dim / (patch_size * patch_size);
+    const uint32_t output_channels = latent_alpha_proj != nullptr ? 4 : 3;
 
     for (uint32_t k = 0; k < frames; k++) {
         for (uint32_t rgb_x = 0; rgb_x < rgb_width; rgb_x++) {
@@ -427,7 +516,7 @@ void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, con
                                : latents.values()[latent_x + latent_width * (latent_y + latent_height * latent_channel)];
                 };
 
-                float r = 0.f, g = 0.f, b = 0.f;
+                float r = 0.f, g = 0.f, b = 0.f, a = 0.f;
                 if (latent_rgb_proj != nullptr) {
                     for (uint32_t d = 0; d < unpatched_dim; d++) {
                         uint32_t latent_channel = d * patch_size * patch_size + channel_offset;
@@ -435,6 +524,9 @@ void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, con
                         r += value * latent_rgb_proj[d][0];
                         g += value * latent_rgb_proj[d][1];
                         b += value * latent_rgb_proj[d][2];
+                        if (latent_alpha_proj != nullptr) {
+                            a += value * latent_alpha_proj[d];
+                        }
                     }
                 } else {
                     r = latent_value(0);
@@ -450,9 +542,13 @@ void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, con
                 g = std::min(1.0f, std::max(0.0f, g * .5f + .5f));
                 b = std::min(1.0f, std::max(0.0f, b * .5f + .5f));
 
-                buffer[pixel_id * 3 + 0] = (uint8_t)(r * 255);
-                buffer[pixel_id * 3 + 1] = (uint8_t)(g * 255);
-                buffer[pixel_id * 3 + 2] = (uint8_t)(b * 255);
+                buffer[pixel_id * output_channels + 0] = (uint8_t)(r * 255);
+                buffer[pixel_id * output_channels + 1] = (uint8_t)(g * 255);
+                buffer[pixel_id * output_channels + 2] = (uint8_t)(b * 255);
+                if (latent_alpha_proj != nullptr) {
+                    a                                      = std::min(1.0f, std::max(0.0f, a + latent_alpha_bias));
+                    buffer[pixel_id * output_channels + 3] = (uint8_t)(a * 255);
+                }
             }
         }
     }
