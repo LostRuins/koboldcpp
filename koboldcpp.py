@@ -11700,7 +11700,8 @@ def run_bundled_kobold_agent(base_url=None, api_key=None):
     if not os.path.isfile(agent_path):
         raise FileNotFoundError(f"Kobold Agent script not found: {agent_path}")
 
-    import runpy
+    # A normal import also lets PyInstaller collect the agent's stdlib imports.
+    import kcpp_agent
     old_argv = sys.argv
     try:
         sys.argv = [agent_path]
@@ -11708,7 +11709,7 @@ def run_bundled_kobold_agent(base_url=None, api_key=None):
             sys.argv.extend(["--base-url", base_url])
         if api_key:
             sys.argv.extend(["--api-key", api_key])
-        runpy.run_path(agent_path, run_name="__main__")
+        kcpp_agent.main()
     finally:
         sys.argv = old_argv
 
@@ -11754,6 +11755,23 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None):
             apple_script = f'tell application "Terminal" to do script {json.dumps(shell_command)}'
             subprocess.Popen(["osascript", "-e", apple_script], start_new_session=True)
         else:
+            # Frozen Linux builds prepend their extraction directory to
+            # LD_LIBRARY_PATH.  Do not leak those bundled libraries into a
+            # system terminal emulator: mixing them with the terminal's system
+            # libraries can produce loader errors (for example, Cairo failing
+            # to resolve FreeType symbols) before the agent is ever started.
+            terminal_env = os.environ.copy()
+            if is_frozen:
+                original_library_path = terminal_env.get("LD_LIBRARY_PATH_ORIG")
+                if original_library_path is not None:
+                    terminal_env["LD_LIBRARY_PATH"] = original_library_path
+                else:
+                    terminal_env.pop("LD_LIBRARY_PATH", None)
+                # Give the agent its own extracted files, even if this launcher
+                # exits. Set this on the command so terminal-server handoffs
+                # cannot lose it when forwarding to an existing terminal.
+                command = ["env", "PYINSTALLER_RESET_ENVIRONMENT=1", *command]
+
             terminal_commands = [
                 ("x-terminal-emulator", ["-e"]),
                 ("gnome-terminal", ["--"]),
@@ -11774,13 +11792,13 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None):
                 if resolved_path in attempted:
                     continue
                 attempted.add(resolved_path)
-                # xterm's default bitmap font is often absent in minimal WSL
+                # xterm's default bitmap font is often absent in minimal Linux
                 # installations; request a fontconfig-backed font instead.
                 launch_args = (["-fa", "monospace"] if os.path.basename(resolved_path) == "xterm" else []) + terminal_args
                 try:
                     terminal_process = subprocess.Popen(
                         [terminal_path, *launch_args, *command],
-                        cwd=os.getcwd(), start_new_session=True)
+                        cwd=os.getcwd(), env=terminal_env, start_new_session=True)
                     try:
                         exit_code = terminal_process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
@@ -11794,7 +11812,9 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None):
                 print(f"Cannot launch Kobold Agent: {'; '.join(failures)}.")
             else:
                 print("Cannot launch Kobold Agent: no supported terminal emulator was found.")
-            print("Try running kcpp_agent.py in another terminal window.")
+            manual_command = ([sys.executable, "--run-bundled-agent"] if is_frozen
+                              else [sys.executable, agent_path])
+            print(f"Try running this in an existing terminal: {shlex.join(manual_command)}")
             return False
         return True
     except Exception as e:

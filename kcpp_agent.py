@@ -41,6 +41,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+if os.name != "nt":
+    try:
+        import readline  # Enable standard line editing and in-memory history.
+    except ImportError:
+        pass  # Optional in some Python builds; plain input() still works.
+
 
 DEFAULT_MAX_TOOL_RESULT_CHARS = 20000
 MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_TOOL_RESULT_CHARS
@@ -193,6 +199,14 @@ def configure_colors(disabled: bool = False) -> None:
 def color(text: str, code: str, *, stderr: bool = False) -> str:
     enabled = COLOR_STDERR if stderr else COLOR_STDOUT
     return f"{code}{text}{ANSI_RESET}" if enabled else text
+
+
+def input_prompt(text: str) -> str:
+    label = color(text, ANSI_BOLD_CYAN)
+    if os.name != "nt" and "readline" in sys.modules:
+        # Readline must exclude ANSI color sequences when counting columns.
+        label = re.sub(r"\x1b\[[0-9;]*m", lambda match: "\001" + match[0] + "\002", label)
+    return label + " "
 
 
 def toggle_status(enabled: bool) -> str:
@@ -748,6 +762,16 @@ def tool_shell(args: dict[str, Any]) -> str:
             raise RuntimeError("No POSIX command shell was found")
         argv = [executable, "-c", command]
 
+    shell_env = None
+    if os.name == "posix" and getattr(sys, "frozen", False):
+        # System commands must not load the frozen agent's bundled libraries.
+        shell_env = os.environ.copy()
+        original_library_path = shell_env.get("LD_LIBRARY_PATH_ORIG")
+        if original_library_path is not None:
+            shell_env["LD_LIBRARY_PATH"] = original_library_path
+        else:
+            shell_env.pop("LD_LIBRARY_PATH", None)
+
     completed = subprocess.run(
         argv,
         capture_output=True,
@@ -755,6 +779,7 @@ def tool_shell(args: dict[str, Any]) -> str:
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
+        env=shell_env,
     )
 
     return limit_text(
@@ -777,7 +802,7 @@ def tool_ask_user(args: dict[str, Any]) -> str:
         raise ValueError("question must be a non-empty string")
     print("\n" + color("Agent asks:", ANSI_CYAN) + f" {question.strip()}")
     try:
-        answer = input(color("Your answer>", ANSI_BOLD_CYAN) + " ")
+        answer = input(input_prompt("Your answer>"))
     except (EOFError, KeyboardInterrupt):
         print()
         return "The user declined to answer."
@@ -1735,7 +1760,7 @@ def run_agent(
 
     while True:
         try:
-            user_text = input(color("User>", ANSI_BOLD_CYAN) + " ").strip()
+            user_text = input(input_prompt("User>")).strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
             return
