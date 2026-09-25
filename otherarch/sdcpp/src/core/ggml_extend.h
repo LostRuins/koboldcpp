@@ -154,7 +154,8 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
                               int d1              = 1,
                               int d2              = 1,
                               bool force_prec_f32 = false,
-                              bool direct         = false);
+                              bool direct         = false,
+                              float scale         = 1.f);
 
 // w: [OC，IC, KD, 1 * 1]
 // x: [N, IC, ID, IH*IW]

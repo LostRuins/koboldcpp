@@ -339,7 +339,13 @@ bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path,
     }
 
     for (const std::string& shard_path : shard_paths) {
-        if (!parse_file(shard_path, prefix)) {
+        FileStamp stamp;
+        if (!read_file_stamp(shard_path, stamp)) {
+            return false;
+        }
+        parsed_dependencies_.push_back(stamp);
+        LOG_INFO("load %s using safetensors format", shard_path.c_str());
+        if (!init_from_safetensors_file(shard_path, prefix)) {
             return false;
         }
     }
