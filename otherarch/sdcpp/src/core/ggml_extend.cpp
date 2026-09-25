@@ -465,7 +465,11 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
                               int d1,
                               int d2,
                               bool force_prec_f32,
-                              bool direct) {
+                              bool direct,
+                              float scale) {
+    if (scale != 1.f) {
+        x = ggml_ext_scale(ctx, x, scale);
+    }
     if (direct) {
         int64_t OC = w->ne[3] / IC;
         int64_t N  = x->ne[3] / IC;
@@ -502,6 +506,9 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
         }
     }
 
+    if (scale != 1.f) {
+        x = ggml_ext_scale(ctx, x, 1.f / scale);
+    }
     if (b != nullptr) {
         b = ggml_reshape_4d(ctx, b, 1, 1, 1, b->ne[0]);  // [OC, 1, 1, 1]
         x = ggml_add_inplace(ctx, x, b);
