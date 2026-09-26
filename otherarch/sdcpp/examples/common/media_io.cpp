@@ -275,6 +275,10 @@ uint8_t* decode_webp_image_to_buffer(const uint8_t* data,
     height               = features.height;
     source_channel_count = features.has_alpha ? 4 : 3;
 
+    if (expected_channel == 0) {
+        expected_channel = source_channel_count;
+    }
+
     const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
 
     if (expected_channel == 1) {
@@ -495,7 +499,8 @@ uint8_t* load_image_common(bool from_memory,
                            int& height,
                            int expected_width,
                            int expected_height,
-                           int expected_channel) {
+                           int expected_channel,
+                           int& out_channel) {
     const char* image_path;
     FreeUniquePtr<uint8_t> image_buffer;
     int source_channel_count = 0;
@@ -552,6 +557,32 @@ uint8_t* load_image_common(bool from_memory,
         LOG_ERROR("load image from '%s' failed", image_path);
         return nullptr;
     }
+    if (expected_channel == 0) {
+        expected_channel = source_channel_count == 2 ? 4 : (source_channel_count == 1 ? 3 : source_channel_count);
+        if (expected_channel != source_channel_count) {
+            FreeUniquePtr<uint8_t> promoted((uint8_t*)malloc((size_t)width * height * expected_channel));
+            if (promoted == nullptr) {
+                LOG_ERROR("error: allocate memory for channel promotion, image_path = %s", image_path);
+                return nullptr;
+            }
+            const size_t pixel_count = (size_t)width * (size_t)height;
+            for (size_t i = 0; i < pixel_count; ++i) {
+                if (source_channel_count == 1) {
+                    promoted.get()[i * 3 + 0] = image_buffer.get()[i];
+                    promoted.get()[i * 3 + 1] = image_buffer.get()[i];
+                    promoted.get()[i * 3 + 2] = image_buffer.get()[i];
+                } else {
+                    promoted.get()[i * 4 + 0] = image_buffer.get()[i * 2];
+                    promoted.get()[i * 4 + 1] = image_buffer.get()[i * 2];
+                    promoted.get()[i * 4 + 2] = image_buffer.get()[i * 2];
+                    promoted.get()[i * 4 + 3] = image_buffer.get()[i * 2 + 1];
+                }
+            }
+            image_buffer         = std::move(promoted);
+            source_channel_count = expected_channel;
+        }
+    }
+    // stb reports the source channel count even when it converts the output.
     if (source_channel_count < expected_channel) {
         fprintf(stderr,
                 "the number of channels for the input image must be >= %d,"
@@ -611,7 +642,7 @@ uint8_t* load_image_common(bool from_memory,
         }
         stbir_resize(image_buffer.get(), width, height, 0,
                      resized_image_buffer.get(), expected_width, expected_height, 0, STBIR_TYPE_UINT8,
-                     expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
+                     expected_channel, expected_channel == 4 ? 3 : STBIR_ALPHA_CHANNEL_NONE, 0,
                      STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
                      STBIR_FILTER_BOX, STBIR_FILTER_BOX,
                      STBIR_COLORSPACE_SRGB, nullptr);
@@ -619,6 +650,7 @@ uint8_t* load_image_common(bool from_memory,
         height       = expected_height;
         image_buffer = std::move(resized_image_buffer);
     }
+    out_channel = expected_channel;
     return image_buffer.release();
 }
 
@@ -791,10 +823,11 @@ bool write_image_to_file(const std::string& path,
 uint8_t* load_image_from_file(const char* image_path,
                               int& width,
                               int& height,
+                              int& out_channel,
                               int expected_width,
                               int expected_height,
                               int expected_channel) {
-    return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+    return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel, out_channel);
 }
 
 bool load_sd_image_from_file(sd_image_t* image,
@@ -804,13 +837,14 @@ bool load_sd_image_from_file(sd_image_t* image,
                              int expected_channel) {
     int width;
     int height;
-    image->data = load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+    int resolved_channel = expected_channel;
+    image->data          = load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel, resolved_channel);
     if (image->data == nullptr) {
         return false;
     }
     image->width   = width;
     image->height  = height;
-    image->channel = expected_channel;
+    image->channel = resolved_channel;
     return true;
 }
 
@@ -818,10 +852,11 @@ uint8_t* load_image_from_memory(const char* image_bytes,
                                 int len,
                                 int& width,
                                 int& height,
+                                int& out_channel,
                                 int expected_width,
                                 int expected_height,
                                 int expected_channel) {
-    return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
+    return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel, out_channel);
 }
 
 static void append_avi_metadata(std::vector<uint8_t>& data, const std::string& parameters) {

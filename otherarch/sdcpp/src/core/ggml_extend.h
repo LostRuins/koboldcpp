@@ -153,7 +153,9 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
                               int d0              = 1,
                               int d1              = 1,
                               int d2              = 1,
-                              bool force_prec_f32 = false);
+                              bool force_prec_f32 = false,
+                              bool direct         = false,
+                              float scale         = 1.f);
 
 // w: [OC，IC, KD, 1 * 1]
 // x: [N, IC, ID, IH*IW]
@@ -216,10 +218,12 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
                                     ggml_tensor* k,
                                     ggml_tensor* v,
                                     int64_t n_head,
-                                    ggml_tensor* mask = nullptr,
-                                    bool skip_reshape = false,
-                                    bool flash_attn   = false,
-                                    float kv_scale    = 1.0f);
+                                    ggml_tensor* mask     = nullptr,
+                                    bool skip_reshape     = false,
+                                    bool flash_attn       = false,
+                                    float kv_scale        = 1.0f,
+                                    bool sage_attn        = false,
+                                    bool* used_flash_attn = nullptr);
 
 ggml_tensor* ggml_ext_layer_norm(ggml_context* ctx,
                                  ggml_tensor* x,

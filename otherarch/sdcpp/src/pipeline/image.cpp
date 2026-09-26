@@ -10,6 +10,7 @@
 #include "model/vae/vae.hpp"
 #include "request.h"
 #include "runtime/denoiser.hpp"
+#include "runtime/image_preprocess.h"
 #include "upscaler.h"
 
 namespace sd::pipeline {
@@ -285,7 +286,8 @@ namespace sd::pipeline {
                     vae_width  = request->width;
                     vae_height = request->height;
                 } else {
-                    int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : 1024 * 1024;
+                    int default_pixels = sd->version == VERSION_QWEN_IMAGE_2_1 ? request->width * request->height : 1024 * 1024;
+                    int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : default_pixels;
                     int vae_image_size = std::min(target_pixels, request->width * request->height);
                     vae_width          = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
                     vae_height         = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
@@ -309,6 +311,9 @@ namespace sd::pipeline {
                             resized_ref_img.shape()[0]);
 
                 ref_latent = sd->encode_first_stage(resized_ref_img);
+                if (sd->version == VERSION_QWEN_IMAGE_2_1) {
+                    ref_images[i] = std::move(resized_ref_img);
+                }
             } else {
                 ref_latent = sd->encode_first_stage(ref_images[i]);
             }
@@ -436,8 +441,7 @@ namespace sd::pipeline {
         sd->compute_ip_adapter_tokens(sd_img_gen_params->ip_adapter_image, sd_img_gen_params->ip_adapter_strength);
         int64_t prepare_start_ms         = ggml_time_ms();
         condition_params.zero_out_masked = false;
-        auto cond                        = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                                       condition_params);
+        auto cond                        = sd->get_learned_condition(condition_params);
         if (cond.empty()) {
             LOG_ERROR("failed to encode prompt");
             return std::nullopt;
@@ -471,8 +475,11 @@ namespace sd::pipeline {
                 }
                 condition_params.text            = request->negative_prompt;
                 condition_params.zero_out_masked = zero_out_masked;
-                uncond                           = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                                               condition_params);
+                if (sd_version_is_llada_image(sd->version)) {
+                    // LLaDA-Image CFG keeps the source latent but drops its SigVQ features.
+                    condition_params.ref_images = nullptr;
+                }
+                uncond = sd->get_learned_condition(condition_params);
                 if (uncond.empty()) {
                     LOG_ERROR("failed to encode negative prompt");
                     return std::nullopt;
@@ -500,8 +507,7 @@ namespace sd::pipeline {
                 if (use_ref_latent_img_cfg) {
                     condition_params.ref_images = &empty_ref_images;
                 }
-                img_uncond = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                         condition_params);
+                img_uncond = sd->get_learned_condition(condition_params);
                 if (img_uncond.empty()) {
                     LOG_ERROR("failed to encode image guidance prompt");
                     return std::nullopt;
@@ -781,15 +787,9 @@ namespace sd::pipeline {
             return false;
         }
 
-        // MiniMax-H3 is video-only. Its denoiser always splits the packed latent into a video and an
-        // audio half, and only generate_video ever computes the audio length, so reaching this
-        // function with an H3 checkpoint is guaranteed to die on
-        // GGML_ASSERT(!audio_input_cache.empty()) with a core dump, after the several minutes it
-        // takes to load the weights, and with nothing in the output pointing at the missing --mode.
-        // (The AnimateDiff path below routes vid_gen back through here, but that is SD1.5 plus a
-        // motion module, never H3.)
-        if (sd_version_is_minimax_h3(sd->version)) {
-            LOG_ERROR("MiniMax-H3 is a video model and cannot be run in img_gen mode; use --mode vid_gen");
+        if (!sd_version_supports_image_generation(sd->version)) {
+            LOG_ERROR("%s cannot be run with generate_image(); use generate_video() or --mode vid_gen in the CLI",
+                      model_version_to_str[sd->version]);
             return false;
         }
 
@@ -798,6 +798,12 @@ namespace sd::pipeline {
         int64_t t0            = ggml_time_ms();
         sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
         GenerationRequest request(sd, sd_img_gen_params);
+        sd::ImagePreprocessor preprocessing(sd_img_gen_params->image_preprocess.rules);
+        sd_img_gen_params_t processed_params = *sd_img_gen_params;
+        if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
+            return false;
+        sd_img_gen_params = &processed_params;
+        request.pm_params = processed_params.pm_params;
         LOG_INFO("generate_image %dx%d", request.width, request.height);
 
         sd->rng->manual_seed(request.seed);

@@ -720,15 +720,18 @@ namespace Boogu {
         }
     }
 
-    __STATIC_INLINE__ std::vector<float> gen_boogu_pe(int h,
-                                                      int w,
-                                                      int patch_size,
-                                                      int bs,
-                                                      int context_len,
-                                                      const std::vector<ggml_tensor*>& ref_latents,
-                                                      int theta,
-                                                      const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids;
+    __STATIC_INLINE__ Rope::Embedding gen_boogu_pe(int h,
+                                                   int w,
+                                                   int patch_size,
+                                                   int bs,
+                                                   int context_len,
+                                                   const std::vector<ggml_tensor*>& ref_latents,
+                                                   int theta,
+                                                   const std::vector<int>& axes_dim) {
+        Rope::Embedding result;
+        result.batch_size = bs;
+        result.positions.append_tokens(context_len);
+        auto& ids = result.ids;
         ids.reserve(static_cast<size_t>(bs) * context_len);
         for (int b = 0; b < bs; b++) {
             for (int i = 0; i < context_len; i++) {
@@ -741,15 +744,18 @@ namespace Boogu {
         for (ggml_tensor* ref : ref_latents) {
             int ref_h_tokens = patched_token_count(ref->ne[1], patch_size);
             int ref_w_tokens = patched_token_count(ref->ne[0], patch_size);
+            result.positions.append_image(ref_h_tokens, ref_w_tokens);
             append_spatial_ids(ids, bs, pe_shift, ref_h_tokens, ref_w_tokens);
             pe_shift += std::max(ref_h_tokens, ref_w_tokens);
         }
 
         int h_tokens = patched_token_count(h, patch_size);
         int w_tokens = patched_token_count(w, patch_size);
+        result.positions.append_image(h_tokens, w_tokens);
         append_spatial_ids(ids, bs, pe_shift, h_tokens, w_tokens);
 
-        return Rope::embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
+        result.values = Rope::embed_nd(ids, bs, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
     }
 
     struct BooguImageRunner : public DiffusionModelRunner {
@@ -793,14 +799,14 @@ namespace Boogu {
                 ref_latents.push_back(make_input(ref_latent_tensor));
             }
 
-            pe_vec      = gen_boogu_pe(static_cast<int>(x->ne[1]),
-                                       static_cast<int>(x->ne[0]),
-                                       config.patch_size,
-                                       static_cast<int>(x->ne[3]),
-                                       static_cast<int>(context->ne[1]),
-                                       ref_latents,
-                                       config.theta,
-                                       config.axes_dim);
+            pe_vec      = finish_rope_pe(gen_boogu_pe(static_cast<int>(x->ne[1]),
+                                                      static_cast<int>(x->ne[0]),
+                                                      config.patch_size,
+                                                      static_cast<int>(x->ne[3]),
+                                                      static_cast<int>(context->ne[1]),
+                                                      ref_latents,
+                                                      config.theta,
+                                                      config.axes_dim));
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
             set_backend_tensor_data(pe, pe_vec.data());

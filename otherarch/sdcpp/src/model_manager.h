@@ -2,6 +2,7 @@
 #define __MODEL_MANAGER_H__
 
 #include <cstdint>
+#include <list>
 #include <map>
 #include <memory>
 #include <set>
@@ -84,9 +85,15 @@ private:
         size_t resident_bytes          = 0;
     };
 
+    struct ResolvedTensorStates {
+        std::vector<ggml_tensor*> tensors;
+        std::vector<TensorState*> states;
+    };
+
     ModelLoader model_loader_;
     std::vector<std::unique_ptr<TensorState>> tensor_states_;
     std::map<const ggml_tensor*, TensorState*> tensor_states_by_tensor_;
+    mutable std::list<ResolvedTensorStates> resolved_tensor_states_;
     std::vector<std::unique_ptr<ParamsStorageBlock>> params_storage_blocks_;
     std::vector<std::unique_ptr<ComputeStagingBlock>> compute_staging_blocks_;
     std::map<ggml_backend_t, ggml_backend_buffer_type_t> split_buffer_types_;
@@ -150,7 +157,8 @@ private:
         }
     };
     CapacityCheck check_capacity(const DeviceMemoryRequest& request,
-                                 const std::vector<TensorState*>& states) const;
+                                 const std::vector<TensorState*>& states,
+                                 bool log_details = false) const;
 
     ggml_backend_buffer_type_t params_buffer_type_for(const TensorState& state) const;
     ggml_backend_buffer_type_t split_buffer_type_for(const TensorState& state) const;

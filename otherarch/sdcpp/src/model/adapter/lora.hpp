@@ -67,7 +67,7 @@ struct LoraModel : public GGMLRunner {
         std::map<std::string, ggml_tensor*> scalars;
         std::set<std::string> scalar_names;
         for (const auto& [name, source] : sources) {
-            if (is_unused_tensor(name) || (filter && !filter(name)))
+            if (filter && !filter(name))
                 continue;
             const bool scalar  = source.nelements() == 1 && (ends_with(name, ".alpha") || ends_with(name, ".scale"));
             auto* tensor       = ggml_new_tensor(params_ctx, scalar ? GGML_TYPE_F32 : source.type, source.n_dims, source.ne);
@@ -163,6 +163,27 @@ struct LoraModel : public GGMLRunner {
 
             lora_tensors = std::move(new_lora_tensors);
         }
+
+        std::unordered_map<std::string, ggml_tensor*> new_lora_tensors;
+        for (const auto& [old_name, tensor] : lora_tensors) {
+            std::string new_name = old_name;
+            if (starts_with(old_name, "lora.model.diffusion_model.transformer_blocks.")) {
+                // Qwen Image 2.1 stores the gate before the projection in fused MLP weights.
+                for (const auto& suffix : {std::string(".img_mlp.gate_layer.weight."), std::string(".img_mlp.proj.weight.")}) {
+                    size_t pos = old_name.find(suffix);
+                    if (pos == std::string::npos) {
+                        continue;
+                    }
+                    std::string fused_name = old_name.substr(5, pos - 5) + ".img_mlp.gate_up.weight";
+                    if (model_tensor_names.find(fused_name) != model_tensor_names.end()) {
+                        new_name = "lora." + fused_name + (suffix == ".img_mlp.proj.weight." ? ".1." : ".") + old_name.substr(pos + suffix.size());
+                    }
+                    break;
+                }
+            }
+            new_lora_tensors[new_name] = tensor;
+        }
+        lora_tensors = std::move(new_lora_tensors);
     }
 
     ggml_tensor* get_lora_weight_diff(const std::string& model_tensor_name, ggml_context* ctx, ggml_backend_t backend) {

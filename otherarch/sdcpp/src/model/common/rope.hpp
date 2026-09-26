@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <set>
+#include <utility>
 #include <vector>
 #include "core/ggml_extend.h"
 #include "core/ggml_runner.h"
@@ -14,6 +15,45 @@ namespace Rope {
     enum class EmbedNDLayout {
         Matrix,
         ErnieImage,
+    };
+
+    struct SpatialRegion {
+        size_t begin;
+        size_t count;
+        float height_period;
+        float width_period;
+        int height_axis = 1;
+        int width_axis  = 2;
+    };
+
+    struct PositionLayout {
+        // Token ranges are relative to one batch item.
+        std::vector<SpatialRegion> images;
+        size_t token_count = 0;
+
+        void append_tokens(size_t count) {
+            token_count += count;
+        }
+
+        void append_image(int height, int width, int frames = 1, float height_step = 1.f, float width_step = 1.f) {
+            size_t count = static_cast<size_t>(height) * width * frames;
+            images.push_back({token_count, count, height * height_step, width * width_step});
+            append_tokens(count);
+        }
+    };
+
+    struct Frequency {
+        size_t axis;
+        float omega;
+    };
+
+    struct Embedding {
+        std::vector<float> values;
+        std::vector<std::vector<float>> ids;
+        PositionLayout positions;
+        std::vector<Frequency> frequencies;
+        EmbedNDLayout layout = EmbedNDLayout::Matrix;
+        int batch_size       = 1;
     };
 
     enum class RefIndexMode {
@@ -56,40 +96,25 @@ namespace Rope {
         return flat_vec;
     }
 
-    __STATIC_INLINE__ std::vector<std::vector<float>> rope(const std::vector<float>& pos,
-                                                           int dim,
-                                                           float theta,
-                                                           const std::vector<int>& axis_wrap_dims = {}) {
+    __STATIC_INLINE__ std::vector<float> rope_frequencies(int dim, float theta) {
         assert(dim % 2 == 0);
-        int half_dim = dim / 2;
-
+        int half_dim             = dim / 2;
         std::vector<float> scale = linspace(0.f, (dim * 1.f - 2) / dim, half_dim);
-
         std::vector<float> omega(half_dim);
         for (int i = 0; i < half_dim; ++i) {
             omega[i] = 1.0f / ::powf(1.f * theta, scale[i]);
         }
+        return omega;
+    }
 
+    __STATIC_INLINE__ std::vector<std::vector<float>> rope(const std::vector<float>& pos,
+                                                           const std::vector<float>& omega) {
+        int half_dim    = static_cast<int>(omega.size());
         size_t pos_size = pos.size();
         std::vector<std::vector<float>> out(pos_size, std::vector<float>(half_dim));
         for (size_t i = 0; i < pos_size; ++i) {
             for (size_t j = 0; j < half_dim; ++j) {
                 float angle = pos[i] * omega[j];
-                if (!axis_wrap_dims.empty()) {
-                    size_t wrap_size = axis_wrap_dims.size();
-                    // mod batch size since we only store this for one item in the batch
-                    size_t wrap_idx = wrap_size > 0 ? (i % wrap_size) : 0;
-                    int wrap_dim    = axis_wrap_dims[wrap_idx];
-                    if (wrap_dim > 0) {
-                        constexpr float TWO_PI = 6.28318530717958647692f;
-                        float cycles           = omega[j] * wrap_dim / TWO_PI;
-                        // closest periodic harmonic, necessary to ensure things neatly tile
-                        // without this round, things don't tile at the boundaries and you end up
-                        // with the model knowing what is "center"
-                        float rounded = std::round(cycles);
-                        angle         = pos[i] * TWO_PI * rounded / wrap_dim;
-                    }
-                }
 
                 out[i][j] = angle;
             }
@@ -106,6 +131,12 @@ namespace Rope {
         }
 
         return result;
+    }
+
+    __STATIC_INLINE__ std::vector<std::vector<float>> rope(const std::vector<float>& pos,
+                                                           int dim,
+                                                           float theta) {
+        return rope(pos, rope_frequencies(dim, theta));
     }
 
     // Generate IDs for image patches and text
@@ -136,12 +167,16 @@ namespace Rope {
                                                                        int patch_size,
                                                                        int bs,
                                                                        int axes_dim_num,
-                                                                       int index       = 0,
-                                                                       int h_offset    = 0,
-                                                                       int w_offset    = 0,
-                                                                       bool scale_rope = false) {
+                                                                       int index              = 0,
+                                                                       int h_offset           = 0,
+                                                                       int w_offset           = 0,
+                                                                       bool scale_rope        = false,
+                                                                       PositionLayout* layout = nullptr) {
         int h_len = (h + (patch_size / 2)) / patch_size;
         int w_len = (w + (patch_size / 2)) / patch_size;
+        if (layout) {
+            layout->append_image(h_len, w_len);
+        }
         std::vector<std::vector<float>> img_ids(h_len * w_len, std::vector<float>(axes_dim_num, 0.0));
 
         int h_start = h_offset;
@@ -192,8 +227,8 @@ namespace Rope {
                                                   int bs,
                                                   const std::vector<float>& axis_thetas,
                                                   const std::vector<int>& axes_dim,
-                                                  const std::vector<std::vector<int>>& wrap_dims = {},
-                                                  EmbedNDLayout layout                           = EmbedNDLayout::Matrix) {
+                                                  EmbedNDLayout layout                = EmbedNDLayout::Matrix,
+                                                  std::vector<Frequency>* frequencies = nullptr) {
         std::vector<std::vector<float>> trans_ids = transpose(ids);
         size_t pos_len                            = ids.size() / bs;
         size_t num_axes                           = axes_dim.size();
@@ -205,19 +240,25 @@ namespace Rope {
         for (int d : axes_dim)
             emb_dim += d / 2;
 
+        if (frequencies) {
+            frequencies->clear();
+            frequencies->reserve(emb_dim);
+        }
         std::vector<std::vector<float>> emb(bs * pos_len, std::vector<float>(emb_dim * 2 * 2, 0.0));
         size_t offset = 0;
         for (size_t i = 0; i < num_axes; ++i) {
-            std::vector<int> axis_wrap_dims;
-            if (!wrap_dims.empty() && i < (int)wrap_dims.size()) {
-                axis_wrap_dims = wrap_dims[i];
-            }
             float axis_theta = 10000.0f;
             if (!axis_thetas.empty()) {
                 axis_theta = axis_thetas[std::min(i, axis_thetas.size() - 1)];
             }
+            auto omega = rope_frequencies(axes_dim[i], axis_theta);
+            if (frequencies) {
+                for (float frequency : omega) {
+                    frequencies->push_back({i, frequency});
+                }
+            }
             std::vector<std::vector<float>> rope_emb =
-                rope(trans_ids[i], axes_dim[i], axis_theta, axis_wrap_dims);  // [bs*pos_len, axes_dim[i]/2 * 2 * 2]
+                rope(trans_ids[i], omega);  // [bs*pos_len, axes_dim[i]/2 * 2 * 2]
             for (int b = 0; b < bs; ++b) {
                 for (int j = 0; j < pos_len; ++j) {
                     for (int k = 0; k < rope_emb[0].size(); ++k) {
@@ -253,10 +294,10 @@ namespace Rope {
                                                   int bs,
                                                   float theta,
                                                   const std::vector<int>& axes_dim,
-                                                  const std::vector<std::vector<int>>& wrap_dims = {},
-                                                  EmbedNDLayout layout                           = EmbedNDLayout::Matrix) {
+                                                  EmbedNDLayout layout                = EmbedNDLayout::Matrix,
+                                                  std::vector<Frequency>* frequencies = nullptr) {
         std::vector<float> axis_thetas(axes_dim.size(), theta);
-        return embed_nd(ids, bs, axis_thetas, axes_dim, wrap_dims, layout);
+        return embed_nd(ids, bs, axis_thetas, axes_dim, layout, frequencies);
     }
 
     __STATIC_INLINE__ std::vector<float> embed_interleaved_mrope(const std::vector<std::vector<float>>& ids,
@@ -264,7 +305,7 @@ namespace Rope {
                                                                  float theta,
                                                                  int head_dim,
                                                                  const std::vector<int>& mrope_section,
-                                                                 const std::vector<std::vector<int>>& axis_wrap_dims = {}) {
+                                                                 std::vector<Frequency>* frequencies = nullptr) {
         GGML_ASSERT(bs > 0);
         GGML_ASSERT(head_dim % 2 == 0);
         GGML_ASSERT(mrope_section.size() >= 3);
@@ -273,20 +314,26 @@ namespace Rope {
         size_t pos_len                            = ids.size() / bs;
         int half_dim                              = head_dim / 2;
 
+        auto omega = rope_frequencies(head_dim, theta);
+        if (frequencies) {
+            frequencies->clear();
+            for (float frequency : omega) {
+                frequencies->push_back({0, frequency});
+            }
+        }
         std::vector<std::vector<std::vector<float>>> axis_embs;
         axis_embs.reserve(3);
         for (int axis = 0; axis < 3; ++axis) {
-            std::vector<int> axis_wrap;
-            if (axis < static_cast<int>(axis_wrap_dims.size())) {
-                axis_wrap = axis_wrap_dims[axis];
-            }
-            axis_embs.push_back(rope(trans_ids[axis], head_dim, theta, axis_wrap));
+            axis_embs.push_back(rope(trans_ids[axis], omega));
         }
 
         std::vector<std::vector<float>> emb = axis_embs[0];
         for (int axis = 1; axis < 3; ++axis) {
             int length = std::min<int>(mrope_section[axis] * 3, half_dim);
             for (int freq_idx = axis; freq_idx < length; freq_idx += 3) {
+                if (frequencies) {
+                    (*frequencies)[freq_idx].axis = axis;
+                }
                 for (size_t pos_idx = 0; pos_idx < bs * pos_len; ++pos_idx) {
                     for (int k = 0; k < 4; ++k) {
                         emb[pos_idx][4 * freq_idx + k] = axis_embs[axis][pos_idx][4 * freq_idx + k];
@@ -298,13 +345,13 @@ namespace Rope {
         return flatten(emb);
     }
 
-    __STATIC_INLINE__ std::vector<float> embed_2d_interleaved(int height,
-                                                              int width,
-                                                              int dim,
-                                                              float theta    = 10000.f,
-                                                              float scale    = 16.f,
-                                                              int ref_grid_h = 0,
-                                                              int ref_grid_w = 0) {
+    __STATIC_INLINE__ Embedding embed_2d_interleaved(int height,
+                                                     int width,
+                                                     int dim,
+                                                     float theta    = 10000.f,
+                                                     float scale    = 16.f,
+                                                     int ref_grid_h = 0,
+                                                     int ref_grid_w = 0) {
         assert(dim % 4 == 0);
         int half_dim      = dim / 2;
         int dim_axis      = dim / 2;
@@ -318,6 +365,10 @@ namespace Rope {
             w_ntk       = std::pow(static_cast<float>(width) / static_cast<float>(ref_grid_w), power);
         }
 
+        Embedding result;
+        result.positions.append_image(height, width, 1,
+                                      height > 1 ? scale / (height - 1) : 1.f,
+                                      width > 1 ? scale / (width - 1) : 1.f);
         std::vector<float> x_pos;
         std::vector<float> y_pos;
         x_pos.reserve(static_cast<size_t>(height) * width);
@@ -326,13 +377,20 @@ namespace Rope {
             float y = height == 1 ? 0.f : scale * static_cast<float>(iy) / static_cast<float>(height - 1);
             for (int ix = 0; ix < width; ++ix) {
                 float x = width == 1 ? 0.f : scale * static_cast<float>(ix) / static_cast<float>(width - 1);
+                result.ids.push_back({0.f, y, x});
                 x_pos.push_back(x);
                 y_pos.push_back(y);
             }
         }
 
-        auto x_emb = rope(x_pos, dim_axis, theta * w_ntk);
-        auto y_emb = rope(y_pos, dim_axis, theta * h_ntk);
+        auto x_freq = rope_frequencies(dim_axis, theta * w_ntk);
+        auto y_freq = rope_frequencies(dim_axis, theta * h_ntk);
+        auto x_emb  = rope(x_pos, x_freq);
+        auto y_emb  = rope(y_pos, y_freq);
+        for (int i = 0; i < axis_half_dim; ++i) {
+            result.frequencies.push_back({2, x_freq[i]});
+            result.frequencies.push_back({1, y_freq[i]});
+        }
 
         std::vector<float> out(static_cast<size_t>(height) * width * half_dim * 4);
         for (int pos = 0; pos < height * width; ++pos) {
@@ -348,7 +406,8 @@ namespace Rope {
                 }
             }
         }
-        return out;
+        result.values = std::move(out);
+        return result;
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_refs_ids(int patch_size,
@@ -359,7 +418,8 @@ namespace Rope {
                                                                    RefIndexMode ref_index_mode,
                                                                    float ref_index_scale,
                                                                    bool scale_rope,
-                                                                   int base_offset = 0) {
+                                                                   int base_offset        = 0,
+                                                                   PositionLayout* layout = nullptr) {
         std::vector<std::vector<float>> ids;
         int curr_h_offset = 0;
         int curr_w_offset = 0;
@@ -386,7 +446,8 @@ namespace Rope {
                                             static_cast<int>(index * ref_index_scale),
                                             h_offset + base_offset,
                                             w_offset + base_offset,
-                                            scale_rope);
+                                            scale_rope,
+                                            layout);
             ids          = concat_ids(ids, ref_ids, bs);
 
             if (ref_index_mode == RefIndexMode::INCREASE) {
@@ -409,88 +470,53 @@ namespace Rope {
                                                                    const std::vector<ggml_tensor*>& ref_latents,
                                                                    RefIndexMode ref_index_mode,
                                                                    float ref_index_scale,
-                                                                   bool is_longcat) {
+                                                                   bool is_longcat,
+                                                                   PositionLayout* layout = nullptr) {
+        if (layout) {
+            layout->append_tokens(context_len);
+        }
         int x_index = is_longcat ? 1 : 0;
 
         auto txt_ids = is_longcat ? gen_longcat_txt_ids(bs, context_len, axes_dim_num) : gen_flux_txt_ids(bs, context_len, axes_dim_num, txt_arange_dims);
         int offset   = is_longcat ? context_len : 0;
-        auto img_ids = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, x_index, offset, offset);
+        auto img_ids = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, x_index, offset, offset, false, layout);
 
         auto ids = concat_ids(txt_ids, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, x_index + 1, ref_latents, ref_index_mode, ref_index_scale, false, offset);
+            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, x_index + 1, ref_latents, ref_index_mode, ref_index_scale, false, offset, layout);
             ids           = concat_ids(ids, refs_ids, bs);
         }
         return ids;
     }
 
     // Generate flux positional embeddings
-    __STATIC_INLINE__ std::vector<float> gen_flux_pe(int h,
-                                                     int w,
-                                                     int patch_size,
-                                                     int bs,
-                                                     int context_len,
-                                                     std::set<int> txt_arange_dims,
-                                                     const std::vector<ggml_tensor*>& ref_latents,
-                                                     RefIndexMode ref_index_mode,
-                                                     float ref_index_scale,
-                                                     int theta,
-                                                     bool circular_h,
-                                                     bool circular_w,
-                                                     const std::vector<int>& axes_dim,
-                                                     bool is_longcat) {
-        std::vector<std::vector<float>> ids = gen_flux_ids(h,
-                                                           w,
-                                                           patch_size,
-                                                           bs,
-                                                           static_cast<int>(axes_dim.size()),
-                                                           context_len,
-                                                           txt_arange_dims,
-                                                           ref_latents,
-                                                           ref_index_mode,
-                                                           ref_index_scale,
-                                                           is_longcat);
-        std::vector<std::vector<int>> wrap_dims;
-        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
-            int h_len = (h + (patch_size / 2)) / patch_size;
-            int w_len = (w + (patch_size / 2)) / patch_size;
-            if (h_len > 0 && w_len > 0) {
-                size_t pos_len = ids.size() / bs;
-                wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
-                size_t cursor           = context_len;  // text first
-                const size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
-                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
-                    if (circular_h) {
-                        wrap_dims[1][cursor + token_i] = h_len;
-                    }
-                    if (circular_w) {
-                        wrap_dims[2][cursor + token_i] = w_len;
-                    }
-                }
-                cursor += img_tokens;
-                // reference latents
-                for (ggml_tensor* ref : ref_latents) {
-                    if (ref == nullptr) {
-                        continue;
-                    }
-                    int ref_h         = static_cast<int>(ref->ne[1]);
-                    int ref_w         = static_cast<int>(ref->ne[0]);
-                    int ref_h_l       = (ref_h + (patch_size / 2)) / patch_size;
-                    int ref_w_l       = (ref_w + (patch_size / 2)) / patch_size;
-                    size_t ref_tokens = static_cast<size_t>(ref_h_l) * static_cast<size_t>(ref_w_l);
-                    for (size_t token_i = 0; token_i < ref_tokens; ++token_i) {
-                        if (circular_h) {
-                            wrap_dims[1][cursor + token_i] = ref_h_l;
-                        }
-                        if (circular_w) {
-                            wrap_dims[2][cursor + token_i] = ref_w_l;
-                        }
-                    }
-                    cursor += ref_tokens;
-                }
-            }
-        }
-        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
+    __STATIC_INLINE__ Embedding gen_flux_pe(int h,
+                                            int w,
+                                            int patch_size,
+                                            int bs,
+                                            int context_len,
+                                            std::set<int> txt_arange_dims,
+                                            const std::vector<ggml_tensor*>& ref_latents,
+                                            RefIndexMode ref_index_mode,
+                                            float ref_index_scale,
+                                            int theta,
+                                            const std::vector<int>& axes_dim,
+                                            bool is_longcat) {
+        Embedding result;
+        result.batch_size = bs;
+        result.ids        = gen_flux_ids(h,
+                                         w,
+                                         patch_size,
+                                         bs,
+                                         static_cast<int>(axes_dim.size()),
+                                         context_len,
+                                         txt_arange_dims,
+                                         ref_latents,
+                                         ref_index_mode,
+                                         ref_index_scale,
+                                         is_longcat, &result.positions);
+        result.values     = embed_nd(result.ids, bs, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_vid_ids(int t,
@@ -500,14 +526,18 @@ namespace Rope {
                                                                   int ph,
                                                                   int pw,
                                                                   int bs,
-                                                                  int t_offset    = 0,
-                                                                  int h_offset    = 0,
-                                                                  int w_offset    = 0,
-                                                                  bool scale_rope = false) {
+                                                                  int t_offset           = 0,
+                                                                  int h_offset           = 0,
+                                                                  int w_offset           = 0,
+                                                                  bool scale_rope        = false,
+                                                                  PositionLayout* layout = nullptr) {
         int t_len = (t + (pt / 2)) / pt;
         int h_len = (h + (ph / 2)) / ph;
         int w_len = (w + (pw / 2)) / pw;
 
+        if (layout) {
+            layout->append_image(h_len, w_len, t_len);
+        }
         std::vector<std::vector<float>> vid_ids(t_len * h_len * w_len, std::vector<float>(3, 0.0));
 
         if (scale_rope) {
@@ -573,7 +603,11 @@ namespace Rope {
                                                                          int bs,
                                                                          int context_len,
                                                                          const std::vector<ggml_tensor*>& ref_latents,
-                                                                         RefIndexMode ref_index_mode) {
+                                                                         RefIndexMode ref_index_mode,
+                                                                         PositionLayout* layout = nullptr) {
+        if (layout) {
+            layout->append_tokens(context_len);
+        }
         int h_len        = (h + (patch_size / 2)) / patch_size;
         int w_len        = (w + (patch_size / 2)) / patch_size;
         int txt_id_start = std::max(h_len, w_len) / 2;
@@ -585,90 +619,49 @@ namespace Rope {
             }
         }
         int axes_dim_num = 3;
-        auto img_ids     = gen_vid_ids(t, h, w, 1, patch_size, patch_size, bs, 0, 0, 0, true);
+        auto img_ids     = gen_vid_ids(t, h, w, 1, patch_size, patch_size, bs, 0, 0, 0, true, layout);
         auto ids         = concat_ids(txt_ids_repeated, img_ids, bs);
         if (ref_latents.size() > 0) {
             int ref_start_index = ref_index_mode == RefIndexMode::DECREASE ? 0 : 1;
-            auto refs_ids       = gen_refs_ids(patch_size, bs, axes_dim_num, ref_start_index, ref_latents, ref_index_mode, 1.f, true);
+            auto refs_ids       = gen_refs_ids(patch_size, bs, axes_dim_num, ref_start_index, ref_latents, ref_index_mode, 1.f, true, 0, layout);
             ids                 = concat_ids(ids, refs_ids, bs);
         }
         return ids;
     }
 
     // Generate qwen_image positional embeddings
-    __STATIC_INLINE__ std::vector<float> gen_qwen_image_pe(int t,
-                                                           int h,
-                                                           int w,
-                                                           int patch_size,
-                                                           int bs,
-                                                           int context_len,
-                                                           const std::vector<ggml_tensor*>& ref_latents,
-                                                           RefIndexMode ref_index_mode,
-                                                           int theta,
-                                                           bool circular_h,
-                                                           bool circular_w,
-                                                           const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_qwen_image_ids(t, h, w, patch_size, bs, context_len, ref_latents, ref_index_mode);
-        std::vector<std::vector<int>> wrap_dims;
-        // This logic simply stores the (pad and patch_adjusted) sizes of images so we can make sure rope correctly tiles
-        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
-            int pad_h = (patch_size - (h % patch_size)) % patch_size;
-            int pad_w = (patch_size - (w % patch_size)) % patch_size;
-            int h_len = (h + pad_h) / patch_size;
-            int w_len = (w + pad_w) / patch_size;
-            if (h_len > 0 && w_len > 0) {
-                const size_t total_tokens = ids.size();
-                // Track per-token wrap lengths for the row/column axes so only spatial tokens become periodic.
-                wrap_dims.assign(axes_dim.size(), std::vector<int>(total_tokens / bs, 0));
-                size_t cursor           = context_len;  // ignore text tokens
-                const size_t img_tokens = static_cast<size_t>(t) * static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
-                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
-                    if (circular_h) {
-                        wrap_dims[1][cursor + token_i] = h_len;
-                    }
-                    if (circular_w) {
-                        wrap_dims[2][cursor + token_i] = w_len;
-                    }
-                }
-                cursor += img_tokens;
-                // For each reference image, store wrap sizes as well
-                for (ggml_tensor* ref : ref_latents) {
-                    if (ref == nullptr) {
-                        continue;
-                    }
-                    int ref_h           = static_cast<int>(ref->ne[1]);
-                    int ref_w           = static_cast<int>(ref->ne[0]);
-                    int ref_pad_h       = (patch_size - (ref_h % patch_size)) % patch_size;
-                    int ref_pad_w       = (patch_size - (ref_w % patch_size)) % patch_size;
-                    int ref_h_len       = (ref_h + ref_pad_h) / patch_size;
-                    int ref_w_len       = (ref_w + ref_pad_w) / patch_size;
-                    size_t ref_n_tokens = static_cast<size_t>(ref_h_len) * static_cast<size_t>(ref_w_len);
-                    for (size_t token_i = 0; token_i < ref_n_tokens; ++token_i) {
-                        if (circular_h) {
-                            wrap_dims[1][cursor + token_i] = ref_h_len;
-                        }
-                        if (circular_w) {
-                            wrap_dims[2][cursor + token_i] = ref_w_len;
-                        }
-                    }
-                    cursor += ref_n_tokens;
-                }
-            }
-        }
-        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
+    __STATIC_INLINE__ Embedding gen_qwen_image_pe(int t,
+                                                  int h,
+                                                  int w,
+                                                  int patch_size,
+                                                  int bs,
+                                                  int context_len,
+                                                  const std::vector<ggml_tensor*>& ref_latents,
+                                                  RefIndexMode ref_index_mode,
+                                                  int theta,
+                                                  const std::vector<int>& axes_dim) {
+        Embedding result;
+        result.batch_size = bs;
+        result.ids        = gen_qwen_image_ids(t, h, w, patch_size, bs, context_len, ref_latents, ref_index_mode, &result.positions);
+        result.values     = embed_nd(result.ids, bs, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
     }
 
-    __STATIC_INLINE__ std::vector<float> gen_mage_flow_pe(int h,
-                                                          int w,
-                                                          int bs,
-                                                          int context_len,
-                                                          const std::vector<ggml_tensor*>& ref_latents,
-                                                          int theta,
-                                                          const std::vector<int>& axes_dim) {
+    __STATIC_INLINE__ Embedding gen_mage_flow_pe(int h,
+                                                 int w,
+                                                 int bs,
+                                                 int context_len,
+                                                 const std::vector<ggml_tensor*>& ref_latents,
+                                                 int theta,
+                                                 const std::vector<int>& axes_dim) {
+        Embedding result;
+        result.batch_size = bs;
+        result.positions.append_tokens(context_len);
         const int axes_dim_num = static_cast<int>(axes_dim.size());
-        auto make_image_ids    = [=](int image_h, int image_w, int image_index) {
+        auto make_image_ids    = [=, &result](int image_h, int image_w, int image_index) {
             std::vector<std::vector<float>> image_ids(static_cast<size_t>(bs) * image_h * image_w,
                                                          std::vector<float>(axes_dim_num, 0.f));
+            result.positions.append_image(image_h, image_w);
             int h_start = -(image_h - image_h / 2);
             int w_start = -(image_w - image_w / 2);
             for (int b = 0; b < bs; ++b) {
@@ -692,15 +685,18 @@ namespace Rope {
                                           static_cast<int>(i + 1));
             ids          = concat_ids(ids, ref_ids, bs);
         }
-        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
+        result.ids    = std::move(ids);
+        result.values = embed_nd(result.ids, bs, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_lens_ids(int h,
                                                                    int w,
                                                                    int bs,
                                                                    int context_len,
-                                                                   bool scale_rope = true) {
-        auto img_ids_repeated = gen_flux_img_ids(h, w, 1, bs, 3, 0, 0, 0, scale_rope);
+                                                                   bool scale_rope        = true,
+                                                                   PositionLayout* layout = nullptr) {
+        auto img_ids_repeated = gen_flux_img_ids(h, w, 1, bs, 3, 0, 0, 0, scale_rope, layout);
 
         int txt_id_start = scale_rope ? std::max(h / 2, w / 2) : 0;
         auto txt_ids     = linspace<float>(1.f * txt_id_start, 1.f * context_len + txt_id_start, context_len);
@@ -711,44 +707,37 @@ namespace Rope {
             }
         }
 
+        if (layout) {
+            layout->append_tokens(context_len);
+        }
         return concat_ids(img_ids_repeated, txt_ids_repeated, bs);
     }
 
-    __STATIC_INLINE__ std::vector<float> gen_lens_pe(int h,
-                                                     int w,
-                                                     int bs,
-                                                     int context_len,
-                                                     int theta,
-                                                     bool circular_h,
-                                                     bool circular_w,
-                                                     const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_lens_ids(h, w, bs, context_len, true);
-        std::vector<std::vector<int>> wrap_dims;
-        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
-            size_t pos_len = ids.size() / bs;
-            wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
-            const size_t img_tokens = static_cast<size_t>(h) * static_cast<size_t>(w);
-            for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
-                if (circular_h) {
-                    wrap_dims[1][token_i] = h;
-                }
-                if (circular_w) {
-                    wrap_dims[2][token_i] = w;
-                }
-            }
-        }
-
-        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
+    __STATIC_INLINE__ Embedding gen_lens_pe(int h,
+                                            int w,
+                                            int bs,
+                                            int context_len,
+                                            int theta,
+                                            const std::vector<int>& axes_dim) {
+        Embedding result;
+        result.batch_size = bs;
+        result.ids        = gen_lens_ids(h, w, bs, context_len, true, &result.positions);
+        result.values     = embed_nd(result.ids, bs, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_ernie_image_ids(int h,
                                                                           int w,
                                                                           int patch_size,
                                                                           int bs,
-                                                                          int context_len) {
+                                                                          int context_len,
+                                                                          PositionLayout* layout = nullptr) {
         int h_len = h / patch_size;
         int w_len = w / patch_size;
 
+        if (layout) {
+            layout->append_image(h_len, w_len);
+        }
         std::vector<std::vector<float>> img_ids(h_len * w_len, std::vector<float>(3, 0.0f));
         std::vector<float> h_ids = linspace<float>(0.f, static_cast<float>(h_len - 1), h_len);
         std::vector<float> w_ids = linspace<float>(0.f, static_cast<float>(w_len - 1), w_len);
@@ -774,39 +763,25 @@ namespace Rope {
             }
         }
 
+        if (layout) {
+            layout->append_tokens(context_len);
+        }
         return concat_ids(img_ids_repeated, txt_ids, bs);
     }
 
-    __STATIC_INLINE__ std::vector<float> gen_ernie_image_pe(int h,
-                                                            int w,
-                                                            int patch_size,
-                                                            int bs,
-                                                            int context_len,
-                                                            int theta,
-                                                            bool circular_h,
-                                                            bool circular_w,
-                                                            const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_ernie_image_ids(h, w, patch_size, bs, context_len);
-        std::vector<std::vector<int>> wrap_dims;
-        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
-            int h_len = h / patch_size;
-            int w_len = w / patch_size;
-            if (h_len > 0 && w_len > 0) {
-                size_t pos_len = ids.size() / bs;
-                wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
-                const size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
-                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
-                    if (circular_h) {
-                        wrap_dims[1][token_i] = h_len;
-                    }
-                    if (circular_w) {
-                        wrap_dims[2][token_i] = w_len;
-                    }
-                }
-            }
-        }
-
-        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims, EmbedNDLayout::ErnieImage);
+    __STATIC_INLINE__ Embedding gen_ernie_image_pe(int h,
+                                                   int w,
+                                                   int patch_size,
+                                                   int bs,
+                                                   int context_len,
+                                                   int theta,
+                                                   const std::vector<int>& axes_dim) {
+        Embedding result;
+        result.batch_size = bs;
+        result.layout     = EmbedNDLayout::ErnieImage;
+        result.ids        = gen_ernie_image_ids(h, w, patch_size, bs, context_len, &result.positions);
+        result.values     = embed_nd(result.ids, bs, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
     }
 
     // Generate wan positional embeddings
@@ -905,7 +880,8 @@ namespace Rope {
                                                                       int context_len,
                                                                       int seq_multi_of,
                                                                       const std::vector<ggml_tensor*>& ref_latents,
-                                                                      RefIndexMode ref_index_mode) {
+                                                                      RefIndexMode ref_index_mode,
+                                                                      PositionLayout* layout = nullptr) {
         SD_UNUSED(ref_index_mode);
         int padded_context_len = context_len + bound_mod(context_len, seq_multi_of);
         auto txt_ids           = std::vector<std::vector<float>>(bs * padded_context_len, std::vector<float>(3, 0.0f));
@@ -913,11 +889,17 @@ namespace Rope {
             txt_ids[i][0] = (i % padded_context_len) + 1.f;
         }
 
+        if (layout) {
+            layout->append_tokens(padded_context_len);
+        }
         int axes_dim_num = 3;
         int index        = padded_context_len + 1;
-        auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, index);
+        auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, index, 0, 0, false, layout);
 
         int img_pad_len = bound_mod(static_cast<int>(img_ids.size() / bs), seq_multi_of);
+        if (layout) {
+            layout->append_tokens(img_pad_len);
+        }
         if (img_pad_len > 0) {
             std::vector<std::vector<float>> img_pad_ids(bs * img_pad_len, std::vector<float>(3, 0.f));
             img_ids = concat_ids(img_ids, img_pad_ids, bs);
@@ -929,43 +911,160 @@ namespace Rope {
         return ids;
     }
 
-    // Generate z_image positional embeddings
-    __STATIC_INLINE__ std::vector<float> gen_z_image_pe(int h,
-                                                        int w,
-                                                        int patch_size,
-                                                        int bs,
-                                                        int context_len,
-                                                        int seq_multi_of,
-                                                        const std::vector<ggml_tensor*>& ref_latents,
-                                                        RefIndexMode ref_index_mode,
-                                                        int theta,
-                                                        bool circular_h,
-                                                        bool circular_w,
-                                                        const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_z_image_ids(h, w, patch_size, bs, context_len, seq_multi_of, ref_latents, ref_index_mode);
-        std::vector<std::vector<int>> wrap_dims;
-        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
-            int pad_h = (patch_size - (h % patch_size)) % patch_size;
-            int pad_w = (patch_size - (w % patch_size)) % patch_size;
-            int h_len = (h + pad_h) / patch_size;
-            int w_len = (w + pad_w) / patch_size;
-            if (h_len > 0 && w_len > 0) {
-                size_t pos_len = ids.size() / bs;
-                wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
-                size_t cursor     = context_len + bound_mod(context_len, seq_multi_of);  // skip text (and its padding)
-                size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
-                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
-                    if (circular_h) {
-                        wrap_dims[1][cursor + token_i] = h_len;
-                    }
-                    if (circular_w) {
-                        wrap_dims[2][cursor + token_i] = w_len;
-                    }
-                }
+    // LLaDA-Image shares Lumina2/z_image's axes layout, but assigns position (0,0,0) to the
+    // padding slots of the caption stream instead of continuing the caption ramp through them.
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_llada_image_ids(int h,
+                                                                          int w,
+                                                                          int patch_size,
+                                                                          int bs,
+                                                                          int context_len,
+                                                                          int seq_multi_of,
+                                                                          PositionLayout* layout = nullptr) {
+        int context_pad_len    = bound_mod(context_len, seq_multi_of);
+        int padded_context_len = context_len + context_pad_len;
+        auto txt_ids           = std::vector<std::vector<float>>(bs * padded_context_len, std::vector<float>(3, 0.0f));
+        for (int i = 0; i < bs * padded_context_len; i++) {
+            int pos = i % padded_context_len;
+            if (pos < context_len) {
+                txt_ids[i][0] = pos + 1.f;
             }
         }
 
-        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
+        if (layout) {
+            layout->append_tokens(padded_context_len);
+        }
+        int axes_dim_num = 3;
+        int index        = padded_context_len + 1;
+        auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, index, 0, 0, false, layout);
+
+        int img_pad_len = bound_mod(static_cast<int>(img_ids.size() / bs), seq_multi_of);
+        if (layout) {
+            layout->append_tokens(img_pad_len);
+        }
+        if (img_pad_len > 0) {
+            std::vector<std::vector<float>> img_pad_ids(bs * img_pad_len, std::vector<float>(3, 0.f));
+            img_ids = concat_ids(img_ids, img_pad_ids, bs);
+        }
+
+        return concat_ids(txt_ids, img_ids, bs);
+    }
+
+    // LLaDA-Image editing packs two caption copies (clean and noisy), the source and target
+    // latents anchored at their own caption's end position, and the SigVQ stream after both.
+    // Padding slots keep position (0,0,0), as in the text-only layout.
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_llada_image_edit_ids(int h,
+                                                                               int w,
+                                                                               int patch_size,
+                                                                               int context_len,
+                                                                               int sigvq_len,
+                                                                               int seq_multi_of,
+                                                                               PositionLayout* layout = nullptr) {
+        const int context_pad    = bound_mod(context_len, seq_multi_of);
+        const int padded_context = context_len + context_pad;
+        const int h_len          = (h + (patch_size / 2)) / patch_size;
+        const int w_len          = (w + (patch_size / 2)) / patch_size;
+        const int image_len      = h_len * w_len;
+        const int image_pad      = bound_mod(image_len, seq_multi_of);
+        const int padded_image   = image_len + image_pad;
+        const int sigvq_pad      = bound_mod(sigvq_len, seq_multi_of);
+
+        std::vector<std::vector<float>> cap_ids;
+        std::vector<int> cap_end_positions;
+        int cursor = 1;
+        for (int copy = 0; copy < 2; ++copy) {
+            for (int i = 0; i < padded_context; ++i) {
+                std::vector<float> id(3, 0.f);
+                if (i < context_len) {
+                    id[0] = static_cast<float>(cursor + i);
+                }
+                cap_ids.push_back(id);
+            }
+            cursor += context_len;
+            cap_end_positions.push_back(cursor);
+            cursor += 2;
+        }
+
+        if (layout) {
+            layout->append_tokens(cap_ids.size());
+        }
+        std::vector<std::vector<float>> img_ids;
+        for (int copy = 0; copy < 2; ++copy) {
+            auto ids = gen_flux_img_ids(h, w, patch_size, 1, 3, cap_end_positions[copy], 0, 0, false, layout);
+            img_ids.insert(img_ids.end(), ids.begin(), ids.end());
+            img_ids.insert(img_ids.end(), image_pad, std::vector<float>(3, 0.f));
+            if (layout) {
+                layout->append_tokens(image_pad);
+            }
+        }
+
+        const int sigvq_start = static_cast<int>(cap_ids.size() + img_ids.size()) + 1;
+        std::vector<std::vector<float>> sigvq_ids;
+        for (int i = 0; i < sigvq_len + sigvq_pad; ++i) {
+            std::vector<float> id(3, 0.f);
+            if (i < sigvq_len) {
+                id[0] = static_cast<float>(sigvq_start + i);
+            }
+            sigvq_ids.push_back(id);
+        }
+
+        std::vector<std::vector<float>> ids;
+        ids.reserve(cap_ids.size() + img_ids.size() + sigvq_ids.size());
+        ids.insert(ids.end(), cap_ids.begin(), cap_ids.end());
+        ids.insert(ids.end(), img_ids.begin(), img_ids.end());
+        ids.insert(ids.end(), sigvq_ids.begin(), sigvq_ids.end());
+        if (layout) {
+            layout->append_tokens(sigvq_ids.size());
+        }
+        SD_UNUSED(padded_image);
+        return ids;
+    }
+
+    __STATIC_INLINE__ Embedding gen_llada_image_edit_pe(int h,
+                                                        int w,
+                                                        int patch_size,
+                                                        int context_len,
+                                                        int sigvq_len,
+                                                        int seq_multi_of,
+                                                        int theta,
+                                                        const std::vector<int>& axes_dim) {
+        Embedding result;
+        result.batch_size = 1;
+        result.ids        = gen_llada_image_edit_ids(h, w, patch_size, context_len, sigvq_len, seq_multi_of, &result.positions);
+        result.values     = embed_nd(result.ids, 1, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
+    }
+
+    __STATIC_INLINE__ Embedding gen_llada_image_pe(int h,
+                                                   int w,
+                                                   int patch_size,
+                                                   int bs,
+                                                   int context_len,
+                                                   int seq_multi_of,
+                                                   int theta,
+                                                   const std::vector<int>& axes_dim) {
+        Embedding result;
+        result.batch_size = bs;
+        result.ids        = gen_llada_image_ids(h, w, patch_size, bs, context_len, seq_multi_of, &result.positions);
+        result.values     = embed_nd(result.ids, bs, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
+    }
+
+    // Generate z_image positional embeddings
+    __STATIC_INLINE__ Embedding gen_z_image_pe(int h,
+                                               int w,
+                                               int patch_size,
+                                               int bs,
+                                               int context_len,
+                                               int seq_multi_of,
+                                               const std::vector<ggml_tensor*>& ref_latents,
+                                               RefIndexMode ref_index_mode,
+                                               int theta,
+                                               const std::vector<int>& axes_dim) {
+        Embedding result;
+        result.batch_size = bs;
+        result.ids        = gen_z_image_ids(h, w, patch_size, bs, context_len, seq_multi_of, ref_latents, ref_index_mode, &result.positions);
+        result.values     = embed_nd(result.ids, bs, static_cast<float>(theta), axes_dim, result.layout, &result.frequencies);
+        return result;
     }
 
     __STATIC_INLINE__ ggml_tensor* apply_rope(ggml_context* ctx,

@@ -94,11 +94,12 @@ namespace sd::ggml_graph_cut {
                     ggml_cgraph* gf,
                     const std::unordered_set<const ggml_tensor*>& params_tensor_set,
                     const char* log_desc);
-    Plan resolve_plan(ggml_backend_t backend,
-                      ggml_cgraph* gf,
-                      PlanCache* cache,
-                      const std::unordered_set<const ggml_tensor*>& params_tensor_set,
-                      const char* log_desc);
+    // The returned reference is valid until its cache entry is evicted or the cache is destroyed.
+    const Plan& resolve_plan(ggml_backend_t backend,
+                             ggml_cgraph* gf,
+                             PlanCache* cache,
+                             const std::unordered_set<const ggml_tensor*>& params_tensor_set,
+                             const char* log_desc);
 
 }  // namespace sd::ggml_graph_cut
 

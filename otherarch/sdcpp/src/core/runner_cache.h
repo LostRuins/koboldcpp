@@ -20,7 +20,8 @@ namespace sd {
         ~CachedTensor();
         static std::unique_ptr<CachedTensor> copy(ggml_backend_t backend,
                                                   const std::string& name,
-                                                  ggml_tensor* source);
+                                                  ggml_tensor* source,
+                                                  ggml_status& status);
     };
     using CachedTensors = std::map<std::string, std::unique_ptr<CachedTensor>>;
 
@@ -41,7 +42,8 @@ namespace sd {
         const std::map<std::string, ggml_tensor*>& outputs() const { return outputs_; }
         size_t pending_bytes(ggml_cgraph* graph) const;
         size_t resident_bytes(ggml_backend_dev_t device) const;
-        bool capture(ggml_cgraph* graph);
+        bool empty() const { return committed_.empty(); }
+        ggml_status capture(ggml_cgraph* graph);
         void graph_end(bool success);
         void clear();
     };
@@ -57,7 +59,7 @@ namespace sd {
         size_t resident_bytes(ggml_backend_dev_t device) const;
         size_t estimate_output_bytes(ggml_cgraph* graph,
                                      const ggml_graph_cut::Segment& segment) const;
-        bool capture(ggml_cgraph* graph, const ggml_graph_cut::Segment& segment, const char* log_desc);
+        ggml_status capture(ggml_cgraph* graph, const ggml_graph_cut::Segment& segment, const char* log_desc);
         void prune(const std::unordered_set<std::string>& keep_names);
         void clear() { tensors_.clear(); }
     };

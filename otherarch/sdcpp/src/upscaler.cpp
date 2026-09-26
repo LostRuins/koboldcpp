@@ -14,6 +14,7 @@ UpscalerGGML::UpscalerGGML(int n_threads,
                            std::string backend_spec,
                            std::string params_backend_spec)
     : n_threads(n_threads),
+      tensor_executor(n_threads > 0 ? n_threads : sd_get_num_physical_cores()),
       direct(direct),
       tile_size(tile_size),
       backend_spec(std::move(backend_spec)),
@@ -35,6 +36,7 @@ void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
 
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   int n_threads) {
+    sd::ParallelScope tensor_scope(&tensor_executor);
     kcpp_sd_ggml_log_set();
 
     std::string error;
@@ -108,10 +110,23 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
 }
 
 sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_tensor) {
+    sd::ParallelScope tensor_scope(&tensor_executor);
+    if (input_tensor.empty() || input_tensor.dim() != 4 ||
+        (input_tensor.shape()[2] != 3 && input_tensor.shape()[2] != 4)) {
+        LOG_ERROR("esrgan expects a 4D RGB or RGBA image tensor");
+        return {};
+    }
+
+    const bool has_alpha = input_tensor.shape()[2] == 4;
+    sd::Tensor<float> rgb;
+    if (has_alpha) {
+        rgb = sd::ops::slice(input_tensor, 2, 0, 3);
+    }
+    const sd::Tensor<float>& model_input = has_alpha ? rgb : input_tensor;
     sd::Tensor<float> upscaled;
     const int scale = esrgan_upscaler->config.scale;
     if (tile_size <= 0 || (input_tensor.shape()[0] <= tile_size && input_tensor.shape()[1] <= tile_size)) {
-        upscaled = esrgan_upscaler->compute(n_threads, input_tensor);
+        upscaled = esrgan_upscaler->compute(n_threads, model_input);
     } else {
         auto on_processing = [&](const sd::Tensor<float>& input_tile) -> sd::Tensor<float> {
             auto output_tile = esrgan_upscaler->compute(n_threads, input_tile);
@@ -122,7 +137,7 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
             return output_tile;
         };
 
-        upscaled = process_tiles_2d(input_tensor,
+        upscaled = process_tiles_2d(model_input,
                                     static_cast<int>(input_tensor.shape()[0] * scale),
                                     static_cast<int>(input_tensor.shape()[1] * scale),
                                     scale,
@@ -138,10 +153,19 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
         LOG_ERROR("esrgan compute failed");
         return {};
     }
+    if (has_alpha) {
+        auto alpha       = sd::ops::slice(input_tensor, 2, 3, 4);
+        auto alpha_shape = alpha.shape();
+        alpha_shape[0]   = upscaled.shape()[0];
+        alpha_shape[1]   = upscaled.shape()[1];
+        alpha            = sd::ops::interpolate(alpha, alpha_shape, sd::ops::InterpolateMode::Bilinear);
+        upscaled         = sd::ops::concat(upscaled, alpha, 2);
+    }
     return upscaled;
 }
 
 sd_image_t UpscalerGGML::upscale(sd_image_t input_image, uint32_t upscale_factor) {
+    sd::ParallelScope tensor_scope(&tensor_executor);
     // upscale_factor, unused for RealESRGAN_x4plus_anime_6B.pth
     sd_image_t upscaled_image = {0, 0, 0, nullptr};
     const int scale           = esrgan_upscaler->config.scale;
@@ -236,6 +260,30 @@ int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {
         return 1;
     }
     return upscaler_ctx->upscaler->esrgan_upscaler->config.scale;
+}
+
+int get_upscaler_model_scale(const char* model_path) {
+    if (model_path == nullptr || model_path[0] == '\0') {
+        return 0;
+    }
+    try {
+        ModelLoader loader;
+        if (!loader.init_from_file_and_convert_name(model_path, "", VERSION_ESRGAN)) {
+            return 0;
+        }
+        const auto& tensors = loader.get_tensor_storage_map();
+        auto first          = tensors.find("conv_first.weight");
+        auto last           = tensors.find("conv_last.weight");
+        if (first == tensors.end() || last == tensors.end() ||
+            tensors.count("body.0.rdb1.conv1.weight") == 0 ||
+            first->second.n_dims != 4 || last->second.n_dims != 4 ||
+            first->second.ne[2] != 3 || last->second.ne[3] != 3) {
+            return 0;
+        }
+        return ESRGANConfig::detect_from_weights(tensors).scale;
+    } catch (const std::exception&) {
+        return 0;
+    }
 }
 
 void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx) {

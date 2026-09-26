@@ -15,6 +15,7 @@
 #include "model/vae/vae.hpp"
 #include "request.h"
 #include "runtime/denoiser.hpp"
+#include "runtime/image_preprocess.h"
 
 // kcpp
 #include "model/vae/ltx_audio_vae.hpp"
@@ -555,11 +556,15 @@ namespace sd::pipeline {
         } runner_guard{sd->audio_vae_model.get()};
 
         if (sd_vid_gen_params->init_image.data) {
-            start_image = sd_image_to_tensor(sd_vid_gen_params->init_image, request->width, request->height);
+            start_image = ensure_image_tensor_channels(
+                sd_image_to_tensor(sd_vid_gen_params->init_image, request->width, request->height),
+                sd->get_image_channels());
         }
 
         if (sd_vid_gen_params->end_image.data) {
-            end_image = sd_image_to_tensor(sd_vid_gen_params->end_image, request->width, request->height);
+            end_image = ensure_image_tensor_channels(
+                sd_image_to_tensor(sd_vid_gen_params->end_image, request->width, request->height),
+                sd->get_image_channels());
         }
 
         if (sd_version_is_minimax_h3(sd->version)) {
@@ -1271,10 +1276,10 @@ namespace sd::pipeline {
         return latents;
     }
 
-    static ImageGenerationEmbeds prepare_video_generation_embeds(StableDiffusionGGML* sd,
-                                                                 const sd_vid_gen_params_t* sd_vid_gen_params,
-                                                                 const GenerationRequest& request,
-                                                                 const ImageGenerationLatents& latents) {
+    static std::optional<ImageGenerationEmbeds> prepare_video_generation_embeds(StableDiffusionGGML* sd,
+                                                                                const sd_vid_gen_params_t* sd_vid_gen_params,
+                                                                                const GenerationRequest& request,
+                                                                                const ImageGenerationLatents& latents) {
         ConditionerRunnerEndOnExit conditioner_runner_end{sd->cond_stage_model.get()};
 
         ImageGenerationEmbeds embeds;
@@ -1289,10 +1294,13 @@ namespace sd::pipeline {
         }
 
         int64_t prepare_start_ms = ggml_time_ms();
-        embeds.cond              = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                               condition_params);
-        embeds.cond.c_concat     = latents.concat_latent;
-        embeds.cond.c_vector     = latents.clip_vision_output;
+        embeds.cond              = sd->get_learned_condition(condition_params);
+        if (embeds.cond.empty()) {
+            LOG_ERROR("failed to encode video prompt");
+            return std::nullopt;
+        }
+        embeds.cond.c_concat = latents.concat_latent;
+        embeds.cond.c_vector = latents.clip_vision_output;
         if (sd_version_is_minimax_h3(sd->version)) {
             embeds.cond.c_ref_images       = latents.ref_latents;
             embeds.cond.c_ref_audios       = latents.reference_audio_latents;
@@ -1310,9 +1318,12 @@ namespace sd::pipeline {
             }
         }
         if (request.use_uncond) {
-            condition_params.text  = request.negative_prompt;
-            embeds.uncond          = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                                 condition_params);
+            condition_params.text = request.negative_prompt;
+            embeds.uncond         = sd->get_learned_condition(condition_params);
+            if (embeds.uncond.empty()) {
+                LOG_ERROR("failed to encode negative video prompt");
+                return std::nullopt;
+            }
             embeds.uncond.c_concat = latents.concat_latent;
             embeds.uncond.c_vector = latents.clip_vision_output;
             if (sd_version_is_minimax_h3(sd->version)) {
@@ -1540,7 +1551,9 @@ namespace sd::pipeline {
         sd::Tensor<float> video_mask = make_ltxav_video_denoise_mask(video_latent, 1.f);
 
         if (sd_vid_gen_params->init_image.data != nullptr) {
-            sd::Tensor<float> start_image = sd_image_to_tensor(sd_vid_gen_params->init_image, image_width, image_height);
+            sd::Tensor<float> start_image = ensure_image_tensor_channels(
+                sd_image_to_tensor(sd_vid_gen_params->init_image, image_width, image_height),
+                sd->get_image_channels());
             if (!apply_ltxav_condition_image_by_latent_index(sd,
                                                              start_image,
                                                              &video_latent,
@@ -1553,7 +1566,9 @@ namespace sd::pipeline {
         }
 
         if (sd_vid_gen_params->end_image.data != nullptr) {
-            sd::Tensor<float> end_image        = sd_image_to_tensor(sd_vid_gen_params->end_image, image_width, image_height);
+            sd::Tensor<float> end_image = ensure_image_tensor_channels(
+                sd_image_to_tensor(sd_vid_gen_params->end_image, image_width, image_height),
+                sd->get_image_channels());
             sd::Tensor<float> end_image_latent = encode_ltxav_condition_image(sd, end_image, "end");
             if (end_image_latent.empty()) {
                 return false;
@@ -1646,6 +1661,7 @@ namespace sd::pipeline {
         img_gen_params.qwen_image_layers = 0;
         img_gen_params.circular_x        = sd_vid_gen_params->circular_x;
         img_gen_params.circular_y        = sd_vid_gen_params->circular_y;
+        img_gen_params.image_preprocess  = sd_vid_gen_params->image_preprocess;
 
         sd->animatediff_num_frames = n_frames;
         bool ok                    = generate_image(sd, &img_gen_params, frames_out, num_frames_out);
@@ -1676,6 +1692,11 @@ namespace sd::pipeline {
         sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
         sd->apply_circular_axes(sd_vid_gen_params->circular_x, sd_vid_gen_params->circular_y);
         GenerationRequest request(sd, sd_vid_gen_params);
+        sd::ImagePreprocessor preprocessing(sd_vid_gen_params->image_preprocess.rules);
+        sd_vid_gen_params_t processed_params = *sd_vid_gen_params;
+        if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
+            return false;
+        sd_vid_gen_params = &processed_params;
         if (fps_out != nullptr) {
             *fps_out = request.fps;
         }
@@ -1713,10 +1734,14 @@ namespace sd::pipeline {
         }
         ImageGenerationLatents latents = std::move(*latent_inputs_opt);
 
-        ImageGenerationEmbeds embeds = prepare_video_generation_embeds(sd,
-                                                                       sd_vid_gen_params,
-                                                                       request,
-                                                                       latents);
+        auto embeds_opt = prepare_video_generation_embeds(sd,
+                                                          sd_vid_gen_params,
+                                                          request,
+                                                          latents);
+        if (!embeds_opt) {
+            return false;
+        }
+        ImageGenerationEmbeds embeds = std::move(*embeds_opt);
         if (latent_upscale_enabled) {
             LOG_INFO("generate_video %dx%dx%d -> LTX latent spatial upscale",
                      request.width,

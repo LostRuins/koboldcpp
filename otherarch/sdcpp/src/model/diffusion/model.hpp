@@ -7,7 +7,7 @@
 
 #include "core/ggml_runner.h"
 #include "core/tensor_ggml.hpp"
-#include "model/common/rope.hpp"
+#include "model/common/rope_circular.hpp"
 #include "model_manager.h"
 
 enum class RefImageResizeMode {
@@ -39,6 +39,9 @@ const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
     {"z_image_omni", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
     {"krea2_ostris_edit", {true, true, Rope::RefIndexMode::INCREASE, true, true, -1, RefImageResizeMode::AREA, -1, -1}},
     {"krea2_edit", {true, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::LONGEST_SIDE, 768, 768}},
+    // pass_to_vlm routes the reference image to the conditioner, which is where LLaDA-Image's
+    // SigVQ encoder lives; it does its own half-resolution resize.
+    {"llada_image", {true, true, Rope::RefIndexMode::FIXED, true, true, -1, RefImageResizeMode::NONE, -1, -1, true}},
     {"cosmos_reference", {false, true, Rope::RefIndexMode::INCREASE, false, false, -1, RefImageResizeMode::NONE, -1, -1}},
 };
 
@@ -64,6 +67,12 @@ struct FluxDiffusionExtra {
 struct AnimaDiffusionExtra {
     const sd::Tensor<int32_t>* t5_ids   = nullptr;
     const sd::Tensor<float>* t5_weights = nullptr;
+};
+
+struct QwenImage21DiffusionExtra {
+    const sd::Tensor<int32_t>* image_slots = nullptr;
+    // Nonzero IDs identify immutable prefix inputs within one sampling run.
+    uint64_t prefix_id = 0;
 };
 
 struct WanDiffusionExtra {
@@ -127,18 +136,25 @@ struct HunyuanVideoDiffusionExtra {
     const sd::Tensor<float>* timestep_r = nullptr;
 };
 
+struct LLaDAImageDiffusionExtra {
+    // SigVQ semantic features of the reference image; present only in editing mode.
+    const sd::Tensor<float>* semantic = nullptr;
+};
+
 using DiffusionExtraParams = std::variant<std::monostate,
                                           UNetDiffusionExtra,
                                           SkipLayerDiffusionExtra,
                                           FluxDiffusionExtra,
                                           AnimaDiffusionExtra,
+                                          QwenImage21DiffusionExtra,
                                           WanDiffusionExtra,
                                           HiDreamO1DiffusionExtra,
                                           LTXAVDiffusionExtra,
                                           MiniMaxH3DiffusionExtra,
                                           MiniT2IDiffusionExtra,
                                           SenseNovaU1DiffusionExtra,
-                                          HunyuanVideoDiffusionExtra>;
+                                          HunyuanVideoDiffusionExtra,
+                                          LLaDAImageDiffusionExtra>;
 
 struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;
@@ -167,6 +183,11 @@ static inline const sd::Tensor<T>& tensor_or_empty(const sd::Tensor<T>* tensor) 
 struct DiffusionModelRunner : public GGMLRunner {
 protected:
     std::string prefix;
+
+    std::vector<float> finish_rope_pe(Rope::Embedding embedding) {
+        Rope::apply_circular(embedding, circular_x_enabled, circular_y_enabled);
+        return std::move(embedding.values);
+    }
 
 public:
     DiffusionModelRunner(ggml_backend_t backend,

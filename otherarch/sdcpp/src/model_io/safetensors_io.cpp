@@ -87,20 +87,16 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F64") {
         ttype = GGML_TYPE_F32;
-#if KCPP_MAINLINE_FP8_SCALED
+#ifdef SD_USE_UPSTREAM_GGML
+    } else if (dtype == "F8_E4M3") {
+        ttype = GGML_TYPE_F16;
+    } else if (dtype == "F8_E5M2") {
+        ttype = GGML_TYPE_F16;
+#else
     } else if (dtype == "F8_E4M3") {
         ttype = GGML_TYPE_F8_E4M3;
     } else if (dtype == "F8_E5M2") {
         ttype = GGML_TYPE_F8_E5M2;
-#else
-    } else if (dtype == "F8_E4M3") {
-        ttype = GGML_TYPE_F16;
-    } else if (dtype == "F8_E5M2") {
-        ttype = GGML_TYPE_F16;
-#endif
-#if !KCPP_MAINLINE_INT8_CONVROT
-    } else if (dtype == "I8") {
-        ttype = GGML_TYPE_F16;
 #endif
     } else if (dtype == "I32") {
         ttype = GGML_TYPE_I32;
@@ -109,6 +105,9 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
 #if KCPP_MAINLINE_INT8_CONVROT
     } else if (dtype == "I8") {
         ttype = GGML_TYPE_I8;
+#else
+    } else if (dtype == "I8") {
+        ttype = GGML_TYPE_F16;
 #endif
     }
     return ttype;
@@ -244,6 +243,12 @@ bool read_safetensors_file(const std::string& file_path,
         if (!read_comfy_quant_config(file, file_path, name, data_start + begin, end - begin, config, error)) {
             return false;
         }
+#ifdef SD_USE_UPSTREAM_GGML
+        if (config.format == "int8_tensorwise") {
+            set_error(error, "INT8 tensorwise/convrot is not supported by this ggml build (tensor '" + name + "')");
+            return false;
+        }
+#endif
         const std::string module_name = name.substr(0, name.size() - std::string(".comfy_quant").size());
         comfy_quant_configs.emplace(module_name, std::move(config));
     }
@@ -385,7 +390,31 @@ bool read_safetensors_file(const std::string& file_path,
         size_t tensor_data_size = end - begin;
 
         bool tensor_size_ok;
-        if (dtype == "I8") {
+        if (dtype == "F8_E4M3") {
+            tensor_storage.is_f8_e4m3 = true;
+#ifdef SD_USE_UPSTREAM_GGML
+            // f8 -> f16
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+#else
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
+#endif
+        } else if (dtype == "F8_E5M2") {
+            tensor_storage.is_f8_e5m2 = true;
+#ifdef SD_USE_UPSTREAM_GGML
+            // f8 -> f16
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
+#else
+            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
+#endif
+        } else if (dtype == "F64") {
+            tensor_storage.is_f64 = true;
+            // f64 -> f32
+            tensor_size_ok = (tensor_storage.nbytes() * 2 == tensor_data_size);
+        } else if (dtype == "I64") {
+            tensor_storage.is_i64 = true;
+            // i64 -> i32
+            tensor_size_ok = (tensor_storage.nbytes() * 2 == tensor_data_size);
+        } else if (dtype == "I8") { //kcpp
 #if KCPP_MAINLINE_INT8_CONVROT
             tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
 #else
@@ -402,31 +431,6 @@ bool read_safetensors_file(const std::string& file_path,
             }
             tensor_size_ok = true;
 #endif
-#if KCPP_MAINLINE_FP8_SCALED
-        } else if (dtype == "F8_E4M3") {
-            tensor_storage.is_f8_e4m3 = true;
-            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
-        } else if (dtype == "F8_E5M2") {
-            tensor_storage.is_f8_e5m2 = true;
-            tensor_size_ok            = (tensor_storage.nbytes() == tensor_data_size);
-#else
-        } else if (dtype == "F8_E4M3") {
-            tensor_storage.is_f8_e4m3 = true;
-            // f8 -> f16
-            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
-        } else if (dtype == "F8_E5M2") {
-            tensor_storage.is_f8_e5m2 = true;
-            // f8 -> f16
-            tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size * 2);
-#endif
-        } else if (dtype == "F64") {
-            tensor_storage.is_f64 = true;
-            // f64 -> f32
-            tensor_size_ok = (tensor_storage.nbytes() * 2 == tensor_data_size);
-        } else if (dtype == "I64") {
-            tensor_storage.is_i64 = true;
-            // i64 -> i32
-            tensor_size_ok = (tensor_storage.nbytes() * 2 == tensor_data_size);
         } else {
             tensor_size_ok = (tensor_storage.nbytes() == tensor_data_size);
         }

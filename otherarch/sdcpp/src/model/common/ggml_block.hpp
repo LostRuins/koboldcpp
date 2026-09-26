@@ -208,7 +208,7 @@ public:
         ggml_tensor* w            = params["weight"];
         const float scale         = ctx->linear_scale > 0.f ? ctx->linear_scale : this->scale;
         ggml_tensor* weight_scale = has_weight_scale ? params["weight_scale"] : nullptr;
-        #if KCPP_MAINLINE_FP8_SCALED
+#ifndef SD_USE_UPSTREAM_GGML
         if (w->type == GGML_TYPE_F8_E4M3 || w->type == GGML_TYPE_F8_E5M2) {
             bool supports_fp8_matmul = false;
             if (ctx->backend != nullptr) {
@@ -222,14 +222,13 @@ public:
                 w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_BF16);
             }
         }
-        #endif //kcpp
+#endif
         ggml_tensor* b = nullptr;
         if (bias) {
             b = params["bias"];
         }
         ggml_tensor* linear_bias = has_weight_scale ? nullptr : b;
         ggml_tensor* out         = nullptr;
-        #if KCPP_MAINLINE_INT8_CONVROT
         if (w->type == GGML_TYPE_I8) {
             if (x->type != GGML_TYPE_F32) {
                 x = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, x);
@@ -241,6 +240,7 @@ public:
             if (ctx->weight_adapter && b != nullptr) {
                 b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
+#ifndef SD_USE_UPSTREAM_GGML
             if (int8_convrot && scale == 1.f) {
                 const auto cache_key = std::make_pair(x, int8_convrot_group_size);
                 auto cached          = ctx->int8_convrot_cache.find(cache_key);
@@ -251,6 +251,7 @@ public:
                     x = cached->second;
                 }
             }
+#endif
             out = ggml_ext_linear_i8_tensorwise(ctx->ggml_ctx,
                                                 x,
                                                 w,
@@ -273,7 +274,6 @@ public:
             }
             return out;
         }
-        #endif //kcpp
         if (has_weight_scale) {
             out = ggml_ext_linear(ctx->ggml_ctx, x, w, nullptr, force_prec_f32, scale);
             out = ggml_mul(ctx->ggml_ctx, out, weight_scale);
@@ -732,7 +732,7 @@ public:
                                 std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                 std::get<2>(padding), std::get<1>(padding), std::get<0>(padding),
                                 std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation),
-                                force_prec_f32);
+                                force_prec_f32, ctx->conv3d_direct_enabled);
     }
 };
 
@@ -839,21 +839,30 @@ class RMSNorm : public UnaryBlock {
 protected:
     int64_t hidden_size;
     float eps;
+    bool elementwise_affine;
     std::string prefix;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
-        this->prefix         = prefix;
+        this->prefix = prefix;
+        if (!elementwise_affine) {
+            return;
+        }
         enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
 
 public:
     RMSNorm(int64_t hidden_size,
-            float eps = 1e-06f)
+            float eps               = 1e-06f,
+            bool elementwise_affine = true)
         : hidden_size(hidden_size),
-          eps(eps) {}
+          eps(eps),
+          elementwise_affine(elementwise_affine) {}
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
+        if (!elementwise_affine) {
+            return ggml_rms_norm(ctx->ggml_ctx, x, eps);
+        }
         ggml_tensor* w = params["weight"];
         if (ctx->weight_adapter) {
             w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");

@@ -20,6 +20,7 @@
 #include "model/diffusion/krea2.hpp"
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/lingbot_video.hpp"
+#include "model/diffusion/llada_image.hpp"
 #include "model/diffusion/ltxv.hpp"
 #include "model/diffusion/mage_flow.hpp"
 #include "model/diffusion/minimax_h3.hpp"
@@ -28,6 +29,7 @@
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/pid.hpp"
 #include "model/diffusion/qwen_image.hpp"
+#include "model/diffusion/qwen_image_2_1.hpp"
 #include "model/diffusion/sensenova_u1.h"
 #include "model/diffusion/unet.hpp"
 #include "model/diffusion/wan.hpp"
@@ -73,12 +75,13 @@ namespace sd::model_builders {
         }
     }
 
-    bool build_core_runners(const Context& ctx, CoreRunners& runners) {
+    bool build_core_runners(const Context& ctx, CoreRunners& runners) try {
         const auto* sd_ctx_params      = &ctx.params;
         const auto& tensor_storage_map = ctx.tensor_storage_map;
         const auto version             = ctx.version;
         const auto& weight_manager     = ctx.weight_manager;
         CoreRunners result;
+        TokenizerConfig tokenizers(sd_ctx_params->tokenizer);
         if (!ensure_backend_pair(ctx.backends, SDBackendModule::TE) ||
             !ensure_backend_pair(ctx.backends, SDBackendModule::DIFFUSION)) {
             return false;
@@ -87,7 +90,8 @@ namespace sd::model_builders {
         if (sd_version_is_sd3(version)) {
             result.conditioner = std::make_shared<SD3CLIPEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                    tensor_storage_map,
-                                                                   weight_manager);
+                                                                   weight_manager,
+                                                                   tokenizers);
             result.diffusion   = std::make_shared<MMDiTRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                              tensor_storage_map,
                                                              "model.diffusion_model",
@@ -98,7 +102,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                false,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<Pid::PiDRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model.net",
@@ -109,7 +114,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                false,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<Ideogram4::Ideogram4Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                             tensor_storage_map,
                                                                             "model.diffusion_model",
@@ -120,7 +126,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                true,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<Krea2::Krea2Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model",
@@ -147,11 +154,13 @@ namespace sd::model_builders {
                                                                    version,
                                                                    "",
                                                                    false,
-                                                                   weight_manager);
+                                                                   weight_manager,
+                                                                   tokenizers);
             } else {
                 result.conditioner = std::make_shared<FluxCLIPEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                         tensor_storage_map,
-                                                                        weight_manager);
+                                                                        weight_manager,
+                                                                        tokenizers);
             }
             result.diffusion = std::make_shared<Flux::FluxRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                   tensor_storage_map,
@@ -166,7 +175,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                false,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<Flux::FluxRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                   tensor_storage_map,
                                                                   "model.diffusion_model",
@@ -178,7 +188,8 @@ namespace sd::model_builders {
                                                                  tensor_storage_map,
                                                                  "text_encoders.llm",
                                                                  "text_embedding_projection",
-                                                                 weight_manager);
+                                                                 weight_manager,
+                                                                 tokenizers);
             result.diffusion   = std::make_shared<LTXV::LTXAVRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
@@ -189,7 +200,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                true,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<MiniMaxH3::MiniMaxH3Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                             tensor_storage_map,
                                                                             "model.diffusion_model",
@@ -200,7 +212,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                false,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<Hunyuan::HunyuanVideoRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                              tensor_storage_map,
                                                                              "model.diffusion_model",
@@ -258,7 +271,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                enable_vision,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<LingBotVideo::LingBotVideoRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                                   tensor_storage_map,
                                                                                   "model.diffusion_model",
@@ -271,20 +285,30 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                enable_vision,
-                                                               weight_manager);
-            result.diffusion   = std::make_shared<Qwen::QwenImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                       tensor_storage_map,
-                                                                       "model.diffusion_model",
-                                                                       version,
-                                                                       weight_manager,
-                                                                       sd_ctx_params->model_args);
+                                                               weight_manager,
+                                                               tokenizers);
+            if (version == VERSION_QWEN_IMAGE_2_1) {
+                result.diffusion = std::make_shared<Qwen::QwenImage21Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                             tensor_storage_map,
+                                                                             "model.diffusion_model",
+                                                                             weight_manager,
+                                                                             sd_ctx_params->model_args);
+            } else {
+                result.diffusion = std::make_shared<Qwen::QwenImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                           tensor_storage_map,
+                                                                           "model.diffusion_model",
+                                                                           version,
+                                                                           weight_manager,
+                                                                           sd_ctx_params->model_args);
+            }
         } else if (sd_version_is_mage_flow(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,
                                                                version,
                                                                "",
                                                                true,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<MageFlow::MageFlowRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                           tensor_storage_map,
                                                                           "model.diffusion_model",
@@ -295,7 +319,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                true,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<Flux::FluxRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                   tensor_storage_map,
                                                                   "model.diffusion_model",
@@ -305,7 +330,8 @@ namespace sd::model_builders {
         } else if (version == VERSION_HIDREAM_O1) {
             result.conditioner = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                                    tensor_storage_map,
-                                                                                   weight_manager);
+                                                                                   weight_manager,
+                                                                                   tokenizers);
             result.diffusion   = std::make_shared<HiDreamO1::HiDreamO1Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                             tensor_storage_map,
                                                                             "model",
@@ -327,7 +353,8 @@ namespace sd::model_builders {
         } else if (sd_version_is_anima(version)) {
             result.conditioner = std::make_shared<AnimaConditioner>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                     tensor_storage_map,
-                                                                    weight_manager);
+                                                                    weight_manager,
+                                                                    tokenizers);
             result.diffusion   = std::make_shared<Anima::AnimaRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model",
@@ -338,19 +365,34 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                false,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<ZImage::ZImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                       tensor_storage_map,
                                                                       "model.diffusion_model",
                                                                       version,
                                                                       weight_manager);
+        } else if (sd_version_is_llada_image(version)) {
+            result.conditioner = std::make_shared<LLaDAImageEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                                      tensor_storage_map,
+                                                                      "text_encoders.llm",
+                                                                      "queryformer",
+                                                                      "text_projection",
+                                                                      "sigvq",
+                                                                      weight_manager,
+                                                                      tokenizers);
+            result.diffusion   = std::make_shared<LLaDAImage::LLaDAImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                              tensor_storage_map,
+                                                                              "model.diffusion_model",
+                                                                              weight_manager);
         } else if (sd_version_is_boogu_image(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,
                                                                version,
                                                                "",
                                                                true,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<Boogu::BooguImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                          tensor_storage_map,
                                                                          "model.diffusion_model",
@@ -362,7 +404,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                false,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<ErnieImage::ErnieImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                               tensor_storage_map,
                                                                               "model.diffusion_model",
@@ -373,7 +416,8 @@ namespace sd::model_builders {
                                                                version,
                                                                "",
                                                                false,
-                                                               weight_manager);
+                                                               weight_manager,
+                                                               tokenizers);
             result.diffusion   = std::make_shared<Lens::LensRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                   tensor_storage_map,
                                                                   "model.diffusion_model",
@@ -387,7 +431,8 @@ namespace sd::model_builders {
                                                                                      tensor_storage_map,
                                                                                      embbeding_map,
                                                                                      version,
-                                                                                     weight_manager);
+                                                                                     weight_manager,
+                                                                                     tokenizers);
             result.diffusion   = std::make_shared<UNetModelRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                  tensor_storage_map,
                                                                  "model.diffusion_model",
@@ -429,8 +474,12 @@ namespace sd::model_builders {
         if (result.ip_adapter) {
             result.ip_adapter->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         }
+        tokenizers.validate_usage();
         runners = std::move(result);
         return true;
+    } catch (const std::exception& error) {
+        LOG_ERROR("failed to build model runners: %s", error.what());
+        return false;
     }
 
     bool build_vae_runners(const Context& ctx, const VAEOptions& options, VAERunners& runners) {
@@ -558,10 +607,12 @@ namespace sd::model_builders {
         }
 
         if (sd_ctx_params->vae_conv_direct) {
-            LOG_INFO("Using Conv2d direct in the vae model");
+            LOG_INFO("Using Conv2d/Conv3d direct in the vae model");
             result.vae->set_conv2d_direct_enabled(true);
+            result.vae->set_conv3d_direct_enabled(true);
             if (result.preview) {
                 result.preview->set_conv2d_direct_enabled(true);
+                result.preview->set_conv3d_direct_enabled(true);
             }
         }
         if (result.vae) {

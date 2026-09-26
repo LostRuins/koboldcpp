@@ -446,12 +446,41 @@ std::vector<std::string> split_string(const std::string& str, char delimiter) {
 }
 
 ggml_type sd_type_to_ggml_type(sd_type_t sdtype) {
+    if (sdtype == SD_TYPE_F8_E4M3 || sdtype == SD_TYPE_F8_E5M2) {
+#ifndef SD_USE_UPSTREAM_GGML
+        return sdtype == SD_TYPE_F8_E4M3 ? GGML_TYPE_F8_E4M3 : GGML_TYPE_F8_E5M2;
+#else
+        return GGML_TYPE_COUNT;
+#endif
+    }
     const int type_value = static_cast<int>(sdtype);
-    if (type_value < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
+    if (type_value >= 0 && type_value < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
         return static_cast<ggml_type>(type_value);
     } else {
         return GGML_TYPE_COUNT;
     }
+}
+
+bool validate_tensor_types(sd_type_t type, const char* tensor_type_rules) {
+    if (type != SD_TYPE_COUNT && sd_type_to_ggml_type(type) == GGML_TYPE_COUNT) {
+        LOG_ERROR("weight type %s is not supported by this ggml build", sd_type_name(type));
+        return false;
+    }
+#ifdef SD_USE_UPSTREAM_GGML
+    for (const auto& rule : split_string(SAFE_STR(tensor_type_rules), ',')) {
+        const auto pos = rule.find('=');
+        if (pos != std::string::npos) {
+            const auto name = rule.substr(pos + 1);
+            if (name == "f8_e4m3" || name == "f8_e5m2") {
+                LOG_ERROR("FP8 is not supported by this ggml build (tensor type rule '%s')", rule.c_str());
+                return false;
+            }
+        }
+    }
+#else
+    GGML_UNUSED(tensor_type_rules);
+#endif
+    return true;
 }
 
 KeyValueArgs parse_key_value_args(const char* args, const char* context) {
@@ -671,6 +700,16 @@ static void sd_log_dispatch(sd_log_level_t level, const std::string& origin, con
 }
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
+    if (sdloglevel > 0 && sdloglevel != INT_MAX) {
+        printf("\n");
+        va_list args;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+        fflush(stdout);
+        return;
+    }
+
     va_list args;
     va_start(args, format);
     std::string message = sd_vformat(format, args);
@@ -817,6 +856,13 @@ sd::Tensor<float> clip_preprocess(const sd::Tensor<float>& image, int target_wid
 
     int64_t resized_width  = static_cast<int64_t>(scale * static_cast<float>(image.shape()[0]));
     int64_t resized_height = static_cast<int64_t>(scale * static_cast<float>(image.shape()[1]));
+
+    // The resized image must cover the crop window. Floating-point rounding can
+    // leave a side one pixel short of the crop target (e.g. 730 -> 735.999...
+    // -> 735 after truncation), so clamp to keep the center crop in bounds.
+    // Truncation is otherwise preserved to avoid changing existing results.
+    resized_width  = std::max<int64_t>(resized_width, target_width);
+    resized_height = std::max<int64_t>(resized_height, target_height);
 
     sd::Tensor<float> resized = sd::ops::interpolate(
         image,
