@@ -8508,23 +8508,25 @@ def RunServerMultiThreaded(addr, port, server_handler, on_ready=None):
             exitcounter = 999
             self.httpd.server_close()
 
+    if not ipv4_sock and not ipv6_sock:
+        raise OSError("Cannot start the server: no socket could bind.")
+
     threadArr = []
     for i in range(num_server_threads):
         threadArr.append(Thread(i))
-    if on_ready:
-        on_ready()
-    while 1:
-        try:
+    try:
+        if on_ready:
+            on_ready()
+        while 1:
             time.sleep(10)
-        except (KeyboardInterrupt,SystemExit):
-            global exitcounter
-            exitcounter = 999
-            for i in range(num_server_threads):
-                try:
-                    threadArr[i].stop()
-                except Exception:
-                    continue
-            sys.exit(0)
+    except (KeyboardInterrupt,SystemExit) as exc:
+        exitcounter = 999
+        for i in range(num_server_threads):
+            try:
+                threadArr[i].stop()
+            except Exception:
+                continue
+        sys.exit(exc.code if isinstance(exc, SystemExit) else 0)
 
 # Based on https://github.com/mathgeniuszach/xdialog/blob/main/xdialog/zenity_dialogs.py - MIT license | - Expanded version by Henk717
 def zenity(filetypes=None, initialdir="", initialfile="", multiple=False, **kwargs) -> Tuple[int, object]:
@@ -11443,6 +11445,9 @@ def apply_agent_launch_safeguards(launch_args):
     if not launch_args.agent:
         return
 
+    if launch_args.cli:
+        launch_args.host = "127.0.0.1"  # The same-terminal agent uses a local API.
+
     adjustments = []
     if launch_args.defaultgenamt < 8192:
         adjustments.append(f"default generation amount increased from {launch_args.defaultgenamt} to 8192")
@@ -11728,8 +11733,8 @@ def run_bundled_kobold_agent(base_url=None, api_key=None):
         sys.argv = old_argv
 
 
-def launch_kobold_agent_terminal(base_url=None, api_key=None):
-    """Open the agent in a new terminal, using the bundled runner when frozen."""
+def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=False):
+    """Run the agent in a new or existing terminal, using the bundled runner when frozen."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
         print(f"Cannot launch Kobold Agent: script not found at {agent_path}")
@@ -11744,6 +11749,16 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None):
         command.extend(["--agent-api-key" if is_frozen else "--api-key", api_key])
 
     try:
+        if same_terminal:
+            # Keep the child's terminal handles while silencing server output,
+            # including native library prints, for the duration of the session.
+            suppress_stdout()
+            try:
+                subprocess.run(command, cwd=os.getcwd(), stdout=saved_stdout,
+                               stderr=saved_stderr, check=True)
+            finally:
+                restore_stdout()
+            return True
         if os.name == 'nt':
             # Prefer Windows Terminal's Unicode/font fallback support over a
             # fresh classic console, which may have different fonts from CMD.
@@ -12497,7 +12512,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     else:
         global_memory["autoswapmode"] = False
 
-    if args.model_param and (args.benchmark or args.prompt or args.cli):
+    if args.model_param and (args.benchmark or args.prompt or args.cli) and not (args.cli and args.agent):
         start_server = False
 
     args.sdlora = sanitize_lora_list(args.sdlora)
@@ -13454,6 +13469,11 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         on_server_ready = None
         if agent_base_url:
             def on_server_ready():
+                if args.cli:
+                    if args.mcpfile:
+                        time.sleep(2)
+                    success = launch_kobold_agent_terminal(agent_base_url, args.password, same_terminal=True)
+                    raise SystemExit(0 if success else 1)
                 if args.mcpfile:
                     agent_timer = threading.Timer(
                         2, launch_kobold_agent_terminal, args=(agent_base_url, args.password)
@@ -13504,7 +13524,7 @@ if __name__ == '__main__':
 
     #more advanced params
     advparser = parser.add_argument_group('Advanced Commands')
-    advparser.add_argument("--agent", help="Launches the simple KoboldCpp Agent in a new terminal window.", action='store_true')
+    advparser.add_argument("--agent", help="Launches the simple KoboldCpp Agent in a new terminal window, or the current terminal with --cli.", action='store_true')
     advparser.add_argument("--analyze", metavar=('[filename]'), help="Reads the metadata, weight types and tensor names in any GGUF or safetensors file.", default="")
     advparser.add_argument("--autofit","--fit","-fit", help="Forces autofit, which attempts to fit the model in the best possible way. Overrides everything else.", action='store_true')
     advparser.add_argument("--autofitpadding", metavar=('[padding in MB]'), help="How much spare allowance in MB should autofit reserve? If it's too little, the load might fail.", type=int, default=default_autofit_padding)
@@ -13513,7 +13533,7 @@ if __name__ == '__main__':
     advparser.add_argument("--benchmark", help="Do not start server, instead run benchmarks. If filename is provided, appends results to provided file.", metavar=('[filename]'), nargs='?', const="stdout", type=str, default=None)
     advparser.add_argument("--blasthreads","--batchthreads","--threadsbatch","--threads-batch", help="Use a different number of threads during batching if specified. Otherwise, has the same value as --threads",metavar=('[threads]'), type=int, default=0)
     advparser.add_argument("--chatcompletionsadapter", metavar=('[filename]'), help="Select an optional ChatCompletions Adapter JSON file to force custom instruct tags.", default="AutoGuess")
-    advparser.add_argument("--cli", help="Does not launch KoboldCpp HTTP server. Instead, enables KoboldCpp from the command line, accepting interactive console input and displaying responses to the terminal.", action='store_true')
+    advparser.add_argument("--cli", help="Runs interactive terminal chat without an HTTP server. With --agent, runs the agent in this terminal using a loopback HTTP server.", action='store_true')
     advparser.add_argument("--debugmode", help="Shows additional debug info in the terminal. Levels: -1 (Horde-quiet, suppresses non-essential prints; auto-applied when Horde args are set), 0 (default, normal output), 1 (verbose: extra slot/cache info, larger print buffers, retains horde-debug prefix). Passing the flag without a value implies 1.", nargs='?', const=1, type=int, default=0)
     advparser.add_argument("--defaultgenamt", help="How many tokens to generate by default, if not specified. Must be smaller than context size. Usually, your frontend GUI will override this.", type=check_range(int,64,32768), default=default_genlen)
     advparser.add_argument("--device", "-dev", metavar=('<dev1,dev2,..>'), help="Set llama.cpp compatible device selection override. Comma separated. Overrides normal device choices.", default="")
