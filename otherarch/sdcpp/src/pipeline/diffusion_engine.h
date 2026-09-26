@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -36,7 +37,7 @@ extern const char* model_version_to_str[];
 static inline bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
     return version == VERSION_FLUX ||
            sd_version_is_flux2(version) ||
-           sd_version_is_qwen_image(version) ||
+           (sd_version_is_qwen_image(version) && version != VERSION_QWEN_IMAGE_2_1) ||
            sd_version_is_mage_flow(version) ||
            sd_version_is_longcat(version) ||
            sd_version_is_z_image(version) ||
@@ -56,8 +57,9 @@ public:
     std::shared_ptr<RNG> rng;
     std::shared_ptr<RNG> sampler_rng = nullptr;
     int n_threads                    = -1;
-    float default_flow_shift         = INFINITY;
-    float active_flow_shift          = INFINITY;
+    std::unique_ptr<sd::ParallelExecutor> tensor_executor;
+    float default_flow_shift = INFINITY;
+    float active_flow_shift  = INFINITY;
 
     std::shared_ptr<Conditioner> cond_stage_model;
     std::shared_ptr<FrozenCLIPVisionEmbedder> clip_vision;  // for svd or wan2.1 i2v
@@ -90,6 +92,7 @@ public:
     std::map<std::string, std::shared_ptr<LoraModel>> kcpp_lora_cache;
     bool kcpp_lora_cache_populate = false;
     std::string kcpp_taesd_path;
+    std::string kcpp_tokenizer_path;
     // kcpp
 
     std::string taesd_path;
@@ -133,6 +136,7 @@ public:
                                 &sd_ctx_params_t::clip_g_path, &sd_ctx_params_t::clip_vision_path,
                                 &sd_ctx_params_t::t5xxl_path, &sd_ctx_params_t::llm_path,
                                 &sd_ctx_params_t::llm_vision_path, &sd_ctx_params_t::diffusion_model_path,
+                                &sd_ctx_params_t::tokenizer,
                                 &sd_ctx_params_t::high_noise_diffusion_model_path, &sd_ctx_params_t::uncond_diffusion_model_path,
                                 &sd_ctx_params_t::embeddings_connectors_path, &sd_ctx_params_t::vae_path,
                                 &sd_ctx_params_t::audio_vae_path, &sd_ctx_params_t::taesd_path,
@@ -210,6 +214,7 @@ public:
         StableDiffusionGGML& sd;
         std::unique_lock<std::recursive_mutex> lock;
         bool acquired = false;
+        std::optional<sd::ParallelScope> tensor_scope;
 
         explicit ContextOperation(StableDiffusionGGML& sd)
             : sd(sd), lock(sd.execution_mutex, std::try_to_lock) {
@@ -219,6 +224,7 @@ public:
             }
             sd.executing_ = true;
             acquired      = true;
+            tensor_scope.emplace(sd.tensor_executor.get());
         }
 
         ~ContextOperation() {

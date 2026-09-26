@@ -102,7 +102,7 @@ namespace sd::backend_fit {
         for (const auto& [name, stored_tensor] : loader.get_tensor_storage_map()) {
             TensorStorage ts = stored_tensor;
             ComponentKind kind;
-            if (is_unused_tensor(ts.name) || !classify_tensor(ts.name, kind)) {
+            if (!classify_tensor(ts.name, kind)) {
                 continue;
             }
             if (ts.expected_type != GGML_TYPE_COUNT) {

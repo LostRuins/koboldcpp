@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/parallel.h"
 #include "core/rng.hpp"
 
 namespace sd {
@@ -57,6 +58,15 @@ namespace sd {
             numel *= dim;
         }
         return numel;
+    }
+
+    template <typename F>
+    inline void tensor_for_each(int64_t count, F&& fn, int64_t grain_size = 65536) {
+        parallel_for(0, count, grain_size, [&](int64_t begin, int64_t end) {
+            for (int64_t i = begin; i < end; ++i) {
+                fn(i);
+            }
+        });
     }
 
     template <typename T>
@@ -230,7 +240,10 @@ namespace sd {
         }
 
         void fill_(const T& value) {
-            std::fill(data_.begin(), data_.end(), value);
+            const T fill_value = value;
+            parallel_for(0, numel(), 65536, [&](int64_t begin, int64_t end) {
+                std::fill_n(data_.data() + begin, end - begin, fill_value);
+            });
         }
 
         Tensor& masked_fill_(const Tensor<uint8_t>& mask, const T& value);
@@ -390,7 +403,7 @@ namespace sd {
                                               tensor_shape_to_string(lhs) + ", rhs_shape=" +
                                               tensor_shape_to_string(rhs));
             }
-            shape[i] = std::max(lhs_dim, rhs_dim);
+            shape[i] = lhs_dim == 1 ? rhs_dim : lhs_dim;
         }
         return shape;
     }
@@ -425,39 +438,55 @@ namespace sd {
                                                  const std::vector<int64_t>& rhs_shape_raw,
                                                  const std::vector<int64_t>& rhs_strides_raw,
                                                  F&& fn) {
-        const size_t ndim                = out_shape.size();
-        std::vector<int64_t> out_strides = tensor_compute_strides(out_shape);
-        std::vector<int64_t> lhs_shape(ndim, 1);
-        std::vector<int64_t> lhs_strides(ndim, 0);
-        std::vector<int64_t> rhs_shape(ndim, 1);
-        std::vector<int64_t> rhs_strides(ndim, 0);
-
-        for (size_t i = 0; i < lhs_shape_raw.size(); ++i) {
-            lhs_shape[i]   = lhs_shape_raw[i];
-            lhs_strides[i] = lhs_strides_raw[i];
-        }
-        for (size_t i = 0; i < rhs_shape_raw.size(); ++i) {
-            rhs_shape[i]   = rhs_shape_raw[i];
-            rhs_strides[i] = rhs_strides_raw[i];
-        }
-
-        const int64_t numel = tensor_numel(out_shape);
-        for (int64_t flat = 0; flat < numel; ++flat) {
-            int64_t remaining  = flat;
-            int64_t lhs_offset = 0;
-            int64_t rhs_offset = 0;
-            for (size_t i = ndim; i-- > 0;) {
-                int64_t coord = remaining / out_strides[i];
-                remaining %= out_strides[i];
-                if (lhs_shape[i] != 1) {
-                    lhs_offset += coord * lhs_strides[i];
+        const int64_t numel    = tensor_numel(out_shape);
+        const size_t ndim      = out_shape.size();
+        auto broadcast_strides = [&](const std::vector<int64_t>& shape,
+                                     const std::vector<int64_t>& strides) {
+            if ((numel != 0 && tensor_numel(shape) == 0) || strides.size() != shape.size()) {
+                tensor_throw_invalid_argument("Tensor broadcast requires non-empty inputs and matching strides");
+            }
+            std::vector<int64_t> result(ndim, 0);
+            for (size_t i = 0; i < std::max(ndim, shape.size()); ++i) {
+                const int64_t input_dim  = i < shape.size() ? shape[i] : 1;
+                const int64_t output_dim = i < ndim ? out_shape[i] : 1;
+                if (input_dim != 1 && input_dim != output_dim) {
+                    tensor_throw_invalid_argument("Tensor broadcast cannot expand the destination: input_shape=" +
+                                                  tensor_shape_to_string(shape) + ", output_shape=" +
+                                                  tensor_shape_to_string(out_shape));
                 }
-                if (rhs_shape[i] != 1) {
-                    rhs_offset += coord * rhs_strides[i];
+                if (i < ndim && input_dim != 1) {
+                    result[i] = strides[i];
                 }
             }
-            fn(flat, lhs_offset, rhs_offset);
+            return result;
+        };
+        const auto lhs_strides = broadcast_strides(lhs_shape_raw, lhs_strides_raw);
+        const auto rhs_strides = broadcast_strides(rhs_shape_raw, rhs_strides_raw);
+        if (numel == 0) {
+            return;
         }
+        parallel_for(0, numel, 16384, [&](int64_t begin, int64_t end) {
+            auto coord         = tensor_unravel_index(begin, out_shape);
+            int64_t lhs_offset = 0;
+            int64_t rhs_offset = 0;
+            for (size_t i = 0; i < ndim; ++i) {
+                lhs_offset += coord[i] * lhs_strides[i];
+                rhs_offset += coord[i] * rhs_strides[i];
+            }
+            for (int64_t flat = begin; flat < end; ++flat) {
+                fn(flat, lhs_offset, rhs_offset);
+                for (size_t i = 0; i < ndim; ++i) {
+                    lhs_offset += lhs_strides[i];
+                    rhs_offset += rhs_strides[i];
+                    if (++coord[i] < out_shape[i]) {
+                        break;
+                    }
+                    coord[i] = 0;
+                    lhs_offset -= out_shape[i] * lhs_strides[i];
+                    rhs_offset -= out_shape[i] * rhs_strides[i];
+                }
+            }
+        });
     }
 
     template <typename T>
@@ -469,6 +498,7 @@ namespace sd {
         const std::vector<int64_t> data_strides = tensor_compute_strides(shape_);
         const std::vector<int64_t> mask_strides = tensor_compute_strides(mask.shape());
         const uint8_t* mask_data                = mask.data();
+        const T fill_value                      = value;
         tensor_for_each_broadcast_offset(shape_,
                                          shape_,
                                          data_strides,
@@ -476,7 +506,7 @@ namespace sd {
                                          mask_strides,
                                          [&](int64_t, int64_t data_offset, int64_t mask_offset) {
                                              if (mask_data[mask_offset] != 0) {
-                                                 data_[static_cast<size_t>(data_offset)] = value;
+                                                 data_[static_cast<size_t>(data_offset)] = fill_value;
                                              }
                                          });
         return *this;
@@ -486,9 +516,9 @@ namespace sd {
     inline Tensor<uint8_t> operator<(const Tensor<T>& lhs, Scalar rhs) {
         Tensor<uint8_t> result(lhs.shape());
         const T value = static_cast<T>(rhs);
-        for (int64_t i = 0; i < lhs.numel(); ++i) {
-            result[i] = lhs[i] < value ? 1 : 0;
-        }
+        tensor_for_each(lhs.numel(), [&](int64_t i) {
+            result.data()[i] = lhs.data()[i] < value ? 1 : 0;
+        });
         return result;
     }
 
@@ -496,9 +526,9 @@ namespace sd {
     inline Tensor<uint8_t> operator<(Scalar lhs, const Tensor<T>& rhs) {
         Tensor<uint8_t> result(rhs.shape());
         const T value = static_cast<T>(lhs);
-        for (int64_t i = 0; i < rhs.numel(); ++i) {
-            result[i] = value < rhs[i] ? 1 : 0;
-        }
+        tensor_for_each(rhs.numel(), [&](int64_t i) {
+            result.data()[i] = value < rhs.data()[i] ? 1 : 0;
+        });
         return result;
     }
 
@@ -516,7 +546,7 @@ namespace sd {
                                          rhs.shape(),
                                          rhs_strides,
                                          [&](int64_t flat, int64_t lhs_offset, int64_t rhs_offset) {
-                                             result[flat] = lhs_data[lhs_offset] < rhs_data[rhs_offset] ? 1 : 0;
+                                             result.data()[flat] = lhs_data[lhs_offset] < rhs_data[rhs_offset] ? 1 : 0;
                                          });
         return result;
     }
@@ -524,9 +554,9 @@ namespace sd {
     template <typename T>
     inline Tensor<T>& operator+=(Tensor<T>& lhs, const Tensor<T>& rhs) {
         if (lhs.shape() == rhs.shape()) {
-            for (int64_t i = 0; i < lhs.numel(); ++i) {
-                lhs[i] += rhs[i];
-            }
+            tensor_for_each(lhs.numel(), [&](int64_t i) {
+                lhs.data()[i] += rhs.data()[i];
+            });
             return lhs;
         }
         tensor_broadcast_shape(lhs.shape(), rhs.shape());
@@ -539,7 +569,7 @@ namespace sd {
                                          rhs.shape(),
                                          rhs_strides,
                                          [&](int64_t, int64_t lhs_offset, int64_t rhs_offset) {
-                                             lhs[static_cast<int64_t>(lhs_offset)] += rhs_data[rhs_offset];
+                                             lhs.data()[lhs_offset] += rhs_data[rhs_offset];
                                          });
         return lhs;
     }
@@ -547,18 +577,18 @@ namespace sd {
     template <typename T, typename Scalar, typename = std::enable_if_t<std::is_arithmetic<Scalar>::value>>
     inline Tensor<T>& operator+=(Tensor<T>& lhs, Scalar rhs) {
         const T value = static_cast<T>(rhs);
-        for (int64_t i = 0; i < lhs.numel(); ++i) {
-            lhs[i] += value;
-        }
+        tensor_for_each(lhs.numel(), [&](int64_t i) {
+            lhs.data()[i] += value;
+        });
         return lhs;
     }
 
     template <typename T>
     inline Tensor<T>& operator-=(Tensor<T>& lhs, const Tensor<T>& rhs) {
         if (lhs.shape() == rhs.shape()) {
-            for (int64_t i = 0; i < lhs.numel(); ++i) {
-                lhs[i] -= rhs[i];
-            }
+            tensor_for_each(lhs.numel(), [&](int64_t i) {
+                lhs.data()[i] -= rhs.data()[i];
+            });
             return lhs;
         }
         tensor_broadcast_shape(lhs.shape(), rhs.shape());
@@ -571,7 +601,7 @@ namespace sd {
                                          rhs.shape(),
                                          rhs_strides,
                                          [&](int64_t, int64_t lhs_offset, int64_t rhs_offset) {
-                                             lhs[static_cast<int64_t>(lhs_offset)] -= rhs_data[rhs_offset];
+                                             lhs.data()[lhs_offset] -= rhs_data[rhs_offset];
                                          });
         return lhs;
     }
@@ -579,18 +609,18 @@ namespace sd {
     template <typename T, typename Scalar, typename = std::enable_if_t<std::is_arithmetic<Scalar>::value>>
     inline Tensor<T>& operator-=(Tensor<T>& lhs, Scalar rhs) {
         const T value = static_cast<T>(rhs);
-        for (int64_t i = 0; i < lhs.numel(); ++i) {
-            lhs[i] -= value;
-        }
+        tensor_for_each(lhs.numel(), [&](int64_t i) {
+            lhs.data()[i] -= value;
+        });
         return lhs;
     }
 
     template <typename T>
     inline Tensor<T>& operator*=(Tensor<T>& lhs, const Tensor<T>& rhs) {
         if (lhs.shape() == rhs.shape()) {
-            for (int64_t i = 0; i < lhs.numel(); ++i) {
-                lhs[i] *= rhs[i];
-            }
+            tensor_for_each(lhs.numel(), [&](int64_t i) {
+                lhs.data()[i] *= rhs.data()[i];
+            });
             return lhs;
         }
         tensor_broadcast_shape(lhs.shape(), rhs.shape());
@@ -603,7 +633,7 @@ namespace sd {
                                          rhs.shape(),
                                          rhs_strides,
                                          [&](int64_t, int64_t lhs_offset, int64_t rhs_offset) {
-                                             lhs[static_cast<int64_t>(lhs_offset)] *= rhs_data[rhs_offset];
+                                             lhs.data()[lhs_offset] *= rhs_data[rhs_offset];
                                          });
         return lhs;
     }
@@ -611,18 +641,18 @@ namespace sd {
     template <typename T, typename Scalar, typename = std::enable_if_t<std::is_arithmetic<Scalar>::value>>
     inline Tensor<T>& operator*=(Tensor<T>& lhs, Scalar rhs) {
         const T value = static_cast<T>(rhs);
-        for (int64_t i = 0; i < lhs.numel(); ++i) {
-            lhs[i] *= value;
-        }
+        tensor_for_each(lhs.numel(), [&](int64_t i) {
+            lhs.data()[i] *= value;
+        });
         return lhs;
     }
 
     template <typename T>
     inline Tensor<T>& operator/=(Tensor<T>& lhs, const Tensor<T>& rhs) {
         if (lhs.shape() == rhs.shape()) {
-            for (int64_t i = 0; i < lhs.numel(); ++i) {
-                lhs[i] /= rhs[i];
-            }
+            tensor_for_each(lhs.numel(), [&](int64_t i) {
+                lhs.data()[i] /= rhs.data()[i];
+            });
             return lhs;
         }
         tensor_broadcast_shape(lhs.shape(), rhs.shape());
@@ -635,7 +665,7 @@ namespace sd {
                                          rhs.shape(),
                                          rhs_strides,
                                          [&](int64_t, int64_t lhs_offset, int64_t rhs_offset) {
-                                             lhs[static_cast<int64_t>(lhs_offset)] /= rhs_data[rhs_offset];
+                                             lhs.data()[lhs_offset] /= rhs_data[rhs_offset];
                                          });
         return lhs;
     }
@@ -643,9 +673,9 @@ namespace sd {
     template <typename T, typename Scalar, typename = std::enable_if_t<std::is_arithmetic<Scalar>::value>>
     inline Tensor<T>& operator/=(Tensor<T>& lhs, Scalar rhs) {
         const T value = static_cast<T>(rhs);
-        for (int64_t i = 0; i < lhs.numel(); ++i) {
-            lhs[i] /= value;
-        }
+        tensor_for_each(lhs.numel(), [&](int64_t i) {
+            lhs.data()[i] /= value;
+        });
         return lhs;
     }
 
@@ -664,7 +694,7 @@ namespace sd {
                                              rhs.shape(),
                                              rhs_strides,
                                              [&](int64_t flat, int64_t lhs_offset, int64_t rhs_offset) {
-                                                 result[flat] = lhs_data[lhs_offset] + rhs_data[rhs_offset];
+                                                 result.data()[flat] = lhs_data[lhs_offset] + rhs_data[rhs_offset];
                                              });
             return result;
         }
@@ -699,7 +729,7 @@ namespace sd {
                                              rhs.shape(),
                                              rhs_strides,
                                              [&](int64_t flat, int64_t lhs_offset, int64_t rhs_offset) {
-                                                 result[flat] = lhs_data[lhs_offset] - rhs_data[rhs_offset];
+                                                 result.data()[flat] = lhs_data[lhs_offset] - rhs_data[rhs_offset];
                                              });
             return result;
         }
@@ -717,9 +747,9 @@ namespace sd {
     inline Tensor<T> operator-(Scalar lhs, const Tensor<T>& rhs) {
         Tensor<T> result = rhs;
         const T value    = static_cast<T>(lhs);
-        for (int64_t i = 0; i < result.numel(); ++i) {
-            result[i] = value - result[i];
-        }
+        tensor_for_each(result.numel(), [&](int64_t i) {
+            result.data()[i] = value - result.data()[i];
+        });
         return result;
     }
 
@@ -738,7 +768,7 @@ namespace sd {
                                              rhs.shape(),
                                              rhs_strides,
                                              [&](int64_t flat, int64_t lhs_offset, int64_t rhs_offset) {
-                                                 result[flat] = lhs_data[lhs_offset] * rhs_data[rhs_offset];
+                                                 result.data()[flat] = lhs_data[lhs_offset] * rhs_data[rhs_offset];
                                              });
             return result;
         }
@@ -773,7 +803,7 @@ namespace sd {
                                              rhs.shape(),
                                              rhs_strides,
                                              [&](int64_t flat, int64_t lhs_offset, int64_t rhs_offset) {
-                                                 result[flat] = lhs_data[lhs_offset] / rhs_data[rhs_offset];
+                                                 result.data()[flat] = lhs_data[lhs_offset] / rhs_data[rhs_offset];
                                              });
             return result;
         }
@@ -791,18 +821,18 @@ namespace sd {
     inline Tensor<T> operator/(Scalar lhs, const Tensor<T>& rhs) {
         Tensor<T> result = rhs;
         const T value    = static_cast<T>(lhs);
-        for (int64_t i = 0; i < result.numel(); ++i) {
-            result[i] = value / result[i];
-        }
+        tensor_for_each(result.numel(), [&](int64_t i) {
+            result.data()[i] = value / result.data()[i];
+        });
         return result;
     }
 
     template <typename T>
     inline Tensor<T> operator-(const Tensor<T>& tensor) {
         Tensor<T> result = tensor;
-        for (int64_t i = 0; i < result.numel(); ++i) {
-            result[i] = -result[i];
-        }
+        tensor_for_each(result.numel(), [&](int64_t i) {
+            result.data()[i] = -result.data()[i];
+        });
         return result;
     }
 
@@ -1067,9 +1097,11 @@ namespace sd {
         template <typename T>
         inline Tensor<T> exp(const Tensor<T>& input) {
             Tensor<T> output(input.shape());
-            for (int64_t i = 0; i < input.numel(); ++i) {
-                output[i] = static_cast<T>(std::exp(static_cast<double>(input[i])));
-            }
+            tensor_for_each(
+                input.numel(), [&](int64_t i) {
+                    output.data()[i] = static_cast<T>(std::exp(static_cast<double>(input.data()[i])));
+                },
+                4096);
             return output;
         }
 
@@ -1079,18 +1111,18 @@ namespace sd {
                 tensor_throw_invalid_argument("Tensor clamp requires min_value <= max_value");
             }
             Tensor<T> output(input.shape());
-            for (int64_t i = 0; i < input.numel(); ++i) {
-                output[i] = std::clamp(input[i], min_value, max_value);
-            }
+            tensor_for_each(input.numel(), [&](int64_t i) {
+                output.data()[i] = std::clamp(input.data()[i], min_value, max_value);
+            });
             return output;
         }
 
         template <typename T>
         inline Tensor<T> round(const Tensor<T>& input) {
             Tensor<T> output(input.shape());
-            for (int64_t i = 0; i < input.numel(); ++i) {
-                output[i] = static_cast<T>(std::round(static_cast<double>(input[i])));
-            }
+            tensor_for_each(input.numel(), [&](int64_t i) {
+                output.data()[i] = static_cast<T>(std::round(static_cast<double>(input.data()[i])));
+            });
             return output;
         }
 

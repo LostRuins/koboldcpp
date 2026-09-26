@@ -26,13 +26,26 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
 }
 
 const char* sd_type_name(enum sd_type_t type) {
-    if ((int)type < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
-        return ggml_type_name((ggml_type)type);
+    if (type == SD_TYPE_F8_E4M3) {
+        return "f8_e4m3";
+    }
+    if (type == SD_TYPE_F8_E5M2) {
+        return "f8_e5m2";
+    }
+    const auto ggml_type = sd_type_to_ggml_type(type);
+    if (ggml_type != GGML_TYPE_COUNT) {
+        return ggml_type_name(ggml_type);
     }
     return NONE_STR;
 }
 
 enum sd_type_t str_to_sd_type(const char* str) {
+    if (!strcmp(str, "f8_e4m3")) {
+        return SD_TYPE_F8_E4M3;
+    }
+    if (!strcmp(str, "f8_e5m2")) {
+        return SD_TYPE_F8_E5M2;
+    }
     for (int i = 0; i < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT); i++) {
         auto trait = ggml_get_type_traits((ggml_type)i);
         if (!strcmp(str, trait->type_name)) {
@@ -349,6 +362,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "t5xxl_path: %s\n"
              "llm_path: %s\n"
              "llm_vision_path: %s\n"
+             "tokenizer: %s\n"
              "diffusion_model_path: %s\n"
              "high_noise_diffusion_model_path: %s\n"
              "uncond_diffusion_model_path: %s\n"
@@ -387,6 +401,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->t5xxl_path),
              SAFE_STR(sd_ctx_params->llm_path),
              SAFE_STR(sd_ctx_params->llm_vision_path),
+             SAFE_STR(sd_ctx_params->tokenizer),
              SAFE_STR(sd_ctx_params->diffusion_model_path),
              SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path),
              SAFE_STR(sd_ctx_params->uncond_diffusion_model_path),
@@ -810,7 +825,7 @@ namespace kcpp_sd {
     model_info get_model_info(sd_ctx_t* ctx)
     {
         model_info res = {};
-        auto loadedsdver = get_loaded_sd_version(ctx);
+        SDVersion loadedsdver = (SDVersion)get_loaded_sd_version(ctx);
         res.is_wan = (loadedsdver == SDVersion::VERSION_WAN2 || loadedsdver == SDVersion::VERSION_WAN2_2_I2V || loadedsdver == SDVersion::VERSION_WAN2_2_TI2V);
         res.is_qwenimg = (loadedsdver == SDVersion::VERSION_QWEN_IMAGE);
         res.is_chroma = loaded_model_is_chroma(ctx);
@@ -821,11 +836,11 @@ namespace kcpp_sd {
         res.is_sdxs = (loadedsdver == SDVersion::VERSION_SDXS_512_DS || loadedsdver == SDVersion::VERSION_SDXS_09);
         res.is_sd1 = (loadedsdver == SDVersion::VERSION_SD1);
         res.is_sd2 = (loadedsdver == SDVersion::VERSION_SD2);
-        res.is_sdxl = sd_version_is_sdxl((SDVersion)loadedsdver);
-        res.is_ltx = sd_version_is_ltxav((SDVersion)loadedsdver);
-        res.is_minimaxh3 = sd_version_is_minimax_h3((SDVersion)loadedsdver);
-        res.is_boogu = sd_version_is_boogu_image((SDVersion)loadedsdver);
-        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg((SDVersion)loadedsdver);
+        res.is_sdxl = sd_version_is_sdxl(loadedsdver);
+        res.is_ltx = sd_version_is_ltxav(loadedsdver);
+        res.is_minimaxh3 = sd_version_is_minimax_h3(loadedsdver);
+        res.is_boogu = sd_version_is_boogu_image(loadedsdver);
+        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg(loadedsdver) || sd_version_is_pid(loadedsdver);
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
         res.spatial_multiple = get_spatial_multiple(ctx);
         return res;

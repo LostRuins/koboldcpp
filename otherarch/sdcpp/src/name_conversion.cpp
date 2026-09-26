@@ -999,7 +999,30 @@ std::string convert_diffusers_vae_to_original_sd1(std::string name) {
     return result;
 }
 
-std::string convert_diffusers_to_original_wan_vae(std::string name) {
+std::string convert_diffusers_to_original_wan_vae(std::string name, bool qwen_image_2_1 = false) {
+    if (qwen_image_2_1) {
+        for (int i = 0; i < 5; ++i) {
+            const auto index = std::to_string(i);
+            for (const auto& side : {std::string("encoder"), std::string("decoder")}) {
+                const bool encoder           = side == "encoder";
+                const std::string old_prefix = side + (encoder ? ".down_blocks." : ".up_blocks.") + index + ".";
+                const std::string new_prefix = side + (encoder ? ".downsamples." : ".upsamples.") + index + ".";
+                if (!starts_with(name, old_prefix)) {
+                    continue;
+                }
+                name.replace(0, old_prefix.size(), new_prefix);
+                const std::string layers = encoder ? "downsamples." : "upsamples.";
+                for (int j = 0; j < (encoder ? 2 : 3); ++j) {
+                    const auto old_resnet = new_prefix + "resnets." + std::to_string(j) + ".";
+                    const auto new_resnet = new_prefix + layers + std::to_string(j) + ".";
+                    replace_with_prefix_map(name, std::vector<std::pair<std::string, std::string>>{{old_resnet + "conv_shortcut.", new_resnet + "shortcut."},
+                                                                                                   {old_resnet, new_resnet + "residual."}});
+                }
+                replace_with_prefix_map(name, std::vector<std::pair<std::string, std::string>>{{new_prefix + (encoder ? "downsampler." : "upsampler."),
+                                                                                                new_prefix + layers + (encoder ? "2." : "3.")}});
+            }
+        }
+    }
     static const std::vector<std::pair<std::string, std::string>> prefix_map = {
         {"quant_conv.", "conv1."},
         {"post_quant_conv.", "conv2."},
@@ -1055,7 +1078,11 @@ std::string convert_diffusers_to_original_wan_vae(std::string name) {
     };
 
     replace_with_name_map(name, shared_name_map);
-    replace_with_prefix_map(name, prefix_map);
+    if (qwen_image_2_1) {
+        replace_with_prefix_map(name, std::vector<std::pair<std::string, std::string>>{{"quant_conv.", "conv1."}, {"post_quant_conv.", "conv2."}});
+    } else {
+        replace_with_prefix_map(name, prefix_map);
+    }
 
     // Only apply the ResNet-specific renaming if the tensor belongs to a ResNet block.
     // This prevents generic ".conv1." or ".conv2." matching on top-level encoder/decoder convolutions.
@@ -1071,7 +1098,7 @@ std::string convert_first_stage_model_name(std::string name, std::string prefix,
         return name;
     }
     if (sd_version_uses_wan_vae(version)) {
-        return convert_diffusers_to_original_wan_vae(name);
+        return convert_diffusers_to_original_wan_vae(name, version == VERSION_QWEN_IMAGE_2_1);
     }
     static std::unordered_map<std::string, std::string> vae_name_map = {
         {"decoder.post_quant_conv.", "post_quant_conv."},
@@ -1489,7 +1516,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     replace_with_prefix_map(name, prefix_map);
 
-    if (sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
+    if (version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
         const std::string hf_vision_prefix = "text_encoders.llm.model.visual.";
         if (starts_with(name, hf_vision_prefix)) {
             name = "text_encoders.llm.visual." + name.substr(hf_vision_prefix.size());

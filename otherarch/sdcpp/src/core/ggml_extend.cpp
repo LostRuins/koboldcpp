@@ -1,6 +1,7 @@
 #include "core/ggml_extend.h"
 
 #include <cmath>
+#include <stdexcept>
 #include <utility>
 
 #include "core/ggml_extend_backend.h"
@@ -240,7 +241,6 @@ ggml_tensor* ggml_ext_linear(ggml_context* ctx,
     return x;
 }
 
-#if KCPP_MAINLINE_INT8_CONVROT
 ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
                                            ggml_tensor* x,
                                            ggml_tensor* w,
@@ -248,6 +248,7 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
                                            ggml_tensor* b,
                                            int convrot_group_size,
                                            float scale) {
+#ifndef SD_USE_UPSTREAM_GGML
     GGML_ASSERT(x->type == GGML_TYPE_F32 || (x->type == GGML_TYPE_I8 && scale == 1.f));
     if (scale != 1.f) {
         x = ggml_ext_scale(ctx, x, scale);
@@ -271,8 +272,17 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
         }
     }
     return x;
+#else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(x);
+    GGML_UNUSED(w);
+    GGML_UNUSED(weight_scale);
+    GGML_UNUSED(b);
+    GGML_UNUSED(convrot_group_size);
+    GGML_UNUSED(scale);
+    throw std::runtime_error("INT8 tensorwise/convrot is not supported by this ggml build");
+#endif
 }
-#endif //kcpp
 
 ggml_tensor* ggml_ext_pad_ext(ggml_context* ctx,
                               ggml_backend_t backend,
@@ -454,8 +464,13 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
                               int d0,
                               int d1,
                               int d2,
-                              bool force_prec_f32) {
-    if (force_prec_f32) {
+                              bool force_prec_f32,
+                              bool direct) {
+    if (direct) {
+        int64_t OC = w->ne[3] / IC;
+        int64_t N  = x->ne[3] / IC;
+        x          = ggml_conv_3d_direct(ctx, w, x, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
+    } else if (force_prec_f32) {
         ggml_tensor* im2col = ggml_im2col_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2, w->type);
 
         int64_t OC = w->ne[3] / IC;
@@ -645,6 +660,14 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
     ggml_tensor* kqv = nullptr;
 
     auto build_kqv = [&](ggml_tensor* q_in, ggml_tensor* k_in, ggml_tensor* v_in, ggml_tensor* mask_in) -> ggml_tensor* {
+        const bool pad_head = d_head > 0 && d_head < 64 && q_in->ne[0] == d_head && k_in->ne[0] == d_head &&
+                              q_in->type == GGML_TYPE_F32 && k_in->type == GGML_TYPE_F32 &&
+                              v_in->type == GGML_TYPE_F32 && sd_backend_supports_cuda_mma(backend);
+        if (pad_head) {
+            // CUDA FA MMA starts at 64 channels; keep the original head's attention scale.
+            q_in = ggml_pad(ctx, q_in, 64 - d_head, 0, 0, 0);
+            k_in = ggml_pad(ctx, k_in, 64 - d_head, 0, 0, 0);
+        }
         if (kv_scale != 1.0f) {
             k_in = ggml_ext_scale(ctx, k_in, kv_scale);
         }
@@ -652,6 +675,9 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
 
         v_in = ggml_ext_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
         v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
+        if (pad_head) {
+            v_in = ggml_pad(ctx, v_in, 64 - d_head, 0, 0, 0);
+        }
         if (kv_scale != 1.0f) {
             v_in = ggml_ext_scale(ctx, v_in, kv_scale);
         }
@@ -680,6 +706,9 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
         if (kv_scale != 1.0f) {
             out = ggml_ext_scale(ctx, out, 1.0f / kv_scale);
+        }
+        if (pad_head) {
+            out = ggml_ext_slice(ctx, out, 0, 0, d_head);
         }
         return out;
     };

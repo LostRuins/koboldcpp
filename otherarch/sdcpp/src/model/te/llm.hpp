@@ -15,6 +15,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,9 +32,9 @@
 #include "model_manager.h"
 #include "tokenizers/bpe_tokenizer.h"
 #include "tokenizers/gemma_tokenizer.h"
-#include "tokenizers/gpt_oss_tokenizer.h"
 #include "tokenizers/mistral_tokenizer.h"
 #include "tokenizers/qwen2_tokenizer.h"
+#include "tokenizers/tokenizer_config.h"
 
 namespace LLM {
     constexpr int LLM_GRAPH_SIZE = 65536;
@@ -1376,7 +1377,7 @@ namespace LLM {
                 x        = ggml_ext_cont(ctx->ggml_ctx, kqv);
                 x        = ggml_reshape_3d(ctx->ggml_ctx, x, head_dim * num_heads, n_token, N);
             } else {
-                x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
+                x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, attention_mask, true, ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
             }
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
@@ -2351,7 +2352,7 @@ namespace LLM {
     };
 
     struct LLMEmbedder {
-        std::shared_ptr<BPETokenizer> tokenizer;
+        std::shared_ptr<Tokenizer> tokenizer;
         LLMRunner model;
 
         LLMEmbedder(LLMArch arch,
@@ -2359,14 +2360,27 @@ namespace LLM {
                     const String2TensorStorage& tensor_storage_map      = {},
                     const std::string prefix                            = "",
                     bool enable_vision                                  = false,
-                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                    std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                    const TokenizerConfig& tokenizers                   = {})
             : model(arch, backend, tensor_storage_map, prefix, enable_vision, weight_manager) {
+            int pad_id = 151643;
             if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
-                tokenizer = std::make_shared<MistralTokenizer>();
+                pad_id = 11;
             } else if (arch == LLMArch::GPT_OSS_20B) {
-                tokenizer = std::make_shared<GPTOSSTokenizer>();
-            } else {
-                tokenizer = std::make_shared<Qwen2Tokenizer>();
+                pad_id = 199999;
+            } else if (arch == LLMArch::GEMMA2_2B) {
+                pad_id = 0;
+            }
+            tokenizer = tokenizers.create(TokenizerConfig::MAIN, model.config.vocab_size, pad_id);
+            if (!tokenizer) {
+                if (arch == LLMArch::GPT_OSS_20B || arch == LLMArch::GEMMA2_2B) {
+                    throw std::runtime_error("GPT-OSS and Gemma 2 require an external tokenizer.json in the main tokenizer slot");
+                }
+                if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
+                    tokenizer = std::make_shared<MistralTokenizer>();
+                } else {
+                    tokenizer = std::make_shared<Qwen2Tokenizer>();
+                }
             }
         }
 
@@ -2402,7 +2416,10 @@ namespace LLM {
             for (const auto& item : parsed_attention) {
                 const std::string& curr_text = item.first;
                 float curr_weight            = item.second;
-                std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
+                std::vector<int> curr_tokens;
+                if (!tokenizer->tokenize(curr_text, curr_tokens, nullptr)) {
+                    return {};
+                }
                 tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
                 weights.insert(weights.end(), curr_tokens.size(), curr_weight);
             }
