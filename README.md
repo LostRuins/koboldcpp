@@ -28,7 +28,7 @@ KoboldCpp is an easy-to-use AI text-generation software for GGML and GGUF models
 - Ready-to-use binaries for Windows, MacOS, Linux. Runs directly with Colab, Docker, also supports other platforms if self-compiled (like  Android (via Termux) and Raspberry PI).
 - [Need help finding a model? Read this!](https://github.com/LostRuins/koboldcpp/wiki#getting-an-ai-model-file)
 
-## Phishing Scam Alert
+## Phishing Scam Alert ⚠️
 - Phishing SCAM Warning: koboldcpp.com is NOT an official site, please help to report it to google for impersonation. You should **ONLY** trust official downloads from the release binaries on the official github at https://github.com/LostRuins/koboldcpp/releases/latest
 
 ## Windows Usage (Precompiled Binary, Recommended)
