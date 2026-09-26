@@ -1271,10 +1271,10 @@ namespace sd::pipeline {
         return latents;
     }
 
-    static ImageGenerationEmbeds prepare_video_generation_embeds(StableDiffusionGGML* sd,
-                                                                 const sd_vid_gen_params_t* sd_vid_gen_params,
-                                                                 const GenerationRequest& request,
-                                                                 const ImageGenerationLatents& latents) {
+    static std::optional<ImageGenerationEmbeds> prepare_video_generation_embeds(StableDiffusionGGML* sd,
+                                                                                const sd_vid_gen_params_t* sd_vid_gen_params,
+                                                                                const GenerationRequest& request,
+                                                                                const ImageGenerationLatents& latents) {
         ConditionerRunnerEndOnExit conditioner_runner_end{sd->cond_stage_model.get()};
 
         ImageGenerationEmbeds embeds;
@@ -1291,8 +1291,12 @@ namespace sd::pipeline {
         int64_t prepare_start_ms = ggml_time_ms();
         embeds.cond              = sd->cond_stage_model->get_learned_condition(sd->n_threads,
                                                                                condition_params);
-        embeds.cond.c_concat     = latents.concat_latent;
-        embeds.cond.c_vector     = latents.clip_vision_output;
+        if (embeds.cond.empty()) {
+            LOG_ERROR("failed to encode video prompt");
+            return std::nullopt;
+        }
+        embeds.cond.c_concat = latents.concat_latent;
+        embeds.cond.c_vector = latents.clip_vision_output;
         if (sd_version_is_minimax_h3(sd->version)) {
             embeds.cond.c_ref_images       = latents.ref_latents;
             embeds.cond.c_ref_audios       = latents.reference_audio_latents;
@@ -1310,9 +1314,13 @@ namespace sd::pipeline {
             }
         }
         if (request.use_uncond) {
-            condition_params.text  = request.negative_prompt;
-            embeds.uncond          = sd->cond_stage_model->get_learned_condition(sd->n_threads,
-                                                                                 condition_params);
+            condition_params.text = request.negative_prompt;
+            embeds.uncond         = sd->cond_stage_model->get_learned_condition(sd->n_threads,
+                                                                                condition_params);
+            if (embeds.uncond.empty()) {
+                LOG_ERROR("failed to encode negative video prompt");
+                return std::nullopt;
+            }
             embeds.uncond.c_concat = latents.concat_latent;
             embeds.uncond.c_vector = latents.clip_vision_output;
             if (sd_version_is_minimax_h3(sd->version)) {
@@ -1713,10 +1721,14 @@ namespace sd::pipeline {
         }
         ImageGenerationLatents latents = std::move(*latent_inputs_opt);
 
-        ImageGenerationEmbeds embeds = prepare_video_generation_embeds(sd,
-                                                                       sd_vid_gen_params,
-                                                                       request,
-                                                                       latents);
+        auto embeds_opt = prepare_video_generation_embeds(sd,
+                                                          sd_vid_gen_params,
+                                                          request,
+                                                          latents);
+        if (!embeds_opt) {
+            return false;
+        }
+        ImageGenerationEmbeds embeds = std::move(*embeds_opt);
         if (latent_upscale_enabled) {
             LOG_INFO("generate_video %dx%dx%d -> LTX latent spatial upscale",
                      request.width,

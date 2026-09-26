@@ -411,6 +411,11 @@ ArgOptions SDContextParams::get_options() {
          0,
          &llm_path},
         {"",
+         "--tokenizer",
+         "tokenizer.json path, or comma-separated main=FILE,clip-l=FILE,clip-g=FILE assignments; required for PiD and Lens",
+         (int)',',
+         &tokenizer},
+        {"",
          "--llm_vision",
          "path to the llm vit",
          0,
@@ -896,6 +901,7 @@ std::string SDContextParams::to_string() const {
         << "  t5xxl_path: \"" << t5xxl_path << "\",\n"
         << "  llm_path: \"" << llm_path << "\",\n"
         << "  llm_vision_path: \"" << llm_vision_path << "\",\n"
+        << "  tokenizer: \"" << tokenizer << "\",\n"
         << "  diffusion_model_path: \"" << diffusion_model_path << "\",\n"
         << "  high_noise_diffusion_model_path: \"" << high_noise_diffusion_model_path << "\",\n"
         << "  uncond_diffusion_model_path: \"" << uncond_diffusion_model_path << "\",\n"
@@ -963,6 +969,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.t5xxl_path                      = t5xxl_path.c_str();
     sd_ctx_params.llm_path                        = llm_path.c_str();
     sd_ctx_params.llm_vision_path                 = llm_vision_path.c_str();
+    sd_ctx_params.tokenizer                       = tokenizer.c_str();
     sd_ctx_params.diffusion_model_path            = diffusion_model_path.c_str();
     sd_ctx_params.high_noise_diffusion_model_path = high_noise_diffusion_model_path.c_str();
     sd_ctx_params.uncond_diffusion_model_path     = uncond_diffusion_model_path.c_str();
@@ -1102,7 +1109,7 @@ ArgOptions SDGenerationParams::get_options() {
          &hires_upscaler},
         {"",
          "--extra-sample-args",
-         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; lms supports lms_max_order, lms_shift, lms_divisions",
+         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; lms supports lms_max_order, lms_shift, lms_divisions; noise-injecting samplers support noise_sampler with value iid (default except for dpm++2m_sde_bt) or brownian_tree; brownian_tree_rng supports cpu (default), cuda, std_default or sampler_rng",
          (int)',',
          &extra_sample_args},
         {"",

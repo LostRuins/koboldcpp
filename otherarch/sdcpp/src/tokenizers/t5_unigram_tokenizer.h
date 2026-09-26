@@ -64,7 +64,7 @@ public:
     explicit T5UniGramTokenizer(bool is_umt5 = false);
     ~T5UniGramTokenizer();
 
-    std::vector<int> encode(const std::string& input, on_new_token_cb_t on_new_token_cb = nullptr) override;
+    bool encode(const std::string& input, std::vector<int>& tokens, on_new_token_cb_t on_new_token_cb = nullptr, std::string* error = nullptr) override;
 };
 
 #endif  // __SD_TOKENIZERS_T5_UNIGRAM_TOKENIZER_H__

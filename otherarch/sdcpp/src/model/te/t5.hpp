@@ -567,7 +567,10 @@ struct T5Embedder {
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
-            std::vector<int> curr_tokens = tokenizer.encode(curr_text);
+            std::vector<int> curr_tokens;
+            if (!tokenizer.encode(curr_text, curr_tokens)) {
+                return {};
+            }
             tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
         }
