@@ -611,12 +611,12 @@ static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
             LLAMA_LOG_WARN("%s: input tensor '%32s' has op %s, expected GGML_OP_NONE\n",
                     __func__, tensor->name, ggml_op_name(tensor->op));
         }
-        for (const ggml_tensor * node : nodes) {
-            LLAMA_LOG_DEBUG("%s: input tensor '%32s' [%s, ne = { %5" PRId64 ", %5" PRId64 ", %5" PRId64 ", %5" PRId64 " }] is used by node '%s' (%s)\n",
-                    __func__, tensor->name, ggml_type_name(tensor->type),
-                    tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
-                    node->name, ggml_op_name(node->op));
-        }
+        // for (const ggml_tensor * node : nodes) {
+        //     LLAMA_LOG_DEBUG("%s: input tensor '%32s' [%s, ne = { %5" PRId64 ", %5" PRId64 ", %5" PRId64 ", %5" PRId64 " }] is used by node '%s' (%s)\n",
+        //             __func__, tensor->name, ggml_type_name(tensor->type),
+        //             tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
+        //             node->name, ggml_op_name(node->op));
+        // }
     }
 
     return (int) users.size();
@@ -653,7 +653,7 @@ void llama_context::sched_reserve() {
     if (memory) { //added by kcpp to reduce embeddings memory usage
     llama_memory_context_ptr mctx;
     if (memory) {
-        LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
+        // LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
         mctx = memory->init_full();
         if (!mctx) {
             throw std::runtime_error("failed to initialize memory module");
@@ -663,7 +663,7 @@ void llama_context::sched_reserve() {
     // avoid reserving graphs with zero outputs - assume one output per sequence
     const int n_outputs = n_seqs;
 
-    LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
+    // LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
     resolve_fused_ops(mctx.get(), n_seqs);
 
