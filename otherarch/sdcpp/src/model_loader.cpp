@@ -559,7 +559,18 @@ SDVersion ModelLoader::get_sd_version() const {
         if (tensor_storage.name.find("model.diffusion_model.layers.0.adaLN_sa_ln.weight") != std::string::npos) {
             return VERSION_ERNIE_IMAGE;
         }
+        if (tensor_storage.name.find("model.diffusion_model.t_block.1.weight") != std::string::npos &&
+            tensor_storage_map.find("model.diffusion_model.x_embedder.proj.weight") != tensor_storage_map.end() &&
+            tensor_storage_map.find("model.diffusion_model.audio_patchify_proj.weight") == tensor_storage_map.end()) {
+            return VERSION_PIXART;
+        }
         if (tensor_storage.name.find("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") != std::string::npos) {
+            // PixArt shares this timestep embedding with LTX-AV.
+            if (tensor_storage_map.find("model.diffusion_model.pos_embed.proj.weight") != tensor_storage_map.end() &&
+                tensor_storage_map.find("model.diffusion_model.adaln_single.linear.weight") != tensor_storage_map.end() &&
+                tensor_storage_map.find("model.diffusion_model.audio_patchify_proj.weight") == tensor_storage_map.end()) {
+                return VERSION_PIXART;
+            }
             return VERSION_LTXAV;
         }
         if (tensor_storage.name.find("model.diffusion_model.video_patch_proj.weight") != std::string::npos &&
@@ -1118,10 +1129,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
         if (tensors_to_process.empty()) {
             continue;
         }
-        LOG_VERBOSE("loading %zu/%zu tensors from %s",
-                    tensors_to_process.size(),
-                    file_tensors.size(),
-                    file_path.c_str());
+        if (log_progress) {
+            LOG_VERBOSE("loading %zu/%zu tensors from %s",
+                        tensors_to_process.size(),
+                        file_tensors.size(),
+                        file_path.c_str());
+        }
 
         bool is_zip = fdata.is_zip;
 
@@ -1653,6 +1666,9 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
             // Pass, do not convert. For Unet
         } else if (contains(name, "embedding")) {
             // Pass, do not convert embedding
+        } else if (contains(name, "scale_shift_table")) {
+            // Pass, do not convert. adaLN modulation tables (PixArt, LTXV) are sliced
+            // element-wise, which is invalid on quantized block layouts.
         } else if (ends_with(name, "_pad_token")) {
             // Pass, do not convert. LLaDA-Image stores its pad tokens far outside the f16
             // range, so any format with an f16 scale or payload turns them into inf.

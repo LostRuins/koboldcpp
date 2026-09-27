@@ -35,19 +35,21 @@ namespace sd::pipeline {
             return original_axes;
         }
 
-        int tile_size_x, tile_size_y;
+        int tile_size_w, tile_size_h;
         float overlap;
-        int latent_size_x = request.width / request.vae_scale_factor;
-        int latent_size_y = request.height / request.vae_scale_factor;
-        sd->first_stage_model->get_tile_sizes(tile_size_x,
-                                              tile_size_y,
-                                              overlap,
-                                              sd_img_gen_params->vae_tiling_params,
-                                              latent_size_x,
-                                              latent_size_y);
+        int latent_size_w = request.width / request.vae_scale_factor;
+        int latent_size_h = request.height / request.vae_scale_factor;
+        if (!sd->first_stage_model->get_tile_sizes(tile_size_w,
+                                                   tile_size_h,
+                                                   overlap,
+                                                   sd_img_gen_params->vae_tiling_params,
+                                                   latent_size_w,
+                                                   latent_size_h)) {
+            return original_axes;
+        }
 
-        sd->circular_x = sd->circular_x && (tile_size_x >= latent_size_x);
-        sd->circular_y = sd->circular_y && (tile_size_y >= latent_size_y);
+        sd->circular_x = sd->circular_x && (tile_size_w >= latent_size_w);
+        sd->circular_y = sd->circular_y && (tile_size_h >= latent_size_h);
 
         if (sd->first_stage_model) {
             sd->first_stage_model->set_circular_axes(sd->circular_x, sd->circular_y);
@@ -56,8 +58,8 @@ namespace sd::pipeline {
             sd->preview_vae->set_circular_axes(sd->circular_x, sd->circular_y);
         }
 
-        sd->circular_x = original_axes.circular_x && (tile_size_x < latent_size_x);
-        sd->circular_y = original_axes.circular_y && (tile_size_y < latent_size_y);
+        sd->circular_x = original_axes.circular_x && (tile_size_w < latent_size_w);
+        sd->circular_y = original_axes.circular_y && (tile_size_h < latent_size_h);
 
         return original_axes;
     }

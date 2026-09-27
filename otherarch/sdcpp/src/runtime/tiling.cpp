@@ -142,8 +142,8 @@ sd::Tensor<float> process_tiles_2d(const sd::Tensor<float>& input,
                                    int output_width,
                                    int output_height,
                                    int scale,
-                                   int p_tile_size_x,
-                                   int p_tile_size_y,
+                                   int p_tile_size_w,
+                                   int p_tile_size_h,
                                    float tile_overlap_factor,
                                    bool circular_x,
                                    bool circular_y,
@@ -168,28 +168,28 @@ sd::Tensor<float> process_tiles_2d(const sd::Tensor<float>& input,
 
     int num_tiles_x;
     float tile_overlap_factor_x;
-    sd_tiling_calc_tiles(num_tiles_x, tile_overlap_factor_x, small_width, p_tile_size_x, tile_overlap_factor, circular_x);
+    sd_tiling_calc_tiles(num_tiles_x, tile_overlap_factor_x, small_width, p_tile_size_w, tile_overlap_factor, circular_x);
 
     int num_tiles_y;
     float tile_overlap_factor_y;
-    sd_tiling_calc_tiles(num_tiles_y, tile_overlap_factor_y, small_height, p_tile_size_y, tile_overlap_factor, circular_y);
+    sd_tiling_calc_tiles(num_tiles_y, tile_overlap_factor_y, small_height, p_tile_size_h, tile_overlap_factor, circular_y);
 
-    int tile_overlap_x     = static_cast<int32_t>(p_tile_size_x * tile_overlap_factor_x);
-    int non_tile_overlap_x = p_tile_size_x - tile_overlap_x;
-    int tile_overlap_y     = static_cast<int32_t>(p_tile_size_y * tile_overlap_factor_y);
-    int non_tile_overlap_y = p_tile_size_y - tile_overlap_y;
-    int tile_size_x        = p_tile_size_x < small_width ? p_tile_size_x : small_width;
-    int tile_size_y        = p_tile_size_y < small_height ? p_tile_size_y : small_height;
-    int input_tile_size_x  = tile_size_x;
-    int input_tile_size_y  = tile_size_y;
-    int output_tile_size_x = tile_size_x;
-    int output_tile_size_y = tile_size_y;
+    int tile_overlap_x     = static_cast<int32_t>(p_tile_size_w * tile_overlap_factor_x);
+    int non_tile_overlap_x = p_tile_size_w - tile_overlap_x;
+    int tile_overlap_y     = static_cast<int32_t>(p_tile_size_h * tile_overlap_factor_y);
+    int non_tile_overlap_y = p_tile_size_h - tile_overlap_y;
+    int tile_size_w        = p_tile_size_w < small_width ? p_tile_size_w : small_width;
+    int tile_size_h        = p_tile_size_h < small_height ? p_tile_size_h : small_height;
+    int input_tile_size_w  = tile_size_w;
+    int input_tile_size_h  = tile_size_h;
+    int output_tile_size_w = tile_size_w;
+    int output_tile_size_h = tile_size_h;
     if (decode) {
-        output_tile_size_x *= scale;
-        output_tile_size_y *= scale;
+        output_tile_size_w *= scale;
+        output_tile_size_h *= scale;
     } else {
-        input_tile_size_x *= scale;
-        input_tile_size_y *= scale;
+        input_tile_size_w *= scale;
+        input_tile_size_h *= scale;
     }
 
     int num_tiles   = num_tiles_x * num_tiles_y;
@@ -205,9 +205,9 @@ sd::Tensor<float> process_tiles_2d(const sd::Tensor<float>& input,
     }
     for (int y = 0; y < small_height && !last_y; y += non_tile_overlap_y) {
         int dy = 0;
-        if (!circular_y && y + tile_size_y >= small_height) {
+        if (!circular_y && y + tile_size_h >= small_height) {
             int original_y = y;
-            y              = small_height - tile_size_y;
+            y              = small_height - tile_size_h;
             dy             = original_y - y;
             if (decode) {
                 dy *= scale;
@@ -216,9 +216,9 @@ sd::Tensor<float> process_tiles_2d(const sd::Tensor<float>& input,
         }
         for (int x = 0; x < small_width && !last_x; x += non_tile_overlap_x) {
             int dx = 0;
-            if (!circular_x && x + tile_size_x >= small_width) {
+            if (!circular_x && x + tile_size_w >= small_width) {
                 int original_x = x;
-                x              = small_width - tile_size_x;
+                x              = small_width - tile_size_w;
                 dx             = original_x - x;
                 if (decode) {
                     dx *= scale;
@@ -235,12 +235,12 @@ sd::Tensor<float> process_tiles_2d(const sd::Tensor<float>& input,
             int overlap_y_out = decode ? tile_overlap_y * scale : tile_overlap_y;
 
             int64_t t1       = ggml_time_ms();
-            auto input_tile  = sd_tensor_split_2d(input, input_tile_size_x, input_tile_size_y, x_in, y_in);
+            auto input_tile  = sd_tensor_split_2d(input, input_tile_size_w, input_tile_size_h, x_in, y_in);
             auto output_tile = on_processing(input_tile);
             if (output_tile.empty()) {
                 return {};
             }
-            GGML_ASSERT(output_tile.shape()[0] == output_tile_size_x && output_tile.shape()[1] == output_tile_size_y);
+            GGML_ASSERT(output_tile.shape()[0] == output_tile_size_w && output_tile.shape()[1] == output_tile_size_h);
             if (output.empty()) {
                 std::vector<int64_t> output_shape = output_tile.shape();
                 output_shape[0]                   = output_width;

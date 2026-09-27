@@ -15,6 +15,26 @@ static bool same_tensor_source(const TensorStorage& a, const TensorStorage& b) {
            a.int8_convrot_group_size == b.int8_convrot_group_size;
 }
 
+std::vector<TensorStorage> ModelManager::find_tensor_sources(const TensorState& state, const String2TensorStorage& sources) {
+    auto first = sources.find(state.name);
+    if (first == sources.end()) {
+        return {};
+    }
+    std::vector<TensorStorage> result{first->second};
+    if (state.component == ModelComponent::LoRA ||
+        std::equal(first->second.ne, first->second.ne + GGML_MAX_DIMS, state.tensor->ne)) {
+        return result;
+    }
+    for (size_t i = 1;; ++i) {
+        auto part = sources.find(state.name + "." + std::to_string(i));
+        if (part == sources.end()) {
+            break;
+        }
+        result.push_back(part->second);
+    }
+    return result;
+}
+
 void ModelManager::invalidate_sources(const std::unordered_set<TensorState*>& states) {
     auto affected = states;
     for (const auto& block : params_storage_blocks_) {
@@ -76,20 +96,16 @@ bool ModelManager::set_loader(ModelLoader loader) {
     }
     std::unordered_set<TensorState*> changed;
     for (const auto& state : tensor_states_) {
-        const auto& sources = sources_for(*state);
-        auto source         = sources.find(state->name);
-        const bool found    = source != sources.end();
-        if (found != state->has_source || (found && !same_tensor_source(state->source, source->second)) ||
+        const auto sources = find_tensor_sources(*state, sources_for(*state));
+        if (sources.size() != state->sources.size() ||
+            !std::equal(sources.begin(), sources.end(), state->sources.begin(), same_tensor_source) ||
             (lora_changed && state->component != ModelComponent::LoRA && state->applied_lora_epoch != UINT64_MAX)) {
             changed.insert(state.get());
         }
     }
     invalidate_sources(changed);
     for (auto* state : changed) {
-        const auto& sources = sources_for(*state);
-        auto source         = sources.find(state->name);
-        state->has_source   = source != sources.end();
-        state->source       = state->has_source ? source->second : TensorStorage{};
+        state->sources = find_tensor_sources(*state, sources_for(*state));
     }
     if (lora_changed) {
         ++current_lora_epoch_;
@@ -134,9 +150,8 @@ ModelLoader::FileVersions ModelManager::source_versions(const std::set<ModelComp
             versions[state->source_file] = loader.file_revision(state->source_file);
             continue;
         }
-        auto source = sources.find(state->name);
-        if (source != sources.end()) {
-            versions[source->second.file_id] = source->second.file_revision;
+        for (const auto& source : find_tensor_sources(*state, sources)) {
+            versions[source.file_id] = source.file_revision;
         }
     }
     return versions;
