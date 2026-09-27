@@ -105,7 +105,25 @@ std::string convert_open_clip_to_hf_clip_name(std::string name) {
 
 std::string convert_llada2_moe_te_name(std::string name);
 
-std::string convert_cond_stage_model_name(std::string name, std::string prefix) {
+static std::string convert_ming_image_te_name(std::string name) {
+    if (name == "llm.query_tokens") {
+        name = "llm.query_tokens_dict.16x16";
+    }
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {"thinker.", "backbone."},
+        {"attention.", "self_attn."},
+        {"self_attn.dense.", "self_attn.o_proj."},
+        {"gate.proj.", "gate."},
+    };
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
+std::string convert_cond_stage_model_name(std::string name, std::string prefix, SDVersion version) {
+    if (version == VERSION_MING_IMAGE && prefix == "text_encoders." && starts_with(name, "llm.")) {
+        name = convert_ming_image_te_name(name);
+    }
+
     static const std::vector<std::pair<std::string, std::string>> clip_name_map{
         {"transformer.text_projection.weight", "transformer.text_model.text_projection"},
         {"model.text_projection.weight", "transformer.text_model.text_projection"},
@@ -994,6 +1012,17 @@ static std::string convert_diffusers_dit_to_original_pixart(std::string name) {
     return prefix + name;
 }
 
+static std::string convert_ming_image_dit_name(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {"all_x_embedder.2-1.", "x_embedder."},
+        {"all_final_layer.2-1.", "final_layer."},
+        {"attention.norm_q.", "attention.q_norm."},
+        {"attention.norm_k.", "attention.k_norm."},
+    };
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
 std::string convert_diffusion_model_name(std::string name, std::string prefix, SDVersion version) {
     if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
         name = convert_diffusers_unet_to_original_sd1(name);
@@ -1005,6 +1034,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_hunyuan_video(version)) {
         name = convert_hunyuan_video_to_original_flux(name);
+    } else if (version == VERSION_MING_IMAGE) {
+        name = convert_ming_image_dit_name(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
     } else if (sd_version_is_llada_image(version)) {
@@ -1668,7 +1699,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
     {
         for (const auto& prefix : cond_stage_model_prefix_vec) {
             if (starts_with(name, prefix)) {
-                name = convert_cond_stage_model_name(name.substr(prefix.size()), prefix);
+                name = convert_cond_stage_model_name(name.substr(prefix.size()), prefix, version);
                 name = prefix + name;
                 break;
             }

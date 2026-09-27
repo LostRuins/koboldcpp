@@ -141,6 +141,10 @@ struct LLaDAImageDiffusionExtra {
     const sd::Tensor<float>* semantic = nullptr;
 };
 
+struct MingImageDiffusionExtra {
+    const sd::Tensor<float>* direct_context = nullptr;
+};
+
 using DiffusionExtraParams = std::variant<std::monostate,
                                           UNetDiffusionExtra,
                                           SkipLayerDiffusionExtra,
@@ -154,7 +158,8 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           MiniT2IDiffusionExtra,
                                           SenseNovaU1DiffusionExtra,
                                           HunyuanVideoDiffusionExtra,
-                                          LLaDAImageDiffusionExtra>;
+                                          LLaDAImageDiffusionExtra,
+                                          MingImageDiffusionExtra>;
 
 struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;

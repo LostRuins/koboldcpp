@@ -79,6 +79,10 @@ static bool device_supports_param_op(ggml_backend_dev_t device,
     if (op == GGML_OP_GET_ROWS) {
         ggml_tensor* indices = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
         op_tensor            = ggml_get_rows(ctx, weight, indices);
+    } else if (op == GGML_OP_CUSTOM) {
+        op_tensor         = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        op_tensor->op     = op;
+        op_tensor->src[0] = weight;
     }
     if (op_tensor == nullptr) {
         ggml_free(ctx);
@@ -507,7 +511,9 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
             LOG_ERROR("model manager params backend is null for tensor '%s'", state->name.c_str());
             return false;
         }
-        if (state->compute_backend == state->params_backend || state->staged_to_compute_backend) {
+        // Custom CPU operators must retain host weights even when the runner uses a GPU.
+        if (state->usage_op == GGML_OP_CUSTOM ||
+            state->compute_backend == state->params_backend || state->staged_to_compute_backend) {
             continue;
         }
         if (!state->loaded_to_params_backend || state->tensor == nullptr || state->tensor->data == nullptr) {
@@ -1400,6 +1406,9 @@ size_t ModelManager::compute_backend_alloc_size(const std::vector<TensorState*>&
     std::unordered_set<TensorState*> seen;
     for (TensorState* state : states) {
         if (state == nullptr || state->tensor == nullptr) {
+            continue;
+        }
+        if (state->usage_op == GGML_OP_CUSTOM && !sd_backend_is_cpu(state->compute_backend)) {
             continue;
         }
         const bool compute_resident =

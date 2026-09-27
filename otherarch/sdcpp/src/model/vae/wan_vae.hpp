@@ -1084,7 +1084,7 @@ namespace WAN {
 
                 _conv_num     = 34;
                 _enc_conv_num = 26;
-            } else if (version == VERSION_QWEN_IMAGE_LAYERED) {
+            } else if (version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_MING_IMAGE) {
                 input_channels = 4;
             }
 
@@ -1423,11 +1423,17 @@ namespace WAN {
         }
 
         sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
+            if (version == VERSION_MING_IMAGE) {
+                return latents / 8.0064f;
+            }
             auto [mean_tensor, std_tensor] = get_latents_mean_std(latents);
             return (latents * std_tensor) / scale_factor + mean_tensor;
         }
 
         sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override {
+            if (version == VERSION_MING_IMAGE) {
+                return latents * 8.0064f;
+            }
             auto [mean_tensor, std_tensor] = get_latents_mean_std(latents);
             return ((latents - mean_tensor) * scale_factor) / std_tensor;
         }

@@ -255,14 +255,20 @@ ggml_tensor* ggml_ext_linear_i8_tensorwise(ggml_context* ctx,
     }
 
     ggml_tensor* fused_bias = scale == 1.f ? b : nullptr;
+    auto mul_mat            = [&](ggml_tensor* input) {
+        if (input->type == GGML_TYPE_F32 && convrot_group_size > 0) {
+            input = ggml_quantize_i8_convrot(ctx, input, convrot_group_size);
+        }
+        return ggml_mul_mat_i8_tensorwise(ctx, w, input, weight_scale, fused_bias, convrot_group_size);
+    };
     if (x->ne[2] * x->ne[3] > 1024) {
         int64_t ne2 = x->ne[2];
         int64_t ne3 = x->ne[3];
         x           = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2] * x->ne[3]);
-        x           = ggml_mul_mat_i8_tensorwise(ctx, w, x, weight_scale, fused_bias, convrot_group_size);
+        x           = mul_mat(x);
         x           = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / ne2 / ne3, ne2, ne3);
     } else {
-        x = ggml_mul_mat_i8_tensorwise(ctx, w, x, weight_scale, fused_bias, convrot_group_size);
+        x = mul_mat(x);
     }
 
     if (scale != 1.f) {

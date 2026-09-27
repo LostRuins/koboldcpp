@@ -106,6 +106,7 @@ const char* model_version_to_str[] = {
     "LLaDA-Image",
     "ESRGAN",
     "PixArt",
+    "Ming-Image",
 };
 
 static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
@@ -1461,6 +1462,11 @@ bool StableDiffusionGGML::validate_and_load_runners() {
     LOG_VERBOSE("validating model metadata");
 
     std::set<std::string> ignore_tensors;
+    if (version == VERSION_MING_IMAGE) {
+        ignore_tensors.insert("text_encoders.llm.vision.");
+        ignore_tensors.insert("text_encoders.llm.linear_proj.");
+        ignore_tensors.insert("text_encoders.llm.backbone.lm_head.");
+    }
     if (use_tae && !tae_preview_only) {
         ignore_tensors.insert("first_stage_model.");
     }
@@ -1621,6 +1627,7 @@ bool StableDiffusionGGML::build_denoiser() {
                    sd_version_is_anima(version) ||
                    sd_version_is_ernie_image(version) ||
                    sd_version_is_z_image(version) ||
+                   version == VERSION_MING_IMAGE ||
                    sd_version_is_llada_image(version) ||
                    sd_version_is_boogu_image(version) ||
                    sd_version_is_pid(version) ||
@@ -1642,6 +1649,8 @@ bool StableDiffusionGGML::build_denoiser() {
                 default_flow_shift = 3.16f;
             } else if (sd_version_is_mage_flow(version)) {
                 default_flow_shift = 6.f;
+            } else if (version == VERSION_MING_IMAGE) {
+                default_flow_shift = INFINITY;
             } else if (sd_version_is_llada_image(version)) {
                 default_flow_shift = 1.0f;  // unused: LLADA_IMAGE_SCHEDULER builds a fixed grid
             } else {
@@ -1702,6 +1711,8 @@ bool StableDiffusionGGML::build_denoiser() {
             } else if (sd_version_is_minimax_h3(version)) {
                 LOG_INFO("running in MiniMax H3 AV FLOW mode");
                 denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, 3.f, get_latent_channel());
+            } else if (version == VERSION_MING_IMAGE) {
+                denoiser = std::make_shared<MingImageFlowDenoiser>();
             } else {
                 LOG_INFO("running in FLOW mode");
                 denoiser = std::make_shared<DiscreteFlowDenoiser>();
@@ -2430,7 +2441,7 @@ std::vector<float> StableDiffusionGGML::prepare_sample_timesteps(float sigma,
     if (version == VERSION_HIDREAM_O1) {
         return std::vector<float>{1.0f - (t / static_cast<float>(TIMESTEPS))};
     }
-    if (sd_version_is_z_image(version) || sd_version_is_ideogram4(version)) {
+    if (sd_version_is_z_image(version) || sd_version_is_ideogram4(version) || version == VERSION_MING_IMAGE) {
         return std::vector<float>{1000.f - t};
     }
     return std::vector<float>{t};
@@ -2783,6 +2794,9 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     condition.c_token_types.empty() ? nullptr : &condition.c_token_types,
                     condition.c_vinput_mask.empty() ? nullptr : &condition.c_vinput_mask,
                     condition.c_image_embeds.empty() ? nullptr : &condition.c_image_embeds};
+            } else if (version == VERSION_MING_IMAGE) {
+                diffusion_params.extra = MingImageDiffusionExtra{
+                    condition.extra_c_crossattns.empty() ? nullptr : &condition.extra_c_crossattns[0]};
             } else if (sd_version_is_llada_image(version)) {
                 diffusion_params.extra = LLaDAImageDiffusionExtra{
                     condition.extra_c_crossattns.empty() ? nullptr : &condition.extra_c_crossattns[0]};
@@ -3017,7 +3031,7 @@ int StableDiffusionGGML::get_diffusion_model_down_factor() {
     if (sd_version_is_dit(version)) {
         if (sd_version_is_sensenova_u1(version)) {
             down_factor = 32;
-        } else if (version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version) || sd_version_is_pixart(version)) {
+        } else if (version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_MING_IMAGE || sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version) || sd_version_is_pixart(version)) {
             down_factor = 2;
         } else {
             down_factor = 1;
@@ -3065,7 +3079,7 @@ int StableDiffusionGGML::get_latent_channel() {
 }
 
 int StableDiffusionGGML::get_image_channels() const {
-    return version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_QWEN_IMAGE_2_1 ? 4 : 3;
+    return version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_MING_IMAGE ? 4 : 3;
 }
 
 int StableDiffusionGGML::get_image_seq_len(int h, int w) {
