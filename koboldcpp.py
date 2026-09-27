@@ -1211,6 +1211,7 @@ def fix_unquoted_keys(s: str) -> str:
     Fix JSON with unquoted keys by only quoting identifiers that appear
     in key position (after '{' or ',' at object level, before ':').
     Uses a state machine to track position in the JSON structure.
+    Returns the original input if malformed nesting prevents progress.
     """
     result = []
     i = 0
@@ -1263,6 +1264,7 @@ def fix_unquoted_keys(s: str) -> str:
             i += 1
             return
         while i < n:
+            start = i
             skip_whitespace()
             if i < n and s[i] == '"':
                 read_string()
@@ -1283,6 +1285,8 @@ def fix_unquoted_keys(s: str) -> str:
             if s[i] == ',':
                 result.append(s[i])
                 i += 1
+            if i == start:
+                raise ValueError("Cannot advance while repairing JSON object")
         if i < n and s[i] == '}':
             result.append(s[i])
             i += 1
@@ -1296,6 +1300,7 @@ def fix_unquoted_keys(s: str) -> str:
             i += 1
             return
         while i < n:
+            start = i
             read_value()
             skip_whitespace()
             if i >= n or s[i] == ']':
@@ -1303,10 +1308,17 @@ def fix_unquoted_keys(s: str) -> str:
             if s[i] == ',':
                 result.append(s[i])
                 i += 1
+            if i == start:
+                raise ValueError("Cannot advance while repairing JSON array")
         if i < n and s[i] == ']':
             result.append(s[i])
             i += 1
-    read_value()
+    try:
+        read_value()
+    except (ValueError, RecursionError):
+        # Preserve the malformed input for the caller's JSON validation. Do not
+        # return a partially repaired prefix that could look like a valid call.
+        return s
     return ''.join(result)
 
 def old_cpu_check(): #return -1 for pass, 0 if has avx2, 1 if has avx, 2 if has nothing
@@ -3940,7 +3952,9 @@ def toolcall_to_normalized_json(text,start_tag,end_tag,required_match_txt): #con
             return json.dumps({"name": fn_name, "arguments": args})
         except Exception:
             pass
-        return text
+        # Invalid arguments are not a tool call. In particular, do not let the
+        # generic JSON extractor mistake fragments of embedded code for calls.
+        return ""
 
     def parse_gpt_oss(text: str) -> str:
         fn_match = re.search(r'functions\.([a-zA-Z_][a-zA-Z0-9_]*)', text)
