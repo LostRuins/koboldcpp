@@ -69,6 +69,7 @@ ESCAPE_DISAMBIGUATION_SECONDS = 0.05
 ESCAPE_SEQUENCE_QUIET_SECONDS = 0.01
 ESCAPE_SEQUENCE_DRAIN_SECONDS = 0.10
 INTERRUPTED_TASK_NOTICE = "[Task was interrupted before the agent finished. Follow the new instruction below.]"
+SESSION_FORMAT_VERSION = 1
 
 ANSI_RESET = "\033[0m"
 ANSI_BOLD_CYAN = "\033[1;36m"
@@ -1615,6 +1616,115 @@ def confirmation_status(mode: str) -> str:
     return color(mode.upper(), ANSI_GREEN if mode == "on" else ANSI_YELLOW)
 
 
+def session_path(command_arg: str) -> Path:
+    """Parse a path argument and add a .json extension when none is supplied."""
+    requested = command_arg.strip()
+    if len(requested) >= 2 and requested[0] == requested[-1] and requested[0] in "\"'":
+        requested = requested[1:-1]
+    if not requested:
+        raise ValueError("a file path is required")
+    path = Path(requested).expanduser()
+    if not path.suffix:
+        path = path.with_suffix(".json")
+    return path
+
+
+def save_session_file(
+    path: Path,
+    *,
+    messages: list[dict[str, Any]],
+    temperature: float,
+    max_tokens: int | None,
+    disabled_tools: set[str],
+    confirmation_mode: str,
+    show_reasoning: bool,
+    verbose: bool,
+    no_color: bool,
+    request_timeout: int,
+    max_tool_result_chars: int,
+    pending_interruption: bool,
+    workdir: Path,
+) -> None:
+    """Save all session state except model endpoint credentials."""
+    session = {
+        "session_format": "koboldcpp-agent",
+        "session_format_version": SESSION_FORMAT_VERSION,
+        # These fields intentionally resemble a stateless Chat Completions request.
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        # Agent-only state follows. Never add base_url, api_key, or model here.
+        "disabled_tools": sorted(disabled_tools),
+        "workdir": str(workdir),
+        "confirmation_mode": confirmation_mode,
+        "show_reasoning": show_reasoning,
+        "verbose": verbose,
+        "no_color": no_color,
+        "request_timeout": request_timeout,
+        "max_tool_result_chars": max_tool_result_chars,
+        "pending_interruption": pending_interruption,
+    }
+    with path.open("w", encoding="utf-8", newline="\n") as destination:
+        json.dump(session, destination, ensure_ascii=False, indent=2)
+        destination.write("\n")
+
+
+def load_session_file(path: Path) -> dict[str, Any]:
+    """Read and validate session state without applying it."""
+    with path.open(encoding="utf-8-sig") as source:
+        session = json.load(source)
+    if not isinstance(session, dict):
+        raise ValueError("session root must be a JSON object")
+    if session.get("session_format") != "koboldcpp-agent":
+        raise ValueError("not a KoboldCpp Agent session")
+    if session.get("session_format_version") != SESSION_FORMAT_VERSION:
+        raise ValueError(
+            f"unsupported session format version: {session.get('session_format_version')!r}"
+        )
+
+    messages = session.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("messages must be a non-empty array")
+    if not all(
+        isinstance(message, dict) and isinstance(message.get("role"), str)
+        for message in messages
+    ):
+        raise ValueError("every message must be an object with a string role")
+    if not isinstance(session.get("temperature"), (int, float)) or isinstance(
+        session.get("temperature"), bool
+    ):
+        raise ValueError("temperature must be a number")
+    if not 0.0 <= session["temperature"] <= 2.0:
+        raise ValueError("temperature must be between 0 and 2")
+    max_tokens = session.get("max_tokens")
+    if max_tokens is not None and (
+        not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1
+    ):
+        raise ValueError("max_tokens must be null or a positive integer")
+    disabled_tools = session.get("disabled_tools")
+    if not isinstance(disabled_tools, list) or not all(
+        isinstance(name, str) and name for name in disabled_tools
+    ):
+        raise ValueError("disabled_tools must be an array of non-empty strings")
+    if len(set(disabled_tools)) != len(disabled_tools):
+        raise ValueError("disabled_tools must not contain duplicates")
+    if session.get("confirmation_mode") not in {"on", "off", "auto"}:
+        raise ValueError("confirmation_mode must be on, off, or auto")
+    for field in ("show_reasoning", "verbose", "no_color", "pending_interruption"):
+        if not isinstance(session.get(field), bool):
+            raise ValueError(f"{field} must be a boolean")
+    for field in ("request_timeout", "max_tool_result_chars"):
+        value = session.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(f"{field} must be a positive integer")
+    workdir = session.get("workdir")
+    if not isinstance(workdir, str) or not workdir:
+        raise ValueError("workdir must be a non-empty string")
+    if not Path(workdir).is_dir():
+        raise ValueError(f"saved working directory is unavailable: {workdir}")
+    return session
+
+
 def print_runtime_status(
     base_url: str,
     model: str,
@@ -1645,6 +1755,8 @@ def print_runtime_help(
     print(
         "\n" + color("Runtime commands:", ANSI_BOLD_CYAN) + "\n"
         "  /help               Show this help\n"
+        "  /save FILE          Save conversation and settings as JSON\n"
+        "  /load FILE          Load conversation and settings from JSON\n"
         "  /clear              Clear history and refresh MCP tools\n"
         "  /tools              List available tools and their status\n"
         "  /tools NAME on|off  Enable or disable a tool, then clear the session\n"
@@ -1734,7 +1846,10 @@ def run_agent(
     temperature: float,
     max_tokens: int | None,
     request_timeout: int,
+    no_color: bool = False,
 ) -> None:
+    global MAX_TOOL_RESULT_CHARS
+
     base_url = normalize_base_url(base_url)
     show_reasoning = False
     verbose = False
@@ -1809,6 +1924,59 @@ def run_agent(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
                 max_tokens,
             )
+            continue
+        if command == "/save":
+            try:
+                path = session_path(command_arg)
+                save_session_file(
+                    path,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    disabled_tools=disabled_tools,
+                    confirmation_mode=confirmation_mode,
+                    show_reasoning=show_reasoning,
+                    verbose=verbose,
+                    no_color=no_color,
+                    request_timeout=request_timeout,
+                    max_tool_result_chars=MAX_TOOL_RESULT_CHARS,
+                    pending_interruption=pending_interruption,
+                    workdir=Path.cwd(),
+                )
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"Cannot save session: {exc}\n")
+                continue
+            print(f"Session saved: {path.resolve()}\n")
+            continue
+        if command == "/load":
+            try:
+                path = session_path(command_arg)
+                loaded_path = path.resolve()
+                session = load_session_file(path)
+                os.chdir(session["workdir"])
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                print(f"Cannot load session: {exc}\n")
+                continue
+            messages[:] = session["messages"]
+            temperature = float(session["temperature"])
+            max_tokens = session["max_tokens"]
+            disabled_tools.clear()
+            disabled_tools.update(session["disabled_tools"])
+            confirmation_mode = session["confirmation_mode"]
+            show_reasoning = session["show_reasoning"]
+            verbose = session["verbose"]
+            no_color = session["no_color"]
+            configure_colors(disabled=no_color)
+            request_timeout = session["request_timeout"]
+            MAX_TOOL_RESULT_CHARS = session["max_tool_result_chars"]
+            pending_interruption = session["pending_interruption"]
+            refresh_mcp_tools()
+            print(f"Session loaded: {loaded_path}")
+            print_runtime_status(
+                base_url, model, confirmation_mode, show_reasoning, verbose,
+                max_tokens,
+            )
+            print()
             continue
         if command == "/tools":
             parts = command_arg.split()
@@ -2249,6 +2417,7 @@ def main() -> None:
             temperature=args.temperature,
             max_tokens=args.max_tokens,
             request_timeout=args.request_timeout,
+            no_color=args.no_color,
         )
     except KeyboardInterrupt:
         print("\nExiting.")
