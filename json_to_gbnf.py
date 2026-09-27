@@ -128,6 +128,17 @@ def _generate_min_max_int(min_value: Optional[int], max_value: Optional[int], ou
         uniform_range(min_s, max_s)
         return
 
+    # int("00") is 0, so a minimum of 100 used to accept 10. Same-length
+    # values use the bounded range, and longer digit strings cover the rest.
+    if min_value is not None and max_value is None and top_level and min_value > 0:
+        min_s = str(min_value)
+        length = len(min_s)
+        uniform_range(min_s, "9" * length)
+        if length < decimals_left:
+            out.append(" | [1-9] ")
+            more_digits(length, decimals_left - 1)
+        return
+
     less_decimals = max(decimals_left - 1, 1)
 
     if min_value is not None:
