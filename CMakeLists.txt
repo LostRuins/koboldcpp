@@ -524,6 +524,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/core/ggml_runner.cpp
             otherarch/sdcpp/src/core/ggml_graph_cut.cpp
             otherarch/sdcpp/src/core/ggml_graph_cut.h
+            otherarch/sdcpp/src/core/regex.cpp
             otherarch/sdcpp/src/core/ggml_tensor_utils.cpp
             otherarch/sdcpp/src/core/runner_cache.cpp
             otherarch/sdcpp/src/core/segment_graph_bindings.cpp
@@ -568,13 +569,29 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/tokenizers/sensenova_u1_tokenizer.cpp
             otherarch/sdcpp/src/tokenizers/t5_unigram_tokenizer.cpp
             otherarch/sdcpp/src/tokenizers/gemma_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/gpt_oss_tokenizer.cpp
+            otherarch/sdcpp/src/tokenizers/hf_tokenizer.cpp
             otherarch/sdcpp/src/tokenizers/tokenizer.cpp
+            otherarch/sdcpp/src/tokenizers/tokenizer_config.cpp
             otherarch/sdcpp/src/tokenizers/tokenize_util.cpp
+            otherarch/sdcpp/thirdparty/oniguruma/ascii.c
+            otherarch/sdcpp/thirdparty/oniguruma/regcomp.c
+            otherarch/sdcpp/thirdparty/oniguruma/regenc.c
+            otherarch/sdcpp/thirdparty/oniguruma/regerror.c
+            otherarch/sdcpp/thirdparty/oniguruma/regexec.c
+            otherarch/sdcpp/thirdparty/oniguruma/regparse.c
+            otherarch/sdcpp/thirdparty/oniguruma/st.c
+            otherarch/sdcpp/thirdparty/oniguruma/unicode.c
+            otherarch/sdcpp/thirdparty/oniguruma/unicode_fold1_key.c
+            otherarch/sdcpp/thirdparty/oniguruma/unicode_fold2_key.c
+            otherarch/sdcpp/thirdparty/oniguruma/unicode_fold3_key.c
+            otherarch/sdcpp/thirdparty/oniguruma/unicode_unfold_key.c
+            otherarch/sdcpp/thirdparty/oniguruma/utf8.c
+            otherarch/sdcpp/thirdparty/utf8proc/utf8proc.c
             otherarch/sdcpp/src/core/backend_fit.cpp
             otherarch/sdcpp/src/core/layer_split_partition.cpp
             otherarch/sdcpp/src/core/ggml_extend_backend.cpp)
-target_include_directories(sdtype_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/include ./otherarch/sdcpp/src ./otherarch/sdcpp/examples ./tools ./common)
+target_include_directories(sdtype_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/include ./otherarch/sdcpp/src ./otherarch/sdcpp/examples ./otherarch/sdcpp/thirdparty/oniguruma ./otherarch/sdcpp/thirdparty/utf8proc ./tools ./common)
+target_compile_definitions(sdtype_adapter PRIVATE ONIG_STATIC UTF8PROC_STATIC)
 target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(sdtype_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(sdtype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)

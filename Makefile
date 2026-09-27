@@ -719,13 +719,13 @@ $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON))): $(HEADERS_SDCOMMON)
 $(OBJS_SDMAIN): $(HEADERS_SDMAIN)
 
 otherarch/sdcpp/src/%.o: otherarch/sdcpp/src/%.cpp
-	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann -I./otherarch/sdcpp/thirdparty/oniguruma -I./otherarch/sdcpp/thirdparty/utf8proc $(CXXFLAGS) -c $< -o $@
+	$(CXX) -DUTF8PROC_STATIC -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann -I./otherarch/sdcpp/thirdparty/oniguruma -I./otherarch/sdcpp/thirdparty/utf8proc $(CXXFLAGS) -c $< -o $@
 
 otherarch/sdcpp/thirdparty/oniguruma/%.o: otherarch/sdcpp/thirdparty/oniguruma/%.c
 	$(CC) $(CFLAGS) -I./otherarch/sdcpp/thirdparty/oniguruma -c $< -o $@
 
 otherarch/sdcpp/thirdparty/utf8proc/%.o: otherarch/sdcpp/thirdparty/utf8proc/%.c
-	$(CC)  $(CFLAGS) -I./otherarch/sdcpp/thirdparty/utf8proc -c $< -o $@
+	$(CC) -DUTF8PROC_STATIC $(CFLAGS) -I./otherarch/sdcpp/thirdparty/utf8proc -c $< -o $@
 
 otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
