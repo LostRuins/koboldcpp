@@ -140,7 +140,8 @@ namespace ZImage {
                        int64_t num_kv_heads,
                        bool qk_norm,
                        bool norm_elementwise_affine = true,
-                       bool split_qkv               = false)
+                       bool split_qkv               = false,
+                       float qk_norm_eps            = 1e-6f)
             : head_dim(head_dim), num_heads(num_heads), num_kv_heads(num_kv_heads), qk_norm(qk_norm), split_qkv(split_qkv) {
             float scale = 1.f;
             if (split_qkv) {
@@ -153,8 +154,8 @@ namespace ZImage {
                 blocks["out"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false, false, false, scale);
             }
             if (qk_norm) {
-                blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim, 1e-06f, norm_elementwise_affine);
-                blocks["k_norm"] = std::make_shared<RMSNorm>(head_dim, 1e-06f, norm_elementwise_affine);
+                blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim, qk_norm_eps, norm_elementwise_affine);
+                blocks["k_norm"] = std::make_shared<RMSNorm>(head_dim, qk_norm_eps, norm_elementwise_affine);
             }
         }
 
@@ -318,9 +319,10 @@ namespace ZImage {
                               bool qk_norm,
                               bool modulation              = true,
                               bool norm_elementwise_affine = true,
-                              bool split_qkv               = false)
+                              bool split_qkv               = false,
+                              float qk_norm_eps            = 1e-6f)
             : modulation(modulation) {
-            blocks["attention"]       = std::make_shared<JointAttention>(hidden_size, head_dim, num_heads, num_kv_heads, qk_norm, norm_elementwise_affine, split_qkv);
+            blocks["attention"]       = std::make_shared<JointAttention>(hidden_size, head_dim, num_heads, num_kv_heads, qk_norm, norm_elementwise_affine, split_qkv, qk_norm_eps);
             blocks["feed_forward"]    = std::make_shared<FeedForward>(hidden_size, hidden_size, multiple_of, ffn_dim_multiplier);
             blocks["attention_norm1"] = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
             blocks["ffn_norm1"]       = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);

@@ -24,6 +24,7 @@
 #include "model/diffusion/llada_image.hpp"
 #include "model/diffusion/ltxv.hpp"
 #include "model/diffusion/mage_flow.hpp"
+#include "model/diffusion/ming_image.hpp"
 #include "model/diffusion/minimax_h3.hpp"
 #include "model/diffusion/minit2i.hpp"
 #include "model/diffusion/mmdit.hpp"
@@ -374,6 +375,11 @@ namespace sd::model_builders {
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model",
                                                                     weight_manager);
+        } else if (version == VERSION_MING_IMAGE) {
+            result.conditioner = std::make_shared<MingImageEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                                     tensor_storage_map, weight_manager, tokenizers);
+            result.diffusion   = std::make_shared<MingImage::MingImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                            tensor_storage_map, "model.diffusion_model", weight_manager);
         } else if (sd_version_is_z_image(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,

@@ -50,6 +50,8 @@ namespace LLM {
         GEMMA4_12B,
         GPT_OSS_20B,
         LLADA2_MOE,
+        BAILING_MOE,
+        QWEN2,
         ARCH_COUNT,
     };
 
@@ -64,6 +66,8 @@ namespace LLM {
         "gemma4_12b",
         "gpt_oss_20b",
         "llada2_moe",
+        "bailing_moe",
+        "qwen2",
     };
 
     enum class MLPActivation {
@@ -225,7 +229,7 @@ namespace LLM {
                 config.intermediate_size       = 9216;
                 config.num_layers              = 26;
                 config.vocab_size              = 256000;
-            } else if (arch == LLMArch::LLADA2_MOE) {
+            } else if (arch == LLMArch::LLADA2_MOE || arch == LLMArch::BAILING_MOE) {
                 config.head_dim                = 128;
                 config.num_heads               = 16;
                 config.num_kv_heads            = 4;
@@ -240,7 +244,7 @@ namespace LLM {
                 config.max_position_embeddings = 16384;
                 config.rope_thetas             = {600000.f};
                 config.qkv_fused               = true;
-                config.bidirectional           = true;
+                config.bidirectional           = arch == LLMArch::LLADA2_MOE;
                 config.partial_rotary          = 0.5f;
                 config.num_experts             = 256;
                 config.num_experts_per_tok     = 8;
@@ -250,6 +254,18 @@ namespace LLM {
                 config.n_group                 = 8;
                 config.topk_group              = 4;
                 config.routed_scaling_factor   = 2.5f;
+                if (arch == LLMArch::BAILING_MOE) {
+                    config.vocab_size              = 157184;
+                    config.max_position_embeddings = 32768;
+                }
+            } else if (arch == LLMArch::QWEN2) {
+                config.hidden_size             = 1536;
+                config.intermediate_size       = 8960;
+                config.num_heads               = 12;
+                config.num_kv_heads            = 2;
+                config.vocab_size              = 151936;
+                config.max_position_embeddings = 32768;
+                config.bidirectional           = true;
             } else if (arch == LLMArch::GPT_OSS_20B) {
                 config.head_dim                = 64;
                 config.num_heads               = 64;
@@ -283,22 +299,22 @@ namespace LLM {
                     if (contains(name, "attn.q_proj")) {
                         config.llama_cpp_style = true;
                     }
-                    if (contains(name, "visual.patch_embed.proj.1.weight")) {
+                    if (ends_with(name, "visual.patch_embed.proj.1.weight")) {
                         config.vision.split_patch_embed = true;
                     }
-                    if (contains(name, "visual.patch_embed.proj.0.weight")) {
+                    if (ends_with(name, "visual.patch_embed.proj.0.weight")) {
                         config.vision.patch_size  = static_cast<int>(tensor_storage.ne[0]);
                         config.vision.in_channels = tensor_storage.ne[2];
                         config.vision.hidden_size = tensor_storage.ne[3];
                     }
                     // HF-format checkpoints keep the patch embed unsplit under a single name.
-                    if (contains(name, "visual.patch_embed.proj.weight")) {
+                    if (ends_with(name, "visual.patch_embed.proj.weight")) {
                         config.vision.patch_size = static_cast<int>(tensor_storage.ne[0]);
                     }
                     if (contains(name, "visual.patch_embed.bias") || contains(name, "visual.patch_embed.proj.bias")) {
                         config.vision.hidden_size = tensor_storage.ne[0];
                     }
-                    if (contains(name, "visual.pos_embed.weight")) {
+                    if (ends_with(name, "visual.pos_embed.weight") && tensor_storage.n_dims == 2) {
                         config.vision.hidden_size             = tensor_storage.ne[0];
                         config.vision.num_position_embeddings = static_cast<int>(tensor_storage.ne[1]);
                     }
@@ -332,7 +348,7 @@ namespace LLM {
                         }
                     }
                 }
-                if (contains(name, "embed_tokens.weight")) {
+                if (ends_with(name, "embed_tokens.weight") && tensor_storage.n_dims == 2) {
                     config.hidden_size = tensor_storage.ne[0];
                     config.vocab_size  = tensor_storage.ne[1];
                 }
@@ -471,6 +487,8 @@ namespace LLM {
         int64_t n_group;
         int64_t topk_group;
         float routed_scaling_factor;
+        bool image_router;
+        bool fused_experts = false;
 
         void init_params(ggml_context* ctx,
                          const String2TensorStorage& tensor_storage_map = {},
@@ -488,6 +506,10 @@ namespace LLM {
             // scores and the group sums match.
             params["gate.weight"]      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, num_experts);
             params["gate.expert_bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_experts);
+            if (image_router) {
+                params["image_gate.weight"]      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, num_experts);
+                params["image_gate.expert_bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_experts);
+            }
 
             ggml_type gate_type = supported_type(get_type(prefix + "experts.gate_proj.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size);
             ggml_type up_type   = supported_type(get_type(prefix + "experts.up_proj.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size);
@@ -506,8 +528,14 @@ namespace LLM {
                 }
             };
 
-            declare_experts("experts.gate_proj.weight", gate_type, hidden_size, moe_intermediate_size);
-            declare_experts("experts.up_proj.weight", up_type, hidden_size, moe_intermediate_size);
+            fused_experts = tensor_storage_map.count(prefix + "experts.gate_up_proj.weight") != 0;
+            if (fused_experts) {
+                auto type = supported_type(get_type(prefix + "experts.gate_up_proj.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size);
+                declare_experts("experts.gate_up_proj.weight", type, hidden_size, 2 * moe_intermediate_size);
+            } else {
+                declare_experts("experts.gate_proj.weight", gate_type, hidden_size, moe_intermediate_size);
+                declare_experts("experts.up_proj.weight", up_type, hidden_size, moe_intermediate_size);
+            }
             declare_experts("experts.down_proj.weight", down_type, moe_intermediate_size, hidden_size);
         }
 
@@ -519,7 +547,8 @@ namespace LLM {
               num_experts_per_tok(config.num_experts_per_tok),
               n_group(config.n_group),
               topk_group(config.topk_group),
-              routed_scaling_factor(config.routed_scaling_factor) {
+              routed_scaling_factor(config.routed_scaling_factor),
+              image_router(config.arch == LLMArch::BAILING_MOE) {
             if (config.num_shared_experts > 0) {
                 blocks["shared_experts"] = std::make_shared<MLP>(config.hidden_size,
                                                                  config.moe_intermediate_size * config.num_shared_experts,
@@ -582,7 +611,7 @@ namespace LLM {
             return ggml_mul_mat_id(ctx->ggml_ctx, w, x, selected_experts);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* image_mask = nullptr) {
             // x: [N, n_token, hidden_size]
             GGML_ASSERT(num_experts > 0 && num_experts_per_tok > 0);
             GGML_ASSERT(n_group > 0 && topk_group > 0 && num_experts % n_group == 0);
@@ -596,10 +625,21 @@ namespace LLM {
 
             auto logits = ggml_mul_mat(gctx, params["gate.weight"], x);
             logits      = ggml_reshape_2d(gctx, logits, num_experts, n_token_total);
-            auto scores = ggml_sigmoid(gctx, logits);  // [num_experts, tokens]
+            auto bias   = params["gate.expert_bias"];
+            if (image_router) {
+                GGML_ASSERT(image_mask != nullptr);
+                auto mask         = ggml_reshape_2d(gctx, image_mask, 1, n_token_total);
+                auto inverse_mask = ggml_scale_bias(gctx, mask, -1.f, 1.f);
+                auto image_logits = ggml_reshape_2d(gctx, ggml_mul_mat(gctx, params["image_gate.weight"], x), num_experts, n_token_total);
+                logits            = ggml_add(gctx, ggml_mul(gctx, logits, inverse_mask), ggml_mul(gctx, image_logits, mask));
+                bias              = ggml_add(gctx,
+                                             ggml_mul(gctx, ggml_repeat_4d(gctx, bias, num_experts, n_token_total, 1, 1), inverse_mask),
+                                             ggml_mul(gctx, ggml_repeat_4d(gctx, params["image_gate.expert_bias"], num_experts, n_token_total, 1, 1), mask));
+            }
+            auto scores = ggml_sigmoid(gctx, logits);
 
             // The bias steers selection only; the combine weights come from the unbiased scores.
-            auto routing = ggml_add(gctx, scores, params["gate.expert_bias"]);
+            auto routing = ggml_add(gctx, scores, bias);
             routing      = ggml_add(gctx, routing, group_limited_mask(ctx, routing, n_token_total));
 
             auto selected_experts = ggml_argsort_top_k(gctx, routing, (int)num_experts_per_tok);  // [top_k, tokens]
@@ -614,12 +654,17 @@ namespace LLM {
             weights = ggml_scale(gctx, weights, routed_scaling_factor);
             weights = ggml_reshape_3d(gctx, weights, 1, num_experts_per_tok, n_token_total);
 
-            auto xf        = ggml_reshape_3d(gctx, x, hidden_size, 1, n_token_total);
-            auto gate      = expert_linear(ctx, "experts.gate_proj.weight", xf, selected_experts);
-            auto up        = expert_linear(ctx, "experts.up_proj.weight", xf, selected_experts);
-            auto activated = ggml_swiglu_split(gctx, gate, up);
-            auto experts   = expert_linear(ctx, "experts.down_proj.weight", activated, selected_experts);
-            experts        = ggml_mul(gctx, experts, weights);
+            auto xf = ggml_reshape_3d(gctx, x, hidden_size, 1, n_token_total);
+            ggml_tensor* activated;
+            if (fused_experts) {
+                activated = ggml_swiglu(gctx, expert_linear(ctx, "experts.gate_up_proj.weight", xf, selected_experts));
+            } else {
+                auto gate = expert_linear(ctx, "experts.gate_proj.weight", xf, selected_experts);
+                auto up   = expert_linear(ctx, "experts.up_proj.weight", xf, selected_experts);
+                activated = ggml_swiglu_split(gctx, gate, up);
+            }
+            auto experts = expert_linear(ctx, "experts.down_proj.weight", activated, selected_experts);
+            experts      = ggml_mul(gctx, experts, weights);
 
             ggml_tensor* out = nullptr;
             for (int64_t i = 0; i < num_experts_per_tok; ++i) {
@@ -1428,7 +1473,9 @@ namespace LLM {
                              ggml_tensor* x,
                              ggml_tensor* input_pos,
                              ggml_tensor* attention_mask = nullptr,
-                             int rope_index              = 0) {
+                             int rope_index              = 0,
+                             ggml_tensor* rope_cos       = nullptr,
+                             ggml_tensor* rope_sin       = nullptr) {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
@@ -1471,13 +1518,28 @@ namespace LLM {
                 v = ggml_rms_norm(ctx->ggml_ctx, v, rms_norm_eps);
             }
 
-            if (arch == LLMArch::MISTRAL_SMALL_3_2) {
+            if (rope_cos != nullptr) {
+                GGML_ASSERT(rope_sin != nullptr);
+                // Bailing video RoPE interleaves spatial frequencies within a partial NEOX head.
+                auto rotate = [&](ggml_tensor* input) {
+                    auto gctx    = ctx->ggml_ctx;
+                    int64_t half = rope_cos->ne[0];
+                    auto first   = ggml_ext_slice(gctx, input, 0, 0, half);
+                    auto second  = ggml_ext_slice(gctx, input, 0, half, 2 * half);
+                    auto left    = ggml_sub(gctx, ggml_mul(gctx, first, rope_cos), ggml_mul(gctx, second, rope_sin));
+                    auto right   = ggml_add(gctx, ggml_mul(gctx, second, rope_cos), ggml_mul(gctx, first, rope_sin));
+                    auto rotated = ggml_concat(gctx, left, right, 0);
+                    return ggml_concat(gctx, rotated, ggml_ext_slice(gctx, input, 0, 2 * half, input->ne[0]), 0);
+                };
+                q = rotate(q);
+                k = rotate(k);
+            } else if (arch == LLMArch::MISTRAL_SMALL_3_2) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NORMAL, 8192, 1000000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else if (arch == LLMArch::MINISTRAL_3_3B) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 262144, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 262144, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
-            } else if (arch == LLMArch::QWEN3) {
+            } else if (arch == LLMArch::QWEN3 || arch == LLMArch::QWEN2) {
                 q = ggml_rope_ext(ctx->ggml_ctx, q, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
                 k = ggml_rope_ext(ctx->ggml_ctx, k, input_pos, nullptr, 128, GGML_ROPE_TYPE_NEOX, 40960, 1000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
             } else if (arch == LLMArch::GPT_OSS_20B) {
@@ -1655,7 +1717,7 @@ namespace LLM {
                 v_attn      = ggml_reshape_3d(ctx->ggml_ctx, v_attn, n_token, head_dim, num_kv_heads * N);
 
                 auto kq = ggml_mul_mat(ctx->ggml_ctx, k, q);
-                ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+                ggml_prec_set_acc(kq, GGML_PREC_F32);
                 kq = ggml_scale_inplace(ctx->ggml_ctx, kq, 1.0f / std::sqrt(static_cast<float>(head_dim)));
                 if (attention_mask != nullptr) {
                     kq = ggml_add_inplace(ctx->ggml_ctx, kq, attention_mask);
@@ -1724,7 +1786,7 @@ namespace LLM {
             blocks["self_attn"] = std::make_shared<Attention>(config, sliding_attention == 0);
             if (config.arch == LLMArch::GPT_OSS_20B) {
                 blocks["mlp"] = std::make_shared<GPTOSSMLP>(config);
-            } else if (config.arch == LLMArch::LLADA2_MOE && layer_index >= config.first_k_dense_replace) {
+            } else if ((config.arch == LLMArch::LLADA2_MOE || config.arch == LLMArch::BAILING_MOE) && layer_index >= config.first_k_dense_replace) {
                 blocks["mlp"] = std::make_shared<LLaDA2MoEMLP>(config);
             } else {
                 blocks["mlp"] = std::make_shared<MLP>(config.hidden_size,
@@ -1746,7 +1808,10 @@ namespace LLM {
                              ggml_tensor* x,
                              ggml_tensor* input_pos,
                              ggml_tensor* attention_mask         = nullptr,
-                             ggml_tensor* sliding_attention_mask = nullptr) {
+                             ggml_tensor* sliding_attention_mask = nullptr,
+                             ggml_tensor* image_mask             = nullptr,
+                             ggml_tensor* rope_cos               = nullptr,
+                             ggml_tensor* rope_sin               = nullptr) {
             // x: [N, n_token, hidden_size]
             auto self_attn                                  = std::dynamic_pointer_cast<Attention>(blocks["self_attn"]);
             auto input_layernorm                            = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["input_layernorm"]);
@@ -1768,7 +1833,7 @@ namespace LLM {
 
             auto residual = x;
             x             = input_layernorm->forward(ctx, x);
-            x             = self_attn->forward(ctx, x, input_pos, block_attention_mask, rope_index);
+            x             = self_attn->forward(ctx, x, input_pos, block_attention_mask, rope_index, rope_cos, rope_sin);
             if (post_attention_norm != nullptr) {
                 x = post_attention_norm->forward(ctx, x);
             }
@@ -1782,7 +1847,7 @@ namespace LLM {
             } else if (auto moe_mlp = std::dynamic_pointer_cast<LLaDA2MoEMLP>(blocks["mlp"])) {
                 // LLaDA2 is dense for the first first_k_dense_replace layers and MoE afterwards,
                 // so the block type varies per layer rather than per arch.
-                x = moe_mlp->forward(ctx, x);
+                x = moe_mlp->forward(ctx, x, image_mask);
             } else {
                 auto mlp = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
                 x        = mlp->forward(ctx, x);
@@ -1804,10 +1869,11 @@ namespace LLM {
     protected:
         int64_t num_layers;
         LLMConfig config;
+        std::string graph_cut_prefix;
 
     public:
-        TextModel(const LLMConfig& config)
-            : num_layers(config.num_layers), config(config) {
+        TextModel(const LLMConfig& config, const std::string& graph_cut_prefix = "llm.text")
+            : num_layers(config.num_layers), config(config), graph_cut_prefix(graph_cut_prefix) {
             blocks["embed_tokens"] = std::shared_ptr<GGMLBlock>(new Embedding(config.vocab_size, config.hidden_size));
             for (int i = 0; i < num_layers; i++) {
                 blocks["layers." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new TransformerBlock(config, i));
@@ -1831,7 +1897,10 @@ namespace LLM {
                                     std::set<int> out_layers,
                                     const std::vector<std::vector<std::pair<int, ggml_tensor*>>>& deepstack_image_embeds = {},
                                     ggml_tensor* sliding_attention_mask                                                  = nullptr,
-                                    bool return_all_hidden_states                                                        = false) {
+                                    bool return_all_hidden_states                                                        = false,
+                                    ggml_tensor* image_mask                                                              = nullptr,
+                                    ggml_tensor* rope_cos                                                                = nullptr,
+                                    ggml_tensor* rope_sin                                                                = nullptr) {
             auto norm = config.final_norm ? std::dynamic_pointer_cast<LLMRMSNorm>(blocks["norm"])
                                           : nullptr;
             std::vector<ggml_tensor*> intermediate_outputs;
@@ -1843,18 +1912,18 @@ namespace LLM {
                 intermediate_outputs.push_back(x);
             }
 
-            sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.prelude", "x");
+            sd::ggml_graph_cut::mark_graph_cut(x, graph_cut_prefix + ".prelude", "x");
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["layers." + std::to_string(i)]);
 
-                x = block->forward(ctx, x, input_pos, attention_mask, sliding_attention_mask);
+                x = block->forward(ctx, x, input_pos, attention_mask, sliding_attention_mask, image_mask, rope_cos, rope_sin);
                 if (i < static_cast<int>(deepstack_image_embeds.size())) {
                     x = add_deepstack_image_embeds(ctx, x, deepstack_image_embeds[static_cast<size_t>(i)]);
                 }
                 if (return_all_hidden_states || out_layers.size() > 1) {
                     x = ggml_cont(ctx->ggml_ctx, x);
                 }
-                sd::ggml_graph_cut::mark_graph_cut(x, "llm.text.layers." + std::to_string(i), "x");
+                sd::ggml_graph_cut::mark_graph_cut(x, graph_cut_prefix + ".layers." + std::to_string(i), "x");
                 if (return_all_hidden_states) {
                     if (i + 1 < num_layers) {
                         intermediate_outputs.push_back(x);

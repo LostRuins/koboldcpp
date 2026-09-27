@@ -465,6 +465,11 @@ namespace sd::pipeline {
                 // states with a zeroed prompt mask, so no extra text encode is needed.
                 uncond.c_crossattn = cond.c_crossattn;
                 uncond.c_vector    = sd::Tensor<float>::zeros_like(cond.c_vector);
+            } else if (sd->version == VERSION_MING_IMAGE) {
+                uncond.c_crossattn = sd::Tensor<float>::zeros_like(cond.c_crossattn);
+                for (const auto& extra : cond.extra_c_crossattns) {
+                    uncond.extra_c_crossattns.push_back(sd::Tensor<float>::zeros_like(extra));
+                }
             } else if (sd_version_is_sensenova_u1(sd->version)) {
                 auto* sensenova_conditioner = static_cast<SenseNovaU1Conditioner*>(sd->cond_stage_model.get());
                 uncond                      = sensenova_conditioner->get_unconditional_condition(request->negative_prompt);
