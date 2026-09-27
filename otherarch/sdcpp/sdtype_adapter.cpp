@@ -1255,7 +1255,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     int vae_tile_size = -1;
     if (dotile) {
-        int new_vae_tile_size = cfg_tiled_vae_threshold / info.vae_scale_factor;
+        int new_vae_tile_size = cfg_tiled_vae_threshold;
         new_vae_tile_size = new_vae_tile_size / 2;
         new_vae_tile_size -= new_vae_tile_size % 2;
         if (new_vae_tile_size > vae_tile_size) {
@@ -1485,8 +1485,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.strength = sd_params->strength;
     params.vae_tiling_params.enabled = dotile;
     if (vae_tile_size > 0) {
-        params.vae_tiling_params.tile_size_x = vae_tile_size;
-        params.vae_tiling_params.tile_size_y = vae_tile_size;
+        params.vae_tiling_params.tile_size_w = vae_tile_size;
+        params.vae_tiling_params.tile_size_h = vae_tile_size;
     }
     if(dotile)
     {

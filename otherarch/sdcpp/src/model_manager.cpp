@@ -246,17 +246,13 @@ bool ModelManager::register_param_tensors(ModelComponent component,
         }
         ggml_set_name(tensor, name.c_str());
 
-        auto state            = std::make_unique<TensorState>();
-        state->name           = name;
-        state->tensor         = tensor;
-        state->component      = component;
-        state->source_file    = source_file;
-        state->source_version = source_version;
-        auto source           = sources.find(name);
-        if (source != sources.end()) {
-            state->source     = source->second;
-            state->has_source = true;
-        }
+        auto state             = std::make_unique<TensorState>();
+        state->name            = name;
+        state->tensor          = tensor;
+        state->component       = component;
+        state->source_file     = source_file;
+        state->source_version  = source_version;
+        state->sources         = find_tensor_sources(*state, sources);
         state->residency_mode  = residency_mode;
         state->compute_backend = compute_backend;
         state->params_backend  = params_backend;
@@ -757,12 +753,33 @@ bool ModelManager::validate_tensor(const TensorState& state) const {
         return true;
     }
 
-    if (!state.has_source) {
+    if (state.sources.empty()) {
         LOG_ERROR("%s tensor '%s' not in model metadata", model_component_name(state.component), state.name.c_str());
         return false;
     }
 
-    const TensorStorage& tensor_storage = state.source;
+    TensorStorage tensor_storage = state.sources.front();
+    if (state.sources.size() > 1) {
+        const int dim = tensor_storage.n_dims - 1;
+        if (dim < 0 || dim >= GGML_MAX_DIMS) {
+            return false;
+        }
+        tensor_storage.ne[dim] = 0;
+        for (const auto& part : state.sources) {
+            if (part.n_dims != tensor_storage.n_dims || part.ne[dim] < 0 ||
+                part.ne[dim] > state.tensor->ne[dim] - tensor_storage.ne[dim]) {
+                LOG_ERROR("invalid tensor part '%s' for '%s'", part.name.c_str(), state.name.c_str());
+                return false;
+            }
+            for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                if (i != dim && part.ne[i] != tensor_storage.ne[i]) {
+                    LOG_ERROR("incompatible tensor part '%s' for '%s'", part.name.c_str(), state.name.c_str());
+                    return false;
+                }
+            }
+            tensor_storage.ne[dim] += part.ne[dim];
+        }
+    }
     if (state.tensor->ne[0] != tensor_storage.ne[0] ||
         state.tensor->ne[1] != tensor_storage.ne[1] ||
         state.tensor->ne[2] != tensor_storage.ne[2] ||
@@ -831,7 +848,7 @@ bool ModelManager::mmap_params(const std::vector<TensorState*>& states,
 }
 
 bool ModelManager::can_mmap_storage(const TensorState& state) const {
-    if (state.source_file != 0 || !enable_mmap_ || state.residency_mode != ResidencyMode::ParamBackend) {
+    if (state.sources.size() > 1 || state.source_file != 0 || !enable_mmap_ || state.residency_mode != ResidencyMode::ParamBackend) {
         return false;
     }
     if (state.compute_backend == nullptr || state.params_backend == nullptr) {
@@ -941,6 +958,62 @@ bool ModelManager::alloc_params_buffers(const std::vector<TensorState*>& states,
     return true;
 }
 
+bool ModelManager::load_tensor_parts(TensorState& state) {
+    auto ctx = std::unique_ptr<ggml_context, decltype(&ggml_free)>(
+        ggml_init({state.sources.size() * ggml_tensor_overhead(), nullptr, true}), ggml_free);
+    if (!ctx) {
+        return false;
+    }
+    const size_t size = ggml_nbytes(state.tensor);
+    std::vector<uint8_t> buffer;
+    void* data = state.tensor->data;
+    if (!ggml_backend_buffer_is_host(state.tensor->buffer)) {
+        buffer.resize(size);
+        data = buffer.data();
+    }
+    std::map<std::string, ggml_tensor*> parts;
+    std::set<std::string> names;
+    size_t offset = 0;
+    for (const auto& source : state.sources) {
+        auto part              = ggml_new_tensor(ctx.get(), state.tensor->type, source.n_dims, source.ne);
+        const size_t part_size = ggml_nbytes(part);
+        if (part_size > size - offset) {
+            return false;
+        }
+        part->data         = static_cast<uint8_t*>(data) + offset;
+        parts[source.name] = part;
+        names.insert(source.name);
+        offset += part_size;
+    }
+    if (offset != size) {
+        return false;
+    }
+    std::set<std::string> loaded;
+    std::mutex mutex;
+    auto callback = [&](const TensorStorage& source, ggml_tensor** dst) {
+        *dst      = nullptr;
+        auto part = parts.find(source.name);
+        if (part != parts.end()) {
+            *dst = part->second;
+            std::lock_guard<std::mutex> lock(mutex);
+            loaded.insert(source.name);
+        }
+        return true;
+    };
+    const bool success = state.source_file == 0
+                             ? model_loader_.load_tensors(callback, enable_mmap_, &names, false)
+                             : model_loader_.load_file_tensors(state.source_file, state.source_version, callback, names, enable_mmap_);
+    if (!success || loaded != names) {
+        return false;
+    }
+    if (!buffer.empty()) {
+        // Upload the assembled tensor once, including for row-split backend buffers.
+        ggml_backend_tensor_set(state.tensor, buffer.data(), 0, size);
+    }
+    state.loaded_to_params_backend = true;
+    return true;
+}
+
 bool ModelManager::load_tensors(const std::vector<TensorState*>& states) {
     using ReadGroup = std::pair<ModelLoader::FileId, SDVersion>;
     using ReadBatch = std::map<std::string, std::vector<TensorState*>>;
@@ -948,6 +1021,12 @@ bool ModelManager::load_tensors(const std::vector<TensorState*>& states) {
     for (auto* state : states) {
         if (state == nullptr)
             continue;
+        if (state->sources.size() > 1) {
+            if (!load_tensor_parts(*state)) {
+                return false;
+            }
+            continue;
+        }
         auto& batches = groups[{state->source_file, state->source_version}];
         // The loader supplies one destination per name; only conflicting types need another batch.
         auto batch = std::find_if(batches.begin(), batches.end(), [&](const ReadBatch& candidate) {

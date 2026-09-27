@@ -35,23 +35,72 @@ enum class GGUFMetadataType : uint32_t {
 class GGUFReader {
 private:
     std::vector<GGUFTensorInfo> tensors_;
+    bool has_wide_tensors_    = false;
+    uint64_t remaining_bytes_ = 0;
     size_t data_offset_;
     size_t alignment_ = 32;  // default alignment is 32
 
     template <typename T>
     bool safe_read(std::ifstream& fin, T& value) {
-        fin.read(reinterpret_cast<char*>(&value), sizeof(T));
-        return fin.good();
+        return safe_read(fin, reinterpret_cast<char*>(&value), sizeof(T));
     }
 
     bool safe_read(std::ifstream& fin, char* buffer, size_t size) {
+        if (size > remaining_bytes_)
+            return false;
         fin.read(buffer, size);
-        return fin.good();
+        if (!fin.good())
+            return false;
+        remaining_bytes_ -= size;
+        return true;
     }
 
-    bool safe_seek(std::ifstream& fin, std::streamoff offset, std::ios::seekdir dir) {
-        fin.seekg(offset, dir);
-        return fin.good();
+    bool safe_skip(std::ifstream& fin, uint64_t count, uint64_t element_size = 1) {
+        if (count > remaining_bytes_ / element_size)
+            return false;
+        uint64_t size = count * element_size;
+        fin.seekg(static_cast<std::streamoff>(size), std::ios::cur);
+        if (!fin.good())
+            return false;
+        remaining_bytes_ -= size;
+        return true;
+    }
+
+    bool skip_metadata_values(std::ifstream& fin, GGUFMetadataType type, uint64_t count) {
+        switch (type) {
+            case GGUFMetadataType::UINT8:
+            case GGUFMetadataType::INT8:
+            case GGUFMetadataType::BOOL:
+                return safe_skip(fin, count);
+
+            case GGUFMetadataType::UINT16:
+            case GGUFMetadataType::INT16:
+                return safe_skip(fin, count, 2);
+
+            case GGUFMetadataType::UINT32:
+            case GGUFMetadataType::INT32:
+            case GGUFMetadataType::FLOAT32:
+                return safe_skip(fin, count, 4);
+
+            case GGUFMetadataType::UINT64:
+            case GGUFMetadataType::INT64:
+            case GGUFMetadataType::FLOAT64:
+                return safe_skip(fin, count, 8);
+
+            case GGUFMetadataType::STRING:
+                if (count > remaining_bytes_ / sizeof(uint64_t))
+                    return false;
+                for (uint64_t i = 0; i < count; i++) {
+                    uint64_t len = 0;
+                    if (!safe_read(fin, len) || !safe_skip(fin, len))
+                        return false;
+                }
+                return true;
+
+            default:
+                LOG_ERROR("Unknown metadata type=%u", static_cast<uint32_t>(type));
+                return false;
+        }
     }
 
     bool read_metadata(std::ifstream& fin) {
@@ -84,52 +133,12 @@ private:
             return true;
         }
 
-        switch (static_cast<GGUFMetadataType>(type)) {
-            case GGUFMetadataType::UINT8:
-            case GGUFMetadataType::INT8:
-            case GGUFMetadataType::BOOL:
-                return safe_seek(fin, 1, std::ios::cur);
-
-            case GGUFMetadataType::UINT16:
-            case GGUFMetadataType::INT16:
-                return safe_seek(fin, 2, std::ios::cur);
-
-            case GGUFMetadataType::UINT32:
-            case GGUFMetadataType::INT32:
-            case GGUFMetadataType::FLOAT32:
-                return safe_seek(fin, 4, std::ios::cur);
-
-            case GGUFMetadataType::UINT64:
-            case GGUFMetadataType::INT64:
-            case GGUFMetadataType::FLOAT64:
-                return safe_seek(fin, 8, std::ios::cur);
-
-            case GGUFMetadataType::STRING: {
-                uint64_t len = 0;
-                if (!safe_read(fin, len))
-                    return false;
-                return safe_seek(fin, len, std::ios::cur);
-            }
-
-            case GGUFMetadataType::ARRAY: {
-                uint32_t elem_type = 0;
-                uint64_t len       = 0;
-                if (!safe_read(fin, elem_type))
-                    return false;
-                if (!safe_read(fin, len))
-                    return false;
-
-                for (uint64_t i = 0; i < len; i++) {
-                    if (!read_metadata(fin))
-                        return false;
-                }
-                return true;
-            }
-
-            default:
-                LOG_ERROR("Unknown metadata type=%u", type);
+        uint64_t count = 1;
+        if (type == static_cast<uint32_t>(GGUFMetadataType::ARRAY)) {
+            if (!safe_read(fin, type) || !safe_read(fin, count))
                 return false;
         }
+        return skip_metadata_values(fin, static_cast<GGUFMetadataType>(type), count);
     }
 
     GGUFTensorInfo read_tensor_info(std::ifstream& fin) {
@@ -154,6 +163,7 @@ private:
         }
 
         if (n_dims > GGML_MAX_DIMS) {
+            has_wide_tensors_ = true;
             for (uint32_t i = GGML_MAX_DIMS; i < n_dims; i++) {
                 info.shape[GGML_MAX_DIMS - 1] *= info.shape[i];  // stack to last dim;
             }
@@ -174,11 +184,19 @@ private:
 
 public:
     bool load(const std::string& file_path) {
-        std::ifstream fin(sd_get_u8path(file_path), std::ios::binary);
+        std::ifstream fin(sd_get_u8path(file_path), std::ios::binary | std::ios::ate);
         if (!fin) {
             LOG_ERROR("failed to open '%s'", file_path.c_str());
             return false;
         }
+
+        std::streamoff file_size = fin.tellg();
+        if (file_size < 0)
+            return false;
+        remaining_bytes_ = static_cast<uint64_t>(file_size);
+        fin.seekg(0, std::ios::beg);
+        if (!fin.good())
+            return false;
 
         // --- Header ---
         char magic[4];
@@ -228,6 +246,8 @@ public:
     }
 
     const std::vector<GGUFTensorInfo>& tensors() const { return tensors_; }
+
+    bool has_tensors_beyond_ggml_limits() const { return has_wide_tensors_; }
     size_t data_offset() const { return data_offset_; }
 };
 

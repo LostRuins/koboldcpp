@@ -62,6 +62,7 @@ enum SDVersion {
     VERSION_SENSENOVA_U1_5,
     VERSION_LLADA_IMAGE,
     VERSION_ESRGAN,
+    VERSION_PIXART,
     VERSION_COUNT,
 };
 
@@ -252,6 +253,10 @@ static inline bool sd_version_is_sensenova_u1(SDVersion version) {
     return version == VERSION_SENSENOVA_U1_5;
 }
 
+static inline bool sd_version_is_pixart(SDVersion version) {
+    return version == VERSION_PIXART;
+}
+
 static inline bool sd_version_supports_video_generation(SDVersion version) {
     return version == VERSION_SVD || sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_lingbot_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version);
 }
@@ -320,7 +325,8 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_sefi_image(version) ||
         sd_version_is_krea2(version) ||
         sd_version_is_mage_flow(version) ||
-        sd_version_is_sensenova_u1(version)) {
+        sd_version_is_sensenova_u1(version) ||
+        sd_version_is_pixart(version)) {
         return true;
     }
     return false;
