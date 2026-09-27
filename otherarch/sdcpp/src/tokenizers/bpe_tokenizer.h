@@ -5,15 +5,19 @@
 #include <cstdint>
 #include <functional>
 #include <map>
-#include <regex>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "core/regex.h"
 #include "tokenizer.h"
 
 class BPETokenizer : public Tokenizer {
+private:
+    std::unique_ptr<sd::Regex> split_regex_;
+
 protected:
     std::map<int, std::u32string> byte_encoder;
     std::map<std::u32string, int> byte_decoder;
@@ -28,15 +32,15 @@ protected:
 protected:
     static std::vector<std::pair<int, std::u32string>> bytes_to_unicode();
     static std::vector<std::u32string> split_utf32(const std::string& text, char32_t delimiter = U'\n');
-    virtual std::vector<std::string> token_split(const std::string& text) const;
+    bool token_split(const std::string& text, std::vector<std::string>& tokens, std::string* error = nullptr) const;
     std::vector<std::u32string> bpe(const std::u32string& token) const;
     std::string decode_token(int token_id) const override;
 
 public:
-    BPETokenizer()          = default;
+    explicit BPETokenizer(const std::string& pattern);
     virtual ~BPETokenizer() = default;
 
-    std::vector<int> encode(const std::string& text, on_new_token_cb_t on_new_token_cb = nullptr) override;
+    bool encode(const std::string& text, std::vector<int>& tokens, on_new_token_cb_t on_new_token_cb = nullptr, std::string* error = nullptr) override;
 };
 
 #endif  // __SD_TOKENIZERS_BPE_TOKENIZER_H__

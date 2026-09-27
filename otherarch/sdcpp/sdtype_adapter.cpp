@@ -262,16 +262,6 @@ std::string load_gemma_vocab_json()
     static std::string cache;
     return load_embd_file(cache, "embd_res/gemma_vocab_json.embd");
 }
-std::string load_gemma2_merges()
-{
-    static std::string cache;
-    return load_embd_file(cache, "embd_res/gemma2_merges_utf8_c_str.embd");
-}
-std::string load_gemma2_vocab_json()
-{
-    static std::string cache;
-    return load_embd_file(cache, "embd_res/gemma2_vocab_json.embd");
-}
 std::string load_mistral_merges()
 {
     static std::string cache;
@@ -292,17 +282,6 @@ std::string load_umt5_tokenizer_json()
     static std::string cache;
     return load_embd_file(cache, "embd_res/umt5_tokenizer_json.embd");
 }
-std::string load_gpt_oss_merges()
-{
-    static std::string cache;
-    return load_embd_file(cache, "embd_res/gpt_oss_merges_utf8_c_str.embd");
-}
-std::string load_gpt_oss_vocab_json()
-{
-    static std::string cache;
-    return load_embd_file(cache, "embd_res/gpt_oss_vocab_json.embd");
-}
-
 static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data);
 
 // 0 disable, 1 initial, 2 denoised
@@ -560,6 +539,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.audio_vae_path = sd_params->audio_vae_path.c_str();
     params.taesd_path = sd_params->taesd_path.c_str();
     params.photo_maker_path = sd_params->stacked_id_embeddings_path.c_str();
+    params.tokenizer = "";
 
     params.rng_type = CUDA_RNG;
 

@@ -87,7 +87,8 @@ Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str)
 }
 
 Qwen2Tokenizer::Qwen2Tokenizer(const std::string& merges_utf8_str,
-                               const std::vector<std::string>& special_tokens_override) {
+                               const std::vector<std::string>& special_tokens_override)
+    : BPETokenizer(R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)") {
     UNK_TOKEN = "<|endoftext|>";
     EOS_TOKEN = "<|endoftext|>";
     PAD_TOKEN = "<|endoftext|>";

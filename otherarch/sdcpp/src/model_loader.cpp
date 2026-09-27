@@ -71,7 +71,6 @@ const char* unused_tensors[] = {
     "text_encoders.llm.output.weight",
     "text_encoders.llm.lm_head.",
     "language_model.lm_head.",
-    "vision_model.",
 };
 
 bool is_unused_tensor(const std::string& name) {

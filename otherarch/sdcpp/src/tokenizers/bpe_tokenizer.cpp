@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <stdexcept>
 
 #include "core/util.h"
 #include "tokenize_util.h"
@@ -31,8 +32,37 @@ std::vector<std::pair<int, std::u32string>> BPETokenizer::bytes_to_unicode() {
     return byte_unicode_pairs;
 }
 
-std::vector<std::string> BPETokenizer::token_split(const std::string& text) const {
-    return ::token_split(text);
+BPETokenizer::BPETokenizer(const std::string& pattern) {
+    if (!pattern.empty()) {
+        split_regex_ = std::make_unique<sd::Regex>();
+        std::string error;
+        if (!split_regex_->compile(pattern, &error)) {
+            throw std::runtime_error("invalid tokenizer regex: " + error);
+        }
+    }
+}
+
+bool BPETokenizer::token_split(const std::string& text, std::vector<std::string>& tokens, std::string* error) const {
+    tokens.clear();
+    if (error) {
+        error->clear();
+    }
+    if (!split_regex_) {
+        if (!text.empty()) {
+            tokens.push_back(text);
+        }
+        return true;
+    }
+    std::vector<sd::Regex::Match> matches;
+    if (!split_regex_->find_matches(text, matches, error)) {
+        return false;
+    }
+    for (const auto& match : matches) {
+        if (match.first != match.second) {
+            tokens.push_back(text.substr(match.first, match.second - match.first));
+        }
+    }
+    return true;
 }
 
 std::vector<std::u32string> BPETokenizer::split_utf32(const std::string& text, char32_t delimiter) {
@@ -130,7 +160,11 @@ std::vector<std::u32string> BPETokenizer::bpe(const std::u32string& token) const
     return word;
 }
 
-std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t on_new_token_cb) {
+bool BPETokenizer::encode(const std::string& text, std::vector<int>& result, on_new_token_cb_t on_new_token_cb, std::string* error) {
+    result.clear();
+    if (error) {
+        error->clear();
+    }
     std::vector<int32_t> bpe_tokens;
     std::vector<std::string> token_strs;
 
@@ -150,7 +184,10 @@ std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t
             token_strs.push_back(splited_text);
             continue;
         }
-        auto tokens = token_split(splited_text);
+        std::vector<std::string> tokens;
+        if (!token_split(splited_text, tokens, error)) {
+            return false;
+        }
         for (auto& token : tokens) {
             if (on_new_token_cb != nullptr) {
                 bool skip = on_new_token_cb(token, bpe_tokens);
@@ -206,7 +243,8 @@ std::vector<int> BPETokenizer::encode(const std::string& text, on_new_token_cb_t
     }
     ss << "]";
     LOG_VERBOSE("split prompt \"%s\" to %zu tokens %s", text.c_str(), bpe_tokens.size(), ss.str().c_str());
-    return bpe_tokens;
+    result = std::move(bpe_tokens);
+    return true;
 }
 
 std::string BPETokenizer::decode_token(int token_id) const {

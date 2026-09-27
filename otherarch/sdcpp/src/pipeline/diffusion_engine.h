@@ -90,6 +90,7 @@ public:
     std::map<std::string, std::shared_ptr<LoraModel>> kcpp_lora_cache;
     bool kcpp_lora_cache_populate = false;
     std::string kcpp_taesd_path;
+    std::string kcpp_tokenizer_path;
     // kcpp
 
     std::string taesd_path;
@@ -133,6 +134,7 @@ public:
                                 &sd_ctx_params_t::clip_g_path, &sd_ctx_params_t::clip_vision_path,
                                 &sd_ctx_params_t::t5xxl_path, &sd_ctx_params_t::llm_path,
                                 &sd_ctx_params_t::llm_vision_path, &sd_ctx_params_t::diffusion_model_path,
+                                &sd_ctx_params_t::tokenizer,
                                 &sd_ctx_params_t::high_noise_diffusion_model_path, &sd_ctx_params_t::uncond_diffusion_model_path,
                                 &sd_ctx_params_t::embeddings_connectors_path, &sd_ctx_params_t::vae_path,
                                 &sd_ctx_params_t::audio_vae_path, &sd_ctx_params_t::taesd_path,

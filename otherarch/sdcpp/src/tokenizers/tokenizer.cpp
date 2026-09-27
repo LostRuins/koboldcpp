@@ -23,17 +23,22 @@ std::string Tokenizer::normalize(const std::string& text) const {
     return text;
 }
 
-std::vector<int> Tokenizer::tokenize(const std::string& text,
-                                     on_new_token_cb_t on_new_token_cb,
-                                     bool padding,
-                                     size_t min_length,
-                                     size_t max_length,
-                                     bool allow_overflow_expand) {
-    std::vector<int> tokens = encode(text, on_new_token_cb);
+bool Tokenizer::tokenize(const std::string& text,
+                         std::vector<int>& tokens,
+                         on_new_token_cb_t on_new_token_cb,
+                         bool padding,
+                         size_t min_length,
+                         size_t max_length,
+                         bool allow_overflow_expand,
+                         std::string* error) {
+    if (!encode(text, tokens, on_new_token_cb, error)) {
+        tokens.clear();
+        return false;
+    }
     if (padding) {
         pad_tokens(tokens, nullptr, nullptr, min_length, max_length, allow_overflow_expand);
     }
-    return tokens;
+    return true;
 }
 
 void Tokenizer::pad_tokens(std::vector<int>& tokens,
@@ -200,8 +205,11 @@ static std::string clean_up_tokenization(std::string& text) {
     return std::regex_replace(text, pattern, ",");
 }
 
-std::string Tokenizer::decode(const std::vector<int>& tokens) const {
-    std::string text;
+bool Tokenizer::decode(const std::vector<int>& tokens, std::string& text, std::string* error) const {
+    text.clear();
+    if (error) {
+        error->clear();
+    }
 
     for (int token_id : tokens) {
         if (token_id == BOS_TOKEN_ID || token_id == EOS_TOKEN_ID || token_id == PAD_TOKEN_ID) {
@@ -218,5 +226,6 @@ std::string Tokenizer::decode(const std::vector<int>& tokens) const {
     }
 
     text = clean_up_tokenization(text);
-    return trim(text);
+    text = trim(text);
+    return true;
 }

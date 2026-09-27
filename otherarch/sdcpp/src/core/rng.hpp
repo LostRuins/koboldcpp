@@ -1,6 +1,8 @@
 #ifndef __SD_CORE_RNG_HPP__
 #define __SD_CORE_RNG_HPP__
 
+#include <cstdint>
+#include <memory>
 #include <random>
 #include <vector>
 
@@ -8,6 +10,7 @@ class RNG {
 public:
     virtual void manual_seed(uint64_t seed)      = 0;
     virtual std::vector<float> randn(uint32_t n) = 0;
+    virtual std::shared_ptr<RNG> clone() const   = 0;
 };
 
 class STDDefaultRNG : public RNG {
@@ -15,6 +18,10 @@ private:
     std::default_random_engine generator;
 
 public:
+    std::shared_ptr<RNG> clone() const override {
+        return std::make_shared<STDDefaultRNG>(*this);
+    }
+
     void manual_seed(uint64_t seed) override {
         generator.seed((unsigned int)seed);
     }
