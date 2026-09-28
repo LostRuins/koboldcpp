@@ -93,7 +93,7 @@ class APIResponseError(RuntimeError):
 
 
 class AgentInterrupted(Exception):
-    """The user stopped the current model request."""
+    """The user stopped the current model request or pending tool approval."""
 
 
 class RequestCancellation:
@@ -269,6 +269,30 @@ class Throbber:
         self.stream.flush()
 
 
+def standalone_escape(fd: int) -> bool:
+    """After reading ESC on POSIX, discard key sequences and detect Escape alone."""
+    import select
+
+    ready, _, _ = select.select([fd], [], [], ESCAPE_DISAMBIGUATION_SECONDS)
+    if not ready:
+        return True
+
+    # Arrow, function, and Alt keys also start with ESC. Drain the sequence so
+    # its remaining characters cannot leak into the next prompt.
+    deadline = time.monotonic() + ESCAPE_SEQUENCE_DRAIN_SECONDS
+    while time.monotonic() < deadline:
+        os.read(fd, 1)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        ready, _, _ = select.select(
+            [fd], [], [], min(ESCAPE_SEQUENCE_QUIET_SECONDS, remaining)
+        )
+        if not ready:
+            break
+    return False
+
+
 def run_interruptible_request(
     operation: Callable[[], Any], on_interrupt: Callable[[], None] | None = None
 ) -> Any:
@@ -306,29 +330,7 @@ def run_interruptible_request(
             if not ready or os.read(fd, 1) != b"\x1b":
                 return False
 
-            # Escape prefixes arrow, function, and Alt-key sequences on POSIX
-            # terminals. Only treat it as an interrupt when it arrives alone.
-            ready, _, _ = select.select(
-                [fd], [], [], ESCAPE_DISAMBIGUATION_SECONDS
-            )
-            if not ready:
-                return True
-
-            # Discard the rest of the terminal-generated sequence so fragments
-            # such as "[A" cannot leak into the next input prompt. Stop after a
-            # short quiet period, with a hard deadline for unusual terminals.
-            deadline = time.monotonic() + ESCAPE_SEQUENCE_DRAIN_SECONDS
-            while time.monotonic() < deadline:
-                os.read(fd, 1)
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                ready, _, _ = select.select(
-                    [fd], [], [], min(ESCAPE_SEQUENCE_QUIET_SECONDS, remaining)
-                )
-                if not ready:
-                    break
-            return False
+            return standalone_escape(fd)
 
         def restore_input() -> None:
             termios.tcsetattr(fd, termios.TCSADRAIN, previous_mode)
@@ -1145,6 +1147,64 @@ def tool_arguments_preview(
     return limit_text(rendered, "argument preview", limit)
 
 
+def read_tool_approval(prompt: str) -> str:
+    """Read a yes/no line, but let Escape interrupt without waiting for Enter."""
+    if not (stream_is_interactive(sys.stdin) and stream_is_interactive(sys.stdout)):
+        return input(prompt)
+
+    if os.name == "nt":
+        import msvcrt
+
+        def read_key() -> str:
+            key = msvcrt.getwch()
+            if key in ("\x00", "\xe0"):
+                msvcrt.getwch()  # Consume Windows arrow/function key codes.
+                return ""
+            return key
+
+        def restore_input() -> None:
+            pass
+
+    else:
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        previous_mode = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+
+        def read_key() -> str:
+            key = os.read(fd, 1)
+            if not key:
+                raise EOFError
+            if key == b"\x1b" and not standalone_escape(fd):
+                return ""
+            return key.decode("ascii", errors="ignore")
+
+        def restore_input() -> None:
+            termios.tcsetattr(fd, termios.TCSADRAIN, previous_mode)
+
+    try:
+        print(prompt, end="", flush=True)
+        answer: list[str] = []
+        while True:
+            key = read_key()
+            if key in ("\x1b", "\x03", "\x04", "\x1a"):
+                raise AgentInterrupted
+            if key in ("\r", "\n"):
+                return "".join(answer)
+            if key in ("\b", "\x7f"):
+                if answer:
+                    answer.pop()
+                    print("\b \b", end="", flush=True)
+            elif key.isprintable():
+                answer.append(key)
+                print(key, end="", flush=True)
+    finally:
+        restore_input()
+        print()
+
+
 def confirm_tool_call(
     name: str,
     args: dict[str, Any],
@@ -1169,15 +1229,18 @@ def confirm_tool_call(
 
     while True:
         try:
-            answer = input("Run this tool? [y/N]: ").strip().lower()
+            answer = read_tool_approval(
+                "Run this tool? [y/N, Esc to halt]: "
+            ).strip().lower()
         except (EOFError, KeyboardInterrupt):
-            print("\n" + color("Denied.", ANSI_RED))
-            return False
+            raise AgentInterrupted from None
+        if "\x1b" in answer or answer in ("esc", "escape"):
+            raise AgentInterrupted
         if answer in ("y", "yes"):
             return True
         if answer in ("", "n", "no"):
             return False
-        print("Please enter y or n.")
+        print("Enter y to approve, n to deny and continue, or press Esc to halt.")
 
 
 def print_tool_result(name: str, result: str, verbose: bool) -> None:
@@ -2302,7 +2365,9 @@ def run_agent(
                 display_name = f"MCP: {name}" if name in mcp_tool_names else name
                 raw_args = function.get("arguments", "{}")
 
-                if name in disabled_tools:
+                if pending_interruption:
+                    result = "SKIPPED: The user interrupted the turn before this tool could run."
+                elif name in disabled_tools:
                     result = f"DENIED: tool {name} is disabled by /tools."
                 elif awaiting_answer and name != "ask_user":
                     result = "SKIPPED: The model must read the user's answer before making another tool call."
@@ -2336,19 +2401,25 @@ def run_agent(
                                     print(f"Automatic review unavailable: {exc}")
                                 if not reviewed_safe:
                                     print("Automatic review requests confirmation.")
-                            approved = confirm_tool_call(
-                                display_name, args,
-                                effective_mode == "off" or reviewed_safe,
-                                verbose,
-                                approval_label=(
-                                    "Approved by automatic review."
-                                    if reviewed_safe else (
-                                        f"Approved automatically (/confirm {name} off)."
-                                        if name in tool_confirmation else "Approved automatically (confirm off)."
-                                    )
-                                ),
-                            )
-                            if not approved:
+                            try:
+                                approved = confirm_tool_call(
+                                    display_name, args,
+                                    effective_mode == "off" or reviewed_safe,
+                                    verbose,
+                                    approval_label=(
+                                        "Approved by automatic review."
+                                        if reviewed_safe else (
+                                            f"Approved automatically (/confirm {name} off)."
+                                            if name in tool_confirmation else "Approved automatically (confirm off)."
+                                        )
+                                    ),
+                                )
+                            except AgentInterrupted:
+                                pending_interruption = True
+                                approved = False
+                            if pending_interruption:
+                                result = "CANCELLED BY USER: The user halted the turn. This tool was not run."
+                            elif not approved:
                                 result = "DENIED BY USER: The user did not approve this tool call."
                             else:
                                 try:
@@ -2383,6 +2454,9 @@ def run_agent(
                         "content": result,
                     }
                 )
+            if pending_interruption:
+                print("\nInterrupted. Enter new instruction.\n")
+                break
         else:
             print("Agent stopped: too many consecutive tool/model turns.\n")
 
