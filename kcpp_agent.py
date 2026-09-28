@@ -12,7 +12,8 @@ Nine built-in tools, plus tools exposed by KoboldCpp's MCP proxy:
   - view_image
   - ask_user
 
-By default, every tool call requires confirmation and its arguments are shown.
+By default, tool calls require confirmation (ask_user prompts directly).
+Per-tool /confirm overrides take precedence over the global confirmation mode.
 Uses only the Python standard library.
 """
 
@@ -69,7 +70,9 @@ ESCAPE_DISAMBIGUATION_SECONDS = 0.05
 ESCAPE_SEQUENCE_QUIET_SECONDS = 0.01
 ESCAPE_SEQUENCE_DRAIN_SECONDS = 0.10
 INTERRUPTED_TASK_NOTICE = "[Task was interrupted before the agent finished. Follow the new instruction below.]"
-SESSION_FORMAT_VERSION = 1
+# Older agents must reject sessions whose confirmation overrides they cannot enforce.
+SESSION_FORMAT_VERSION = 2
+CONFIRMATION_MODES = ("on", "off", "auto")
 
 ANSI_RESET = "\033[0m"
 ANSI_BOLD_CYAN = "\033[1;36m"
@@ -1616,6 +1619,23 @@ def confirmation_status(mode: str) -> str:
     return color(mode.upper(), ANSI_GREEN if mode == "on" else ANSI_YELLOW)
 
 
+def tool_confirmation_status(name: str, mode: str, overrides: dict[str, str]) -> str:
+    if name in overrides:
+        return f"confirmation {overrides[name]} (override)"
+    if name == "ask_user":
+        return "prompts directly"
+    return f"confirmation {mode} (default)"
+
+
+def print_confirmation_settings(mode: str, overrides: dict[str, str]) -> None:
+    print(f"Default confirmation: {mode}. Per-tool overrides take precedence.")
+    for name, setting in sorted(overrides.items()):
+        print(f"  {name}: {setting}")
+    if not overrides:
+        print("  No per-tool overrides.")
+    print()
+
+
 def session_path(command_arg: str) -> Path:
     """Parse a path argument and add a .json extension when none is supplied."""
     requested = command_arg.strip()
@@ -1644,6 +1664,7 @@ def save_session_file(
     max_tool_result_chars: int,
     pending_interruption: bool,
     workdir: Path,
+    tool_confirmation: dict[str, str] | None = None,
 ) -> None:
     """Save all session state except model endpoint credentials."""
     session = {
@@ -1657,6 +1678,7 @@ def save_session_file(
         "disabled_tools": sorted(disabled_tools),
         "workdir": str(workdir),
         "confirmation_mode": confirmation_mode,
+        "tool_confirmation": dict(tool_confirmation or {}),
         "show_reasoning": show_reasoning,
         "verbose": verbose,
         "no_color": no_color,
@@ -1677,7 +1699,7 @@ def load_session_file(path: Path) -> dict[str, Any]:
         raise ValueError("session root must be a JSON object")
     if session.get("session_format") != "koboldcpp-agent":
         raise ValueError("not a KoboldCpp Agent session")
-    if session.get("session_format_version") != SESSION_FORMAT_VERSION:
+    if session.get("session_format_version") not in (1, SESSION_FORMAT_VERSION):
         raise ValueError(
             f"unsupported session format version: {session.get('session_format_version')!r}"
         )
@@ -1710,6 +1732,15 @@ def load_session_file(path: Path) -> dict[str, Any]:
         raise ValueError("disabled_tools must not contain duplicates")
     if session.get("confirmation_mode") not in {"on", "off", "auto"}:
         raise ValueError("confirmation_mode must be on, off, or auto")
+    if session["session_format_version"] == 1:
+        session.setdefault("tool_confirmation", {})
+    overrides = session.get("tool_confirmation")
+    if not isinstance(overrides, dict) or not all(
+        isinstance(name, str) and name and isinstance(mode, str)
+        and mode in CONFIRMATION_MODES
+        for name, mode in overrides.items()
+    ):
+        raise ValueError("tool_confirmation must map tool names to on, off, or auto")
     for field in ("show_reasoning", "verbose", "no_color", "pending_interruption"):
         if not isinstance(session.get(field), bool):
             raise ValueError(f"{field} must be a boolean")
@@ -1732,6 +1763,7 @@ def print_runtime_status(
     show_reasoning: bool,
     verbose: bool,
     max_tokens: int | None,
+    tool_confirmation: dict[str, str] | None = None,
 ) -> None:
     max_tokens_status = str(max_tokens) if max_tokens is not None else "server default"
     print(color("Current status:", ANSI_BOLD_CYAN))
@@ -1739,7 +1771,10 @@ def print_runtime_status(
     print(color("Endpoint:", ANSI_CYAN) + f" {base_url}")
     print(color("Working directory:", ANSI_CYAN) + f" {Path.cwd()}")
     print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens_status}")
-    print(color("Confirmation:", ANSI_CYAN) + f" {confirmation_status(confirmation_mode)}")
+    print(color("Default confirmation:", ANSI_CYAN) + f" {confirmation_status(confirmation_mode)}")
+    if tool_confirmation:
+        settings = ", ".join(f"{name}={mode}" for name, mode in sorted(tool_confirmation.items()))
+        print(color("Confirmation overrides:", ANSI_CYAN) + f" {settings}")
     print(color("Reasoning display:", ANSI_CYAN) + f" {toggle_status(show_reasoning)}")
     print(color("Verbose tool display:", ANSI_CYAN) + f" {toggle_status(verbose)}")
 
@@ -1751,6 +1786,7 @@ def print_runtime_help(
     show_reasoning: bool,
     verbose: bool,
     max_tokens: int | None,
+    tool_confirmation: dict[str, str] | None = None,
 ) -> None:
     print(
         "\n" + color("Runtime commands:", ANSI_BOLD_CYAN) + "\n"
@@ -1758,15 +1794,18 @@ def print_runtime_help(
         "  /save FILE          Save conversation and settings as JSON\n"
         "  /load FILE          Load conversation and settings from JSON\n"
         "  /clear              Clear history and refresh MCP tools\n"
-        "  /tools              List available tools and their status\n"
+        "  /tools              List tools and confirmation settings (/tool is an alias)\n"
         "  /tools NAME on|off  Enable or disable a tool, then clear the session\n"
         "  /compact            Summarize history to save context space\n"
         "  /workdir            Show the current working directory\n"
         "  /workdir PATH       Change directory and clear the session\n"
-        "  /confirm            Show confirmation status\n"
-        "  /confirm on         Require approval for every tool call\n"
-        "  /confirm off        Auto-approve all tool calls\n"
-        "  /confirm auto       Agent will decide if approval is needed\n"
+        "  /confirm            Show default confirmation and tool overrides\n"
+        "  /confirm on|off|auto Set default: ask, approve, or automatic review\n"
+        "  /confirm NAME       Show a tool's confirmation setting\n"
+        "  /confirm NAME on|off|auto  Override confirmation for a tool\n"
+        "  /confirm NAME default     Remove the tool's override\n"
+        "                      Overrides win over the default; disabled tools never run.\n"
+        "                      Changes preserve history; ask_user prompts directly unless overridden.\n"
         "  /reasoning          Show reasoning display status\n"
         "  /reasoning on       Display model reasoning\n"
         "  /reasoning off      Hide model reasoning\n"
@@ -1777,7 +1816,8 @@ def print_runtime_help(
         "  /exit or /quit      Stop the agent\n"
     )
     print_runtime_status(
-        base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens
+        base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
+        tool_confirmation,
     )
     print()
 
@@ -1847,6 +1887,7 @@ def run_agent(
     max_tokens: int | None,
     request_timeout: int,
     no_color: bool = False,
+    tool_confirmation: dict[str, str] | None = None,
 ) -> None:
     global MAX_TOOL_RESULT_CHARS
 
@@ -1867,6 +1908,7 @@ def run_agent(
         base_url, api_key, model = connection
 
     disabled_tools: set[str] = set()
+    tool_confirmation = dict(tool_confirmation or {})
     all_tools = list(TOOLS)
     available_tools = list(TOOLS)
     mcp_tool_names: set[str] = set()
@@ -1890,6 +1932,10 @@ def run_agent(
             tool for tool in all_tools
             if tool["function"]["name"] not in disabled_tools
         ]
+        known_names = {tool["function"]["name"] for tool in all_tools}
+        for name in sorted(tool_confirmation.keys() - known_names):
+            print(color("Confirmation warning:", ANSI_YELLOW) +
+                  f" {name} is unavailable. Its override is retained but has no effect until the tool is available.")
 
     refresh_mcp_tools()
 
@@ -1899,7 +1945,8 @@ def run_agent(
     pending_interruption = False
 
     print_runtime_status(
-        base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens
+        base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
+        tool_confirmation,
     )
     print("\nKoboldCpp Agent has full shell access, exercise caution when approving commands.")
     print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
@@ -1922,7 +1969,7 @@ def run_agent(
         if command == "/help":
             print_runtime_help(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
-                max_tokens,
+                max_tokens, tool_confirmation,
             )
             continue
         if command == "/save":
@@ -1935,6 +1982,7 @@ def run_agent(
                     max_tokens=max_tokens,
                     disabled_tools=disabled_tools,
                     confirmation_mode=confirmation_mode,
+                    tool_confirmation=tool_confirmation,
                     show_reasoning=show_reasoning,
                     verbose=verbose,
                     no_color=no_color,
@@ -1963,6 +2011,7 @@ def run_agent(
             disabled_tools.clear()
             disabled_tools.update(session["disabled_tools"])
             confirmation_mode = session["confirmation_mode"]
+            tool_confirmation = session["tool_confirmation"]
             show_reasoning = session["show_reasoning"]
             verbose = session["verbose"]
             no_color = session["no_color"]
@@ -1974,11 +2023,11 @@ def run_agent(
             print(f"Session loaded: {loaded_path}")
             print_runtime_status(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
-                max_tokens,
+                max_tokens, tool_confirmation,
             )
             print()
             continue
-        if command == "/tools":
+        if command in {"/tool", "/tools"}:
             parts = command_arg.split()
             if not parts:
                 print("\nAvailable tools:")
@@ -1986,7 +2035,8 @@ def run_agent(
                     name = tool["function"]["name"]
                     source = "MCP" if name in mcp_tool_names else "built-in"
                     state = "off" if name in disabled_tools else "on"
-                    print(f"  {name} ({source}): {state}")
+                    approval = tool_confirmation_status(name, confirmation_mode, tool_confirmation)
+                    print(f"  {name} ({source}): {state}; {approval}")
                 print()
                 continue
             if len(parts) != 2 or parts[1].lower() not in {"on", "off"}:
@@ -2061,20 +2111,32 @@ def run_agent(
             print("Conversation cleared (/clear fresh session).\n")
             continue
         if command == "/confirm":
-            setting = command_arg.lower()
-            if not setting:
-                print(f"Confirmation is {confirmation_mode}.\n")
-            elif setting == "on":
-                confirmation_mode = "on"
-                print("Confirmation enabled; tool calls now require approval.\n")
-            elif setting == "off":
-                confirmation_mode = "off"
-                print("Confirmation disabled; tool calls will be auto-approved.\n")
-            elif setting == "auto":
-                confirmation_mode = "auto"
-                print("Automatic review enabled; uncertain tool calls will require approval.\n")
+            parts = command_arg.split()
+            if not parts:
+                print_confirmation_settings(confirmation_mode, tool_confirmation)
+            elif len(parts) == 1 and parts[0].lower() in CONFIRMATION_MODES:
+                confirmation_mode = parts[0].lower()
+                print_confirmation_settings(confirmation_mode, tool_confirmation)
+            elif len(parts) <= 2:
+                name = parts[0]
+                known_names = {tool["function"]["name"] for tool in all_tools}
+                if name not in known_names and name not in tool_confirmation:
+                    print(f"Unknown tool: {name}. Use /tools to list available tools.\n")
+                    continue
+                if len(parts) == 2:
+                    setting = parts[1].lower()
+                    if setting == "default":
+                        tool_confirmation.pop(name, None)
+                    elif setting in CONFIRMATION_MODES:
+                        tool_confirmation[name] = setting
+                    else:
+                        print("Usage: /confirm NAME [on|off|auto|default]\n")
+                        continue
+                state = "unavailable" if name not in known_names else "off" if name in disabled_tools else "on"
+                approval = tool_confirmation_status(name, confirmation_mode, tool_confirmation)
+                print(f"{name}: {state}; {approval}\n")
             else:
-                print("Usage: /confirm [on|off|auto]\n")
+                print("Usage: /confirm [on|off|auto] or /confirm NAME [on|off|auto|default]\n")
             continue
         if command == "/reasoning":
             setting = command_arg.lower()
@@ -2254,14 +2316,15 @@ def run_agent(
                     else:
                         if name not in TOOL_IMPL and name not in mcp_tool_names and name != "view_image":
                             result = f"ERROR: unknown tool: {name}"
-                        elif name == "ask_user":
+                        elif name == "ask_user" and name not in tool_confirmation:
                             try:
                                 result = tool_ask_user(args)
                             except Exception as exc:
                                 result = f"ERROR: {type(exc).__name__}: {exc}"
                         else:
+                            effective_mode = tool_confirmation.get(name, confirmation_mode)
                             reviewed_safe = False
-                            if confirmation_mode == "auto":
+                            if effective_mode == "auto":
                                 try:
                                     with Throbber("Reviewing tool call"):
                                         reviewed_safe = review_tool_call(
@@ -2275,11 +2338,14 @@ def run_agent(
                                     print("Automatic review requests confirmation.")
                             approved = confirm_tool_call(
                                 display_name, args,
-                                confirmation_mode == "off" or reviewed_safe,
+                                effective_mode == "off" or reviewed_safe,
                                 verbose,
                                 approval_label=(
                                     "Approved by automatic review."
-                                    if reviewed_safe else "Approved automatically (confirm off)."
+                                    if reviewed_safe else (
+                                        f"Approved automatically (/confirm {name} off)."
+                                        if name in tool_confirmation else "Approved automatically (confirm off)."
+                                    )
                                 ),
                             )
                             if not approved:
@@ -2367,13 +2433,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--confirmation",
-        choices=("on", "off", "auto"),
+        choices=CONFIRMATION_MODES,
         default="on",
         help=(
-            "Tool confirmation mode: 'on' asks for every tool call, 'off' approves "
-            "all calls, and 'auto' asks only when automatic review does not approve "
-            "the call (default: %(default)s)."
+            "Default tool confirmation: 'on' asks, 'off' approves, and 'auto' asks "
+            "when automatic review does not approve (default: %(default)s). "
+            "Per-tool overrides take precedence; ask_user prompts directly unless overridden."
         ),
+    )
+    parser.add_argument(
+        "--tool-confirmation",
+        type=tool_confirmation_value,
+        action="append",
+        default=[],
+        metavar="NAME=MODE",
+        help="Override a tool's confirmation with on, off, or auto. Repeat for multiple tools; last value wins.",
     )
     parser.add_argument(
         "--no-color",
@@ -2381,6 +2455,14 @@ def parse_args() -> argparse.Namespace:
         help="Disable colored terminal output.",
     )
     return parser.parse_args()
+
+
+def tool_confirmation_value(value: str) -> tuple[str, str]:
+    name, separator, mode = value.partition("=")
+    mode = mode.lower()
+    if not separator or not name or any(char.isspace() for char in name) or mode not in CONFIRMATION_MODES:
+        raise argparse.ArgumentTypeError("expected NAME=on, NAME=off, or NAME=auto")
+    return name, mode
 
 
 def positive_int(value: str) -> int:
@@ -2414,6 +2496,7 @@ def main() -> None:
             api_key=args.api_key,
             model=args.model,
             confirmation_mode=args.confirmation,
+            tool_confirmation=dict(args.tool_confirmation),
             temperature=args.temperature,
             max_tokens=args.max_tokens,
             request_timeout=args.request_timeout,
