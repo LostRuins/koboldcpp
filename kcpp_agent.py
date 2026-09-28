@@ -1851,33 +1851,35 @@ def print_runtime_help(
     max_tokens: int | None,
     tool_confirmation: dict[str, str] | None = None,
 ) -> None:
-    print(
-        "\n" + color("Runtime commands:", ANSI_BOLD_CYAN) + "\n"
-        "  /help               Show this help\n"
-        "  /save FILE          Save conversation and settings as JSON\n"
-        "  /load FILE          Load conversation and settings from JSON\n"
-        "  /clear              Clear history and refresh MCP tools\n"
-        "  /tools              List tools and confirmation settings (/tool is an alias)\n"
-        "  /tools NAME on|off  Enable or disable a tool, then clear the session\n"
-        "  /compact            Summarize history to save context space\n"
-        "  /workdir            Show the current working directory\n"
-        "  /workdir PATH       Change directory and clear the session\n"
-        "  /confirm            Show default confirmation and tool overrides\n"
-        "  /confirm on|off|auto Set default: ask, approve, or automatic review\n"
-        "  /confirm NAME       Show a tool's confirmation setting\n"
-        "  /confirm NAME on|off|auto  Override confirmation for a tool\n"
-        "  /confirm NAME default     Remove the tool's override\n"
-        "                      Overrides win over the default; disabled tools never run.\n"
-        "                      Changes preserve history; ask_user prompts directly unless overridden.\n"
-        "  /reasoning          Show reasoning display status\n"
-        "  /reasoning on       Display model reasoning\n"
-        "  /reasoning off      Hide model reasoning\n"
-        "  /verbose            Show verbose display status\n"
-        "  /verbose on         Expand arguments and show result contents\n"
-        "  /verbose off        Use compact tool displays\n"
-        "  /connect            Set endpoint, API key, and model interactively\n"
-        "  /exit or /quit      Stop the agent\n"
+    rows = (
+        ("/help", "Show this help"),
+        ("/save FILE", "Save conversation and settings as JSON"),
+        ("/load FILE", "Load conversation and settings from JSON"),
+        ("/clear", "Clear history and refresh MCP tools"),
+        ("/tools", "List tools and confirmation settings (/tool is an alias)"),
+        ("/tools NAME on|off", "Enable or disable a tool, then clear the session"),
+        ("/compact", "Summarize history to save context space"),
+        ("/workdir", "Show the current working directory"),
+        ("/workdir PATH", "Change directory and clear the session"),
+        ("/confirm", "Show global default confirmation and tool overrides"),
+        ("/confirm on|off|auto", "Set global default: ask, approve, or automatic review"),
+        ("/confirm NAME", "Show a tool's confirmation setting"),
+        ("/confirm NAME on|off|auto", "Override confirmation for a tool. Overrides win over the default"),
+        ("/confirm NAME default", "Remove the tool's override"),
+        ("/reasoning", "Show reasoning display status"),
+        ("/reasoning on", "Display model reasoning"),
+        ("/reasoning off", "Hide model reasoning"),
+        ("/verbose", "Show verbose display status"),
+        ("/verbose on", "Expand arguments and show result contents"),
+        ("/verbose off", "Use compact tool displays"),
+        ("/connect", "Set endpoint, API key, and model interactively"),
+        ("/exit or /quit", "Stop the agent"),
     )
+    command_width = max(len(command) for command, _ in rows)
+    print("\n" + color("Runtime commands:", ANSI_BOLD_CYAN))
+    for command, description in rows:
+        print(f"  {command:<{command_width}}  {description}")
+    print()
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
         tool_confirmation,
