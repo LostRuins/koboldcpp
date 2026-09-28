@@ -1520,7 +1520,10 @@ def truncate_long_json(data, max_length):
 
 def convert_json_to_gbnf(json_obj):
     try:
-        from json_to_gbnf import SchemaConverter
+        try:
+            from json_to_gbnf import SchemaConverter
+        except ModuleNotFoundError:
+            from kcpp_src.json_to_gbnf import SchemaConverter
         prop_order = []
         converter = SchemaConverter(
         prop_order={name: idx for idx, name in enumerate(prop_order)},

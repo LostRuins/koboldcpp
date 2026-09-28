@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 echo Create Version File
 :: Read the version string from koboldcpp.py
-for /f "tokens=2 delims== " %%A in ('findstr "KcppVersion" koboldcpp.py') do (
+for /f "tokens=2 delims== " %%A in ('findstr "KcppVersion" "%~dp0..\..\koboldcpp.py"') do (
     set "version=%%~A"
     goto :done
 )
@@ -22,12 +22,12 @@ echo Minor Version: %version_minor%
 
 :: Replace all instances of "MYVER" in foo.txt with the version
 (
-    for /f "delims=" %%i in (version_template.txt) do (
+    for /f "usebackq delims=" %%i in ("%~dp0version_template.txt") do (
         set "line=%%i"
         set "line=!line:MYVER_MAJOR=%version_major%!"
         set "line=!line:MYVER_MINOR=%version_minor%!"
         echo !line!
     )
-) > "version.txt"
+) > "%~dp0version.txt"
 
 endlocal

@@ -829,7 +829,7 @@ vulkan-shaders-gen: ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_ADD) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 ifeq ($(OS),Windows_NT)
 	@echo 'Now rebuilding vulkan shaders for Windows...'
-	./vulkan-shaders-gen.exe --glslc glslc --input-dir ggml/src/ggml-vulkan/vulkan-shaders --target-hpp $(VKGEN_HPP) --target-cpp $(VKGEN_CPP) --output-dir vulkan-spv-tmp
+	./vulkan-shaders-gen.exe --glslc kcpp_src/bin/glslc.exe --input-dir ggml/src/ggml-vulkan/vulkan-shaders --target-hpp $(VKGEN_HPP) --target-cpp $(VKGEN_CPP) --output-dir vulkan-spv-tmp
 	@echo 'Vulkan Shaders Rebuilt for Windows...'
 else
 	@echo 'Now rebuilding vulkan shaders for Linux...'
@@ -837,9 +837,9 @@ else
 	@echo 'Checking if system glslc-linux binary is usable...'
 	@GLSLC_BIN=$$( \
 		if [ -n "$$LLAMA_USE_BUNDLED_GLSLC" ]; then \
-			chmod +x ./glslc-linux; \
-			if [ -x ./glslc-linux ] && ./glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
-				echo "./glslc-linux"; \
+			chmod +x ./kcpp_src/bin/glslc-linux; \
+			if [ -x ./kcpp_src/bin/glslc-linux ] && ./kcpp_src/bin/glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
+				echo "./kcpp_src/bin/glslc-linux"; \
 			elif command -v glslc >/dev/null 2>&1; then \
 				echo "glslc"; \
 			else \
@@ -848,10 +848,10 @@ else
 		else \
 			if command -v glslc >/dev/null 2>&1 && glslc --version 2>/dev/null | grep -q "glslang"; then \
 				echo "glslc"; \
-			elif [ -x ./glslc-linux ]; then \
-				chmod +x ./glslc-linux; \
-				if ./glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
-					echo "./glslc-linux"; \
+			elif [ -x ./kcpp_src/bin/glslc-linux ]; then \
+				chmod +x ./kcpp_src/bin/glslc-linux; \
+				if ./kcpp_src/bin/glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
+					echo "./kcpp_src/bin/glslc-linux"; \
 				else \
 					echo ""; \
 				fi; \
@@ -873,7 +873,7 @@ vulkan-shaders-gen-noext: ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_FORCE) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 ifeq ($(OS),Windows_NT)
 	@echo 'Now rebuilding vulkan shaders (no extensions) for Windows...'
-	./vulkan-shaders-gen-noext.exe --glslc glslc --input-dir ggml/src/ggml-vulkan/vulkan-shaders --target-hpp ggml/src/ggml-vulkan-shaders-noext.hpp --target-cpp ggml/src/ggml-vulkan-shaders-noext.cpp --output-dir vulkan-spv-noext-tmp
+	./vulkan-shaders-gen-noext.exe --glslc kcpp_src/bin/glslc.exe --input-dir ggml/src/ggml-vulkan/vulkan-shaders --target-hpp ggml/src/ggml-vulkan-shaders-noext.hpp --target-cpp ggml/src/ggml-vulkan-shaders-noext.cpp --output-dir vulkan-spv-noext-tmp
 	@echo 'Vulkan Shaders (no extensions) Rebuilt for Windows...'
 else
 	@echo 'Now rebuilding vulkan shaders (no extensions) for Linux...'
@@ -881,9 +881,9 @@ else
 	@echo 'Checking if system glslc-linux binary is usable...'
 	@GLSLC_BIN=$$( \
 		if [ -n "$$LLAMA_USE_BUNDLED_GLSLC" ]; then \
-			chmod +x ./glslc-linux; \
-			if [ -x ./glslc-linux ] && ./glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
-				echo "./glslc-linux"; \
+			chmod +x ./kcpp_src/bin/glslc-linux; \
+			if [ -x ./kcpp_src/bin/glslc-linux ] && ./kcpp_src/bin/glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
+				echo "./kcpp_src/bin/glslc-linux"; \
 			elif command -v glslc >/dev/null 2>&1; then \
 				echo "glslc"; \
 			else \
@@ -892,10 +892,10 @@ else
 		else \
 			if command -v glslc >/dev/null 2>&1 && glslc --version 2>/dev/null | grep -q "glslang"; then \
 				echo "glslc"; \
-			elif [ -x ./glslc-linux ]; then \
-				chmod +x ./glslc-linux; \
-				if ./glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
-					echo "./glslc-linux"; \
+			elif [ -x ./kcpp_src/bin/glslc-linux ]; then \
+				chmod +x ./kcpp_src/bin/glslc-linux; \
+				if ./kcpp_src/bin/glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
+					echo "./kcpp_src/bin/glslc-linux"; \
 				else \
 					echo ""; \
 				fi; \
