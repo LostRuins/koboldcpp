@@ -1424,8 +1424,11 @@ def tool_view_image(
         api_key=api_key,
         model=model,
         messages=[
+            {
+                "role": "system",
+                "content": "You are a computer vision inspection tool. Answer from the supplied image (if any) only.",
+            },
             {"role": "user", "content": [
-                {"role": "system", "content": "You are a computer vision inspection tool. Answer from the supplied image (if any) only."},
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": image_url}},
             ]},
