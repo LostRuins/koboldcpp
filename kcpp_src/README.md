@@ -6,4 +6,5 @@ so upstream updates can continue to be merged without path-only conflicts.
 
 Prebuilt helper programs and link inputs used by KoboldCpp builds live under
 `bin/` and `lib/`, respectively. Release version metadata and its generation
-scripts live under `packaging/`.
+scripts live under `packaging/`; Conda environment definitions are kept in
+`packaging/environments/`.

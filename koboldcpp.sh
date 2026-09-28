@@ -1,5 +1,6 @@
 #!/bin/bash
 ARCH=$(uname -m)
+KCPP_CONDA_CONFIG_DIR="kcpp_src/packaging/environments"
 
 if [ "$ARCH" = "x86_64" ]; then
 	ARCH=x64
@@ -37,16 +38,17 @@ if [[ ! -f "conda/envs/linux/bin/python" || $1 == "rebuild" ]] && [ -z "$KCPP_CU
 fi
 
 if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA != "rocm" || $1 == "rebuild" && $KCPP_CUDA != "rocm" ]]; then
-	cp environment.yaml environment.tmp.yaml
-	sed -i -e "s/nvidia\/label\/cuda-12.1.0/nvidia\/label\/cuda-$KCPP_CUDA/g" environment.tmp.yaml
-	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f environment.tmp.yaml -y
+	KCPP_ENVIRONMENT_TMP=$(mktemp "${TMPDIR:-/tmp}/koboldcpp-environment.XXXXXX.yaml") || exit 1
+	cp "$KCPP_CONDA_CONFIG_DIR/environment.yaml" "$KCPP_ENVIRONMENT_TMP"
+	sed -i -e "s/nvidia\/label\/cuda-12.1.0/nvidia\/label\/cuda-$KCPP_CUDA/g" "$KCPP_ENVIRONMENT_TMP"
+	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f "$KCPP_ENVIRONMENT_TMP" -y
 	bin/micromamba run -r conda -p conda/envs/linux make clean
 	echo $KCPP_CUDA > conda/envs/linux/cudaver
-	rm environment.tmp.yaml
+	rm -f "$KCPP_ENVIRONMENT_TMP"
 fi
 
 if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA == "rocm" || $1 == "rebuild" && $KCPP_CUDA == "rocm" ]]; then
-	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f environment-nocuda.yaml -y
+	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f "$KCPP_CONDA_CONFIG_DIR/environment-nocuda.yaml" -y
 	bin/micromamba run -r conda -p conda/envs/linux make clean
 	echo "rocm" > conda/envs/linux/cudaver
 fi
