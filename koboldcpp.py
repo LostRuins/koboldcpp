@@ -856,6 +856,13 @@ def getabspath():
 def file_exists(filename):
     return os.path.exists(os.path.join(getdirpath(), filename))
 
+def get_kcpp_bin_path(filename):
+    base_path = getattr(sys, '_MEIPASS', getabspath())
+    bundled_path = os.path.join(base_path, filename)
+    if os.path.exists(bundled_path):
+        return bundled_path
+    return os.path.join(base_path, "kcpp_src", "bin", filename)
+
 def suppress_stdout():
     global saved_stdout, saved_stderr, saved_stdout_py, saved_stderr_py, stdout_nullfile, stdout_nullfile_py
     if not saved_stdout and not saved_stderr and not saved_stdout_py and not saved_stderr_py and not stdout_nullfile and not stdout_nullfile_py:
@@ -1338,10 +1345,9 @@ def old_cpu_check(): #return -1 for pass, 0 if has avx2, 1 if has avx, 2 if has 
                 elif 'avx2' not in cpuinfo:
                     retflags = 1
         elif os.name == 'nt':
-            basepath = os.path.abspath(os.path.dirname(__file__))
             output = ""
             data = None
-            output = subprocess.run([os.path.join(basepath, "simplecpuinfo.exe")], capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS, encoding='utf-8', timeout=6).stdout
+            output = subprocess.run([get_kcpp_bin_path("simplecpuinfo.exe")], capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS, encoding='utf-8', timeout=6).stdout
             data = json.loads(output)
             if data["avx2"]==0 and data["avx"]==0:
                 retflags = 2
@@ -11624,8 +11630,7 @@ def downloader_internal(input_url, output_filename, capture_output, min_file_siz
     download_url = resolve_huggingface_xet_url(input_url)
     aria2_candidates = []
     if os.name == 'nt':
-        basepath = os.path.abspath(os.path.dirname(__file__))
-        a2cexe = os.path.join(basepath, "aria2c-win.exe")
+        a2cexe = get_kcpp_bin_path("aria2c-win.exe")
         if os.path.exists(a2cexe):  # on windows try using embedded aria2c
             aria2_candidates.append((a2cexe, "aria2c-win"))
     if shutil.which("aria2c") is not None:
