@@ -100,6 +100,20 @@ if (LLAMA_CUBLAS)
 
         enable_language(CUDA)
 
+        message(STATUS "CUDA compiler: ${CMAKE_CUDA_COMPILER} (${CMAKE_CUDA_COMPILER_VERSION})")
+        message(STATUS "CUDA toolkit: ${CUDAToolkit_LIBRARY_ROOT} (${CUDAToolkit_VERSION})")
+        # CI can require a toolkit family independently of the runner's defaults.
+        # Toolkit discovery and Visual Studio CUDA toolset selection are separate.
+        set(KCPP_CUDA_EXPECTED_VERSION "" CACHE STRING "Required CUDA major.minor version, if specified")
+        if (KCPP_CUDA_EXPECTED_VERSION)
+            string(REGEX MATCH "^[0-9]+\\.[0-9]+" KCPP_CUDA_COMPILER_VERSION "${CMAKE_CUDA_COMPILER_VERSION}")
+            string(REGEX MATCH "^[0-9]+\\.[0-9]+" KCPP_CUDA_TOOLKIT_VERSION "${CUDAToolkit_VERSION}")
+            if (NOT KCPP_CUDA_COMPILER_VERSION VERSION_EQUAL KCPP_CUDA_EXPECTED_VERSION OR
+                NOT KCPP_CUDA_TOOLKIT_VERSION VERSION_EQUAL KCPP_CUDA_EXPECTED_VERSION)
+                message(FATAL_ERROR "Expected CUDA ${KCPP_CUDA_EXPECTED_VERSION}, but compiler is ${CMAKE_CUDA_COMPILER_VERSION} and toolkit is ${CUDAToolkit_VERSION}")
+            endif()
+        endif()
+
         add_compile_definitions(GGML_USE_LLAMAFILE)
         add_compile_definitions(GGML_USE_CUDA)
         add_compile_definitions(SD_USE_CUDA)
@@ -152,6 +166,9 @@ if (LLAMA_CUBLAS)
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
     else()
+        if (KCPP_CUDA_EXPECTED_VERSION)
+            message(FATAL_ERROR "Required CUDA ${KCPP_CUDA_EXPECTED_VERSION} toolkit was not found")
+        endif()
         message(WARNING "cuBLAS not found")
     endif()
 endif()

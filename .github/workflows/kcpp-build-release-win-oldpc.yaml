@@ -100,24 +100,23 @@ jobs:
 
       - name: Build CUDA
         id: cmake_build
+        env:
+          KCPP_CUDA_ROOT: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         run: |
-          mkdir build
-          cd build
-          cmake .. -DLLAMA_CUBLAS=ON -DLLAMA_AVX2=OFF -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
-          cmake --build . --config Release -j 2
-          cd ..
+          cmake -S . -B build -G "Visual Studio 16 2019" -A x64 -T "cuda=$env:KCPP_CUDA_ROOT" "-DCUDAToolkit_ROOT=$env:KCPP_CUDA_ROOT" -DKCPP_CUDA_EXPECTED_VERSION=11.4 -DLLAMA_CUBLAS=ON -DLLAMA_AVX2=OFF -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release -j 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # note: The libraries that come from the github cuda directory seem to be larger, so they are not recommended
-      - name: Download CuBLAS Libraries
+      # Package the same toolkit's libraries, including cudart, to avoid mixed versions.
+      - name: Copy CUDA Libraries
+        env:
+          KCPP_CUDA_ROOT: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         run: |
-          curl -L https://github.com/LostRuins/koboldcpp/releases/download/cuda11_cublas_libraries/cublas64_11.dll --output cublas64_11.dll
-          curl -L https://github.com/LostRuins/koboldcpp/releases/download/cuda11_cublas_libraries/cublasLt64_11.dll --output cublasLt64_11.dll
-          ls
-      # - name: Copy CuBLAS Libraries
-      #   run: |
-      #     copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.4\bin\cublasLt64_11.dll" .
-      #     copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.4\bin\cublas64_11.dll" .
-      #     ls
+          foreach ($dll in @('cublas64_11.dll', 'cublasLt64_11.dll', 'cudart64_110.dll')) {
+            Copy-Item -LiteralPath (Join-Path $env:KCPP_CUDA_ROOT "bin\$dll") -Destination . -Force -ErrorAction Stop
+            (Get-Item -LiteralPath $dll).VersionInfo | Format-List FileName, FileVersion, ProductVersion
+          }
 
       - name: Package PyInstallers
         id: make_pyinstaller
