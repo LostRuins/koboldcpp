@@ -102,7 +102,7 @@ jobs:
         env:
           KCPP_CUDA_ROOT: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         run: |
-          cmake -S . -B build -G "Visual Studio 16 2019" -A x64 -T "cuda=$env:KCPP_CUDA_ROOT" "-DCUDAToolkit_ROOT=$env:KCPP_CUDA_ROOT" -DKCPP_CUDA_EXPECTED_VERSION=11.4 -DLLAMA_CUBLAS=ON -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
+          cmake -S . -B build -G "Visual Studio 16 2019" -A x64 -T "cuda=$env:KCPP_CUDA_ROOT" "-DCUDAToolkit_ROOT=$env:KCPP_CUDA_ROOT" "-DKCPP_CUDA_EXPECTED_VERSION=11.4" -DLLAMA_CUBLAS=ON -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build --config Release -j 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
