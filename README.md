@@ -118,9 +118,9 @@ If you want to build a universal binary that works on other systems like the one
   - To make your build sharable and capable of working on other devices, you must use `LLAMA_PORTABLE=1`
   - If you want to generate the .exe file, make sure you have the python module PyInstaller installed with pip (`pip install PyInstaller`). Then run the script `make_pyinstaller.bat`
   - The koboldcpp.exe file will be at your dist folder.
-- **Building with CUDA**: Visual Studio, CMake and CUDA Toolkit is required. Clone the repo, then open the CMake file and compile it in Visual Studio. Copy the `koboldcpp_cublas.dll` generated into the same directory as the `koboldcpp.py` file. If you are bundling executables, you may need to include CUDA dynamic libraries (such as `cublasLt64_11.dll` and `cublas64_11.dll`) in order for the executable to work correctly on a different PC.
+- **Building with CUDA**: Visual Studio, CMake and CUDA Toolkit is required. Clone the repo, then open the CMake file and compile it in Visual Studio. Copy the `koboldcpp_cublas.dll` generated into the same directory as the `koboldcpp.py` file. Portable executables must include matching CUDA dynamic libraries: `cublas`, `cublasLt`, and `cudart` from the same CUDA toolkit family used for the build.
 - **Replacing Libraries (Not Recommended)**: If you wish to use your own version of the additional Windows libraries (Vulkan), you can do it with:
-  - Move the respectives .lib files to the /lib folder of your project, overwriting the older files.
+  - Move the respective `.lib` files to the `/kcpp_src/lib` folder of your project, overwriting the older files.
   - Also, replace the existing versions of the corresponding .dll files located in the project directory root.
   - Make the KoboldCpp project using the instructions above.
 

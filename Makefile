@@ -56,7 +56,7 @@ CFLAGS += -fsanitize=undefined -fsanitize-undefined-trap-on-error
 CXXFLAGS += -fsanitize=undefined -fsanitize-undefined-trap-on-error
 endif
 CFLAGS   += -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./tools/mtmd -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_USE_RPC
-CXXFLAGS += -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./tools/mtmd -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_USE_RPC
+CXXFLAGS += -I. -I./kcpp_src -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./tools/mtmd -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_USE_RPC
 
 ifndef KCPP_DEBUG
 CFLAGS += -DNDEBUG -s
@@ -429,7 +429,7 @@ NOAVX2_BUILD = $(CXX) $(CXXFLAGS) $^ -shared -o $@.dll $(LDFLAGS)
 endif
 
 ifdef LLAMA_VULKAN
-VULKAN_LIB = lib/vulkan-1.lib
+VULKAN_LIB = kcpp_src/lib/vulkan-1.lib
 VULKAN_BUILD = $(CXX) $(CXXFLAGS) $^ $(VULKAN_LIB) -shared -o $@.dll $(LDFLAGS)
 endif
 
@@ -596,7 +596,7 @@ mtmd-helper-gen.o: tools/mtmd/mtmd-helper-gen.cpp tools/mtmd/mtmd-helper-common.
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 mtmd-image.o: tools/mtmd/mtmd-image.cpp tools/mtmd/mtmd-image.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-hash.o: hash.cpp vendor/hash/hash.cpp vendor/hash/hash.h vendor/hash/sha256/sha256.c vendor/hash/sha256/sha256.h vendor/hash/rotate-bits/rotate-bits.h
+hash.o: kcpp_src/hash.cpp vendor/hash/hash.cpp vendor/hash/hash.h vendor/hash/sha256/sha256.c vendor/hash/sha256/sha256.h vendor/hash/rotate-bits/rotate-bits.h
 	$(CXX) $(CXXFLAGS) -I./vendor/hash -c $< -o $@
 unicode-common.o: common/unicode.cpp common/unicode.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -694,7 +694,7 @@ sampling.o: common/sampling.cpp common/common.h common/sampling.h common/log.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 console.o: common/console.cpp common/console.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-expose.o: expose.cpp expose.h model_adapter.cpp
+expose.o: kcpp_src/expose.cpp kcpp_src/expose.h kcpp_src/model_adapter.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 llama-impl.o: src/llama-impl.cpp src/llama-impl.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -732,7 +732,7 @@ otherarch/sdcpp/thirdparty/utf8proc/%.o: otherarch/sdcpp/thirdparty/utf8proc/%.c
 otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
 
-otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp otherarch/sdcpp/include/stable-diffusion.h otherarch/sdcpp/src/kcpp_sd_extensions.h model_adapter.h otherarch/utils.h
+otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp otherarch/sdcpp/include/stable-diffusion.h otherarch/sdcpp/src/kcpp_sd_extensions.h kcpp_src/model_adapter.h otherarch/utils.h
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src $(CXXFLAGS) -c $< -o $@
 
 otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
@@ -747,7 +747,7 @@ LLAMASERVER_CXXFLAGS := -I./tools/mtmd
 
 
 #whisper objects
-whispercpp_default.o: otherarch/whispercpp/whisper_adapter.cpp otherarch/whispercpp/whisper.cpp kcpp_backend.h
+whispercpp_default.o: otherarch/whispercpp/whisper_adapter.cpp otherarch/whispercpp/whisper.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 #tts objects
@@ -761,19 +761,19 @@ music_default.o: otherarch/acestep/music_adapter.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # idiotic "for easier compilation"
-GPTTYPE_ADAPTER = gpttype_adapter.cpp kcpp_backend.h model_adapter.h otherarch/otherarch.h include/llama.h otherarch/llama_v2.cpp otherarch/llama_v3.cpp otherarch/gptj_v1.cpp otherarch/gptj_v2.cpp otherarch/gptj_v3.cpp otherarch/gpt2_v1.cpp otherarch/gpt2_v2.cpp otherarch/gpt2_v3.cpp otherarch/rwkv_v2.cpp otherarch/rwkv_v3.cpp otherarch/neox_v2.cpp otherarch/neox_v3.cpp otherarch/mpt_v3.cpp
+GPTTYPE_ADAPTER = kcpp_src/gpttype_adapter.cpp kcpp_src/kcpp_backend.h kcpp_src/model_adapter.h otherarch/otherarch.h include/llama.h otherarch/llama_v2.cpp otherarch/llama_v3.cpp otherarch/gptj_v1.cpp otherarch/gptj_v2.cpp otherarch/gptj_v3.cpp otherarch/gpt2_v1.cpp otherarch/gpt2_v2.cpp otherarch/gpt2_v3.cpp otherarch/rwkv_v2.cpp otherarch/rwkv_v3.cpp otherarch/neox_v2.cpp otherarch/neox_v3.cpp otherarch/mpt_v3.cpp
 gpttype_adapter_default.o: $(GPTTYPE_ADAPTER)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-kcpp_backend_failsafe.o: kcpp_backend.cpp kcpp_backend.h
+kcpp_backend_failsafe.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
-kcpp_backend_default.o: kcpp_backend.cpp kcpp_backend.h
+kcpp_backend_default.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-kcpp_backend_cublas.o: kcpp_backend.cpp kcpp_backend.h
+kcpp_backend_cublas.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) $(CUBLAS_FLAGS) $(HIPFLAGS) -c $< -o $@
-kcpp_backend_vulkan.o: kcpp_backend.cpp kcpp_backend.h
+kcpp_backend_vulkan.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) $(VULKAN_FLAGS) -c $< -o $@
-kcpp_backend_vulkan_noavx2.o: kcpp_backend.cpp kcpp_backend.h
+kcpp_backend_vulkan_noavx2.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) $(FAILSAFE_FLAGS) $(VULKAN_FLAGS) -c $< -o $@
 
 clean:
@@ -792,7 +792,7 @@ fitparams: tools/fit-params/main.cpp tools/fit-params/fit-params.cpp common/arg.
 	$(CXX) $(CXXFLAGS) -DGGML_USE_VULKAN $(filter-out %.h,$^) $(VULKAN_LIB) -o $@ $(LDFLAGS)
 sdmain: $(OBJS_SDCOMMON) $(OBJS_SDMAIN) build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-iqp.o ggml-unops.o llama.o chat.o llama-model.o console.o clip_default.o mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
-whispermain: otherarch/whispercpp/main.cpp otherarch/whispercpp/whisper.cpp kcpp_backend.h kcpp_backend_default.o build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-iqp.o ggml-unops.o llama.o chat.o llama-model.o console.o clip_default.o mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
+whispermain: otherarch/whispercpp/main.cpp otherarch/whispercpp/whisper.cpp kcpp_src/kcpp_backend.h kcpp_backend_default.o build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-iqp.o ggml-unops.o llama.o chat.o llama-model.o console.o clip_default.o mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
 ttsmain: tools/tts/tts.cpp common/arg.cpp common/preset.cpp $(COMMON_DOWNLOAD_SRCS) build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-iqp.o ggml-unops.o llama.o chat.o llama-model.o console.o clip_default.o mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
@@ -993,7 +993,7 @@ quantize_ace: otherarch/acestep/quantize-acestep.cpp tools/mtmd/clip.cpp ggml_v3
 
 
 #window simple clinfo
-simplecpuinfo: simplecpuinfo.cpp
+simplecpuinfo: kcpp_src/simplecpuinfo.cpp
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 build-info.h:

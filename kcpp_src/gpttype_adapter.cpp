@@ -12,7 +12,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
-#include "model_adapter.h"
+#include "kcpp_src/model_adapter.h"
 #include "otherarch.h"
 #include "llama.h"
 #include <vector>
@@ -33,7 +33,7 @@
 
 #include "utils.h"
 #include "llmutils.h"
-#include "kcpp_backend.h"
+#include "kcpp_src/kcpp_backend.h"
 
 #include "llama_v2.cpp"
 #include "llama_v3.cpp"

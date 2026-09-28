@@ -607,7 +607,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/core/backend_fit.cpp
             otherarch/sdcpp/src/core/layer_split_partition.cpp
             otherarch/sdcpp/src/core/ggml_extend_backend.cpp)
-target_include_directories(sdtype_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/include ./otherarch/sdcpp/src ./otherarch/sdcpp/examples ./otherarch/sdcpp/thirdparty/oniguruma ./otherarch/sdcpp/thirdparty/utf8proc ./tools ./common)
+target_include_directories(sdtype_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/include ./otherarch/sdcpp/src ./otherarch/sdcpp/examples ./otherarch/sdcpp/thirdparty/oniguruma ./otherarch/sdcpp/thirdparty/utf8proc ./tools ./common)
 target_compile_definitions(sdtype_adapter PRIVATE ONIG_STATIC UTF8PROC_STATIC)
 target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(sdtype_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
@@ -615,46 +615,46 @@ set_target_properties(sdtype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(whisper_adapter
             otherarch/whispercpp/whisper_adapter.cpp)
-target_include_directories(whisper_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/whispercpp ./tools ./common)
+target_include_directories(whisper_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/whispercpp ./tools ./common)
 target_compile_features(whisper_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(whisper_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(whisper_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(music_adapter
             otherarch/acestep/music_adapter.cpp)
-target_include_directories(music_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/acestep ./tools ./common)
+target_include_directories(music_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/acestep ./tools ./common)
 target_compile_features(music_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(music_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(music_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tts_adapter
             otherarch/tts_adapter.cpp)
-target_include_directories(tts_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/ttscpp/include ./otherarch/ttscpp/src ./otherarch/qwen3tts ./tools ./common)
+target_include_directories(tts_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/ttscpp/include ./otherarch/ttscpp/src ./otherarch/qwen3tts ./tools ./common)
 target_compile_features(tts_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(tts_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(tts_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(embeddings_adapter
             otherarch/embeddings_adapter.cpp)
-target_include_directories(embeddings_adapter PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./tools ./common)
+target_include_directories(embeddings_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./tools ./common)
 target_compile_features(embeddings_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(embeddings_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(embeddings_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(gpttype_adapter
-            gpttype_adapter.cpp
+            kcpp_src/gpttype_adapter.cpp
             src/llama.cpp
             common/chat.cpp
             src/llama-model.cpp)
-target_include_directories(gpttype_adapter PUBLIC . ./src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
+target_include_directories(gpttype_adapter PUBLIC . ./kcpp_src ./src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
 target_compile_features(gpttype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(gpttype_adapter PRIVATE common2 ggml ggml_v1 ggml_v2 ggml_v3 ${LLAMA_EXTRA_LIBS})
 set_target_properties(gpttype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if (LLAMA_CUBLAS)
     set(TARGET koboldcpp_cublas)
-    add_library(${TARGET} SHARED expose.cpp expose.h kcpp_backend.cpp kcpp_backend.h)
-    target_include_directories(${TARGET} PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
+    add_library(${TARGET} SHARED kcpp_src/expose.cpp kcpp_src/expose.h kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h)
+    target_include_directories(${TARGET} PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
     target_compile_features(${TARGET} PUBLIC cxx_std_17) # don't bump
     set_target_properties(${TARGET} PROPERTIES PREFIX "")
     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME "koboldcpp_cublas")
@@ -673,8 +673,8 @@ endif()
 
 if (LLAMA_HIPBLAS)
     set(TARGET koboldcpp_hipblas)
-    add_library(${TARGET} SHARED expose.cpp expose.h kcpp_backend.cpp kcpp_backend.h)
-    target_include_directories(${TARGET} PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
+    add_library(${TARGET} SHARED kcpp_src/expose.cpp kcpp_src/expose.h kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h)
+    target_include_directories(${TARGET} PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
     target_compile_features(${TARGET} PUBLIC cxx_std_17) # don't bump
     set_target_properties(${TARGET} PROPERTIES PREFIX "")
     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME "koboldcpp_hipblas")

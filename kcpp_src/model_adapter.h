@@ -11,7 +11,7 @@
 #include <math.h>
 #include <vector>
 
-#include "expose.h"
+#include "kcpp_src/expose.h"
 #include "src/llama-arch.h"
 
 enum FileFormat

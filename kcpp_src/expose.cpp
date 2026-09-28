@@ -17,8 +17,8 @@
 #include <string>
 #include <math.h>
 #include <cstdint>
-#include "expose.h"
-#include "model_adapter.cpp"
+#include "kcpp_src/expose.h"
+#include "kcpp_src/model_adapter.cpp"
 
 extern "C"
 {

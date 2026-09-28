@@ -1,4 +1,4 @@
-//a simple program that obtains AVX and AVX2 info, prints them out and exits
+// A simple program that obtains AVX and AVX2 info, prints them out and exits.
 #include <cstdio>
 #if defined(_MSC_VER)
     #include <intrin.h>

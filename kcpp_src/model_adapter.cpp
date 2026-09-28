@@ -9,7 +9,7 @@
 #include <math.h>
 #include <vector>
 
-#include "model_adapter.h"
+#include "kcpp_src/model_adapter.h"
 #include "ggml.h"
 #include "ggml-cpu.h"
 #include "gguf.h"
