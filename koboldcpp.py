@@ -206,6 +206,7 @@ tool_call_pairs = [ #third element is optional str to match in chat template bef
     ("<tool_calls>", "</tool_calls>", "[BEGIN FINAL RESPONSE]", True), #apriel
     ("<|START_ACTION|>", "<|END_ACTION|>", "<|START_OF_TURN_TOKEN|>", True), #cohere
     ("<atem:function_calls>", "</atem:function_calls>", "<|eom|>", True), #muse glimmer
+    ("[TOOL_CALLS]", "", None, True), #devstral, mistral
 ]
 
 address_header_formats = [
