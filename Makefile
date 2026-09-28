@@ -145,6 +145,8 @@ endif
 ifeq ($(UNAME_S),OpenBSD)
 CFLAGS   += -pthread
 CXXFLAGS += -pthread
+endif
+ifeq ($(UNAME_S),$(filter $(UNAME_S),OpenBSD FreeBSD))
 ifdef LLAMA_VULKAN
 LDFLAGS += -L/usr/local/lib
 endif
