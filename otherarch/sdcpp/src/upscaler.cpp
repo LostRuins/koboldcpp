@@ -14,6 +14,7 @@ UpscalerGGML::UpscalerGGML(int n_threads,
                            std::string backend_spec,
                            std::string params_backend_spec)
     : n_threads(n_threads),
+      tensor_executor(n_threads > 0 ? n_threads : sd_get_num_physical_cores()),
       direct(direct),
       tile_size(tile_size),
       backend_spec(std::move(backend_spec)),
@@ -35,6 +36,7 @@ void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
 
 bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
                                   int n_threads) {
+    sd::ParallelScope tensor_scope(&tensor_executor);
     kcpp_sd_ggml_log_set();
 
     std::string error;
@@ -108,6 +110,7 @@ bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
 }
 
 sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_tensor) {
+    sd::ParallelScope tensor_scope(&tensor_executor);
     sd::Tensor<float> upscaled;
     const int scale = esrgan_upscaler->config.scale;
     if (tile_size <= 0 || (input_tensor.shape()[0] <= tile_size && input_tensor.shape()[1] <= tile_size)) {
@@ -142,6 +145,7 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
 }
 
 sd_image_t UpscalerGGML::upscale(sd_image_t input_image, uint32_t upscale_factor) {
+    sd::ParallelScope tensor_scope(&tensor_executor);
     // upscale_factor, unused for RealESRGAN_x4plus_anime_6B.pth
     sd_image_t upscaled_image = {0, 0, 0, nullptr};
     const int scale           = esrgan_upscaler->config.scale;

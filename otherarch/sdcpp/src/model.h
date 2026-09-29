@@ -39,6 +39,7 @@ enum SDVersion {
     VERSION_LINGBOT_VIDEO,
     VERSION_QWEN_IMAGE,
     VERSION_QWEN_IMAGE_LAYERED,
+    VERSION_QWEN_IMAGE_2_1,
     VERSION_HUNYUAN_VIDEO,
     VERSION_ANIMA,
     VERSION_FLUX2,
@@ -145,7 +146,7 @@ static inline bool sd_version_is_lingbot_video(SDVersion version) {
 }
 
 static inline bool sd_version_is_qwen_image(SDVersion version) {
-    if (version == VERSION_QWEN_IMAGE || version == VERSION_QWEN_IMAGE_LAYERED) {
+    if (version == VERSION_QWEN_IMAGE || version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_QWEN_IMAGE_2_1) {
         return true;
     }
     return false;

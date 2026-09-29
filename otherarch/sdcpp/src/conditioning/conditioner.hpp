@@ -1978,7 +1978,8 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::GPT_OSS_20B;
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
-        } else if (sd_version_is_lingbot_video(version) ||
+        } else if (version == VERSION_QWEN_IMAGE_2_1 ||
+                   sd_version_is_lingbot_video(version) ||
                    sd_version_is_ideogram4(version) ||
                    sd_version_is_boogu_image(version) ||
                    sd_version_is_sefi_image(version) ||
@@ -2547,6 +2548,67 @@ struct LLMEmbedder : public Conditioner {
             prompt += conditioner_params.text;
             prompt_attn_range = {0, 0};
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
+        } else if (version == VERSION_QWEN_IMAGE_2_1) {
+            if (!llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
+                LOG_ERROR("Qwen Image 2.1 editing requires Qwen3-VL vision weights; provide --llm_vision or a combined encoder");
+                return {};
+            }
+            prompt = "<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n";
+            std::vector<int> system_tokens;
+            if (!tokenizer->encode(prompt, system_tokens, nullptr)) {
+                return {};
+            }
+            prompt_template_encode_start_idx = static_cast<int>(system_tokens.size());
+            out_layers                       = {static_cast<int>(llm->config.num_layers)};
+            prompt += "<|im_start|>user\n";
+            if (llm->enable_vision && conditioner_params.ref_images != nullptr) {
+                for (size_t i = 0; i < conditioner_params.ref_images->size(); ++i) {
+                    const auto& image = (*conditioner_params.ref_images)[i];
+                    int64_t width     = image.shape()[0];
+                    int64_t height    = image.shape()[1];
+                    int64_t pixels    = width * height;
+                    if (width % 32 != 0 || height % 32 != 0) {
+                        LOG_ERROR("Qwen Image 2.1 reference dimensions must be multiples of 32");
+                        return {};
+                    }
+                    auto rgb = sd::Tensor<float>({width, height, 3, 1});
+                    for (int64_t p = 0; p < pixels; ++p) {
+                        float alpha = image.shape()[2] == 4 ? image[p + 3 * pixels] : 1.f;
+                        for (int c = 0; c < 3; ++c) {
+                            rgb[p + c * pixels] = 2.f * (image[p + c * pixels] * alpha + 1.f - alpha) - 1.f;
+                        }
+                    }
+                    auto outputs = llm->encode_image_outputs(n_threads, rgb, false);
+                    if (outputs.empty()) {
+                        return {};
+                    }
+                    prompt += (i == 0 ? "" : " ") + std::string("<image") + std::to_string(i + 1) + "><|vision_start|>";
+                    std::vector<int> prefix_tokens;
+                    if (!tokenizer->encode(prompt, prefix_tokens, nullptr)) {
+                        return {};
+                    }
+                    int index = static_cast<int>(prefix_tokens.size());
+                    int count = static_cast<int>(outputs[0].shape()[1]);
+                    image_embeds.emplace_back(index, std::move(outputs[0]));
+                    if (deepstack_image_embeds.empty()) {
+                        deepstack_image_embeds.resize(outputs.size() - 1);
+                    }
+                    for (size_t layer = 1; layer < outputs.size(); ++layer) {
+                        deepstack_image_embeds[layer - 1].emplace_back(index, std::move(outputs[layer]));
+                    }
+                    image_grids.push_back({index, count,
+                                           static_cast<int>(height) / llm->config.vision.patch_size,
+                                           static_cast<int>(width) / llm->config.vision.patch_size});
+                    for (int j = 0; j < count; ++j) {
+                        prompt += "<|image_pad|>";
+                    }
+                    prompt += "<|vision_end|>";
+                }
+            }
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text.empty() ? " " : conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (sd_version_is_qwen_image(version) || sd_version_is_mage_flow(version)) {
             if (llm->enable_vision && conditioner_params.ref_images != nullptr && !conditioner_params.ref_images->empty()) {
                 LOG_INFO("%s", sd_version_is_mage_flow(version) ? "MageFlowEditPipeline" : "QwenImageEditPlusPipeline");
@@ -3074,6 +3136,21 @@ struct LLMEmbedder : public Conditioner {
         SDCondition result;
         result.c_crossattn        = std::move(hidden_states);
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
+        if (version == VERSION_QWEN_IMAGE_2_1) {
+            auto slots = sd::Tensor<int32_t>::zeros({result.c_crossattn.shape()[1]});
+            for (size_t i = 0; i < image_embeds.size(); ++i) {
+                int64_t begin = image_embeds[i].first - prompt_template_encode_start_idx;
+                int64_t end   = begin + image_embeds[i].second.shape()[1];
+                if (begin < 0 || end > slots.numel()) {
+                    LOG_ERROR("Qwen Image 2.1 image slots exceed the encoded prompt");
+                    return {};
+                }
+                for (int64_t j = begin; j < end; ++j) {
+                    slots[j] = static_cast<int32_t>(i + 1);
+                }
+            }
+            result.c_token_types = std::move(slots);
+        }
         if (sd_version_is_minimax_h3(version)) {
             std::vector<int32_t> tags(static_cast<size_t>(result.c_crossattn.shape()[1]), 1);
             for (const auto& [index, image_embed] : image_embeds) {

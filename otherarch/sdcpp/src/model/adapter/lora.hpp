@@ -67,7 +67,7 @@ struct LoraModel : public GGMLRunner {
         std::map<std::string, ggml_tensor*> scalars;
         std::set<std::string> scalar_names;
         for (const auto& [name, source] : sources) {
-            if (is_unused_tensor(name) || (filter && !filter(name)))
+            if (filter && !filter(name))
                 continue;
             const bool scalar  = source.nelements() == 1 && (ends_with(name, ".alpha") || ends_with(name, ".scale"));
             auto* tensor       = ggml_new_tensor(params_ctx, scalar ? GGML_TYPE_F32 : source.type, source.n_dims, source.ne);

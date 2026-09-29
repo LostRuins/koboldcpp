@@ -17,6 +17,7 @@ struct UpscalerGGML {
     std::shared_ptr<ESRGAN> esrgan_upscaler;
     std::string esrgan_path;
     int n_threads;
+    sd::ParallelExecutor tensor_executor;
     bool direct                 = false;
     int tile_size               = 128;
     size_t max_graph_vram_bytes = 0;
