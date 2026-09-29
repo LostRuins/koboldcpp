@@ -13385,7 +13385,11 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 lastturns.append({"role":"system","content":args.prompt})
                 print(f"System Prompt:\n{args.prompt}\n")
             while True:
-                lastuserinput = input("> ")
+                try:
+                    lastuserinput = input("> ")
+                except EOFError:
+                    print("\nTerminal input is unavailable or closed. Exiting CLI mode.", flush=True)
+                    break
                 if lastuserinput=="/quit" or lastuserinput=="/exit":
                     break
                 if not lastuserinput:
@@ -13401,6 +13405,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 result = (genout["text"] if "text" in genout else "")
                 if result:
                     lastturns.append({"role":"assistant","content":result})
+                    if args.debugmode >= 1:
+                        print() # native debug timing output does not end with a newline
                     print(result.strip() + "\n", flush=True)
                 else:
                     print("(No Response Received)\n", flush=True)
