@@ -430,8 +430,10 @@ add_library(ggml
             ggml/src/ggml-cpu/kcpp-repackmapper.cpp
             ggml/src/ggml-cpu/repack.cpp
             ggml/src/ggml-cpu/repack.h
-            ggml/src/ggml-cpu/iqp.cpp
-            ggml/src/ggml-cpu/iqp.h
+            ggml/src/ggml-cpu/tiled/tiled.cpp
+            ggml/src/ggml-cpu/tiled/tiled.h
+            ggml/src/ggml-cpu/tiled/tiled-kernel.cpp
+            ggml/src/ggml-cpu/tiled/tiled-kernel.h
             ggml/src/ggml-cpu/quants.c
             ggml/src/ggml-cpu/quants.h
             ggml/src/ggml-cpu/common.h
