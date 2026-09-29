@@ -230,8 +230,8 @@ CUBLASLD_FLAGS += -Lconda/envs/linux/lib -Lconda/envs/linux/lib/stubs
 endif
 
 
-ifdef LLAMA_PORTABLE
-
+# Explicit CUDA targets also work with native CPU builds. In particular, CUDA
+# 11.4 cannot use -arch=native (introduced in CUDA 11.5 Update 1).
 ifdef LLAMA_ARCHES_CU11
 NVCCFLAGS += -Wno-deprecated-gpu-targets \
              -gencode arch=compute_35,code=compute_35 \
@@ -257,13 +257,12 @@ NVCCFLAGS += -Wno-deprecated-gpu-targets \
              -gencode arch=compute_120,code=compute_120 \
 			 -DKCPP_LIMIT_CUDA_MAX_ARCH=1200
 
-else
+else ifdef LLAMA_PORTABLE
 NVCCFLAGS += -Wno-deprecated-gpu-targets -arch=all
-endif
 
 else
 NVCCFLAGS += -arch=native
-endif # LLAMA_PORTABLE
+endif
 
 ifdef LLAMA_CUDA_CCBIN
 NVCCFLAGS += -ccbin $(LLAMA_CUDA_CCBIN)

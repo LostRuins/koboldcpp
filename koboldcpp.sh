@@ -18,15 +18,34 @@ if [ ! -f "bin/micromamba" ]; then
 fi
 
 NVIDIA_GPU=0
+NVIDIA_CUDA_VERSION=""
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -qE '^GPU [0-9]+:'; then
 	NVIDIA_GPU=1
+	NVIDIA_CUDA_VERSION=$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9][0-9.]*\).*/\1/p' | head -n 1)
 fi
 
-if [[ ! -f "conda/envs/linux/bin/python" || $1 == "rebuild" ]] && [ -z "$KCPP_CUDA" ]; then
+KCPP_INSTALLED_CUDA=""
+if [ -f "conda/envs/linux/cudaver" ]; then
+	KCPP_INSTALLED_CUDA=$(<conda/envs/linux/cudaver)
+fi
+KCPP_CREATE_ENV=0
+if [[ ! -f "conda/envs/linux/bin/python" || $1 == "rebuild" ]] ||
+   [[ -n "$KCPP_CUDA" && "$KCPP_CUDA" != "$KCPP_INSTALLED_CUDA" ]]; then
+	KCPP_CREATE_ENV=1
+fi
+
+if [ "$KCPP_CREATE_ENV" = 1 ] && [ -z "$KCPP_CUDA" ]; then
 	if [ "$NVIDIA_GPU" = 1 ]; then
-		if nvidia-smi | grep -qE 'CUDA Version: (11|12\.0)'; then
+		NVIDIA_CUDA_MAJOR=${NVIDIA_CUDA_VERSION%%.*}
+		NVIDIA_CUDA_MINOR=${NVIDIA_CUDA_VERSION#*.}
+		NVIDIA_CUDA_MINOR=${NVIDIA_CUDA_MINOR%%.*}
+		if [[ "$NVIDIA_CUDA_MAJOR" =~ ^[0-9]+$ && "$NVIDIA_CUDA_MINOR" =~ ^[0-9]+$ ]] &&
+		   (( NVIDIA_CUDA_MAJOR > 12 || NVIDIA_CUDA_MAJOR == 12 && NVIDIA_CUDA_MINOR >= 8 )); then
+			# CUDA 12.8 retains support for Maxwell/Pascal/Volta and adds
+			# native Blackwell SM 100/120 support.
+			KCPP_CUDA=12.8.0
+		elif [[ "$NVIDIA_CUDA_VERSION" =~ ^(11\.|12\.0) ]]; then
 			KCPP_CUDA=11.4.0
-			ARCHES_CU11=true
 		else
 			KCPP_CUDA=12.1.0
 		fi
@@ -37,23 +56,29 @@ if [[ ! -f "conda/envs/linux/bin/python" || $1 == "rebuild" ]] && [ -z "$KCPP_CU
 	fi
 fi
 
-if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA != "rocm" || $1 == "rebuild" && $KCPP_CUDA != "rocm" ]]; then
-	KCPP_ENVIRONMENT_TMP=$(mktemp "${TMPDIR:-/tmp}/koboldcpp-environment.XXXXXX.yaml") || exit 1
-	cp "$KCPP_CONDA_CONFIG_DIR/environment.yaml" "$KCPP_ENVIRONMENT_TMP"
-	sed -i -e "s/nvidia\/label\/cuda-12.1.0/nvidia\/label\/cuda-$KCPP_CUDA/g" "$KCPP_ENVIRONMENT_TMP"
-	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f "$KCPP_ENVIRONMENT_TMP" -y
-	bin/micromamba run -r conda -p conda/envs/linux make clean
-	echo $KCPP_CUDA > conda/envs/linux/cudaver
-	rm -f "$KCPP_ENVIRONMENT_TMP"
+if [ "$KCPP_CREATE_ENV" = 1 ]; then
+	KCPP_ENVIRONMENT_FILE="$KCPP_CONDA_CONFIG_DIR/environment-nocuda.yaml"
+	if [ "$KCPP_CUDA" != "rocm" ]; then
+		KCPP_ENVIRONMENT_TMP=$(mktemp "${TMPDIR:-/tmp}/koboldcpp-environment.XXXXXX.yaml") || exit 1
+		trap 'rm -f -- "$KCPP_ENVIRONMENT_TMP"' EXIT
+		cp "$KCPP_CONDA_CONFIG_DIR/environment.yaml" "$KCPP_ENVIRONMENT_TMP" || exit 1
+		sed -i -e "s/nvidia\/label\/cuda-12.1.0/nvidia\/label\/cuda-$KCPP_CUDA/g" "$KCPP_ENVIRONMENT_TMP" || exit 1
+		KCPP_ENVIRONMENT_FILE="$KCPP_ENVIRONMENT_TMP"
+	fi
+	# A failed update can leave a partially changed environment. Only mark it
+	# usable after both environment creation and removal of old build objects succeed.
+	rm -f conda/envs/linux/cudaver || exit 1
+	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f "$KCPP_ENVIRONMENT_FILE" -y || exit 1
+	bin/micromamba run -r conda -p conda/envs/linux make clean || exit 1
+	printf '%s\n' "$KCPP_CUDA" > conda/envs/linux/cudaver || exit 1
+else
+	KCPP_CUDA="$KCPP_INSTALLED_CUDA"
 fi
 
-if [[ ! -f "conda/envs/linux/bin/python" && $KCPP_CUDA == "rocm" || $1 == "rebuild" && $KCPP_CUDA == "rocm" ]]; then
-	bin/micromamba create --no-rc --no-shortcuts -r conda -p conda/envs/linux -f "$KCPP_CONDA_CONFIG_DIR/environment-nocuda.yaml" -y
-	bin/micromamba run -r conda -p conda/envs/linux make clean
-	echo "rocm" > conda/envs/linux/cudaver
+if [ -z "$KCPP_CUDA" ]; then
+	echo "Error: environment toolkit version is missing. Run ./koboldcpp.sh rebuild."
+	exit 1
 fi
-
-KCPP_CUDA=$(<conda/envs/linux/cudaver)
 KCPP_CUDAAPPEND=-cuda${KCPP_CUDA//.}$KCPP_APPEND
 
 if [[ "$KCPP_CUDA" == 11.* && -z "$ARCHES_CU11$ARCHES_CU12$ARCHES_CU13" ]]; then
