@@ -54,7 +54,7 @@ DEFAULT_MAX_TOOL_RESULT_CHARS = 20000
 MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_TOOL_RESULT_CHARS
 NORMAL_TOOL_RESULT_DISPLAY_CHARS = 8000
 COMPACT_TOOL_RESULT_DISPLAY_CHARS = 600
-MAX_AGENT_STEPS = 32
+MAX_AGENT_STEPS = 48
 MAX_FETCH_BYTES = 4000000
 MAX_VIEW_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_PROJECT_INSTRUCTION_CHARS = 10000
@@ -1731,6 +1731,7 @@ def save_session_file(
     pending_interruption: bool,
     workdir: Path,
     tool_confirmation: dict[str, str] | None = None,
+    max_agent_steps: int = MAX_AGENT_STEPS,
 ) -> None:
     """Save all session state except model endpoint credentials."""
     session = {
@@ -1741,6 +1742,7 @@ def save_session_file(
         "temperature": temperature,
         "max_tokens": max_tokens,
         # Agent-only state follows. Never add base_url, api_key, or model here.
+        "max_agent_steps": max_agent_steps,
         "disabled_tools": sorted(disabled_tools),
         "workdir": str(workdir),
         "confirmation_mode": confirmation_mode,
@@ -1810,7 +1812,8 @@ def load_session_file(path: Path) -> dict[str, Any]:
     for field in ("show_reasoning", "verbose", "no_color", "pending_interruption"):
         if not isinstance(session.get(field), bool):
             raise ValueError(f"{field} must be a boolean")
-    for field in ("request_timeout", "max_tool_result_chars"):
+    session.setdefault("max_agent_steps", MAX_AGENT_STEPS)
+    for field in ("request_timeout", "max_tool_result_chars", "max_agent_steps"):
         value = session.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(f"{field} must be a positive integer")
@@ -1830,6 +1833,7 @@ def print_runtime_status(
     verbose: bool,
     max_tokens: int | None,
     tool_confirmation: dict[str, str] | None = None,
+    max_agent_steps: int = MAX_AGENT_STEPS,
 ) -> None:
     max_tokens_status = str(max_tokens) if max_tokens is not None else "server default"
     print(color("Current status:", ANSI_BOLD_CYAN))
@@ -1837,6 +1841,7 @@ def print_runtime_status(
     print(color("Endpoint:", ANSI_CYAN) + f" {base_url}")
     print(color("Working directory:", ANSI_CYAN) + f" {Path.cwd()}")
     print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens_status}")
+    print(color("Max agent steps:", ANSI_CYAN) + f" {max_agent_steps}")
     print(color("Default confirmation:", ANSI_CYAN) + f" {confirmation_status(confirmation_mode)}")
     if tool_confirmation:
         settings = ", ".join(f"{name}={mode}" for name, mode in sorted(tool_confirmation.items()))
@@ -1853,6 +1858,7 @@ def print_runtime_help(
     verbose: bool,
     max_tokens: int | None,
     tool_confirmation: dict[str, str] | None = None,
+    max_agent_steps: int = MAX_AGENT_STEPS,
 ) -> None:
     rows = (
         ("/help", "Show this help"),
@@ -1862,6 +1868,7 @@ def print_runtime_help(
         ("/tools", "List tools and confirmation settings (/tool is an alias)"),
         ("/tools NAME on|off", "Enable or disable a tool, then clear the session"),
         ("/compact", "Summarize history to save context space"),
+        ("/maxsteps [N]", "Show or set the maximum model turns per user message (N >= 1)"),
         ("/workdir", "Show the current working directory"),
         ("/workdir PATH", "Change directory and clear the session"),
         ("/confirm", "Show global default confirmation and tool overrides"),
@@ -1885,7 +1892,7 @@ def print_runtime_help(
     print()
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
-        tool_confirmation,
+        tool_confirmation, max_agent_steps,
     )
     print()
 
@@ -1956,6 +1963,7 @@ def run_agent(
     request_timeout: int,
     no_color: bool = False,
     tool_confirmation: dict[str, str] | None = None,
+    max_agent_steps: int = MAX_AGENT_STEPS,
 ) -> None:
     global MAX_TOOL_RESULT_CHARS
 
@@ -2014,7 +2022,7 @@ def run_agent(
 
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
-        tool_confirmation,
+        tool_confirmation, max_agent_steps,
     )
     print("\nKoboldCpp Agent has full shell access, exercise caution when approving commands.")
     print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
@@ -2037,8 +2045,17 @@ def run_agent(
         if command == "/help":
             print_runtime_help(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
-                max_tokens, tool_confirmation,
+                max_tokens, tool_confirmation, max_agent_steps,
             )
+            continue
+        if command == "/maxsteps":
+            if command_arg:
+                try:
+                    max_agent_steps = positive_int(command_arg)
+                except (ValueError, argparse.ArgumentTypeError):
+                    print("Usage: /maxsteps [N] (N must be a positive integer)\n")
+                    continue
+            print(f"Max agent steps: {max_agent_steps}\n")
             continue
         if command == "/save":
             try:
@@ -2048,6 +2065,7 @@ def run_agent(
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    max_agent_steps=max_agent_steps,
                     disabled_tools=disabled_tools,
                     confirmation_mode=confirmation_mode,
                     tool_confirmation=tool_confirmation,
@@ -2076,6 +2094,7 @@ def run_agent(
             messages[:] = session["messages"]
             temperature = float(session["temperature"])
             max_tokens = session["max_tokens"]
+            max_agent_steps = session["max_agent_steps"]
             disabled_tools.clear()
             disabled_tools.update(session["disabled_tools"])
             confirmation_mode = session["confirmation_mode"]
@@ -2091,7 +2110,7 @@ def run_agent(
             print(f"Session loaded: {loaded_path}")
             print_runtime_status(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
-                max_tokens, tool_confirmation,
+                max_tokens, tool_confirmation, max_agent_steps,
             )
             print()
             continue
@@ -2266,7 +2285,7 @@ def run_agent(
             messages.append({"role": "user", "content": user_text})
 
         # Continue calling the model until it returns a normal assistant answer.
-        for _ in range(MAX_AGENT_STEPS):
+        for _ in range(max_agent_steps):
             try:
                 cancellation = RequestCancellation()
                 request_args = dict(
@@ -2463,7 +2482,7 @@ def run_agent(
                 print("\nInterrupted. Enter new instruction.\n")
                 break
         else:
-            print("Agent stopped: too many consecutive tool/model turns.\n")
+            print(f"Agent stopped: reached the limit of {max_agent_steps} consecutive tool/model turns.\n")
 
 
 def parse_args() -> argparse.Namespace:
@@ -2502,6 +2521,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="TOKENS",
         help="Maximum output tokens per model response (omitted by default)",
+    )
+    parser.add_argument(
+        "--max-agent-steps",
+        type=positive_int,
+        default=MAX_AGENT_STEPS,
+        metavar="STEPS",
+        help="Maximum model turns per user message (default: %(default)s)",
     )
     parser.add_argument(
         "--request-timeout",
@@ -2578,6 +2604,7 @@ def main() -> None:
             tool_confirmation=dict(args.tool_confirmation),
             temperature=args.temperature,
             max_tokens=args.max_tokens,
+            max_agent_steps=args.max_agent_steps,
             request_timeout=args.request_timeout,
             no_color=args.no_color,
         )
