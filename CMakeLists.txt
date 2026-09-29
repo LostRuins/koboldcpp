@@ -210,7 +210,7 @@ if (LLAMA_HIPBLAS)
         list(APPEND GGML_SOURCES_ROCM ${SRCS})
         file(GLOB SRCS "ggml/src/ggml-cuda/template-instances/mmf*.cu")
         list(APPEND GGML_SOURCES_ROCM ${SRCS})
-        add_compile_definitions(GGML_USE_HIP GGML_USE_CUDA SD_USE_CUDA GGML_HIP_NO_VMM)
+        add_compile_definitions(GGML_USE_HIP GGML_USE_CUDA GGML_HIP_NO_VMM)
         add_library(ggml-rocm ${GGML_SOURCES_CUDA})
 
         list(APPEND GGML_SOURCES_ROCM
@@ -543,6 +543,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/core/ggml_runner.cpp
             otherarch/sdcpp/src/core/ggml_graph_cut.cpp
             otherarch/sdcpp/src/core/ggml_graph_cut.h
+            otherarch/sdcpp/src/core/parallel.cpp
             otherarch/sdcpp/src/core/regex.cpp
             otherarch/sdcpp/src/core/ggml_tensor_utils.cpp
             otherarch/sdcpp/src/core/runner_cache.cpp
@@ -610,7 +611,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/core/layer_split_partition.cpp
             otherarch/sdcpp/src/core/ggml_extend_backend.cpp)
 target_include_directories(sdtype_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/include ./otherarch/sdcpp/src ./otherarch/sdcpp/examples ./otherarch/sdcpp/thirdparty/oniguruma ./otherarch/sdcpp/thirdparty/utf8proc ./tools ./common)
-target_compile_definitions(sdtype_adapter PRIVATE ONIG_STATIC UTF8PROC_STATIC)
+target_compile_definitions(sdtype_adapter PRIVATE ONIG_STATIC UTF8PROC_STATIC SD_USE_UPSTREAM_GGML)
 target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(sdtype_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(sdtype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
