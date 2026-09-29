@@ -2333,6 +2333,7 @@ def generate(genparams, stream_flag=False):
             print(f"\n!!! ====== !!!\n(Warning! Request max_context_length={max_context_length} exceeds allocated context size of {maxctx}. It will be reduced to fit. Consider launching with increased --contextsize to avoid issues. This message will only show once per session.)\n!!! ====== !!!")
             showmaxctxwarning = False
         max_context_length = maxctx
+    rep_pen_range = max(0, min(rep_pen_range, max(1, max_context_length)))
     # Estimate the complete textual input before deciding how much of the
     # context may be used for output. Media token usage cannot be estimated by
     # token_count, so retain the more conservative limit for multimodal input.
