@@ -3878,7 +3878,10 @@ def toolcall_to_normalized_json(text,start_tag,end_tag,required_match_txt): #con
         params = {}
         param_blocks = re.findall(r"<parameter=(.*?)>(.*?)</parameter>", text, re.DOTALL)
         for key, value in param_blocks:
-            params[key.strip()] = value.strip()
+            key = key.strip()
+            if not key: # Models may emit an empty parameter tag for no-argument tools.
+                continue
+            params[key] = value.strip()
         return json.dumps({"name": fn_name, "arguments": params})
     def parse_glm(text: str) -> str:
         text = text.strip()
