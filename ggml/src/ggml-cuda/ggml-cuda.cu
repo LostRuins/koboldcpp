@@ -1392,10 +1392,11 @@ struct batched_mul_mat_traits<GGML_TYPE_F16> {
     static inline const cublasComputeType_t compute_type = CUBLAS_COMPUTE_16F;
     static inline const cudaDataType_t data_type = CUDA_R_16F;
     static inline const ggml_type ggml_type_val = GGML_TYPE_F16;
-    static inline const half alpha = 1.0;
-    static inline const half beta = 0.0;
-    static inline const void* get_alpha() { static const half val = alpha; return &val; }
-    static inline const void* get_beta() { static const half val = beta; return &val; }
+    // kcpp: binary16 bits avoid broken inline static half initialization with CUDA 11.4/MSVC.
+    static inline const uint16_t alpha = 0x3c00; // 1.0h
+    static inline const uint16_t beta = 0x0000; // 0.0h
+    static inline const void* get_alpha() { static const uint16_t val = alpha; return &val; }
+    static inline const void* get_beta() { static const uint16_t val = beta; return &val; }
     static inline auto convert(ggml_type src_type) { return ggml_get_to_fp16_cuda(src_type); }
     static inline auto convert_nc(ggml_type src_type) { return ggml_get_to_fp16_nc_cuda(src_type); }
 };
