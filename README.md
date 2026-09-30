@@ -1,13 +1,13 @@
 # koboldcpp
 
-KoboldCpp is an easy-to-use AI text-generation software for GGML and GGUF models, inspired by the original **KoboldAI**. It's a single self-contained distributable that builds off **llama.cpp** and adds many additional powerful features. [Download Releases Here](https://github.com/LostRuins/koboldcpp/releases/latest).
+KoboldCpp is an easy-to-use AI text-generation software for GGML and GGUF models, inspired by the original **KoboldAI**. It's a single self-contained distributable that builds off **llama.cpp** and adds many additional powerful features. [Download KoboldCPP Releases Here](https://github.com/LostRuins/koboldcpp/releases/latest).
 
-![Preview](media/preview.png)
-![Preview](media/preview2.png)
-![Preview](media/preview3.png)
-![Preview](media/preview4.png)
-![Preview](media/preview5.png)
-![Preview](media/preview6.png)
+![Integrated Web UI](media/preview.png)
+![Roleplay Chat Mode](media/preview2.png)
+![GUI Launcher](media/preview3.png)
+![Messenger Chat Mode](media/preview4.png)
+![Image Generation UI](media/preview5.png)
+![Assistant UI](media/preview6.png)
 
 ### Features
 - Single file executable, with no installation required and no external dependencies
@@ -20,6 +20,7 @@ KoboldCpp is an easy-to-use AI text-generation software for GGML and GGUF models
 - Music Generation (Ace Step 1.5, Ace Step XL)
 - Image Recognition (Multimodal Vision)
 - MCP Server support and tool calling
+- Integrated AI Agent (KoboldCpp Agent) that can write and edit code, run programs, schedule tasks
 - Provides many compatible APIs endpoints for many popular webservices (KoboldCppApi OpenAiApi OllamaApi A1111ForgeApi ComfyUiApi WhisperTranscribeApi XttsApi OpenAiSpeechApi)
 - Bundled KoboldAI Lite UI with editing tools, save formats, memory, world info, author's note, characters, scenarios.
 - Includes multiple modes (chat, adventure, instruct, storywriter) and UI Themes (aesthetic roleplay, classic writer, corporate assistant, messsenger)
