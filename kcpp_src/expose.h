@@ -262,6 +262,8 @@ struct sd_generation_inputs
     const int lora_len = 0;
     const char ** lora_filenames = nullptr;
     const float * lora_multipliers = nullptr;
+    const float * custom_sigmas = nullptr;
+    const int custom_sigmas_count = 0;
 };
 struct sd_generation_outputs
 {

@@ -1129,6 +1129,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     {
         ref_audio_data.push_back(std::string(inputs.ref_audios[i]));
     }
+    std::vector<float> custom_sigmas;
+    if (inputs.custom_sigmas && inputs.custom_sigmas_count > 0) {
+        custom_sigmas.assign(inputs.custom_sigmas, inputs.custom_sigmas + inputs.custom_sigmas_count);
+    }
     sd_params->prompt = inputs.prompt;
     sd_params->negative_prompt = inputs.negative_prompt;
     sd_params->cfg_scale = inputs.cfg_scale;
@@ -1470,6 +1474,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.sample_params.sample_method = sd_params->sample_method;
     params.sample_params.scheduler = sd_params->scheduler;
     params.sample_params.sample_steps = sd_params->sample_steps;
+    if (!custom_sigmas.empty()) {
+        params.sample_params.custom_sigmas = custom_sigmas.data();
+        params.sample_params.custom_sigmas_count = (int)custom_sigmas.size();
+    }
     params.sample_params.shifted_timestep = sd_params->shifted_timestep;
     if (sd_params->eta >= 0.f && sd_params->eta <= 1.f) {
         params.sample_params.eta = sd_params->eta;

@@ -152,6 +152,7 @@ has_vision_support = False
 has_whisper = False
 cached_chat_template = None
 cached_sd_info = {}
+cached_sd_custom_sigmas = {}
 cached_jinja_kwargs = None
 savedata_obj = None
 mcp_connections = [] #every element is linked to one mcp source, contains obj {"client":obj, "tools":[]}
@@ -503,7 +504,9 @@ class sd_generation_inputs(ctypes.Structure):
                 ("upscale", ctypes.c_bool),
                 ("lora_len", ctypes.c_int),
                 ("lora_filenames", ctypes.POINTER(ctypes.c_char_p)),
-                ("lora_multipliers", ctypes.POINTER(ctypes.c_float))]
+                ("lora_multipliers", ctypes.POINTER(ctypes.c_float)),
+                ("custom_sigmas", ctypes.POINTER(ctypes.c_float)),
+                ("custom_sigmas_count", ctypes.c_int)]
 
 class sd_generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -2606,6 +2609,36 @@ def sd_sdapi_samplers():
                   for k, v in smap.items()]
     return result
 
+def sd_build_custom_sigmas():
+    """Build the canonical custom sigma lists from the gendefaults field
+    `custom_sigmas` (a map of scheduler name -> list of sigma values).
+    Returns a dict mapping lowercase name -> list of float sigmas.
+    Entries that are short/invalid, collide with a built-in scheduler, or
+    duplicate an earlier entry (case-insensitively) are ignored."""
+    global cached_sd_info, args
+    result = {}
+    gend = gendefaults_parse_meta_field(args.gendefaults or '')
+    custom = gend.get('custom_sigmas', {})
+    if not isinstance(custom, dict):
+        print(f"Warning: gendefaults custom_sigmas is not a dictionary, ignoring")
+        return result
+    builtin = {str(s).lower() for s in cached_sd_info.get('available_schedulers', [])}
+    for name, values in custom.items():
+        key = str(name).lower()
+        valid = (isinstance(values, list) and len(values) >= 2
+                 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values))
+        if not valid:
+            print(f"Warning: gendefaults custom_sigmas entry '{name}' is not a list of at least 2 numbers, ignoring")
+            continue
+        if key in builtin:
+            print(f"Warning: gendefaults custom_sigmas entry '{name}' collides with a built-in scheduler, ignoring")
+            continue
+        if key in result:
+            print(f"Warning: gendefaults custom_sigmas entry '{name}' duplicates an earlier entry, ignoring")
+            continue
+        result[key] = [float(v) for v in values]
+    return result
+
 
 sd_convdirect_choices = ['off', 'vaeonly', 'full']
 
@@ -2676,10 +2709,11 @@ def sd_get_device_override(deviceid, module=''):
     return result
 
 def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename):
-    global args, cached_sd_info
+    global args, cached_sd_info, cached_sd_custom_sigmas
     inputs = sd_load_model_inputs()
     inputs = set_backend_props(inputs)
     cached_sd_info = sd_get_info()
+    cached_sd_custom_sigmas = sd_build_custom_sigmas()
     inputs.model_filename = model_filename.encode("UTF-8")
     thds = args.threads
 
@@ -2999,7 +3033,7 @@ def lora_map_name_to_path(request_list):
     return result
 
 def sd_generate(genparams):
-    global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter
+    global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter, cached_sd_custom_sigmas
 
     job_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
@@ -3042,6 +3076,7 @@ def sd_generate(genparams):
         seed = random.randint(100000, 999999)
     sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
+    custom_sigmas = cached_sd_custom_sigmas.get(scheduler)
     extra_sample_args = str(genparams.get("extra_sample_args") or "")
     ref_image_args = str(genparams.get("ref_image_args") or "").strip()
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
@@ -3072,6 +3107,9 @@ def sd_generate(genparams):
     if flow_shift is not None and flow_shift < 0:
         flow_shift = None # fall back to the default
     sample_steps = (1 if sample_steps < 1 else (forced_steplimit if sample_steps > forced_steplimit else sample_steps))
+    if custom_sigmas is not None:
+        # custom sigmas fully determine the schedule; ignore the requested step count
+        sample_steps = len(custom_sigmas) - 1
     vid_req_frames = (1 if vid_req_frames < 1 else (480 if vid_req_frames > 480 else vid_req_frames))
     vid_fps = (16 if vid_fps < 16 else (32 if vid_fps > 32 else vid_fps))
 
@@ -3113,6 +3151,9 @@ def sd_generate(genparams):
     inputs.seed = ((seed + 2**31) % 2**32) - 2**31
     inputs.sample_method = sd_sampler_canonical_name(sample_method).encode("UTF-8")
     inputs.scheduler = scheduler.encode("UTF-8")
+    inputs.custom_sigmas_count = len(custom_sigmas) if custom_sigmas is not None else 0
+    if custom_sigmas is not None:
+        inputs.custom_sigmas = (ctypes.c_float * len(custom_sigmas))(*custom_sigmas)
     inputs.eta = -1.0 if eta is None else eta
     inputs.extra_sample_args = extra_sample_args.encode("UTF-8")
     inputs.clip_skip = clip_skip
@@ -6997,7 +7038,9 @@ Change Mode<br>
             if (friendlysdmodelname=="inactive" or fullsdmodelpath=="") and not(autoswapmode and imageName is not None):
                 response_body = (json.dumps([]).encode())
             else:
-                response_body = (json.dumps([{"name":name,"label":name} for name in cached_sd_info.get('available_schedulers', [])]).encode())
+                schedulers = list(cached_sd_info.get('available_schedulers', []))
+                schedulers.extend(cached_sd_custom_sigmas.keys())
+                response_body = (json.dumps([{"name":name,"label":name} for name in schedulers]).encode())
         elif clean_path.endswith('/sdapi/v1/latent-upscale-modes'):
            response_body = (json.dumps([]).encode())
 
