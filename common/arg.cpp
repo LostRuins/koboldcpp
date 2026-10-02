@@ -352,7 +352,7 @@ static bool parse_bool_value(const std::string & value) {
 static std::string get_default_local_path(const std::string & url) {
     auto f = string_split<std::string>(url, '#').front();
     f = string_split<std::string>(f, '?').front();
-    return fs_get_cache_file(string_split<std::string>(f, '/').back());
+    return fs_path_to_utf8(fs_get_cache_file(string_split<std::string>(f, '/').back()));
 }
 
 static bool spec_types_is_default(const common_params & params) {
@@ -718,24 +718,24 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 // 1. system-wide: /etc/llama.cpp/config.ini (%PROGRAMDATA%\llama.cpp\config.ini on windows)
 // 2. user-level: ${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini (%APPDATA%\llama.cpp\config.ini on windows)
 static void common_params_apply_system_config(common_params & params, llama_example ex) {
-    std::vector<std::string> paths;
+    std::vector<std::filesystem::path> paths;
 
 #if defined(_WIN32)
-    const std::string program_data = common_get_env("PROGRAMDATA");
+    const std::filesystem::path program_data = common_get_path_from_env("PROGRAMDATA");
     if (!program_data.empty()) {
-        paths.push_back(program_data + "\\llama.cpp\\config.ini");
+        paths.push_back(program_data / "llama.cpp" / "config.ini");
     }
 #else
     paths.push_back("/etc/llama.cpp/config.ini");
 #endif
 
     try {
-        paths.push_back(fs_get_config_directory() + "config.ini");
+        paths.push_back(fs_get_config_directory() / "config.ini");
     } catch (const std::exception & e) {
         LOG_DBG("cannot read user-level config file, skipping: %s\n", e.what());
     }
 
-    std::vector<std::string> found;
+    std::vector<std::filesystem::path> found;
     for (const auto & path : paths) {
         std::error_code ec;
         if (std::filesystem::exists(path, ec)) {
@@ -749,7 +749,7 @@ static void common_params_apply_system_config(common_params & params, llama_exam
     common_preset_context ctx(ex);
     ctx.ignore_unknown_keys = true; // the same config file is shared by all programs
     for (const auto & path : found) {
-        LOG_INF("using config file: %s\n", path.c_str());
+        LOG_INF("using config file: %s\n", fs_path_to_utf8(path).c_str());
         common_preset global;
         common_presets presets = ctx.load_from_ini(path, global);
         global.apply_to_params(params);
