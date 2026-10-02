@@ -211,6 +211,18 @@
         "assistant_end": "<|END_OF_TURN_TOKEN|>"
     }
 }, {
+    "search": ["<｜start▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<|System|>", "<|User|>", "<|Bot|>", "</think>"],
+    "name": "Spark X2.5",
+    "adapter": {
+        "system_start": "<｜start▁of▁sentence｜><|System|>\n",
+        "system_end": "<｜end▁of▁sentence｜>",
+        "user_start": "<｜start▁of▁sentence｜><|User|>",
+        "user_end": "<｜end▁of▁sentence｜>",
+        "assistant_start": "<｜start▁of▁sentence｜><|Bot|></think>",
+        "assistant_gen": "<｜start▁of▁sentence｜><|Bot|><think>",
+        "assistant_end": "<｜end▁of▁sentence｜>"
+    }
+}, {
     "search": ["<｜User｜>"],
     "name": "DeepSeek V2.5",
     "adapter": {

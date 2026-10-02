@@ -12992,7 +12992,12 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 pass
 
             if chatcompl_adapter is None:
-                print("Chat template heuristics failed to identify chat completions format. Alpaca will be used.")
+                if cached_chat_template:
+                    args.jinja = True
+                    args.jinja_tools = True
+                    print("Chat template heuristics failed to identify chat completions format. Jinja and Jinja tools will be used.")
+                else:
+                    print("Chat template heuristics failed to identify chat completions format. Alpaca will be used.")
 
     #handle loading image model
     if args.sdmodel and args.sdmodel!="":
