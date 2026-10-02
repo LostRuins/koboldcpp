@@ -889,7 +889,7 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
             {
                 to_replace = "taesd_f2.embd";
             }
-            else if(sd_version_uses_wan_vae(tempver))
+            else if(sd_version_uses_wan_vae(tempver) && tempver != VERSION_QWEN_IMAGE_2_1) // qwen 2.1 + tae crashing as of master-917
             {
                 to_replace = "taesd_w21.embd";
             }
