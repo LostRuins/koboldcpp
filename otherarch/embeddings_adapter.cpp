@@ -26,14 +26,14 @@ bool embeddings_debug = false;
 static int max_batchsize = 512;
 static std::string last_output = "";
 
-static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
+static void batch_add_seq(common_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
     size_t n_tokens = tokens.size();
     for (size_t i = 0; i < n_tokens; i++) {
-        common_batch_add(batch, tokens[i], i, { seq_id }, true);
+        batch.add(tokens[i], i, seq_id, true);
     }
 }
 
-static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd, int embd_norm) {
+static void batch_decode(llama_context * ctx, common_batch & batch, float * output, int n_seq, int n_embd, int embd_norm) {
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
     const struct llama_model * model = llama_get_model(ctx);
 
@@ -43,16 +43,16 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
     // run model
     if(embeddings_debug)
     {
-        printf("\n%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
+        printf("\n%s: n_tokens = %d, n_seq = %d\n", __func__, batch.size(), n_seq);
     }
 
     // run model
-    if (llama_decode(ctx, batch) < 0) {
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) < 0) {
         printf("%s : failed to process\n", __func__);
     }
 
-    for (int i = 0; i < batch.n_tokens; i++) {
-        if (!batch.logits[i]) {
+    for (int i = 0; i < batch.size(); i++) {
+        if (!batch.tokens[i].output) {
             continue;
         }
         const float * embd = nullptr;
@@ -67,8 +67,8 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
             }
         } else {
             // try to get sequence embeddings - supported only when pooling_type is not NONE
-            embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
-            embd_pos = batch.seq_id[i][0];
+            embd = llama_get_embeddings_seq(ctx, batch.tokens[i].seq_id);
+            embd_pos = batch.tokens[i].seq_id;
              if(embd == NULL)
             {
                 printf("\nfailed to get sequence embeddings\n");
@@ -220,7 +220,7 @@ embeddings_generation_outputs embeddingstype_generate(const embeddings_generatio
     // initialize batch
     const int n_prompts = 1;
     const enum llama_pooling_type pooling_type = llama_pooling_type(embeddings_ctx);
-    struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    common_batch batch(embeddings_ctx);
 
     // count number of embeddings
     int n_embd_count = 0;
@@ -247,12 +247,12 @@ embeddings_generation_outputs embeddingstype_generate(const embeddings_generatio
         auto & inp = prompt_inputs[k];
         const uint64_t n_toks = inp.size();
         // encode if at capacity
-        if (batch.n_tokens + n_toks > n_batch) {
+        if (batch.size() + n_toks > n_batch) {
             float * out = emb + e * n_embd;
             batch_decode(embeddings_ctx, batch, out, s, n_embd, embd_normalize);
-            e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
+            e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.size() : s;
             s = 0;
-            common_batch_clear(batch);
+            batch.clear();
         }
         // add to batch
         batch_add_seq(batch, inp, s);
@@ -273,9 +273,6 @@ embeddings_generation_outputs embeddingstype_generate(const embeddings_generatio
     }
     outputarray += "]";
     last_output = outputarray;
-
-    // clean up
-    llama_batch_free(batch);
 
     timetaken = timer_check();
     printf("\nText Embeddings Generated %d values in %.2fs.\n",(int) n_embd,timetaken);

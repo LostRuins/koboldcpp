@@ -1082,7 +1082,18 @@ static int32_t kcpp_decode_main_and_spec(llama_context * main_ctx, llama_batch b
         {
             llama_memory_seq_rm(llama_get_memory(draft_ctx), batch.seq_id[0][0], batch.pos[0], -1);
         }
-        if(!common_speculative_process(draft_spec, batch))
+        // Callers provide text batches with explicit positions, sequence IDs and logits flags.
+        GGML_ASSERT(batch.token && !batch.embd);
+        common_batch spec_batch;
+        for(int32_t i = 0; i < batch.n_tokens; ++i)
+        {
+            const int32_t idx = spec_batch.add(batch.token[i], batch.pos[i], batch.seq_id[i][0], batch.logits[i] != 0);
+            for(int32_t s = 1; s < batch.n_seq_id[i]; ++s)
+            {
+                spec_batch.add_seq(idx, batch.seq_id[i][s]);
+            }
+        }
+        if(!common_speculative_process(draft_spec, spec_batch))
         {
             kcpp_flush_log_output();
             printf("\nERROR: Speculative state update failed!\n");
@@ -4810,7 +4821,7 @@ static bool batch_claim_waiting_locked()
 static void batch_worker_loop()
 {
     const int batch_cap = std::max(1, kcpp_data ? kcpp_data->n_batch : 512);
-    llama_batch batch = llama_batch_init(batch_cap, 0, 1);
+    common_batch batch(llama_ctx_v4);
     while(true)
     {
         std::vector<int> decode_ids;
@@ -4828,10 +4839,10 @@ static void batch_worker_loop()
                 continue;
             }
             batch_claim_waiting_locked();
-            common_batch_clear(batch);
+            batch.clear();
             for(auto & req_ptr : batch_requests)
             {
-                if(!req_ptr || !batch_is_live_state(req_ptr->state) || req_ptr->slot < 0 || batch.n_tokens >= batch_cap)
+                if(!req_ptr || !batch_is_live_state(req_ptr->state) || req_ptr->slot < 0 || batch.size() >= batch_cap)
                 {
                     continue;
                 }
@@ -4845,15 +4856,15 @@ static void batch_worker_loop()
                 }
                 if(req.state == BatchState::PREFILL)
                 {
-                    while(req.prompt_pos < (int) req.prompt_tokens.size() && batch.n_tokens < batch_cap)
+                    while(req.prompt_pos < (int) req.prompt_tokens.size() && batch.size() < batch_cap)
                     {
                         bool is_last = req.prompt_pos == (int) req.prompt_tokens.size() - 1;
                         if(is_last)
                         {
-                            req.i_batch = batch.n_tokens;
+                            req.i_batch = batch.size();
                             req.i_batch_is_prefill = true;
                         }
-                        common_batch_add(batch, req.prompt_tokens[req.prompt_pos], req.n_past, { req.slot }, is_last);
+                        batch.add(req.prompt_tokens[req.prompt_pos], req.n_past, req.slot, is_last);
                         req.prompt_pos++;
                         req.n_past++;
                     }
@@ -4864,14 +4875,14 @@ static void batch_worker_loop()
                 }
                 else if(req.state == BatchState::GENERATING && req.has_pending)
                 {
-                    req.i_batch = batch.n_tokens;
+                    req.i_batch = batch.size();
                     req.i_batch_is_prefill = false;
-                    common_batch_add(batch, req.pending_token, req.n_past, { req.slot }, true);
+                    batch.add(req.pending_token, req.n_past, req.slot, true);
                     req.n_past++;
                     req.has_pending = false;
                 }
             }
-            if(batch.n_tokens == 0)
+            if(batch.size() == 0)
             {
                 continue;
             }
@@ -4884,7 +4895,7 @@ static void batch_worker_loop()
             }
         }
 
-        int decode_status = llama_decode(llama_ctx_v4, batch);
+        int decode_status = llama_process(llama_ctx_v4, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         auto decode_finish_time = std::chrono::steady_clock::now();
 
         std::lock_guard<std::mutex> lock(batch_mutex);
@@ -4941,7 +4952,6 @@ static void batch_worker_loop()
             req->i_batch = -1;
         }
     }
-    llama_batch_free(batch);
 }
 
 static void batch_start_worker_locked()
