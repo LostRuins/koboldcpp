@@ -818,7 +818,7 @@ namespace kcpp_sd {
         model_info res = {};
         SDVersion loadedsdver = (SDVersion)get_loaded_sd_version(ctx);
         res.is_wan = (loadedsdver == SDVersion::VERSION_WAN2 || loadedsdver == SDVersion::VERSION_WAN2_2_I2V || loadedsdver == SDVersion::VERSION_WAN2_2_TI2V);
-        res.is_qwenimg = (loadedsdver == SDVersion::VERSION_QWEN_IMAGE);
+        res.is_qwenimg = sd_version_is_qwen_image(loadedsdver);
         res.is_chroma = loaded_model_is_chroma(ctx);
         res.is_kontext = (loadedsdver==SDVersion::VERSION_FLUX && !res.is_chroma);
         res.is_flux2 = (loadedsdver == SDVersion::VERSION_FLUX2 || loadedsdver == SDVersion::VERSION_FLUX2_KLEIN);
@@ -831,7 +831,7 @@ namespace kcpp_sd {
         res.is_ltx = sd_version_is_ltxav(loadedsdver);
         res.is_minimaxh3 = sd_version_is_minimax_h3(loadedsdver);
         res.is_boogu = sd_version_is_boogu_image(loadedsdver);
-        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg(loadedsdver) || sd_version_is_pid(loadedsdver);
+        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg(loadedsdver) || sd_version_is_pid(loadedsdver) || res.is_qwenimg;
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
         res.spatial_multiple = get_spatial_multiple(ctx);
         return res;
