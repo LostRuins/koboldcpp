@@ -5322,7 +5322,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
         is_chat_completions_path = (clean_path.endswith('/v1/chat/completions') or clean_path=='/chat/completions')
 
         #any requests to the following endpoints is capable of waking the server
-        wake_requests = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/extra/transcribe","/v1/audio/transcriptions","/api/extra/tts","/v1/audio/speech","/api/extra/embeddings","/v1/embeddings","/api/embed","/api/extra/music/prepare","/api/extra/music/generate","/images/generations","/v1/images/generations","/images/edits","/v1/images/edits","/sdapi/v1/txt2img","/sdapi/v1/img2img","/sdapi/v1/upscale"]
+        wake_requests = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/extra/transcribe","/v1/audio/transcriptions","/api/extra/tts","/v1/audio/speech","/api/extra/embeddings","/v1/embeddings","/api/embed","/api/extra/music/prepare","/api/extra/music/generate","/images/generations","/v1/images/generations","/images/edits","/v1/images/edits","/sdapi/v1/txt2img","/sdapi/v1/img2img","/sdapi/v1/upscale","/api/generate", "/api/chat", "/v1/messages", "/messages"]
         is_wake_request = clean_path in wake_requests
 
         autoswapEnabled = global_memory["autoswapmode"] is not None and global_memory["autoswapmode"]
@@ -5371,7 +5371,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                             return
                         time.sleep(0.1)
             if autoswapEnabled and not model_switch_pass:
-                textReqs = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses"]
+                textReqs = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/generate", "/api/chat", "/v1/messages", "/messages"]
                 sttReqs = ["/api/extra/transcribe","/v1/audio/transcriptions"]
                 ttsReqs = ["/api/extra/tts", "/v1/audio/speech"]
                 embedReqs = ["/api/extra/embeddings", "/v1/embeddings", "/api/embed"]
@@ -5514,6 +5514,22 @@ class KcppProxyHttpServer(http.server.HTTPServer):
         finally:
             self.shutdown_request(request)
 
+def create_server_ssl_context(ssl_config):
+    if not ssl_config:
+        return None
+    import ssl
+    try:
+        if len(ssl_config) != 2 or not all(isinstance(path, str) for path in ssl_config):
+            raise ValueError("Provide a certificate file and a key file.")
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        # Do not prompt for an encrypted key in a background server process.
+        context.load_cert_chain(certfile=os.path.abspath(ssl_config[0]),
+                                keyfile=os.path.abspath(ssl_config[1]), password=lambda: "")
+        return context
+    except (OSError, ValueError, TypeError) as exc:
+        raise SystemExit(f"Your SSL configuration is INVALID: {exc}") from None
+
+
 def run_router_proxy(proxy_port, upstream_port):
     server = KcppProxyHttpServer(("", proxy_port), KcppProxyHandler, upstream_port)
     global args, sslvalid
@@ -5521,10 +5537,7 @@ def run_router_proxy(proxy_port, upstream_port):
         import ssl
         if args.nocertify:
             ssl._create_default_https_context = ssl._create_unverified_context
-        certpath = os.path.abspath(args.ssl[0])
-        keypath = os.path.abspath(args.ssl[1])
-        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        context.load_cert_chain(certfile=certpath, keyfile=keypath)
+        context = create_server_ssl_context(args.ssl)
         server.socket = context.wrap_socket(server.socket, server_side=True)
         print(f"KoboldCpp Proxy starting on port {proxy_port} (SSL/HTTPS), forwarding to port {upstream_port}",flush=True)
     else:
@@ -8475,10 +8488,7 @@ def RunServerMultiThreaded(addr, port, server_handler, on_ready=None):
 
     if args.ssl and sslvalid and not args.routermode: #if routermode, ssl is already offloaded
         import ssl
-        certpath = os.path.abspath(args.ssl[0])
-        keypath = os.path.abspath(args.ssl[1])
-        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        context.load_cert_chain(certfile=certpath, keyfile=keypath)
+        context = create_server_ssl_context(args.ssl)
         ipv4_sock = context.wrap_socket(ipv4_sock, server_side=True)
         if ipv6_sock:
             ipv6_sock = context.wrap_socket(ipv6_sock, server_side=True)
@@ -11692,6 +11702,9 @@ def downloader_internal(input_url, output_filename, capture_output, min_file_siz
         "--file-allocation=none", "--max-tries=3", "--retry-wait=5",
         "-d", out_dir, "-o", out_name, download_url
     ]
+    skip_cert_check = bool(args.nocertify)
+    if skip_cert_check:
+        aria2_args.insert(0, "--check-certificate=false")
     for aria2_exe, aria2_name in aria2_candidates:
         if dl_success:
             break
@@ -11704,7 +11717,7 @@ def downloader_internal(input_url, output_filename, capture_output, min_file_siz
 
     try:
         if not dl_success and shutil.which("curl") is not None:
-            rc = subprocess.run(["curl", "-fLo", output_filename, download_url],
+            rc = subprocess.run(["curl", *(["--insecure"] if skip_cert_check else []), "-fLo", output_filename, download_url],
                 capture_output=capture_output, text=True, check=True, encoding="utf-8")
             dl_success = (rc.returncode == 0 and os.path.exists(output_filename) and os.path.getsize(output_filename) > min_file_size)
     except subprocess.CalledProcessError as e:
@@ -11712,7 +11725,7 @@ def downloader_internal(input_url, output_filename, capture_output, min_file_siz
 
     try:
         if not dl_success and shutil.which("wget") is not None:
-            rc = subprocess.run(["wget", "-O", output_filename, download_url],
+            rc = subprocess.run(["wget", *(["--no-check-certificate"] if skip_cert_check else []), "-O", output_filename, download_url],
                 capture_output=capture_output, text=True, check=True, encoding="utf-8")
             dl_success = (rc.returncode == 0 and os.path.exists(output_filename) and os.path.getsize(output_filename) > min_file_size)
     except subprocess.CalledProcessError as e:
@@ -12180,9 +12193,8 @@ def main(launch_args, default_args):
 
     apply_agent_launch_safeguards(args)
 
-    if args.ssl: #need to duplicate here for the tunnel
-        if len(args.ssl)==2 and isinstance(args.ssl[0], str) and os.path.exists(args.ssl[0]) and isinstance(args.ssl[1], str) and os.path.exists(args.ssl[1]):
-            sslvalid = True
+    # Validate before starting the router or tunnel, including PEM parsing/key matching.
+    sslvalid = create_server_ssl_context(args.ssl) is not None
 
     args.proxy_port = None #normally unused
     if args.autoswapmode:
@@ -13353,12 +13365,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         print(f"Enabled APIs: {' '.join(apimlist)}")
 
     global sslvalid
-    if args.ssl:
-        if len(args.ssl)==2 and isinstance(args.ssl[0], str) and os.path.exists(args.ssl[0]) and isinstance(args.ssl[1], str) and os.path.exists(args.ssl[1]):
-            sslvalid = True
-            print("SSL configuration is valid and will be used.")
-        else:
-            print("Your SSL configuration is INVALID. SSL will not be used.")
+    sslvalid = create_server_ssl_context(args.ssl) is not None
+    if sslvalid:
+        print("SSL configuration is valid and will be used.")
     endpoint_url = ""
     remote_url = ""
     httpsaffix = ("https" if sslvalid else "http")
