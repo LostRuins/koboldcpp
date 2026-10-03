@@ -105,7 +105,25 @@ std::string convert_open_clip_to_hf_clip_name(std::string name) {
 
 std::string convert_llada2_moe_te_name(std::string name);
 
-std::string convert_cond_stage_model_name(std::string name, std::string prefix) {
+static std::string convert_ming_image_te_name(std::string name) {
+    if (name == "llm.query_tokens") {
+        name = "llm.query_tokens_dict.16x16";
+    }
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {"thinker.", "backbone."},
+        {"attention.", "self_attn."},
+        {"self_attn.dense.", "self_attn.o_proj."},
+        {"gate.proj.", "gate."},
+    };
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
+std::string convert_cond_stage_model_name(std::string name, std::string prefix, SDVersion version) {
+    if (version == VERSION_MING_IMAGE && prefix == "text_encoders." && starts_with(name, "llm.")) {
+        name = convert_ming_image_te_name(name);
+    }
+
     static const std::vector<std::pair<std::string, std::string>> clip_name_map{
         {"transformer.text_projection.weight", "transformer.text_model.text_projection"},
         {"model.text_projection.weight", "transformer.text_model.text_projection"},
@@ -932,6 +950,79 @@ static bool is_diffusers_controlnet_name(const std::string& name) {
     return false;
 }
 
+static std::string convert_diffusers_dit_to_original_pixart(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> prefix_map = {
+        {"pos_embed.proj.", "x_embedder.proj."},
+        {"adaln_single.emb.timestep_embedder.linear_1.", "t_embedder.mlp.0."},
+        {"adaln_single.emb.timestep_embedder.linear_2.", "t_embedder.mlp.2."},
+        {"adaln_single.emb.resolution_embedder.linear_1.", "csize_embedder.mlp.0."},
+        {"adaln_single.emb.resolution_embedder.linear_2.", "csize_embedder.mlp.2."},
+        {"adaln_single.emb.aspect_ratio_embedder.linear_1.", "ar_embedder.mlp.0."},
+        {"adaln_single.emb.aspect_ratio_embedder.linear_2.", "ar_embedder.mlp.2."},
+        {"adaln_single.linear.", "t_block.1."},
+        {"caption_projection.linear_1.", "y_embedder.y_proj.fc1."},
+        {"caption_projection.linear_2.", "y_embedder.y_proj.fc2."},
+        {"proj_out.", "final_layer.linear."},
+    };
+    for (const auto& entry : prefix_map) {
+        if (starts_with(name, entry.first)) {
+            return entry.second + name.substr(entry.first.size());
+        }
+    }
+    if (name == "scale_shift_table") {
+        return "final_layer.scale_shift_table";
+    }
+    const std::string block_prefix = "transformer_blocks.";
+    if (!starts_with(name, block_prefix)) {
+        return name;
+    }
+    const size_t block_end = name.find('.', block_prefix.size());
+    if (block_end == std::string::npos) {
+        return name;
+    }
+    const std::string prefix                                                = "blocks." + name.substr(block_prefix.size(), block_end - block_prefix.size()) + ".";
+    name                                                                    = name.substr(block_end + 1);
+    static const std::vector<std::pair<std::string, std::string>> block_map = {
+        {"attn1.to_q.", "attn.qkv."},
+        {"attn1.to_out.0.", "attn.proj."},
+        {"attn2.to_q.", "cross_attn.q_linear."},
+        {"attn2.to_k.", "cross_attn.kv_linear."},
+        {"attn2.to_out.0.", "cross_attn.proj."},
+        {"ff.net.0.proj.", "mlp.fc1."},
+        {"ff.net.2.", "mlp.fc2."},
+    };
+    for (const auto& entry : block_map) {
+        if (starts_with(name, entry.first)) {
+            return prefix + entry.second + name.substr(entry.first.size());
+        }
+    }
+    static const std::vector<std::pair<std::string, std::string>> part_map = {
+        {"attn1.to_k.weight", "attn.qkv.weight.1"},
+        {"attn1.to_k.bias", "attn.qkv.bias.1"},
+        {"attn1.to_v.weight", "attn.qkv.weight.2"},
+        {"attn1.to_v.bias", "attn.qkv.bias.2"},
+        {"attn2.to_v.weight", "cross_attn.kv_linear.weight.1"},
+        {"attn2.to_v.bias", "cross_attn.kv_linear.bias.1"},
+    };
+    for (const auto& entry : part_map) {
+        if (name == entry.first || starts_with(name, entry.first + ".")) {
+            return prefix + entry.second + name.substr(entry.first.size());
+        }
+    }
+    return prefix + name;
+}
+
+static std::string convert_ming_image_dit_name(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {"all_x_embedder.2-1.", "x_embedder."},
+        {"all_final_layer.2-1.", "final_layer."},
+        {"attention.norm_q.", "attention.q_norm."},
+        {"attention.norm_k.", "attention.k_norm."},
+    };
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
 std::string convert_diffusion_model_name(std::string name, std::string prefix, SDVersion version) {
     if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
         name = convert_diffusers_unet_to_original_sd1(name);
@@ -943,6 +1034,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_hunyuan_video(version)) {
         name = convert_hunyuan_video_to_original_flux(name);
+    } else if (version == VERSION_MING_IMAGE) {
+        name = convert_ming_image_dit_name(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
     } else if (sd_version_is_llada_image(version)) {
@@ -951,6 +1044,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_other_dit_to_original_anima(name);
     } else if (sd_version_is_krea2(version)) {
         name = convert_diffusers_dit_to_original_krea2(name);
+    } else if (sd_version_is_pixart(version)) {
+        name = convert_diffusers_dit_to_original_pixart(name);
     }
     return name;
 }
@@ -1604,7 +1699,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
     {
         for (const auto& prefix : cond_stage_model_prefix_vec) {
             if (starts_with(name, prefix)) {
-                name = convert_cond_stage_model_name(name.substr(prefix.size()), prefix);
+                name = convert_cond_stage_model_name(name.substr(prefix.size()), prefix, version);
                 name = prefix + name;
                 break;
             }

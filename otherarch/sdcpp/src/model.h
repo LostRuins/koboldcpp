@@ -62,6 +62,8 @@ enum SDVersion {
     VERSION_SENSENOVA_U1_5,
     VERSION_LLADA_IMAGE,
     VERSION_ESRGAN,
+    VERSION_PIXART,
+    VERSION_MING_IMAGE,
     VERSION_COUNT,
 };
 
@@ -252,6 +254,10 @@ static inline bool sd_version_is_sensenova_u1(SDVersion version) {
     return version == VERSION_SENSENOVA_U1_5;
 }
 
+static inline bool sd_version_is_pixart(SDVersion version) {
+    return version == VERSION_PIXART;
+}
+
 static inline bool sd_version_supports_video_generation(SDVersion version) {
     return version == VERSION_SVD || sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_lingbot_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version);
 }
@@ -275,7 +281,7 @@ static inline bool sd_version_uses_flux2_vae(SDVersion version) {
 }
 
 static inline bool sd_version_uses_wan_vae(SDVersion version) {
-    if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_qwen_image(version) || sd_version_is_krea2(version) || sd_version_is_anima(version)) {
+    if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_qwen_image(version) || sd_version_is_krea2(version) || sd_version_is_anima(version) || version == VERSION_MING_IMAGE) {
         return true;
     }
     return false;
@@ -309,6 +315,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
+        version == VERSION_MING_IMAGE ||
         sd_version_is_llada_image(version) ||
         sd_version_is_boogu_image(version) ||
         sd_version_is_ernie_image(version) ||
@@ -320,7 +327,8 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_sefi_image(version) ||
         sd_version_is_krea2(version) ||
         sd_version_is_mage_flow(version) ||
-        sd_version_is_sensenova_u1(version)) {
+        sd_version_is_sensenova_u1(version) ||
+        sd_version_is_pixart(version)) {
         return true;
     }
     return false;

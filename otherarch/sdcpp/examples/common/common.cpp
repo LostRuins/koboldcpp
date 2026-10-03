@@ -1341,7 +1341,7 @@ ArgOptions SDGenerationParams::get_options() {
          &embed_image_metadata},
         {"",
          "--vae-tiling",
-         "process vae in tiles to reduce memory usage",
+         "process vae encode and decode in spatial tiles to reduce memory usage (default: 256x256 image pixels)",
          true,
          &vae_tiling_params.enabled},
         {"",
@@ -1605,12 +1605,12 @@ ArgOptions SDGenerationParams::get_options() {
         size_t x_pos              = tile_size_str.find('x');
         try {
             if (x_pos != std::string::npos) {
-                std::string tile_x_str        = tile_size_str.substr(0, x_pos);
-                std::string tile_y_str        = tile_size_str.substr(x_pos + 1);
-                vae_tiling_params.tile_size_x = std::stoi(tile_x_str);
-                vae_tiling_params.tile_size_y = std::stoi(tile_y_str);
+                std::string tile_w_str        = tile_size_str.substr(0, x_pos);
+                std::string tile_h_str        = tile_size_str.substr(x_pos + 1);
+                vae_tiling_params.tile_size_w = std::stoi(tile_w_str);
+                vae_tiling_params.tile_size_h = std::stoi(tile_h_str);
             } else {
-                vae_tiling_params.tile_size_x = vae_tiling_params.tile_size_y = std::stoi(tile_size_str);
+                vae_tiling_params.tile_size_w = vae_tiling_params.tile_size_h = std::stoi(tile_size_str);
             }
         } catch (const std::invalid_argument&) {
             return -1;
@@ -1628,12 +1628,12 @@ ArgOptions SDGenerationParams::get_options() {
         size_t x_pos             = rel_size_str.find('x');
         try {
             if (x_pos != std::string::npos) {
-                std::string rel_x_str        = rel_size_str.substr(0, x_pos);
-                std::string rel_y_str        = rel_size_str.substr(x_pos + 1);
-                vae_tiling_params.rel_size_x = std::stof(rel_x_str);
-                vae_tiling_params.rel_size_y = std::stof(rel_y_str);
+                std::string rel_w_str        = rel_size_str.substr(0, x_pos);
+                std::string rel_h_str        = rel_size_str.substr(x_pos + 1);
+                vae_tiling_params.rel_size_w = std::stof(rel_w_str);
+                vae_tiling_params.rel_size_h = std::stof(rel_h_str);
             } else {
-                vae_tiling_params.rel_size_x = vae_tiling_params.rel_size_y = std::stof(rel_size_str);
+                vae_tiling_params.rel_size_w = vae_tiling_params.rel_size_h = std::stof(rel_size_str);
             }
         } catch (const std::invalid_argument&) {
             return -1;
@@ -1763,11 +1763,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_scm_policy_arg},
         {"",
          "--vae-tile-size",
-         "tile size for vae tiling in latent units, not image pixels, format [X]x[Y] (default: 32x32)",
+         "tile size for vae encode and decode in image pixels, format [W]x[H] or [S] (default: 256x256; requires --vae-tiling)",
          on_tile_size_arg},
         {"",
          "--vae-relative-tile-size",
-         "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
+         "relative tile size for vae encode and decode, format [W]x[H] or [S]: <=1 is a dimension fraction, >1 a target tile count (overrides --vae-tile-size; requires --vae-tiling)",
          on_relative_tile_size_arg},
         {"",
          "--prompt-file",
@@ -2224,20 +2224,20 @@ bool SDGenerationParams::from_json_str(
         if (tiling_json.contains("temporal_tiling") && tiling_json["temporal_tiling"].is_boolean()) {
             vae_tiling_params.temporal_tiling = tiling_json["temporal_tiling"];
         }
-        if (tiling_json.contains("tile_size_x") && tiling_json["tile_size_x"].is_number_integer()) {
-            vae_tiling_params.tile_size_x = tiling_json["tile_size_x"];
+        if (tiling_json.contains("tile_size_w") && tiling_json["tile_size_w"].is_number_integer()) {
+            vae_tiling_params.tile_size_w = tiling_json["tile_size_w"];
         }
-        if (tiling_json.contains("tile_size_y") && tiling_json["tile_size_y"].is_number_integer()) {
-            vae_tiling_params.tile_size_y = tiling_json["tile_size_y"];
+        if (tiling_json.contains("tile_size_h") && tiling_json["tile_size_h"].is_number_integer()) {
+            vae_tiling_params.tile_size_h = tiling_json["tile_size_h"];
         }
         if (tiling_json.contains("target_overlap") && tiling_json["target_overlap"].is_number()) {
             vae_tiling_params.target_overlap = tiling_json["target_overlap"];
         }
-        if (tiling_json.contains("rel_size_x") && tiling_json["rel_size_x"].is_number()) {
-            vae_tiling_params.rel_size_x = tiling_json["rel_size_x"];
+        if (tiling_json.contains("rel_size_w") && tiling_json["rel_size_w"].is_number()) {
+            vae_tiling_params.rel_size_w = tiling_json["rel_size_w"];
         }
-        if (tiling_json.contains("rel_size_y") && tiling_json["rel_size_y"].is_number()) {
-            vae_tiling_params.rel_size_y = tiling_json["rel_size_y"];
+        if (tiling_json.contains("rel_size_h") && tiling_json["rel_size_h"].is_number()) {
+            vae_tiling_params.rel_size_h = tiling_json["rel_size_h"];
         }
         if (tiling_json.contains("extra_tiling_args") && tiling_json["extra_tiling_args"].is_string()) {
             extra_tiling_args = tiling_json["extra_tiling_args"].get<std::string>();
@@ -2934,11 +2934,11 @@ std::string SDGenerationParams::to_string() const {
         << "  vae_tiling_params: { "
         << vae_tiling_params.enabled << ", "
         << vae_tiling_params.temporal_tiling << ", "
-        << vae_tiling_params.tile_size_x << ", "
-        << vae_tiling_params.tile_size_y << ", "
+        << vae_tiling_params.tile_size_w << ", "
+        << vae_tiling_params.tile_size_h << ", "
         << vae_tiling_params.target_overlap << ", "
-        << vae_tiling_params.rel_size_x << ", "
-        << vae_tiling_params.rel_size_y << ", "
+        << vae_tiling_params.rel_size_w << ", "
+        << vae_tiling_params.rel_size_h << ", "
         << "\"" << extra_tiling_args << "\" },\n"
         << "}";
     return oss.str();
@@ -3140,11 +3140,11 @@ std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
         root["vae_tiling"] = {
             {"enabled", gen_params.vae_tiling_params.enabled},
             {"temporal_tiling", gen_params.vae_tiling_params.temporal_tiling},
-            {"tile_size_x", gen_params.vae_tiling_params.tile_size_x},
-            {"tile_size_y", gen_params.vae_tiling_params.tile_size_y},
+            {"tile_size_w", gen_params.vae_tiling_params.tile_size_w},
+            {"tile_size_h", gen_params.vae_tiling_params.tile_size_h},
             {"target_overlap", gen_params.vae_tiling_params.target_overlap},
-            {"rel_size_x", gen_params.vae_tiling_params.rel_size_x},
-            {"rel_size_y", gen_params.vae_tiling_params.rel_size_y},
+            {"rel_size_w", gen_params.vae_tiling_params.rel_size_w},
+            {"rel_size_h", gen_params.vae_tiling_params.rel_size_h},
             {"extra_tiling_args", gen_params.extra_tiling_args},
         };
     }

@@ -1,6 +1,9 @@
 #ifndef __SD_MODEL_VAE_VAE_HPP__
 #define __SD_MODEL_VAE_VAE_HPP__
 
+#include <cmath>
+#include <limits>
+
 #include "core/tensor_ggml.hpp"
 #include "model/common/block.hpp"
 #include "model/vae/vae_tiling.hpp"
@@ -117,8 +120,8 @@ protected:
                                     int output_width,
                                     int output_height,
                                     int scale,
-                                    int p_tile_size_x,
-                                    int p_tile_size_y,
+                                    int p_tile_size_w,
+                                    int p_tile_size_h,
                                     float tile_overlap_factor,
                                     bool circular_x,
                                     bool circular_y,
@@ -138,17 +141,28 @@ protected:
             }
             return output_tile;
         };
-        return ::process_tiles_2d(input,
-                                  output_width,
-                                  output_height,
-                                  scale,
-                                  p_tile_size_x,
-                                  p_tile_size_y,
-                                  tile_overlap_factor,
-                                  circular_x,
-                                  circular_y,
-                                  on_processing,
-                                  silent);
+        const bool original_circular_x = circular_x_enabled;
+        const bool original_circular_y = circular_y_enabled;
+        const int64_t latent_width     = decode_graph ? input.shape()[0] : output_width;
+        const int64_t latent_height    = decode_graph ? input.shape()[1] : output_height;
+        circular_x                     = circular_x || original_circular_x;
+        circular_y                     = circular_y || original_circular_y;
+        // Full-width axes wrap in convolutions; split axes wrap between tiles.
+        set_circular_axes(circular_x && p_tile_size_w >= latent_width,
+                          circular_y && p_tile_size_h >= latent_height);
+        auto output = ::process_tiles_2d(input,
+                                         output_width,
+                                         output_height,
+                                         scale,
+                                         p_tile_size_w,
+                                         p_tile_size_h,
+                                         tile_overlap_factor,
+                                         circular_x && p_tile_size_w < latent_width,
+                                         circular_y && p_tile_size_h < latent_height,
+                                         on_processing,
+                                         silent);
+        set_circular_axes(original_circular_x, original_circular_y);
+        return output;
     }
 
 public:
@@ -178,33 +192,48 @@ public:
         return supports_temporal_tiling(VAETemporalDirection::DECODE);
     }
 
-    void get_tile_sizes(int& tile_size_x,
-                        int& tile_size_y,
+    virtual sd_tiling_params_t resolve_tiling_params(sd_tiling_params_t params) const {
+        return params;
+    }
+
+    bool get_tile_sizes(int& tile_size_w,
+                        int& tile_size_h,
                         float& tile_overlap,
                         const sd_tiling_params_t& params,
-                        int64_t latent_x,
-                        int64_t latent_y,
-                        float encoding_factor = 1.0f) {
-        tile_overlap       = std::max(std::min(params.target_overlap, 0.5f), 0.0f);
-        auto get_tile_size = [&](int requested_size, float factor, int64_t latent_size) {
-            const int default_tile_size  = 32;
-            const int min_tile_dimension = 4;
-            int tile_size                = default_tile_size;
-            // factor <= 1 means simple fraction of the latent dimension
-            // factor > 1 means number of tiles across that dimension
-            if (factor > 0.f) {
-                if (factor > 1.0)
-                    factor = 1 / (factor - factor * tile_overlap + tile_overlap);
-                tile_size = static_cast<int>(std::round(latent_size * factor));
-            } else if (requested_size >= min_tile_dimension) {
-                tile_size = requested_size;
+                        int64_t latent_w,
+                        int64_t latent_h) {
+        const auto tiling = resolve_tiling_params(params);
+        if (latent_w <= 0 || latent_h <= 0 ||
+            latent_w > std::numeric_limits<int>::max() || latent_h > std::numeric_limits<int>::max() ||
+            !std::isfinite(tiling.target_overlap)) {
+            LOG_ERROR("invalid VAE tiling dimensions or overlap");
+            return false;
+        }
+        const int scale_factor = get_scale_factor();
+        tile_overlap           = std::max(std::min(tiling.target_overlap, 0.5f), 0.0f);
+        auto get_tile_size     = [&](int requested_size, double factor, int64_t latent_size, int& tile_size) {
+            if (requested_size < 0 || !std::isfinite(factor) || factor < 0.0) {
+                LOG_ERROR("VAE tile sizes and relative sizes must be finite and non-negative");
+                return false;
             }
-            tile_size = static_cast<int>(tile_size * encoding_factor);
-            return std::max(std::min(tile_size, static_cast<int>(latent_size)), min_tile_dimension);
+            const int min_tile_dimension = std::min(4, static_cast<int>(latent_size));
+            double size                  = (requested_size > 0 ? requested_size : 256) / scale_factor;
+            if (factor > 0.0) {
+                if (factor > 1.0) {
+                    factor = 1.0 / (factor * (1.0 - tile_overlap) + tile_overlap);
+                }
+                size = std::floor(static_cast<double>(latent_size) * factor);
+            }
+            if (size < min_tile_dimension && (requested_size > 0 || factor > 0.0)) {
+                LOG_ERROR("VAE tile size must be at least %d image pixels on this axis", min_tile_dimension * scale_factor);
+                return false;
+            }
+            tile_size = static_cast<int>(std::min(static_cast<double>(latent_size), std::max<double>(min_tile_dimension, size)));
+            return true;
         };
 
-        tile_size_x = get_tile_size(params.tile_size_x, params.rel_size_x, latent_x);
-        tile_size_y = get_tile_size(params.tile_size_y, params.rel_size_y, latent_y);
+        return get_tile_size(tiling.tile_size_w, tiling.rel_size_w, latent_w, tile_size_w) &&
+               get_tile_size(tiling.tile_size_h, tiling.rel_size_h, latent_h, tile_size_h);
     }
 
     virtual sd::Tensor<float> encode(int n_threads,
@@ -213,6 +242,7 @@ public:
                                      bool circular_x = false,
                                      bool circular_y = false) {
         int64_t t0              = ggml_time_ms();
+        tiling_params           = resolve_tiling_params(tiling_params);
         sd::Tensor<float> input = x;
         sd::Tensor<float> output;
         if (scale_input) {
@@ -224,21 +254,19 @@ public:
             int64_t W              = input.shape()[0] / scale_factor;
             int64_t H              = input.shape()[1] / scale_factor;
             float tile_overlap;
-            int tile_size_x, tile_size_y;
-            // Image VAE encode is more sensitive to tile boundary context than decode.
-            // Keep the smaller legacy factor for video VAEs, but default image encode
-            // tiles to 64 latent pixels so a 512px SD image is encoded as one tile.
-            const float encode_tile_factor = sd_version_is_minimax_h3(version) ? 1.f : (sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version)) ? 1.30539f
-                                                                                                                                                                                            : 2.0f;
-            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, tiling_params, W, H, encode_tile_factor);
-            LOG_VERBOSE("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+            int tile_size_w, tile_size_h;
+            if (!get_tile_sizes(tile_size_w, tile_size_h, tile_overlap, tiling_params, W, H)) {
+                return {};
+            }
+            LOG_VERBOSE("VAE encode tile size: %dx%d pixels (%dx%d latent)",
+                        tile_size_w * scale_factor, tile_size_h * scale_factor, tile_size_w, tile_size_h);
             output = tiled_compute(input,
                                    n_threads,
                                    static_cast<int>(W),
                                    static_cast<int>(H),
                                    scale_factor,
-                                   tile_size_x,
-                                   tile_size_y,
+                                   tile_size_w,
+                                   tile_size_h,
                                    tile_overlap,
                                    circular_x,
                                    circular_y,
@@ -271,6 +299,7 @@ public:
                                      bool circular_y   = false,
                                      bool silent       = false) {
         int64_t t0              = ggml_time_ms();
+        tiling_params           = resolve_tiling_params(tiling_params);
         sd::Tensor<float> input = x;
         sd::Tensor<float> output;
 
@@ -279,10 +308,13 @@ public:
             int64_t W              = input.shape()[0] * scale_factor;
             int64_t H              = input.shape()[1] * scale_factor;
             float tile_overlap;
-            int tile_size_x, tile_size_y;
-            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, tiling_params, input.shape()[0], input.shape()[1]);
+            int tile_size_w, tile_size_h;
+            if (!get_tile_sizes(tile_size_w, tile_size_h, tile_overlap, tiling_params, input.shape()[0], input.shape()[1])) {
+                return {};
+            }
             if (!silent) {
-                LOG_VERBOSE("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+                LOG_VERBOSE("VAE decode tile size: %dx%d pixels (%dx%d latent)",
+                            tile_size_w * scale_factor, tile_size_h * scale_factor, tile_size_w, tile_size_h);
             }
             output = tiled_compute(
                 input,
@@ -290,8 +322,8 @@ public:
                 static_cast<int>(W),
                 static_cast<int>(H),
                 scale_factor,
-                tile_size_x,
-                tile_size_y,
+                tile_size_w,
+                tile_size_h,
                 tile_overlap,
                 circular_x,
                 circular_y,
