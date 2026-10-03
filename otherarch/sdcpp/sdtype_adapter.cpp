@@ -1725,6 +1725,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             free(input_audio.data);
             input_audio.data = nullptr;
         }
+        if (info.is_qwenimg && params.ref_images_count > 0) {
+            printf("\nKCPP SD: If using Qwen Image 2.1, editing requires Qwen3-VL vision mmproj!\n");
+        }
         return sd_generation.error("KCPP SD generate failed!");
     }
 
