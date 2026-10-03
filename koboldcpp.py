@@ -2238,8 +2238,6 @@ def coerce_ban_list(value):
 
 def generate(genparams, stream_flag=False):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey
-    default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
-    adapter_obj = genparams.get('adapter', default_adapter)
 
     prompt = genparams.get('prompt', "")
     memory = genparams.get('memory', "")
@@ -2249,15 +2247,15 @@ def generate(genparams, stream_flag=False):
     audio = genparams.get('audio', [])
     max_context_length = tryparseint(genparams.get('max_context_length', maxctx),maxctx)
     max_length = tryparseint(genparams.get('max_length', args.defaultgenamt),args.defaultgenamt)
-    temperature = tryparsefloat(genparams.get('temperature', adapter_obj.get("temperature", 0.7)),0.7)
-    top_k = tryparseint(genparams.get('top_k', adapter_obj.get("top_k", 100)),100)
+    temperature = tryparsefloat(genparams.get('temperature', 0.7),0.7)
+    top_k = tryparseint(genparams.get('top_k', 100),100)
     top_a = tryparsefloat(genparams.get('top_a', 0.0),0.0)
-    top_p = tryparsefloat(genparams.get('top_p', adapter_obj.get("top_p", 0.9)),0.9)
-    min_p = tryparsefloat(genparams.get('min_p', adapter_obj.get("min_p", 0.0)),0.0)
+    top_p = tryparsefloat(genparams.get('top_p', 0.9),0.9)
+    min_p = tryparsefloat(genparams.get('min_p', 0.0),0.0)
     typical_p = tryparsefloat(genparams.get('typical', 1.0),1.0)
     tfs = tryparsefloat(genparams.get('tfs', 1.0),1.0)
     nsigma = tryparsefloat(genparams.get('nsigma', 0.0),0.0)
-    rep_pen = tryparsefloat(genparams.get('rep_pen', adapter_obj.get("rep_pen", 1.0)),1.0)
+    rep_pen = tryparsefloat(genparams.get('rep_pen', 1.0),1.0)
     rep_pen_range = tryparseint(genparams.get('rep_pen_range', 320),320)
     rep_pen_slope = tryparsefloat(genparams.get('rep_pen_slope', 1.0),1.0)
     presence_penalty = tryparsefloat(genparams.get('presence_penalty', 0.0),0.0)
@@ -3004,13 +3002,11 @@ def sd_generate(genparams):
 
     job_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
-    default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
-    adapter_obj = genparams.get('adapter', default_adapter)
-    forced_negprompt = adapter_obj.get("add_sd_negative_prompt", "")
-    forced_posprompt = adapter_obj.get("add_sd_prompt", "")
-    forced_steplimit = tryparseint(adapter_obj.get("add_sd_step_limit", genparams.get("add_sd_step_limit",80)),80)
-    forced_maxcfg = tryparsefloat(adapter_obj.get("add_sd_cfg_limit", genparams.get("add_sd_cfg_limit",25)),25)
-    allow_remove_limits = tryparseint(adapter_obj.get("remove_limits", genparams.get("remove_limits",0)),0)
+    forced_negprompt = genparams.get("add_sd_negative_prompt", "")
+    forced_posprompt = genparams.get("add_sd_prompt", "")
+    forced_steplimit = tryparseint(genparams.get("add_sd_step_limit",80),80)
+    forced_maxcfg = tryparsefloat(genparams.get("add_sd_cfg_limit",25),25)
+    allow_remove_limits = tryparseint(genparams.get("remove_limits",0),0)
 
     prompt = genparams.get("prompt", "high quality")
     negative_prompt = genparams.get("negative_prompt", "")
@@ -3122,8 +3118,8 @@ def sd_generate(genparams):
     inputs.video_output_type = video_output_type
     inputs.remove_limits = allow_remove_limits
     inputs.ref_image_args = ref_image_args.encode("UTF-8")
-    inputs.circular_x = tryparseint(adapter_obj.get("circular_x", genparams.get("circular_x",0)),0)
-    inputs.circular_y = tryparseint(adapter_obj.get("circular_y", genparams.get("circular_y",0)),0)
+    inputs.circular_x = tryparseint(genparams.get("circular_x",0),0)
+    inputs.circular_y = tryparseint(genparams.get("circular_y",0),0)
     inputs.cache_mode = cache_mode.encode("UTF-8")
     inputs.cache_options = cache_options.encode("UTF-8")
     inputs.upscale = (True if tryparseint(genparams.get("enable_hr", 0),0) else False)
@@ -4701,7 +4697,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
     elif api_format==3 or api_format==4 or api_format==7:
         default_adapter = {} if chatcompl_adapter is None else chatcompl_adapter
         adapter_obj = genparams.get('adapter', default_adapter)
-        default_max_tok = (adapter_obj.get("max_length", args.defaultgenamt) if (api_format==4 or api_format==7) else args.defaultgenamt)
+        default_max_tok = (genparams.get("max_length", args.defaultgenamt) if (api_format==4 or api_format==7) else args.defaultgenamt)
         oaiml = tryparseint(genparams.get('max_tokens', genparams.get('max_completion_tokens', default_max_tok)),default_max_tok)
         genparams["max_length"] = genparams.get('max_length', oaiml)
         if genparams["max_length"] <= 0:
@@ -4793,7 +4789,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     genparams["using_openai_tools"] = True
                     if api_format == 4 and args.jinja_tools:
                         # Default Jinja tool requests to 0.5 and cap their temperature at 1.0.
-                        genparams["temperature"] = min(tryparsefloat(genparams.get("temperature", adapter_obj.get("temperature", 0.5)), 0.5), 1.0)
+                        genparams["temperature"] = min(tryparsefloat(genparams.get("temperature", 0.5), 0.5), 1.0)
                 # handle media
                 images_added, audio_added = sweep_media_from_messages(messages_array)
             else:
