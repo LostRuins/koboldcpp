@@ -556,12 +556,18 @@ namespace MiniMaxH3VAE {
                                    tensor.shape()[3]});
         }
 
-        static sd_tiling_params_t h3_tiling(sd_tiling_params_t params) {
+        sd_tiling_params_t resolve_tiling_params(sd_tiling_params_t params) const override {
+            if (!params.enabled) {
+                params.target_overlap = 0.25f;
+            }
+            if (params.tile_size_w == 0 && params.rel_size_w == 0.f) {
+                params.tile_size_w = 256;
+            }
+            if (params.tile_size_h == 0 && params.rel_size_h == 0.f) {
+                params.tile_size_h = 256;
+            }
             params.enabled         = true;
             params.temporal_tiling = false;
-            params.tile_size_x     = 16;
-            params.tile_size_y     = 16;
-            params.target_overlap  = 0.25f;
             return params;
         }
 
@@ -605,7 +611,7 @@ namespace MiniMaxH3VAE {
                                  bool circular_x = false,
                                  bool circular_y = false) override {
             auto input  = ensure_video_shape(x);
-            auto tiling = h3_tiling(tiling_params);
+            auto tiling = resolve_tiling_params(tiling_params);
             if (input.shape()[2] == 1) {
                 auto encoded = VAE::encode(n_threads, input, tiling, circular_x, circular_y);
                 if (!encoded.empty() && encoded.shape()[2] > 1) {
@@ -646,7 +652,7 @@ namespace MiniMaxH3VAE {
                                  bool circular_y   = false,
                                  bool silent       = false) override {
             auto input  = ensure_video_shape(x);
-            auto tiling = h3_tiling(tiling_params);
+            auto tiling = resolve_tiling_params(tiling_params);
             if (input.shape()[2] == 1) {
                 auto decoded = VAE::decode(n_threads,
                                            input,

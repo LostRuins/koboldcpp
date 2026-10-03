@@ -478,7 +478,12 @@ namespace sd::backend_fit {
         return true;
     }
 
-    bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params, bool prefer_temporal_tiling, ggml_status status) {
+    bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params,
+                                         bool prefer_temporal_tiling,
+                                         ggml_status status,
+                                         int latent_tile_size_w,
+                                         int latent_tile_size_h,
+                                         int scale_factor) {
         // Execution failures can leave the device unusable; tiling only helps with allocation failures.
         if (status != GGML_STATUS_ALLOC_FAILED) {
             return false;
@@ -487,19 +492,31 @@ namespace sd::backend_fit {
         if (prefer_temporal_tiling && !tiling_params.temporal_tiling) {
             tiling_params.temporal_tiling = true;
             retry_mode                    = tiling_params.enabled ? "spatial+temporal" : "temporal";
-        } else if (!tiling_params.enabled) {
-            tiling_params.enabled    = true;
-            tiling_params.rel_size_x = 0.5f;
-            tiling_params.rel_size_y = 0.5f;
-            if (tiling_params.tile_size_x <= 0) {
-                tiling_params.tile_size_x = 256;
-            }
-            if (tiling_params.tile_size_y <= 0) {
-                tiling_params.tile_size_y = 256;
-            }
-            retry_mode = tiling_params.temporal_tiling ? "spatial+temporal" : "spatial";
         } else {
-            return false;
+            if (latent_tile_size_w <= 0 || latent_tile_size_h <= 0 || scale_factor <= 0) {
+                return false;
+            }
+            auto smaller_tile = [&](int size) {
+                int next_size = size / 2;
+                if (!tiling_params.enabled) {
+                    next_size = std::min(next_size, 256 / scale_factor);
+                }
+                return std::min(size, std::max(4, next_size));
+            };
+            const int tile_size_w = smaller_tile(latent_tile_size_w);
+            const int tile_size_h = smaller_tile(latent_tile_size_h);
+            if (tile_size_w == latent_tile_size_w && tile_size_h == latent_tile_size_h) {
+                return false;
+            }
+            tiling_params.enabled     = true;
+            tiling_params.rel_size_w  = 0.0f;
+            tiling_params.rel_size_h  = 0.0f;
+            tiling_params.tile_size_w = tile_size_w * scale_factor;
+            tiling_params.tile_size_h = tile_size_h * scale_factor;
+            retry_mode                = tiling_params.temporal_tiling ? "spatial+temporal" : "spatial";
+            LOG_WARN("Reducing VAE decode tiles from %dx%d to %dx%d image pixels",
+                     latent_tile_size_w * scale_factor, latent_tile_size_h * scale_factor,
+                     tiling_params.tile_size_w, tiling_params.tile_size_h);
         }
 
         LOG_WARN("VAE decode ran out of memory; retrying with %s tiling",

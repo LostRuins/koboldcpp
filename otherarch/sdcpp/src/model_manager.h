@@ -38,8 +38,7 @@ private:
         std::string name;
         ggml_tensor* tensor      = nullptr;
         ModelComponent component = ModelComponent::Count;
-        TensorStorage source;
-        bool has_source                 = false;
+        std::vector<TensorStorage> sources;
         ModelLoader::FileId source_file = 0;
         SDVersion source_version        = VERSION_COUNT;
 
@@ -138,6 +137,8 @@ private:
     bool apply_loras_to_params(const std::vector<TensorState*>& states);
     bool mmap_params(const std::vector<TensorState*>& states,
                      std::vector<ParamsStorageBlock*>& created_storage_blocks);
+    static std::vector<TensorStorage> find_tensor_sources(const TensorState& state, const String2TensorStorage& sources);
+    bool load_tensor_parts(TensorState& state);
     bool can_mmap_storage(const TensorState& state) const;
     bool alloc_params_buffers(const std::vector<TensorState*>& states,
                               std::vector<ParamsStorageBlock*>& created_storage_blocks);

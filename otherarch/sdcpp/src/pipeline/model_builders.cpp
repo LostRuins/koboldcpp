@@ -1,5 +1,6 @@
 #include "model_builders.h"
 
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -23,11 +24,13 @@
 #include "model/diffusion/llada_image.hpp"
 #include "model/diffusion/ltxv.hpp"
 #include "model/diffusion/mage_flow.hpp"
+#include "model/diffusion/ming_image.hpp"
 #include "model/diffusion/minimax_h3.hpp"
 #include "model/diffusion/minit2i.hpp"
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/pid.hpp"
+#include "model/diffusion/pixart.hpp"
 #include "model/diffusion/qwen_image.hpp"
 #include "model/diffusion/qwen_image_2_1.hpp"
 #include "model/diffusion/sensenova_u1.h"
@@ -301,6 +304,19 @@ namespace sd::model_builders {
                                                                            weight_manager,
                                                                            sd_ctx_params->model_args);
             }
+        } else if (version == VERSION_PIXART) {
+            result.conditioner = std::make_shared<T5CLIPEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                                  tensor_storage_map,
+                                                                  true,
+                                                                  0,
+                                                                  false,
+                                                                  weight_manager,
+                                                                  sd_ctx_params->model_args);
+            result.diffusion   = std::make_shared<PixArt::PixArtRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                      tensor_storage_map,
+                                                                      "model.diffusion_model",
+                                                                      weight_manager,
+                                                                      sd_ctx_params->model_args);
         } else if (sd_version_is_mage_flow(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,
@@ -359,6 +375,11 @@ namespace sd::model_builders {
                                                                     tensor_storage_map,
                                                                     "model.diffusion_model",
                                                                     weight_manager);
+        } else if (version == VERSION_MING_IMAGE) {
+            result.conditioner = std::make_shared<MingImageEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                                     tensor_storage_map, weight_manager, tokenizers);
+            result.diffusion   = std::make_shared<MingImage::MingImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                            tensor_storage_map, "model.diffusion_model", weight_manager);
         } else if (sd_version_is_z_image(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,
@@ -562,6 +583,23 @@ namespace sd::model_builders {
                                                              false,
                                                              vae_version,
                                                              weight_manager);
+                if (sd_version_is_pixart(version)) {
+                    // Alpha-512 and Sigma share tensor layouts; Alpha-512 needs an explicit scale override.
+                    if (tensor_storage_map.count("model.diffusion_model.csize_embedder.mlp.0.weight") != 0) {
+                        model->scale_factor = 0.18215f;
+                    }
+                    for (const auto& [key, value] : parse_key_value_args(sd_ctx_params->model_args, "model arg")) {
+                        if (key == "pixart_vae_scale_factor") {
+                            float parsed = 0.f;
+                            if (parse_strict_float(value, parsed) && std::isfinite(parsed) && parsed > 0.f) {
+                                model->scale_factor = parsed;
+                            } else {
+                                LOG_WARN("ignoring invalid PixArt model arg '%s=%s'", key.c_str(), value.c_str());
+                            }
+                        }
+                    }
+                    LOG_VERBOSE("pixart: VAE scale factor = %.5f", model->scale_factor);
+                }
                 if (sd_version_is_sdxl(version) &&
                     (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale || options.external_vae_is_invalid)) {
                     float vae_conv_2d_scale = 1.f / 32.f;

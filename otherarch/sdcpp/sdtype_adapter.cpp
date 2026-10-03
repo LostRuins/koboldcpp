@@ -517,18 +517,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->stacked_id_embeddings_path = photomaker_filename;
     sd_params->lora_map = lora_map;
     sd_params->lora_dynamic = lora_dynamic;
-    //if t5 is set, and model is a gguf, load it as a diffusion model path
-    bool endswithgguf = (sd_params->model_path.rfind(".gguf") == sd_params->model_path.size() - 5);
-    if((sd_params->t5xxl_path!="" || sd_params->clip_l_path!="" || sd_params->clip_g_path!="") && endswithgguf)
-    {
-        //extra check - make sure there is no diffusion model prefix already inside!
-        if(!gguf_tensor_exists(sd_params->model_path,"model.diffusion_model.",false))
-        {
-            printf("\nSwap to Diffusion Model Path:%s",sd_params->model_path.c_str());
-            sd_params->diffusion_model_path = sd_params->model_path;
-            sd_params->model_path = "";
-        }
-    }
 
     sd_ctx_params_t params = {};
     sd_ctx_params_init(&params);
@@ -1255,7 +1243,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     int vae_tile_size = -1;
     if (dotile) {
-        int new_vae_tile_size = cfg_tiled_vae_threshold / info.vae_scale_factor;
+        int new_vae_tile_size = cfg_tiled_vae_threshold;
         new_vae_tile_size = new_vae_tile_size / 2;
         new_vae_tile_size -= new_vae_tile_size % 2;
         if (new_vae_tile_size > vae_tile_size) {
@@ -1485,8 +1473,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.strength = sd_params->strength;
     params.vae_tiling_params.enabled = dotile;
     if (vae_tile_size > 0) {
-        params.vae_tiling_params.tile_size_x = vae_tile_size;
-        params.vae_tiling_params.tile_size_y = vae_tile_size;
+        params.vae_tiling_params.tile_size_w = vae_tile_size;
+        params.vae_tiling_params.tile_size_h = vae_tile_size;
     }
     if(dotile)
     {

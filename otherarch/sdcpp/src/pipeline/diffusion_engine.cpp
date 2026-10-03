@@ -105,6 +105,8 @@ const char* model_version_to_str[] = {
     "SenseNova U1.5",
     "LLaDA-Image",
     "ESRGAN",
+    "PixArt",
+    "Ming-Image",
 };
 
 static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
@@ -121,6 +123,18 @@ void calculate_alphas_cumprod(float* alphas_cumprod,
     for (int i = 0; i < timesteps; i++) {
         float beta = ls_sqrt + amount * ((float)i / (timesteps - 1));
         product *= 1.0f - powf(beta, 2.0f);
+        alphas_cumprod[i] = product;
+    }
+}
+
+void calculate_alphas_cumprod_linear_beta(float* alphas_cumprod,
+                                          float beta_start,
+                                          float beta_end,
+                                          int timesteps = TIMESTEPS) {
+    float product = 1.0f;
+    for (int i = 0; i < timesteps; i++) {
+        float beta = beta_start + (beta_end - beta_start) * ((float)i / (timesteps - 1));
+        product *= 1.0f - beta;
         alphas_cumprod[i] = product;
     }
 }
@@ -666,6 +680,10 @@ void StableDiffusionGGML::refresh_compvis_denoiser_sigmas() {
     std::vector<float> alphas_cumprod(TIMESTEPS);
     if (file_alphas_cumprod.size() == TIMESTEPS) {
         alphas_cumprod = file_alphas_cumprod;
+    } else if (sd_version_is_pixart(version)) {
+        // PixArt checkpoints train with a linear beta schedule (0.0001 -> 0.02)
+        // instead of the scaled_linear schedule used by SD1.x/SDXL.
+        calculate_alphas_cumprod_linear_beta(alphas_cumprod.data(), 0.0001f, 0.02f);
     } else {
         calculate_alphas_cumprod(alphas_cumprod.data());
     }
@@ -704,57 +722,84 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
     auto& use_tae             = configuration.use_tae;
     auto& use_audio_vae       = configuration.use_audio_vae;
 
-    if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
-        LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->model_path)) {
-            LOG_ERROR("init model loader from file failed: '%s'", sd_ctx_params->model_path);
-        }
-    }
-
-    if (strlen(SAFE_STR(sd_ctx_params->diffusion_model_path)) > 0) {
-        LOG_INFO("loading diffusion model from '%s'", sd_ctx_params->diffusion_model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->diffusion_model_path, "model.diffusion_model.")) {
-            LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->diffusion_model_path);
-        }
-    }
-
     {   // begin kcpp replacements
         auto& p = *sd_ctx_params;
-        SDVersion tempver = model_loader.get_sd_version();
-        bool fallback_swapped = false;
+        SDVersion tempver = VERSION_COUNT;
 
         auto path_empty = [](const char* path) -> bool {
             return path == nullptr || *path == '\0';
         };
 
-        // kcpp fallback to separate diffusion model passed as model
-        if (!path_empty(p.model_path) &&
-        path_empty(p.diffusion_model_path) &&
-        (!path_empty(p.t5xxl_path)||!path_empty(p.clip_l_path)))
         {
-            bool endswithsafetensors = ends_with(p.model_path, ".safetensors");
-            if(endswithsafetensors && !model_loader.has_diffusion_model_tensors())
-            {
-                LOG_INFO("SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
-                if (!model_loader.init_from_file(p.model_path, "model.diffusion_model.")) {
-                    LOG_WARN("loading diffusion model from '%s' failed", p.model_path);
-                }
-                fallback_swapped = true;
-                tempver = model_loader.get_sd_version();
-            }
-        }
+            // Use temporary loaders to detect the version, and swap model_path with diffusion_model_path
+            // (note this checks metadata only)
+            // Should handle:
+            // - canonical correct calls: model with prefix, diffusion without prefix, or both
+            // - diffusion with prefix and model without prefix will be swapped
 
-        if (tempver == VERSION_ANIMA && !fallback_swapped &&
-            !path_empty(p.model_path) &&
-            path_empty(p.diffusion_model_path) &&
-            !model_loader.has_diffusion_model_tensors()
-            )
-        {
-            LOG_INFO("Anima: SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
-            if (!model_loader.init_from_file(p.model_path, "model.diffusion_model.")) {
-                LOG_WARN("loading diffusion model from '%s' failed", p.model_path);
+            ModelLoader m_loader, d_loader;
+
+            bool check_diffusion = !path_empty(p.diffusion_model_path);
+            bool swap_models     = false;
+
+            if (!path_empty(p.model_path)) {
+                bool m_status;
+                if ((m_status = m_loader.init_from_file(p.model_path))) {
+                    if (m_loader.has_diffusion_model_tensors()) {
+                        // normal main
+                        check_diffusion = false;
+                        tempver         = m_loader.get_sd_version();
+                    } else if (path_empty(p.diffusion_model_path)) {
+                        // diffusion passed as main
+                        if ((m_status = m_loader.init_from_file(p.model_path, "model.diffusion_model."))) {
+                            swap_models = true;
+                            tempver     = m_loader.get_sd_version();
+                        }
+                    }
+                }
+                if (!m_status) {
+                    LOG_ERROR("couldn't load model file %s", p.model_path);
+                }
             }
-            tempver = model_loader.get_sd_version();
+
+            if (check_diffusion) {
+                // inert on kcpp, can be checked with sdmain
+                bool d_status;
+                // try without the prefix first, since it's easier to check
+                if ((d_status = d_loader.init_from_file(p.diffusion_model_path))) {
+                    if (d_loader.has_diffusion_model_tensors()) {
+                        // diffusion has main
+                        swap_models = true;
+                        tempver     = d_loader.get_sd_version();
+                    } else {
+                        // grab the version from the diffusion model
+                        if ((d_status = d_loader.init_from_file(p.diffusion_model_path, "model.diffusion_model."))) {
+                            tempver = d_loader.get_sd_version();
+                        }
+                    }
+                }
+                if (!d_status) {
+                    LOG_ERROR("couldn't load model file %s", p.diffusion_model_path);
+                }
+            }
+
+            if (tempver == VERSION_COUNT) {
+                printf("Error: image model version detection failed!\n");
+                fflush(stdout);
+                return false;
+            }
+
+            LOG_INFO("Image model detected as %s", model_version_to_str[tempver]);
+            if (swap_models) {
+                if (path_empty(p.model_path)) {
+                    LOG_INFO("  loading %s as main model", p.diffusion_model_path);
+                } else if (path_empty(p.diffusion_model_path)) {
+                    LOG_INFO("  loading %s as diffusion model", p.model_path);
+                } else {
+                    LOG_INFO("  loading %s as main model, %s as diffusion model", p.diffusion_model_path, p.model_path);
+                }
+                std::swap(p.model_path, p.diffusion_model_path);
+            }
         }
 
         std::string kcpp_main_tokenizer;
@@ -778,6 +823,7 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         bool is_ernie = sd_version_is_ernie_image(tempver);
         bool is_longcat = sd_version_is_longcat(tempver);
         bool is_lens = sd_version_is_lens(tempver);
+        bool is_ming = (tempver == VERSION_MING_IMAGE);
         bool is_pid = sd_version_is_pid(tempver);
         bool is_ltx = sd_version_is_ltxav(tempver);
         bool is_ideogram = sd_version_is_ideogram4(tempver);
@@ -786,7 +832,7 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         bool is_sefi = sd_version_is_sefi_image(tempver);
         bool is_mageflow = sd_version_is_mage_flow(tempver);
         bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
-        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid);
+        bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming);
         bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
 
         //kcpp qol fallback: if a llm was loaded as t5 by mistake
@@ -845,11 +891,11 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
             {
                 std::swap(p.uncond_diffusion_model_path, p.clip_g_path);
             }
-            else if ((is_lens || is_pid) && kcpp_main_tokenizer.empty())
+            else if ((is_lens || is_pid || is_ming) && kcpp_main_tokenizer.empty())
             {
-                    // accept a tokenizer.json on clip_2
-                    kcpp_main_tokenizer = p.clip_g_path;
-                    p.clip_g_path = "";
+                // accept a tokenizer.json on clip_2
+                kcpp_main_tokenizer = p.clip_g_path;
+                p.clip_g_path = "";
             }
         }
 
@@ -958,11 +1004,26 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         }
 
         //debug print
-        // printf("\n\nclip_g: %s\nclip_l: %s\nclip_vision: %s\nllm: %s\nllm_vision: %s\nt5xxl: %s\ntaesd: %s\n",
+        // printf("\n\nclip_g: %s\nclip_l: %s\nclip_vision: %s\nllm: %s\nllm_vision: %s\nt5xxl: %s\ntaesd: %s\ntokenizer: %s\n",
         // p.clip_g_path, p.clip_l_path, p.clip_vision_path,
         // p.llm_path, p.llm_vision_path, p.t5xxl_path,
-        // p.taesd_path);
+        // p.taesd_path,
+        // p.tokenizer);
         // end kcpp replacements
+    }
+
+    if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
+        LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
+        if (!model_loader.init_from_file(sd_ctx_params->model_path)) {
+            LOG_ERROR("init model loader from file failed: '%s'", sd_ctx_params->model_path);
+        }
+    }
+
+    if (strlen(SAFE_STR(sd_ctx_params->diffusion_model_path)) > 0) {
+        LOG_INFO("loading diffusion model from '%s'", sd_ctx_params->diffusion_model_path);
+        if (!model_loader.init_from_file(sd_ctx_params->diffusion_model_path, "model.diffusion_model.")) {
+            LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->diffusion_model_path);
+        }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
@@ -1444,6 +1505,11 @@ bool StableDiffusionGGML::validate_and_load_runners() {
     LOG_VERBOSE("validating model metadata");
 
     std::set<std::string> ignore_tensors;
+    if (version == VERSION_MING_IMAGE) {
+        ignore_tensors.insert("text_encoders.llm.vision.");
+        ignore_tensors.insert("text_encoders.llm.linear_proj.");
+        ignore_tensors.insert("text_encoders.llm.backbone.lm_head.");
+    }
     if (use_tae && !tae_preview_only) {
         ignore_tensors.insert("first_stage_model.");
     }
@@ -1604,6 +1670,7 @@ bool StableDiffusionGGML::build_denoiser() {
                    sd_version_is_anima(version) ||
                    sd_version_is_ernie_image(version) ||
                    sd_version_is_z_image(version) ||
+                   version == VERSION_MING_IMAGE ||
                    sd_version_is_llada_image(version) ||
                    sd_version_is_boogu_image(version) ||
                    sd_version_is_pid(version) ||
@@ -1625,6 +1692,8 @@ bool StableDiffusionGGML::build_denoiser() {
                 default_flow_shift = 3.16f;
             } else if (sd_version_is_mage_flow(version)) {
                 default_flow_shift = 6.f;
+            } else if (version == VERSION_MING_IMAGE) {
+                default_flow_shift = INFINITY;
             } else if (sd_version_is_llada_image(version)) {
                 default_flow_shift = 1.0f;  // unused: LLADA_IMAGE_SCHEDULER builds a fixed grid
             } else {
@@ -1685,6 +1754,8 @@ bool StableDiffusionGGML::build_denoiser() {
             } else if (sd_version_is_minimax_h3(version)) {
                 LOG_INFO("running in MiniMax H3 AV FLOW mode");
                 denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, 3.f, get_latent_channel());
+            } else if (version == VERSION_MING_IMAGE) {
+                denoiser = std::make_shared<MingImageFlowDenoiser>();
             } else {
                 LOG_INFO("running in FLOW mode");
                 denoiser = std::make_shared<DiscreteFlowDenoiser>();
@@ -2413,7 +2484,7 @@ std::vector<float> StableDiffusionGGML::prepare_sample_timesteps(float sigma,
     if (version == VERSION_HIDREAM_O1) {
         return std::vector<float>{1.0f - (t / static_cast<float>(TIMESTEPS))};
     }
-    if (sd_version_is_z_image(version) || sd_version_is_ideogram4(version)) {
+    if (sd_version_is_z_image(version) || sd_version_is_ideogram4(version) || version == VERSION_MING_IMAGE) {
         return std::vector<float>{1000.f - t};
     }
     return std::vector<float>{t};
@@ -2766,6 +2837,9 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     condition.c_token_types.empty() ? nullptr : &condition.c_token_types,
                     condition.c_vinput_mask.empty() ? nullptr : &condition.c_vinput_mask,
                     condition.c_image_embeds.empty() ? nullptr : &condition.c_image_embeds};
+            } else if (version == VERSION_MING_IMAGE) {
+                diffusion_params.extra = MingImageDiffusionExtra{
+                    condition.extra_c_crossattns.empty() ? nullptr : &condition.extra_c_crossattns[0]};
             } else if (sd_version_is_llada_image(version)) {
                 diffusion_params.extra = LLaDAImageDiffusionExtra{
                     condition.extra_c_crossattns.empty() ? nullptr : &condition.extra_c_crossattns[0]};
@@ -3000,7 +3074,7 @@ int StableDiffusionGGML::get_diffusion_model_down_factor() {
     if (sd_version_is_dit(version)) {
         if (sd_version_is_sensenova_u1(version)) {
             down_factor = 32;
-        } else if (version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version)) {
+        } else if (version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_MING_IMAGE || sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version) || sd_version_is_pixart(version)) {
             down_factor = 2;
         } else {
             down_factor = 1;
@@ -3038,6 +3112,8 @@ int StableDiffusionGGML::get_latent_channel() {
             latent_channel = 128;
         } else if (sd_version_is_mage_flow(version)) {
             latent_channel = 128;
+        } else if (sd_version_is_pixart(version)) {
+            latent_channel = 4;
         } else {
             latent_channel = 16;
         }
@@ -3046,7 +3122,7 @@ int StableDiffusionGGML::get_latent_channel() {
 }
 
 int StableDiffusionGGML::get_image_channels() const {
-    return version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_QWEN_IMAGE_2_1 ? 4 : 3;
+    return version == VERSION_QWEN_IMAGE_LAYERED || version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_MING_IMAGE ? 4 : 3;
 }
 
 int StableDiffusionGGML::get_image_seq_len(int h, int w) {
@@ -3133,14 +3209,26 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
         return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
     }
     auto latents                      = first_stage_model->diffusion_to_vae_latents(x);
-    auto decoded                      = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
-    const bool prefer_temporal_tiling = decode_video && first_stage_model->can_temporal_tile_decode();
-    while (decoded.empty() &&
-           sd::backend_fit::prepare_vae_decode_retry_tiling(vae_tiling_params, prefer_temporal_tiling,
-                                                            first_stage_model->last_compute_status())) {
-        decoded = first_stage_model->decode(n_threads, latents, vae_tiling_params, decode_video, circular_x, circular_y);
+    auto tiling_params                = first_stage_model->resolve_tiling_params(vae_tiling_params);
+    const bool prefer_temporal_tiling = decode_video && latents.dim() == 5 && latents.shape()[2] > 1 &&
+                                        first_stage_model->can_temporal_tile_decode();
+    for (;;) {
+        int tile_size_w = static_cast<int>(latents.shape()[0]);
+        int tile_size_h = static_cast<int>(latents.shape()[1]);
+        float tile_overlap;
+        if (tiling_params.enabled &&
+            !first_stage_model->get_tile_sizes(tile_size_w, tile_size_h, tile_overlap, tiling_params,
+                                               latents.shape()[0], latents.shape()[1])) {
+            return {};
+        }
+        auto decoded = first_stage_model->decode(n_threads, latents, tiling_params, decode_video, circular_x, circular_y);
+        if (!decoded.empty() ||
+            !sd::backend_fit::prepare_vae_decode_retry_tiling(tiling_params, prefer_temporal_tiling,
+                                                              first_stage_model->last_compute_status(),
+                                                              tile_size_w, tile_size_h, first_stage_model->get_scale_factor())) {
+            return decoded;
+        }
     }
-    return decoded;
 }
 
 sd::Tensor<float> StableDiffusionGGML::normalize_ltx_video_latents(const sd::Tensor<float>& x) {
