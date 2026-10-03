@@ -722,57 +722,84 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
     auto& use_tae             = configuration.use_tae;
     auto& use_audio_vae       = configuration.use_audio_vae;
 
-    if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
-        LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->model_path)) {
-            LOG_ERROR("init model loader from file failed: '%s'", sd_ctx_params->model_path);
-        }
-    }
-
-    if (strlen(SAFE_STR(sd_ctx_params->diffusion_model_path)) > 0) {
-        LOG_INFO("loading diffusion model from '%s'", sd_ctx_params->diffusion_model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->diffusion_model_path, "model.diffusion_model.")) {
-            LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->diffusion_model_path);
-        }
-    }
-
     {   // begin kcpp replacements
         auto& p = *sd_ctx_params;
-        SDVersion tempver = model_loader.get_sd_version();
-        bool fallback_swapped = false;
+        SDVersion tempver = VERSION_COUNT;
 
         auto path_empty = [](const char* path) -> bool {
             return path == nullptr || *path == '\0';
         };
 
-        // kcpp fallback to separate diffusion model passed as model
-        if (!path_empty(p.model_path) &&
-        path_empty(p.diffusion_model_path) &&
-        (!path_empty(p.t5xxl_path)||!path_empty(p.clip_l_path)))
         {
-            bool endswithsafetensors = ends_with(p.model_path, ".safetensors");
-            if(endswithsafetensors && !model_loader.has_diffusion_model_tensors())
-            {
-                LOG_INFO("SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
-                if (!model_loader.init_from_file(p.model_path, "model.diffusion_model.")) {
-                    LOG_WARN("loading diffusion model from '%s' failed", p.model_path);
-                }
-                fallback_swapped = true;
-                tempver = model_loader.get_sd_version();
-            }
-        }
+            // Use temporary loaders to detect the version, and swap model_path with diffusion_model_path
+            // (note this checks metadata only)
+            // Should handle:
+            // - canonical correct calls: model with prefix, diffusion without prefix, or both
+            // - diffusion with prefix and model without prefix will be swapped
 
-        if (tempver == VERSION_ANIMA && !fallback_swapped &&
-            !path_empty(p.model_path) &&
-            path_empty(p.diffusion_model_path) &&
-            !model_loader.has_diffusion_model_tensors()
-            )
-        {
-            LOG_INFO("Anima: SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
-            if (!model_loader.init_from_file(p.model_path, "model.diffusion_model.")) {
-                LOG_WARN("loading diffusion model from '%s' failed", p.model_path);
+            ModelLoader m_loader, d_loader;
+
+            bool check_diffusion = !path_empty(p.diffusion_model_path);
+            bool swap_models     = false;
+
+            if (!path_empty(p.model_path)) {
+                bool m_status;
+                if ((m_status = m_loader.init_from_file(p.model_path))) {
+                    if (m_loader.has_diffusion_model_tensors()) {
+                        // normal main
+                        check_diffusion = false;
+                        tempver         = m_loader.get_sd_version();
+                    } else if (path_empty(p.diffusion_model_path)) {
+                        // diffusion passed as main
+                        if ((m_status = m_loader.init_from_file(p.model_path, "model.diffusion_model."))) {
+                            swap_models = true;
+                            tempver     = m_loader.get_sd_version();
+                        }
+                    }
+                }
+                if (!m_status) {
+                    LOG_ERROR("couldn't load model file %s", p.model_path);
+                }
             }
-            tempver = model_loader.get_sd_version();
+
+            if (check_diffusion) {
+                // inert on kcpp, can be checked with sdmain
+                bool d_status;
+                // try without the prefix first, since it's easier to check
+                if ((d_status = d_loader.init_from_file(p.diffusion_model_path))) {
+                    if (d_loader.has_diffusion_model_tensors()) {
+                        // diffusion has main
+                        swap_models = true;
+                        tempver     = d_loader.get_sd_version();
+                    } else {
+                        // grab the version from the diffusion model
+                        if ((d_status = d_loader.init_from_file(p.diffusion_model_path, "model.diffusion_model."))) {
+                            tempver = d_loader.get_sd_version();
+                        }
+                    }
+                }
+                if (!d_status) {
+                    LOG_ERROR("couldn't load model file %s", p.diffusion_model_path);
+                }
+            }
+
+            if (tempver == VERSION_COUNT) {
+                printf("Error: image model version detection failed!\n");
+                fflush(stdout);
+                return false;
+            }
+
+            LOG_INFO("Image model detected as %s", model_version_to_str[tempver]);
+            if (swap_models) {
+                if (path_empty(p.model_path)) {
+                    LOG_INFO("  loading %s as main model", p.diffusion_model_path);
+                } else if (path_empty(p.diffusion_model_path)) {
+                    LOG_INFO("  loading %s as diffusion model", p.model_path);
+                } else {
+                    LOG_INFO("  loading %s as main model, %s as diffusion model", p.diffusion_model_path, p.model_path);
+                }
+                std::swap(p.model_path, p.diffusion_model_path);
+            }
         }
 
         std::string kcpp_main_tokenizer;
@@ -977,11 +1004,26 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         }
 
         //debug print
-        // printf("\n\nclip_g: %s\nclip_l: %s\nclip_vision: %s\nllm: %s\nllm_vision: %s\nt5xxl: %s\ntaesd: %s\n",
+        // printf("\n\nclip_g: %s\nclip_l: %s\nclip_vision: %s\nllm: %s\nllm_vision: %s\nt5xxl: %s\ntaesd: %s\ntokenizer: %s\n",
         // p.clip_g_path, p.clip_l_path, p.clip_vision_path,
         // p.llm_path, p.llm_vision_path, p.t5xxl_path,
-        // p.taesd_path);
+        // p.taesd_path,
+        // p.tokenizer);
         // end kcpp replacements
+    }
+
+    if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
+        LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
+        if (!model_loader.init_from_file(sd_ctx_params->model_path)) {
+            LOG_ERROR("init model loader from file failed: '%s'", sd_ctx_params->model_path);
+        }
+    }
+
+    if (strlen(SAFE_STR(sd_ctx_params->diffusion_model_path)) > 0) {
+        LOG_INFO("loading diffusion model from '%s'", sd_ctx_params->diffusion_model_path);
+        if (!model_loader.init_from_file(sd_ctx_params->diffusion_model_path, "model.diffusion_model.")) {
+            LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->diffusion_model_path);
+        }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
