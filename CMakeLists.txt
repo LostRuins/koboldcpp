@@ -563,6 +563,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/runtime/sample-cache.cpp
             otherarch/sdcpp/src/runtime/tiling.cpp
             otherarch/sdcpp/src/runtime/audio_processing.cpp
+            otherarch/sdcpp/src/runtime/image_preprocess.cpp
             otherarch/sdcpp/src/core/util.cpp
             otherarch/sdcpp/src/name_conversion.cpp
             otherarch/sdcpp/src/upscaler.cpp
