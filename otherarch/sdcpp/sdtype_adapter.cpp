@@ -517,18 +517,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->stacked_id_embeddings_path = photomaker_filename;
     sd_params->lora_map = lora_map;
     sd_params->lora_dynamic = lora_dynamic;
-    //if t5 is set, and model is a gguf, load it as a diffusion model path
-    bool endswithgguf = (sd_params->model_path.rfind(".gguf") == sd_params->model_path.size() - 5);
-    if((sd_params->t5xxl_path!="" || sd_params->clip_l_path!="" || sd_params->clip_g_path!="") && endswithgguf)
-    {
-        //extra check - make sure there is no diffusion model prefix already inside!
-        if(!gguf_tensor_exists(sd_params->model_path,"model.diffusion_model.",false))
-        {
-            printf("\nSwap to Diffusion Model Path:%s",sd_params->model_path.c_str());
-            sd_params->diffusion_model_path = sd_params->model_path;
-            sd_params->model_path = "";
-        }
-    }
 
     sd_ctx_params_t params = {};
     sd_ctx_params_init(&params);
