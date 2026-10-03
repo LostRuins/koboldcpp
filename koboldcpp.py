@@ -7711,6 +7711,10 @@ Change Mode<br>
         if reqblocking:
             requestsinqueue = (requestsinqueue - 1) if requestsinqueue > 0 else 0
 
+        # Batching releases modelbusy, so track all in-flight requests separately.
+        with batched_cond:
+            global_memory["active_requests"] = global_memory.get("active_requests", 0) + 1
+
         # handle endpoints that require mutex locking and handle actual gens
         try:
             sse_stream_flag = False
@@ -8438,6 +8442,9 @@ Change Mode<br>
 
         finally:
             time.sleep(0.05)
+            with batched_cond:
+                global_memory["last_active_timestamp"] = datetime.now()
+                global_memory["active_requests"] -= 1
             if is_batchable_req:
                 with batched_cond:
                     batched_request_runner_count -= 1
@@ -12301,8 +12308,9 @@ def main(launch_args, default_args):
                         fault_recovery_mode = False
                     restart_target = global_memory["restart_target"]
                     restart_override_base_config = global_memory["restart_override_base_config"]
-                    last_active = global_memory["last_active_timestamp"]
-                    if last_active and args.adminunloadtimeout>0:
+                    activity = global_memory.copy()
+                    last_active = activity["last_active_timestamp"]
+                    if last_active and args.adminunloadtimeout>0 and not activity.get("active_requests", 0):
                         curtime = datetime.now()
                         elapsedtime = curtime - last_active
                         time_since_last_active = elapsedtime.total_seconds()
@@ -12552,6 +12560,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     args = launch_args
     args.gendefaults = get_reasoning_defaults(vars(args))
     global_memory = g_memory
+    if global_memory is not None:
+        global_memory["active_requests"] = 0
     using_gui_launcher = gui_launcher
     start_time = time.time()
 
