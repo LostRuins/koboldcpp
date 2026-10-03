@@ -8487,7 +8487,6 @@ def RunServerMultiThreaded(addr, port, server_handler, on_ready=None):
         ipv6_sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
 
     if args.ssl and sslvalid and not args.routermode: #if routermode, ssl is already offloaded
-        import ssl
         context = create_server_ssl_context(args.ssl)
         ipv4_sock = context.wrap_socket(ipv4_sock, server_side=True)
         if ipv6_sock:
@@ -11348,35 +11347,35 @@ def setuptunnel(global_memory, has_sd, has_music):
     try:
         global sslvalid
         httpsaffix = ("https" if sslvalid else "http")
-        ssladd = (" --no-tls-verify" if sslvalid else "")
+        tunnelbinary = None
+
         def run_tunnel():
             tunnelproc = None
             tunneloutput = ""
             tunnelrawlog = ""
             time.sleep(0.2)
-            tunnelbinary = ""
+
             if os.name == 'nt':
                 print("Starting Cloudflare Tunnel for Windows, please wait...", flush=True)
-                tunnelbinary = "cloudflared.exe"
-            elif sys.platform=="darwin":
+            elif sys.platform == "darwin":
                 print("Starting Cloudflare Tunnel for MacOS, please wait...", flush=True)
-                tunnelbinary = "./cloudflared"
             elif sys.platform == "linux" and platform.machine().lower() == "aarch64":
                 print("Starting Cloudflare Tunnel for ARM64 Linux, please wait...", flush=True)
-                tunnelbinary = "./cloudflared-linux-arm64"
             else:
                 print("Starting Cloudflare Tunnel for Linux, please wait...", flush=True)
-                tunnelbinary = "./cloudflared-linux-amd64"
 
-            tunnelproc = None
             displayedport = (args.port if not args.proxy_port else args.proxy_port)
+            tunnelcmd = [tunnelbinary, "tunnel", "--url", f"{httpsaffix}://localhost:{int(displayedport)}"]
+            if sslvalid:
+                tunnelcmd.append("--no-tls-verify")
+
             if sys.platform == "linux":
                 clean_env = os.environ.copy()
                 clean_env.pop("LD_LIBRARY_PATH", None)
                 clean_env["PATH"] = "/usr/bin:/bin"
-                tunnelproc = subprocess.Popen(f"{tunnelbinary} tunnel --url {httpsaffix}://localhost:{int(displayedport)}{ssladd}", text=True, encoding='utf-8', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=clean_env)
+                tunnelproc = subprocess.Popen(tunnelcmd, text=True, encoding='utf-8', stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=clean_env)
             else:
-                tunnelproc = subprocess.Popen(f"{tunnelbinary} tunnel --url {httpsaffix}://localhost:{int(displayedport)}{ssladd}", text=True, encoding='utf-8', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                tunnelproc = subprocess.Popen(tunnelcmd, text=True, encoding='utf-8', stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             time.sleep(10)
 
             def tunnel_reader():
@@ -11413,17 +11412,31 @@ def setuptunnel(global_memory, has_sd, has_music):
             tunnelproc.wait()
 
         if os.name == 'nt':
-            downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe", "cloudflared.exe", True, 500000)
-        elif sys.platform=="darwin":
-            downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz", "cloudflared-darwin-amd64.tgz", True, 500000)
-            subprocess.run("tar -xzf cloudflared-darwin-amd64.tgz", shell=True)
-            subprocess.run("chmod +x 'cloudflared'", shell=True)
+            tunnelbinary = downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe", "cloudflared.exe", True, 500000)
+        elif sys.platform == "darwin":
+            if platform.machine().lower() in ("arm64", "aarch64"):
+                archive = downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz", "cloudflared-darwin-arm64.tgz", True, 500000)
+            else:
+                archive = downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz", "cloudflared-darwin-amd64.tgz", True, 500000)
+            if not archive:
+                raise RuntimeError("Could not download cloudflared")
+            tunnel_dir = os.path.dirname(os.path.abspath(archive))
+            subprocess.run(["tar", "-xzf", archive, "-C", tunnel_dir], check=True)
+            tunnelbinary = os.path.join(tunnel_dir, "cloudflared")
+            subprocess.run(["chmod", "+x", tunnelbinary], check=True)
         elif sys.platform == "linux" and platform.machine().lower() == "aarch64":
-            downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64", "cloudflared-linux-arm64", True, 500000)
-            subprocess.run("chmod +x 'cloudflared-linux-arm64'", shell=True)
+            tunnelbinary = downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64", "cloudflared-linux-arm64", True, 500000)
+            if tunnelbinary:
+                subprocess.run(["chmod", "+x", tunnelbinary], check=True)
         else:
-            downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "cloudflared-linux-amd64", True, 500000)
-            subprocess.run("chmod +x 'cloudflared-linux-amd64'", shell=True)
+            tunnelbinary = downloader_internal("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "cloudflared-linux-amd64", True, 500000)
+            if tunnelbinary:
+                subprocess.run(["chmod", "+x", tunnelbinary], check=True)
+
+        if not tunnelbinary:
+            raise RuntimeError("Could not download cloudflared")
+
+        tunnelbinary = os.path.abspath(tunnelbinary)
         print("Attempting to start tunnel thread...", flush=True)
         tunnel_thread = threading.Thread(target=run_tunnel)
         tunnel_thread.start()
