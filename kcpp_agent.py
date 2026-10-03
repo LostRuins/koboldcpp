@@ -1389,6 +1389,27 @@ def review_tool_call(
     )
 
 
+def write_path_requires_confirmation(
+    name: str,
+    args: dict[str, Any],
+    workdir: Path | None = None,
+) -> bool:
+    """Return whether an auto-mode write/edit targets outside the workdir."""
+    if name not in {"write", "edit"}:
+        return False
+
+    try:
+        root = (workdir or Path.cwd()).resolve()
+        path = Path(args["path"]).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        path.resolve(strict=False).relative_to(root)
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError):
+        # Invalid or unresolvable paths should fail closed and require a person.
+        return True
+    return False
+
+
 def tool_view_image(
     args: dict[str, Any],
     base_url: str,
@@ -2414,16 +2435,23 @@ def run_agent(
                             effective_mode = tool_confirmation.get(name, confirmation_mode)
                             reviewed_safe = False
                             if effective_mode == "auto":
-                                try:
-                                    with Throbber("Reviewing tool call"):
-                                        reviewed_safe = review_tool_call(
-                                            messages, available_tools, call_id, name,
-                                            base_url, api_key, model, max_tokens,
-                                            request_timeout,
-                                        )
-                                except Exception as exc:
-                                    print(f"Automatic review unavailable: {exc}")
-                                if not reviewed_safe:
+                                outside_workdir = write_path_requires_confirmation(name, args)
+                                if outside_workdir:
+                                    print(
+                                        "Write/edit outside the working directory "
+                                        "requires confirmation."
+                                    )
+                                else:
+                                    try:
+                                        with Throbber("Reviewing tool call"):
+                                            reviewed_safe = review_tool_call(
+                                                messages, available_tools, call_id, name,
+                                                base_url, api_key, model, max_tokens,
+                                                request_timeout,
+                                            )
+                                    except Exception as exc:
+                                        print(f"Automatic review unavailable: {exc}")
+                                if not reviewed_safe and not outside_workdir:
                                     print("Automatic review requests confirmation.")
                             try:
                                 approved = confirm_tool_call(
@@ -2542,7 +2570,8 @@ def parse_args() -> argparse.Namespace:
         default="on",
         help=(
             "Default tool confirmation: 'on' asks, 'off' approves, and 'auto' asks "
-            "when automatic review does not approve (default: %(default)s). "
+            "when automatic review does not approve; write/edit paths outside the "
+            "working directory always ask in auto mode (default: %(default)s). "
             "Per-tool overrides take precedence; ask_user prompts directly unless overridden."
         ),
     )
