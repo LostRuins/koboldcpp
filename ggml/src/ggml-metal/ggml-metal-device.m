@@ -2385,6 +2385,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
         dispatch_release(completion_semaphore);
 
         //[cmd_buf waitUntilCompleted];
+
+        [buf_src release];
     }
 }
 
@@ -2423,6 +2425,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
 
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
+
+        [buf_dst release];
     }
 }
 

@@ -24,6 +24,7 @@
 #include "parsers/kimi-k3.cpp"
 #include "parsers/lfm2.cpp"
 #include "parsers/ling3.cpp"
+#include "parsers/llm-jp-harmony.cpp"
 #include "parsers/minicpm5.cpp"
 #include "parsers/minimax-m3.cpp"
 #include "parsers/ministral3.cpp"
@@ -1129,6 +1130,12 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         src.find("[ARGS]") != std::string::npos && src.find("[CALL_ID]") == std::string::npos) {
         LOG_DBG("Using specialized template: Ministral/Magistral Large 3\n");
         return common_chat_params_init_ministral_3(tmpl, params);
+    }
+
+    // LLM-jp-4.1 - GPT-OSS dialect (spaces after special tokens, <|end|>-separated parallel calls)
+    if (src.find("chat_format=llm-jp-harmony-v1") != std::string::npos) {
+        LOG_DBG("Using specialized template: LLM-jp Harmony v1\n");
+        return common_chat_params_init_llm_jp_harmony(tmpl, params);
     }
 
     // GPT-OSS - has unique channel-based structure that needs dedicated handler

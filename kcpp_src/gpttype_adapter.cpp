@@ -3510,7 +3510,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 printf("\nEstimating MMProj GPU usage...");
                 mtmd_context_params ctx_mtmd_params = init_mtmd_ctx_params(inputs.mmproj_cpu,true);
                 auto mtmd_mem = mtmd_get_memory_usage(mmproj_filename.c_str(), ctx_mtmd_params);
-                for (auto & [dev, size] : mtmd_mem) {
+                for (auto & [dev, size] : mtmd_mem.backend_mem_usage) {
                     totalmmprojtax += size;
                 }
                 totalmmprojtax = totalmmprojtax / (1024*1024);

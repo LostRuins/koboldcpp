@@ -252,6 +252,12 @@ Start with the [KoboldCpp FAQ and knowledge base](https://github.com/LostRuins/k
 
 For troubleshooting, include your operating system, hardware, KoboldCpp version, model filename, launch settings, and relevant error output.
 
+### Official Resources
+[KoboldCpp Huggingface Repo](https://huggingface.co/koboldcpp)
+[KoboldCpp Sourceforge Mirror](https://sourceforge.net/projects/koboldcpp/)
+[KoboldAI Subreddit](https://www.reddit.com/r/KoboldAi/)
+[KoboldAI Discord](https://koboldai.org/discord)
+
 ## Third Party Resources
 These community projects may be outdated or unmaintained. Contact their maintainers for support.
 
