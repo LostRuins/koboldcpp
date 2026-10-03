@@ -137,6 +137,7 @@ const char* scheduler_to_str[] = {
     "flux2",
     "flux",
     "beta",
+    "llada_image",
 };
 
 static_assert(SCHEDULER_COUNT == sizeof(scheduler_to_str) / sizeof(scheduler_to_str[0]),
@@ -325,6 +326,7 @@ void sd_hires_params_init(sd_hires_params_t* hires_params) {
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     *sd_ctx_params                           = {};
     sd_ctx_params->n_threads                 = sd_get_num_physical_cores();
+    sd_ctx_params->conditioning_cache_size   = 4;
     sd_ctx_params->wtype                     = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                  = CUDA_RNG;
     sd_ctx_params->sampler_rng_type          = RNG_TYPE_COUNT;
@@ -336,6 +338,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->eager_load                = false;
     sd_ctx_params->enable_mmap               = false;
     sd_ctx_params->diffusion_flash_attn      = false;
+    sd_ctx_params->sage_attn                 = false;
     sd_ctx_params->linear_scale              = 0.f;
     sd_ctx_params->attn_scale                = 0.f;
     sd_ctx_params->vae_format                = SD_VAE_FORMAT_AUTO;
@@ -376,6 +379,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "pulid_weights_path: %s\n"
              "tensor_type_rules: %s\n"
              "n_threads: %d\n"
+             "conditioning_cache_size: %d\n"
              "wtype: %s\n"
              "rng_type: %s\n"
              "sampler_rng_type: %s\n"
@@ -391,6 +395,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "auto_fit: %s\n"
              "flash_attn: %s\n"
              "diffusion_flash_attn: %s\n"
+             "sage_attn: %s\n"
              "linear_scale: %g\n"
              "attn_scale: %g\n"
              "vae_format: %s\n",
@@ -415,6 +420,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->pulid_weights_path),
              SAFE_STR(sd_ctx_params->tensor_type_rules),
              sd_ctx_params->n_threads,
+             sd_ctx_params->conditioning_cache_size,
              sd_type_name(sd_ctx_params->wtype),
              sd_rng_type_name(sd_ctx_params->rng_type),
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
@@ -430,6 +436,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->auto_fit),
              BOOL_STR(sd_ctx_params->flash_attn),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
+             BOOL_STR(sd_ctx_params->sage_attn),
              sd_ctx_params->linear_scale,
              sd_ctx_params->attn_scale,
              sd_vae_format_name(sd_ctx_params->vae_format));
@@ -627,14 +634,6 @@ struct sd_ctx_t {
     StableDiffusionGGML* sd = nullptr;
 };
 
-static bool sd_version_supports_video_generation(SDVersion version) {
-    return version == VERSION_SVD || sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_lingbot_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version);
-}
-
-static bool sd_version_supports_image_generation(SDVersion version) {
-    return !sd_version_supports_video_generation(version);
-}
-
 sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == nullptr) {
@@ -756,28 +755,20 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            int* num_frames_out,
                            sd_audio_t** audio_out,
                            int* fps_out) {
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
-        if (fps_out != nullptr) {
-            *fps_out = 0;
-        }
-        return false;
-    }
-
-    if (frames_out != nullptr) {
+    if (frames_out != nullptr)
         *frames_out = nullptr;
-    }
-    if (audio_out != nullptr) {
+    if (audio_out != nullptr)
         *audio_out = nullptr;
-    }
-    if (num_frames_out != nullptr) {
+    if (num_frames_out != nullptr)
         *num_frames_out = 0;
+    if (fps_out != nullptr)
+        *fps_out = 0;
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
+        return false;
     }
 
     StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
     if (!execution.ready) {
-        if (fps_out != nullptr) {
-            *fps_out = 0;
-        }
         return false;
     }
 
@@ -827,7 +818,7 @@ namespace kcpp_sd {
         model_info res = {};
         SDVersion loadedsdver = (SDVersion)get_loaded_sd_version(ctx);
         res.is_wan = (loadedsdver == SDVersion::VERSION_WAN2 || loadedsdver == SDVersion::VERSION_WAN2_2_I2V || loadedsdver == SDVersion::VERSION_WAN2_2_TI2V);
-        res.is_qwenimg = (loadedsdver == SDVersion::VERSION_QWEN_IMAGE);
+        res.is_qwenimg = sd_version_is_qwen_image(loadedsdver);
         res.is_chroma = loaded_model_is_chroma(ctx);
         res.is_kontext = (loadedsdver==SDVersion::VERSION_FLUX && !res.is_chroma);
         res.is_flux2 = (loadedsdver == SDVersion::VERSION_FLUX2 || loadedsdver == SDVersion::VERSION_FLUX2_KLEIN);
@@ -840,7 +831,7 @@ namespace kcpp_sd {
         res.is_ltx = sd_version_is_ltxav(loadedsdver);
         res.is_minimaxh3 = sd_version_is_minimax_h3(loadedsdver);
         res.is_boogu = sd_version_is_boogu_image(loadedsdver);
-        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg(loadedsdver) || sd_version_is_pid(loadedsdver);
+        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg(loadedsdver) || sd_version_is_pid(loadedsdver) || res.is_qwenimg;
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
         res.spatial_multiple = get_spatial_multiple(ctx);
         return res;

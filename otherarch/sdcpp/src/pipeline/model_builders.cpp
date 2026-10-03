@@ -20,6 +20,7 @@
 #include "model/diffusion/krea2.hpp"
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/lingbot_video.hpp"
+#include "model/diffusion/llada_image.hpp"
 #include "model/diffusion/ltxv.hpp"
 #include "model/diffusion/mage_flow.hpp"
 #include "model/diffusion/minimax_h3.hpp"
@@ -290,7 +291,8 @@ namespace sd::model_builders {
                 result.diffusion = std::make_shared<Qwen::QwenImage21Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                              tensor_storage_map,
                                                                              "model.diffusion_model",
-                                                                             weight_manager);
+                                                                             weight_manager,
+                                                                             sd_ctx_params->model_args);
             } else {
                 result.diffusion = std::make_shared<Qwen::QwenImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                            tensor_storage_map,
@@ -370,6 +372,19 @@ namespace sd::model_builders {
                                                                       "model.diffusion_model",
                                                                       version,
                                                                       weight_manager);
+        } else if (sd_version_is_llada_image(version)) {
+            result.conditioner = std::make_shared<LLaDAImageEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                                      tensor_storage_map,
+                                                                      "text_encoders.llm",
+                                                                      "queryformer",
+                                                                      "text_projection",
+                                                                      "sigvq",
+                                                                      weight_manager,
+                                                                      tokenizers);
+            result.diffusion   = std::make_shared<LLaDAImage::LLaDAImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                              tensor_storage_map,
+                                                                              "model.diffusion_model",
+                                                                              weight_manager);
         } else if (sd_version_is_boogu_image(version)) {
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                tensor_storage_map,

@@ -839,21 +839,30 @@ class RMSNorm : public UnaryBlock {
 protected:
     int64_t hidden_size;
     float eps;
+    bool elementwise_affine;
     std::string prefix;
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
-        this->prefix         = prefix;
+        this->prefix = prefix;
+        if (!elementwise_affine) {
+            return;
+        }
         enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
 
 public:
     RMSNorm(int64_t hidden_size,
-            float eps = 1e-06f)
+            float eps               = 1e-06f,
+            bool elementwise_affine = true)
         : hidden_size(hidden_size),
-          eps(eps) {}
+          eps(eps),
+          elementwise_affine(elementwise_affine) {}
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
+        if (!elementwise_affine) {
+            return ggml_rms_norm(ctx->ggml_ctx, x, eps);
+        }
         ggml_tensor* w = params["weight"];
         if (ctx->weight_adapter) {
             w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");

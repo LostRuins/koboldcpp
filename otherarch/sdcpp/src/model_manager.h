@@ -157,7 +157,8 @@ private:
         }
     };
     CapacityCheck check_capacity(const DeviceMemoryRequest& request,
-                                 const std::vector<TensorState*>& states) const;
+                                 const std::vector<TensorState*>& states,
+                                 bool log_details = false) const;
 
     ggml_backend_buffer_type_t params_buffer_type_for(const TensorState& state) const;
     ggml_backend_buffer_type_t split_buffer_type_for(const TensorState& state) const;

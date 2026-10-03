@@ -415,15 +415,13 @@ namespace ErnieImage {
             GGML_ASSERT(!context_tensor.empty());
             ggml_tensor* context = make_input(context_tensor);
 
-            pe_vec      = Rope::gen_ernie_image_pe(static_cast<int>(x->ne[1]),
-                                                   static_cast<int>(x->ne[0]),
-                                                   config.patch_size,
-                                                   static_cast<int>(x->ne[3]),
-                                                   static_cast<int>(context->ne[1]),
-                                                   config.theta,
-                                                   circular_y_enabled,
-                                                   circular_x_enabled,
-                                                   config.axes_dim);
+            pe_vec      = finish_rope_pe(Rope::gen_ernie_image_pe(static_cast<int>(x->ne[1]),
+                                                                  static_cast<int>(x->ne[0]),
+                                                                  config.patch_size,
+                                                                  static_cast<int>(x->ne[3]),
+                                                                  static_cast<int>(context->ne[1]),
+                                                                  config.theta,
+                                                                  config.axes_dim));
             int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
             auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, config.axes_dim_sum, 1, pos_len, 2);
             set_backend_tensor_data(pe, pe_vec.data());

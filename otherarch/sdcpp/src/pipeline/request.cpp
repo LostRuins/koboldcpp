@@ -73,6 +73,8 @@ namespace sd::pipeline {
             return LTX2_SCHEDULER;
         } else if (sd != nullptr && sd_version_is_ideogram4(sd->version)) {
             return LOGIT_NORMAL_SCHEDULER;
+        } else if (sd != nullptr && sd_version_is_llada_image(sd->version)) {
+            return LLADA_IMAGE_SCHEDULER;
         }
         return DISCRETE_SCHEDULER;
     }

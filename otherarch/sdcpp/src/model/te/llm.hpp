@@ -49,6 +49,7 @@ namespace LLM {
         GEMMA2_2B,
         GEMMA4_12B,
         GPT_OSS_20B,
+        LLADA2_MOE,
         ARCH_COUNT,
     };
 
@@ -62,6 +63,7 @@ namespace LLM {
         "gemma2_2b",
         "gemma4_12b",
         "gpt_oss_20b",
+        "llada2_moe",
     };
 
     enum class MLPActivation {
@@ -125,6 +127,17 @@ namespace LLM {
         std::vector<int> sliding_attention;
         int64_t num_experts         = 0;
         int64_t num_experts_per_tok = 0;
+        bool qkv_fused              = false;
+        bool bidirectional          = false;
+        float partial_rotary        = 1.f;
+
+        // DeepSeek-V3-style grouped-sigmoid MoE routing (LLaDA2)
+        int64_t moe_intermediate_size = 0;
+        int64_t num_shared_experts    = 0;
+        int64_t first_k_dense_replace = 0;
+        int64_t n_group               = 0;
+        int64_t topk_group            = 0;
+        float routed_scaling_factor   = 1.f;
         LLMVisionConfig vision;
         bool have_vision_weight = false;
         bool llama_cpp_style    = false;
@@ -212,6 +225,31 @@ namespace LLM {
                 config.intermediate_size       = 9216;
                 config.num_layers              = 26;
                 config.vocab_size              = 256000;
+            } else if (arch == LLMArch::LLADA2_MOE) {
+                config.head_dim                = 128;
+                config.num_heads               = 16;
+                config.num_kv_heads            = 4;
+                config.qkv_bias                = false;
+                config.attention_out_bias      = false;
+                config.qk_norm                 = true;
+                config.rms_norm_eps            = 1e-6f;
+                config.hidden_size             = 2048;
+                config.intermediate_size       = 5120;
+                config.num_layers              = 20;
+                config.vocab_size              = 173568;
+                config.max_position_embeddings = 16384;
+                config.rope_thetas             = {600000.f};
+                config.qkv_fused               = true;
+                config.bidirectional           = true;
+                config.partial_rotary          = 0.5f;
+                config.num_experts             = 256;
+                config.num_experts_per_tok     = 8;
+                config.moe_intermediate_size   = 512;
+                config.num_shared_experts      = 1;
+                config.first_k_dense_replace   = 1;
+                config.n_group                 = 8;
+                config.topk_group              = 4;
+                config.routed_scaling_factor   = 2.5f;
             } else if (arch == LLMArch::GPT_OSS_20B) {
                 config.head_dim                = 64;
                 config.num_heads               = 64;
@@ -419,6 +457,195 @@ namespace LLM {
         }
     };
 
+    // LLaDA2's MoE differs from GPT-OSS's in three ways that all change the result:
+    // routing scores are sigmoid (not softmax over the selected logits), expert selection is
+    // group-limited and uses a bias term that the returned weights do NOT include, and the
+    // experts carry no biases. Ref: LLaDA2MoeGate / LLaDA2MoeSparseMoeBlock in
+    // modeling_llada2uni_moe.py.
+    struct LLaDA2MoEMLP : public GGMLBlock {
+    protected:
+        int64_t hidden_size;
+        int64_t moe_intermediate_size;
+        int64_t num_experts;
+        int64_t num_experts_per_tok;
+        int64_t n_group;
+        int64_t topk_group;
+        float routed_scaling_factor;
+
+        void init_params(ggml_context* ctx,
+                         const String2TensorStorage& tensor_storage_map = {},
+                         std::string prefix                             = "") override {
+            GGMLBlock::init_params(ctx, tensor_storage_map, prefix);
+
+            auto supported_type = [](ggml_type wtype, int64_t in_features) {
+                if (in_features % ggml_blck_size(wtype) != 0) {
+                    return GGML_TYPE_F32;
+                }
+                return wtype;
+            };
+
+            // The reference runs the router in fp32; keep the weight in fp32 so the sigmoid
+            // scores and the group sums match.
+            params["gate.weight"]      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, num_experts);
+            params["gate.expert_bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_experts);
+
+            ggml_type gate_type = supported_type(get_type(prefix + "experts.gate_proj.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size);
+            ggml_type up_type   = supported_type(get_type(prefix + "experts.up_proj.weight", tensor_storage_map, GGML_TYPE_F32), hidden_size);
+            ggml_type down_type = supported_type(get_type(prefix + "experts.down_proj.weight", tensor_storage_map, GGML_TYPE_F32), moe_intermediate_size);
+
+            // HF ships the stacked experts as 3-D nn.Parameters, while the ComfyUI GGUF repack
+            // flattens the expert axis into ne[1]. Declare whichever the file holds - the two are
+            // bit-identical, and forward() reshapes to 3-D for ggml_mul_mat_id either way.
+            auto declare_experts = [&](const std::string& name, ggml_type type, int64_t in_dim, int64_t out_dim) {
+                auto storage = tensor_storage_map.find(prefix + name);
+                if (storage != tensor_storage_map.end() && storage->second.n_dims == 2) {
+                    GGML_ASSERT(storage->second.nelements() == in_dim * out_dim * num_experts);
+                    params[name] = ggml_new_tensor_2d(ctx, type, in_dim, out_dim * num_experts);
+                } else {
+                    params[name] = ggml_new_tensor_3d(ctx, type, in_dim, out_dim, num_experts);
+                }
+            };
+
+            declare_experts("experts.gate_proj.weight", gate_type, hidden_size, moe_intermediate_size);
+            declare_experts("experts.up_proj.weight", up_type, hidden_size, moe_intermediate_size);
+            declare_experts("experts.down_proj.weight", down_type, moe_intermediate_size, hidden_size);
+        }
+
+    public:
+        LLaDA2MoEMLP(const LLMConfig& config)
+            : hidden_size(config.hidden_size),
+              moe_intermediate_size(config.moe_intermediate_size),
+              num_experts(config.num_experts),
+              num_experts_per_tok(config.num_experts_per_tok),
+              n_group(config.n_group),
+              topk_group(config.topk_group),
+              routed_scaling_factor(config.routed_scaling_factor) {
+            if (config.num_shared_experts > 0) {
+                blocks["shared_experts"] = std::make_shared<MLP>(config.hidden_size,
+                                                                 config.moe_intermediate_size * config.num_shared_experts,
+                                                                 false,
+                                                                 config.mlp_activation);
+            }
+        }
+
+        // Reproduces group_limited_topk(): keep the topk_group groups with the highest
+        // "sum of the two best scores in the group", then take the global top-k among them.
+        ggml_tensor* group_limited_mask(GGMLRunnerContext* ctx,
+                                        ggml_tensor* routing_scores,
+                                        int64_t n_token_total) {
+            ggml_context* gctx      = ctx->ggml_ctx;
+            const int64_t per_group = num_experts / n_group;
+
+            // [experts_per_group, n_group * tokens] so top-2 runs per (group, token) row.
+            auto grouped     = ggml_reshape_2d(gctx, routing_scores, per_group, n_group * n_token_total);
+            auto best2_idx   = ggml_argsort_top_k(gctx, grouped, 2);  // [2, n_group * tokens]
+            auto grouped_val = ggml_reshape_3d(gctx, grouped, 1, per_group, n_group * n_token_total);
+            auto best2       = ggml_get_rows(gctx, grouped_val, best2_idx);  // [1, 2, n_group * tokens]
+            best2            = ggml_reshape_2d(gctx, best2, 2, n_group * n_token_total);
+            auto group_score = ggml_reshape_2d(gctx, ggml_sum_rows(gctx, best2), n_group, n_token_total);  // [n_group, tokens]
+
+            // Threshold = the topk_group-th largest group score, taken from the sorted top-k.
+            auto top_groups = ggml_argsort_top_k(gctx, group_score, (int)topk_group);  // [topk_group, tokens]
+            auto group_val  = ggml_reshape_3d(gctx, group_score, 1, n_group, n_token_total);
+            auto top_scores = ggml_get_rows(gctx, group_val, top_groups);  // [1, topk_group, tokens]
+            top_scores      = ggml_reshape_2d(gctx, top_scores, topk_group, n_token_total);
+            auto threshold  = ggml_view_2d(gctx,
+                                           top_scores,
+                                           1,
+                                           n_token_total,
+                                           top_scores->nb[1],
+                                           (topk_group - 1) * top_scores->nb[0]);  // [1, tokens]
+            threshold       = ggml_cont(gctx, threshold);
+
+            // keep = 1 - step(threshold - score). step(0) == 0, so the group sitting exactly on
+            // the threshold is kept without needing an epsilon.
+            auto diff = ggml_sub(gctx, ggml_repeat(gctx, threshold, group_score), group_score);
+            auto keep = ggml_scale_bias(gctx, ggml_step(gctx, diff), -1.f, 1.f);  // [n_group, tokens]
+
+            // 0 for kept groups, a large negative for dropped ones, broadcast over the group.
+            auto additive = ggml_scale_bias(gctx, keep, 1e30f, -1e30f);
+            additive      = ggml_reshape_3d(gctx, additive, 1, n_group, n_token_total);
+            auto expanded = ggml_repeat_4d(gctx, additive, per_group, n_group, n_token_total, 1);
+            return ggml_reshape_2d(gctx, expanded, num_experts, n_token_total);
+        }
+
+        ggml_tensor* expert_linear(GGMLRunnerContext* ctx,
+                                   const std::string& weight_name,
+                                   ggml_tensor* x,
+                                   ggml_tensor* selected_experts) {
+            ggml_tensor* w = params[weight_name];
+            if (w->ne[2] != num_experts) {
+                // Flattened layout: split the expert axis back out. ne[0] is untouched, so this
+                // stays valid for quantized types.
+                w = ggml_reshape_3d(ctx->ggml_ctx, w, w->ne[0], w->ne[1] / num_experts, num_experts);
+            }
+            return ggml_mul_mat_id(ctx->ggml_ctx, w, x, selected_experts);
+        }
+
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+            // x: [N, n_token, hidden_size]
+            GGML_ASSERT(num_experts > 0 && num_experts_per_tok > 0);
+            GGML_ASSERT(n_group > 0 && topk_group > 0 && num_experts % n_group == 0);
+
+            ggml_context* gctx          = ctx->ggml_ctx;
+            const int64_t n_token       = x->ne[1];
+            const int64_t N             = x->ne[2];
+            const int64_t n_token_total = n_token * N;
+
+            auto identity = x;
+
+            auto logits = ggml_mul_mat(gctx, params["gate.weight"], x);
+            logits      = ggml_reshape_2d(gctx, logits, num_experts, n_token_total);
+            auto scores = ggml_sigmoid(gctx, logits);  // [num_experts, tokens]
+
+            // The bias steers selection only; the combine weights come from the unbiased scores.
+            auto routing = ggml_add(gctx, scores, params["gate.expert_bias"]);
+            routing      = ggml_add(gctx, routing, group_limited_mask(ctx, routing, n_token_total));
+
+            auto selected_experts = ggml_argsort_top_k(gctx, routing, (int)num_experts_per_tok);  // [top_k, tokens]
+            auto score_rows       = ggml_reshape_3d(gctx, scores, 1, num_experts, n_token_total);
+            auto weights          = ggml_get_rows(gctx, score_rows, selected_experts);  // [1, top_k, tokens]
+            weights               = ggml_reshape_2d(gctx, weights, num_experts_per_tok, n_token_total);
+
+            if (num_experts_per_tok > 1) {
+                auto denom = ggml_scale_bias(gctx, ggml_sum_rows(gctx, weights), 1.f, 1e-20f);  // [1, tokens]
+                weights    = ggml_div(gctx, weights, ggml_repeat(gctx, denom, weights));
+            }
+            weights = ggml_scale(gctx, weights, routed_scaling_factor);
+            weights = ggml_reshape_3d(gctx, weights, 1, num_experts_per_tok, n_token_total);
+
+            auto xf        = ggml_reshape_3d(gctx, x, hidden_size, 1, n_token_total);
+            auto gate      = expert_linear(ctx, "experts.gate_proj.weight", xf, selected_experts);
+            auto up        = expert_linear(ctx, "experts.up_proj.weight", xf, selected_experts);
+            auto activated = ggml_swiglu_split(gctx, gate, up);
+            auto experts   = expert_linear(ctx, "experts.down_proj.weight", activated, selected_experts);
+            experts        = ggml_mul(gctx, experts, weights);
+
+            ggml_tensor* out = nullptr;
+            for (int64_t i = 0; i < num_experts_per_tok; ++i) {
+                auto expert_out = ggml_view_2d(gctx,
+                                               experts,
+                                               hidden_size,
+                                               n_token_total,
+                                               experts->nb[2],
+                                               i * experts->nb[1]);
+                out             = out == nullptr ? expert_out : ggml_add(gctx, out, expert_out);
+            }
+            if (num_experts_per_tok == 1) {
+                out = ggml_cont(gctx, out);
+            }
+            out = ggml_reshape_3d(gctx, out, hidden_size, n_token, N);
+
+            auto shared_it = blocks.find("shared_experts");
+            if (shared_it != blocks.end()) {
+                auto shared_experts = std::dynamic_pointer_cast<MLP>(shared_it->second);
+                out                 = ggml_add(gctx, out, shared_experts->forward(ctx, identity));
+            }
+
+            return out;
+        }
+    };
+
     struct GPTOSSMLP : public GGMLBlock {
     protected:
         int64_t hidden_size;
@@ -605,21 +832,31 @@ namespace LLM {
             }
             txt_token_end = image_embeds[i].first;
 
-            auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
-            if (input_embed == nullptr) {
-                input_embed = txt_embed;
-            } else {
-                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
+            // An embed can sit flush against the previous one or at the very start/end of the
+            // sequence, leaving no text tokens to splice around it.
+            if (txt_token_end > txt_token_start) {
+                auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+                if (input_embed == nullptr) {
+                    input_embed = txt_embed;
+                } else {
+                    input_embed = ggml_concat(ctx->ggml_ctx, input_embed, txt_embed, 1);
+                }
             }
 
-            input_embed = ggml_concat(ctx->ggml_ctx, input_embed, image_embeds[i].second, 1);
+            if (input_embed == nullptr) {
+                input_embed = image_embeds[i].second;
+            } else {
+                input_embed = ggml_concat(ctx->ggml_ctx, input_embed, image_embeds[i].second, 1);
+            }
         }
 
         txt_token_start = image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1];
         txt_token_end   = raw_x->ne[1];
 
-        auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
-        input_embed          = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
+        if (txt_token_end > txt_token_start) {
+            auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+            input_embed          = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
+        }
         GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);
         return input_embed;
     }
@@ -1122,6 +1359,7 @@ namespace LLM {
         bool k_eq_v;
         bool v_norm;
         bool unscaled_attention;
+        bool qkv_fused;
         float rms_norm_eps;
         int rope_pairs;
 
@@ -1147,12 +1385,20 @@ namespace LLM {
               k_eq_v(global_layer && config.global_k_eq_v),
               v_norm(config.v_norm),
               unscaled_attention(config.unscaled_attention),
+              qkv_fused(config.qkv_fused),
               rms_norm_eps(config.rms_norm_eps),
               rope_pairs(0) {
-            blocks["q_proj"] = std::make_shared<Linear>(config.hidden_size, num_heads * head_dim, config.qkv_bias);
-            blocks["k_proj"] = std::make_shared<Linear>(config.hidden_size, num_kv_heads * head_dim, config.qkv_bias);
-            if (!k_eq_v) {
-                blocks["v_proj"] = std::make_shared<Linear>(config.hidden_size, num_kv_heads * head_dim, config.qkv_bias);
+            if (qkv_fused) {
+                // The checkpoint ships q, k and v as one tensor and the loader cannot split a
+                // source tensor, so keep it fused and slice it in forward().
+                GGML_ASSERT(!k_eq_v);
+                blocks["query_key_value"] = std::make_shared<Linear>(config.hidden_size, (num_heads + num_kv_heads * 2) * head_dim, config.qkv_bias);
+            } else {
+                blocks["q_proj"] = std::make_shared<Linear>(config.hidden_size, num_heads * head_dim, config.qkv_bias);
+                blocks["k_proj"] = std::make_shared<Linear>(config.hidden_size, num_kv_heads * head_dim, config.qkv_bias);
+                if (!k_eq_v) {
+                    blocks["v_proj"] = std::make_shared<Linear>(config.hidden_size, num_kv_heads * head_dim, config.qkv_bias);
+                }
             }
             blocks["o_proj"] = std::make_shared<Linear>(num_heads * head_dim, config.hidden_size, config.attention_out_bias);
             if (config.qk_norm) {
@@ -1161,7 +1407,7 @@ namespace LLM {
             }
             // Proportional RoPE rotates only the leading `rope_pairs` dimension pairs of the head;
             // the rest are left unrotated through freq_factors (see rope_freq_factors()).
-            float partial = global_layer ? config.global_partial_rotary : 1.f;
+            float partial = global_layer && config.global_partial_rotary != 1.f ? config.global_partial_rotary : config.partial_rotary;
             rope_pairs    = static_cast<int>(partial * head_dim / 2.f);
         }
 
@@ -1186,14 +1432,28 @@ namespace LLM {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
-            auto q_proj     = std::dynamic_pointer_cast<Linear>(blocks["q_proj"]);
-            auto k_proj     = std::dynamic_pointer_cast<Linear>(blocks["k_proj"]);
-            auto v_proj     = k_eq_v ? nullptr : std::dynamic_pointer_cast<Linear>(blocks["v_proj"]);
             auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks["o_proj"]);
 
-            auto q = q_proj->forward(ctx, x);               // [N, n_token, num_heads*head_dim]
-            auto k = k_proj->forward(ctx, x);               // [N, n_token, num_kv_heads*head_dim]
-            auto v = k_eq_v ? k : v_proj->forward(ctx, x);  // [N, n_token, num_kv_heads*head_dim]
+            ggml_tensor* q = nullptr;
+            ggml_tensor* k = nullptr;
+            ggml_tensor* v = nullptr;
+            if (qkv_fused) {
+                auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["query_key_value"]);
+                auto qkv      = qkv_proj->forward(ctx, x);  // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
+                int64_t q_len = num_heads * head_dim;
+                int64_t k_len = num_kv_heads * head_dim;
+                q             = ggml_ext_slice(ctx->ggml_ctx, qkv, 0, 0, q_len);
+                k             = ggml_ext_slice(ctx->ggml_ctx, qkv, 0, q_len, q_len + k_len);
+                v             = ggml_ext_slice(ctx->ggml_ctx, qkv, 0, q_len + k_len, q_len + k_len * 2);
+            } else {
+                auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["q_proj"]);
+                auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["k_proj"]);
+                auto v_proj = k_eq_v ? nullptr : std::dynamic_pointer_cast<Linear>(blocks["v_proj"]);
+
+                q = q_proj->forward(ctx, x);               // [N, n_token, num_heads*head_dim]
+                k = k_proj->forward(ctx, x);               // [N, n_token, num_kv_heads*head_dim]
+                v = k_eq_v ? k : v_proj->forward(ctx, x);  // [N, n_token, num_kv_heads*head_dim]
+            }
 
             q = ggml_reshape_4d(ctx->ggml_ctx, q, head_dim, num_heads, n_token, N);     // [N, n_token, num_heads, head_dim]
             k = ggml_reshape_4d(ctx->ggml_ctx, k, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
@@ -1336,6 +1596,38 @@ namespace LLM {
                                   1.f,
                                   32.f,
                                   1.f);
+            } else if (arch == LLMArch::LLADA2_MOE) {
+                // LLaDA2 slices the head (query[..., :rotary_dim]) instead of zero-padding
+                // inv_freq like gemma does, so rotate_half pairs i with i + rotary_dim/2 and the
+                // frequencies use rotary_dim as the exponent denominator. Passing n_dims =
+                // rotary_dim reproduces both; freq_factors would give the wrong pairing.
+                int rotary_dim = rope_pairs * 2;
+                q              = ggml_rope_ext(ctx->ggml_ctx,
+                                               q,
+                                               input_pos,
+                                               nullptr,
+                                               rotary_dim,
+                                               GGML_ROPE_TYPE_NEOX,
+                                               static_cast<int>(max_position_embeddings),
+                                               rope_thetas[0],
+                                               1.f,
+                                               0.f,
+                                               1.f,
+                                               32.f,
+                                               1.f);
+                k              = ggml_rope_ext(ctx->ggml_ctx,
+                                               k,
+                                               input_pos,
+                                               nullptr,
+                                               rotary_dim,
+                                               GGML_ROPE_TYPE_NEOX,
+                                               static_cast<int>(max_position_embeddings),
+                                               rope_thetas[0],
+                                               1.f,
+                                               0.f,
+                                               1.f,
+                                               32.f,
+                                               1.f);
             } else if (arch == LLMArch::QWEN3_VL) {
                 int sections[4] = {24, 20, 20, 0};
                 q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, head_dim, sections, GGML_ROPE_TYPE_IMROPE, 262144, 5000000.f, 1.f, 0.f, 1.f, 32.f, 1.f);
@@ -1432,6 +1724,8 @@ namespace LLM {
             blocks["self_attn"] = std::make_shared<Attention>(config, sliding_attention == 0);
             if (config.arch == LLMArch::GPT_OSS_20B) {
                 blocks["mlp"] = std::make_shared<GPTOSSMLP>(config);
+            } else if (config.arch == LLMArch::LLADA2_MOE && layer_index >= config.first_k_dense_replace) {
+                blocks["mlp"] = std::make_shared<LLaDA2MoEMLP>(config);
             } else {
                 blocks["mlp"] = std::make_shared<MLP>(config.hidden_size,
                                                       config.intermediate_size,
@@ -1485,6 +1779,10 @@ namespace LLM {
             if (arch == LLMArch::GPT_OSS_20B) {
                 auto mlp = std::dynamic_pointer_cast<GPTOSSMLP>(blocks["mlp"]);
                 x        = mlp->forward(ctx, x);
+            } else if (auto moe_mlp = std::dynamic_pointer_cast<LLaDA2MoEMLP>(blocks["mlp"])) {
+                // LLaDA2 is dense for the first first_k_dense_replace layers and MoE afterwards,
+                // so the block type varies per layer rather than per arch.
+                x = moe_mlp->forward(ctx, x);
             } else {
                 auto mlp = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
                 x        = mlp->forward(ctx, x);
@@ -1648,6 +1946,11 @@ namespace LLM {
                                     out_layers,
                                     return_all_hidden_states);
             return x;
+        }
+
+        ggml_tensor* embed(GGMLRunnerContext* ctx, ggml_tensor* input_ids) {
+            auto model = std::dynamic_pointer_cast<TextModel>(blocks["model"]);
+            return model->embed(ctx, input_ids);
         }
 
         std::shared_ptr<VisionModel> vision_model() {
@@ -1990,7 +2293,8 @@ namespace LLM {
                 config.arch == LLMArch::GEMMA3_12B ||
                 config.arch == LLMArch::GEMMA4_12B ||
                 config.arch == LLMArch::GEMMA2_2B ||
-                config.arch == LLMArch::GPT_OSS_20B) {
+                config.arch == LLMArch::GPT_OSS_20B ||
+                config.arch == LLMArch::LLADA2_MOE) {
                 input_pos_vec.resize(n_tokens);
                 for (int i = 0; i < n_tokens; ++i) {
                     input_pos_vec[i] = i;
@@ -2042,8 +2346,9 @@ namespace LLM {
                 attention_mask_vec.resize(n_tokens * n_tokens);
                 for (int i0 = 0; i0 < n_tokens; i0++) {
                     for (int i1 = 0; i1 < n_tokens; i1++) {
+                        // Diffusion LLMs attend in both directions; only causal LMs get the triangle.
                         float value = 0.f;
-                        if (i0 > i1) {
+                        if (!config.bidirectional && i0 > i1) {
                             value = -INFINITY;
                         }
                         attention_mask_vec[i1 * n_tokens + i0] = value;
@@ -2112,6 +2417,22 @@ namespace LLM {
                                    return_all_hidden_states);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, auto_runner_end),
+                                                   input_ids.dim() + 1);
+        }
+
+        // LLaDA-Image's QueryFormer consumes the raw token embeddings before the backbone runs,
+        // so it needs the embedding lookup on its own.
+        sd::Tensor<float> compute_input_embeds(const int n_threads,
+                                               const sd::Tensor<int32_t>& input_ids) {
+            auto get_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf  = new_graph_custom(LLM_GRAPH_SIZE);
+                ggml_tensor* ids = make_input(input_ids);
+                auto runner_ctx  = get_context();
+                ggml_tensor* out = model.embed(&runner_ctx, ids);
+                ggml_build_forward_expand(gf, out);
+                return gf;
+            };
+            return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, true),
                                                    input_ids.dim() + 1);
         }
 
@@ -2370,11 +2691,13 @@ namespace LLM {
                 pad_id = 199999;
             } else if (arch == LLMArch::GEMMA2_2B) {
                 pad_id = 0;
+            } else if (arch == LLMArch::LLADA2_MOE) {
+                pad_id = 156892;
             }
             tokenizer = tokenizers.create(TokenizerConfig::MAIN, model.config.vocab_size, pad_id);
             if (!tokenizer) {
-                if (arch == LLMArch::GPT_OSS_20B || arch == LLMArch::GEMMA2_2B) {
-                    throw std::runtime_error("GPT-OSS and Gemma 2 require an external tokenizer.json in the main tokenizer slot");
+                if (arch == LLMArch::GPT_OSS_20B || arch == LLMArch::GEMMA2_2B || arch == LLMArch::LLADA2_MOE) {
+                    throw std::runtime_error("GPT-OSS, Gemma 2 and LLaDA2 require an external tokenizer.json in the main tokenizer slot");
                 }
                 if (arch == LLMArch::MISTRAL_SMALL_3_2 || arch == LLMArch::MINISTRAL_3_3B) {
                     tokenizer = std::make_shared<MistralTokenizer>();

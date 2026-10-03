@@ -24,6 +24,7 @@ namespace WAN {
         std::tuple<int, int, int> padding;
         std::tuple<int, int, int> dilation;
         bool bias;
+        float scale = 1.f;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             auto weight = tensor_storage_map.find(prefix + "weight");
@@ -60,6 +61,10 @@ namespace WAN {
               dilation(std::move(dilation)),
               bias(bias) {}
 
+        void set_scale(float scale_value) {
+            scale = scale_value;
+        }
+
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* cache_x = nullptr) {
             // x: [N*IC, ID, IH, IW]
             // result: x: [N*OC, ID, IH, IW]
@@ -82,11 +87,25 @@ namespace WAN {
             }
 
             x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+            if (w->ne[2] == 1 && x->ne[2] == 1 && x->ne[3] == in_channels) {
+                // One frame through a one-frame-deep kernel is a 2D conv; backends without
+                // im2col_3d (Metal) otherwise fall back to a much slower direct conv_3d.
+                if (!ggml_is_contiguous(x)) {
+                    x = ggml_cont(ctx->ggml_ctx, x);
+                }
+                ggml_tensor* x2 = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], x->ne[1], in_channels, 1);
+                ggml_tensor* w2 = ggml_reshape_4d(ctx->ggml_ctx, w, w->ne[0], w->ne[1], in_channels, out_channels);
+                x2              = ggml_ext_conv_2d(ctx->ggml_ctx, x2, w2, b,
+                                                   std::get<2>(stride), std::get<1>(stride), 0, 0,
+                                                   std::get<2>(dilation), std::get<1>(dilation),
+                                                   ctx->conv2d_direct_enabled, false, false, scale);
+                return ggml_reshape_4d(ctx->ggml_ctx, x2, x2->ne[0], x2->ne[1], 1, out_channels);
+            }
             return ggml_ext_conv_3d(ctx->ggml_ctx, ctx->backend, x, w, b, in_channels,
                                     std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                     0, 0, 0,
                                     std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation),
-                                    false, ctx->conv3d_direct_enabled);
+                                    false, ctx->conv3d_direct_enabled, scale);
         }
     };
 
@@ -1070,11 +1089,11 @@ namespace WAN {
             }
 
             if (version == VERSION_QWEN_IMAGE_2_1) {
-                wan2_2              = true;
-                dec_dim             = 144;
-                z_dim               = 64;
-                input_channels      = 4;
-                dim_mult            = {1, 2, 4, 8, 8};
+                wan2_2         = true;
+                dec_dim        = 144;
+                z_dim          = 64;
+                input_channels = 4;
+                dim_mult       = {1, 2, 4, 8, 8};
             }
 
             if (is_2D) {
@@ -1102,6 +1121,19 @@ namespace WAN {
                 blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2dBut3d(z_dim, z_dim, {1, 1}));
             } else {
                 blocks["conv2"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(z_dim, z_dim, {1, 1, 1}));
+            }
+            if (version == VERSION_QWEN_IMAGE_2_1) {
+                // Keep large VAE activations within the FP16 convolution range.
+                const float conv_scale = 1.f / 128.f;
+                std::vector<GGMLBlock*> all_blocks;
+                get_all_blocks(all_blocks);
+                for (auto block : all_blocks) {
+                    if (auto conv = dynamic_cast<Conv2d*>(block)) {
+                        conv->set_scale(conv_scale);
+                    } else if (auto conv = dynamic_cast<CausalConv3d*>(block)) {
+                        conv->set_scale(conv_scale);
+                    }
+                }
             }
         }
 
@@ -1429,15 +1461,14 @@ namespace WAN {
 
             ggml_tensor* z = make_input(z_tensor);
 
-            auto runner_ctx = get_context();
+            auto runner_ctx = get_context(gf);
 
             ggml_tensor* out = ae.decode_tiled_chunk(&runner_ctx, z, chunk_idx);
 
             for (size_t feat_idx = 0; feat_idx < ae._feat_map.size(); feat_idx++) {
                 ggml_tensor* feat_cache = ae._feat_map[feat_idx];
                 if (feat_cache != nullptr) {
-                    cache("feat_idx:" + std::to_string(feat_idx), feat_cache);
-                    ggml_build_forward_expand(gf, feat_cache);
+                    runner_ctx.persist_cache_tensor("feat_idx:" + std::to_string(feat_idx), feat_cache);
                 }
             }
 

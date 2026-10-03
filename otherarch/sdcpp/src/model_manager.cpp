@@ -780,38 +780,52 @@ bool ModelManager::validate_tensor(const TensorState& state) const {
 
 bool ModelManager::mmap_params(const std::vector<TensorState*>& states,
                                std::vector<ParamsStorageBlock*>& created_storage_blocks) {
-    std::map<std::string, ggml_tensor*> mmap_candidates;
-    std::map<std::string, TensorState*> mmap_states;
+    // A GPU that computes on mmapped params in place cannot address a CPU buffer, and nothing
+    // stages them for it, so they are mapped through a buffer of that GPU's device.
+    struct MmapGroup {
+        std::map<std::string, ggml_tensor*> candidates;
+        std::map<std::string, TensorState*> states;
+    };
+    std::map<ggml_backend_dev_t, MmapGroup> groups;
     for (TensorState* state : states) {
         if (state == nullptr || !can_mmap_storage(*state) || state->tensor == nullptr ||
             state->tensor->data != nullptr || state->tensor->view_src != nullptr) {
             continue;
         }
-        mmap_candidates[state->name] = state->tensor;
-        mmap_states[state->name]     = state;
-    }
-    if (mmap_candidates.empty()) {
-        return true;
-    }
-
-    auto mmap_store = model_loader_.mmap_tensors(mmap_candidates, {}, writable_mmap_);
-    if (mmap_store.empty()) {
-        return true;
-    }
-
-    auto block                = std::make_unique<ParamsStorageBlock>();
-    block->mmap_tensor_stores = std::move(mmap_store);
-    ParamsStorageBlock* raw   = block.get();
-    for (const auto& pair : mmap_states) {
-        TensorState* state = pair.second;
-        if (state != nullptr && state->tensor != nullptr && state->tensor->data != nullptr) {
-            block->states.push_back(state);
+        ggml_backend_dev_t device = nullptr;
+        if (!sd_backend_is_cpu(state->compute_backend) && !sd_backend_is_cpu(state->params_backend)) {
+            device = ggml_backend_get_device(state->compute_backend);
         }
+        MmapGroup& group              = groups[device];
+        group.candidates[state->name] = state->tensor;
+        group.states[state->name]     = state;
     }
 
-    if (!block->states.empty()) {
-        params_storage_blocks_.push_back(std::move(block));
-        created_storage_blocks.push_back(raw);
+    for (auto& [device, group] : groups) {
+        // Device buffers wrap read-only mappings only; params that LoRAs are merged into in place
+        // are loaded instead.
+        if (device != nullptr && writable_mmap_) {
+            continue;
+        }
+        auto mmap_store = model_loader_.mmap_tensors(group.candidates, {}, writable_mmap_, device);
+        if (mmap_store.empty()) {
+            continue;
+        }
+
+        auto block                = std::make_unique<ParamsStorageBlock>();
+        block->mmap_tensor_stores = std::move(mmap_store);
+        ParamsStorageBlock* raw   = block.get();
+        for (const auto& pair : group.states) {
+            TensorState* state = pair.second;
+            if (state != nullptr && state->tensor != nullptr && state->tensor->data != nullptr) {
+                block->states.push_back(state);
+            }
+        }
+
+        if (!block->states.empty()) {
+            params_storage_blocks_.push_back(std::move(block));
+            created_storage_blocks.push_back(raw);
+        }
     }
     return true;
 }
@@ -1353,15 +1367,16 @@ size_t ModelManager::compute_backend_resident_bytes(ggml_backend_t compute_backe
     }
 
     size_t total_size = 0;
-    auto add_buffer   = [&](ggml_backend_buffer_t buffer) {
-        if (buffer == nullptr || ggml_backend_buffer_is_host(buffer)) {
+    std::unordered_set<ggml_backend_buffer_t> seen;
+    auto add_buffer = [&](ggml_backend_buffer_t buffer) {
+        if (buffer == nullptr || ggml_backend_buffer_is_host(buffer) || !seen.insert(buffer).second) {
             return;
         }
         ggml_backend_buffer_type_t buffer_type = ggml_backend_buffer_get_type(buffer);
         auto split_devices                     = split_buffer_devices_.find(buffer_type);
         const bool on_device                   = split_devices == split_buffer_devices_.end()
-                                                       ? buffer_type != nullptr && ggml_backend_buft_get_device(buffer_type) == compute_device
-                                                       : std::any_of(split_devices->second.begin(), split_devices->second.end(), [&](const auto& entry) {
+                                                     ? buffer_type != nullptr && ggml_backend_buft_get_device(buffer_type) == compute_device
+                                                     : std::any_of(split_devices->second.begin(), split_devices->second.end(), [&](const auto& entry) {
                                          return ggml_backend_get_device(entry.first) == compute_device;
                                      });
         if (!on_device) {
@@ -1371,9 +1386,16 @@ size_t ModelManager::compute_backend_resident_bytes(ggml_backend_t compute_backe
         total_size               = buffer_size > SIZE_MAX - total_size ? SIZE_MAX : total_size + buffer_size;
     };
 
+    // The loader may retain device mappings after their parameter blocks are released.
+    for (ggml_backend_buffer_t buffer : model_loader_.get_device_mmap_buffers()) {
+        add_buffer(buffer);
+    }
     for (const auto& block : params_storage_blocks_) {
         if (block != nullptr) {
             add_buffer(block->buffer);
+            for (const auto& store : block->mmap_tensor_stores) {
+                add_buffer(store.mmbuffer.get());
+            }
         }
     }
     for (const auto& block : compute_staging_blocks_) {
@@ -1613,7 +1635,8 @@ void ModelManager::remove_runtime_owner(uintptr_t owner_id) {
 
 ModelManager::CapacityCheck ModelManager::check_capacity(
     const DeviceMemoryRequest& request,
-    const std::vector<TensorState*>& states) const {
+    const std::vector<TensorState*>& states,
+    bool log_details) const {
     CapacityCheck result;
     if (request.compute_backend == nullptr || sd_backend_is_cpu(request.compute_backend)) {
         return result;
@@ -1631,16 +1654,23 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
         }
         size_t free_bytes = 0, total_bytes = 0;
         ggml_backend_dev_memory(device, &free_bytes, &total_bytes);
+        const size_t weights_resident = compute_backend_resident_bytes(backend);
+        const size_t other_runtime    = other_runtime_resident_bytes(request.owner_id, backend);
+        const size_t resident         = add(weights_resident, add(other_runtime, request.runtime_resident_bytes));
+        if (log_details) {
+            LOG_WARN("model manager memory on %s: reported free %.2f MB / total %.2f MB, tracked weights %.2f MB / other runtime %.2f MB / current runtime %.2f MB",
+                        ggml_backend_name(backend),
+                        free_bytes / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0),
+                        weights_resident / (1024.0 * 1024.0), other_runtime / (1024.0 * 1024.0),
+                        request.runtime_resident_bytes / (1024.0 * 1024.0));
+        }
         if (free_bytes == 0 && total_bytes == 0) {
             return SIZE_MAX;
         }
         // Vulkan's heap budget subtraction can underflow when usage exceeds the budget.
-        if (total_bytes > 0 && free_bytes > total_bytes) {
+        if (total_bytes > 0 && free_bytes > total_bytes && sd_backend_is(backend, "Vulkan")) {
             return size_t{0};
         }
-        const size_t resident = add(compute_backend_resident_bytes(backend),
-                                       add(other_runtime_resident_bytes(request.owner_id, backend),
-                                           request.runtime_resident_bytes));
         if (total_bytes > 0) {
             free_bytes = std::min(free_bytes, resident < total_bytes ? total_bytes - resident : 0);
         }
@@ -1786,7 +1816,7 @@ bool ModelManager::ensure_compute_backend_capacity(
         }
     }
 
-    const auto capacity                = check_capacity(request, required_states);
+    const auto capacity                = check_capacity(request, required_states, true);
     const std::string available_device = capacity.available_device_bytes == SIZE_MAX
                                              ? "unknown"
                                              : sd_format("%.2f MB", capacity.available_device_bytes / (1024.0 * 1024.0));

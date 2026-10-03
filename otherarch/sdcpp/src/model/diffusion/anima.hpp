@@ -603,34 +603,37 @@ namespace Anima {
             return std::pow(extrapolation_ratio, static_cast<float>(axis_dim) / static_cast<float>(axis_dim - 2));
         }
 
-        static std::vector<float> gen_anima_image_pe_vec(int bs,
-                                                         int h,
-                                                         int w,
-                                                         int patch_size,
-                                                         int theta,
-                                                         const std::vector<int>& axes_dim,
-                                                         float h_extrapolation_ratio,
-                                                         float w_extrapolation_ratio,
-                                                         float t_extrapolation_ratio,
-                                                         const std::vector<ggml_tensor*>& ref_latents) {
-            auto ids = Rope::gen_flux_ids(h,
-                                          w,
-                                          patch_size,
-                                          bs,
-                                          static_cast<int>(axes_dim.size()),
-                                          0,
-                                          {},
-                                          ref_latents,
-                                          Rope::RefIndexMode::FIXED,
-                                          1.0f,
-                                          false);
+        static Rope::Embedding gen_anima_image_pe_vec(int bs,
+                                                      int h,
+                                                      int w,
+                                                      int patch_size,
+                                                      int theta,
+                                                      const std::vector<int>& axes_dim,
+                                                      float h_extrapolation_ratio,
+                                                      float w_extrapolation_ratio,
+                                                      float t_extrapolation_ratio,
+                                                      const std::vector<ggml_tensor*>& ref_latents) {
+            Rope::Embedding result;
+            result.batch_size = bs;
+            result.ids        = Rope::gen_flux_ids(h,
+                                                   w,
+                                                   patch_size,
+                                                   bs,
+                                                   static_cast<int>(axes_dim.size()),
+                                                   0,
+                                                   {},
+                                                   ref_latents,
+                                                   Rope::RefIndexMode::FIXED,
+                                                   1.0f,
+                                                   false, &result.positions);
 
             std::vector<float> axis_thetas = {
                 static_cast<float>(theta) * calc_ntk_factor(t_extrapolation_ratio, axes_dim[0]),
                 static_cast<float>(theta) * calc_ntk_factor(h_extrapolation_ratio, axes_dim[1]),
                 static_cast<float>(theta) * calc_ntk_factor(w_extrapolation_ratio, axes_dim[2]),
             };
-            return Rope::embed_nd(ids, bs, axis_thetas, axes_dim);
+            result.values = Rope::embed_nd(result.ids, bs, axis_thetas, axes_dim, result.layout, &result.frequencies);
+            return result;
         }
 
         ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
@@ -657,16 +660,16 @@ namespace Anima {
             int64_t h_pad = x->ne[1] + pad_h;
             int64_t w_pad = x->ne[0] + pad_w;
 
-            image_pe_vec          = gen_anima_image_pe_vec(1,
-                                                           static_cast<int>(h_pad),
-                                                           static_cast<int>(w_pad),
-                                                           static_cast<int>(config.patch_size),
-                                                           config.theta,
-                                                           config.axes_dim,
-                                                           4.0f,
-                                                           4.0f,
-                                                           1.0f,
-                                                           ref_latents);
+            image_pe_vec          = finish_rope_pe(gen_anima_image_pe_vec(1,
+                                                                          static_cast<int>(h_pad),
+                                                                          static_cast<int>(w_pad),
+                                                                          static_cast<int>(config.patch_size),
+                                                                          config.theta,
+                                                                          config.axes_dim,
+                                                                          4.0f,
+                                                                          4.0f,
+                                                                          1.0f,
+                                                                          ref_latents));
             int64_t image_pos_len = static_cast<int64_t>(image_pe_vec.size()) / (2 * 2 * (config.head_dim / 2));
             auto image_pe         = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, image_pos_len);
             set_backend_tensor_data(image_pe, image_pe_vec.data());

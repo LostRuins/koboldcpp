@@ -79,6 +79,7 @@ enum scheduler_t {
     FLUX2_SCHEDULER,
     FLUX_SCHEDULER,
     BETA_SCHEDULER,
+    LLADA_IMAGE_SCHEDULER,
     SCHEDULER_COUNT
 };
 
@@ -245,6 +246,8 @@ typedef struct {
     float linear_scale;              // Override linear input scaling; 0 keeps the model default
     float attn_scale;                // Override flash-attention K/V scaling; 0 keeps the model default
     const char* tokenizer;           // tokenizer.json path or main=FILE,clip-l=FILE,clip-g=FILE assignments; required for PiD and Lens
+    bool sage_attn;
+    int conditioning_cache_size;  // Maximum cached conditioning entries per context; 0 disables caching (default: 4)
 } sd_ctx_params_t;
 
 typedef struct {
@@ -260,6 +263,11 @@ typedef struct {
     uint32_t channel;
     uint8_t* data;
 } sd_image_t;
+
+typedef struct {
+    // Semicolon-separated target=...,key=value rules. NULL preserves defaults.
+    const char* rules;
+} sd_image_preprocess_params_t;
 
 typedef struct {
     sd_image_t* frames;
@@ -408,6 +416,7 @@ typedef struct {
     int qwen_image_layers;
     bool circular_x;
     bool circular_y;
+    sd_image_preprocess_params_t image_preprocess;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -442,6 +451,7 @@ typedef struct {
     sd_hires_params_t hires;
     bool circular_x;
     bool circular_y;
+    sd_image_preprocess_params_t image_preprocess;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
@@ -549,6 +559,8 @@ SD_API bool upscale(upscaler_ctx_t* upscaler_ctx,
                     int* num_images_out);
 
 SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
+// Reads model metadata only; returns 0 if the file is not a recognized RGB ESRGAN model.
+SD_API int get_upscaler_model_scale(const char* model_path);
 
 typedef struct adetailer_ctx_t adetailer_ctx_t;
 

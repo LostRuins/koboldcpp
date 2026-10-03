@@ -488,6 +488,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(inputs.max_vram && *inputs.max_vram) {
         max_vram = inputs.max_vram;
         printf("Using max VRAM = %s GB\n", max_vram.c_str());
+        if (params_backend == "") {
+            printf("Note: a VRAM limit may not be effective without offloading!\n");
+        }
     }
     if(inputs.quant > 0)
     {

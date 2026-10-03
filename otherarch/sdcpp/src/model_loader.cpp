@@ -339,7 +339,13 @@ bool ModelLoader::init_from_safetensors_index_file(const std::string& file_path,
     }
 
     for (const std::string& shard_path : shard_paths) {
-        if (!parse_file(shard_path, prefix)) {
+        FileStamp stamp;
+        if (!read_file_stamp(shard_path, stamp)) {
+            return false;
+        }
+        parsed_dependencies_.push_back(stamp);
+        LOG_INFO("load %s using safetensors format", shard_path.c_str());
+        if (!init_from_safetensors_file(shard_path, prefix)) {
             return false;
         }
     }
@@ -540,6 +546,9 @@ SDVersion ModelLoader::get_sd_version() const {
         }
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.0.img_mlp.gate_proj.weight") != std::string::npos) {
             return VERSION_OVIS_IMAGE;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.sigvq_embedder.1.weight") != std::string::npos) {
+            return VERSION_LLADA_IMAGE;
         }
         if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
             return VERSION_Z_IMAGE;
@@ -898,7 +907,8 @@ void ModelLoader::process_model_files(bool enable_mmap, bool writable_mmap) {
 
 std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
                                                        std::set<std::string> ignore_tensors,
-                                                       bool writable_mmap) {
+                                                       bool writable_mmap,
+                                                       ggml_backend_dev_t device) {
     std::set<std::string> names;
     for (const auto& entry : tensors) {
         names.insert(entry.first);
@@ -919,6 +929,39 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
     for (auto& fdata : file_data) {
         if (!fdata.mmbuffer)
             continue;
+
+        // Wrapped on first use: a device buffer makes the whole file resident on that device.
+        std::shared_ptr<struct ggml_backend_buffer> file_buffer = device == nullptr ? fdata.mmbuffer : nullptr;
+        bool file_unmappable                                    = false;
+
+        auto buffer_for_file = [&]() -> ggml_backend_buffer_t {
+            if (file_buffer || file_unmappable) {
+                return file_buffer.get();
+            }
+            auto cached = fdata.device_mmbuffers.find(device);
+            if (cached != fdata.device_mmbuffers.end()) {
+                file_buffer = cached->second;
+                return file_buffer.get();
+            }
+            size_t max_tensor_size = 0;
+            for (const auto& ts : fdata.tensors) {
+                max_tensor_size = std::max(max_tensor_size, static_cast<size_t>(ts.nbytes()));
+            }
+            ggml_backend_buffer_t buf = sd_backend_dev_buffer_from_host_ptr(device,
+                                                                            fdata.mmapped->writable_data(),
+                                                                            fdata.mmapped->size(),
+                                                                            max_tensor_size);
+            if (buf == nullptr) {
+                LOG_WARN("mmap: %s cannot map '%s', loading it instead",
+                         ggml_backend_dev_name(device), fdata.path.c_str());
+                file_unmappable = true;
+                return nullptr;
+            }
+            LOG_INFO("mmap: mapped '%s' for %s", fdata.path.c_str(), ggml_backend_dev_name(device));
+            file_buffer                    = std::shared_ptr<struct ggml_backend_buffer>(buf, ggml_backend_buffer_free);
+            fdata.device_mmbuffers[device] = file_buffer;
+            return file_buffer.get();
+        };
 
         const std::vector<TensorStorage>& file_tensors = fdata.tensors;
 
@@ -969,10 +1012,13 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
                 continue;
             }
 
-            ggml_backend_buffer_t buf_mmap = fdata.mmbuffer.get();
-            uint8_t* mmap_data             = static_cast<uint8_t*>(ggml_backend_buffer_get_base(buf_mmap));
-            dst_tensor->buffer             = buf_mmap;
-            dst_tensor->data               = mmap_data + tensor_offset;
+            ggml_backend_buffer_t buf_mmap = buffer_for_file();
+            if (buf_mmap == nullptr) {
+                break;
+            }
+            uint8_t* mmap_data = static_cast<uint8_t*>(ggml_backend_buffer_get_base(buf_mmap));
+            dst_tensor->buffer = buf_mmap;
+            dst_tensor->data   = mmap_data + tensor_offset;
 
             file_mapped_bytes += tensor_size;
             file_mapped_tensors++;
@@ -981,7 +1027,7 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
         if (file_mapped_bytes > 0) {
             mapped_tensors += file_mapped_tensors;
             mapped_bytes += file_mapped_bytes;
-            result.push_back({fdata.mmapped, fdata.mmbuffer});
+            result.push_back({fdata.mmapped, file_buffer});
         }
     }
 
@@ -995,6 +1041,16 @@ std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggm
              duration_ms / 1000.0);
 
     return result;
+}
+
+std::vector<ggml_backend_buffer_t> ModelLoader::get_device_mmap_buffers() const {
+    std::vector<ggml_backend_buffer_t> buffers;
+    for (const auto& fdata : file_data) {
+        for (const auto& entry : fdata.device_mmbuffers) {
+            buffers.push_back(entry.second.get());
+        }
+    }
+    return buffers;
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
@@ -1140,6 +1196,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
 
                     // skip mmapped tensors
                     if (dst_tensor->buffer != nullptr && dst_tensor->buffer == fdata.mmbuffer.get()) {
+                        continue;
+                    }
+                    if (dst_tensor->buffer != nullptr &&
+                        std::any_of(fdata.device_mmbuffers.begin(), fdata.device_mmbuffers.end(),
+                                    [&](const auto& entry) { return entry.second.get() == dst_tensor->buffer; })) {
                         continue;
                     }
 
@@ -1599,6 +1660,9 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
             // Pass, do not convert. For Unet
         } else if (contains(name, "embedding")) {
             // Pass, do not convert embedding
+        } else if (ends_with(name, "_pad_token")) {
+            // Pass, do not convert. LLaDA-Image stores its pad tokens far outside the f16
+            // range, so any format with an f16 scale or payload turns them into inf.
         } else {
             return true;
         }

@@ -728,12 +728,20 @@ inline float flux_time_shift(float mu, float sigma, float t) {
 
 // https://github.com/black-forest-labs/flux/blob/main/src/flux/sampling.py#L289
 struct FluxScheduler : SigmaScheduler {
-    int image_seq_len = 0;
-    float base_shift  = 0.5f;
-    float max_shift   = 1.15f;
+    int image_seq_len      = 0;
+    int base_image_seq_len = 256;
+    int max_image_seq_len  = 4096;
+    float base_shift       = 0.5f;
+    float max_shift        = 1.15f;
+    float shift_terminal   = 0.0f;
 
-    explicit FluxScheduler(int image_seq_len, const char* extra_sample_args = nullptr)
+    FluxScheduler(int image_seq_len, SDVersion version, const char* extra_sample_args = nullptr)
         : image_seq_len(image_seq_len) {
+        if (version == VERSION_QWEN_IMAGE_2_1) {
+            max_image_seq_len = 8192;
+            max_shift         = 0.9f;
+            shift_terminal    = 0.02f;
+        }
         parse_extra_sample_args(extra_sample_args);
     }
 
@@ -752,10 +760,8 @@ struct FluxScheduler : SigmaScheduler {
     }
 
     float compute_mu() const {
-        constexpr float base_shift_anchor = 256.0f;
-        constexpr float max_shift_anchor  = 4096.0f;
-        float m                           = (max_shift - base_shift) / (max_shift_anchor - base_shift_anchor);
-        float b                           = base_shift - m * base_shift_anchor;
+        float m = (max_shift - base_shift) / static_cast<float>(max_image_seq_len - base_image_seq_len);
+        float b = base_shift - m * static_cast<float>(base_image_seq_len);
         return static_cast<float>(image_seq_len) * m + b;
     }
 
@@ -764,7 +770,7 @@ struct FluxScheduler : SigmaScheduler {
         sigmas.reserve(n + 1);
 
         float mu = compute_mu();
-        LOG_VERBOSE("Flux scheduler: image_seq_len=%d, steps=%u, mu=%.3f", image_seq_len, n, mu);
+        LOG_VERBOSE("Flux scheduler: image_seq_len=%d, steps=%u, mu=%.3f, shift_terminal=%.3f", image_seq_len, n, mu, shift_terminal);
 
         if (n == 0) {
             sigmas.push_back(1.0f);
@@ -780,12 +786,70 @@ struct FluxScheduler : SigmaScheduler {
             }
         }
 
+        if (shift_terminal > 0.0f && n > 1) {
+            // The terminal shift applies to the last model evaluation, not the final zero sigma.
+            float scale_factor = (1.0f - sigmas[n - 1]) / (1.0f - shift_terminal);
+            if (std::isfinite(scale_factor) && scale_factor > 0.0f) {
+                for (uint32_t i = 0; i < n; ++i) {
+                    sigmas[i] = 1.0f - (1.0f - sigmas[i]) / scale_factor;
+                }
+            }
+        }
+
         sigmas[n] = 0.0f;
         return sigmas;
     }
 };
 
 // https://github.com/black-forest-labs/flux2/blob/main/src/flux2/sampling.py#L244
+// LLaDA-Image does not use a shift-based flow schedule. The reference pipeline builds a
+// Kumaraswamy-shaped grid over t = linspace(0.001, 1, n + 1)[:-1]:
+//     schedule = (1 - (1 - t^1.17)^0.8)^1.1
+//     sigma    = 1 - schedule
+// Its scheduler config can also set use_uniform_sigmas, which replaces the whole curve with a
+// plain linspace(1, 0, n + 1)[:-1] pre-shift grid.
+struct LLaDAImageScheduler : SigmaScheduler {
+    bool uniform_sigmas = false;
+
+    explicit LLaDAImageScheduler(const char* extra_sample_args = nullptr) {
+        parse_extra_sample_args(extra_sample_args);
+    }
+
+    void parse_extra_sample_args(const char* extra_sample_args) {
+        for (const auto& [key, value] : parse_key_value_args(extra_sample_args, "llada_image scheduler arg")) {
+            if (key == "uniform") {
+                if (!parse_strict_bool(value, uniform_sigmas)) {
+                    LOG_WARN("ignoring invalid llada_image scheduler arg '%s=%s'", key.c_str(), value.c_str());
+                }
+            }
+        }
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t /*t_to_sigma*/) override {
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+
+        if (n == 0) {
+            sigmas.push_back(1.0f);
+            return sigmas;
+        }
+
+        for (uint32_t i = 0; i < n; ++i) {
+            float progress = static_cast<float>(i) / static_cast<float>(n);
+            if (uniform_sigmas) {
+                sigmas.push_back(1.0f - progress);
+            } else {
+                float t        = 0.001f + progress * (1.0f - 0.001f);
+                float schedule = powf(1.0f - powf(1.0f - powf(t, 1.17f), 0.8f), 1.1f);
+                sigmas.push_back(1.0f - schedule);
+            }
+        }
+
+        sigmas.push_back(0.0f);
+        return sigmas;
+    }
+};
+
 struct Flux2Scheduler : SigmaScheduler {
     int image_seq_len = 0;
 
@@ -1123,9 +1187,14 @@ struct Denoiser {
                 scheduler = std::make_shared<Flux2Scheduler>(image_seq_len);
                 break;
             }
+            case LLADA_IMAGE_SCHEDULER: {
+                LOG_INFO("get_sigmas with LLaDA-Image scheduler");
+                scheduler = std::make_shared<LLaDAImageScheduler>(extra_sample_args);
+                break;
+            }
             case FLUX_SCHEDULER: {
                 LOG_INFO("get_sigmas with Flux scheduler");
-                scheduler = std::make_shared<FluxScheduler>(image_seq_len, extra_sample_args);
+                scheduler = std::make_shared<FluxScheduler>(image_seq_len, version, extra_sample_args);
                 break;
             }
             default:
