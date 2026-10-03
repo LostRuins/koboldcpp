@@ -4640,6 +4640,47 @@ def sweep_media_from_messages(messages_array):
     return images, audio
 
 
+def apply_forced_sysprompt(genparams, api_format):
+    forced_sysprompt = genparams.get("add_sysprompt", "")
+    if not forced_sysprompt:
+        return genparams
+    if not isinstance(forced_sysprompt, str):
+        forced_sysprompt = str(forced_sysprompt)
+
+    # Responses and Anthropic requests are converted to OpenAI chat requests
+    # below. Defer injection until that conversion so the prefix is not added
+    # twice or lost when their messages array is rebuilt.
+    if api_format == 8 or api_format == 9:
+        return genparams
+
+    if api_format == 4 or api_format == 7:
+        messages = genparams.get("messages", [])
+        if isinstance(messages, list):
+            for message in messages:
+                if not isinstance(message, dict) or message.get("role") != "system":
+                    continue
+                content = message.get("content", "")
+                if isinstance(content, str):
+                    message["content"] = forced_sysprompt + content
+                elif isinstance(content, list):
+                    content.insert(0, {"type": "text", "text": forced_sysprompt})
+                else:
+                    message["content"] = forced_sysprompt + ("" if content is None else str(content))
+                break
+            else:
+                messages.insert(0, {"role": "system", "content": forced_sysprompt})
+            genparams["messages"] = messages
+            return genparams
+
+    if api_format == 6:
+        system_prompt = genparams.get("system", "")
+        genparams["system"] = forced_sysprompt + (system_prompt if isinstance(system_prompt, str) else str(system_prompt))
+    else:
+        memory = genparams.get("memory", "")
+        genparams["memory"] = forced_sysprompt + (memory if isinstance(memory, str) else str(memory))
+    return genparams
+
+
 def transform_genparams(genparams, api_format, use_jinja):
     global chatcompl_adapter, maxctx, thinkformats, cached_jinja_kwargs
 
@@ -4675,6 +4716,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
 
     used_tool_json = None
     #api format 1=basic,2=kai,3=oai,4=oai-chat,5=interrogate,6=ollama,7=ollamachat,8=oai-responses,9=anthropic-messages
+    apply_forced_sysprompt(genparams, api_format)
     #alias all nonstandard alternative names for rep pen.
     rp1 = float(genparams.get('repeat_penalty', 1.0))
     rp2 = float(genparams.get('repetition_penalty', 1.0))
