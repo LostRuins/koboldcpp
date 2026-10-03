@@ -470,7 +470,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         if (!lora_dynamic && inputs.lora_len > 0) {
             printf("Note: static LoRAs can reduce mmap memory savings!\n");
         }
-    } else if (inputs.params_backend == "CPU") {
+    } else if (params_backend == "CPU") {
         printf("Offloading weights to system RAM\n");
     } else if (inputs.use_mmap) {
         printf("Using mmap for I/O\n");

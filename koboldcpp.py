@@ -86,6 +86,7 @@ showdebug = True
 kcpp_instance = None #global running instance
 global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False}
 using_gui_launcher = False
+cli_arg_overrides = set()
 
 handle = None
 friendlymodelname = "inactive"
@@ -2049,7 +2050,7 @@ def fetch_gpu_properties(testCU,testVK,testmemory=False):
         MaxMemory[0] = max(cumem,MaxMemory[0])
         MaxFreeMemory[0] = max(freecumem,MaxFreeMemory[0])
         if testmemory:
-            print(f'detected CUDA memory: {cumem/(1024*1024)} MB, {freecumem/(1024*102)} MB free')
+            print(f'detected CUDA memory: {cumem/(1024*1024)} MB, {freecumem/(1024*1024)} MB free')
 
     if testVK:
         vkmem = detect_memory_vk(gpumem_ignore_limit_min, gpumem_ignore_limit_max)
@@ -7400,27 +7401,25 @@ Change Mode<br>
                 return
             if savedata_obj is None:
                 response_body = (json.dumps([]).encode())
-                return
-            output = []
-            for i in range (net_save_slots):
-                if str(i) in savedata_obj:
-                    output.append(savedata_obj[str(i)]["title"])
-                else:
-                    output.append("")
-            response_body = (json.dumps(output).encode())
+            else:
+                output = []
+                for i in range (net_save_slots):
+                    if str(i) in savedata_obj:
+                        output.append(savedata_obj[str(i)]["title"])
+                    else:
+                        output.append("")
+                response_body = (json.dumps(output).encode())
 
         elif clean_path.endswith('/api/extra/data/load'):
             if not self.secure_endpoint():
                 return
-            if savedata_obj is None:
-                response_body = (json.dumps({"success":False,"data":None}).encode())
             loadid = -1
             try:
                 tempbody = json.loads(body)
                 loadid = tryparseint(tempbody.get('slot', 0),0)
             except Exception:
                 loadid = -1
-            if loadid < 0 or str(loadid) not in savedata_obj:
+            if savedata_obj is None or loadid < 0 or str(loadid) not in savedata_obj:
                 response_body = (json.dumps({"success":False,"data":None}).encode())
             else:
                 response_body = (json.dumps({"success":True,"data":savedata_obj[str(loadid)]}).encode())
@@ -9413,18 +9412,22 @@ def show_gui():
                     gpu_choice_var.set("0")
                     print(f"Auto Selected HIP Backend (flag={cpusupport})\n")
                     found_new_backend = True
-            elif exitcounter < 100 and (1 in VKIsDGPU) and runmode_untouched and ("Use Vulkan" in runopts or "Use Vulkan (Old CPU)" in runopts):
+            elif exitcounter < 100 and (1 in VKIsDGPU) and runmode_untouched:
                 for i in range(0,len(VKIsDGPU)):
                     if VKIsDGPU[i]==1:
                         if cpusupport<1 and "Use Vulkan" in runopts:
                             runopts_var.set("Use Vulkan")
-                        else:
+                        elif cpusupport<2 and "Use Vulkan (Old CPU)" in runopts:
                             runopts_var.set("Use Vulkan (Old CPU)")
+                        elif "Use Vulkan (Older CPU)" in runopts:
+                            runopts_var.set("Use Vulkan (Older CPU)")
+                        else:
+                            break
                         gpu_choice_var.set(str(i))
                         print(f"Auto Selected Vulkan Backend (flag={cpusupport})\n")
                         found_new_backend = True
                         break
-            else:
+            if not found_new_backend and runmode_untouched:
                 if runopts_var.get()=="Use CPU" and cpusupport==1 and "Use CPU (Old CPU)" in runopts:
                     runopts_var.set("Use CPU (Old CPU)")
                 elif runopts_var.get()=="Use CPU" and cpusupport==2 and "Failsafe Mode (Older CPU)" in runopts:
@@ -9441,9 +9444,12 @@ def show_gui():
             if filepath.lower().endswith('.kcpps'):
                 global runmode_untouched
                 runmode_untouched = False
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                dict = json.load(f)
-                import_vars(dict)
+            try:
+                config = read_config_file(filepath)
+            except (OSError, ValueError) as ex:
+                show_gui_msgbox("Invalid Config", f"Could not load config '{filepath}': {ex}")
+                return
+            import_vars(config)
 
     def gui_changed_modelfile(*args):
         global importvars_in_progress
@@ -9691,7 +9697,7 @@ def show_gui():
         makecheckbox(quick_tab, name, properties[0], int(idx/2) + 20, idx % 2, tooltiptxt=properties[1])
 
     # context size
-    makeslider(quick_tab, "Context Size:", contextsize_text, context_var, 40, width=280, set=default_contextsize_index, tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
+    quick_context_slider, _, _ = makeslider(quick_tab, "Context Size:", contextsize_text, context_var, 40, width=280, set=default_contextsize_index, tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
 
     # load model
     makefileentry(quick_tab, "GGUF Text Model:", "Select GGUF or GGML Model File", model_var, 50, 280, onchoosefile=on_picked_model_file,tooltiptxt="Select a GGUF or GGML model file on disk to be loaded.")
@@ -9783,7 +9789,7 @@ def show_gui():
     cacheslots_entry, cacheslots_label = makelabelentry(context_tab, "CacheSlots:", smartcacheslots_var, row=5, padx=(300), singleline=True, tooltip="Number of slots for smartcache",labelpadx=(220))
 
     # context size
-    makeslider(context_tab, "Context Size:",contextsize_text, context_var, 18, width=280, set=default_contextsize_index,tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
+    context_slider, _, _ = makeslider(context_tab, "Context Size:",contextsize_text, context_var, 18, width=280, set=default_contextsize_index,tooltip="What is the maximum context size to support. Model specific. You cannot exceed it.\nLarger contexts require more memory, and not all models support it.")
     context_var.trace_add("write", changed_gpulayers_estimate)
     makelabelentry(context_tab, "Default Gen Amt:", defaultgenamt_var, row=20, padx=(120), singleline=True, tooltip="How many tokens to generate by default, if not specified. Must be smaller than context size. Usually, your frontend GUI will override this.")
     makelabelentry(context_tab, "Prompt Limit:", genlimit_var, row=20, padx=(300), singleline=True, tooltip="If set, restricts max output tokens to this limit regardless of API request. Set to 0 to disable.",labelpadx=(210))
@@ -10492,6 +10498,7 @@ def show_gui():
         args.sdloramult = sanitize_lora_multipliers(re.split(r"[ |]+", sd_loramult_var.get()))
         args.sdmaingpu = sd_resolve_device(sd_main_gpu_var.get())
         args.gendefaults = gen_defaults_var.get()  if gen_defaults_var.get() != "" else ""
+        args.reasoningeffort = "default" # already incorporated into the editable generation defaults
         args.gendefaultsoverwrite = (gen_defaults_overwrite_var.get()==1)
         args.whispermodel = whisper_model_var.get() if whisper_model_var.get() != "" else ""
         args.embeddingsmodel = embeddings_model_var.get()  if embeddings_model_var.get() != "" else ""
@@ -10638,7 +10645,13 @@ def show_gui():
         else:
             deviceoverride_var.set("")
         if "contextsize" in mydict and mydict["contextsize"]:
-            context_var.set(contextsize_text.index(str(mydict["contextsize"])))
+            contextsize = str(mydict["contextsize"])
+            if contextsize not in contextsize_text:
+                contextsize_text.append(contextsize)
+                contextsize_text.sort(key=int)
+                for slider in (quick_context_slider, context_slider):
+                    slider.configure(to=len(contextsize_text)-1, number_of_steps=len(contextsize_text)-1)
+            context_var.set(contextsize_text.index(contextsize))
         if "overridenativecontext" in mydict and mydict["overridenativecontext"]>0:
             customrope_var.set(1)
             manualrope_var.set(0)
@@ -10801,13 +10814,9 @@ def show_gui():
             sd_runtime_loras_var.set(0)
         sd_vram_limit_var.set(str(mydict["sdvramlimit"]) if ("sdvramlimit" in mydict and mydict["sdvramlimit"]) else "")
 
-        gendefaults = (mydict["gendefaults"] if ("gendefaults" in mydict and mydict["gendefaults"]) else "")
+        gendefaults = get_reasoning_defaults(mydict)
         if isinstance(gendefaults, type({})):
             gendefaults = json.dumps(gendefaults)
-        if "reasoningeffort" in mydict and mydict["reasoningeffort"] and mydict["reasoningeffort"]!="default":
-            gendefaults = (json.loads(gendefaults) if gendefaults else {})
-            gendefaults["reasoning_effort"] = mydict["reasoningeffort"]
-            gendefaults = json.dumps(gendefaults) if gendefaults else ""
         gen_defaults_var.set(gendefaults)
         gen_defaults_overwrite_var.set(1 if "gendefaultsoverwrite" in mydict and mydict["gendefaultsoverwrite"] else 0)
 
@@ -10873,9 +10882,12 @@ def show_gui():
                 print("You can try using the legacy filepicker instead (in Extra).")
             return
         runmode_untouched = False
-        with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
-            dict = json.load(f)
-            import_vars(dict)
+        try:
+            config = read_config_file(filename)
+        except (OSError, ValueError) as ex:
+            show_gui_msgbox("Invalid Config", f"Could not load config '{filename}': {ex}")
+            return
+        import_vars(config)
         pass
 
     def display_help():
@@ -11443,31 +11455,62 @@ def reload_new_config(filename,defaultargs,overwrite_blank=False): #for changing
         except Exception as e:
             print(f"Reload New Config Failed: {e}")
 
-def load_config_cli(filename):
-    print(f"Loading configuration file {filename}...")
+def read_config_file(filename):
     with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
         config = json.load(f)
-        config = convert_invalid_args(config)
-        if "onready" in config and not getattr(args, "allow_config_onready", False):
-            config["onready"] = "" #do not allow onready commands from config
-        if "allow_config_onready" in config:
-            del config["allow_config_onready"] #do not allow configs to opt into onready commands
-        args.istemplate = False
-        raw_args = (sys.argv[1:]) #a lousy hack to allow for overriding kcpps
-        # special: overriding model applies to model_param too
-        if "--model" in raw_args:
-            raw_args.append("--model_param")
-        for key, value in config.items():
-            if f"--{key}" in raw_args:
-                if key!="config":
-                    print(f"Overriding Config Value: {key}")
-            else:
-                setattr(args, key, value)
-        if args.istemplate:
-            print("\nA .kcppt template was selected from CLI...")
-            if (args.usecuda is None) and (args.usevulkan is None):
-                print("Automatically selecting your backend...")
-                auto_set_backend_cli()
+    if not isinstance(config, dict):
+        raise ValueError("Config must contain a JSON object.")
+    return config
+
+def get_cli_arg_overrides(parser, argv=None):
+    # Reuse argparse's alias/value handling, omitting arguments that were not supplied.
+    explicit_parser = copy.deepcopy(parser)
+    for action in explicit_parser._actions:
+        action.default = None
+    explicit = {key: value for key, value in vars(explicit_parser.parse_args(argv)).items() if value is not None}
+    model = explicit.get("model_param", "")
+    if model.lower().split("?")[0].endswith(('.kcpps', '.kcppt')):
+        explicit.pop("model_param") # positional config files are not model overrides
+    overrides = set(explicit)
+    if overrides & {"model", "model_param"}:
+        overrides.update(("model", "model_param"))
+    if overrides & {"port", "port_param"}:
+        overrides.update(("port", "port_param"))
+    return overrides
+
+def get_reasoning_defaults(config):
+    defaults = config.get("gendefaults") or ""
+    effort = config.get("reasoningeffort", "default")
+    if effort and effort != "default":
+        defaults = (parse_json_object(defaults, "gendefaults") or {}).copy()
+        defaults["reasoning_effort"] = effort
+        defaults = json.dumps(defaults)
+    return defaults
+
+def load_config_cli(filename):
+    print(f"Loading configuration file {filename}...")
+    try:
+        config = read_config_file(filename)
+    except (OSError, ValueError) as ex:
+        exit_with_error(2, f"Could not load config '{filename}': {ex}")
+        return
+    config = convert_invalid_args(config)
+    if "onready" in config and not getattr(args, "allow_config_onready", False):
+        config["onready"] = "" #do not allow onready commands from config
+    if "allow_config_onready" in config:
+        del config["allow_config_onready"] #do not allow configs to opt into onready commands
+    args.istemplate = False
+    for key, value in config.items():
+        if key in cli_arg_overrides:
+            if key!="config":
+                print(f"Overriding Config Value: {key}")
+        else:
+            setattr(args, key, value)
+    if args.istemplate:
+        print("\nA .kcppt template was selected from CLI...")
+        if (args.usecuda is None) and (args.usevulkan is None):
+            print("Automatically selecting your backend...")
+            auto_set_backend_cli()
 
 def apply_agent_launch_safeguards(launch_args):
     if not launch_args.agent:
@@ -12482,6 +12525,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     start_server = True
 
     args = launch_args
+    args.gendefaults = get_reasoning_defaults(vars(args))
     global_memory = g_memory
     using_gui_launcher = gui_launcher
     start_time = time.time()
@@ -12793,7 +12837,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 process.nice(psutil.REALTIME_PRIORITY_CLASS)
                 print("High Priority for Windows Set: " + str(oldprio) + " to " + str(process.nice()))
             elif os_used == "linux":  # linux
-                process.nice(psutil.IOPRIO_CLASS_RT)
+                process.nice(-18)
                 print("High Priority for Linux Set: " + str(oldprio) + " to " + str(process.nice()))
             else:  # MAC OS X or other
                 process.nice(-18)
@@ -12827,16 +12871,15 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         nocertify = True
         ssl._create_default_https_context = ssl._create_unverified_context
 
+    if args.usecpu and args.rpcmode!="connect":
+        args.gpulayers = 0
+        args.autofit = False
+
     if args.gpulayers:
         if args.autofit:
             args.gpulayers = -1
-        shouldavoidgpu = False
-        if args.usecpu and sys.platform!="darwin":
-            shouldavoidgpu = True
-            if args.gpulayers and args.gpulayers>0 and args.rpcmode!="connect":
-                print("WARNING: GPU layers is set, but a GPU backend was not selected! GPU will not be used!")
-                args.gpulayers = 0
-        elif args.gpulayers==-1 and sys.platform=="darwin" and args.model_param and os.path.exists(args.model_param):
+        shouldavoidgpu = args.usecpu
+        if not shouldavoidgpu and args.gpulayers==-1 and sys.platform=="darwin" and args.model_param and os.path.exists(args.model_param):
             print("MacOS detected: Auto GPU layers set to maximum")
             args.gpulayers = 200
         elif not shouldavoidgpu:
@@ -13111,7 +13154,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     if args.embeddingsmodel and args.embeddingsmodel!="":
         if not os.path.exists(args.embeddingsmodel):
             if args.ignoremissing:
-                print("Ignoring missing TTS model files!")
+                print("Ignoring missing embedding model files!")
                 args.embeddingsmodel = None
             else:
                 exitcounter = 999
@@ -13178,6 +13221,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 if not loadok:
                     exitcounter = 999
                     exit_with_error(3, "Could not load Music models!")
+        else:
+            exitcounter = 999
+            exit_with_error(2, "Invalid config: Music embedding and Music VAE models require a Music Diffusion model!")
 
     #load embedded lite
     embddir = os.path.join(os.path.abspath(os.path.dirname(os.path.realpath(__file__))),"embd_res")
@@ -13548,7 +13594,7 @@ if __name__ == '__main__':
     modelgroup = parser.add_mutually_exclusive_group() #we want to be backwards compatible with the unnamed positional args
     modelgroup.add_argument("--model","-m", metavar=('[filenames]'), help="Model file to load. Accepts multiple values if they are URLs.", type=str, nargs='+', default=[])
     modelgroup.add_argument("model_param", help="Model file to load (positional)", nargs="?")
-    parser.add_argument("--config", metavar=('[filename]'), help="Load settings from a .kcpps file. Other arguments will be ignored", type=str, nargs=1)
+    parser.add_argument("--config", metavar=('[filename]'), help="Load settings from a .kcpps file. Explicit command-line arguments override the file", type=str, nargs=1)
     parser.add_argument("--contextsize","--ctx-size", "-c", help=f"Controls the memory allocated for maximum context size, only change if you need more RAM for big contexts. (default {default_maxctx}).",metavar=('[256 to 524288]'), type=check_range(int,256,524288), default=default_maxctx)
     parser.add_argument("--gpulayers","--gpu-layers","--n-gpu-layers","-ngl", help="Set number of layers to offload to GPU (when using GPU). Set to -1 to enable autofit (default), set to 0 to disable GPU offload.",metavar=('[GPU layers]'), nargs='?', const=1, type=int, default=-1)
     parser.add_argument("--host", metavar=('[ipaddr]'), help="Host IP to listen on. If this flag is not set, all routable interfaces are accepted.", default="")
@@ -13751,4 +13797,6 @@ if __name__ == '__main__':
     internalgroup.add_argument("--agent-base-url", help=argparse.SUPPRESS, default=None)
     internalgroup.add_argument("--agent-api-key", help=argparse.SUPPRESS, default=None)
 
-    main(launch_args=parser.parse_args(),default_args=parser.parse_args([]))
+    launch_args = parser.parse_args()
+    cli_arg_overrides = get_cli_arg_overrides(parser)
+    main(launch_args=launch_args,default_args=parser.parse_args([]))
