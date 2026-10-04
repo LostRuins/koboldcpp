@@ -11146,6 +11146,9 @@ def show_gui():
         # processing vars
         kcpp_exporting_template = False
         export_vars()
+        # Cancel pending callbacks before destroy deletes their Tcl commands.
+        for after_id in root.tk.splitlist(root.tk.call("after", "info")):
+            root.tk.call("after", "cancel", after_id)
         root.destroy()
 
         if not has_valid_model():
