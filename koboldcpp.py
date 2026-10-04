@@ -8924,7 +8924,7 @@ def show_gui():
         root.attributes("-alpha", 0)
         args.model_param = zentk_askopenfilename(title="Select ggml model .bin or .gguf file or .kcpps config")
         root.withdraw()
-        root.quit()
+        root.destroy()
         if args.model_param and args.model_param!="" and (args.model_param.lower().endswith('.kcpps') or args.model_param.lower().endswith('.kcppt') or args.model_param.lower().endswith('.kcpps?download=true') or args.model_param.lower().endswith('.kcppt?download=true')):
             dlfile = download_model_from_url(args.model_param,[".kcpps",".kcppt"]) # maybe download from url
             if dlfile:
@@ -11146,6 +11146,7 @@ def show_gui():
         # processing vars
         kcpp_exporting_template = False
         export_vars()
+        root.destroy()
 
         if not has_valid_model():
             exitcounter = 999
@@ -12324,6 +12325,9 @@ def main(launch_args, default_args):
         print("***")
         try:
             show_gui()
+            # Collect GUI reference cycles on the Tk thread, after show_gui's locals are released.
+            import gc
+            gc.collect()
         except Exception as ex:
             exitcounter = 999
             ermsg = "Reason: " + str(ex) + "\nFile selection GUI unsupported.\ncustomtkinter python module required!\n\nYou must use the command line instead, e.g. python ./koboldcpp.py --help"
