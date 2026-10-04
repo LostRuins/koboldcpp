@@ -1207,6 +1207,15 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             sd_params->cfg_scale = 1.0f;
             sd_params->sample_steps = 1;
         }
+        // A custom sigma list determines the real sampler iteration count and
+        // would otherwise bypass the SDXS one-step restriction above. A
+        // two-value list already represents one step and remains valid.
+        if (custom_sigmas.size() > 2) {
+            if (!sd_is_quiet && sddebugmode) {
+                printf("SDXS: ignoring custom sigma schedule with more than 1 step\n");
+            }
+            custom_sigmas.clear();
+        }
     }
 
     //if a single extra image is provided, mask is NOT provided, and img2img image is NOT provided

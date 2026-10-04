@@ -2619,15 +2619,23 @@ def sd_build_custom_sigmas():
     gend = gendefaults_parse_meta_field(args.gendefaults or '')
     custom = gend.get('custom_sigmas', {})
     if not isinstance(custom, dict):
-        print(f"Warning: gendefaults custom_sigmas is not a dictionary, ignoring")
+        print("Warning: gendefaults custom_sigmas is not a dictionary, ignoring")
         return result
     builtin = {str(s).lower() for s in cached_sd_info.get('available_schedulers', [])}
     for name, values in custom.items():
         key = str(name).lower()
-        valid = (isinstance(values, list) and len(values) >= 2
-                 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values))
-        if not valid:
+        if (not isinstance(values, list) or len(values) < 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values)):
             print(f"Warning: gendefaults custom_sigmas entry '{name}' is not a list of at least 2 numbers, ignoring")
+            continue
+        try:
+            sigmas = [float(v) for v in values]
+        except (OverflowError, TypeError, ValueError):
+            print(f"Warning: gendefaults custom_sigmas entry '{name}' contains an invalid number, ignoring")
+            continue
+        # sanitize inputs
+        if not all(math.isfinite(v) and math.isfinite(ctypes.c_float(v).value) for v in sigmas):
+            print(f"Warning: gendefaults custom_sigmas entry '{name}' contains a non-finite or out-of-range number, ignoring")
             continue
         if key in builtin:
             print(f"Warning: gendefaults custom_sigmas entry '{name}' collides with a built-in scheduler, ignoring")
@@ -2635,7 +2643,7 @@ def sd_build_custom_sigmas():
         if key in result:
             print(f"Warning: gendefaults custom_sigmas entry '{name}' duplicates an earlier entry, ignoring")
             continue
-        result[key] = [float(v) for v in values]
+        result[key] = sigmas
     return result
 
 
