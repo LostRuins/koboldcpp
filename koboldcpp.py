@@ -4301,6 +4301,9 @@ def remove_outer_tags(inputstr):
 def normalize_anthropic_tools_input(tools): #Convert Anthropic-format tool definitions to OpenAI format.
     normalized = []
     for tool in tools:
+        if not isinstance(tool, dict):
+            print(f"Dropped unsupported tool: {tool}")
+            continue
         if tool.get("type") == "function" and "function" in tool: # Already in OpenAI format — leave it alone
             normalized.append(tool)
             continue
@@ -4314,6 +4317,22 @@ def normalize_anthropic_tools_input(tools): #Convert Anthropic-format tool defin
         # Unknown format, drop the tool
         print(f"Dropped unsupported tool: {tool}")
         # normalized.append(tool)
+    return normalized
+
+def normalize_openai_tools_input(tools):
+    """Keep only function tools that KoboldCpp can execute."""
+    normalized = []
+    if not isinstance(tools, list):
+        print(f"Dropped unsupported tools value: {tools}")
+        return normalized
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if isinstance(tool, dict) and tool.get("type") == "function" and isinstance(function, dict) and function.get("name"):
+            normalized.append(tool)
+        else:
+            # OpenAI built-in tools (for example web_search) require provider-side
+            # implementations and cannot be exposed to the local model as functions.
+            print(f"Dropped unsupported tool: {tool}")
     return normalized
 
 def normalize_tool_call_resp(obj): # Normalize various tool call formats to OpenAI format
@@ -4634,16 +4653,28 @@ def determine_tool_json_to_use(genparams, curr_ctx, assistant_message_start, is_
 def compress_tools_array(tools_array):
     tools_array_filtered = []
     for tool_dict in tools_array:
+        if not isinstance(tool_dict, dict):
+            continue
         tool_data = tool_dict
         if 'function' in tool_dict:
             tool_data = tool_dict['function']
+        if not isinstance(tool_data, dict) or not tool_data.get("name"):
+            continue
         tool_props = {}
         params = tool_data.get("parameters", {})
+        if not isinstance(params, dict):
+            params = {}
         props = params.get("properties", {})
+        if not isinstance(props, dict):
+            props = {}
         for prop_name, prop_data in props.items():
+            if not isinstance(prop_data, dict):
+                continue
             prop_type = prop_data.get("type")
             if prop_type is None and "anyOf" in prop_data:
                 for option in prop_data["anyOf"]:
+                    if not isinstance(option, dict):
+                        continue
                     option_type = option.get("type")
                     if option_type and option_type != "null":
                         prop_type = option_type
@@ -4652,7 +4683,7 @@ def compress_tools_array(tools_array):
                 prop_type = "string"
             tool_props[prop_name] = prop_type
         tools_array_filtered.append({
-            "name": tool_data['name'],
+            "name": tool_data["name"],
             "description": tool_data.get("description", ""),
             "properties": tool_props
         })
@@ -4806,6 +4837,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
         genparams["mirostat"] = genparams.get('mirostat_mode', 0)
 
         if api_format==4 or api_format==7: #handle ollama chat here too
+            if genparams.get("tools"):
+                genparams["tools"] = normalize_openai_tools_input(genparams["tools"])
             # translate openai chat completion messages format into one big string.
             messages_array = genparams.get('messages', [])
             messages_string = adapter_obj.get("chat_start", "")

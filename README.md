@@ -6,7 +6,7 @@ Inspired by **KoboldAI** and built on **llama.cpp**
 
 One executable file, no installation required. Ready-to-run downloads are available for Windows, Linux, and macOS.
 
-**[Download KoboldCpp](https://github.com/LostRuins/koboldcpp/releases/latest) | [Documentation and FAQ](https://github.com/LostRuins/koboldcpp/wiki) | [API reference](https://lite.koboldai.net/koboldcpp_api) | [Discord community](https://koboldai.org/discord)**
+**[Download KoboldCpp](https://github.com/LostRuins/koboldcpp/releases/latest) | [Quick Start](#quick-start) | [Documentation and FAQ](https://github.com/LostRuins/koboldcpp/wiki) | [API reference](https://lite.koboldai.net/koboldcpp_api) | [Discord community](https://koboldai.org/discord)**
 
 ![Integrated Web UI](media/preview.png)
 ![Roleplay Chat Mode](media/preview2.png)
@@ -99,8 +99,11 @@ KoboldCpp also retains backward compatibility with legacy GGML `.bin` models, th
 - Lightweight and Fast: [Gemma3-4B](https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf)
   - Add [optional Gemma3-4B MMproj file](https://huggingface.co/koboldcpp/mmproj/resolve/main/gemma3-4b-mmproj-q8.gguf) for vision recognition capabilities.
 - Image Generation: [PicX Real](https://huggingface.co/koboldcpp/imgmodel/resolve/main/picx_real_q5_1.gguf)
-- Speech Recognition: [Whisper models for Speech-To-Text](https://huggingface.co/koboldcpp/whisper/tree/main)
-- Text-To-Speech: [TTS models for Narration](https://huggingface.co/koboldcpp/tts/tree/main)
+  - Or browse [More image generation models](https://huggingface.co/koboldcpp/imgmodel/tree/main)
+- Speech Recognition: [Whisper Base](https://huggingface.co/koboldcpp/whisper/resolve/main/whisper-base.en-q5_1.bin)
+  - Or browse [More Whisper models for Speech-To-Text](https://huggingface.co/koboldcpp/whisper/tree/main)
+- Text-To-Speech: [Kokoro TTS](https://huggingface.co/koboldcpp/tts/resolve/main/Kokoro_no_espeak_Q4.gguf)
+  - Or browse [More TTS models for Narration](https://huggingface.co/koboldcpp/tts/tree/main)
 - This is just a list for noobs to get started! There are hundreds more GGUFs out there!
 - [More newbie templates](https://huggingface.co/koboldcpp/newbie-templates) - Contains premade KoboldCpp quick launch templates curated for newbies.
 - [More popular templates](https://huggingface.co/koboldcpp/popular-templates) - Contains premade KoboldCpp quick launch templates curated for popularity.
