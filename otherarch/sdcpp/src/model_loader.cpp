@@ -1326,14 +1326,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb,
                             return;
                         }
                         bytes_processed.fetch_add(scale_nbytes);
-                    } else
-#if !KCPP_MAINLINE_FP8_SCALED
-                    if (tensor_storage.is_f8_e4m3) {
-                        f8_e4m3_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
-                    } else if (tensor_storage.is_f8_e5m2) {
-                        f8_e5m2_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
-                    } else
-#endif
+                    } else //kcpp
                     if (tensor_storage.is_f64) {
                         f64_to_f32_vec((double*)read_buf, (float*)target_buf, tensor_storage.nelements());
                     } else if (tensor_storage.is_i64) {
