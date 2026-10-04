@@ -60,7 +60,7 @@ MAX_VIEW_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_PROJECT_INSTRUCTION_CHARS = 10000
 DEFAULT_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:5001/v1")
 DEFAULT_API_KEY = os.getenv("OPENAI_API_KEY", "local")
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "local-model")
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "")
 # Accept self-signed endpoint certificates for now; web_fetch keeps verification.
 API_SSL_CONTEXT = ssl._create_unverified_context()
 COLOR_STDOUT = False
@@ -1605,8 +1605,8 @@ def call_mcp_tool(
     return json.dumps(result, ensure_ascii=False)
 
 
-def probe_endpoint(base_url: str, api_key: str, timeout: int) -> tuple[bool, str]:
-    """Check reachability without spending tokens on a completion."""
+def probe_endpoint(base_url: str, api_key: str, timeout: int) -> tuple[bool, str, list[str]]:
+    """Check reachability and discover model IDs without requesting a completion."""
     request = urllib.request.Request(
         api_url(base_url, "models"),
         headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
@@ -1614,15 +1614,26 @@ def probe_endpoint(base_url: str, api_key: str, timeout: int) -> tuple[bool, str
     )
     try:
         with urllib.request.urlopen(request, timeout=min(timeout, 5), context=API_SSL_CONTEXT) as response:
-            response.read(1)
-            return True, f"HTTP {response.status}"
+            detail = f"HTTP {response.status}"
+            try:
+                payload = json.load(response)
+            except (ValueError, UnicodeError):
+                return True, detail, []
+            models: list[str] = []
+            entries = payload.get("data", []) if isinstance(payload, dict) else []
+            if isinstance(entries, list):
+                for entry in entries:
+                    model_id = entry.get("id") if isinstance(entry, dict) else None
+                    if isinstance(model_id, str) and model_id.strip() and model_id not in models:
+                        models.append(model_id)
+            return True, detail, models
     except urllib.error.HTTPError as exc:
         # Authentication failures and servers without /models are still reachable.
         if exc.code < 500:
-            return True, f"HTTP {exc.code}"
-        return False, f"HTTP {exc.code}"
+            return True, f"HTTP {exc.code}", []
+        return False, f"HTTP {exc.code}", []
     except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
-        return False, str(exc)
+        return False, str(exc), []
 
 
 def recover_connection(
@@ -1652,10 +1663,10 @@ def recover_connection(
                 return connection
             continue
         if answer in {"", "r", "retry", "reconnect"}:
-            reachable, detail = probe_endpoint(current_url, api_key, timeout)
+            reachable, detail, models = probe_endpoint(current_url, api_key, timeout)
             if reachable:
                 print(f"Endpoint responded: {current_url} ({detail}).\n")
-                return current_url, api_key, model
+                return current_url, api_key, model or (models[0] if models else "local-model")
             reason = detail
             continue
         print("Choose r, w, or c.")
@@ -1665,7 +1676,7 @@ def prompt_for_connection(
     current_url: str, current_key: str, current_model: str, timeout: int
 ) -> tuple[str, str, str] | None:
     """Collect and check connection settings before applying any of them."""
-    print("\nConnect to a model endpoint. Press Enter to keep a value, or type /cancel.")
+    print("\nConnect to a model endpoint. Press Enter to accept a default, or type /cancel.")
     try:
         while True:
             requested_url = input(f"Endpoint URL [{current_url}]: ").strip()
@@ -1685,20 +1696,28 @@ def prompt_for_connection(
             return None
         candidate_key = requested_key if requested_key else current_key
 
-        requested_model = input(f"Model [{current_model}]: ").strip()
+        reachable, detail, models = probe_endpoint(candidate_url, candidate_key, timeout)
+        if not reachable:
+            print(f"Connection failed: {detail}. Settings unchanged.\n")
+            return None
+        print(f"Endpoint responded: {candidate_url} ({detail}).")
+        if models:
+            print("Available models:")
+            for model_id in models:
+                print(f"  {model_id}")
+            default_model = current_model if current_model in models else models[0]
+        else:
+            print("No model names available. Enter a model name manually if needed.")
+            default_model = current_model or "local-model"
+        requested_model = input(f"Model [{default_model}]: ").strip()
         if requested_model.lower() == "/cancel":
             print("Connection unchanged.\n")
             return None
-        candidate_model = requested_model or current_model
+        candidate_model = requested_model or default_model
     except (EOFError, KeyboardInterrupt):
         print("\nConnection unchanged.\n")
         return None
 
-    reachable, detail = probe_endpoint(candidate_url, candidate_key, timeout)
-    if not reachable:
-        print(f"Connection failed: {detail}. Settings unchanged.\n")
-        return None
-    print(f"Endpoint responded: {candidate_url} ({detail}).\n")
     return candidate_url, candidate_key, candidate_model
 
 
@@ -1994,7 +2013,7 @@ def run_agent(
     print(color("***\nWelcome to KoboldCpp Agent", ANSI_BOLD_CYAN))
     print(f"Connecting to {base_url}, please wait...")
     print(color("***", ANSI_BOLD_CYAN) + "\n")
-    reachable, detail = probe_endpoint(base_url, api_key, request_timeout)
+    reachable, detail, models = probe_endpoint(base_url, api_key, request_timeout)
     if not reachable:
         connection = recover_connection(
             base_url, api_key, model, request_timeout, detail
@@ -2003,6 +2022,8 @@ def run_agent(
             print("No reachable endpoint selected. Exiting.")
             return
         base_url, api_key, model = connection
+    else:
+        model = model or (models[0] if models else "local-model")
 
     disabled_tools: set[str] = set()
     tool_confirmation = dict(tool_confirmation or {})
@@ -2528,7 +2549,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help="Model name (default: OPENAI_MODEL or 'local-model')",
+        help="Model name (default: OPENAI_MODEL or the first model from /models; falls back to 'local-model')",
     )
     parser.add_argument(
         "--temperature",
