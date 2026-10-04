@@ -98,7 +98,7 @@ KoboldCpp also retains backward compatibility with legacy GGML `.bin` models, th
 - Creative Writing and Roleplay: [L3-8B-Stheno-v3.2](https://huggingface.co/bartowski/L3-8B-Stheno-v3.2-GGUF/resolve/main/L3-8B-Stheno-v3.2-Q4_K_S.gguf)
 - Lightweight and Fast: [Gemma3-4B](https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf)
   - Add [optional Gemma3-4B MMproj file](https://huggingface.co/koboldcpp/mmproj/resolve/main/gemma3-4b-mmproj-q8.gguf) for vision recognition capabilities.
-- Image Generation: [PicX Real](https://huggingface.co/koboldcpp/imgmodel/resolve/main/picx_real_q5_1.gguf)
+- Image Generation: [PicX Real](https://huggingface.co/koboldcpp/imgmodel/resolve/main/picx_real_q8_0.gguf)
   - Or browse [More image generation models](https://huggingface.co/koboldcpp/imgmodel/tree/main)
 - Speech Recognition: [Whisper Base](https://huggingface.co/koboldcpp/whisper/resolve/main/whisper-base.en-q5_1.bin)
   - Or browse [More Whisper models for Speech-To-Text](https://huggingface.co/koboldcpp/whisper/tree/main)
