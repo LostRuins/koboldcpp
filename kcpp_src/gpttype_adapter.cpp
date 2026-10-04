@@ -3498,27 +3498,35 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         llama_ctx_params.type_v = (inputs.quant_v==4?GGML_TYPE_Q4_0:(inputs.quant_v==3?GGML_TYPE_Q5_1:(inputs.quant_v==2?GGML_TYPE_Q8_0:(inputs.quant_v==1?GGML_TYPE_BF16:GGML_TYPE_F16))));
 
         //apply overrides from autofit
-        float tensor_split_temp[128] = {0}; //temp buffer for autofit
+        std::vector<float> tensor_split_temp(llama_max_devices(), 0.0f);
+        std::vector<llama_model_tensor_buft_override> fit_tensor_overrides;
         std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(),1024*1024*1024);
         if(inputs.autofit)
         {
             kcpp_backend_hip_initialize();
 
-            size_t totalmmprojtax = 0;
+            std::map<ggml_backend_dev_t, size_t> mmproj_reserves;
             if(mmproj_filename != "" && file_format==FileFormat::GGUF_GENERIC && !inputs.mmproj_cpu)
             {
-                printf("\nEstimating MMProj GPU usage...");
                 mtmd_context_params ctx_mtmd_params = init_mtmd_ctx_params(inputs.mmproj_cpu,true);
-                auto mtmd_mem = mtmd_get_memory_usage(mmproj_filename.c_str(), ctx_mtmd_params);
-                for (auto & [dev, size] : mtmd_mem.backend_mem_usage) {
-                    totalmmprojtax += size;
+                if(ctx_mtmd_params.use_gpu)
+                {
+                    printf("\nEstimating MMProj GPU usage...\n");
+                    mmproj_reserves = mtmd_get_memory_usage(mmproj_filename.c_str(), ctx_mtmd_params).backend_mem_usage;
+                    if(mmproj_reserves.empty())
+                    {
+                        printf("Warning: failed to estimate MMProj memory usage; autofit cannot reserve space for it.\n");
+                    }
+                    for (const auto & [dev, size] : mmproj_reserves) {
+                        if(ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU)
+                        {
+                            printf("MMProj Autofit Usage (%s): %.2f MiB\n", ggml_backend_dev_name(dev), size / (1024.0 * 1024.0));
+                        }
+                    }
                 }
-                totalmmprojtax = totalmmprojtax / (1024*1024);
-                printf("MMProj Autofit Usage: %zu MB", totalmmprojtax);
             }
 
-            common_params temp_params;
-            size_t taxmb = inputs.autofit_tax_mb + totalmmprojtax;
+            size_t taxmb = inputs.autofit_tax_mb;
             if(file_format==FileFormat::GGUF_GENERIC && (draftmodel_filename != "" || inputs.use_mtp))
             {
                 try
@@ -3543,11 +3551,12 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 }
             }
             printf("\nAttempting to use llama.cpp's automating fitting code. This will override all your layer configs, may or may not work!\n");
+            const llama_model_params original_model_params = model_params;
+            const llama_context_params original_ctx_params = llama_ctx_params;
             //zero out any customizations made
-            tenos.clear();
-            tenos.push_back({nullptr, nullptr});
-            model_params.tensor_buft_overrides = tenos.data();
-            model_params.tensor_split = tensor_split_temp;
+            fit_tensor_overrides.resize(llama_max_tensor_buft_overrides(), {nullptr, nullptr});
+            model_params.tensor_buft_overrides = fit_tensor_overrides.data();
+            model_params.tensor_split = tensor_split_temp.data();
             model_params.n_gpu_layers = -1; //must be this value to be considered default
             printf("Autofit Reserve Space: %zu MB\n",taxmb);
             //disable log spam
@@ -3563,8 +3572,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             }
             fit_params_target[0] = taxmb*1024*1024;
             bool success = (common_fit_params(kcpp_data->model_filename.c_str(), &model_params, &llama_ctx_params,
-            tensor_split_temp, tenos.data(), fit_params_target.data(), kcpp_data->n_ctx, nullptr,
-            dospam?GGML_LOG_LEVEL_DEBUG:GGML_LOG_LEVEL_NONE)==0);
+            tensor_split_temp.data(), fit_tensor_overrides.data(), fit_params_target.data(), kcpp_data->n_ctx, nullptr,
+            dospam?GGML_LOG_LEVEL_DEBUG:GGML_LOG_LEVEL_NONE, mmproj_reserves)==COMMON_PARAMS_FIT_STATUS_SUCCESS);
             if(!dospam)
             {
                 llama_log_set(currlogger, curruserdat);
@@ -3578,7 +3587,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             if(!success)
             {
                 //revert to previous
-                model_params.n_gpu_layers = inputs.gpulayers;
+                model_params = original_model_params;
+                llama_ctx_params = original_ctx_params;
             }
         }
 

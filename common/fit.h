@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "llama.h"
 
+#include <map>
 #include <vector>
 
 enum common_params_fit_status {
@@ -35,7 +36,8 @@ common_params_fit_status common_fit_params(
                              size_t * margins,               // margins of memory to leave per device in bytes
                            uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
       const common_fit_extra_model * extra,                  // model to fit alongside the main one, nullptr if there is none
-                     ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
+                     ggml_log_level   log_level,             // minimum log level to print during fitting, lower levels go to debug log
+   const std::map<ggml_backend_dev_t, size_t> & device_reserves = {}); // additional bytes reserved on each selected device, e.g. for MMProj
 
 // print estimated memory to stdout
 void common_fit_print(

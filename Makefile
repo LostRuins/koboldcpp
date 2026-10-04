@@ -685,7 +685,9 @@ llama.o: src/llama.cpp ggml/include/ggml.h ggml/include/ggml-alloc.h ggml/includ
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 llama-model.o: src/llama-model.cpp src/llama-model.h src/models/models.h ggml/include/ggml.h include/llama.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
-common.o: common/common.cpp common/common.h common/log.h
+llama.o: common/fit.h
+
+common.o: common/common.cpp common/common.h common/log.h common/fit.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 common-json.o: common/json.cpp common/json.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -763,7 +765,7 @@ music_default.o: otherarch/acestep/music_adapter.cpp
 
 # idiotic "for easier compilation"
 GPTTYPE_ADAPTER = kcpp_src/gpttype_adapter.cpp kcpp_src/kcpp_backend.h kcpp_src/model_adapter.h otherarch/otherarch.h include/llama.h otherarch/llama_v2.cpp otherarch/llama_v3.cpp otherarch/gptj_v1.cpp otherarch/gptj_v2.cpp otherarch/gptj_v3.cpp otherarch/gpt2_v1.cpp otherarch/gpt2_v2.cpp otherarch/gpt2_v3.cpp otherarch/rwkv_v2.cpp otherarch/rwkv_v3.cpp otherarch/neox_v2.cpp otherarch/neox_v3.cpp otherarch/mpt_v3.cpp
-gpttype_adapter_default.o: $(GPTTYPE_ADAPTER)
+gpttype_adapter_default.o: $(GPTTYPE_ADAPTER) common/fit.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 kcpp_backend_failsafe.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h

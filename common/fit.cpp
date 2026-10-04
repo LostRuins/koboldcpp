@@ -179,7 +179,8 @@ common_device_memory_data_vec common_get_device_memory_data(
 static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, const common_fit_extra_model * extra, enum ggml_log_level log_level) {
+        size_t * margins_s, uint32_t n_ctx_min, const common_fit_extra_model * extra, enum ggml_log_level log_level,
+        const std::map<ggml_backend_dev_t, size_t> & device_reserves) {
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
     }
@@ -287,6 +288,12 @@ static void common_params_fit_impl(
     } else {
         for (size_t id = 0; id < nd; id++) {
             margins.push_back(margins_s[id]);
+            // Match the model's selected device order, not backend registration order.
+            // Host allocations and devices unused by this model do not consume its GPU budget.
+            const auto reserve = device_reserves.find(devs[id]);
+            if (reserve != device_reserves.end()) {
+                margins.back() += reserve->second;
+            }
         }
     }
 
@@ -885,11 +892,12 @@ enum common_params_fit_status common_fit_params(
         size_t * margins,
         uint32_t n_ctx_min,
         const common_fit_extra_model * extra,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        const std::map<ggml_backend_dev_t, size_t> & device_reserves) {
     const int64_t t0_us = llama_time_us();
     common_params_fit_status status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, extra, log_level);
+        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, extra, log_level, device_reserves);
         LOG_TRC("%s: successfully fit params to free device memory\n", __func__);
     } catch (const common_params_fit_exception & e) {
         LOG_WRN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
