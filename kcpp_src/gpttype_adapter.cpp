@@ -6258,6 +6258,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         guidance_n_past += guidance_embd.size();
     }
 
+    // Keep the full prepared prompt length before fast-forwarding removes its cached prefix.
+    const size_t full_prompt_token_count = embd_inp.size();
+
     //determine how much npast we have to rewind from the current state
     std::vector<gpt_vocab::id> embd;
 
@@ -6598,8 +6601,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     bool firstdecodedone = false; //we CANNOT use logits if the first decode has not been executed yet.
     bool v3_use_scratch = true; //for normal inference always use scratch
     bool rnn_lifeboat_attempted = false;
-    const int rnn_lifeboat_target = (int)((embd_inp.size() * smartcache_rnn_lifeboat_percent) / 100);
-    const bool rnn_lifeboat_enabled = kcpp_data->smartcache && is_recurrent && file_format==FileFormat::GGUF_GENERIC && (int)embd_inp.size() >= smartcache_rnn_lifeboat_min_prompt_tokens;
+    const int rnn_lifeboat_target = (int)((full_prompt_token_count * smartcache_rnn_lifeboat_percent) / 100);
+    // Reuse past the target cannot recreate that earlier state; preserve any existing lifeboat.
+    const bool rnn_lifeboat_enabled = kcpp_data->smartcache && is_recurrent && file_format==FileFormat::GGUF_GENERIC
+        && full_prompt_token_count >= smartcache_rnn_lifeboat_min_prompt_tokens && n_past <= rnn_lifeboat_target;
 
     speculative_draft_result draft_results; //only use if drafting was used
     bool draft_used = false;
