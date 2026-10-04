@@ -5576,6 +5576,24 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
 
 static const int smartcache_snapshot_min_spacing = 150;
 
+static bool smartcache_slot_in_range(int slot)
+{
+    return slot >= 0 && slot < savestate_limit && (size_t)slot < savestates.size();
+}
+
+static bool smartcache_slot_usable(int slot)
+{
+    if(!smartcache_slot_in_range(slot))
+    {
+        return false;
+    }
+    const auto & state = savestates[slot];
+    return state.current_savestate_size > 0
+        && state.current_savestate_size <= state.current_savestate_buffer.size()
+        && (!draft_ctx || (state.current_draft_savestate_size > 0
+            && state.current_draft_savestate_size <= state.current_draft_savestate_buffer.size()));
+}
+
 static bool smartcache_prefix_compatible(const std::vector<gpt_vocab::id> & a, const std::vector<gpt_vocab::id> & b)
 {
     const size_t min_size = std::min(a.size(), b.size());
@@ -5596,6 +5614,10 @@ static int get_nearby_compatible_smartcache_slot()
     const size_t currctxsize = current_context_tokens.size();
     for(int i=0;i<savestate_limit;++i)
     {
+        if(!smartcache_slot_usable(i))
+        {
+            continue;
+        }
         const auto & slot_tokens = savestates[i].savestate_context_tokens;
         if(slot_tokens.empty() || savestates[i].media_signature!=media_composite_image_signature)
         {
@@ -5622,6 +5644,10 @@ static int get_nearby_compatible_smartcache_slot()
 
 int smartcache_quick_snapshot(int specific_slot = -1)
 {
+    if(specific_slot != -1 && !smartcache_slot_in_range(specific_slot))
+    {
+        return -1;
+    }
     int identical_slot = get_identical_existing_slot();
     if(identical_slot==-1)
     {
@@ -5635,20 +5661,19 @@ int smartcache_quick_snapshot(int specific_slot = -1)
                     touch_slot(nearby_slot);
                     return nearby_slot;
                 }
-                gpttype_save_state_kv(nearby_slot);
-                return nearby_slot;
+                // Moving a nearby checkpoint earlier on the same prefix preserves its reuse value,
+                // including for a lifeboat, and avoids evicting an unrelated checkpoint.
+                return gpttype_save_state_kv(nearby_slot) > 0 ? nearby_slot : -1;
             }
         }
         if(specific_slot!=-1)
         {
-            gpttype_save_state_kv(specific_slot);
-            return specific_slot;
+            return gpttype_save_state_kv(specific_slot) > 0 ? specific_slot : -1;
         }
         else
         {
             int oldest_slot = get_oldest_slot(-1);
-            gpttype_save_state_kv(oldest_slot);
-            return oldest_slot;
+            return oldest_slot >= 0 && gpttype_save_state_kv(oldest_slot) > 0 ? oldest_slot : -1;
         }
     }
     else
@@ -5656,6 +5681,32 @@ int smartcache_quick_snapshot(int specific_slot = -1)
         touch_slot(identical_slot);
         return identical_slot;
     }
+}
+
+static bool smartcache_switch_slot(int slot)
+{
+    if(!smartcache_slot_usable(slot))
+    {
+        return false;
+    }
+    if(current_context_tokens.size() > 32)
+    {
+        const int identical_slot = get_identical_existing_slot();
+        if(identical_slot >= 0)
+        {
+            touch_slot(identical_slot);
+        }
+        else
+        {
+            const int oldest_slot = get_oldest_slot(slot);
+            if(oldest_slot >= 0)
+            {
+                // Saving the outgoing context is optional; failure must not prevent loading the match.
+                gpttype_save_state_kv(oldest_slot);
+            }
+        }
+    }
+    return gpttype_load_state_kv(slot);
 }
 
 generation_outputs gpttype_generate(const generation_inputs inputs)
@@ -6261,6 +6312,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 // }
                 for(int i=0;i<savestate_limit;++i)
                 {
+                    if(!smartcache_slot_usable(i))
+                    {
+                        continue;
+                    }
                     bool target_usable = FullyContainedPrefix(savestates[i].savestate_context_tokens,embd_inp);
                     // printf("\nSlot %d has %d. Usable: %d = ",i,savestates[i].savestate_context_tokens.size(),target_usable);
                     // for(int x=0;x<savestates[i].savestate_context_tokens.size();++x)
@@ -6280,34 +6335,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 }
                 if(bestslot!=-1) //found a good slot to load
                 {
-                    int oldest_slot = get_oldest_slot(bestslot);
-                    if(oldest_slot!=bestslot)
+                    if(smartcache_switch_slot(bestslot) && !is_quiet)
                     {
-                        if(current_context_tokens.size() > 32) //do not save tiny contexts
-                        {
-                            if(identical_slot==-1)
-                            {
-                                if(!is_quiet)
-                                {
-                                    printf("\n[SmartCache RNN Match of %d tokens in slot %d. Saving into slot %d and switching...]\n",bestlen,bestslot,oldest_slot);
-                                }
-                                gpttype_save_state_kv(oldest_slot);
-                            } else {
-                                if(!is_quiet)
-                                {
-                                    printf("\n[SmartCache RNN Match of %d tokens in slot %d. Already saved in slot %d, switching...]\n",bestlen,bestslot,identical_slot);
-                                }
-                                touch_slot(identical_slot);
-                            }
-                        }
-                        else
-                        {
-                            if(!is_quiet)
-                            {
-                                printf("\n[SmartCache RNN Match of %d tokens in slot %d. Switching...]\n",bestlen,bestslot);
-                            }
-                        }
-                        gpttype_load_state_kv(bestslot);
+                        printf("\n[SmartCache RNN Match of %d tokens restored from slot %d]\n",bestlen,bestslot);
                     }
                 }
                 else
@@ -6317,11 +6347,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         if(identical_slot==-1)
                         {
                             int oldest_slot = get_oldest_slot(-1);
-                            if(!is_quiet)
+                            if(oldest_slot >= 0)
                             {
-                                printf("\n[SmartCache RNN No Match, Saving into slot %d...]\n",oldest_slot);
+                                gpttype_save_state_kv(oldest_slot);
                             }
-                            gpttype_save_state_kv(oldest_slot);
                         }
                         else
                         {
@@ -6351,6 +6380,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 int identical_slot = get_identical_existing_slot(); //see if a slot already exists with identical data to current
                 for(int i=0;i<savestate_limit;++i)
                 {
+                    if(!smartcache_slot_usable(i))
+                    {
+                        continue;
+                    }
                     float similaritybeat = ComputePrefixMatchPercent(savestates[i].savestate_context_tokens,embd_inp);
                     if(savestates[i].media_signature!=media_composite_image_signature)
                     {
@@ -6358,38 +6391,12 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                     if(similaritybeat > similarity_threshold || (shiftable && CanContextShift(savestates[i].savestate_context_tokens, embd_inp, inputs.max_length, nctx)))
                     {
-                        //found a match. save to the oldest slot thats not the one we are loading
-                        int oldest_slot = get_oldest_slot(i);
-                        if(oldest_slot!=i)
+                        foundswap = smartcache_switch_slot(i);
+                        if(foundswap && !is_quiet)
                         {
-                            if(current_context_tokens.size() > 32) //do not save tiny contexts
-                            {
-                                if(identical_slot==-1)
-                                {
-                                    if(!is_quiet)
-                                    {
-                                        printf("\n[SmartCache Match of %.2f in slot %d. Saving into slot %d and switching...]\n",similaritybeat,i,oldest_slot);
-                                    }
-                                    gpttype_save_state_kv(oldest_slot);
-                                } else {
-                                    if(!is_quiet)
-                                    {
-                                        printf("\n[SmartCache Match of %.2f in slot %d. Already saved in slot %d, switching...]\n",similaritybeat,i,identical_slot);
-                                    }
-                                    touch_slot(identical_slot);
-                                }
-                            }
-                            else
-                            {
-                                if(!is_quiet)
-                                {
-                                    printf("\n[SmartCache Match of %.2f in slot %d. Switching...]\n",similaritybeat,i);
-                                }
-                            }
-                            gpttype_load_state_kv(i);
-                            foundswap = true;
-                            break;
+                            printf("\n[SmartCache Match of %.2f restored from slot %d]\n",similaritybeat,i);
                         }
+                        break; // a failed restore resets the context for full prompt processing
                     }
                 }
                 if(!foundswap) //could not match anything, just save kv and continue
@@ -6399,11 +6406,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         if(identical_slot==-1)
                         {
                             int oldest_slot = get_oldest_slot(-1);
-                            if(!is_quiet)
+                            if(oldest_slot >= 0)
                             {
-                                printf("\n[SmartCache No Match, Saving into slot %d...]\n",oldest_slot);
+                                gpttype_save_state_kv(oldest_slot);
                             }
-                            gpttype_save_state_kv(oldest_slot);
                         }
                         else
                         {
@@ -6875,11 +6881,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         if(rnn_lifeboat_enabled && !rnn_lifeboat_taken && !startedsampling && n_past >= rnn_lifeboat_target && input_consumed < (int)embd_inp.size())
         {
             int lifeboat_slot = rnn_lifeboat_hard_reserved ? smartcache_quick_snapshot(rnn_lifeboat_slot_idx) : smartcache_quick_snapshot();
-            if(!is_quiet)
+            if(lifeboat_slot >= 0 && !is_quiet)
             {
                 printf("\n[SmartCache RNN Lifeboat: Saved %zu-token checkpoint into slot %d%s]\n",current_context_tokens.size(),lifeboat_slot,(rnn_lifeboat_hard_reserved ? "" : " (soft)"));
             }
-            rnn_lifeboat_taken = true;
+            rnn_lifeboat_taken = lifeboat_slot >= 0;
         }
         embd.clear();
 
@@ -7583,41 +7589,62 @@ size_t gpttype_calc_new_state_tokencount()
 }
 size_t gpttype_save_state_kv(int slot)
 {
-    if(kcpp_data==nullptr)
+    if(kcpp_data==nullptr || !smartcache_slot_in_range(slot))
     {
         return 0;
     }
     if(file_format == FileFormat::GGUF_GENERIC)
     {
-        size_t totalbytes = 0;
-        if (!savestates[slot].current_savestate_buffer.empty()) {  //JIT free
-            savestates[slot].current_savestate_buffer.clear();
-            savestates[slot].current_draft_savestate_buffer.clear();
-            savestates[slot].savestate_context_tokens.clear();
-            savestates[slot].latest_logits.clear();
-            savestates[slot].current_savestate_size = 0;
-            savestates[slot].current_draft_savestate_size = 0;
-            savestates[slot].media_signature = "";
-        }
-        size_t newsize = llama_state_get_size(llama_ctx_v4);
+        auto & state = savestates[slot];
+        // Invalidate before reusing buffers. Publish the sizes only after the entire save succeeds.
+        state.current_savestate_size = 0;
+        state.current_draft_savestate_size = 0;
+        state.savestate_context_tokens.clear();
+        state.latest_logits.clear();
+        state.media_signature.clear();
+        state.last_used = 0;
+        state.current_savestate_buffer.clear();
+        state.current_draft_savestate_buffer.clear();
+
         try {
-            if (savestates[slot].current_savestate_buffer.capacity() < newsize + 512) {
-                savestates[slot].current_savestate_buffer = std::vector<uint8_t>(newsize + 512); // add some padding. May throw std::bad_alloc
-            } else {
-                savestates[slot].current_savestate_buffer.resize(newsize + 512);
+            auto save_context = [](llama_context * ctx, std::vector<uint8_t> & buffer) -> size_t {
+                const size_t size = llama_state_get_size(ctx);
+                if(size == 0)
+                {
+                    return 0;
+                }
+                if(buffer.capacity() < size + 512)
+                {
+                    buffer = std::vector<uint8_t>(size + 512);
+                }
+                else
+                {
+                    buffer.resize(size + 512);
+                }
+                return llama_state_get_data(ctx, buffer.data(), size) == size ? size : 0;
+            };
+            const size_t main_size = save_context(llama_ctx_v4, state.current_savestate_buffer);
+            if(main_size == 0)
+            {
+                fprintf(stderr, "KV Save State %d: Target save failed; snapshot invalidated.\n", slot);
+                return 0;
             }
-        } catch (const std::bad_alloc&) {
-            fprintf(stderr, "KV Save State: Failed to allocate %zu bytes.\n", newsize + 512);
-            return 0;
-        }
-        auto res = llama_state_get_data(llama_ctx_v4, savestates[slot].current_savestate_buffer.data(), newsize);
-        if (res > 0) {
-            totalbytes += res;
-            savestates[slot].current_savestate_size   = newsize;
-            savestates[slot].savestate_context_tokens = current_context_tokens;
-            savestates[slot].media_signature = media_composite_image_signature;
+            const size_t draft_size = draft_ctx ? save_context(draft_ctx, state.current_draft_savestate_buffer) : 0;
+            if(draft_ctx && draft_size == 0)
+            {
+                fprintf(stderr, "KV Save State %d: Draft save failed; snapshot invalidated.\n", slot);
+                return 0;
+            }
+
             float * lgptr = (draft_is_mtp ? llama_get_logits_ith(llama_ctx_v4, -1) : llama_get_logits(llama_ctx_v4));
-            savestates[slot].latest_logits.assign(lgptr,lgptr+n_vocab);
+            if(lgptr == nullptr)
+            {
+                fprintf(stderr, "KV Save State %d: No logits; snapshot invalidated.\n", slot);
+                return 0;
+            }
+            state.latest_logits.assign(lgptr,lgptr+n_vocab);
+            state.savestate_context_tokens = current_context_tokens;
+            state.media_signature = media_composite_image_signature;
             int maxedpos = llama_memory_seq_pos_max(llama_get_memory(llama_ctx_v4),0);
             //kcpp: so maxedpos appears to always be equal to ctx tokens - 2, if savestate_ctx_tokens > maxedpos + 2 then trim excess
             if(maxedpos > 0 && savestates[slot].savestate_context_tokens.size() > maxedpos + 2)
@@ -7632,61 +7659,84 @@ size_t gpttype_save_state_kv(int slot)
                     savestates[slot].savestate_context_tokens.pop_back();
                 }
             }
+            state.current_savestate_size = main_size;
+            state.current_draft_savestate_size = draft_size;
             touch_slot(slot);
-            printf("\nKV Save State %d: Created SaveState of %zu tokens, costing %zu MB.\n",slot,savestates[slot].savestate_context_tokens.size(),savestates[slot].current_savestate_size/(1024*1024));
-        }
-
-        if(draft_ctx)
-        {
-            size_t newsize2 = llama_state_get_size(draft_ctx);
-            try {
-                if (savestates[slot].current_draft_savestate_buffer.capacity() < newsize2 + 512) {
-                    savestates[slot].current_draft_savestate_buffer = std::vector<uint8_t>(newsize2 + 512);
-                } else {
-                    savestates[slot].current_draft_savestate_buffer.resize(newsize2 + 512);
-                }
-            } catch (const std::bad_alloc&) {
-                fprintf(stderr, "KV Save State: Failed to allocate %zu bytes.\n", newsize2 + 512);
-                return 0;
+            printf("\nKV Save State %d: Created SaveState of %zu tokens, costing %zu MB.\n",slot,state.savestate_context_tokens.size(),main_size/(1024*1024));
+            if(draft_ctx)
+            {
+                printf("\nKV Save State %d: Created DraftSaveState of %zu tokens, costing %zu MB.\n",slot,state.savestate_context_tokens.size(),draft_size/(1024*1024));
             }
-            auto res2 = llama_state_get_data(draft_ctx, savestates[slot].current_draft_savestate_buffer.data(), newsize2);
-            if (res2 > 0) {
-                totalbytes += res2;
-                savestates[slot].current_draft_savestate_size = newsize2;
-                printf("\nKV Save State %d: Created DraftSaveState of %zu tokens, costing %zu MB.\n",slot,current_context_tokens.size(),savestates[slot].current_draft_savestate_size/(1024*1024));
-            }
+            return main_size + draft_size;
+        } catch (const std::bad_alloc&) {
+            state.savestate_context_tokens.clear();
+            state.latest_logits.clear();
+            state.media_signature.clear();
+            fprintf(stderr, "KV Save State %d: Allocation failed; snapshot invalidated.\n", slot);
+            return 0;
         }
-        return totalbytes;
     }
     return 0;
 }
 bool gpttype_load_state_kv(int slot)
 {
-    if(kcpp_data==nullptr)
+    if(kcpp_data==nullptr || !smartcache_slot_usable(slot))
     {
         return false;
     }
     if(file_format == FileFormat::GGUF_GENERIC)
     {
-        if (savestates[slot].current_savestate_buffer.empty()) {
+        auto & state = savestates[slot];
+        auto failed_restore = [&]() {
+            state.current_savestate_size = 0;
+            state.current_draft_savestate_size = 0;
+            state.savestate_context_tokens.clear();
+            state.latest_logits.clear();
+            state.media_signature.clear();
+            state.last_used = 0;
+            llama_memory_clear(llama_get_memory(llama_ctx_v4),true);
+            if(draft_ctx)
+            {
+                llama_memory_clear(llama_get_memory(draft_ctx),true);
+            }
+            n_past = 0;
+            current_context_tokens.clear();
+            loaded_latest_logits.clear();
+            smartcontext.clear();
+            std::fill(last_n_tokens.begin(), last_n_tokens.end(), 0);
+            fprintf(stderr, "KV Load SaveState %d: Restore failed; context reset for full prompt processing.\n", slot);
             return false;
-        }
-        if(draft_ctx && savestates[slot].current_draft_savestate_size>0)
+        };
+        try
         {
-            llama_memory_clear(llama_get_memory(draft_ctx),true);
-            auto res2 = llama_state_set_data(draft_ctx, savestates[slot].current_draft_savestate_buffer.data(), savestates[slot].current_draft_savestate_size);
-            printf("\nKV Load DraftSaveState %d: Restored KV with %zu tokens.\n", slot,current_context_tokens.size());
-        }
-        llama_memory_clear(llama_get_memory(llama_ctx_v4),true);
-        auto res = llama_state_set_data(llama_ctx_v4, savestates[slot].current_savestate_buffer.data(), savestates[slot].current_savestate_size);
-        if(res > 0)
-        {
-            current_context_tokens = savestates[slot].savestate_context_tokens;
-            loaded_latest_logits = savestates[slot].latest_logits;
+            // Allocate metadata before mutating live memory; commit it only after both restores succeed.
+            auto restored_tokens = state.savestate_context_tokens;
+            auto restored_logits = state.latest_logits;
+            llama_memory_clear(llama_get_memory(llama_ctx_v4),true);
+            if(llama_state_set_data(llama_ctx_v4, state.current_savestate_buffer.data(), state.current_savestate_size) != state.current_savestate_size)
+            {
+                return failed_restore();
+            }
+            if(draft_ctx)
+            {
+                llama_memory_clear(llama_get_memory(draft_ctx),true);
+                if(llama_state_set_data(draft_ctx, state.current_draft_savestate_buffer.data(), state.current_draft_savestate_size) != state.current_draft_savestate_size)
+                {
+                    return failed_restore();
+                }
+            }
+            current_context_tokens = std::move(restored_tokens);
+            loaded_latest_logits = std::move(restored_logits);
             printf("\nKV Load SaveState %d: Restored KV with %zu tokens.\n", slot,current_context_tokens.size());
+            if(draft_ctx)
+            {
+                printf("\nKV Load DraftSaveState %d: Restored KV with %zu tokens.\n", slot,current_context_tokens.size());
+            }
             touch_slot(slot);
+            return true;
+        } catch (const std::bad_alloc&) {
+            return failed_restore();
         }
-        return (res > 0);
     }
     return false;
 }
@@ -7710,7 +7760,8 @@ bool gpttype_clear_state_kv(bool shrink)
                 savestates[slot].savestate_context_tokens.clear();
                 savestates[slot].current_savestate_size = 0;
                 savestates[slot].media_signature = "";
-                if(draft_ctx && savestates[slot].current_draft_savestate_size>0)
+                // Failed saves/restores can leave a draft buffer with an invalidated size.
+                if(!savestates[slot].current_draft_savestate_buffer.empty())
                 {
                     savestates[slot].current_draft_savestate_buffer.clear();
                     if(shrink)
@@ -7739,7 +7790,7 @@ int get_identical_existing_slot() //returns slot number of slot containing exact
     int currctxsize = current_context_tokens.size();
     for(int i=0;i<savestate_limit;++i)
     {
-        if(savestates[i].savestate_context_tokens.size() == currctxsize && savestates[i].media_signature==media_composite_image_signature)
+        if(smartcache_slot_usable(i) && savestates[i].savestate_context_tokens.size() == currctxsize && savestates[i].media_signature==media_composite_image_signature)
         {
             bool is_identical = true;
             const auto& slot_tokens = savestates[i].savestate_context_tokens;
@@ -7765,7 +7816,7 @@ int get_identical_existing_slot() //returns slot number of slot containing exact
 int get_oldest_slot(int excludeSlotId)
 {
     int64_t slotage = INT64_MAX; // Initialize with maximum possible value
-    int slotid = 0;
+    int slotid = -1;
     for(int i=0;i<savestate_limit;++i)
     {
         if(i==excludeSlotId || (rnn_lifeboat_hard_reserved && i==rnn_lifeboat_slot_idx))
