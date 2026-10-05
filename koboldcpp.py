@@ -264,6 +264,7 @@ deprecated_keys = {
     "sdgendefaults",
     "flashattention",
     "useswa",
+    "jinja_tools",
 }
 
 saved_stdout = None
@@ -4887,7 +4888,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
             attachedimgid = 0
             attachedaudid = 0
             jinja_output = None
-            jinjatools = genparams.get('tools', [])
+            request_tools = genparams.get('tools', [])
+            genparams['_jinja_tool_formatting_used'] = False
             if use_jinja and cached_chat_template:
                 copied_jinja_kwargs = dict(cached_jinja_kwargs or {})
                 # Merge user-provided chat_template_kwargs into our defaults
@@ -4901,7 +4903,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     copied_jinja_kwargs["reasoning_strength"] = "none"
                 elif "reasoning_effort" in copied_jinja_kwargs and copied_jinja_kwargs["reasoning_effort"]:
                     copied_jinja_kwargs["reasoning_strength"] = copied_jinja_kwargs["reasoning_effort"]
-                jinja_output = format_jinja(messages_array,jinjatools,copied_jinja_kwargs)
+                jinja_output = format_jinja(messages_array,request_tools,copied_jinja_kwargs)
             if jinja_output:
                 messages_string = jinja_output
                 for pair in thinkformats:
@@ -4909,18 +4911,19 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     if jinja_output.rstrip().endswith(starter): #the prompt template already forced a start think.
                         genparams["already_started_thinking"] = True
                         break
-                if jinjatools and len(jinjatools)>0:
+                if request_tools and len(request_tools)>0:
                     genparams["using_openai_tools"] = True
-                    if api_format == 4 and args.jinja_tools:
+                    genparams['_jinja_tool_formatting_used'] = True
+                    if api_format == 4:
                         # Default Jinja tool requests to 0.5 and cap their temperature at 1.0.
                         genparams["temperature"] = min(tryparsefloat(genparams.get("temperature", 0.5), 0.5), 1.0)
                 # handle media
                 images_added, audio_added = sweep_media_from_messages(messages_array)
             else:
-                if jinjatools:
+                if request_tools:
                     # inject the tools list at the top of the context window, even if context has shifted
                     # uses koboldcpp's special memory parameter
-                    tools_string = f"{system_message_start}### Available Tools:\n{json.dumps(compress_tools_array(jinjatools), indent=0)}{system_message_end}\n"
+                    tools_string = f"{system_message_start}### Available Tools:\n{json.dumps(compress_tools_array(request_tools), indent=0)}{system_message_end}\n"
                     exist_mem = genparams.get('memory', "")
                     genparams["memory"] = tools_string + exist_mem
 
@@ -5049,7 +5052,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                 genparams["stop_sequence"] = [user_message_start.strip()]
             else:
                 genparams["stop_sequence"].append(user_message_start.strip())
-            if not used_tool_json and jinjatools and latest_turn_was_tool:
+            if not used_tool_json and request_tools and latest_turn_was_tool:
                 genparams["stop_sequence"].append("(Made a function call") # qol prevent fake toolcalls
             genparams["trim_stop"] = True
 
@@ -6115,9 +6118,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             if streamhandled and cached_chat_template and start in cached_chat_template:
                 tool_segment_tag = start
                 break
-        jinjatools = (args.jinja and args.jinja_tools)
         if (api_format == 4 or api_format == 7 or api_format == 9) and using_openai_tools:
-            if not jinjatools or not tool_segment_tag:
+            if not genparams.get('_jinja_tool_formatting_used', False) or not tool_segment_tag:
                 genparams['sync_toolcall_stream_ineligible'] = True
                 return
 
@@ -8027,11 +8029,6 @@ Change Mode<br>
                 if args.debugmode >= 1:
                     trunc_len = 40000
 
-                if use_jinja and not args.jinja_tools:
-                    tmptools = genparams.get('tools', [])
-                    if tmptools and len(tmptools) > 0:
-                        use_jinja = False # not allowed to use tools with jinja
-
                 # payload modifications for lcpp endpoint. we detect this by the timings_per_token field existing
                 if "timings_per_token" in genparams:
                     genparams["continue_assistant_turn"] = True
@@ -9140,7 +9137,6 @@ def show_gui():
     chatcompletionsadapter_var = ctk.StringVar(value="AutoGuess")
     jinjatemplate_var = ctk.StringVar()
     jinja_var = ctk.IntVar(value=0)
-    jinja_tools_var = ctk.IntVar(value=0)
     jinja_kwargs_var = ctk.StringVar()
     jinja_think_var = ctk.StringVar(value="default")
     think_effort_var = ctk.StringVar(value="default")
@@ -9967,15 +9963,11 @@ def show_gui():
     makecheckbox(context_tab, "Enable Guidance", enableguidance_var, 43,padx=(140), tooltiptxt="Enables the use of Classifier-Free-Guidance, which allows the use of negative prompts. Has performance and memory impact.")
     def togglejinja(a,b,c):
         if jinja_var.get()==1:
-            jinja_tools_var.set(1)
-            jinjatoolsbox.grid()
             jinjakwargsbox.grid()
             jinjakwargsboxlbl.grid()
             jinjathinkbox.grid()
             jinjathinklbl.grid()
         else:
-            jinja_tools_var.set(0)
-            jinjatoolsbox.grid_remove()
             jinjakwargsbox.grid_remove()
             jinjakwargsboxlbl.grid_remove()
             jinjathinkbox.grid_remove()
@@ -10021,10 +10013,9 @@ def show_gui():
         curr = (curr if curr else {})
         if "reasoning_effort" in curr and curr["reasoning_effort"]:
             think_effort_var.set(curr["reasoning_effort"])
-    makecheckbox(context_tab, "Use Jinja", jinja_var, row=45, command=togglejinja, tooltiptxt="Enables using jinja chat template formatting for chat completions endpoint. Other endpoints are unaffected.")
-    jinjatoolsbox = makecheckbox(context_tab, "Jinja for Tools", jinja_tools_var, row=45 ,padx=(140), tooltiptxt="Allows jinja even with tool calls. If unchecked, jinja will be disabled when tools are used.")
+    makecheckbox(context_tab, "Use Jinja", jinja_var, row=45, command=togglejinja, tooltiptxt="Enables Jinja chat template formatting, including tool calls. Falls back to universal formatting if Jinja fails.")
     jinja_think_choices = ['default', 'true', 'false']
-    jinjathinkbox, jinjathinklbl = makelabelcombobox(context_tab, "Jinja Thinking:", jinja_think_var, 45, command=togglejinjathink,labelpadx=(280), padx=370, width=100, tooltiptxt="Tries to enable or disable thinking in Jinja mode. This is a shortcut to setting Jinja Kwargs directly.", values=jinja_think_choices)
+    jinjathinkbox, jinjathinklbl = makelabelcombobox(context_tab, "Jinja Thinking:", jinja_think_var, 45, command=togglejinjathink,labelpadx=(210), padx=300, width=100, tooltiptxt="Tries to enable or disable thinking in Jinja mode. This is a shortcut to setting Jinja Kwargs directly.", values=jinja_think_choices)
     jinjakwargsbox,jinjakwargsboxlbl = makelabelentry(context_tab, "Jinja Kwargs:", jinja_kwargs_var, row=47, width=160, labelpadx=(210), padx=(300), singleline=True, tooltip='Set additiona fields for Jinja JSON template parser, must be a valid json object.\nSpecified as JSON fields: {"KEY1":"VALUE1", "KEY2":"VALUE2"...}')
     think_effort_choices = ['default', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none']
     makelabelcombobox(context_tab, "Think Effort:", think_effort_var, 47, command=togglethinkeffort, padx=84, width=100, tooltiptxt="Set the default thinking effort, can be overridden by the API.", values=think_effort_choices)
@@ -10529,7 +10520,6 @@ def show_gui():
         args.genlimit = int(genlimit_var.get()) if genlimit_var.get()!="" else 0
         args.nobostoken = (nobostoken_var.get()==1)
         args.jinja = (jinja_var.get()==1)
-        args.jinja_tools = (jinja_tools_var.get()==1)
         args.jinja_kwargs = jinja_kwargs_var.get()  if jinja_kwargs_var.get() != "" else ""
         args.jinjatemplate = jinjatemplate_var.get() if jinjatemplate_var.get() != "" else ""
         args.enableguidance = (enableguidance_var.get()==1)
@@ -10822,7 +10812,6 @@ def show_gui():
             genlimit_var.set(str(0))
         nobostoken_var.set(mydict["nobostoken"] if ("nobostoken" in mydict) else 0)
         jinja_var.set(mydict["jinja"] if ("jinja" in mydict) else 0)
-        jinja_tools_var.set(mydict["jinja_tools"] if ("jinja_tools" in mydict) else 0)
         jinja_think_var.set("default")
         think_effort_var.set("default")
         jinja_kwargs = (mydict["jinja_kwargs"] if ("jinja_kwargs" in mydict and mydict["jinja_kwargs"]) else "")
@@ -11438,8 +11427,10 @@ def convert_invalid_args(args):
         dict["sdclip1"] = dict["sdclipl"]
     if "sdclipg" in dict and "sdclip2" not in dict:
         dict["sdclip2"] = dict["sdclipg"]
-    if "jinja_tools" in dict and dict["jinja_tools"]:
-        dict["jinja"] = True
+    if "jinja_tools" in dict:
+        if dict["jinja_tools"]:
+            dict["jinja"] = True
+        del dict["jinja_tools"]
     if "jinjathink" in dict and dict["jinjathink"] and dict["jinjathink"]!="default":
         dict["jinja"] = True
         jinja_kwargs = None
@@ -11685,10 +11676,6 @@ def apply_agent_launch_safeguards(launch_args):
     if not launch_args.jinja:
         adjustments.append("Jinja chat templates enabled")
         launch_args.jinja = True
-    if not launch_args.jinja_tools:
-        adjustments.append("Jinja tool formatting enabled")
-        launch_args.jinja_tools = True
-
     if adjustments:
         print("\nWARNING: KoboldCpp Agent adjusted launch settings for reliable tool use:")
         for adjustment in adjustments:
@@ -13201,8 +13188,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             if chatcompl_adapter is None:
                 if cached_chat_template:
                     args.jinja = True
-                    args.jinja_tools = True
-                    print("Chat template heuristics failed to identify chat completions format. Jinja and Jinja tools will be used.")
+                    print("Chat template heuristics failed to identify chat completions format. Jinja will be used.")
                 else:
                     print("Chat template heuristics failed to identify chat completions format. Alpaca will be used.")
 
@@ -13797,9 +13783,8 @@ if __name__ == '__main__':
     advparser.add_argument("--genlimit","--promptlimit", help="Sets the maximum number of generated tokens, it will restrict all generations to this or lower. Also usable with --prompt or --benchmark.",metavar=('[token limit]'), type=int, default=0)
     advparser.add_argument("--highpriority", help="Experimental flag. If set, increases the process CPU priority, potentially speeding up generation. Use caution.", action='store_true')
     advparser.add_argument("--ignoremissing", help="Ignores all missing non-essential files, just skipping them instead.", action='store_true')
-    advparser.add_argument("--jinja", help="Enables using jinja chat template formatting for chat completions endpoint. Other endpoints are unaffected. Tool calls are done without jinja.", action='store_true')
+    advparser.add_argument("--jinja", "--jinja_tools", "--jinja-tools", "--jinjatools", dest="jinja", help="Enables Jinja chat template formatting, including tool calls. Falls back to universal formatting if Jinja fails.", action='store_true')
     advparser.add_argument("--jinja_kwargs","--jinja-kwargs","--jinjakwargs","--chat-template-kwargs", metavar=('{"parameter":"value",...}'), help="Set additional fields for Jinja JSON template parser, must be a valid JSON object.", default="")
-    advparser.add_argument("--jinja_tools","--jinja-tools","--jinjatools", help="Enables using jinja chat template formatting for chat completions endpoint. Other endpoints are unaffected. Tool calls are done with jinja.", action='store_true')
     advparser.add_argument("--jinjatemplate","--chat-template-file", metavar=('[filename]'), help="Select a custom Jinja chat template, will overwrite model jinja chat template", default="")
     advparser.add_argument("--jinjathink", help="A quick way to enable or disable thinking in the jinja template.", type=str, choices=['default','true','false'], default="default")
     advparser.add_argument("--lora", help="GGUF models only, applies a lora file on top of model.", metavar=('[lora_filename]'), nargs='+')

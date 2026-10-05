@@ -127,7 +127,7 @@ KoboldCpp provides many hardware configurations that can affect performance. Gen
 - **An older computer crashes at startup:** Some devices lack newer CPU instruction support. Try an `oldpc` release or use `--noavx2`. See the release notes for hardware compatibility.
 - **The browser cannot connect:** Wait for model loading to finish and check the address printed in the terminal. The default is [localhost:5001](http://localhost:5001); a custom `--port` changes it.
 - **A model will not load:** Check the terminal error, your available memory, and whether your KoboldCpp version supports the model. You can trigger debug mode with the `--debugmode` flag or launch toggle. Try the latest release and [check the wiki](https://github.com/LostRuins/koboldcpp/wiki) or [create a Github issue](https://github.com/LostRuins/koboldcpp/issues) to report a bug.
-- **Model is incoherent:** You might be using an incorrect chat template. Try relaunch with `--jinjatools` to use the included Jinja template, or enable the Jinja toggle in the GUI.
+- **Model is incoherent:** You might be using an incorrect chat template. Try relaunch with `--jinja` to use the included Jinja template, or enable the Jinja toggle in the GUI.
 - For more information, be sure to run the program with the `--help` flag.
 
 ## APIs and integrations
