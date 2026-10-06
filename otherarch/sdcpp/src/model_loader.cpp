@@ -551,10 +551,8 @@ SDVersion ModelLoader::get_sd_version() const {
             return VERSION_LLADA_IMAGE;
         }
         if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
-            //kcpp do not rely on the text encoder for detection
-            if (tensor_storage_map.find("model.diffusion_model.cap_pad_token") != tensor_storage_map.end()) {
-                return VERSION_Z_IMAGE;
-            } else {
+            //kcpp do not rely on the text encoder for Ming-Image detection
+            if (tensor_storage_map.find("model.diffusion_model.cap_pad_token") == tensor_storage_map.end()) {
                 return VERSION_MING_IMAGE;
             }
             //kcpp
