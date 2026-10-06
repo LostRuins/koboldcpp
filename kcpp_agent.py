@@ -809,6 +809,7 @@ def tool_shell(args: dict[str, Any]) -> str:
 
     completed = subprocess.run(
         argv,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         encoding="utf-8",
