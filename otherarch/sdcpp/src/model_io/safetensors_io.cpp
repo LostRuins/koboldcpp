@@ -243,7 +243,13 @@ bool read_safetensors_file(const std::string& file_path,
         if (!read_comfy_quant_config(file, file_path, name, data_start + begin, end - begin, config, error)) {
             return false;
         }
-        // kcpp: INT8 tensorwise/convrot is converted to F16 by the fallback below.
+#ifdef SD_USE_UPSTREAM_GGML
+        if (1) {} else // kcpp: INT8 tensorwise/convrot is converted to F16 by the fallback below.
+        if (config.format == "int8_tensorwise") {
+            set_error(error, "INT8 tensorwise/convrot is not supported by this ggml build (tensor '" + name + "')");
+            return false;
+        }
+#endif
         const std::string module_name = name.substr(0, name.size() - std::string(".comfy_quant").size());
         comfy_quant_configs.emplace(module_name, std::move(config));
     }
