@@ -4426,6 +4426,7 @@ Current version indicated by LITEVER below.
 		my_api_key: "0000000000", //put here so it can be saved and loaded in persistent mode
 		saved_oai_key: "", //do not ever share this in save files!
 		saved_oai_addr: default_oai_base, //do not ever share this in save files!
+		saved_oai_favorites: [], //saved custom OpenAI-compatible endpoint/key pairs; do not share in save files!
 		saved_dalle_key: "",
 		saved_dalle_url: (default_oai_base + default_oai_image_endpoint),
 		saved_dalle_model: default_dalle_model_name,
@@ -4651,6 +4652,7 @@ Current version indicated by LITEVER below.
 		my_api_key: true,
 		saved_oai_key: true,
 		saved_oai_addr: true,
+		saved_oai_favorites: true,
 		saved_dalle_key: true,
 		saved_dalle_url: true,
 		saved_oai_tts_key: true,
@@ -11050,6 +11052,7 @@ Current version indicated by LITEVER below.
 			new_save_storyobj.savedsettings.my_api_key = "0000000000";
 			new_save_storyobj.savedsettings.saved_oai_key = "";
 			new_save_storyobj.savedsettings.saved_oai_addr = "";
+			new_save_storyobj.savedsettings.saved_oai_favorites = [];
 			new_save_storyobj.savedsettings.saved_dalle_key = "";
 			new_save_storyobj.savedsettings.saved_dalle_url = "";
 			new_save_storyobj.savedsettings.saved_oai_tts_key = "";
@@ -14790,9 +14793,180 @@ Current version indicated by LITEVER below.
 		});
 	}
 
+	function get_oai_favorites()
+	{
+		if(!Array.isArray(localsettings.saved_oai_favorites))
+		{
+			localsettings.saved_oai_favorites = [];
+		}
+		else
+		{
+			localsettings.saved_oai_favorites = localsettings.saved_oai_favorites.filter(favorite =>
+				favorite && typeof favorite.name === "string" && typeof favorite.endpoint === "string" && typeof favorite.key === "string");
+		}
+		return localsettings.saved_oai_favorites;
+	}
+
+	function refresh_oai_favorites(selected_index = -1)
+	{
+		let dropdown = document.getElementById("custom_oai_favorites");
+		if(!dropdown)
+		{
+			return;
+		}
+
+		let favorites = get_oai_favorites();
+		dropdown.replaceChildren();
+		let default_option = document.createElement("option");
+		default_option.value = "default";
+		default_option.textContent = "[Default]";
+		dropdown.appendChild(default_option);
+		let placeholder = document.createElement("option");
+		placeholder.value = "";
+		placeholder.textContent = "[Custom]";
+
+		for(let i = 0; i < favorites.length; ++i)
+		{
+			let favorite = favorites[i];
+			let option = document.createElement("option");
+			option.value = i.toString();
+			option.textContent = favorite.name;
+			dropdown.appendChild(option);
+		}
+		dropdown.appendChild(placeholder);
+
+		let endpoint = document.getElementById("custom_oai_endpoint").value.trim();
+		let key = document.getElementById("custom_oai_key").value.trim();
+		if(selected_index >= 0)
+		{
+			dropdown.value = selected_index.toString();
+		}
+		else
+		{
+			selected_index = favorites.findIndex(favorite => favorite && favorite.endpoint === endpoint && favorite.key === key);
+			if(selected_index >= 0)
+			{
+				dropdown.value = selected_index.toString();
+			}
+			else if(endpoint === default_oai_base)
+			{
+				dropdown.value = "default";
+			}
+			else
+			{
+				dropdown.value = "";
+			}
+		}
+		update_oai_favorite_btns();
+	}
+
+	function update_oai_favorite_btns()
+	{
+		let selected_value = document.getElementById("custom_oai_favorites").value;
+		document.getElementById("btn_save_oai_favorite").classList.toggle("hidden", selected_value !== "");
+		document.getElementById("btn_delete_oai_favorite").classList.toggle("hidden", selected_value === "" || selected_value === "default");
+	}
+
+	function oai_favorite_fields_changed()
+	{
+		let endpoint = document.getElementById("custom_oai_endpoint").value.trim();
+		let key = document.getElementById("custom_oai_key").value.trim();
+		let dropdown = document.getElementById("custom_oai_favorites");
+		let selected_value = dropdown.value;
+		if(selected_value === "default")
+		{
+			if(endpoint !== default_oai_base)
+			{
+				dropdown.value = "";
+			}
+		}
+		else if(selected_value !== "")
+		{
+			let favorite = get_oai_favorites()[Number.parseInt(selected_value, 10)];
+			if(!favorite || favorite.endpoint !== endpoint || favorite.key !== key)
+			{
+				dropdown.value = "";
+			}
+		}
+		update_oai_favorite_btns();
+	}
+
+	function load_oai_favorite()
+	{
+		let dropdown = document.getElementById("custom_oai_favorites");
+		if(dropdown.value === "default")
+		{
+			document.getElementById("custom_oai_endpoint").value = default_oai_base;
+			update_oai_favorite_btns();
+			return;
+		}
+		let index = Number.parseInt(dropdown.value, 10);
+		let favorite = get_oai_favorites()[index];
+		if(!favorite)
+		{
+			update_oai_favorite_btns();
+			return;
+		}
+		document.getElementById("custom_oai_endpoint").value = favorite.endpoint;
+		document.getElementById("custom_oai_key").value = favorite.key;
+		update_oai_favorite_btns();
+	}
+
+	function save_oai_favorite()
+	{
+		let endpoint = document.getElementById("custom_oai_endpoint").value.trim();
+		let key = document.getElementById("custom_oai_key").value.trim();
+		if(endpoint === "")
+		{
+			msgbox("Enter an OpenAI API URL before adding a favorite.", "Missing API URL");
+			return;
+		}
+
+		let default_name = "Endpoint " + (get_oai_favorites().length + 1);
+		try
+		{
+			default_name = new URL(endpoint).host || default_name;
+		}
+		catch(error) {}
+		inputBoxOkCancel("Enter a name for this API URL and key pair.", "Add API Favorite", default_name, "Favorite name", () => {
+			let name = getInputBoxValue().trim();
+			if(name === "")
+			{
+				msgbox("Favorite name cannot be empty.", "Invalid Favorite Name");
+				return;
+			}
+			let favorites = get_oai_favorites();
+			if(favorites.some(favorite => favorite && favorite.name.toLowerCase() === name.toLowerCase()))
+			{
+				msgbox("A favorite with that name already exists.", "Duplicate Favorite Name");
+				return;
+			}
+			favorites.push({name:name, endpoint:endpoint, key:key});
+			refresh_oai_favorites(favorites.length - 1);
+			autosave();
+		}, () => {});
+	}
+
+	function delete_oai_favorite()
+	{
+		let dropdown = document.getElementById("custom_oai_favorites");
+		let index = Number.parseInt(dropdown.value, 10);
+		let favorite = get_oai_favorites()[index];
+		if(!favorite)
+		{
+			return;
+		}
+		msgboxYesNo("Remove the favorite \"" + favorite.name + "\"?", "Remove API Favorite", () => {
+			get_oai_favorites().splice(index, 1);
+			refresh_oai_favorites();
+			autosave();
+		}, null);
+	}
+
 	function customapi_dropdown(force_autotoggle_chatcompl = false)
 	{
 		let epchoice = document.getElementById("customapidropdown").value;
+		document.getElementById("custom_oai_favorites_container").classList.add("hidden");
 		document.getElementById("oaicustom").classList.add("hidden");
 		document.getElementById("koboldcustom").classList.add("hidden");
 		document.getElementById("claudecustom").classList.add("hidden");
@@ -14838,6 +15012,7 @@ Current version indicated by LITEVER below.
 			document.getElementById("oaireasoningeffort").value = localsettings.reasoning_effort;
 			if(epchoice==2)
 			{
+				document.getElementById("custom_oai_favorites_container").classList.remove("hidden");
 				document.getElementById("oaidesc").classList.remove("hidden");
 				document.getElementById("custom_oai_model").classList.remove("hidden");
 				document.getElementById("custom_oai_endpoint").classList.remove("hidden");
@@ -14847,6 +15022,7 @@ Current version indicated by LITEVER below.
 				} else {
 					document.getElementById("custom_oai_endpoint").value = (localsettings.saved_oai_addr ? localsettings.saved_oai_addr : default_oai_base);
 				}
+				refresh_oai_favorites();
 			}
 			else if(epchoice==3) //openrouter supports autofetch
 			{
@@ -33501,8 +33677,18 @@ Current version indicated by LITEVER below.
 				<span class="color_green" style="font-weight: bold;">Please input Nvidia NIM Key.</span><br><br>
 				</div>
 
-				<input class="form-control" name="username" autocomplete="username" type="text" id="custom_oai_endpoint" placeholder="OpenAI API URL" value="" onblur="">
-				<input class="form-control" name="password" autocomplete="current-password" type="password" id="custom_oai_key" placeholder="API Key (Required)" value="" onfocus="focus_api_keys()" onblur="blur_api_keys()"><br>
+				<div id="custom_oai_favorites_container" class="hidden">
+				<div style="display:flex; gap:4px; margin-bottom:4px; align-items:center; justify-content:flex-end;">
+					Favorites: <select title="Saved OpenAI API URL and key pairs" class="form-control" id="custom_oai_favorites" style="min-width:0;flex:1;height: 25px;font-size: 12px;padding: 3px;display: inline;max-width: 140px;" onchange="load_oai_favorite()">
+						<option value="default">[Default]</option>
+						<option value="">[Custom]</option>
+					</select>
+					<button title="Save the current API URL and key as a favorite" type="button" class="btn btn-primary" id="btn_save_oai_favorite" style="padding:3px; font-size:12px;" onclick="save_oai_favorite()">Save</button>
+					<button title="Delete the selected favorite" type="button" class="btn btn-primary bg_red hidden" id="btn_delete_oai_favorite" style="padding:3px; font-size:12px;" onclick="delete_oai_favorite()">Delete</button>
+				</div>
+				</div>
+				<input class="form-control" name="username" autocomplete="username" type="text" id="custom_oai_endpoint" placeholder="OpenAI API URL" value="" oninput="oai_favorite_fields_changed()">
+				<input class="form-control" name="password" autocomplete="current-password" type="password" id="custom_oai_key" placeholder="API Key (Required)" value="" oninput="oai_favorite_fields_changed()" onfocus="focus_api_keys()" onblur="blur_api_keys()"><br>
 				<div style="display:flex; align-items:center;">
 					<div style="padding:2px">Model Choice:</div>
 					<div style="padding:2px;margin-left:auto;" id="model_cost"></div>
