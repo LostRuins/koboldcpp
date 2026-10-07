@@ -2552,9 +2552,6 @@ def continuous_batching_python_eligible(genparams, api_format):
     if genparams.get("sampler_order") and genparams.get("sampler_order") != [6, 0, 1, 3, 4, 2, 5]:
         utfprint("Batching disabled due to sampler order",2)
         return False
-    if genparams.get("reasoning_effort"):
-        utfprint("Batching disabled due to reasoning",2)
-        return False
     return True
 
 def sd_get_info():

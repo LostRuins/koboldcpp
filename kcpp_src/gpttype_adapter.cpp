@@ -54,6 +54,7 @@
 #include "common/speculative.h"
 #include "common/chat.h"
 #include "common/log.h"
+#include "common/reasoning-budget.h"
 #include "llama-grammar.h"
 #include "vendor/stb/stb_image.h"
 #include "otherarch/sdcpp/thirdparty/stb_image_resize.h"
@@ -2290,6 +2291,72 @@ void sample_guidance(struct llama_context * ctx, struct llama_context * guidance
     }
 }
 
+struct ReasoningBudgetTokenSequences
+{
+    std::vector<int> start;
+    std::vector<int> end;
+    std::vector<int> forced;
+};
+
+static ReasoningBudgetTokenSequences get_reasoning_budget_token_sequences()
+{
+    ReasoningBudgetTokenSequences result;
+    if(file_format != FileFormat::GGUF_GENERIC)
+    {
+        return result;
+    }
+
+    std::string start = "<think>";
+    std::string end = "</think>";
+    std::string budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n</think>";
+    size_t expected_start_tokens = 1;
+    size_t expected_end_tokens = 1;
+
+    switch(file_format_meta.model_architecture)
+    {
+        case llm_arch::LLM_ARCH_GEMMA4:
+            start = "<|channel>thought";
+            end = "<channel|>";
+            budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n<channel|>";
+            expected_start_tokens = 2;
+            break;
+        case llm_arch::LLM_ARCH_SEED_OSS:
+            start = "<seed:think>";
+            end = "</seed:think>";
+            budget_exceeded = "\n(Reasoning budget exceeded)\n<seed:cot_budget_reflect>The current thinking budget is 0, so I will directly start answering the question.</seed:cot_budget_reflect>\nTime to respond now.\n</seed:think>";
+            break;
+        case llm_arch::LLM_ARCH_COHERE2MOE:
+            start = "<|START_THINKING|>";
+            end = "<|END_THINKING|>";
+            budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n<|END_THINKING|>";
+            break;
+        case llm_arch::LLM_ARCH_MISTRAL3:
+            start = "[THINK]";
+            end = "[/THINK]";
+            budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n[/THINK]";
+            break;
+        case llm_arch::LLM_ARCH_MUSE_GLIMMER:
+            start = " to=self<|message|>";
+            end = "<|eom|>";
+            budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n<|eom|>";
+            expected_start_tokens = 3;
+            break;
+        default:
+            break;
+    }
+
+    TokenizeString(start, result.start, file_format, false);
+    TokenizeString(end, result.end, file_format, false);
+    TokenizeString(budget_exceeded, result.forced, file_format, false);
+    if(result.start.size() != expected_start_tokens || result.end.size() != expected_end_tokens || result.forced.empty())
+    {
+        result.start.clear();
+        result.end.clear();
+        result.forced.clear();
+    }
+    return result;
+}
+
 static int apply_reasoning_budget(int id, const std::vector<int> & start_think, const std::vector<int> & end_think, std::vector<int> & think_end_phrase_toks, int budget)
 {
     if(budget<0 || start_think.size()==0 || end_think.size()!=1 || think_end_phrase_toks.size()==0) //start_think can be 1-3 tokens long, end_think is always 1 token
@@ -4367,6 +4434,7 @@ struct BatchGenerateRequest
     float dry_base = 1.75f;
     int dry_allowed_length = 2;
     int dry_penalty_last_n = 0;
+    int reasoning_budget = -1;
     bool tool_call_fix = false;
     bool allow_eos_token = true;
     bool bypass_eos_token = false;
@@ -4548,10 +4616,6 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
                 return false;
             }
         }
-    }
-    if(inputs.reasoning_budget >= 0)
-    {
-        return false;
     }
     return true;
 }
@@ -4780,6 +4844,125 @@ static llama_sampler * batch_tool_call_init(int32_t n_vocab, bool render_special
     });
 }
 
+struct BatchReasoningGrammarSampler
+{
+    llama_sampler * reasoning = nullptr;
+    llama_sampler * grammar = nullptr;
+};
+
+static bool batch_reasoning_is_active(const llama_sampler * reasoning)
+{
+    const common_reasoning_budget_state state = common_reasoning_budget_get_state(reasoning);
+    return state == REASONING_BUDGET_COUNTING ||
+           state == REASONING_BUDGET_WAITING_UTF8 ||
+           state == REASONING_BUDGET_FORCING;
+}
+
+static const char * batch_reasoning_grammar_name(const llama_sampler * /*smpl*/)
+{
+    return "kcpp-batch-reasoning-grammar";
+}
+
+static void batch_reasoning_grammar_accept(llama_sampler * smpl, llama_token token)
+{
+    auto * ctx = (BatchReasoningGrammarSampler *) smpl->ctx;
+    const bool reasoning_was_active = batch_reasoning_is_active(ctx->reasoning);
+    llama_sampler_accept(ctx->reasoning, token);
+    const bool reasoning_is_active = batch_reasoning_is_active(ctx->reasoning);
+    if(ctx->grammar && !reasoning_was_active && !reasoning_is_active)
+    {
+        llama_sampler_accept(ctx->grammar, token);
+    }
+}
+
+static void batch_reasoning_grammar_apply(llama_sampler * smpl, llama_token_data_array * cur_p)
+{
+    auto * ctx = (BatchReasoningGrammarSampler *) smpl->ctx;
+    llama_sampler_apply(ctx->reasoning, cur_p);
+    if(ctx->grammar && !batch_reasoning_is_active(ctx->reasoning))
+    {
+        llama_sampler_apply(ctx->grammar, cur_p);
+    }
+}
+
+static void batch_reasoning_grammar_reset(llama_sampler * smpl)
+{
+    auto * ctx = (BatchReasoningGrammarSampler *) smpl->ctx;
+    llama_sampler_reset(ctx->reasoning);
+    llama_sampler_reset(ctx->grammar);
+}
+
+static llama_sampler * batch_reasoning_grammar_clone(const llama_sampler * smpl)
+{
+    const auto * ctx = (const BatchReasoningGrammarSampler *) smpl->ctx;
+    return llama_sampler_init(smpl->iface, new BatchReasoningGrammarSampler {
+        llama_sampler_clone(ctx->reasoning),
+        llama_sampler_clone(ctx->grammar),
+    });
+}
+
+static void batch_reasoning_grammar_free(llama_sampler * smpl)
+{
+    auto * ctx = (BatchReasoningGrammarSampler *) smpl->ctx;
+    llama_sampler_free(ctx->reasoning);
+    llama_sampler_free(ctx->grammar);
+    delete ctx;
+}
+
+static llama_sampler_i batch_reasoning_grammar_i = {
+    /* .name              = */ batch_reasoning_grammar_name,
+    /* .accept            = */ batch_reasoning_grammar_accept,
+    /* .apply             = */ batch_reasoning_grammar_apply,
+    /* .reset             = */ batch_reasoning_grammar_reset,
+    /* .clone             = */ batch_reasoning_grammar_clone,
+    /* .free              = */ batch_reasoning_grammar_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+static int batch_find_last_sequence_end(const llama_tokens & tokens, const llama_tokens & sequence)
+{
+    if(sequence.empty() || tokens.size() < sequence.size())
+    {
+        return -1;
+    }
+    for(size_t offset = tokens.size() - sequence.size() + 1; offset-- > 0;)
+    {
+        if(std::equal(sequence.begin(), sequence.end(), tokens.begin() + offset))
+        {
+            return (int) (offset + sequence.size() - 1);
+        }
+    }
+    return -1;
+}
+
+static void batch_prime_reasoning_sampler(
+    llama_sampler * reasoning_sampler,
+    const llama_tokens & prompt_tokens,
+    const llama_tokens & start_tokens,
+    const llama_tokens & end_tokens)
+{
+    const int start_end = batch_find_last_sequence_end(prompt_tokens, start_tokens);
+    const int end_end = batch_find_last_sequence_end(prompt_tokens, end_tokens);
+    if(start_end < 0 || end_end > start_end)
+    {
+        return;
+    }
+
+    const size_t start_pos = (size_t) (start_end + 1 - (int) start_tokens.size());
+    for(size_t i = start_pos; i < prompt_tokens.size(); ++i)
+    {
+        llama_sampler_accept(reasoning_sampler, prompt_tokens[i]);
+        if(common_reasoning_budget_get_state(reasoning_sampler) == REASONING_BUDGET_FORCING)
+        {
+            // Remaining prompt tokens are context, not tokens from the forced sequence.
+            break;
+        }
+    }
+}
+
 static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
 {
     llama_sampler_chain_params params = llama_sampler_chain_default_params();
@@ -4787,6 +4970,58 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     const uint32_t sampler_seed = req.seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t) req.seed;
     const llama_vocab * sampler_vocab = llama_model_get_vocab(llama_get_model(llama_ctx_v4));
     const int32_t sampler_n_vocab = llama_vocab_n_tokens(sampler_vocab);
+
+    llama_sampler * reasoning_sampler = nullptr;
+    llama_sampler * grammar_sampler = nullptr;
+    if(req.reasoning_budget >= 0)
+    {
+        const ReasoningBudgetTokenSequences reasoning_tokens = get_reasoning_budget_token_sequences();
+        if(!reasoning_tokens.start.empty() && !reasoning_tokens.end.empty() && !reasoning_tokens.forced.empty())
+        {
+            const llama_tokens start_tokens(reasoning_tokens.start.begin(), reasoning_tokens.start.end());
+            const llama_tokens end_tokens(reasoning_tokens.end.begin(), reasoning_tokens.end.end());
+            const llama_tokens forced_tokens(reasoning_tokens.forced.begin(), reasoning_tokens.forced.end());
+            reasoning_sampler = common_reasoning_budget_init(
+                sampler_vocab,
+                {start_tokens},
+                {end_tokens},
+                forced_tokens,
+                req.reasoning_budget);
+            batch_prime_reasoning_sampler(reasoning_sampler, req.prompt_tokens, start_tokens, end_tokens);
+        }
+    }
+
+    if(!req.grammar.empty())
+    {
+        grammar_sampler = llama_sampler_init_grammar(sampler_vocab, req.grammar.c_str(), "root");
+        if(!grammar_sampler)
+        {
+            printf("\nIgnored invalid grammar sampler.");
+        }
+    }
+
+    if(reasoning_sampler && grammar_sampler)
+    {
+        llama_sampler_chain_add(chain, llama_sampler_init(&batch_reasoning_grammar_i, new BatchReasoningGrammarSampler {
+            reasoning_sampler,
+            grammar_sampler,
+        }));
+        reasoning_sampler = nullptr;
+        grammar_sampler = nullptr;
+    }
+    else
+    {
+        if(reasoning_sampler)
+        {
+            llama_sampler_chain_add(chain, reasoning_sampler);
+            reasoning_sampler = nullptr;
+        }
+        if(grammar_sampler)
+        {
+            llama_sampler_chain_add(chain, grammar_sampler);
+            grammar_sampler = nullptr;
+        }
+    }
 
     if(req.tool_call_fix)
     {
@@ -4823,19 +5058,6 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
             llama_sampler_accept(dry_sampler, token);
         }
         llama_sampler_chain_add(chain, dry_sampler);
-    }
-
-    if(!req.grammar.empty())
-    {
-        llama_sampler * grammar_sampler = llama_sampler_init_grammar(sampler_vocab, req.grammar.c_str(), "root");
-        if(grammar_sampler)
-        {
-            llama_sampler_chain_add(chain, grammar_sampler);
-        }
-        else
-        {
-            printf("\nIgnored invalid grammar sampler.");
-        }
     }
 
     llama_sampler * rep_pen_sampler = batch_rep_pen_init(
@@ -5229,6 +5451,7 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->dry_base = inputs.dry_base;
     req->dry_allowed_length = inputs.dry_allowed_length;
     req->dry_penalty_last_n = inputs.dry_penalty_last_n;
+    req->reasoning_budget = inputs.reasoning_budget;
     req->tool_call_fix = inputs.tool_call_fix;
     req->allow_eos_token = inputs.allow_eos_token;
     req->bypass_eos_token = inputs.bypass_eos_token;
@@ -6272,61 +6495,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     ApplyPromptFormatAdjustments(addedmemory, kcpp_data->prompt);
 
     //thinking budget handling
-    std::vector<int> thinking_start_sequence;
-    std::vector<int> thinking_end_sequence;
-    std::vector<int> thinking_end_phrase_toksleft;
-    std::string chat_template = "";
-    if (file_format == FileFormat::GGUF_GENERIC) {
-        chat_template = gpttype_get_chat_template();
-
-        std::string start = "<think>";
-        std::string end = "</think>";
-        std::string  budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n</think>";
-        size_t expected_start_tokens = 1;
-        size_t expected_end_tokens = 1;
-
-        switch (file_format_meta.model_architecture) {
-            case llm_arch::LLM_ARCH_GEMMA4:
-                start = "<|channel>thought";
-                end = "<channel|>";
-                budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n<channel|>";
-                expected_start_tokens = 2;
-                break;
-            case llm_arch::LLM_ARCH_SEED_OSS:
-                start = "<seed:think>";
-                end = "</seed:think>";
-                budget_exceeded = "\n(Reasoning budget exceeded)\n<seed:cot_budget_reflect>The current thinking budget is 0, so I will directly start answering the question.</seed:cot_budget_reflect>\nTime to respond now.\n</seed:think>";
-                break;
-            case llm_arch::LLM_ARCH_COHERE2MOE:
-                start = "<|START_THINKING|>";
-                end = "<|END_THINKING|>";
-                 budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n<|END_THINKING|>";
-                break;
-            case llm_arch::LLM_ARCH_MISTRAL3:
-                start = "[THINK]";
-                end = "[/THINK]";
-                budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n[/THINK]";
-                break;
-            case llm_arch::LLM_ARCH_MUSE_GLIMMER:
-                start = " to=self<|message|>";
-                end = "<|eom|>";
-                budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n<|eom|>";
-                expected_start_tokens = 3;
-                break;
-            default:
-                break;
-        }
-
-        TokenizeString(start, thinking_start_sequence, file_format, false);
-        TokenizeString(end, thinking_end_sequence, file_format, false);
-        TokenizeString(budget_exceeded, thinking_end_phrase_toksleft, file_format, false);
-        if (thinking_start_sequence.size() != expected_start_tokens || thinking_end_sequence.size() != expected_end_tokens)
-        {
-            thinking_start_sequence.clear();
-            thinking_end_sequence.clear();
-            thinking_end_phrase_toksleft.clear();
-        }
-    }
+    ReasoningBudgetTokenSequences reasoning_tokens = get_reasoning_budget_token_sequences();
+    std::vector<int> thinking_start_sequence = std::move(reasoning_tokens.start);
+    std::vector<int> thinking_end_sequence = std::move(reasoning_tokens.end);
+    std::vector<int> thinking_end_phrase_toksleft = std::move(reasoning_tokens.forced);
 
 
     bool stream_sse = inputs.stream_sse;

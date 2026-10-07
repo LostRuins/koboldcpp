@@ -259,18 +259,18 @@ For troubleshooting, include your operating system, hardware, KoboldCpp version,
 ## Official Resources
 The following are all official KoboldCpp resources
 
-[Download KoboldCpp Releases](https://github.com/LostRuins/koboldcpp/releases/latest)
-[KoboldAI Discord](https://koboldai.org/discord)
-[KoboldCpp Huggingface Repo](https://huggingface.co/koboldcpp)
-[KoboldCpp Sourceforge Mirror](https://sourceforge.net/projects/koboldcpp/)
-[KoboldAI Subreddit](https://www.reddit.com/r/KoboldAi/)
-[KoboldCpp Wiki](https://github.com/LostRuins/koboldcpp/wiki)
-[KoboldCpp API Reference](https://lite.koboldai.net/koboldcpp_api)
-[KoboldAI Lite Online WebUI](https://lite.koboldai.net)
-[KoboldCpp Colab Notebook](https://colab.research.google.com/github/LostRuins/koboldcpp/blob/concedo/colab.ipynb)
-[KoboldCpp Public Demo](https://koboldai-koboldcpp-tiefighter.hf.space/)
-[KoboldCpp RunPod Cloud Image](https://koboldai.org/runpodcpp)
-[KoboldCpp Docker image](https://hub.docker.com/r/koboldai/koboldcpp) (Caution: For experts only)
+- [Download KoboldCpp Releases](https://github.com/LostRuins/koboldcpp/releases/latest)
+- [KoboldAI Discord](https://koboldai.org/discord)
+- [KoboldCpp Huggingface Repo](https://huggingface.co/koboldcpp)
+- [KoboldCpp Sourceforge Mirror](https://sourceforge.net/projects/koboldcpp/)
+- [KoboldAI Subreddit](https://www.reddit.com/r/KoboldAi/)
+- [KoboldCpp Wiki](https://github.com/LostRuins/koboldcpp/wiki)
+- [KoboldCpp API Reference](https://lite.koboldai.net/koboldcpp_api)
+- [KoboldAI Lite Online WebUI](https://lite.koboldai.net)
+- [KoboldCpp Colab Notebook](https://colab.research.google.com/github/LostRuins/koboldcpp/blob/concedo/colab.ipynb)
+- [KoboldCpp Public Demo](https://koboldai-koboldcpp-tiefighter.hf.space/)
+- [KoboldCpp RunPod Cloud Image](https://koboldai.org/runpodcpp)
+- [KoboldCpp Docker image](https://hub.docker.com/r/koboldai/koboldcpp) (Caution: For experts only)
 
 ## Third Party Resources
 These unofficial community projects may be outdated or unmaintained. Contact their maintainers for support.
