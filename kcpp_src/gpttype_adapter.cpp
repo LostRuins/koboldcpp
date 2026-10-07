@@ -4347,10 +4347,20 @@ struct BatchGenerateRequest
     float top_p = 1.0f;
     float min_p = 0.0f;
     float typical_p = 1.0f;
+    float nsigma = 0.0f;
     float rep_pen = 1.0f;
     float rep_pen_slope = 1.0f;
     int rep_pen_range = 0;
     float presence_penalty = 0.0f;
+    int mirostat = 0;
+    float mirostat_tau = 5.0f;
+    float mirostat_eta = 0.1f;
+    float xtc_threshold = 0.2f;
+    float xtc_probability = 0.0f;
+    float dynatemp_range = 0.0f;
+    float dynatemp_exponent = 1.0f;
+    float adaptive_target = -1.0f;
+    float adaptive_decay = 0.9f;
     bool allow_eos_token = true;
     bool bypass_eos_token = false;
     bool render_special = false;
@@ -4505,11 +4515,11 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(inputs.mirostat != 0 || inputs.xtc_probability > 0.0f || inputs.nsigma > 0.0f || inputs.smoothing_factor > 0.0f || inputs.adaptive_target > 0.0f)
+    if(inputs.smoothing_factor > 0.0f)
     {
         return false;
     }
-    if(inputs.top_a > 0.0f || inputs.tfs != 1.0f || inputs.dynatemp_range > 0.0f)
+    if(inputs.top_a > 0.0f || inputs.tfs != 1.0f || inputs.dynatemp_range < 0.0f)
     {
         return false;
     }
@@ -4663,6 +4673,8 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
 {
     llama_sampler_chain_params params = llama_sampler_chain_default_params();
     llama_sampler * chain = llama_sampler_chain_init(params);
+    const uint32_t sampler_seed = req.seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t) req.seed;
+    const int32_t sampler_n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(llama_ctx_v4)));
     llama_sampler_chain_add(chain, batch_rep_pen_init(
         req.rep_pen_range,
         req.rep_pen,
@@ -4670,8 +4682,20 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
         req.presence_penalty));
     if(req.logit_biases.size()>0)
     {
-        int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(llama_ctx_v4)));
-        llama_sampler_chain_add(chain, llama_sampler_init_logit_bias(n_vocab, req.logit_biases.size(), req.logit_biases.data()));
+        llama_sampler_chain_add(chain, llama_sampler_init_logit_bias(sampler_n_vocab, req.logit_biases.size(), req.logit_biases.data()));
+    }
+    if(req.mirostat == 1 || req.mirostat == 2)
+    {
+        llama_sampler_chain_add(chain, llama_sampler_init_temp(req.temperature));
+        if(req.mirostat == 1)
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_mirostat(sampler_n_vocab, sampler_seed, req.mirostat_tau, req.mirostat_eta, 100));
+        }
+        else
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_mirostat_v2(sampler_seed, req.mirostat_tau, req.mirostat_eta));
+        }
+        return chain;
     }
     if(req.top_k > 0)
     {
@@ -4689,10 +4713,32 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     {
         llama_sampler_chain_add(chain, llama_sampler_init_typical(req.typical_p, 1));
     }
-    if(req.temperature > 0.0f)
+    if(req.temperature > 0.0f || req.dynatemp_range > 0.0f)
     {
-        llama_sampler_chain_add(chain, llama_sampler_init_temp(req.temperature));
-        llama_sampler_chain_add(chain, llama_sampler_init_dist(req.seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t) req.seed));
+        if(req.dynatemp_range > 0.0f)
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_temp_ext(req.temperature, req.dynatemp_range, req.dynatemp_exponent));
+        }
+        else
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_temp(req.temperature));
+        }
+        if(req.nsigma > 0.0f)
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_top_n_sigma(req.nsigma));
+        }
+        if(req.xtc_probability > 0.0f)
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_xtc(req.xtc_probability, req.xtc_threshold, 1, sampler_seed));
+        }
+        if(req.adaptive_target > 0.0f)
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_adaptive_p(req.adaptive_target, req.adaptive_decay, sampler_seed));
+        }
+        else
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_dist(sampler_seed));
+        }
     }
     else
     {
@@ -5004,10 +5050,20 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->top_p = inputs.top_p;
     req->min_p = inputs.min_p;
     req->typical_p = inputs.typical_p;
+    req->nsigma = inputs.nsigma;
     req->rep_pen = inputs.rep_pen;
     req->rep_pen_slope = inputs.rep_pen_slope;
     req->rep_pen_range = inputs.rep_pen_range;
     req->presence_penalty = inputs.presence_penalty;
+    req->mirostat = inputs.mirostat;
+    req->mirostat_tau = inputs.mirostat_tau;
+    req->mirostat_eta = inputs.mirostat_eta;
+    req->xtc_threshold = inputs.xtc_threshold;
+    req->xtc_probability = inputs.xtc_probability;
+    req->dynatemp_range = inputs.dynatemp_range;
+    req->dynatemp_exponent = std::max(inputs.dynatemp_exponent, 0.0f);
+    req->adaptive_target = inputs.adaptive_target;
+    req->adaptive_decay = inputs.adaptive_decay;
     req->allow_eos_token = inputs.allow_eos_token;
     req->bypass_eos_token = inputs.bypass_eos_token;
     req->render_special = inputs.render_special;

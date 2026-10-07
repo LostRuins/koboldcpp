@@ -2538,13 +2538,13 @@ def continuous_batching_python_eligible(genparams, api_format):
     if genparams.get("grammar") or genparams.get("grammar_retain_state") or genparams.get("banned_tokens") or genparams.get("banned_strings"):
         utfprint("Batching disabled due to grammar or bans",2)
         return False
-    if tryparsefloat(genparams.get("dry_multiplier", 0), 0) or tryparseint(genparams.get("mirostat", 0), 0) or tryparsefloat(genparams.get("xtc_probability", 0), 0) or tryparsefloat(genparams.get("nsigma", 0), 0):
+    if tryparsefloat(genparams.get("dry_multiplier", 0), 0):
         utfprint("Batching disabled due to samplers set 1",2)
         return False
-    if tryparsefloat(genparams.get("smoothing_factor", 0), 0) or tryparsefloat(genparams.get("adaptive_target", -1), -1) > 0 or genparams.get("using_openai_tools", False):
+    if tryparsefloat(genparams.get("smoothing_factor", 0), 0) or genparams.get("using_openai_tools", False):
         utfprint("Batching disabled due to samplers set 2",2)
         return False
-    if tryparsefloat(genparams.get("top_a", 0), 0) or tryparsefloat(genparams.get("tfs", 1), 1) != 1 or tryparsefloat(genparams.get("dynatemp_range", 0), 0):
+    if tryparsefloat(genparams.get("top_a", 0), 0) or tryparsefloat(genparams.get("tfs", 1), 1) != 1 or tryparsefloat(genparams.get("dynatemp_range", 0), 0) < 0:
         utfprint("Batching disabled due to samplers set 3",2)
         return False
     if genparams.get("sampler_order") and genparams.get("sampler_order") != [6, 0, 1, 3, 4, 2, 5]:
