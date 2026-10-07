@@ -11668,9 +11668,9 @@ def apply_agent_launch_safeguards(launch_args):
         launch_args.host = "127.0.0.1"  # The same-terminal agent uses a local API.
 
     adjustments = []
-    if launch_args.defaultgenamt < 8192:
-        adjustments.append(f"default generation amount increased from {launch_args.defaultgenamt} to 8192")
-        launch_args.defaultgenamt = 8192
+    if launch_args.defaultgenamt < 10240:
+        adjustments.append(f"default generation amount increased from {launch_args.defaultgenamt} to 10240")
+        launch_args.defaultgenamt = 10240
     if launch_args.contextsize < 32768:
         adjustments.append(f"context size increased from {launch_args.contextsize} to 32768")
         launch_args.contextsize = 32768
