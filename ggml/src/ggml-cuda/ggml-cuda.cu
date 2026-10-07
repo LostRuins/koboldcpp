@@ -1780,8 +1780,9 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
         (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
         src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
-    const int cc      = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, is_mul_mat_id ? src1->ne[2] : src1->ne[1]);
+    const int cc        = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0->type, cc, warp_size, src0->ne, src0->nb, is_mul_mat_id ? src1->ne[2] : src1->ne[1]);
 
     //we only support fusion for ncols_dst = 1
     if (tensor->op == GGML_OP_MUL_MAT && dst->ne[1] != 1) {
@@ -1825,6 +1826,55 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
+static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_idx, int shared_idx) {
+    if (routed_idx + 2 >= graph->n_nodes || shared_idx + 2 >= graph->n_nodes || shared_idx < routed_idx + 3) {
+        return false;
+    }
+    const int nodes[] = { routed_idx, routed_idx + 1, routed_idx + 2, shared_idx, shared_idx + 1, shared_idx + 2 };
+    const ggml_op ops[] = { GGML_OP_MUL_MAT_ID, GGML_OP_MUL_MAT_ID, GGML_OP_GLU,
+                           GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU };
+    const int outputs[] = { routed_idx + 2, shared_idx + 2 };
+    if (!ggml_can_fuse_subgraph_ext(graph, nodes, 6, ops, outputs, 2)) {
+        return false;
+    }
+
+    const ggml_tensor * routed = graph->nodes[routed_idx + 2];
+    const ggml_tensor * shared = graph->nodes[shared_idx + 2];
+    const ggml_tensor * gate = routed->src[0];
+    const ggml_tensor * up = routed->src[1];
+    const ggml_tensor * shared_gate = shared->src[0];
+    const ggml_tensor * shared_up = shared->src[1];
+    const auto is_pair = [&](const ggml_tensor * a, const ggml_tensor * b, int idx) {
+        return (a == graph->nodes[idx] && b == graph->nodes[idx + 1]) ||
+               (b == graph->nodes[idx] && a == graph->nodes[idx + 1]);
+    };
+    if (!is_pair(gate, up, routed_idx) || !is_pair(shared_gate, shared_up, shared_idx) ||
+            !ggml_cuda_should_fuse_mul_mat(up, gate, routed) ||
+            !ggml_cuda_should_fuse_mul_mat(shared_up, shared_gate, shared) ||
+            !up->src[0]->buffer ||
+            !ggml_cuda_should_fuse_mul_mat_vec_q(up)) {
+        return false;
+    }
+    const ggml_tensor * input = up->src[1];
+    const ggml_tensor * weight = up->src[0];
+    const ggml_tensor * shared_weight = shared_up->src[0];
+    if (input->op != GGML_OP_RESHAPE || input->src[0] != shared_up->src[1] ||
+            input->ne[1] != 1 || input->ne[3] != 1 || !ggml_is_contiguous(input) ||
+            !ggml_is_contiguous(shared_up->src[1]) || !ggml_is_matrix(shared_up->src[1]) ||
+            weight->type != shared_weight->type || weight->ne[0] != shared_weight->ne[0] ||
+            weight->ne[1] != shared_weight->ne[1] || weight->nb[1] != shared_weight->nb[1] || weight->ne[3] != 1 ||
+            !ggml_is_matrix(shared_weight) || !ggml_is_contiguous(shared_weight) ||
+            !ggml_is_contiguous(shared_gate->src[0]) || !ggml_is_contiguous(routed) || !ggml_is_contiguous(shared)) {
+        return false;
+    }
+    if (shared_weight->op != GGML_OP_NONE || shared_gate->src[0]->op != GGML_OP_NONE ||
+            ggml_get_glu_op(routed) != ggml_get_glu_op(shared) ||
+            ggml_get_op_params_f32(routed, 3) != ggml_get_op_params_f32(shared, 3)) {
+        return false;
+    }
+    return true;
+}
+
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -1845,7 +1895,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
-    if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
+    if (ggml_cuda_should_use_mmvf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11)) {
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
@@ -1855,7 +1905,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     if (ne01 == 1 && ne11 > MMVF_MAX_BATCH_SIZE && ne2 == 1 && ne3 == 1
             && src0->type == GGML_TYPE_F32
             && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)
-            && ggml_cuda_should_use_mmvf(src1->type, cc, src1->ne, src1->nb, /*ne11 =*/ 1)) {
+            && ggml_cuda_should_use_mmvf(src1->type, cc, warp_size, src1->ne, src1->nb, /*ne11 =*/ 1)) {
         ggml_tensor dst_vec = *dst;
         dst_vec.ne[0] = ne11;
         dst_vec.ne[1] = 1;
@@ -3469,6 +3519,25 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     ggml_tensor * node = cgraph->nodes[i];
 
+    if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
+            ggml_cuda_match_shared_expert(cgraph, i, i + 3)) {
+        const int outputs[] = { i + 2, i + 5 };
+        if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 6, outputs, 2)) {
+            ggml_tensor * routed = cgraph->nodes[i + 2];
+            ggml_tensor * shared = cgraph->nodes[i + 5];
+            const ggml_tensor * up = routed->src[1];
+            ggml_cuda_mm_fusion_args_host fusion{};
+            fusion.gate = routed->src[0]->src[0];
+            fusion.glu_op = ggml_get_glu_op(routed);
+            fusion.glu_limit = ggml_get_op_params_f32(routed, 3);
+            fusion.shared_up = shared->src[1]->src[0];
+            fusion.shared_gate = shared->src[0]->src[0];
+            fusion.shared_dst = shared;
+            ggml_cuda_mul_mat_vec_q(*cuda_ctx, up->src[0], up->src[1], up->src[2], routed, &fusion);
+            return 5;
+        }
+    }
+
     if (node->op == GGML_OP_MUL) {
         ggml_cuda_moe_weighted_reduction_match match;
         if (ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
@@ -4564,6 +4633,27 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     if (!disable_fusion) {
         // add alloc deps for performance positive fusions. This may increase the overall compute buffer size.
         // TODO: consolidate fusion paths in graph_optimize and graph_compute
+        ggml_cuda_set_device(cuda_ctx->device);
+        for (int i = 0; i + 5 < cgraph->n_nodes; ++i) {
+            if (cgraph->nodes[i]->op != GGML_OP_MUL_MAT_ID) {
+                continue;
+            }
+            for (int j = i + 3; j + 2 < cgraph->n_nodes; ++j) {
+                if (cgraph->nodes[j]->op == GGML_OP_MUL_MAT_ID && cgraph->nodes[j + 1]->op == GGML_OP_MUL_MAT_ID) {
+                    break;
+                }
+                if (cgraph->nodes[j]->op != GGML_OP_MUL_MAT || !ggml_cuda_match_shared_expert(cgraph, i, j)) {
+                    continue;
+                }
+                // Group both outputs before allocation so the shared result cannot alias intervening nodes.
+                std::rotate(cgraph->nodes + i + 3, cgraph->nodes + j, cgraph->nodes + j + 3);
+                ggml_tensor * up = cgraph->nodes[i + 2]->src[1];
+                params->add_alloc_dep(params->user_data, up->src[1], cgraph->nodes[i + 5]);
+                params->add_alloc_dep(params->user_data, up->src[2], cgraph->nodes[i + 5]);
+                i += 5;
+                break;
+            }
+        }
         for (int i = 0; i < cgraph->n_nodes; ++i) {
             ggml_cuda_moe_weighted_reduction_match match;
             if (ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
