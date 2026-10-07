@@ -2305,7 +2305,7 @@ def generate(genparams, stream_flag=False):
     banned_strings = coerce_ban_list(genparams.get('banned_strings', [])) # SillyTavern uses that name
     banned_tokens = coerce_ban_list(genparams.get('banned_tokens', banned_strings))
     bypass_eos_token = genparams.get('bypass_eos', False)
-    tool_call_fix = genparams.get('using_openai_tools', False)
+    tool_call_fix = genparams.get('_generic_tool_json_array_fix', False)
     custom_token_bans = genparams.get('custom_token_bans', '')
 
     for tok in custom_token_bans.split(','):
@@ -2543,7 +2543,7 @@ def continuous_batching_python_eligible(genparams, api_format):
     if dry_multiplier > 0 and 0 < dry_base < 1:
         utfprint("Batching disabled due to samplers set 1",2)
         return False
-    if tryparsefloat(genparams.get("smoothing_factor", 0), 0) or genparams.get("using_openai_tools", False):
+    if tryparsefloat(genparams.get("smoothing_factor", 0), 0):
         utfprint("Batching disabled due to samplers set 2",2)
         return False
     if tryparsefloat(genparams.get("top_a", 0), 0) or tryparsefloat(genparams.get("tfs", 1), 1) != 1 or tryparsefloat(genparams.get("dynatemp_range", 0), 0) < 0:
@@ -4892,6 +4892,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
             jinja_output = None
             request_tools = genparams.get('tools', [])
             genparams['_jinja_tool_formatting_used'] = False
+            genparams['_generic_tool_json_array_fix'] = False
             if use_jinja and cached_chat_template:
                 copied_jinja_kwargs = dict(cached_jinja_kwargs or {})
                 # Merge user-provided chat_template_kwargs into our defaults
@@ -5014,6 +5015,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                             # Set temperature lower automatically if function calling, cannot exceed 0.5
                             genparams["temperature"] = (1.0 if genparams.get("temperature", 0.5) > 1.0 else genparams.get("temperature", 0.5))
                             genparams["using_openai_tools"] = True
+                            genparams['_generic_tool_json_array_fix'] = True
                             # Set grammar to llamacpp example grammar to force json response (see https://github.com/ggerganov/llama.cpp/blob/master/grammars/json_arr.gbnf)
                             genparams["grammar"] = jsongrammar
                             try:

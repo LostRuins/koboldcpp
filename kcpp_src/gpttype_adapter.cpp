@@ -4367,6 +4367,7 @@ struct BatchGenerateRequest
     float dry_base = 1.75f;
     int dry_allowed_length = 2;
     int dry_penalty_last_n = 0;
+    bool tool_call_fix = false;
     bool allow_eos_token = true;
     bool bypass_eos_token = false;
     bool render_special = false;
@@ -4548,7 +4549,7 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
             }
         }
     }
-    if(inputs.reasoning_budget >= 0 || inputs.tool_call_fix)
+    if(inputs.reasoning_budget >= 0)
     {
         return false;
     }
@@ -4679,6 +4680,106 @@ static llama_sampler * batch_rep_pen_init(int32_t penalty_last_n, float penalty_
     });
 }
 
+struct BatchToolCallSampler
+{
+    std::vector<uint8_t> prevented_tokens;
+    bool render_special = false;
+    int generated_tokens = 0;
+    int opening_bracket_count = 0;
+};
+
+static const char * batch_tool_call_name(const llama_sampler * /*smpl*/)
+{
+    return "kcpp-batch-tool-call-fix";
+}
+
+static void batch_tool_call_accept(llama_sampler * smpl, llama_token token)
+{
+    auto * ctx = (BatchToolCallSampler *) smpl->ctx;
+    ctx->generated_tokens++;
+    const std::string piece = FileFormatTokenizeID(token, file_format, ctx->render_special);
+    ctx->opening_bracket_count += std::count(piece.begin(), piece.end(), '[');
+}
+
+static void batch_tool_call_apply(llama_sampler * smpl, llama_token_data_array * cur_p)
+{
+    auto * ctx = (BatchToolCallSampler *) smpl->ctx;
+    if(ctx->generated_tokens >= 3 || ctx->opening_bracket_count > 1 || cur_p->size == 0)
+    {
+        return;
+    }
+
+    float lowest_logit = cur_p->data[0].logit;
+    for(size_t i = 1; i < cur_p->size; ++i)
+    {
+        lowest_logit = std::min(lowest_logit, cur_p->data[i].logit);
+    }
+    for(size_t i = 0; i < cur_p->size; ++i)
+    {
+        llama_token token = cur_p->data[i].id;
+        if(token >= 0 && (size_t) token < ctx->prevented_tokens.size() && ctx->prevented_tokens[token])
+        {
+            cur_p->data[i].logit = lowest_logit;
+        }
+    }
+    cur_p->sorted = false;
+}
+
+static void batch_tool_call_reset(llama_sampler * smpl)
+{
+    auto * ctx = (BatchToolCallSampler *) smpl->ctx;
+    ctx->generated_tokens = 0;
+    ctx->opening_bracket_count = 0;
+}
+
+static llama_sampler * batch_tool_call_clone(const llama_sampler * smpl)
+{
+    const auto * ctx = (const BatchToolCallSampler *) smpl->ctx;
+    return llama_sampler_init(smpl->iface, new BatchToolCallSampler {
+        ctx->prevented_tokens,
+        ctx->render_special,
+        ctx->generated_tokens,
+        ctx->opening_bracket_count,
+    });
+}
+
+static void batch_tool_call_free(llama_sampler * smpl)
+{
+    delete (BatchToolCallSampler *) smpl->ctx;
+}
+
+static llama_sampler_i batch_tool_call_i = {
+    /* .name              = */ batch_tool_call_name,
+    /* .accept            = */ batch_tool_call_accept,
+    /* .apply             = */ batch_tool_call_apply,
+    /* .reset             = */ batch_tool_call_reset,
+    /* .clone             = */ batch_tool_call_clone,
+    /* .free              = */ batch_tool_call_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+static llama_sampler * batch_tool_call_init(int32_t n_vocab, bool render_special)
+{
+    std::vector<uint8_t> prevented_tokens(n_vocab, 0);
+    for(llama_token token = 0; token < n_vocab; ++token)
+    {
+        const std::string piece = FileFormatTokenizeID(token, file_format, true);
+        if(piece.find(']') != std::string::npos)
+        {
+            prevented_tokens[token] = 1;
+        }
+    }
+    return llama_sampler_init(&batch_tool_call_i, new BatchToolCallSampler {
+        std::move(prevented_tokens),
+        render_special,
+        0,
+        0,
+    });
+}
+
 static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
 {
     llama_sampler_chain_params params = llama_sampler_chain_default_params();
@@ -4686,6 +4787,12 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     const uint32_t sampler_seed = req.seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t) req.seed;
     const llama_vocab * sampler_vocab = llama_model_get_vocab(llama_get_model(llama_ctx_v4));
     const int32_t sampler_n_vocab = llama_vocab_n_tokens(sampler_vocab);
+
+    if(req.tool_call_fix)
+    {
+        // This sampler must not be primed with prompt tokens: its three-token window starts at generation.
+        llama_sampler_chain_add(chain, batch_tool_call_init(sampler_n_vocab, req.render_special));
+    }
 
     if(req.logit_biases.size()>0)
     {
@@ -5122,6 +5229,7 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->dry_base = inputs.dry_base;
     req->dry_allowed_length = inputs.dry_allowed_length;
     req->dry_penalty_last_n = inputs.dry_penalty_last_n;
+    req->tool_call_fix = inputs.tool_call_fix;
     req->allow_eos_token = inputs.allow_eos_token;
     req->bypass_eos_token = inputs.bypass_eos_token;
     req->render_special = inputs.render_special;
