@@ -4337,8 +4337,10 @@ struct BatchGenerateRequest
     BatchState state = BatchState::WAITING;
     std::string prompt;
     std::string prompt_added_memory;
+    std::string grammar;
     std::vector<std::string> stop_sequences;
     std::vector<llama_logit_bias> logit_biases;
+    std::vector<std::string> dry_sequence_breakers;
     int max_context_length = 0;
     int max_length = 0;
     int seed = 0;
@@ -4361,6 +4363,10 @@ struct BatchGenerateRequest
     float dynatemp_exponent = 1.0f;
     float adaptive_target = -1.0f;
     float adaptive_decay = 0.9f;
+    float dry_multiplier = 0.0f;
+    float dry_base = 1.75f;
+    int dry_allowed_length = 2;
+    int dry_penalty_last_n = 0;
     bool allow_eos_token = true;
     bool bypass_eos_token = false;
     bool render_special = false;
@@ -4507,11 +4513,15 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(inputs.grammar && std::string(inputs.grammar).size() > 0)
+    if(inputs.grammar_retain_state)
     {
         return false;
     }
-    if(inputs.banned_tokens_len > 0 || inputs.dry_multiplier > 0.0f)
+    if(inputs.banned_tokens_len > 0)
+    {
+        return false;
+    }
+    if(inputs.dry_multiplier > 0.0f && inputs.dry_base > 0.0f && inputs.dry_base < 1.0f)
     {
         return false;
     }
@@ -4674,16 +4684,63 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     llama_sampler_chain_params params = llama_sampler_chain_default_params();
     llama_sampler * chain = llama_sampler_chain_init(params);
     const uint32_t sampler_seed = req.seed < 0 ? LLAMA_DEFAULT_SEED : (uint32_t) req.seed;
-    const int32_t sampler_n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(llama_ctx_v4)));
-    llama_sampler_chain_add(chain, batch_rep_pen_init(
-        req.rep_pen_range,
-        req.rep_pen,
-        req.rep_pen_slope,
-        req.presence_penalty));
+    const llama_vocab * sampler_vocab = llama_model_get_vocab(llama_get_model(llama_ctx_v4));
+    const int32_t sampler_n_vocab = llama_vocab_n_tokens(sampler_vocab);
+
     if(req.logit_biases.size()>0)
     {
         llama_sampler_chain_add(chain, llama_sampler_init_logit_bias(sampler_n_vocab, req.logit_biases.size(), req.logit_biases.data()));
     }
+
+    if(req.dry_multiplier > 0.0f && req.dry_base >= 1.0f)
+    {
+        std::vector<const char *> dry_breakers;
+        dry_breakers.reserve(req.dry_sequence_breakers.size());
+        for(const std::string & breaker : req.dry_sequence_breakers)
+        {
+            dry_breakers.push_back(breaker.c_str());
+        }
+        int dry_last_n = req.dry_penalty_last_n;
+        const int request_n_ctx = req.max_context_length > 0 ? std::min(req.max_context_length, kcpp_data->n_ctx) : kcpp_data->n_ctx;
+        dry_last_n = dry_last_n <= 0 ? request_n_ctx : std::min(dry_last_n, request_n_ctx);
+        llama_sampler * dry_sampler = llama_sampler_init_dry(
+            sampler_vocab,
+            req.dry_multiplier,
+            req.dry_base,
+            req.dry_allowed_length,
+            dry_last_n,
+            dry_breakers.data(),
+            dry_breakers.size());
+        for(llama_token token : req.prompt_tokens)
+        {
+            llama_sampler_accept(dry_sampler, token);
+        }
+        llama_sampler_chain_add(chain, dry_sampler);
+    }
+
+    if(!req.grammar.empty())
+    {
+        llama_sampler * grammar_sampler = llama_sampler_init_grammar(sampler_vocab, req.grammar.c_str(), "root");
+        if(grammar_sampler)
+        {
+            llama_sampler_chain_add(chain, grammar_sampler);
+        }
+        else
+        {
+            printf("\nIgnored invalid grammar sampler.");
+        }
+    }
+
+    llama_sampler * rep_pen_sampler = batch_rep_pen_init(
+        req.rep_pen_range,
+        req.rep_pen,
+        req.rep_pen_slope,
+        req.presence_penalty);
+    for(llama_token token : req.prompt_tokens)
+    {
+        llama_sampler_accept(rep_pen_sampler, token);
+    }
+    llama_sampler_chain_add(chain, rep_pen_sampler);
     if(req.mirostat == 1 || req.mirostat == 2)
     {
         llama_sampler_chain_add(chain, llama_sampler_init_temp(req.temperature));
@@ -4855,10 +4912,6 @@ static bool batch_claim_waiting_locked()
 
         req->prompt_token_count = req->prompt_tokens.size();
         req->sampler = batch_build_sampler(*req);
-        for(llama_token token : req->prompt_tokens)
-        {
-            llama_sampler_accept(req->sampler, token);
-        }
         req->prompt_pos = 0;
         req->n_past = 0;
         req->has_pending = false;
@@ -5042,6 +5095,7 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->id = batch_next_request_id++;
     req->prompt = inputs.prompt ? inputs.prompt : "";
     req->prompt_added_memory = inputs.memory ? inputs.memory : "";
+    req->grammar = inputs.grammar ? inputs.grammar : "";
     req->max_context_length = inputs.max_context_length;
     req->max_length = inputs.max_length;
     req->seed = inputs.seed;
@@ -5064,9 +5118,20 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->dynatemp_exponent = std::max(inputs.dynatemp_exponent, 0.0f);
     req->adaptive_target = inputs.adaptive_target;
     req->adaptive_decay = inputs.adaptive_decay;
+    req->dry_multiplier = inputs.dry_multiplier;
+    req->dry_base = inputs.dry_base;
+    req->dry_allowed_length = inputs.dry_allowed_length;
+    req->dry_penalty_last_n = inputs.dry_penalty_last_n;
     req->allow_eos_token = inputs.allow_eos_token;
     req->bypass_eos_token = inputs.bypass_eos_token;
     req->render_special = inputs.render_special;
+    for(int i = 0; i < inputs.dry_sequence_breakers_len; ++i)
+    {
+        if(inputs.dry_sequence_breakers[i])
+        {
+            req->dry_sequence_breakers.emplace_back(inputs.dry_sequence_breakers[i]);
+        }
+    }
     req->logit_biases = {};
     for(int i = 0; i < inputs.logit_biases_len; ++i)
     {

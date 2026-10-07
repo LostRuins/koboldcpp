@@ -2535,10 +2535,12 @@ def continuous_batching_python_eligible(genparams, api_format):
     if genparams.get("negative_prompt") or genparams.get("images") or genparams.get("audio"):
         utfprint("Batching disabled due to media",2)
         return False
-    if genparams.get("grammar") or genparams.get("grammar_retain_state") or genparams.get("banned_tokens") or genparams.get("banned_strings"):
-        utfprint("Batching disabled due to grammar or bans",2)
+    if genparams.get("grammar_retain_state") or genparams.get("banned_tokens") or genparams.get("banned_strings"):
+        utfprint("Batching disabled due to retained grammar or bans",2)
         return False
-    if tryparsefloat(genparams.get("dry_multiplier", 0), 0):
+    dry_multiplier = tryparsefloat(genparams.get("dry_multiplier", 0), 0)
+    dry_base = tryparsefloat(genparams.get("dry_base", 1.75), 1.75)
+    if dry_multiplier > 0 and 0 < dry_base < 1:
         utfprint("Batching disabled due to samplers set 1",2)
         return False
     if tryparsefloat(genparams.get("smoothing_factor", 0), 0) or genparams.get("using_openai_tools", False):
