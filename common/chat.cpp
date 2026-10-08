@@ -20,6 +20,7 @@
 #include "parsers/gemma4.cpp"
 #include "parsers/gigachat-v3.cpp"
 #include "parsers/gpt-oss.cpp"
+#include "parsers/k2-horizon.cpp"
 #include "parsers/kimi-k2.cpp"
 #include "parsers/kimi-k3.cpp"
 #include "parsers/lfm2.cpp"
@@ -1170,6 +1171,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         src.find("<|end_of_msg|>") != std::string::npos) {
         LOG_DBG("Using specialized template: Kimi K3\n");
         return common_chat_params_init_kimi_k3(tmpl, params);
+    }
+
+    // K2 Horizon - <|ifm|im_start|> turns, <ifm|think*> reasoning picked by reasoning_effort and
+    // <ifm|tool_calls> sections; the three think tag pairs defeat the autoparser's reasoning detection
+    if (src.find("<|ifm|im_start|>") != std::string::npos &&
+        src.find("<ifm|tool_calls>") != std::string::npos) {
+        LOG_DBG("Using specialized template: K2 Horizon\n");
+        return common_chat_params_init_k2_horizon(tmpl, params);
     }
 
     // Ling 3.0 / Bailing V3 - <role>X</role> sections with <arg_key>/<arg_value> tagged

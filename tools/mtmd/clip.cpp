@@ -1758,12 +1758,19 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
-			            if (model.proj_type==PROJECTOR_TYPE_QWEN25VL && q25vl_migrated) {
+		                if (model.proj_type==PROJECTOR_TYPE_QWEN25VL && q25vl_migrated) {
                             hparams.n_wa_pattern = 8;
                         }
                         // hparams.set_limit_image_tokens(8, 4096);
                         // hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                         hparams.set_limit_image_tokens(8, 2048);
+			            // optional limits of the model, the custom values take precedence
+                        if (hparams.custom_image_min_tokens <= 0) {
+                            get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels, false);
+                        }
+                        if (hparams.custom_image_max_tokens <= 0) {
+                            get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, false);
+                        }
                         hparams.set_warmup_n_tokens(256); // kcpp revert qwen vision size
                         // const int warn_min_pixels = 1024 * hparams.n_merge * hparams.n_merge * hparams.patch_size * hparams.patch_size;
                         // if (hparams.image_min_pixels < warn_min_pixels) {
