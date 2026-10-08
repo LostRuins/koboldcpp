@@ -4413,9 +4413,11 @@ struct BatchGenerateRequest
     int seed = 0;
     float temperature = 0.0f;
     int top_k = 0;
+    float top_a = 0.0f;
     float top_p = 1.0f;
     float min_p = 0.0f;
     float typical_p = 1.0f;
+    float tfs = 1.0f;
     float nsigma = 0.0f;
     float rep_pen = 1.0f;
     float rep_pen_slope = 1.0f;
@@ -4428,6 +4430,8 @@ struct BatchGenerateRequest
     float xtc_probability = 0.0f;
     float dynatemp_range = 0.0f;
     float dynatemp_exponent = 1.0f;
+    float smoothing_factor = 0.0f;
+    float smoothing_curve = 1.0f;
     float adaptive_target = -1.0f;
     float adaptive_decay = 0.9f;
     float dry_multiplier = 0.0f;
@@ -4594,14 +4598,6 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(inputs.smoothing_factor > 0.0f)
-    {
-        return false;
-    }
-    if(inputs.top_a > 0.0f || inputs.tfs != 1.0f || inputs.dynatemp_range < 0.0f)
-    {
-        return false;
-    }
     static const int default_sampler_order[] = {6, 0, 1, 3, 4, 2, 5};
     if(inputs.sampler_len > 0)
     {
@@ -4741,6 +4737,171 @@ static llama_sampler * batch_rep_pen_init(int32_t penalty_last_n, float penalty_
         penalty_slope,
         penalty_present,
         {},
+    });
+}
+
+struct BatchTopASampler
+{
+    float top_a = 0.0f;
+};
+
+static const char * batch_top_a_name(const llama_sampler * /*smpl*/)
+{
+    return "kcpp-batch-top-a";
+}
+
+static void batch_top_a_apply(llama_sampler * smpl, llama_token_data_array * cur_p)
+{
+    const auto * ctx = (const BatchTopASampler *) smpl->ctx;
+    sample_top_a(cur_p, ctx->top_a, 1);
+}
+
+static llama_sampler * batch_top_a_clone(const llama_sampler * smpl)
+{
+    const auto * ctx = (const BatchTopASampler *) smpl->ctx;
+    return llama_sampler_init(smpl->iface, new BatchTopASampler {ctx->top_a});
+}
+
+static void batch_top_a_free(llama_sampler * smpl)
+{
+    delete (BatchTopASampler *) smpl->ctx;
+}
+
+static llama_sampler_i batch_top_a_i = {
+    /* .name              = */ batch_top_a_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ batch_top_a_apply,
+    /* .reset             = */ nullptr,
+    /* .clone             = */ batch_top_a_clone,
+    /* .free              = */ batch_top_a_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+static constexpr float batch_smoothing_factor_max = 10.0f;
+static constexpr float batch_smoothing_curve_min = 0.1f;
+static constexpr float batch_smoothing_curve_max = 5.0f;
+
+static llama_sampler * batch_top_a_init(float top_a)
+{
+    return llama_sampler_init(&batch_top_a_i, new BatchTopASampler {std::clamp(top_a, 0.0f, 1.0f)});
+}
+
+struct BatchTFSSampler
+{
+    float tfs = 1.0f;
+};
+
+static const char * batch_tfs_name(const llama_sampler * /*smpl*/)
+{
+    return "kcpp-batch-tfs";
+}
+
+static void batch_tfs_apply(llama_sampler * smpl, llama_token_data_array * cur_p)
+{
+    const auto * ctx = (const BatchTFSSampler *) smpl->ctx;
+    sample_tail_free(cur_p, ctx->tfs, 1);
+}
+
+static llama_sampler * batch_tfs_clone(const llama_sampler * smpl)
+{
+    const auto * ctx = (const BatchTFSSampler *) smpl->ctx;
+    return llama_sampler_init(smpl->iface, new BatchTFSSampler {ctx->tfs});
+}
+
+static void batch_tfs_free(llama_sampler * smpl)
+{
+    delete (BatchTFSSampler *) smpl->ctx;
+}
+
+static llama_sampler_i batch_tfs_i = {
+    /* .name              = */ batch_tfs_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ batch_tfs_apply,
+    /* .reset             = */ nullptr,
+    /* .clone             = */ batch_tfs_clone,
+    /* .free              = */ batch_tfs_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+static llama_sampler * batch_tfs_init(float tfs)
+{
+    return llama_sampler_init(&batch_tfs_i, new BatchTFSSampler {std::clamp(tfs, 0.0f, 1.0f)});
+}
+
+struct BatchTemperatureSampler
+{
+    float temperature = 0.0f;
+    float dynatemp_range = 0.0f;
+    float dynatemp_exponent = 1.0f;
+    float smoothing_factor = 0.0f;
+    float smoothing_curve = 1.0f;
+};
+
+static const char * batch_temperature_name(const llama_sampler * /*smpl*/)
+{
+    return "kcpp-batch-temperature";
+}
+
+static void batch_temperature_apply(llama_sampler * smpl, llama_token_data_array * cur_p)
+{
+    const auto * ctx = (const BatchTemperatureSampler *) smpl->ctx;
+    if(ctx->dynatemp_range > 0.0f)
+    {
+        const float min_temp = std::max(ctx->temperature - ctx->dynatemp_range, 0.0f);
+        const float max_temp = std::max(ctx->temperature + ctx->dynatemp_range, 0.0f);
+        sample_entropy(cur_p, min_temp, max_temp, ctx->dynatemp_exponent, ctx->smoothing_factor, ctx->smoothing_curve);
+    }
+    else
+    {
+        sample_temperature(cur_p, ctx->temperature, ctx->smoothing_factor, ctx->smoothing_curve);
+    }
+}
+
+static llama_sampler * batch_temperature_clone(const llama_sampler * smpl)
+{
+    const auto * ctx = (const BatchTemperatureSampler *) smpl->ctx;
+    return llama_sampler_init(smpl->iface, new BatchTemperatureSampler {
+        ctx->temperature,
+        ctx->dynatemp_range,
+        ctx->dynatemp_exponent,
+        ctx->smoothing_factor,
+        ctx->smoothing_curve,
+    });
+}
+
+static void batch_temperature_free(llama_sampler * smpl)
+{
+    delete (BatchTemperatureSampler *) smpl->ctx;
+}
+
+static llama_sampler_i batch_temperature_i = {
+    /* .name              = */ batch_temperature_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ batch_temperature_apply,
+    /* .reset             = */ nullptr,
+    /* .clone             = */ batch_temperature_clone,
+    /* .free              = */ batch_temperature_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+static llama_sampler * batch_temperature_init(float temperature, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve)
+{
+    const float safe_temperature = std::isfinite(temperature) ? temperature : 0.0f;
+    return llama_sampler_init(&batch_temperature_i, new BatchTemperatureSampler {
+        safe_temperature,
+        safe_temperature > 0.0f && std::isfinite(dynatemp_range) ? std::max(dynatemp_range, 0.0f) : 0.0f,
+        std::isfinite(dynatemp_exponent) ? std::max(dynatemp_exponent, 0.0f) : 1.0f,
+        std::isfinite(smoothing_factor) ? std::clamp(smoothing_factor, 0.0f, batch_smoothing_factor_max) : 0.0f,
+        std::isfinite(smoothing_curve) ? std::clamp(smoothing_curve, batch_smoothing_curve_min, batch_smoothing_curve_max) : 1.0f,
     });
 }
 
@@ -5072,7 +5233,14 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     llama_sampler_chain_add(chain, rep_pen_sampler);
     if(req.mirostat == 1 || req.mirostat == 2)
     {
-        llama_sampler_chain_add(chain, llama_sampler_init_temp(req.temperature));
+        if(req.smoothing_factor > 0.0f)
+        {
+            llama_sampler_chain_add(chain, batch_temperature_init(req.temperature, 0.0f, 1.0f, req.smoothing_factor, req.smoothing_curve));
+        }
+        else
+        {
+            llama_sampler_chain_add(chain, llama_sampler_init_temp(req.temperature));
+        }
         if(req.mirostat == 1)
         {
             llama_sampler_chain_add(chain, llama_sampler_init_mirostat(sampler_n_vocab, sampler_seed, req.mirostat_tau, req.mirostat_eta, 100));
@@ -5087,6 +5255,18 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     {
         llama_sampler_chain_add(chain, llama_sampler_init_top_k(req.top_k));
     }
+    if(req.top_a > 0.0f)
+    {
+        llama_sampler_chain_add(chain, batch_top_a_init(req.top_a));
+    }
+    if(req.tfs < 1.0f)
+    {
+        llama_sampler_chain_add(chain, batch_tfs_init(req.tfs));
+    }
+    if(req.typical_p > 0.0f && req.typical_p < 1.0f)
+    {
+        llama_sampler_chain_add(chain, llama_sampler_init_typical(req.typical_p, 1));
+    }
     if(req.top_p > 0.0f && req.top_p < 1.0f)
     {
         llama_sampler_chain_add(chain, llama_sampler_init_top_p(req.top_p, 1));
@@ -5095,13 +5275,13 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     {
         llama_sampler_chain_add(chain, llama_sampler_init_min_p(req.min_p, 1));
     }
-    if(req.typical_p > 0.0f && req.typical_p < 1.0f)
-    {
-        llama_sampler_chain_add(chain, llama_sampler_init_typical(req.typical_p, 1));
-    }
     if(req.temperature > 0.0f || req.dynatemp_range > 0.0f)
     {
-        if(req.dynatemp_range > 0.0f)
+        if(req.smoothing_factor > 0.0f)
+        {
+            llama_sampler_chain_add(chain, batch_temperature_init(req.temperature, req.dynatemp_range, req.dynatemp_exponent, req.smoothing_factor, req.smoothing_curve));
+        }
+        else if(req.dynatemp_range > 0.0f)
         {
             llama_sampler_chain_add(chain, llama_sampler_init_temp_ext(req.temperature, req.dynatemp_range, req.dynatemp_exponent));
         }
@@ -5430,9 +5610,11 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->seed = inputs.seed;
     req->temperature = inputs.temperature;
     req->top_k = inputs.top_k;
+    req->top_a = std::isfinite(inputs.top_a) ? std::clamp(inputs.top_a, 0.0f, 1.0f) : 0.0f;
     req->top_p = inputs.top_p;
     req->min_p = inputs.min_p;
     req->typical_p = inputs.typical_p;
+    req->tfs = std::isfinite(inputs.tfs) ? std::clamp(inputs.tfs, 0.0f, 1.0f) : 1.0f;
     req->nsigma = inputs.nsigma;
     req->rep_pen = inputs.rep_pen;
     req->rep_pen_slope = inputs.rep_pen_slope;
@@ -5443,8 +5625,10 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->mirostat_eta = inputs.mirostat_eta;
     req->xtc_threshold = inputs.xtc_threshold;
     req->xtc_probability = inputs.xtc_probability;
-    req->dynatemp_range = inputs.dynatemp_range;
-    req->dynatemp_exponent = std::max(inputs.dynatemp_exponent, 0.0f);
+    req->dynatemp_range = std::isfinite(inputs.temperature) && inputs.temperature > 0.0f && std::isfinite(inputs.dynatemp_range) ? std::max(inputs.dynatemp_range, 0.0f) : 0.0f;
+    req->dynatemp_exponent = std::isfinite(inputs.dynatemp_exponent) ? std::max(inputs.dynatemp_exponent, 0.0f) : 1.0f;
+    req->smoothing_factor = std::isfinite(inputs.smoothing_factor) ? std::clamp(inputs.smoothing_factor, 0.0f, batch_smoothing_factor_max) : 0.0f;
+    req->smoothing_curve = std::isfinite(inputs.smoothing_curve) ? std::clamp(inputs.smoothing_curve, batch_smoothing_curve_min, batch_smoothing_curve_max) : 1.0f;
     req->adaptive_target = inputs.adaptive_target;
     req->adaptive_decay = inputs.adaptive_decay;
     req->dry_multiplier = inputs.dry_multiplier;

@@ -2543,12 +2543,6 @@ def continuous_batching_python_eligible(genparams, api_format):
     if dry_multiplier > 0 and 0 < dry_base < 1:
         utfprint("Batching disabled due to samplers set 1",2)
         return False
-    if tryparsefloat(genparams.get("smoothing_factor", 0), 0):
-        utfprint("Batching disabled due to samplers set 2",2)
-        return False
-    if tryparsefloat(genparams.get("top_a", 0), 0) or tryparsefloat(genparams.get("tfs", 1), 1) != 1 or tryparsefloat(genparams.get("dynatemp_range", 0), 0) < 0:
-        utfprint("Batching disabled due to samplers set 3",2)
-        return False
     if genparams.get("sampler_order") and genparams.get("sampler_order") != [6, 0, 1, 3, 4, 2, 5]:
         utfprint("Batching disabled due to sampler order",2)
         return False
