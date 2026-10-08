@@ -6,7 +6,7 @@ Inspired by **KoboldAI** and built on **llama.cpp**
 
 One executable file, no installation required. Ready-to-run downloads are available for Windows, Linux, and macOS.
 
-**[Download KoboldCpp](https://github.com/LostRuins/koboldcpp/releases/latest) | [Documentation and FAQ](https://github.com/LostRuins/koboldcpp/wiki) | [API reference](https://lite.koboldai.net/koboldcpp_api) | [Discord community](https://koboldai.org/discord)**
+**[Download KoboldCpp](https://github.com/LostRuins/koboldcpp/releases/latest) | [Quick Start](#quick-start) |  [Official Resources](#official-resources)**
 
 ![Integrated Web UI](media/preview.png)
 ![Roleplay Chat Mode](media/preview2.png)
@@ -27,6 +27,10 @@ One executable file, no installation required. Ready-to-run downloads are availa
 - **Writing and roleplay tools:** Bundled KoboldAI Lite WebUI includes multiple UI themes, editing tools, memory, world info, author's notes, characters, scenarios, and persistent story saves. Import Tavern character cards and other supported formats from file or external sites. Also includes the classic llama.cpp WebUI.
 - **App integrations:** Compatible endpoints for KoboldAI, OpenAI, Ollama, A1111/Forge, ComfyUI, Whisper transcription, XTTS, and OpenAI speech clients. See [APIs and integrations](#apis-and-integrations).
 - **Fully Portable** - Single standalone executable for Windows, Linux or macOS, with no installation required and no external dependencies. Runs on CPU or GPU, with full or partial offloading. Can also run on Colab, Docker, also supports other platforms if self-compiled (like Android via Termux and Raspberry PI).
+
+## KoboldCpp Community Website
+- NEW: KoboldCpp now has its own official [KoboldCpp Community Website](https://koboldcpp.net) at **https://koboldcpp.net**
+- This community website provides simple resources and instructions to help newbies get started, and links to release binaries on the KoboldCpp Github repo. Contributions are welcome.
 
 ## Phishing Scam Alert ⚠️
 - Phishing SCAM Warning: `koboldcpp.com` is a malicious fake site and is not affiliated with this project. You should **ONLY** trust official downloads from the release binaries on the official github at https://github.com/LostRuins/koboldcpp/releases/latest
@@ -98,9 +102,13 @@ KoboldCpp also retains backward compatibility with legacy GGML `.bin` models, th
 - Creative Writing and Roleplay: [L3-8B-Stheno-v3.2](https://huggingface.co/bartowski/L3-8B-Stheno-v3.2-GGUF/resolve/main/L3-8B-Stheno-v3.2-Q4_K_S.gguf)
 - Lightweight and Fast: [Gemma3-4B](https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf)
   - Add [optional Gemma3-4B MMproj file](https://huggingface.co/koboldcpp/mmproj/resolve/main/gemma3-4b-mmproj-q8.gguf) for vision recognition capabilities.
-- Image Generation: [PicX Real](https://huggingface.co/koboldcpp/imgmodel/resolve/main/picx_real_q5_1.gguf)
-- Speech Recognition: [Whisper models for Speech-To-Text](https://huggingface.co/koboldcpp/whisper/tree/main)
-- Text-To-Speech: [TTS models for Narration](https://huggingface.co/koboldcpp/tts/tree/main)
+- Image Generation: [PicX Real](https://huggingface.co/koboldcpp/imgmodel/resolve/main/picx_real_q8_0.gguf)
+  - Or browse [More image generation models](https://huggingface.co/koboldcpp/imgmodel/tree/main)
+- Speech Recognition: [Whisper Base](https://huggingface.co/koboldcpp/whisper/resolve/main/whisper-base.en-q5_1.bin)
+  - Or browse [More Whisper models for Speech-To-Text](https://huggingface.co/koboldcpp/whisper/tree/main)
+- Text-To-Speech: [Kokoro TTS](https://huggingface.co/koboldcpp/tts/resolve/main/Kokoro_no_espeak_Q4.gguf)
+  - Or browse [More TTS models for Narration](https://huggingface.co/koboldcpp/tts/tree/main)
+- Music Generation: [AceStep 1.5](https://huggingface.co/koboldcpp/music/tree/main)
 - This is just a list for noobs to get started! There are hundreds more GGUFs out there!
 - [More newbie templates](https://huggingface.co/koboldcpp/newbie-templates) - Contains premade KoboldCpp quick launch templates curated for newbies.
 - [More popular templates](https://huggingface.co/koboldcpp/popular-templates) - Contains premade KoboldCpp quick launch templates curated for popularity.
@@ -123,7 +131,7 @@ KoboldCpp provides many hardware configurations that can affect performance. Gen
 - **An older computer crashes at startup:** Some devices lack newer CPU instruction support. Try an `oldpc` release or use `--noavx2`. See the release notes for hardware compatibility.
 - **The browser cannot connect:** Wait for model loading to finish and check the address printed in the terminal. The default is [localhost:5001](http://localhost:5001); a custom `--port` changes it.
 - **A model will not load:** Check the terminal error, your available memory, and whether your KoboldCpp version supports the model. You can trigger debug mode with the `--debugmode` flag or launch toggle. Try the latest release and [check the wiki](https://github.com/LostRuins/koboldcpp/wiki) or [create a Github issue](https://github.com/LostRuins/koboldcpp/issues) to report a bug.
-- **Model is incoherent:** You might be using an incorrect chat template. Try relaunch with `--jinjatools` to use the included Jinja template, or enable the Jinja toggle in the GUI.
+- **Model is incoherent:** You might be using an incorrect chat template. Try relaunch with `--jinja` to use the included Jinja template, or enable the Jinja toggle in the GUI.
 - For more information, be sure to run the program with the `--help` flag.
 
 ## APIs and integrations
@@ -252,8 +260,25 @@ Start with the [KoboldCpp FAQ and knowledge base](https://github.com/LostRuins/k
 
 For troubleshooting, include your operating system, hardware, KoboldCpp version, model filename, launch settings, and relevant error output.
 
+## Official Resources
+The following are all official KoboldCpp resources
+
+- [Download KoboldCpp Releases](https://github.com/LostRuins/koboldcpp/releases/latest)
+- [KoboldAI Discord](https://koboldai.org/discord)
+- [KoboldCpp Huggingface Repo](https://huggingface.co/koboldcpp)
+- [KoboldCpp Sourceforge Mirror](https://sourceforge.net/projects/koboldcpp/)
+- [KoboldAI Subreddit](https://www.reddit.com/r/KoboldAi/)
+- [KoboldCpp Wiki](https://github.com/LostRuins/koboldcpp/wiki)
+- [KoboldCpp API Reference](https://lite.koboldai.net/koboldcpp_api)
+- [KoboldAI Lite Online WebUI](https://lite.koboldai.net)
+- [KoboldCpp Colab Notebook](https://colab.research.google.com/github/LostRuins/koboldcpp/blob/concedo/colab.ipynb)
+- [KoboldCpp Public Demo](https://koboldai-koboldcpp-tiefighter.hf.space/)
+- [KoboldCpp RunPod Cloud Image](https://koboldai.org/runpodcpp)
+- [KoboldCpp Docker image](https://hub.docker.com/r/koboldai/koboldcpp) (Caution: For experts only)
+- [KoboldCpp Official Community Website](https://koboldcpp.net)
+
 ## Third Party Resources
-These community projects may be outdated or unmaintained. Contact their maintainers for support.
+These unofficial community projects may be outdated or unmaintained. Contact their maintainers for support.
 
 - **Arch Linux:** AUR packages for [CUDA](https://aur.archlinux.org/packages/koboldcpp-cuda) and [HIPBLAS](https://aur.archlinux.org/packages/koboldcpp-hipblas).
 - **Community Docker images:** [korewaChino](https://github.com/korewaChino/koboldCppDocker) and [noneabove1182](https://github.com/noneabove1182/koboldcpp-docker).
