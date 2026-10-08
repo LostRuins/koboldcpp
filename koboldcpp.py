@@ -2240,6 +2240,15 @@ def coerce_ban_list(value):
             pass
     return [value]
 
+def normalize_sampler_order(value):
+    if value is None or value == []:
+        return []
+    if not isinstance(value, (list, tuple)) or not 0 < len(value) <= sampler_order_max:
+        return None
+    if any(isinstance(sampler, bool) or not isinstance(sampler, int) or sampler < 0 or sampler >= sampler_order_max for sampler in value):
+        return None
+    return list(value)
+
 def generate(genparams, stream_flag=False):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey
 
@@ -2273,7 +2282,7 @@ def generate(genparams, stream_flag=False):
     dry_sequence_breakers = genparams.get('dry_sequence_breakers', [])
     xtc_threshold = tryparsefloat(genparams.get('xtc_threshold', 0.2),0.2)
     xtc_probability = tryparsefloat(genparams.get('xtc_probability', 0),0)
-    sampler_order = genparams.get('sampler_order', [6, 0, 1, 3, 4, 2, 5])
+    sampler_order = normalize_sampler_order(genparams.get('sampler_order', [6, 0, 1, 3, 4, 2, 5]))
     seed = tryparseint(genparams.get('sampler_seed', -1),-1)
     stop_sequence = genparams.get('stop_sequence', [])
     ban_eos_token = genparams.get('ban_eos_token', False)
@@ -2433,17 +2442,16 @@ def generate(genparams, stream_flag=False):
     for n, breaker in enumerate(dry_sequence_breakers):
         inputs.dry_sequence_breakers[n] = breaker.encode("UTF-8")
 
-    if sampler_order and 0 < len(sampler_order) <= sampler_order_max:
-        try:
-            for i, sampler in enumerate(sampler_order):
-                inputs.sampler_order[i] = sampler
-            inputs.sampler_len = len(sampler_order)
-            global showsamplerwarning
-            if showsamplerwarning and inputs.mirostat==0 and inputs.sampler_len>0 and (inputs.sampler_order[0]!=6 or inputs.sampler_order[inputs.sampler_len-1]!=5):
-                print("\n(Note: Non-default sampler_order detected. Recommended sampler values are [6,0,1,3,4,2,5]. This message will only show once per session.)")
-                showsamplerwarning = False
-        except TypeError as e:
-            print("ERROR: sampler_order must be a list of integers: " + str(e))
+    if sampler_order:
+        for i, sampler in enumerate(sampler_order):
+            inputs.sampler_order[i] = sampler
+        inputs.sampler_len = len(sampler_order)
+        global showsamplerwarning
+        if showsamplerwarning and inputs.mirostat==0 and inputs.sampler_len>0 and (inputs.sampler_order[0]!=6 or inputs.sampler_order[inputs.sampler_len-1]!=5):
+            print("\n(Note: Non-default sampler_order detected. Recommended sampler values are [6,0,1,3,4,2,5]. This message will only show once per session.)")
+            showsamplerwarning = False
+    elif sampler_order is None:
+        print("ERROR: sampler_order must contain between 1 and 7 integer sampler IDs from 0 to 6. Using the default order.")
     inputs.seed = seed
 
     inputs.stop_sequence_len = len(stop_sequence)
@@ -2543,8 +2551,8 @@ def continuous_batching_python_eligible(genparams, api_format):
     if dry_multiplier > 0 and 0 < dry_base < 1:
         utfprint("Batching disabled due to samplers set 1",2)
         return False
-    if genparams.get("sampler_order") and genparams.get("sampler_order") != [6, 0, 1, 3, 4, 2, 5]:
-        utfprint("Batching disabled due to sampler order",2)
+    if normalize_sampler_order(genparams.get("sampler_order")) is None:
+        utfprint("Batching disabled due to invalid sampler order",2)
         return False
     return True
 

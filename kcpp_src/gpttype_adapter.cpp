@@ -4408,6 +4408,7 @@ struct BatchGenerateRequest
     std::vector<std::string> stop_sequences;
     std::vector<llama_logit_bias> logit_biases;
     std::vector<std::string> dry_sequence_breakers;
+    std::vector<samplers> sampler_order;
     int max_context_length = 0;
     int max_length = 0;
     int seed = 0;
@@ -4598,16 +4599,16 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    static const int default_sampler_order[] = {6, 0, 1, 3, 4, 2, 5};
     if(inputs.sampler_len > 0)
     {
-        if(inputs.sampler_len != 7)
+        if(inputs.sampler_len > KCPP_SAMPLER_MAX)
         {
             return false;
         }
-        for(int i = 0; i < 7; ++i)
+        for(int i = 0; i < inputs.sampler_len; ++i)
         {
-            if((int) inputs.sampler_order[i] != default_sampler_order[i])
+            const int sampler = (int) inputs.sampler_order[i];
+            if(sampler < 0 || sampler >= KCPP_SAMPLER_MAX)
             {
                 return false;
             }
@@ -5221,18 +5222,23 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
         llama_sampler_chain_add(chain, dry_sampler);
     }
 
-    llama_sampler * rep_pen_sampler = batch_rep_pen_init(
-        req.rep_pen_range,
-        req.rep_pen,
-        req.rep_pen_slope,
-        req.presence_penalty);
-    for(llama_token token : req.prompt_tokens)
+    const auto add_rep_pen_sampler = [&]()
     {
-        llama_sampler_accept(rep_pen_sampler, token);
-    }
-    llama_sampler_chain_add(chain, rep_pen_sampler);
+        llama_sampler * rep_pen_sampler = batch_rep_pen_init(
+            req.rep_pen_range,
+            req.rep_pen,
+            req.rep_pen_slope,
+            req.presence_penalty);
+        for(llama_token token : req.prompt_tokens)
+        {
+            llama_sampler_accept(rep_pen_sampler, token);
+        }
+        llama_sampler_chain_add(chain, rep_pen_sampler);
+    };
+
     if(req.mirostat == 1 || req.mirostat == 2)
     {
+        add_rep_pen_sampler();
         if(req.smoothing_factor > 0.0f)
         {
             llama_sampler_chain_add(chain, batch_temperature_init(req.temperature, 0.0f, 1.0f, req.smoothing_factor, req.smoothing_curve));
@@ -5251,64 +5257,80 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
         }
         return chain;
     }
-    if(req.top_k > 0)
+
+    for(samplers sampler : req.sampler_order)
     {
-        llama_sampler_chain_add(chain, llama_sampler_init_top_k(req.top_k));
+        switch(sampler)
+        {
+            case KCPP_SAMPLER_REP_PEN:
+                add_rep_pen_sampler();
+                break;
+            case KCPP_SAMPLER_TOP_K:
+                llama_sampler_chain_add(chain, llama_sampler_init_top_k(req.top_k));
+                break;
+            case KCPP_SAMPLER_TOP_A:
+                if(req.top_a > 0.0f)
+                {
+                    llama_sampler_chain_add(chain, batch_top_a_init(req.top_a));
+                }
+                break;
+            case KCPP_SAMPLER_TOP_P:
+                if(req.top_p < 1.0f)
+                {
+                    llama_sampler_chain_add(chain, llama_sampler_init_top_p(req.top_p, 1));
+                }
+                if(req.min_p > 0.0f)
+                {
+                    llama_sampler_chain_add(chain, llama_sampler_init_min_p(req.min_p, 1));
+                }
+                break;
+            case KCPP_SAMPLER_TFS:
+                if(req.tfs < 1.0f)
+                {
+                    llama_sampler_chain_add(chain, batch_tfs_init(req.tfs));
+                }
+                break;
+            case KCPP_SAMPLER_TYP:
+                if(req.typical_p < 1.0f)
+                {
+                    llama_sampler_chain_add(chain, llama_sampler_init_typical(req.typical_p, 1));
+                }
+                break;
+            case KCPP_SAMPLER_TEMP:
+                if(req.smoothing_factor > 0.0f)
+                {
+                    llama_sampler_chain_add(chain, batch_temperature_init(req.temperature, req.dynatemp_range, req.dynatemp_exponent, req.smoothing_factor, req.smoothing_curve));
+                }
+                else if(req.dynatemp_range > 0.0f)
+                {
+                    llama_sampler_chain_add(chain, llama_sampler_init_temp_ext(req.temperature, req.dynatemp_range, req.dynatemp_exponent));
+                }
+                else
+                {
+                    llama_sampler_chain_add(chain, llama_sampler_init_temp(req.temperature));
+                }
+                if(req.nsigma > 0.0f)
+                {
+                    llama_sampler_chain_add(chain, llama_sampler_init_top_n_sigma(req.nsigma));
+                }
+                break;
+            default:
+                break;
+        }
     }
-    if(req.top_a > 0.0f)
+
+    // XTC and Adaptive-P are not part of sampler_order in the legacy path.
+    if(req.xtc_probability > 0.0f)
     {
-        llama_sampler_chain_add(chain, batch_top_a_init(req.top_a));
+        llama_sampler_chain_add(chain, llama_sampler_init_xtc(req.xtc_probability, req.xtc_threshold, 1, sampler_seed));
     }
-    if(req.tfs < 1.0f)
+    if(req.adaptive_target > 0.0f)
     {
-        llama_sampler_chain_add(chain, batch_tfs_init(req.tfs));
-    }
-    if(req.typical_p > 0.0f && req.typical_p < 1.0f)
-    {
-        llama_sampler_chain_add(chain, llama_sampler_init_typical(req.typical_p, 1));
-    }
-    if(req.top_p > 0.0f && req.top_p < 1.0f)
-    {
-        llama_sampler_chain_add(chain, llama_sampler_init_top_p(req.top_p, 1));
-    }
-    if(req.min_p > 0.0f)
-    {
-        llama_sampler_chain_add(chain, llama_sampler_init_min_p(req.min_p, 1));
-    }
-    if(req.temperature > 0.0f || req.dynatemp_range > 0.0f)
-    {
-        if(req.smoothing_factor > 0.0f)
-        {
-            llama_sampler_chain_add(chain, batch_temperature_init(req.temperature, req.dynatemp_range, req.dynatemp_exponent, req.smoothing_factor, req.smoothing_curve));
-        }
-        else if(req.dynatemp_range > 0.0f)
-        {
-            llama_sampler_chain_add(chain, llama_sampler_init_temp_ext(req.temperature, req.dynatemp_range, req.dynatemp_exponent));
-        }
-        else
-        {
-            llama_sampler_chain_add(chain, llama_sampler_init_temp(req.temperature));
-        }
-        if(req.nsigma > 0.0f)
-        {
-            llama_sampler_chain_add(chain, llama_sampler_init_top_n_sigma(req.nsigma));
-        }
-        if(req.xtc_probability > 0.0f)
-        {
-            llama_sampler_chain_add(chain, llama_sampler_init_xtc(req.xtc_probability, req.xtc_threshold, 1, sampler_seed));
-        }
-        if(req.adaptive_target > 0.0f)
-        {
-            llama_sampler_chain_add(chain, llama_sampler_init_adaptive_p(req.adaptive_target, req.adaptive_decay, sampler_seed));
-        }
-        else
-        {
-            llama_sampler_chain_add(chain, llama_sampler_init_dist(sampler_seed));
-        }
+        llama_sampler_chain_add(chain, llama_sampler_init_adaptive_p(req.adaptive_target, req.adaptive_decay, sampler_seed));
     }
     else
     {
-        llama_sampler_chain_add(chain, llama_sampler_init_greedy());
+        llama_sampler_chain_add(chain, llama_sampler_init_dist(sampler_seed));
     }
     return chain;
 }
@@ -5635,6 +5657,26 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->dry_base = inputs.dry_base;
     req->dry_allowed_length = inputs.dry_allowed_length;
     req->dry_penalty_last_n = inputs.dry_penalty_last_n;
+    if(inputs.sampler_len > 0)
+    {
+        req->sampler_order.reserve(inputs.sampler_len);
+        for(int i = 0; i < inputs.sampler_len; ++i)
+        {
+            req->sampler_order.push_back(inputs.sampler_order[i]);
+        }
+    }
+    else
+    {
+        req->sampler_order = {
+            KCPP_SAMPLER_REP_PEN,
+            KCPP_SAMPLER_TOP_K,
+            KCPP_SAMPLER_TOP_A,
+            KCPP_SAMPLER_TFS,
+            KCPP_SAMPLER_TYP,
+            KCPP_SAMPLER_TOP_P,
+            KCPP_SAMPLER_TEMP,
+        };
+    }
     req->reasoning_budget = inputs.reasoning_budget;
     req->tool_call_fix = inputs.tool_call_fix;
     req->allow_eos_token = inputs.allow_eos_token;
