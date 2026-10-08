@@ -2546,14 +2546,6 @@ def continuous_batching_python_eligible(genparams, api_format):
     if genparams.get("grammar_retain_state") or genparams.get("banned_tokens") or genparams.get("banned_strings"):
         utfprint("Batching disabled due to retained grammar or bans",2)
         return False
-    dry_multiplier = tryparsefloat(genparams.get("dry_multiplier", 0), 0)
-    dry_base = tryparsefloat(genparams.get("dry_base", 1.75), 1.75)
-    if dry_multiplier > 0 and 0 < dry_base < 1:
-        utfprint("Batching disabled due to samplers set 1",2)
-        return False
-    if normalize_sampler_order(genparams.get("sampler_order")) is None:
-        utfprint("Batching disabled due to invalid sampler order",2)
-        return False
     return True
 
 def sd_get_info():

@@ -4595,10 +4595,6 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(inputs.dry_multiplier > 0.0f && inputs.dry_base > 0.0f && inputs.dry_base < 1.0f)
-    {
-        return false;
-    }
     if(inputs.sampler_len > 0)
     {
         if(inputs.sampler_len > KCPP_SAMPLER_MAX)
@@ -5653,8 +5649,8 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->smoothing_curve = std::isfinite(inputs.smoothing_curve) ? std::clamp(inputs.smoothing_curve, batch_smoothing_curve_min, batch_smoothing_curve_max) : 1.0f;
     req->adaptive_target = inputs.adaptive_target;
     req->adaptive_decay = inputs.adaptive_decay;
-    req->dry_multiplier = inputs.dry_multiplier;
-    req->dry_base = inputs.dry_base;
+    req->dry_multiplier = std::isfinite(inputs.dry_multiplier) ? std::max(inputs.dry_multiplier, 0.0f) : 0.0f;
+    req->dry_base = std::isfinite(inputs.dry_base) && inputs.dry_base > 0.0f ? std::max(inputs.dry_base, 1.0f) : 0.0f;
     req->dry_allowed_length = inputs.dry_allowed_length;
     req->dry_penalty_last_n = inputs.dry_penalty_last_n;
     if(inputs.sampler_len > 0)
