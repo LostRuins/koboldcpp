@@ -701,7 +701,7 @@ public:
         bool use_midblock_gn = false;
         taef2                = sd_version_uses_flux2_vae(version);
 
-        if (sd_version_is_dit(version)) {
+        if (sd_version_is_dit(version) && !sd_version_is_pixart(version)) {
             z_channels = 16;
         }
         if (taef2) {

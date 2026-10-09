@@ -16,6 +16,7 @@
 #include "model/te/clip.hpp"
 #include "model/te/llada_image_te.hpp"
 #include "model/te/llm.hpp"
+#include "model/te/ming_image_te.hpp"
 #include "model/te/t5.hpp"
 #include "model_loader.h"
 #include "tokenizers/sensenova_u1_tokenizer.h"
@@ -3167,6 +3168,65 @@ struct LLMEmbedder : public Conditioner {
             result.c_token_types = sd::Tensor<int32_t>({tag_count}, std::move(tags));
         }
 
+        return result;
+    }
+};
+
+struct MingImageEmbedder : public Conditioner {
+    std::shared_ptr<Tokenizer> tokenizer;
+    std::shared_ptr<MingImageTE::MingImageTextRunner> text_model;
+    const std::string prefix = "text_encoders.llm";
+
+    MingImageEmbedder(ggml_backend_t backend, const String2TensorStorage& tensors, std::shared_ptr<RunnerWeightManager> weight_manager, const TokenizerConfig& tokenizers) {
+        if (!tokenizers.has(TokenizerConfig::MAIN)) {
+            throw std::runtime_error("Ming-Image requires the Ling tokenizer.json; pass --tokenizer FILE");
+        }
+        text_model = std::make_shared<MingImageTE::MingImageTextRunner>(backend, tensors, prefix, weight_manager);
+        tokenizer  = tokenizers.create(TokenizerConfig::MAIN, text_model->config.backbone.vocab_size, 156895);
+    }
+
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        text_model->get_param_tensors(tensors, prefix);
+    }
+    void get_param_tensor_ops(std::map<ggml_tensor*, enum ggml_op>& ops) override {
+        text_model->get_param_tensor_ops(ops);
+    }
+    void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
+        text_model->get_param_tensors(tensors, prefix);
+    }
+    void set_flash_attention_enabled(bool enabled) override { text_model->set_flash_attention_enabled(enabled); }
+    void set_max_graph_vram_bytes(size_t bytes) override { text_model->set_max_graph_vram_bytes(bytes); }
+    void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override { text_model->set_runtime_backends(backends); }
+    void set_graph_cut_layer_split_enabled(bool enabled) override { text_model->set_graph_cut_layer_split_enabled(enabled); }
+    void set_graph_cut_layer_split_backend_vram_limits(const std::vector<size_t>& limits) override { text_model->set_graph_cut_layer_split_backend_vram_limits(limits); }
+    void set_scale_overrides(float linear, float attention) override { text_model->set_scale_overrides(linear, attention); }
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override { text_model->set_weight_adapter(adapter); }
+    void runner_end() override { text_model->runner_end(); }
+
+    SDCondition get_learned_condition(int n_threads, const ConditionerParams& input) override {
+        if (input.ref_images != nullptr && !input.ref_images->empty()) {
+            LOG_ERROR("Ming-Image currently supports text-to-image only");
+            return {};
+        }
+        std::string prompt =
+            "<role>SYSTEM</role>你是一个友好的AI助手。\n\ndetailed thinking off<|role_end|>"
+            "<role>HUMAN</role>" +
+            input.text + "<|role_end|><role>ASSISTANT</role>";
+        std::vector<int> tokens;
+        if (!tokenizer->encode(prompt, tokens, nullptr)) {
+            return {};
+        }
+        if (tokens.size() + 258 > 32768) {
+            LOG_ERROR("Ming-Image prompt exceeds the text encoder context length");
+            return {};
+        }
+        auto output = text_model->compute(n_threads, tokens);
+        if (output.empty()) {
+            return {};
+        }
+        SDCondition result;
+        result.c_crossattn = sd::ops::slice(sd::ops::slice(output, 1, 0, 256), 0, 0, text_model->config.caption_dim);
+        result.extra_c_crossattns.push_back(sd::ops::slice(output, 1, 256, output.shape()[1]));
         return result;
     }
 };

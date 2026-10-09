@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_COMMON_GGML_BLOCK_HPP__
 #define __SD_MODEL_COMMON_GGML_BLOCK_HPP__
 
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -214,7 +215,7 @@ public:
             if (ctx->backend != nullptr) {
                 ggml_tensor* fp8_matmul = ggml_mul_mat(ctx->ggml_ctx, w, x);
                 if (force_prec_f32) {
-                    ggml_mul_mat_set_prec(fp8_matmul, GGML_PREC_F32);
+                    ggml_prec_set_acc(fp8_matmul, GGML_PREC_F32);
                 }
                 supports_fp8_matmul = ggml_backend_supports_op(ctx->backend, fp8_matmul);
             }
@@ -335,15 +336,75 @@ class Embedding : public UnaryBlock {
 protected:
     int64_t embedding_dim;
     int64_t num_embeddings;
+    bool is_int8_tensorwise     = false;
+    int int8_convrot_group_size = 0;
+
+    static void get_rows_i8(ggml_tensor* dst, int ith, int nth, void* userdata) {
+        const auto* embedding     = static_cast<const Embedding*>(userdata);
+        const int group_size      = embedding->int8_convrot_group_size;
+        const auto* weight        = dst->src[0];
+        const auto* input_ids     = static_cast<const int32_t*>(dst->src[1]->data);
+        const auto* scales        = static_cast<const float*>(dst->src[2]->data);
+        const bool scalar_scale   = ggml_nelements(dst->src[2]) == 1;
+        const float normalization = group_size > 0 ? 1.f / std::sqrt(static_cast<float>(group_size)) : 1.f;
+        for (int64_t row = ith; row < dst->ne[1]; row += nth) {
+            const int32_t token = input_ids[row];
+            GGML_ASSERT(token >= 0 && token < weight->ne[1]);
+            const auto* src   = reinterpret_cast<const int8_t*>(static_cast<const char*>(weight->data) + token * weight->nb[1]);
+            auto* out         = reinterpret_cast<float*>(static_cast<char*>(dst->data) + row * dst->nb[1]);
+            const float scale = scales[scalar_scale ? 0 : token] * normalization;
+            for (int64_t i = 0; i < weight->ne[0]; ++i) {
+                out[i] = static_cast<float>(src[i]) * scale;
+            }
+            // The regular Hadamard rotation is symmetric and its own inverse.
+            for (int stride = 1; stride < group_size; stride *= 4) {
+                for (int64_t base = 0; base < weight->ne[0]; base += 4 * stride) {
+                    for (int j = 0; j < stride; ++j) {
+                        float* values      = out + base + j;
+                        const float a      = values[0];
+                        const float b      = values[stride];
+                        const float c      = values[2 * stride];
+                        const float d      = values[3 * stride];
+                        values[0]          = a + b + c - d;
+                        values[stride]     = a + b - c + d;
+                        values[2 * stride] = a - b + c + d;
+                        values[3 * stride] = -a + b + c + d;
+                    }
+                }
+            }
+        }
+    }
+
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
-        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
-        if (!support_get_rows(wtype)) {
+        auto weight_storage     = tensor_storage_map.find(prefix + "weight");
+        is_int8_tensorwise      = weight_storage != tensor_storage_map.end() && weight_storage->second.is_int8_tensorwise;
+        int8_convrot_group_size = 0;
+        enum ggml_type wtype    = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
+        if (is_int8_tensorwise) {
+            GGML_ASSERT(wtype == GGML_TYPE_I8);
+            auto scale_storage = tensor_storage_map.find(prefix + "weight_scale");
+            GGML_ASSERT(scale_storage != tensor_storage_map.end());
+            const int64_t scale_nelements = scale_storage->second.nelements();
+            GGML_ASSERT(scale_nelements == 1 || scale_nelements == num_embeddings);
+            params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
+            if (weight_storage->second.int8_convrot) {
+                int8_convrot_group_size = weight_storage->second.int8_convrot_group_size;
+                int remainder           = int8_convrot_group_size;
+                while (remainder > 1 && remainder % 4 == 0) {
+                    remainder /= 4;
+                }
+                GGML_ASSERT(remainder == 1 && embedding_dim % int8_convrot_group_size == 0);
+            }
+        } else if (!support_get_rows(wtype)) {
             wtype = GGML_TYPE_F32;
         }
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, embedding_dim, num_embeddings);
     }
 
     enum ggml_op param_usage_op(const std::string& name) const override {
+        if (is_int8_tensorwise) {
+            return GGML_OP_CUSTOM;
+        }
         return name == "weight" ? GGML_OP_GET_ROWS : GGML_OP_NONE;
     }
 
@@ -363,9 +424,17 @@ public:
         int64_t n = input_ids->ne[1];
         input_ids = ggml_reshape_1d(ctx->ggml_ctx, input_ids, input_ids->ne[0] * input_ids->ne[1]);
 
-        input_ids      = ggml_reshape_3d(ctx->ggml_ctx, input_ids, input_ids->ne[0], 1, input_ids->ne[1]);
-        auto embedding = ggml_get_rows(ctx->ggml_ctx, weight, input_ids);
-        embedding      = ggml_reshape_3d(ctx->ggml_ctx, embedding, embedding->ne[0], embedding->ne[1] / n, n);
+        ggml_tensor* embedding;
+        if (is_int8_tensorwise) {
+            GGML_ASSERT(input_ids->type == GGML_TYPE_I32);
+            ggml_tensor* args[] = {weight, input_ids, params["weight_scale"]};
+            embedding           = ggml_custom_4d(ctx->ggml_ctx, GGML_TYPE_F32, embedding_dim, input_ids->ne[0], 1, 1,
+                                                 args, 3, get_rows_i8, GGML_N_TASKS_MAX, this);
+        } else {
+            input_ids = ggml_reshape_3d(ctx->ggml_ctx, input_ids, input_ids->ne[0], 1, input_ids->ne[1]);
+            embedding = ggml_get_rows(ctx->ggml_ctx, weight, input_ids);
+        }
+        embedding = ggml_reshape_3d(ctx->ggml_ctx, embedding, embedding->ne[0], embedding->ne[1] / n, n);
 
         // [N, n_token, embedding_dim]
         return embedding;
