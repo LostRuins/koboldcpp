@@ -439,11 +439,14 @@ static bool kcpp_set_model_paths(SDParams& params, const sd_load_model_inputs& i
         return result;
     };
 
-    bool iswan = sd_version_is_wan(tempver);
-    bool is_wan21 = sd_version_is_wan(tempver) && tempver != VERSION_WAN2_2_TI2V;
+    bool is_wan = sd_version_is_wan(tempver);
     bool is_qwenimg = sd_version_is_qwen_image(tempver);
-    bool iszimg = sd_version_is_z_image(tempver);
-    bool isflux2 = sd_version_is_flux2(tempver);
+    bool is_zimg = sd_version_is_z_image(tempver);
+    bool is_pixart = sd_version_is_pixart(tempver);
+    bool is_minit2i = sd_version_is_minit2i(tempver);
+    bool is_sd3 = sd_version_is_sd3(tempver);
+    bool is_flux1 = sd_version_is_flux(tempver);
+    bool is_flux2 = sd_version_is_flux2(tempver);
     bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
     bool is_anima = sd_version_is_anima(tempver);
     bool is_ernie = sd_version_is_ernie_image(tempver);
@@ -458,27 +461,20 @@ static bool kcpp_set_model_paths(SDParams& params, const sd_load_model_inputs& i
     bool is_sefi = sd_version_is_sefi_image(tempver);
     bool is_mageflow = sd_version_is_mage_flow(tempver);
     bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
-    bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming);
+    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming);
     bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
+    bool has_t5xxl = (is_sd3 || (is_flux1 && !is_ovis) || is_wan || is_pixart || is_minit2i);
 
-    //kcpp qol fallback: if a llm was loaded as t5 by mistake
-    if(conditioner_is_llm && !params.t5xxl_path.empty())
-    {
-        if(params.clip_l_path.empty())
-        {
-            std::swap(params.clip_l_path, params.t5xxl_path);
-        }
-        else if(params.clip_g_path.empty())
-        {
-            //very tricky case. see if we can tell if clipl is an mmproj, if so move to right place
-            if(toLowerCase(params.clip_l_path).find("mmproj") != std::string::npos || is_ltx)
-            {
-                // g = l, l = t, t = ""
-                std::swap(params.clip_g_path, params.clip_l_path);
-                std::swap(params.clip_l_path, params.t5xxl_path);
-            }
-        }
+    if(has_t5xxl) {
+        params.t5xxl_path = inputs.llm_filename;
+    } else if(conditioner_is_llm) {
+        params.llm_path = inputs.llm_filename;
+    } else {
+        // what to do here? Most new models receive LLMs, let's guess this one does too
+        params.llm_path = inputs.llm_filename;
     }
+    params.clip_l_path = inputs.clip1_filename;
+    params.clip_g_path = inputs.clip2_filename;
 
     //settle clip-l replacements
     if (!params.clip_l_path.empty())
@@ -487,7 +483,7 @@ static bool kcpp_set_model_paths(SDParams& params, const sd_load_model_inputs& i
         {
             std::swap(params.llm_path, params.clip_l_path);
         }
-        else if(iswan)
+        else if(is_wan)
         {
             if(params.t5xxl_path.empty())
             {
@@ -503,7 +499,7 @@ static bool kcpp_set_model_paths(SDParams& params, const sd_load_model_inputs& i
     //settle clip-g replacements
     if (!params.clip_g_path.empty())
     {
-        if(iswan && params.clip_vision_path.empty())
+        if(is_wan && params.clip_vision_path.empty())
         {
             std::swap(params.clip_vision_path, params.clip_g_path);
         }
@@ -647,9 +643,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     }
     std::string vaefilename = inputs.vae_filename;
     std::string audiovaefilename = inputs.audio_vae_filename;
-    std::string t5xxl_filename = inputs.llm_filename;
-    std::string clip1_filename = inputs.clip1_filename;
-    std::string clip2_filename = inputs.clip2_filename;
     std::string photomaker_filename = inputs.photomaker_filename;
     std::string upscaler_filename = inputs.upscaler_filename;
     cfg_tiled_vae_threshold = inputs.tiled_vae_threshold;
@@ -704,17 +697,17 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     {
         printf("With Audio VAE: %s\n",audiovaefilename.c_str());
     }
-    if(t5xxl_filename!="")
+    if(*inputs.llm_filename!='\0')
     {
-        printf("With Custom T5-XXL Model: %s\n",t5xxl_filename.c_str());
+        printf("With Custom LLM / T5-XXL Model: %s\n",inputs.llm_filename);
     }
-    if(clip1_filename!="")
+    if(*inputs.clip1_filename!='\0')
     {
-        printf("With Custom Clip-1 Model: %s\n",clip1_filename.c_str());
+        printf("With Custom Clip-1 Model: %s\n",inputs.clip1_filename);
     }
-    if(clip2_filename!="")
+    if(*inputs.clip2_filename!='\0')
     {
-        printf("With Custom Clip-2 Model: %s\n",clip2_filename.c_str());
+        printf("With Custom Clip-2 Model: %s\n",inputs.clip2_filename);
     }
     if(photomaker_filename!="")
     {
@@ -786,9 +779,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->vae_conv_direct = inputs.vae_conv_direct;
     sd_params->vae_path = vaefilename;
     sd_params->audio_vae_path = audiovaefilename;
-    sd_params->t5xxl_path = t5xxl_filename;
-    sd_params->clip_l_path = clip1_filename;
-    sd_params->clip_g_path = clip2_filename;
     sd_params->photo_maker_path = photomaker_filename;
     sd_params->lora_map = lora_map;
     sd_params->lora_dynamic = lora_dynamic;
