@@ -239,10 +239,13 @@ class Throbber:
         self.enabled = stream_is_interactive(self.stream)
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
+        self.started_at = 0.0
+        self.rendered_width = 0
 
     def __enter__(self) -> Throbber:
         if not self.enabled:
             return self
+        self.started_at = time.monotonic()
         self._write_frame(0)
         self.thread = threading.Thread(target=self._animate, daemon=True)
         self.thread.start()
@@ -250,7 +253,10 @@ class Throbber:
 
     def _write_frame(self, index: int) -> None:
         label = color(self.label, ANSI_CYAN)
-        self.stream.write(f"\r{label} {self.FRAMES[index % len(self.FRAMES)]}")
+        elapsed = int(time.monotonic() - self.started_at)
+        suffix = f" {self.FRAMES[index % len(self.FRAMES)]} {elapsed}s"
+        self.rendered_width = max(self.rendered_width, len(self.label) + len(suffix))
+        self.stream.write(f"\r{label}{suffix}")
         self.stream.flush()
 
     def _animate(self) -> None:
@@ -265,7 +271,7 @@ class Throbber:
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join(timeout=0.3)
-        self.stream.write("\r" + " " * (len(self.label) + 2) + "\r")
+        self.stream.write("\r" + " " * self.rendered_width + "\r")
         self.stream.flush()
 
 
