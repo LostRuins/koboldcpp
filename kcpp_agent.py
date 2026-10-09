@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A tiny, cross-platform OpenAI Chat Completions-compatible local agent, for use in KoboldCpp.
 
-Nine built-in tools, plus tools exposed by KoboldCpp's MCP proxy:
+Nine built-in tools, plus tools exposed by a local KoboldCpp MCP proxy:
   - read
   - write
   - edit
@@ -460,7 +460,7 @@ def system_prompt(disabled_tools: set[str] | None = None) -> str:
     rules.append("After finishing tool use, briefly tell the user what was done.")
     return (
         f"You are a small, careful local computer assistant running on {platform.system()}.\n"
-        f"{introduction} The server may also supply MCP tools.\n\nRules:\n"
+        f"{introduction} A local KoboldCpp server may also supply MCP tools.\n\nRules:\n"
         + "\n".join(f"- {rule}" for rule in rules)
         + "\n"
         + load_workdir_instructions()
@@ -1501,6 +1501,20 @@ def api_url(base_url: str, resource: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(path=path))
 
 
+def is_local_endpoint(base_url: str) -> bool:
+    """Return whether an endpoint explicitly targets this device's loopback interface."""
+    hostname = urllib.parse.urlsplit(normalize_base_url(base_url)).hostname
+    if hostname is None:
+        return False
+    hostname = hostname.rstrip(".")
+    if hostname.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def mcp_url(base_url: str) -> str:
     """Return the KoboldCpp MCP proxy URL for an OpenAI-compatible base URL."""
     parsed = urllib.parse.urlsplit(normalize_base_url(base_url))
@@ -1514,6 +1528,8 @@ def mcp_request(
     params: dict[str, Any],
     timeout: int,
 ) -> dict[str, Any]:
+    if not is_local_endpoint(base_url):
+        raise RuntimeError("MCP tools are only available for localhost endpoints")
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -2042,17 +2058,18 @@ def run_agent(
         nonlocal all_tools, available_tools, mcp_tool_names
         all_tools = list(TOOLS)
         mcp_tool_names = set()
-        try:
-            mcp_tools, mcp_tool_names, warnings = discover_mcp_tools(
-                base_url, api_key, request_timeout
-            )
-            all_tools.extend(mcp_tools)
-            for warning in warnings:
-                print(color("MCP warning:", ANSI_YELLOW) + f" {warning}")
-            if mcp_tools:
-                print(color("MCP tools:", ANSI_CYAN) + f" {len(mcp_tools)} loaded")
-        except Exception as exc:
-            print(color("MCP unavailable:", ANSI_YELLOW) + f" {exc}")
+        if is_local_endpoint(base_url):
+            try:
+                mcp_tools, mcp_tool_names, warnings = discover_mcp_tools(
+                    base_url, api_key, request_timeout
+                )
+                all_tools.extend(mcp_tools)
+                for warning in warnings:
+                    print(color("MCP warning:", ANSI_YELLOW) + f" {warning}")
+                if mcp_tools:
+                    print(color("MCP tools:", ANSI_CYAN) + f" {len(mcp_tools)} loaded")
+            except Exception as exc:
+                print(color("MCP unavailable:", ANSI_YELLOW) + f" {exc}")
         available_tools = [
             tool for tool in all_tools
             if tool["function"]["name"] not in disabled_tools
