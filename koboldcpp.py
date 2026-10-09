@@ -9061,7 +9061,7 @@ def show_gui():
 
     tabs = ctk.CTkFrame(root, corner_radius = 0, width=windowwidth, height=windowheight-50)
     tabs.grid(row=0, stick="nsew")
-    tabnames= ["Quick Launch", "Hardware", "Context", "Loaded Files", "Network", "Horde Worker","Image Gen","Audio","Admin","Extra"]
+    tabnames= ["Quick Launch", "Hardware", "Context", "Loaded Files", "Network", "Horde Worker","Image Gen","Audio","Agent","Admin","Extra"]
     navbuttons = {}
     navbuttonframe = ctk.CTkFrame(tabs, width=int(104), height=int(tabs.cget("height")))
     navbuttonframe.grid(row=0, column=0, padx=2,pady=2)
@@ -10270,6 +10270,9 @@ def show_gui():
     makefileentry(audio_tab, "MusicVAE:", "Select music VAE model", musicvae_var, 36, width=280, singlerow=True, dialog_type=0, tooltiptxt="Select music VAE model")
     makecheckbox(audio_tab, "Music Low VRAM", musiclowvram_var, 38, 0,tooltiptxt="Unload music models when not in use.")
 
+    agent_tab = tabcontent["Agent"]
+    makecheckbox(agent_tab, "Launch KoboldCpp Agent", agent_var, 1, 0, tooltiptxt="Open the local tool-using agent in a new terminal after the KoboldCpp API is ready.")
+
     admin_tab = tabcontent["Admin"]
     def toggleadmin(a,b,c):
         if admin_var.get()==1 and admin_dir_var.get()=="":
@@ -10305,7 +10308,6 @@ def show_gui():
     makefileentry(admin_tab, "Base config .kcpps (Optional, for reloading):", "", baseconfig_var, 7, width=280, dialog_type=0, tooltiptxt="Specify a base .kcpps config to apply, if no custom base config is selected during a model swap.")
     makelabelentry(admin_tab, "Auto Unload Timeout:" , admin_unload_timeout_var, 17, 70,padx=(150),singleline=True,tooltip="Set an idle timeout in seconds after which KoboldCpp will automatically unload the current model.")
     makecheckbox(admin_tab, "SingleInstance Mode", singleinstance_var, 19, 0,tooltiptxt="Allows this server to be shut down by another KoboldCpp instance with singleinstance starting on the same port.")
-    makecheckbox(admin_tab, "Launch KoboldCpp Agent", agent_var, 21, 0, tooltiptxt="Open the local tool-using agent in a new terminal after the KoboldCpp API is ready.")
     router_mode_box = makecheckbox(admin_tab, "Router Mode", router_mode_var, 31, 0, command=togglerouter, tooltiptxt="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.")
     autoswap_mode_box = makecheckbox(admin_tab, "Autoswap Mode", autoswap_mode_var, 33, 0, command=toggleautoswap, tooltiptxt="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.")
     autoswap_threshold_entry, autoswap_threshold_label = makelabelentry(admin_tab, "Autoswap Threshold (MB):", autoswap_threshold_var, 35, 70, padx=(180), singleline=True, tooltip="Model families at or below this combined file size remain loaded as sidecars. Only one model family above the threshold is loaded at a time.")
