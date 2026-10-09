@@ -343,7 +343,7 @@ bool T5UniGramTokenizer::encode(const std::string& input, std::vector<int>& resu
         ss << "\"" << token_str << "\", ";
     }
     ss << "]";
-    LOG_VERBOSE("split prompt \"%s\" to tokens %s", input.c_str(), ss.str().c_str());
+    LOG_VERBOSE("split prompt \"%s\" to tokens %s", escape_newlines(input).c_str(), escape_newlines(ss.str()).c_str());
 
     result = std::move(tokens);
     return true;

@@ -2271,14 +2271,15 @@ bool SDGenerationParams::from_json_str(
     return true;
 }
 
-void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_dir) {
+bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_dir) {
     if (lora_model_dir.empty()) {
-        return;
+        return true;
     }
     static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
     static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
     std::smatch m;
 
+    bool missing    = false;
     std::string tmp = prompt;
 
     while (std::regex_search(tmp, m, re)) {
@@ -2320,8 +2321,9 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
             }
             if (!found) {
                 LOG_WARN("can not found lora %s", final_path.lexically_normal().string().c_str());
-                tmp    = m.suffix().str();
-                prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                tmp     = m.suffix().str();
+                prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                missing = true;
                 continue;
             }
         }
@@ -2337,6 +2339,8 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
 
         tmp = m.suffix().str();
     }
+
+    return !missing;
 }
 
 bool SDGenerationParams::width_and_height_are_set() const {
@@ -2458,7 +2462,7 @@ bool SDGenerationParams::initialize_cache_params() {
     return true;
 }
 
-bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict) {
+bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict, bool validate_missing_loras) {
     vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
 
     if (high_noise_sample_params.sample_steps <= 0) {
@@ -2502,7 +2506,9 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
 
     prompt_with_lora = prompt;
     if (!lora_model_dir.empty()) {
-        extract_and_remove_lora(lora_model_dir);
+        if (!extract_and_remove_lora(lora_model_dir) && validate_missing_loras) {
+            return false;
+        }
     }
     return true;
 }
@@ -2630,7 +2636,7 @@ bool SDGenerationParams::resolve_and_validate(SDMode mode,
                                               const std::string& lora_model_dir,
                                               const std::string& hires_upscalers_dir,
                                               bool strict) {
-    if (!resolve(lora_model_dir, hires_upscalers_dir, strict)) {
+    if (!resolve(lora_model_dir, hires_upscalers_dir, strict, mode == CONVERT)) {
         return false;
     }
     if (!validate(mode)) {

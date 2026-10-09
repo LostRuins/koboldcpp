@@ -180,7 +180,7 @@ public:
             scale_factor = 16;
         } else if (sd_version_uses_flux2_vae(version)) {
             scale_factor = 16;
-        } else if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version)) {
+        } else if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version) || sd_version_is_z_image_l2p(version)) {
             scale_factor = 1;
         }
         return scale_factor;
@@ -241,6 +241,15 @@ public:
                                      sd_tiling_params_t tiling_params,
                                      bool circular_x = false,
                                      bool circular_y = false) {
+        return encode(n_threads, x, tiling_params, circular_x, circular_y, true);
+    }
+
+    sd::Tensor<float> encode(int n_threads,
+                             const sd::Tensor<float>& x,
+                             sd_tiling_params_t tiling_params,
+                             bool circular_x,
+                             bool circular_y,
+                             bool auto_end) {
         int64_t t0              = ggml_time_ms();
         tiling_params           = resolve_tiling_params(tiling_params);
         sd::Tensor<float> input = x;
@@ -280,7 +289,9 @@ public:
                                                   tiling_params);
         }
 
-        runner_end();
+        if (auto_end) {
+            runner_end();
+        }
 
         if (output.empty()) {
             LOG_ERROR("vae encode compute failed");
@@ -298,6 +309,17 @@ public:
                                      bool circular_x   = false,
                                      bool circular_y   = false,
                                      bool silent       = false) {
+        return decode(n_threads, x, tiling_params, decode_video, circular_x, circular_y, silent, true);
+    }
+
+    sd::Tensor<float> decode(int n_threads,
+                             const sd::Tensor<float>& x,
+                             sd_tiling_params_t tiling_params,
+                             bool decode_video,
+                             bool circular_x,
+                             bool circular_y,
+                             bool silent,
+                             bool auto_end) {
         int64_t t0              = ggml_time_ms();
         tiling_params           = resolve_tiling_params(tiling_params);
         sd::Tensor<float> input = x;
@@ -338,7 +360,9 @@ public:
                                                   tiling_params);
         }
 
-        runner_end();
+        if (auto_end) {
+            runner_end();
+        }
 
         if (output.empty()) {
             LOG_ERROR("vae decode compute failed");

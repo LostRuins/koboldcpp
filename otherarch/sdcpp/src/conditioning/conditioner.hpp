@@ -399,7 +399,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -817,7 +817,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -1207,7 +1207,7 @@ struct FluxCLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -1484,7 +1484,7 @@ struct T5CLIPEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -1873,7 +1873,7 @@ struct AnimaConditioner : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         std::vector<int> qwen_tokens;
@@ -1989,7 +1989,7 @@ struct LLMEmbedder : public Conditioner {
                    sd_version_is_minimax_h3(version) ||
                    sd_version_is_mage_flow(version)) {
             arch = LLM::LLMArch::QWEN3_VL;
-        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
+        } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
         }
         llm        = std::make_shared<LLM::LLMRunner>(arch,
@@ -2144,7 +2144,7 @@ struct LLMEmbedder : public Conditioner {
                 ss << "['" << item.first << "', " << item.second << "], ";
             }
             ss << "]";
-            LOG_VERBOSE("parse '%s' to %s", text.c_str(), ss.str().c_str());
+            LOG_VERBOSE("parse '%s' to %s", escape_newlines(text).c_str(), escape_newlines(ss.str()).c_str());
         }
 
         std::vector<int> tokens;
@@ -2953,7 +2953,7 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|end|><|start|>assistant<|channel|>analysis<|message|>Need to generate one image according to the description.<|end|><|start|>assistant<|channel|>final<|message|>";
-        } else if (sd_version_is_z_image(version)) {
+        } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version)) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {35};  // -2
 
