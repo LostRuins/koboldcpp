@@ -201,7 +201,7 @@ struct sd_load_model_inputs
     const bool vae_conv_direct = false;
     const bool taesd = false;
     const int tiled_vae_threshold = 0;
-    const char * t5xxl_filename = nullptr;
+    const char * llm_filename = nullptr;
     const char * clip1_filename = nullptr;
     const char * clip2_filename = nullptr;
     const char * vae_filename = nullptr;

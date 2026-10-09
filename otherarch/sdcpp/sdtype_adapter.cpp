@@ -647,7 +647,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     }
     std::string vaefilename = inputs.vae_filename;
     std::string audiovaefilename = inputs.audio_vae_filename;
-    std::string t5xxl_filename = inputs.t5xxl_filename;
+    std::string t5xxl_filename = inputs.llm_filename;
     std::string clip1_filename = inputs.clip1_filename;
     std::string clip2_filename = inputs.clip2_filename;
     std::string photomaker_filename = inputs.photomaker_filename;
