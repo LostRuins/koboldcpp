@@ -423,7 +423,7 @@ static SDVersion detect_model_version(SDParams& params)
 // they were provided the other way round, and settle the auxiliary paths
 // (clip/t5/tae/tokenizer) for the detected model type.
 // Returns false if the model version could not be detected.
-static bool kcpp_set_model_paths(SDParams& params)
+static bool kcpp_set_model_paths(SDParams& params, const sd_load_model_inputs& inputs)
 {
     SDVersion tempver = detect_model_version(params);
 
@@ -537,53 +537,52 @@ static bool kcpp_set_model_paths(SDParams& params)
         }
     }
 
-    //settle tae replacements
-    std::string taesd_path = params.taesd_path;
-    if(taesd_path != "")
+    //settle tae: build the TAE path for the detected model version
+    std::string taesd_path = "";
+    if(inputs.taesd)
     {
-        std::string to_search = "taesd.embd";
-        std::string to_replace = "";
+        const char* tae_name = nullptr;
         if(sd_version_is_sd1(tempver) || sd_version_is_sd2(tempver))
         {
-            to_replace = "taesd.embd";
+            tae_name = "taesd.embd";
         }
         else if(sd_version_is_sdxl(tempver))
         {
-            to_replace = "taesd_xl.embd";
+            tae_name = "taesd_xl.embd";
         }
         else if(sd_version_uses_flux_vae(tempver))
         {
-            to_replace = "taesd_f.embd";
+            tae_name = "taesd_f.embd";
         }
         else if(sd_version_is_sd3(tempver))
         {
-            to_replace = "taesd_3.embd";
+            tae_name = "taesd_3.embd";
         }
         else if(sd_version_uses_flux2_vae(tempver))
         {
-            to_replace = "taesd_f2.embd";
+            tae_name = "taesd_f2.embd";
         }
         else if(sd_version_uses_wan_vae(tempver) && tempver != VERSION_QWEN_IMAGE_2_1) // qwen 2.1 + tae crashing as of master-917
         {
-            to_replace = "taesd_w21.embd";
+            tae_name = "taesd_w21.embd";
         }
 
-        if(to_replace!="")
+        if(tae_name)
         {
-            size_t pos = taesd_path.find(to_search);
-            if (pos != std::string::npos) {
-                taesd_path.replace(pos, to_search.length(), to_replace);
+            taesd_path = executable_path + "embd_res/" + tae_name;
+            if(!file_exists(taesd_path))
+            {
+                printf("\nCannot use TAESD: \"%s\" not found. TAESD Disabled!\n", taesd_path.c_str());
+                taesd_path = "";
             }
         }
         else
         {
-            printf("\nCannot use TAESD: Unknown tempver %d. TAESD Disabled!\n", tempver);
-            taesd_path = "";
+            printf("\nCannot use TAESD: Unknown model version %d. TAESD Disabled!\n", tempver);
         }
-        if (taesd_path != "" && !file_exists(taesd_path))
+        if(taesd_path != "")
         {
-            printf("\nCannot use TAESD: \"%s\" not found. TAESD Disabled!\n", taesd_path.c_str());
-            taesd_path = "";
+            printf("With TAE SD VAE: %s\n", taesd_path.c_str());
         }
     }
     if (!params.photo_maker_path.empty() && tempver != VERSION_SDXL) {
@@ -641,7 +640,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
     executable_path = sd_get_u8path(inputs.executable_path);
-    std::string taesdpath = "";
     LoraMap lora_map;
     for(int i=0;i<inputs.lora_len;++i)
     {
@@ -696,12 +694,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     if(inputs.taesd)
     {
-        taesdpath = executable_path + "embd_res/taesd.embd";
-        printf("With TAE SD VAE: %s\n",taesdpath.c_str());
-        if (cfg_tiled_vae_threshold < 8192) {
-            printf("  disabling VAE tiling for TAESD\n");
-            cfg_tiled_vae_threshold = 8192;
-        }
+        printf("With Tiny Autoencoder (TAE)\n");
     }
     else if(vaefilename!="")
     {
@@ -793,7 +786,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->vae_conv_direct = inputs.vae_conv_direct;
     sd_params->vae_path = vaefilename;
     sd_params->audio_vae_path = audiovaefilename;
-    sd_params->taesd_path = taesdpath;
     sd_params->t5xxl_path = t5xxl_filename;
     sd_params->clip_l_path = clip1_filename;
     sd_params->clip_g_path = clip2_filename;
@@ -801,8 +793,18 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->lora_map = lora_map;
     sd_params->lora_dynamic = lora_dynamic;
 
-    if (!kcpp_set_model_paths(*sd_params)) {
+    if (!kcpp_set_model_paths(*sd_params, inputs)) {
         return false;
+    }
+
+    if (!sd_params->taesd_path.empty() && cfg_tiled_vae_threshold < 8192) {
+        // double the threshold for TAE (4x the image area)
+        cfg_tiled_vae_threshold = std::min(2 * cfg_tiled_vae_threshold, 8192);
+        if (cfg_tiled_vae_threshold == 8192) {
+            printf("Disabling VAE tiling for TAE\n");
+        } else {
+            printf("Bumping VAE tiling threshold to %d for TAE\n", cfg_tiled_vae_threshold);
+        }
     }
 
     sd_ctx_params_t params = {};
