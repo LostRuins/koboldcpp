@@ -67,6 +67,21 @@ void replace_all_chars(std::string& str, char target, char replacement) {
     }
 }
 
+std::string escape_newlines(const std::string& text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char ch : text) {
+        if (ch == '\n') {
+            escaped += "\\n";
+        } else if (ch == '\r') {
+            escaped += "\\r";
+        } else {
+            escaped += ch;
+        }
+    }
+    return escaped;
+}
+
 static std::string sd_vformat(const char* fmt, va_list ap) {
     char small[128];
     va_list ap2;
@@ -375,12 +390,13 @@ int32_t sd_get_num_physical_cores() {
 static sd_progress_cb_t sd_progress_cb = nullptr;
 void* sd_progress_cb_data              = nullptr;
 
-static sd_preview_cb_t sd_preview_cb = nullptr;
-static void* sd_preview_cb_data      = nullptr;
-preview_t sd_preview_mode            = PREVIEW_NONE;
-int sd_preview_interval              = 1;
-bool sd_preview_denoised             = true;
-bool sd_preview_noisy                = false;
+static sd_preview_info_t sd_preview_info = {};
+static sd_preview_cb_t sd_preview_cb     = nullptr;
+static void* sd_preview_cb_data          = nullptr;
+preview_t sd_preview_mode                = PREVIEW_NONE;
+int sd_preview_interval                  = 1;
+bool sd_preview_denoised                 = true;
+bool sd_preview_noisy                    = false;
 
 static sd_graph_eval_callback_t sd_backend_eval_cb = nullptr;
 static void* sd_backend_eval_cb_data               = nullptr;
@@ -692,9 +708,14 @@ static void sd_log_dispatch(sd_log_level_t level, const std::string& origin, con
     }
     if (sd_log_cb == nullptr)
         return;
-    std::string message = origin + " - " + text;
-    if (message.back() != '\n') {
-        message += '\n';
+    std::string message = text;
+    while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
+        message.pop_back();
+    }
+    if (origin == "ggml") {
+        message = origin + ": " + message + '\n';
+    } else {
+        message += " --- " + origin + '\n';
     }
     sd_log_cb(level, message.c_str(), sd_log_cb_data);
 }
@@ -714,7 +735,7 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     va_start(args, format);
     std::string message = sd_vformat(format, args);
     va_end(args);
-    std::string origin = sd_format("%s:%-4d", sd_basename(file).c_str(), line);
+    std::string origin = sd_format("%s:%d", sd_basename(file).c_str(), line);
     sd_log_dispatch(level, origin, message);
 }
 
@@ -749,6 +770,7 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb_data = data;
 }
 void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
+    sd_preview_info     = {};
     sd_preview_cb       = cb;
     sd_preview_cb_data  = data;
     sd_preview_mode     = mode;
@@ -760,6 +782,17 @@ void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, b
 void sd_set_backend_eval_callback(sd_graph_eval_callback_t cb, void* data) {
     sd_backend_eval_cb      = cb;
     sd_backend_eval_cb_data = data;
+}
+
+void sd_begin_preview_pass(int total_steps) {
+    if (sd_preview_cb != nullptr) {
+        ++sd_preview_info.sample_pass;
+        sd_preview_info.total_steps = total_steps;
+    }
+}
+
+sd_preview_info_t sd_get_preview_info() {
+    return sd_preview_info;
 }
 
 sd_preview_cb_t sd_get_preview_callback() {

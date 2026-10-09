@@ -242,7 +242,7 @@ bool BPETokenizer::encode(const std::string& text, std::vector<int>& result, on_
         ss << "\"" << token << "\", ";
     }
     ss << "]";
-    LOG_VERBOSE("split prompt \"%s\" to %zu tokens %s", text.c_str(), bpe_tokens.size(), ss.str().c_str());
+    LOG_VERBOSE("split prompt \"%s\" to %zu tokens %s", escape_newlines(text).c_str(), bpe_tokens.size(), escape_newlines(ss.str()).c_str());
     result = std::move(bpe_tokens);
     return true;
 }

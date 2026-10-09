@@ -223,13 +223,13 @@ ggml_tensor* ggml_ext_linear(ggml_context* ctx,
         x           = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2] * x->ne[3]);
         x           = ggml_mul_mat(ctx, w, x);
         if (force_prec_f32) {
-            ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+            ggml_prec_set_acc(x, GGML_PREC_F32);
         }
         x = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / ne2 / ne3, ne2, ne3);
     } else {
         x = ggml_mul_mat(ctx, w, x);
         if (force_prec_f32) {
-            ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+            ggml_prec_set_acc(x, GGML_PREC_F32);
         }
     }
     if (scale != 1.f) {
@@ -488,7 +488,7 @@ ggml_tensor* ggml_ext_conv_3d(ggml_context* ctx,
         x          = ggml_mul_mat(ctx,
                                   ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[3] * im2col->ne[2] * im2col->ne[1]),
                                   ggml_reshape_2d(ctx, w, w->ne[0] * w->ne[1] * w->ne[2] * IC, OC));
-        ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+        ggml_prec_set_acc(x, GGML_PREC_F32);
 
         int64_t OD = im2col->ne[3] / N;
         x          = ggml_reshape_4d(ctx, x, im2col->ne[1] * im2col->ne[2], OD, N, OC);
@@ -683,8 +683,8 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
                               v_in->type == GGML_TYPE_F32 && sd_backend_supports_cuda_mma(backend);
         if (pad_head) {
             // CUDA FA MMA starts at 64 channels; keep the original head's attention scale.
-            q_in = ggml_pad(ctx, q_in, 64 - d_head, 0, 0, 0);
-            k_in = ggml_pad(ctx, k_in, 64 - d_head, 0, 0, 0);
+            q_in = ggml_pad(ctx, q_in, static_cast<int>(64 - d_head), 0, 0, 0);
+            k_in = ggml_pad(ctx, k_in, static_cast<int>(64 - d_head), 0, 0, 0);
         }
         if (kv_scale != 1.0f) {
             k_in = ggml_ext_scale(ctx, k_in, kv_scale);
@@ -694,7 +694,7 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         v_in = ggml_ext_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
         v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
         if (pad_head) {
-            v_in = ggml_pad(ctx, v_in, 64 - d_head, 0, 0, 0);
+            v_in = ggml_pad(ctx, v_in, static_cast<int>(64 - d_head), 0, 0, 0);
         }
         if (kv_scale != 1.0f) {
             v_in = ggml_ext_scale(ctx, v_in, kv_scale);
@@ -721,7 +721,7 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         if (!ggml_backend_supports_op(backend, out)) {
             return nullptr;
         }
-        ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
+        ggml_prec_set_acc(out, GGML_PREC_F32);
         if (kv_scale != 1.0f) {
             out = ggml_ext_scale(ctx, out, 1.0f / kv_scale);
         }
@@ -742,9 +742,9 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         }
         if (padded_head != d_head) {
             // Keep the original head's softmax scale when padding for the CUDA kernel.
-            q_in = ggml_pad(ctx, q_in, padded_head - d_head, 0, 0, 0);
-            k_in = ggml_pad(ctx, k_in, padded_head - d_head, 0, 0, 0);
-            v_in = ggml_pad(ctx, v_in, padded_head - d_head, 0, 0, 0);
+            q_in = ggml_pad(ctx, q_in, static_cast<int>(padded_head - d_head), 0, 0, 0);
+            k_in = ggml_pad(ctx, k_in, static_cast<int>(padded_head - d_head), 0, 0, 0);
+            v_in = ggml_pad(ctx, v_in, static_cast<int>(padded_head - d_head), 0, 0, 0);
         }
         if (kv_scale != 1.0f) {
             k_in = ggml_ext_scale(ctx, k_in, kv_scale);
@@ -797,7 +797,7 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         v = ggml_reshape_3d(ctx, v, L_k, d_head, n_kv_head * N);   // [N * n_kv_head, d_head, L_k]
 
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
-        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        ggml_prec_set_acc(kq, GGML_PREC_F32);
         kq = ggml_scale_inplace(ctx, kq, scale);
         if (mask) {
             kq = ggml_add_inplace(ctx, kq, mask);

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -11,11 +12,15 @@
 #include <thread>
 #include <vector>
 
+#include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "model_io/gguf_io.h"
 #include "model_io/safetensors_io.h"
 #include "model_io/streaming_writer.h"
 #include "model_loader.h"
+#include "model_manager.h"
+#include "name_conversion.h"
+#include "runtime/imatrix.h"
 
 struct TensorExportInfo {
     TensorStorage storage;
@@ -75,9 +80,9 @@ static size_t export_tensor_nbytes(const TensorExportInfo& info) {
     return static_cast<size_t>(output_storage.nbytes());
 }
 
-static TensorWritePlan tensor_write_plan_from_export_info(const TensorExportInfo& info) {
+static TensorWritePlan tensor_write_plan_from_export_info(const TensorExportInfo& info, const std::string& name) {
     TensorWritePlan plan;
-    plan.name   = info.storage.name;
+    plan.name   = name;
     plan.type   = info.type;
     plan.n_dims = info.storage.n_dims;
     for (int i = 0; i < SD_MAX_DIMS; i++) {
@@ -86,11 +91,14 @@ static TensorWritePlan tensor_write_plan_from_export_info(const TensorExportInfo
     return plan;
 }
 
-static std::vector<TensorWritePlan> tensor_write_plans_from_export_infos(const std::vector<TensorExportInfo>& tensors) {
+static std::vector<TensorWritePlan> tensor_write_plans_from_export_infos(const std::vector<TensorExportInfo>& tensors,
+                                                                         bool convert_name,
+                                                                         SDVersion version) {
     std::vector<TensorWritePlan> plans;
     plans.reserve(tensors.size());
     for (const TensorExportInfo& info : tensors) {
-        plans.push_back(tensor_write_plan_from_export_info(info));
+        const std::string name = convert_name ? convert_tensor_name(info.storage.name, version) : info.storage.name;
+        plans.push_back(tensor_write_plan_from_export_info(info, name));
     }
     return plans;
 }
@@ -158,15 +166,41 @@ static bool load_tensor_for_export(ModelLoader& model_loader, TensorExportJob& j
     return true;
 }
 
+static bool export_tensor_from_memory(const TensorExportInfo& info,
+                                      const std::map<std::string, ggml_tensor*>& mem,
+                                      SDVersion version,
+                                      std::vector<uint8_t>& out) {
+    auto found = mem.find(info.storage.name);
+    if (found == mem.end() || found->second == nullptr || found->second->data == nullptr) {
+        return false;
+    }
+    const TensorStorage& storage = info.storage;
+    out.resize(export_tensor_nbytes(info));
+    if (out.size() > 0) {
+        std::vector<float> imatrix = get_imatrix_collector().get_values(convert_tensor_name(info.storage.name, version));
+        convert_tensor(found->second->data,
+                       found->second->type,
+                       out.data(),
+                       info.type,
+                       (int)(storage.nelements() / storage.ne[0]),
+                       (int)storage.ne[0],
+                       std::move(imatrix));
+    }
+    return true;
+}
+
 static bool stream_tensor_data(ModelLoader& model_loader,
                                const std::string& output_path,
                                const std::vector<TensorExportInfo>& tensors,
                                const StreamingModelWriter& writer,
                                int n_threads,
+                               const std::map<std::string, ggml_tensor*>* mem,
                                std::string* error) {
     n_threads = n_threads > 0 ? n_threads : sd_get_num_physical_cores();
     n_threads = std::max(1, n_threads);
     LOG_INFO("streaming convert with %d threads", n_threads);
+
+    const SDVersion version = model_loader.get_sd_version();
 
     int64_t start_time       = ggml_time_ms();
     uint64_t bytes_written   = 0;
@@ -241,7 +275,10 @@ static bool stream_tensor_data(ModelLoader& model_loader,
                 TensorExportJob job;
                 job.info = tensors[tensor_index];
                 try {
-                    job.success = load_tensor_for_export(model_loader, job);
+                    job.success = (mem != nullptr) && export_tensor_from_memory(job.info, *mem, version, job.data);
+                    if (!job.success) {
+                        job.success = load_tensor_for_export(model_loader, job);
+                    }
                 } catch (const std::exception& e) {
                     job.error   = e.what();
                     job.success = false;
@@ -298,8 +335,10 @@ static bool write_model_file_streaming(ModelLoader& model_loader,
                                        const std::vector<TensorExportInfo>& tensors,
                                        StreamingModelWriter& writer,
                                        int n_threads,
+                                       bool convert_name,
+                                       const std::map<std::string, ggml_tensor*>* mem,
                                        std::string* error) {
-    std::vector<TensorWritePlan> plans = tensor_write_plans_from_export_infos(tensors);
+    std::vector<TensorWritePlan> plans = tensor_write_plans_from_export_infos(tensors, convert_name, model_loader.get_sd_version());
     if (!writer.write_metadata(output_path, plans, error)) {
         return false;
     }
@@ -307,7 +346,7 @@ static bool write_model_file_streaming(ModelLoader& model_loader,
         return false;
     }
     model_loader.process_model_files(false, false);
-    return stream_tensor_data(model_loader, output_path, tensors, writer, n_threads, error);
+    return stream_tensor_data(model_loader, output_path, tensors, writer, n_threads, mem, error);
 }
 
 static bool init_convert_path(ModelLoader& model_loader, const char* path, const char* prefix, bool& loaded_any) {
@@ -326,7 +365,9 @@ static bool export_loaded_model(ModelLoader& model_loader,
                                 const char* output_path,
                                 sd_type_t output_type,
                                 const char* tensor_type_rules,
-                                int n_threads) {
+                                int n_threads,
+                                bool convert_name,
+                                const std::map<std::string, ggml_tensor*>* mem = nullptr) {
     ggml_type type             = sd_type_to_ggml_type(output_type);
     bool output_is_safetensors = ends_with(output_path, ".safetensors");
     TensorTypeRules type_rules = parse_tensor_type_rules(tensor_type_rules);
@@ -341,13 +382,181 @@ static bool export_loaded_model(ModelLoader& model_loader,
         } else {
             writer = std::make_unique<GGUFStreamingWriter>();
         }
-        success = write_model_file_streaming(model_loader, output_path, tensors, *writer, n_threads, &error);
+        success = write_model_file_streaming(model_loader, output_path, tensors, *writer, n_threads, convert_name, mem, &error);
     }
 
     if (!success && !error.empty()) {
         LOG_ERROR("%s", error.c_str());
     }
 
+    return success;
+}
+
+static bool has_active_loras(const sd_lora_t* loras, int lora_count) {
+    if (loras == nullptr) {
+        return false;
+    }
+    for (int i = 0; i < lora_count; i++) {
+        if (loras[i].multiplier != 0.0f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static std::vector<ModelManager::LoraSpec> build_lora_specs(const sd_lora_t* loras, int lora_count) {
+    std::vector<ModelManager::LoraSpec> specs;
+    specs.reserve(lora_count);
+    for (int i = 0; i < lora_count; i++) {
+        ModelManager::LoraSpec spec;
+        spec.path          = loras[i].path != nullptr ? loras[i].path : "";
+        spec.multiplier    = loras[i].multiplier;
+        spec.is_high_noise = loras[i].is_high_noise;
+        spec.required      = true;
+        specs.push_back(std::move(spec));
+    }
+    return specs;
+}
+
+static ModelComponent component_for_tensor_name(const std::string& name) {
+    if (starts_with(name, "text_encoders.") || starts_with(name, "cond_stage_model.")) {
+        return ModelComponent::Conditioner;
+    }
+    if (starts_with(name, "model.high_noise_diffusion_model.")) {
+        return ModelComponent::HighNoiseDiffusion;
+    }
+    if (starts_with(name, "model.diffusion_model.")) {
+        return ModelComponent::Diffusion;
+    }
+    if (starts_with(name, "vae.") || starts_with(name, "first_stage_model.")) {
+        return ModelComponent::VAE;
+    }
+    return ModelComponent::Diffusion;
+}
+
+static bool load_model_into_memory(ModelLoader& model_loader,
+                                   const sd_lora_t* loras,
+                                   int lora_count,
+                                   int n_threads,
+                                   ModelManager& manager,
+                                   ggml_backend_t cpu,
+                                   ggml_context* ctx,
+                                   std::map<std::string, ggml_tensor*>& mem,
+                                   std::vector<ggml_tensor*>& all_tensors,
+                                   ggml_type output_type,
+                                   const TensorTypeRules& type_rules) {
+    const String2TensorStorage& storage_map = model_loader.get_tensor_storage_map();
+    if (storage_map.empty()) {
+        LOG_ERROR("no tensors to load into memory for convert");
+        return false;
+    }
+
+    const SDVersion version  = model_loader.get_sd_version();
+    ModelLoader merge_loader = model_loader;
+    merge_loader.convert_tensors_name();
+
+    std::map<ModelComponent, std::map<std::string, ggml_tensor*>> groups;
+    size_t total_bytes = 0;
+    for (const auto& [name, storage] : storage_map) {
+        ggml_type load_type         = storage.type;
+        const ggml_type export_type = get_export_tensor_type(model_loader, storage, output_type, type_rules);
+        const bool quant_src        = ggml_is_quantized(storage.type);
+        const bool quant_dst        = ggml_is_quantized(export_type);
+        if (quant_src && quant_dst) {
+            load_type = GGML_TYPE_F16;
+        } else if (quant_src || quant_dst) {
+            load_type = quant_src ? export_type : storage.type;
+        } else if (storage.type == GGML_TYPE_F32 || export_type == GGML_TYPE_F32) {
+            load_type = GGML_TYPE_F32;
+        }
+        ggml_tensor* tensor = ggml_new_tensor(ctx, load_type, storage.n_dims, storage.ne);
+        if (tensor == nullptr) {
+            LOG_ERROR("failed to create tensor '%s' for in-memory convert", name.c_str());
+            return false;
+        }
+        const std::string merge_name = convert_tensor_name(name, version);
+        auto& group                  = groups[component_for_tensor_name(merge_name)];
+        if (!group.emplace(merge_name, tensor).second) {
+            LOG_ERROR("duplicate tensor name '%s' after name conversion", merge_name.c_str());
+            return false;
+        }
+        mem[name] = tensor;
+        all_tensors.push_back(tensor);
+        total_bytes += ggml_nbytes(tensor);
+    }
+    LOG_INFO("loading %zu tensors (%.2f GB) into memory for convert",
+             all_tensors.size(), total_bytes / (1024.0 * 1024.0 * 1024.0));
+
+    manager.set_n_threads(n_threads);
+    manager.set_enable_mmap(false);
+    if (!manager.set_loader(std::move(merge_loader))) {
+        LOG_ERROR("failed to set model loader for in-memory convert");
+        return false;
+    }
+
+    for (const auto& [component, tensors] : groups) {
+        if (!manager.register_param_tensors(component, tensors, ModelManager::ResidencyMode::ParamBackend, cpu, cpu)) {
+            LOG_ERROR("failed to register %s tensors for in-memory convert", model_component_name(component));
+            return false;
+        }
+    }
+
+    std::vector<ModelManager::LoraSpec> lora_specs = build_lora_specs(loras, lora_count);
+    if (!manager.prepare_lora_sources(lora_specs)) {
+        LOG_ERROR("failed to prepare LoRA sources for convert");
+        return false;
+    }
+    if (!manager.set_loras(lora_specs, version)) {
+        LOG_ERROR("failed to set LoRAs for convert");
+        return false;
+    }
+    if (!manager.prepare_params(all_tensors)) {
+        LOG_ERROR("failed to load model into memory for convert");
+        return false;
+    }
+
+    return true;
+}
+
+static bool convert_model_in_memory(ModelLoader& model_loader,
+                                    const char* output_path,
+                                    sd_type_t output_type,
+                                    const char* tensor_type_rules,
+                                    bool convert_name,
+                                    int n_threads,
+                                    const sd_lora_t* loras,
+                                    int lora_count) {
+    auto cpu = std::unique_ptr<ggml_backend, decltype(&ggml_backend_free)>(sd_backend_cpu_init(), ggml_backend_free);
+    if (cpu == nullptr) {
+        LOG_ERROR("failed to init CPU backend for in-memory convert");
+        return false;
+    }
+
+    ggml_init_params ctx_params;
+    ctx_params.mem_size   = model_loader.get_tensor_storage_map().size() * ggml_tensor_overhead();
+    ctx_params.mem_buffer = nullptr;
+    ctx_params.no_alloc   = true;
+    ggml_context* ctx     = ggml_init(ctx_params);
+    if (ctx == nullptr) {
+        LOG_ERROR("ggml_init failed for in-memory convert");
+        return false;
+    }
+
+    ggml_type type             = sd_type_to_ggml_type(output_type);
+    TensorTypeRules type_rules = parse_tensor_type_rules(tensor_type_rules);
+
+    std::vector<ggml_tensor*> all_tensors;
+    std::map<std::string, ggml_tensor*> mem;
+    bool success = false;
+    {
+        // The manager owns the buffers backing `mem` and must outlive the export; it is
+        // destroyed (freeing those buffers) before the tensor context is freed below.
+        ModelManager manager;
+        if (load_model_into_memory(model_loader, loras, lora_count, n_threads, manager, cpu.get(), ctx, mem, all_tensors, type, type_rules)) {
+            success = export_loaded_model(model_loader, output_path, output_type, tensor_type_rules, n_threads, convert_name, &mem);
+        }
+    }
+    ggml_free(ctx);
     return success;
 }
 
@@ -361,10 +570,22 @@ bool convert_with_components(const char* model_path,
                              sd_type_t output_type,
                              const char* tensor_type_rules,
                              bool convert_name,
-                             int n_threads) {
+                             int n_threads,
+                             const sd_lora_t* loras,
+                             int lora_count) {
     if (!validate_tensor_types(output_type, tensor_type_rules)) {
         return false;
     }
+
+    if (loras != nullptr) {
+        for (int i = 0; i < lora_count; i++) {
+            LOG_INFO("lora %d: '%s' (multiplier %.2f%s)",
+                     i + 1, loras[i].path != nullptr ? loras[i].path : "",
+                     loras[i].multiplier,
+                     loras[i].is_high_noise ? ", high noise" : "");
+        }
+    }
+
     ModelLoader model_loader;
     bool loaded_any = false;
 
@@ -382,11 +603,17 @@ bool convert_with_components(const char* model_path,
         return false;
     }
 
+    if (has_active_loras(loras, lora_count)) {
+        LOG_INFO("loading the full model into memory to apply LoRAs");
+        return convert_model_in_memory(model_loader, output_path, output_type, tensor_type_rules, convert_name, n_threads,
+                                       loras, lora_count);
+    }
+
     if (convert_name) {
         model_loader.convert_tensors_name();
     }
 
-    return export_loaded_model(model_loader, output_path, output_type, tensor_type_rules, n_threads);
+    return export_loaded_model(model_loader, output_path, output_type, tensor_type_rules, n_threads, false, nullptr);
 }
 
 bool convert(const char* input_path,
@@ -405,5 +632,7 @@ bool convert(const char* input_path,
                                    output_type,
                                    tensor_type_rules,
                                    convert_name,
+                                   0,
+                                   nullptr,
                                    0);
 }

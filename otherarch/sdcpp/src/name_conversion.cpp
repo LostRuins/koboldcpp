@@ -824,6 +824,7 @@ std::string convert_diffusers_dit_to_original_lumina2(std::string name) {
     if (z_image_name_map.empty()) {
         z_image_name_map["all_x_embedder.2-1."]  = "x_embedder.";
         z_image_name_map["all_final_layer.2-1."] = "final_layer.";
+        z_image_name_map["all_x_embedder.16-1."] = "x_embedder.";
 
         // --- transformer blocks ---
         auto add_attention_map = [&](const std::string& prefix, int num) {
@@ -1036,7 +1037,7 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_hunyuan_video_to_original_flux(name);
     } else if (version == VERSION_MING_IMAGE) {
         name = convert_ming_image_dit_name(name);
-    } else if (sd_version_is_z_image(version)) {
+    } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
     } else if (sd_version_is_llada_image(version)) {
         name = convert_diffusers_dit_to_original_llada_image(name);

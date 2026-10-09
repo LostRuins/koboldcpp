@@ -375,17 +375,19 @@ namespace sd::pipeline {
         total_steps = sample_steps + std::max(0, high_noise_sample_steps);
 
         if (sample_params->custom_sigmas_count > 0) {
-            sigmas      = std::vector<float>(sample_params->custom_sigmas,
+            sigmas = std::vector<float>(sample_params->custom_sigmas,
                                         sample_params->custom_sigmas + sample_params->custom_sigmas_count);
-            total_steps = static_cast<int>(sigmas.size()) - 1;
-            LOG_WARN("total_steps != custom_sigmas_count - 1, set total_steps to %d", total_steps);
-            if (sample_steps >= total_steps) {
-                sample_steps = total_steps;
-                LOG_WARN("total_steps != custom_sigmas_count - 1, set sample_steps to %d", sample_steps);
-            }
-            if (high_noise_sample_steps > 0) {
-                high_noise_sample_steps = total_steps - sample_steps;
-                LOG_WARN("total_steps != custom_sigmas_count - 1, set high_noise_sample_steps to %d", high_noise_sample_steps);
+            if (total_steps != sample_params->custom_sigmas_count - 1) {
+                total_steps = sample_params->custom_sigmas_count - 1;
+                LOG_WARN("total_steps != custom_sigmas_count - 1, set total_steps to %d", total_steps);
+                if ((sample_steps > total_steps) || (high_noise_sample_steps <= 0 && sample_steps != total_steps)) {
+                    sample_steps = total_steps;
+                    LOG_WARN("total_steps != custom_sigmas_count - 1, set sample_steps to %d", sample_steps);
+                }
+                if (high_noise_sample_steps > 0) {
+                    high_noise_sample_steps = total_steps - sample_steps;
+                    LOG_WARN("total_steps != custom_sigmas_count - 1, set high_noise_sample_steps to %d", high_noise_sample_steps);
+                }
             }
         } else {
             scheduler_t scheduler = resolve_scheduler(sd,

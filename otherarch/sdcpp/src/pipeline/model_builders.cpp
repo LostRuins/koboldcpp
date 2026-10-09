@@ -37,6 +37,7 @@
 #include "model/diffusion/unet.hpp"
 #include "model/diffusion/wan.hpp"
 #include "model/diffusion/z_image.hpp"
+#include "model/diffusion/z_image_l2p.hpp"
 #include "model/vae/auto_encoder_kl.hpp"
 #include "model/vae/hunyuan_vae.hpp"
 #include "model/vae/ltx_audio_vae.hpp"
@@ -393,6 +394,18 @@ namespace sd::model_builders {
                                                                       "model.diffusion_model",
                                                                       version,
                                                                       weight_manager);
+        } else if (sd_version_is_z_image_l2p(version)) {
+            result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                               tensor_storage_map,
+                                                               version,
+                                                               "",
+                                                               false,
+                                                               weight_manager,
+                                                               tokenizers);
+            result.diffusion   = std::make_shared<ZImageL2P::ZImageL2PRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                            tensor_storage_map,
+                                                                            "model.diffusion_model",
+                                                                            weight_manager);
         } else if (sd_version_is_llada_image(version)) {
             result.conditioner = std::make_shared<LLaDAImageEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                       tensor_storage_map,
@@ -613,7 +626,7 @@ namespace sd::model_builders {
             }
         };
 
-        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version)) {
+        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version) || sd_version_is_z_image_l2p(version)) {
             LOG_INFO("using FakeVAE");
             result.vae = std::make_shared<FakeVAE>(version,
                                                    ctx.backends.runtime_backend(SDBackendModule::VAE),

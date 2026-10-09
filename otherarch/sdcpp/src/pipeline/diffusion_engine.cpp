@@ -107,6 +107,7 @@ const char* model_version_to_str[] = {
     "ESRGAN",
     "PixArt",
     "Ming-Image",
+    "Z-Image L2P",
 };
 
 static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
@@ -1628,6 +1629,7 @@ bool StableDiffusionGGML::build_denoiser() {
                    sd_version_is_anima(version) ||
                    sd_version_is_ernie_image(version) ||
                    sd_version_is_z_image(version) ||
+                   sd_version_is_z_image_l2p(version) ||
                    version == VERSION_MING_IMAGE ||
                    sd_version_is_llada_image(version) ||
                    sd_version_is_boogu_image(version) ||
@@ -2442,7 +2444,7 @@ std::vector<float> StableDiffusionGGML::prepare_sample_timesteps(float sigma,
     if (version == VERSION_HIDREAM_O1) {
         return std::vector<float>{1.0f - (t / static_cast<float>(TIMESTEPS))};
     }
-    if (sd_version_is_z_image(version) || sd_version_is_ideogram4(version) || version == VERSION_MING_IMAGE) {
+    if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version) || sd_version_is_ideogram4(version) || version == VERSION_MING_IMAGE) {
         return std::vector<float>{1000.f - t};
     }
     return std::vector<float>{t};
@@ -2641,7 +2643,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         noise *= eta;
     }
 
-    int64_t last_progress_us     = ggml_time_us();
+    int64_t last_progress_us = ggml_time_us();
+    sd_begin_preview_pass(static_cast<int>(steps));
     SamplePreviewContext preview = prepare_sample_preview_context();
 
     sd::Tensor<float> processed_init_latent       = denoiser->process_latent_in(init_latent);
@@ -3032,6 +3035,8 @@ int StableDiffusionGGML::get_diffusion_model_down_factor() {
     if (sd_version_is_dit(version)) {
         if (sd_version_is_sensenova_u1(version)) {
             down_factor = 32;
+        } else if (sd_version_is_z_image_l2p(version)) {
+            down_factor = 16;
         } else if (version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_MING_IMAGE || sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version) || sd_version_is_pixart(version)) {
             down_factor = 2;
         } else {
@@ -3061,6 +3066,8 @@ int StableDiffusionGGML::get_latent_channel() {
         } else if (sd_version_is_minit2i(version)) {
             latent_channel = 3;
         } else if (sd_version_is_sensenova_u1(version)) {
+            latent_channel = 3;
+        } else if (sd_version_is_z_image_l2p(version)) {
             latent_channel = 3;
         } else if (sd_version_is_pid(version)) {
             latent_channel = 3;

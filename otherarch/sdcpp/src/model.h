@@ -64,6 +64,7 @@ enum SDVersion {
     VERSION_ESRGAN,
     VERSION_PIXART,
     VERSION_MING_IMAGE,
+    VERSION_Z_IMAGE_L2P,
     VERSION_COUNT,
 };
 
@@ -174,6 +175,10 @@ static inline bool sd_version_is_z_image(SDVersion version) {
         return true;
     }
     return false;
+}
+
+static inline bool sd_version_is_z_image_l2p(SDVersion version) {
+    return version == VERSION_Z_IMAGE_L2P;
 }
 
 static inline bool sd_version_is_llada_image(SDVersion version) {
@@ -315,6 +320,7 @@ static inline bool sd_version_is_dit(SDVersion version) {
         version == VERSION_HIDREAM_O1 ||
         sd_version_is_anima(version) ||
         sd_version_is_z_image(version) ||
+        sd_version_is_z_image_l2p(version) ||
         version == VERSION_MING_IMAGE ||
         sd_version_is_llada_image(version) ||
         sd_version_is_boogu_image(version) ||

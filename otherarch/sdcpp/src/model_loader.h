@@ -13,6 +13,14 @@
 
 TensorTypeRules parse_tensor_type_rules(const std::string& tensor_type_rules);
 
+void convert_tensor(void* src,
+                    ggml_type src_type,
+                    void* dst,
+                    ggml_type dst_type,
+                    int nrows,
+                    int n_per_row,
+                    std::vector<float> imatrix = {});
+
 class MmapWrapper;
 
 struct ModelFileData {
