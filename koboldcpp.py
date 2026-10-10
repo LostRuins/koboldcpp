@@ -463,7 +463,6 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("img_soft_limit", ctypes.c_int),
                 ("max_vram", ctypes.c_char_p),
                 ("split_mode", ctypes.c_char_p),
-                ("stream_layers", ctypes.c_bool),
                 ("auto_fit", ctypes.c_bool),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
@@ -2748,7 +2747,7 @@ def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_
     inputs.photomaker_filename = photomaker_filename.encode("UTF-8")
     inputs.upscaler_filename = upscaler_filename.encode("UTF-8")
     inputs.max_vram = str((args.sdvramlimit/1024.0) if args.sdvramlimit > 0 else '').encode('UTF-8')
-    inputs.stream_layers = False
+    inputs.auto_fit = False
 
     lora_filenames, lora_multipliers = prepare_initial_lora_multipliers()
     inputs.lora_len = len(lora_filenames)
