@@ -2295,7 +2295,7 @@ def run_agent(
                 continue
             try:
                 with Throbber("Summarizing session"):
-                    summary, last_usage = compact_session(
+                    summary, _ = compact_session(
                         messages, base_url, api_key, model, temperature,
                         max_tokens, request_timeout,
                     )
@@ -2306,6 +2306,7 @@ def run_agent(
                 {"role": "system", "content": system_prompt(disabled_tools)},
                 {"role": "assistant", "content": f"Summary of the earlier session:\n{summary}"},
             ]
+            last_usage = None
             print(f"Session compacted:\n{summary}\n")
             continue
         if command == "/workdir":
