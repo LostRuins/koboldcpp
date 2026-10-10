@@ -253,6 +253,31 @@ def drain_terminal_input() -> None:
         pass  # Unsupported terminal controls must not prevent prompting.
 
 
+def read_paste_input() -> str | None:
+    """Collect literal input until /end, or return None when cancelled."""
+    drain_terminal_input()
+    print(
+        "Paste mode: enter or paste text, then type "
+        + color("/end", ANSI_YELLOW)
+        + " on its own line to submit."
+    )
+
+    lines: list[str] = []
+    while True:
+        try:
+            chunk = input(input_prompt("Paste>") if not lines else "")
+        except (EOFError, KeyboardInterrupt):
+            print("\nPaste cancelled.\n")
+            return None
+
+        # Readline may return a bracketed multiline paste in one chunk, while
+        # basic consoles return one line per input() call.
+        for line in chunk.split("\n"):
+            if line == "/end":
+                return "\n".join(lines)
+            lines.append(line)
+
+
 def toggle_status(enabled: bool) -> str:
     return color("ON" if enabled else "OFF", ANSI_GREEN if enabled else ANSI_YELLOW)
 
@@ -2069,6 +2094,7 @@ def print_runtime_help(
 ) -> None:
     rows = (
         ("/help", "Show this help"),
+        ("/paste", "Enter multiline input; finish with /end."),
         ("/save FILE", "Save conversation and settings as JSON"),
         ("/load FILE", "Load conversation and settings from JSON"),
         ("/clear", "Clear history and refresh MCP tools"),
@@ -2364,6 +2390,21 @@ def run_agent(
         command_parts = user_text.split(maxsplit=1)
         command = command_parts[0].lower()
         command_arg = command_parts[1].strip() if len(command_parts) == 2 else ""
+        literal_input = False
+        if command == "/paste":
+            if command_arg:
+                print("Usage: /paste\n")
+                continue
+            pasted_text = read_paste_input()
+            if pasted_text is None:
+                continue
+            if not pasted_text.strip():
+                print("Paste was empty.\n")
+                continue
+            user_text = pasted_text
+            command = ""
+            command_arg = ""
+            literal_input = True
         if command == "/help":
             print_runtime_help(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
@@ -2630,7 +2671,11 @@ def run_agent(
         if command in {"/model", "/apikey", "/endpoint"}:
             print("Use /connect to set the endpoint, API key, and model.\n")
             continue
-        if user_text.startswith("/") and not user_text.startswith("//"):
+        if (
+            not literal_input
+            and user_text.startswith("/")
+            and not user_text.startswith("//")
+        ):
             print(f"Unknown command: {command}. Type /help for available commands.\n")
             continue
 
