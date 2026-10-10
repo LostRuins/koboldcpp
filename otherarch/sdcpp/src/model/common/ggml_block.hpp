@@ -205,6 +205,11 @@ public:
         force_prec_f32 = force_prec_f32_;
     }
 
+    bool has_quantized_weight() const {
+        auto it = params.find("weight");
+        return it != params.end() && it->second != nullptr && ggml_is_quantized(it->second->type);
+    }
+
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         ggml_tensor* w            = params["weight"];
         const float scale         = ctx->linear_scale > 0.f ? ctx->linear_scale : this->scale;

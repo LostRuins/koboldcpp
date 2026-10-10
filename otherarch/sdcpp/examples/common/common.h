@@ -313,12 +313,12 @@ struct SDGenerationParams {
                        const std::function<std::string(const std::string&)>& lora_path_resolver = {});
     bool parse_image_preprocess_json(const std::string& json_str);
     bool initialize_cache_params();
-    void extract_and_remove_lora(const std::string& lora_model_dir);
+    bool extract_and_remove_lora(const std::string& lora_model_dir);
     bool width_and_height_are_set() const;
     void set_width_and_height_if_unset(int w, int h);
     int get_resolved_width() const;
     int get_resolved_height() const;
-    bool resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict = false);
+    bool resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict = false, bool validate_missing_loras = false);
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode,
                               const std::string& lora_model_dir,

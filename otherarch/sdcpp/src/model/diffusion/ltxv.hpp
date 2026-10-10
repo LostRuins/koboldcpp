@@ -548,21 +548,22 @@ namespace LTXV {
         return build_rope_matrix_from_frequencies(freqs, dim);
     }
 
-    __STATIC_INLINE__ ggml_tensor* apply_hidden_rope(ggml_context* ctx,
+    __STATIC_INLINE__ ggml_tensor* apply_hidden_rope(GGMLRunnerContext* runner_ctx,
                                                      ggml_tensor* x,
                                                      ggml_tensor* pe,
                                                      int64_t heads,
                                                      int64_t dim_head,
                                                      bool rope_interleaved) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[0] == heads * dim_head);
         auto x4 = ggml_reshape_4d(ctx, x, dim_head, heads, x->ne[1], x->ne[2]);
         if (pe != nullptr && pe->ne[3] == x->ne[1] * heads) {
             auto x_flat   = ggml_reshape_4d(ctx, x4, dim_head, 1, x->ne[1] * heads, x->ne[2]);
-            auto out_flat = Rope::apply_rope(ctx, x_flat, pe, rope_interleaved);
+            auto out_flat = Rope::apply_rope(runner_ctx, x_flat, pe, rope_interleaved);
             auto out4     = ggml_reshape_4d(ctx, out_flat, dim_head, heads, x->ne[1], x->ne[2]);
             return ggml_reshape_3d(ctx, out4, heads * dim_head, x->ne[1], x->ne[2]);
         }
-        return Rope::apply_rope(ctx, x4, pe, rope_interleaved);
+        return Rope::apply_rope(runner_ctx, x4, pe, rope_interleaved);
     }
 
     struct TimestepEmbedder : public GGMLBlock {
@@ -705,8 +706,8 @@ namespace LTXV {
                 if (k_pe == nullptr) {
                     k_pe = pe;
                 }
-                q = apply_hidden_rope(ctx->ggml_ctx, q, pe, heads, dim_head, rope_interleaved);
-                k = apply_hidden_rope(ctx->ggml_ctx, k, k_pe, heads, dim_head, rope_interleaved);
+                q = apply_hidden_rope(ctx, q, pe, heads, dim_head, rope_interleaved);
+                k = apply_hidden_rope(ctx, k, k_pe, heads, dim_head, rope_interleaved);
             }
 
             auto out = ggml_ext_attention_ext(ctx,

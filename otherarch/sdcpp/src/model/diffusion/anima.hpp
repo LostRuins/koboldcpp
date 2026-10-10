@@ -235,8 +235,8 @@ namespace Anima {
                 if (pe_k == nullptr) {
                     pe_k = pe_q;
                 }
-                auto q_rope = Rope::apply_rope(ctx->ggml_ctx, q4, pe_q, false);
-                auto k_rope = Rope::apply_rope(ctx->ggml_ctx, k4, pe_k, false);
+                auto q_rope = Rope::apply_rope(ctx, q4, pe_q, false);
+                auto k_rope = Rope::apply_rope(ctx, k4, pe_k, false);
                 attn_out    = ggml_ext_attention_ext(ctx,
                                                      q_rope,
                                                      k_rope,

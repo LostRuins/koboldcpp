@@ -168,13 +168,16 @@ namespace ZImage {
             int64_t N       = x->ne[2];
             auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks[split_qkv ? "to_out.0" : "out"]);
 
+            if (out_proj->has_quantized_weight()) {
+                out_proj->set_scale(1.f / 16.f);
+            }
+
             if (split_qkv) {
                 auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
                 auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
                 auto v_proj = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
 
                 if (sd_backend_is(ctx->backend, "ROCm")) {
-                    out_proj->set_scale(1.f / 16.f);
                     out_proj->set_force_prec_f32(true);
                     q_proj->set_force_prec_f32(true);
                     k_proj->set_force_prec_f32(true);
@@ -197,7 +200,6 @@ namespace ZImage {
             auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
             if (sd_backend_is(ctx->backend, "ROCm")) {
-                out_proj->set_scale(1.f / 16.f);
                 out_proj->set_force_prec_f32(true);
                 qkv_proj->set_force_prec_f32(true);
             }

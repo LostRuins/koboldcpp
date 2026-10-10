@@ -228,11 +228,12 @@ namespace MiniMaxH3VAE {
         return ggml_reshape_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2] * x->ne[3]);
     }
 
-    static ggml_tensor* apply_partial_rope(ggml_context* ctx,
+    static ggml_tensor* apply_partial_rope(GGMLRunnerContext* runner_ctx,
                                            ggml_tensor* x,
                                            ggml_tensor* pe) {
+        auto ctx        = runner_ctx->ggml_ctx;
         int64_t rot_dim = pe->ne[2] * 2;
-        auto rotated    = Rope::apply_rope(ctx,
+        auto rotated    = Rope::apply_rope(runner_ctx,
                                            ggml_ext_slice(ctx, x, 0, 0, rot_dim),
                                            pe,
                                            false);
@@ -289,8 +290,8 @@ namespace MiniMaxH3VAE {
                                                   batch_size);
             q                   = ggml_rms_norm(ctx->ggml_ctx, q, 1e-5f);
             k                   = ggml_rms_norm(ctx->ggml_ctx, k, 1e-5f);
-            q                   = apply_partial_rope(ctx->ggml_ctx, q, pe);
-            k                   = apply_partial_rope(ctx->ggml_ctx, k, pe);
+            q                   = apply_partial_rope(ctx, q, pe);
+            k                   = apply_partial_rope(ctx, k, pe);
             auto out            = ggml_ext_attention_ext(ctx,
                                                          q,
                                                          k,
@@ -633,8 +634,11 @@ namespace MiniMaxH3VAE {
             auto plan   = make_vae_temporal_tile_plan(input.shape()[2], {17, 0});
             auto result = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& chunk, const VAETemporalTile& tile) {
                 SD_UNUSED(tile);
-                return VAE::encode(n_threads, chunk, tiling, circular_x, circular_y);
+                // keep the runner alive across chunks; ending it here would
+                // evict and reload the encoder weights every chunk
+                return VAE::encode(n_threads, chunk, tiling, circular_x, circular_y, false);
             });
+            runner_end();
             if (result.empty()) {
                 return {};
             }
@@ -695,13 +699,16 @@ namespace MiniMaxH3VAE {
                 {static_cast<int>(tokens_per_chunk + token_overlap), static_cast<int>(token_overlap)});
             GGML_ASSERT(plan.tiles.size() == static_cast<size_t>(num_chunks));
             auto result = process_vae_temporal_tiles(input, plan, [&](const sd::Tensor<float>& chunk, const VAETemporalTile& tile) {
+                // keep the runner alive across chunks; ending it here would
+                // evict and reload the decoder weights every chunk
                 auto decoded = VAE::decode(n_threads,
                                            chunk,
                                            tiling,
                                            true,
                                            circular_x,
                                            circular_y,
-                                           silent);
+                                           silent,
+                                           false);
                 if (decoded.empty()) {
                     return sd::Tensor<float>();
                 }
@@ -728,6 +735,7 @@ namespace MiniMaxH3VAE {
                 }
                 return first;
             });
+            runner_end();
             if (result.empty()) {
                 return {};
             }

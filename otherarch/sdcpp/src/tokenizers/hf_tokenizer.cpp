@@ -735,7 +735,7 @@ bool HFTokenizer::encode(const std::string& text, std::vector<int>& tokens, on_n
         }
     }
     ss << "]";
-    LOG_VERBOSE("split prompt \"%s\" to %zu tokens %s", text.c_str(), result.size(), ss.str().c_str());
+    LOG_VERBOSE("split prompt \"%s\" to %zu tokens %s", escape_newlines(text).c_str(), result.size(), escape_newlines(ss.str()).c_str());
     tokens = std::move(result);
     return true;
 }
