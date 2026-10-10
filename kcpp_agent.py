@@ -1219,7 +1219,17 @@ def confirm_tool_call(
     verbose: bool = False,
     approval_label: str = "Approved automatically.",
 ) -> bool:
-    preview_limit = NORMAL_TOOL_RESULT_DISPLAY_CHARS if verbose else min(COMPACT_TOOL_RESULT_DISPLAY_CHARS, NORMAL_TOOL_RESULT_DISPLAY_CHARS)
+    verbose_preview = tool_arguments_preview(args, NORMAL_TOOL_RESULT_DISPLAY_CHARS)
+    if verbose:
+        preview_limit = NORMAL_TOOL_RESULT_DISPLAY_CHARS
+        preview = verbose_preview
+    else:
+        preview_limit = min(
+            COMPACT_TOOL_RESULT_DISPLAY_CHARS,
+            NORMAL_TOOL_RESULT_DISPLAY_CHARS,
+        )
+        preview = tool_arguments_preview(args, preview_limit)
+    more_available = not verbose and preview != verbose_preview
     delimiter = "--- Tool call --------------------------------------------------"
     print("\n" + color(delimiter, ANSI_YELLOW))
     print(color("Tool:", ANSI_YELLOW) + f" {name}")
@@ -1227,7 +1237,7 @@ def confirm_tool_call(
         color("Arguments preview:", ANSI_CYAN)
         + f" maximum {preview_limit} characters"
     )
-    print(tool_arguments_preview(args, preview_limit))
+    print(preview)
     print(color("-" * len(delimiter), ANSI_YELLOW))
 
     if auto_approve:
@@ -1236,8 +1246,9 @@ def confirm_tool_call(
 
     while True:
         try:
+            choices = "y/N/more" if more_available else "y/N"
             answer = read_tool_approval(
-                "Run this tool? [y/N, Esc to halt]: "
+                f"Run this tool? [{choices}, Esc to halt]: "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             raise AgentInterrupted from None
@@ -1247,7 +1258,22 @@ def confirm_tool_call(
             return True
         if answer in ("", "n", "no"):
             return False
-        print("Enter y to approve, n to deny and continue, or press Esc to halt.")
+        if more_available and answer in ("m", "more"):
+            print(
+                color("Arguments preview (more):", ANSI_CYAN)
+                + f" maximum {NORMAL_TOOL_RESULT_DISPLAY_CHARS} characters"
+            )
+            print(verbose_preview)
+            print(color("-" * len(delimiter), ANSI_YELLOW))
+            more_available = False
+            continue
+        if more_available:
+            print(
+                "Enter y to approve, n to deny and continue, m for more, "
+                "or press Esc to halt."
+            )
+        else:
+            print("Enter y to approve, n to deny and continue, or press Esc to halt.")
 
 
 def print_tool_result(name: str, result: str, verbose: bool) -> None:
