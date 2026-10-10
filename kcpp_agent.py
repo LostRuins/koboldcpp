@@ -70,6 +70,11 @@ ESCAPE_DISAMBIGUATION_SECONDS = 0.05
 ESCAPE_SEQUENCE_QUIET_SECONDS = 0.01
 ESCAPE_SEQUENCE_DRAIN_SECONDS = 0.10
 INTERRUPTED_TASK_NOTICE = "[Task was interrupted before the agent finished. Follow the new instruction below.]"
+AUTOCOMPACT_RESUME_NOTICE = (
+    "[The session was automatically compacted while this task was in progress. "
+    "Continue the task from the summary above, starting with the next unfinished "
+    "step. Do not wait for the user to repeat the request.]"
+)
 # Older agents must reject sessions whose confirmation overrides they cannot enforce.
 SESSION_FORMAT_VERSION = 2
 CONFIRMATION_MODES = ("on", "off", "auto")
@@ -1838,6 +1843,7 @@ def save_session_file(
     tool_confirmation: dict[str, str] | None = None,
     max_agent_steps: int = MAX_AGENT_STEPS,
     reasoning_effort: str | None = None,
+    autocompact_tokens: int | None = None,
 ) -> None:
     """Save all session state except model endpoint credentials."""
     session = {
@@ -1850,6 +1856,7 @@ def save_session_file(
         "reasoning_effort": reasoning_effort,
         # Agent-only state follows. Never add base_url, api_key, or model here.
         "max_agent_steps": max_agent_steps,
+        "autocompact_tokens": autocompact_tokens,
         "disabled_tools": sorted(disabled_tools),
         "workdir": str(workdir),
         "confirmation_mode": confirmation_mode,
@@ -1928,10 +1935,18 @@ def load_session_file(path: Path) -> dict[str, Any]:
         if not isinstance(session.get(field), bool):
             raise ValueError(f"{field} must be a boolean")
     session.setdefault("max_agent_steps", MAX_AGENT_STEPS)
+    session.setdefault("autocompact_tokens", None)
     for field in ("request_timeout", "max_tool_result_chars", "max_agent_steps"):
         value = session.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(f"{field} must be a positive integer")
+    autocompact_tokens = session["autocompact_tokens"]
+    if autocompact_tokens is not None and (
+        not isinstance(autocompact_tokens, int)
+        or isinstance(autocompact_tokens, bool)
+        or autocompact_tokens < 1
+    ):
+        raise ValueError("autocompact_tokens must be null or a positive integer")
     workdir = session.get("workdir")
     if not isinstance(workdir, str) or not workdir:
         raise ValueError("workdir must be a non-empty string")
@@ -1981,6 +1996,7 @@ def print_runtime_status(
     tool_confirmation: dict[str, str] | None = None,
     max_agent_steps: int = MAX_AGENT_STEPS,
     reasoning_effort: str | None = None,
+    autocompact_tokens: int | None = None,
 ) -> None:
     max_tokens_status = str(max_tokens) if max_tokens is not None else "server default"
     print(color("Current status:", ANSI_BOLD_CYAN))
@@ -1990,6 +2006,11 @@ def print_runtime_status(
     print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens_status}")
     print(color("Reasoning effort:", ANSI_CYAN) + f" {reasoning_effort or 'default'}")
     print(color("Max agent steps:", ANSI_CYAN) + f" {max_agent_steps}")
+    autocompact_status = (
+        f"{autocompact_tokens:,} context tokens"
+        if autocompact_tokens is not None else "off"
+    )
+    print(color("Automatic compaction:", ANSI_CYAN) + f" {autocompact_status}")
     print(color("Default confirmation:", ANSI_CYAN) + f" {confirmation_status(confirmation_mode)}")
     if tool_confirmation:
         settings = ", ".join(f"{name}={mode}" for name, mode in sorted(tool_confirmation.items()))
@@ -2008,6 +2029,7 @@ def print_runtime_help(
     tool_confirmation: dict[str, str] | None = None,
     max_agent_steps: int = MAX_AGENT_STEPS,
     reasoning_effort: str | None = None,
+    autocompact_tokens: int | None = None,
 ) -> None:
     rows = (
         ("/help", "Show this help"),
@@ -2018,6 +2040,7 @@ def print_runtime_help(
         ("/tools NAME on|off", "Enable or disable a tool, then clear the session"),
         ("/compact", "Summarize history to save context space"),
         ("/usage", "Show token usage for the latest model request"),
+        ("/autocompact [N|off]", "Show, set, or disable automatic compaction by context tokens"),
         ("/maxsteps [N]", "Show or set the maximum model turns per user message (N >= 1)"),
         ("/workdir", "Show the current working directory"),
         ("/workdir PATH", "Change directory and clear the session"),
@@ -2044,7 +2067,7 @@ def print_runtime_help(
     print()
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
-        tool_confirmation, max_agent_steps, reasoning_effort,
+        tool_confirmation, max_agent_steps, reasoning_effort, autocompact_tokens,
     )
     print()
 
@@ -2072,6 +2095,18 @@ def completion_usage(response: dict[str, Any]) -> dict[str, int] | None:
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             counts[field] = value
     return counts if "prompt_tokens" in counts else None
+
+
+def autocompaction_due(
+    usage: dict[str, int] | None,
+    autocompact_tokens: int | None,
+) -> bool:
+    """Return whether the latest request crossed the configured context limit."""
+    return (
+        autocompact_tokens is not None
+        and usage is not None
+        and usage["prompt_tokens"] > autocompact_tokens
+    )
 
 
 def print_quota(usage: dict[str, int] | None) -> None:
@@ -2109,7 +2144,9 @@ def compact_session(
                 "with the earlier messages removed. Be concise and accurate. Include the "
                 "overall and current goals, decisions, completed work, important findings "
                 "and file paths, and remaining steps or blockers. Preserve details needed "
-                "to act; do not invent progress. Return only the summary."
+                "to act; do not invent progress. If a task is still in progress, state the "
+                "next unfinished step explicitly so work can resume without more input from "
+                "the user. Return only the summary."
             ),
         },
     ]
@@ -2162,12 +2199,15 @@ def run_agent(
         max_tokens = session["max_tokens"]
         reasoning_effort = session["reasoning_effort"]
         max_agent_steps = session["max_agent_steps"]
+        autocompact_tokens = session["autocompact_tokens"]
         confirmation_mode = session["confirmation_mode"]
         tool_confirmation = session["tool_confirmation"]
         no_color = session["no_color"]
         request_timeout = session["request_timeout"]
         MAX_TOOL_RESULT_CHARS = session["max_tool_result_chars"]
         configure_colors(disabled=no_color)
+    else:
+        autocompact_tokens = None
 
     base_url = normalize_base_url(base_url)
     show_reasoning = session["show_reasoning"] if session is not None else False
@@ -2227,11 +2267,47 @@ def run_agent(
     last_usage: dict[str, int] | None = None
     pending_interruption = session["pending_interruption"] if session is not None else False
 
+    def compact_current_session(
+        *,
+        automatic: bool,
+        resume: bool = False,
+        trigger_tokens: int | None = None,
+    ) -> bool:
+        """Compact current history, optionally making an in-progress turn continue."""
+        nonlocal last_usage
+        try:
+            with Throbber("Automatically summarizing session" if automatic else "Summarizing session"):
+                summary, _ = compact_session(
+                    messages, base_url, api_key, model, temperature,
+                    max_tokens, request_timeout, reasoning_effort,
+                )
+        except (EndpointUnavailableError, APIResponseError) as exc:
+            label = "Automatic compaction" if automatic else "Compaction"
+            print(f"{label} failed: {exc}. Conversation unchanged.\n")
+            return False
+        messages[:] = [
+            {"role": "system", "content": system_prompt(disabled_tools)},
+            {"role": "assistant", "content": f"Summary of the earlier session:\n{summary}"},
+        ]
+        if resume:
+            messages.append({"role": "user", "content": AUTOCOMPACT_RESUME_NOTICE})
+        last_usage = None
+        if automatic:
+            trigger = (
+                f" after context input reached {trigger_tokens:,} tokens"
+                if trigger_tokens is not None else ""
+            )
+            suffix = " Resuming the in-progress task.\n" if resume else "\n"
+            print(f"Session automatically compacted{trigger}.{suffix}")
+        else:
+            print(f"Session compacted:\n{summary}\n")
+        return True
+
     if loaded_session_path is not None:
         print_session_loaded(loaded_session_path, messages)
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
-        tool_confirmation, max_agent_steps, reasoning_effort,
+        tool_confirmation, max_agent_steps, reasoning_effort, autocompact_tokens,
     )
     print("\nKoboldCpp Agent has full shell access, exercise caution when approving commands.")
     print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
@@ -2255,6 +2331,7 @@ def run_agent(
             print_runtime_help(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
                 max_tokens, tool_confirmation, max_agent_steps, reasoning_effort,
+                autocompact_tokens,
             )
             continue
         if command == "/maxsteps":
@@ -2272,6 +2349,24 @@ def run_agent(
                 continue
             print_quota(last_usage)
             continue
+        if command == "/autocompact":
+            if command_arg:
+                if command_arg.lower() == "off":
+                    autocompact_tokens = None
+                else:
+                    try:
+                        autocompact_tokens = positive_int(command_arg)
+                    except (ValueError, argparse.ArgumentTypeError):
+                        print("Usage: /autocompact [N|off] (N must be a positive integer)\n")
+                        continue
+            if autocompact_tokens is None:
+                print("Automatic compaction is off.\n")
+            else:
+                print(
+                    "Automatic compaction threshold: "
+                    f"{autocompact_tokens:,} context tokens.\n"
+                )
+            continue
         if command == "/save":
             try:
                 path = session_path(command_arg)
@@ -2282,6 +2377,7 @@ def run_agent(
                     max_tokens=max_tokens,
                     reasoning_effort=reasoning_effort,
                     max_agent_steps=max_agent_steps,
+                    autocompact_tokens=autocompact_tokens,
                     disabled_tools=disabled_tools,
                     confirmation_mode=confirmation_mode,
                     tool_confirmation=tool_confirmation,
@@ -2313,6 +2409,7 @@ def run_agent(
             max_tokens = session["max_tokens"]
             reasoning_effort = session["reasoning_effort"]
             max_agent_steps = session["max_agent_steps"]
+            autocompact_tokens = session["autocompact_tokens"]
             disabled_tools.clear()
             disabled_tools.update(session["disabled_tools"])
             confirmation_mode = session["confirmation_mode"]
@@ -2330,6 +2427,7 @@ def run_agent(
             print_runtime_status(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
                 max_tokens, tool_confirmation, max_agent_steps, reasoning_effort,
+                autocompact_tokens,
             )
             print()
             continue
@@ -2382,21 +2480,7 @@ def run_agent(
             if len(messages) == 1:
                 print("Nothing to compact.\n")
                 continue
-            try:
-                with Throbber("Summarizing session"):
-                    summary, _ = compact_session(
-                        messages, base_url, api_key, model, temperature,
-                        max_tokens, request_timeout, reasoning_effort,
-                    )
-            except (EndpointUnavailableError, APIResponseError) as exc:
-                print(f"Compaction failed: {exc}. Conversation unchanged.\n")
-                continue
-            messages[:] = [
-                {"role": "system", "content": system_prompt(disabled_tools)},
-                {"role": "assistant", "content": f"Summary of the earlier session:\n{summary}"},
-            ]
-            last_usage = None
-            print(f"Session compacted:\n{summary}\n")
+            compact_current_session(automatic=False)
             continue
         if command == "/workdir":
             if not command_arg:
@@ -2544,6 +2628,9 @@ def run_agent(
                     on_interrupt=cancellation.cancel,
                 )
                 last_usage = completion_usage(response)
+                should_autocompact = autocompaction_due(
+                    last_usage, autocompact_tokens
+                )
             except AgentInterrupted:
                 pending_interruption = True
                 print("\nInterrupted. Enter new instruction.\n")
@@ -2618,6 +2705,11 @@ def run_agent(
             if content:
                 print("\n" + color("Agent>", ANSI_GREEN) + f" {content}\n")
             if not tool_calls:
+                if should_autocompact:
+                    compact_current_session(
+                        automatic=True,
+                        trigger_tokens=last_usage["prompt_tokens"],
+                    )
                 break
 
             awaiting_answer = any(
@@ -2727,8 +2819,19 @@ def run_agent(
                     }
                 )
             if pending_interruption:
+                if should_autocompact:
+                    compact_current_session(
+                        automatic=True,
+                        trigger_tokens=last_usage["prompt_tokens"],
+                    )
                 print("\nInterrupted. Enter new instruction.\n")
                 break
+            if should_autocompact:
+                compact_current_session(
+                    automatic=True,
+                    resume=True,
+                    trigger_tokens=last_usage["prompt_tokens"],
+                )
         else:
             print(f"Agent stopped: reached the limit of {max_agent_steps} consecutive tool/model turns.\n")
 
