@@ -6074,8 +6074,7 @@ std::string gpttype_parse_chat_tool_calls(const std::string & generated_text,
         }
 
         common_chat_parser_params parser_params(chat_params);
-        parser_params.parse_tool_calls = true;
-        parser_params.parser.load(chat_params.parser);
+        parser_params.parser = std::move(chat_params.parser);
 
         ggml_log_callback currlogger = nullptr;
         void * curruserdat = nullptr;

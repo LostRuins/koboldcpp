@@ -479,6 +479,340 @@
              },
              "openapi": "3.0.3",
              "paths": {
+                "/v1/completions": {
+                   "post": {
+                      "summary": "Generates text continuations given a prompt. Please refer to OpenAI documentation",
+                      "description": "Generates text continuations given a prompt.\n\nThis is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/api/reference/resources/completions/methods/create](https://developers.openai.com/api/reference/resources/completions/methods/create). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {"model":"kcpp","prompt": "Hi, my name is Kobo and", "temperature": 0.8,"max_tokens": 64},
+                               "schema": {
+                                  "properties": {},
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
+                "/v1/chat/completions": {
+                   "post": {
+                      "summary": "Generates a response from a list of messages. Please refer to OpenAI documentation",
+                      "description": "Given a list of messages comprising a conversation, the model will return a response.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {"model":"kcpp","messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Tell me a joke about Kobolds."}],  "temperature": 0.7},
+                               "schema": {
+                                  "properties": {},
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
+                "/v1/responses": {
+                   "post": {
+                      "summary": "Emulates OpenAI Responses API. Very experimental, not recommended (use chat completions instead). Please refer to OpenAI documentation",
+                      "description": "Emulates OpenAI Responses API.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/api/reference/resources/responses](https://developers.openai.com/api/reference/resources/responses). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {"model":"kcpp","input": "Tell me a joke about Kobolds."},
+                               "schema": {
+                                  "properties": {},
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
+                "/v1/images/generations": {
+                   "post": {
+                      "summary": "Generates images from a text prompt. Please refer to OpenAI documentation",
+                      "description": "Creates images from a text prompt.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/images/create](https://developers.openai.com/docs/api-reference/images/create).",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {"model":"kcpp","prompt": "picture of a kobold, high quality HD render", "n": 1, "size": "512x512", "response_format": "b64_json"},
+                               "schema": {
+                                  "properties": {
+                                     "model": {
+                                        "type": "string",
+                                        "description": "Model identifier. Use kcpp for the currently loaded image model."
+                                     },
+                                     "prompt": {
+                                        "type": "string",
+                                        "description": "Text prompt describing the image to generate."
+                                     },
+                                     "n": {
+                                        "type": "integer",
+                                        "description": "Number of images to generate.",
+                                        "minimum": 1
+                                     },
+                                     "size": {
+                                        "type": "string",
+                                        "description": "Requested image size, such as 512x512 or 1024x1024."
+                                     },
+                                     "response_format": {
+                                        "type": "string",
+                                        "description": "Response image format. b64_json returns base64 encoded image data."
+                                     }
+                                  },
+                                  "required": [
+                                     "prompt"
+                                  ],
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "example": {"created": 1710000000, "data": [{"b64_json": "base64_image_data"}]},
+                                  "schema": {
+                                     "properties": {
+                                        "created": {
+                                           "type": "integer",
+                                           "description": "Unix timestamp for the generation request."
+                                        },
+                                        "data": {
+                                           "type": "array",
+                                           "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                 "b64_json": {
+                                                    "type": "string",
+                                                    "description": "Base64 encoded image data."
+                                                 },
+                                                 "url": {
+                                                    "type": "string",
+                                                    "description": "Image URL, if URL responses are supported."
+                                                 }
+                                              }
+                                           }
+                                        }
+                                     },
+                                     "type": "object"
+                                  }
+                               }
+                            },
+                            "description": "Successful request"
+                         }
+                      }
+                   }
+                },
+                "/v1/models": {
+                   "get": {
+                      "summary": "List and describe the various models available in the API. Please refer to OpenAI documentation",
+                      "description": "List and describe the various models available in the API.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/models](https://developers.openai.com/docs/api-reference/models)",
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
+                "/v1/audio/transcriptions": {
+                   "post": {
+                      "summary": "Transcribes a wav file with speech to text using loaded Whisper model. Please refer to OpenAI documentation",
+                      "description": "Transcribes a wav file with speech to text using loaded Whisper model.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/audio/createTranscription](https://developers.openai.com/docs/api-reference/audio/createTranscription)",
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
+                "/v1/audio/speech": {
+                   "post": {
+                      "summary": "Generates Text-To-Speech audio from input text. Please refer to OpenAI documentation",
+                      "description": "Generates Text-To-Speech audio from input text.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/audio/createSpeech](https://developers.openai.com/docs/api-reference/audio/createSpeech)",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {"model":"kcpp","input": "Hello, my name is Kobold and I love to play.", "voice": "alloy"},
+                               "schema": {
+                                  "properties": {},
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
+                "/v1/embeddings": {
+                   "post": {
+                      "summary": "Creates an embedding vector representing the input text. Please refer to OpenAI documentation",
+                      "description": "Creates an embedding vector representing the input text.\n\nThis is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/embeddings/create](https://developers.openai.com/docs/api-reference/embeddings/create)",
+                      "requestBody": {
+                         "content": {
+                            "application/json": {
+                               "example": {
+                                 "model": "kcpp",
+                                 "input": "Niko the Kobold is in town today.",
+                                 "truncate": true,
+                              },
+                               "schema": {
+                                  "properties": {},
+                                  "type": "object"
+                               }
+                            }
+                         },
+                         "required": true
+                      },
+                      "tags": [
+                         "v1"
+                      ],
+                      "responses": {"default": {"description": ""}}
+                   }
+                },
+                "/v1/messages": {
+                  "post": {
+                     "summary": "Creates a message using the Anthropic Messages API format",
+                     "description": "Given a structured list of input messages, a system prompt, and required tokens parameter, the model will return a response. This follows the native Anthropic Messages payload style.",
+                     "tags": [
+                        "v1"
+                     ],
+                     "parameters": [
+                        {
+                           "name": "x-api-key",
+                           "in": "header",
+                           "required": false,
+                           "description": "Anthropic API Key used for authentication.",
+                           "schema": {
+                              "type": "string"
+                           }
+                        },
+                        {
+                           "name": "anthropic-version",
+                           "in": "header",
+                           "required": false,
+                           "description": "Anthropic API version. Currently, '2023-06-01' is expected.",
+                           "schema": {
+                              "type": "string",
+                              "default": "2023-06-01"
+                           }
+                        }
+                     ],
+                     "requestBody": {
+                        "required": false,
+                        "content": {
+                           "application/json": {
+                              "example": {
+                                 "model": "claude-3-5-sonnet-20241022",
+                                 "max_tokens": 1024,
+                                 "system": "You are a helpful assistant.",
+                                 "messages": [
+                                    {
+                                       "role": "user",
+                                       "content": "Tell me a joke about Kobolds."
+                                    }
+                                 ],
+                                 "temperature": 0.7
+                              },
+                              "schema": {
+                                 "type": "object",
+                                 "required": [
+                                    "model",
+                                    "messages",
+                                    "max_tokens"
+                                 ],
+                                 "properties": {
+                                    "model": {
+                                       "type": "string",
+                                       "description": "The model that will handle the request."
+                                    },
+                                    "messages": {
+                                       "type": "array",
+                                       "description": "Input messages. Roles must alternate between user and assistant.",
+                                       "items": {
+                                          "type": "object",
+                                          "required": [
+                                             "role",
+                                             "content"
+                                          ],
+                                          "properties": {
+                                             "role": {
+                                                "type": "string",
+                                                "enum": ["user", "assistant"]
+                                             },
+                                             "content": {
+                                                "oneOf": [
+                                                   { "type": "string" },
+                                                   {
+                                                      "type": "array",
+                                                      "items": {
+                                                         "type": "object",
+                                                         "properties": {
+                                                            "type": {
+                                                               "type": "string",
+                                                               "enum": ["text", "image"]
+                                                            },
+                                                            "text": { "type": "string" }
+                                                         }
+                                                      }
+                                                   }
+                                                ]
+                                             }
+                                          }
+                                       }
+                                    },
+                                    "system": {
+                                       "type": "string",
+                                       "description": "System prompt to define the behavior and tone of the model."
+                                    },
+                                    "max_tokens": {
+                                       "type": "integer",
+                                       "description": "The maximum number of tokens to generate."
+                                    },
+                                    "temperature": {
+                                       "type": "number",
+                                       "minimum": 0.0,
+                                       "maximum": 1.0
+                                    },
+                                    "stream": {
+                                       "type": "boolean"
+                                    }
+                                 }
+                              }
+                           }
+                        }
+                     },
+                     "responses": {
+                        "default": {
+                           "description": ""
+                        }
+                     }
+                  }
+                },
                 "/api/v1/config/max_context_length": {
                    "get": {
                       "responses": {
@@ -2776,341 +3110,7 @@
                          "sdapi/v1"
                       ]
                    }
-                },
-                "/v1/completions": {
-                   "post": {
-                      "summary": "Generates text continuations given a prompt. Please refer to OpenAI documentation",
-                      "description": "Generates text continuations given a prompt.\n\nThis is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/api/reference/resources/completions/methods/create](https://developers.openai.com/api/reference/resources/completions/methods/create). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
-                      "requestBody": {
-                         "content": {
-                            "application/json": {
-                               "example": {"model":"kcpp","prompt": "Hi, my name is Kobo and", "temperature": 0.8,"max_tokens": 64},
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
-                            }
-                         },
-                         "required": true
-                      },
-                      "tags": [
-                         "v1"
-                      ],
-                      "responses": {"default": {"description": ""}}
-                   }
-                },
-                "/v1/chat/completions": {
-                   "post": {
-                      "summary": "Generates a response from a list of messages. Please refer to OpenAI documentation",
-                      "description": "Given a list of messages comprising a conversation, the model will return a response.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
-                      "requestBody": {
-                         "content": {
-                            "application/json": {
-                               "example": {"model":"kcpp","messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Tell me a joke about Kobolds."}],  "temperature": 0.7},
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
-                            }
-                         },
-                         "required": true
-                      },
-                      "tags": [
-                         "v1"
-                      ],
-                      "responses": {"default": {"description": ""}}
-                   }
-                },
-                "/v1/responses": {
-                   "post": {
-                      "summary": "Emulates OpenAI Responses API. Very experimental, not recommended (use chat completions instead). Please refer to OpenAI documentation",
-                      "description": "Emulates OpenAI Responses API.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/api/reference/resources/responses](https://developers.openai.com/api/reference/resources/responses). All KoboldCpp samplers are supported, please refer to /api/v1/generate for more details.",
-                      "requestBody": {
-                         "content": {
-                            "application/json": {
-                               "example": {"model":"kcpp","input": "Tell me a joke about Kobolds."},
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
-                            }
-                         },
-                         "required": true
-                      },
-                      "tags": [
-                         "v1"
-                      ],
-                      "responses": {"default": {"description": ""}}
-                   }
-                },
-                "/v1/images/generations": {
-                   "post": {
-                      "summary": "Generates images from a text prompt. Please refer to OpenAI documentation",
-                      "description": "Creates images from a text prompt.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/images/create](https://developers.openai.com/docs/api-reference/images/create).",
-                      "requestBody": {
-                         "content": {
-                            "application/json": {
-                               "example": {"model":"kcpp","prompt": "picture of a kobold, high quality HD render", "n": 1, "size": "512x512", "response_format": "b64_json"},
-                               "schema": {
-                                  "properties": {
-                                     "model": {
-                                        "type": "string",
-                                        "description": "Model identifier. Use kcpp for the currently loaded image model."
-                                     },
-                                     "prompt": {
-                                        "type": "string",
-                                        "description": "Text prompt describing the image to generate."
-                                     },
-                                     "n": {
-                                        "type": "integer",
-                                        "description": "Number of images to generate.",
-                                        "minimum": 1
-                                     },
-                                     "size": {
-                                        "type": "string",
-                                        "description": "Requested image size, such as 512x512 or 1024x1024."
-                                     },
-                                     "response_format": {
-                                        "type": "string",
-                                        "description": "Response image format. b64_json returns base64 encoded image data."
-                                     }
-                                  },
-                                  "required": [
-                                     "prompt"
-                                  ],
-                                  "type": "object"
-                               }
-                            }
-                         },
-                         "required": true
-                      },
-                      "tags": [
-                         "v1"
-                      ],
-                      "responses": {
-                         "200": {
-                            "content": {
-                               "application/json": {
-                                  "example": {"created": 1710000000, "data": [{"b64_json": "base64_image_data"}]},
-                                  "schema": {
-                                     "properties": {
-                                        "created": {
-                                           "type": "integer",
-                                           "description": "Unix timestamp for the generation request."
-                                        },
-                                        "data": {
-                                           "type": "array",
-                                           "items": {
-                                              "type": "object",
-                                              "properties": {
-                                                 "b64_json": {
-                                                    "type": "string",
-                                                    "description": "Base64 encoded image data."
-                                                 },
-                                                 "url": {
-                                                    "type": "string",
-                                                    "description": "Image URL, if URL responses are supported."
-                                                 }
-                                              }
-                                           }
-                                        }
-                                     },
-                                     "type": "object"
-                                  }
-                               }
-                            },
-                            "description": "Successful request"
-                         }
-                      }
-                   }
-                },
-                "/v1/models": {
-                   "get": {
-                      "summary": "List and describe the various models available in the API. Please refer to OpenAI documentation",
-                      "description": "List and describe the various models available in the API.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/models](https://developers.openai.com/docs/api-reference/models)",
-                      "tags": [
-                         "v1"
-                      ],
-                      "responses": {"default": {"description": ""}}
-                   }
-                },
-                "/v1/audio/transcriptions": {
-                   "post": {
-                      "summary": "Transcribes a wav file with speech to text using loaded Whisper model. Please refer to OpenAI documentation",
-                      "description": "Transcribes a wav file with speech to text using loaded Whisper model.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/audio/createTranscription](https://developers.openai.com/docs/api-reference/audio/createTranscription)",
-                      "tags": [
-                         "v1"
-                      ],
-                      "responses": {"default": {"description": ""}}
-                   }
-                },
-                "/v1/audio/speech": {
-                   "post": {
-                      "summary": "Generates Text-To-Speech audio from input text. Please refer to OpenAI documentation",
-                      "description": "Generates Text-To-Speech audio from input text.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/audio/createSpeech](https://developers.openai.com/docs/api-reference/audio/createSpeech)",
-                      "requestBody": {
-                         "content": {
-                            "application/json": {
-                               "example": {"model":"kcpp","input": "Hello, my name is Kobold and I love to play.", "voice": "alloy"},
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
-                            }
-                         },
-                         "required": true
-                      },
-                      "tags": [
-                         "v1"
-                      ],
-                      "responses": {"default": {"description": ""}}
-                   }
-                },
-                "/v1/embeddings": {
-                   "post": {
-                      "summary": "Creates an embedding vector representing the input text. Please refer to OpenAI documentation",
-                      "description": "Creates an embedding vector representing the input text.\n\nThis is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/embeddings/create](https://developers.openai.com/docs/api-reference/embeddings/create)",
-                      "requestBody": {
-                         "content": {
-                            "application/json": {
-                               "example": {
-                                 "model": "kcpp",
-                                 "input": "Niko the Kobold is in town today.",
-                                 "truncate": true,
-                              },
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
-                            }
-                         },
-                         "required": true
-                      },
-                      "tags": [
-                         "v1"
-                      ],
-                      "responses": {"default": {"description": ""}}
-                   }
-                },
-                "/v1/messages": {
-                  "post": {
-                     "summary": "Creates a message using the Anthropic Messages API format",
-                     "description": "Given a structured list of input messages, a system prompt, and required tokens parameter, the model will return a response. This follows the native Anthropic Messages payload style.",
-                     "tags": [
-                        "v1"
-                     ],
-                     "parameters": [
-                        {
-                           "name": "x-api-key",
-                           "in": "header",
-                           "required": false,
-                           "description": "Anthropic API Key used for authentication.",
-                           "schema": {
-                              "type": "string"
-                           }
-                        },
-                        {
-                           "name": "anthropic-version",
-                           "in": "header",
-                           "required": false,
-                           "description": "Anthropic API version. Currently, '2023-06-01' is expected.",
-                           "schema": {
-                              "type": "string",
-                              "default": "2023-06-01"
-                           }
-                        }
-                     ],
-                     "requestBody": {
-                        "required": false,
-                        "content": {
-                           "application/json": {
-                              "example": {
-                                 "model": "claude-3-5-sonnet-20241022",
-                                 "max_tokens": 1024,
-                                 "system": "You are a helpful assistant.",
-                                 "messages": [
-                                    {
-                                       "role": "user",
-                                       "content": "Tell me a joke about Kobolds."
-                                    }
-                                 ],
-                                 "temperature": 0.7
-                              },
-                              "schema": {
-                                 "type": "object",
-                                 "required": [
-                                    "model",
-                                    "messages",
-                                    "max_tokens"
-                                 ],
-                                 "properties": {
-                                    "model": {
-                                       "type": "string",
-                                       "description": "The model that will handle the request."
-                                    },
-                                    "messages": {
-                                       "type": "array",
-                                       "description": "Input messages. Roles must alternate between user and assistant.",
-                                       "items": {
-                                          "type": "object",
-                                          "required": [
-                                             "role",
-                                             "content"
-                                          ],
-                                          "properties": {
-                                             "role": {
-                                                "type": "string",
-                                                "enum": ["user", "assistant"]
-                                             },
-                                             "content": {
-                                                "oneOf": [
-                                                   { "type": "string" },
-                                                   {
-                                                      "type": "array",
-                                                      "items": {
-                                                         "type": "object",
-                                                         "properties": {
-                                                            "type": {
-                                                               "type": "string",
-                                                               "enum": ["text", "image"]
-                                                            },
-                                                            "text": { "type": "string" }
-                                                         }
-                                                      }
-                                                   }
-                                                ]
-                                             }
-                                          }
-                                       }
-                                    },
-                                    "system": {
-                                       "type": "string",
-                                       "description": "System prompt to define the behavior and tone of the model."
-                                    },
-                                    "max_tokens": {
-                                       "type": "integer",
-                                       "description": "The maximum number of tokens to generate."
-                                    },
-                                    "temperature": {
-                                       "type": "number",
-                                       "minimum": 0.0,
-                                       "maximum": 1.0
-                                    },
-                                    "stream": {
-                                       "type": "boolean"
-                                    }
-                                 }
-                              }
-                           }
-                        }
-                     },
-                     "responses": {
-                        "default": {
-                           "description": ""
-                        }
-                     }
-                  }
-               }
+                }
              },
              "servers": [
                 {
@@ -3118,6 +3118,10 @@
                 }
              ],
              "tags": [
+                {
+                   "description": "OpenAI Compatible APIs. Recommended for beginners.",
+                   "name": "v1"
+                },
                 {
                    "description": "KoboldAI United compatible API core endpoints",
                    "name": "api/v1"
@@ -3127,16 +3131,12 @@
                    "name": "api/extra"
                 },
                 {
-                   "description": "Common identity API for LLM services",
-                   "name": "serviceinfo"
-                },
-                {
                    "description": "Image Generation API (A1111 compatible)",
                    "name": "sdapi/v1"
                 },
                 {
-                   "description": "OpenAI Compatible APIs",
-                   "name": "v1"
+                   "description": "Common identity API for LLM services",
+                   "name": "serviceinfo"
                 }
              ]
           };
