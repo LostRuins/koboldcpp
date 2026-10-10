@@ -1957,6 +1957,7 @@ def print_runtime_help(
         ("/tools", "List tools and confirmation settings (/tool is an alias)"),
         ("/tools NAME on|off", "Enable or disable a tool, then clear the session"),
         ("/compact", "Summarize history to save context space"),
+        ("/usage", "Show token usage for the latest model request"),
         ("/maxsteps [N]", "Show or set the maximum model turns per user message (N >= 1)"),
         ("/workdir", "Show the current working directory"),
         ("/workdir PATH", "Change directory and clear the session"),
@@ -1997,6 +1998,35 @@ def reasoning_text(message: dict[str, Any]) -> str:
     return ""
 
 
+def completion_usage(response: dict[str, Any]) -> dict[str, int] | None:
+    """Return standard Chat Completions token counts when supplied by the server."""
+    usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    counts: dict[str, int] = {}
+    for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = usage.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            counts[field] = value
+    return counts if "prompt_tokens" in counts else None
+
+
+def print_quota(usage: dict[str, int] | None) -> None:
+    """Display the latest request usage without implying an account quota."""
+    if usage is None:
+        print("Token usage is unavailable. You may need to send a message first.\n")
+        return
+
+    print(color("Latest model request:", ANSI_BOLD_CYAN))
+    print(color("Context input:", ANSI_CYAN) + f" {usage['prompt_tokens']:,} tokens")
+    if "completion_tokens" in usage:
+        print(color("Generated output:", ANSI_CYAN) + f" {usage['completion_tokens']:,} tokens")
+    if "total_tokens" in usage:
+        print(color("Total request usage:", ANSI_CYAN) + f" {usage['total_tokens']:,} tokens")
+    print("Type " + color("/compact", ANSI_YELLOW) + " to summarize and compress current context.\n")
+
+
 def compact_session(
     messages: list[dict[str, Any]],
     base_url: str,
@@ -2005,7 +2035,7 @@ def compact_session(
     temperature: float,
     max_tokens: int | None,
     request_timeout: int,
-) -> str:
+) -> tuple[str, dict[str, int] | None]:
     """Summarize the complete conversation without changing it on failure."""
     summary_request = [
         *messages,
@@ -2039,7 +2069,7 @@ def compact_session(
         raise APIResponseError("summary was cut off by the output token limit")
     if not isinstance(summary, str) or not summary.strip():
         raise APIResponseError("model returned an empty summary")
-    return summary.strip()
+    return summary.strip(), completion_usage(response)
 
 
 def run_agent(
@@ -2110,6 +2140,7 @@ def run_agent(
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt(disabled_tools)}
     ]
+    last_usage: dict[str, int] | None = None
     pending_interruption = False
 
     print_runtime_status(
@@ -2149,6 +2180,12 @@ def run_agent(
                     continue
             print(f"Max agent steps: {max_agent_steps}\n")
             continue
+        if command == "/usage":
+            if command_arg:
+                print("Usage: /usage\n")
+                continue
+            print_quota(last_usage)
+            continue
         if command == "/save":
             try:
                 path = session_path(command_arg)
@@ -2184,6 +2221,7 @@ def run_agent(
                 print(f"Cannot load session: {exc}\n")
                 continue
             messages[:] = session["messages"]
+            last_usage = None
             temperature = float(session["temperature"])
             max_tokens = session["max_tokens"]
             max_agent_steps = session["max_agent_steps"]
@@ -2237,11 +2275,13 @@ def run_agent(
                 disabled_tools.remove(name)
             refresh_mcp_tools()
             messages[:] = [{"role": "system", "content": system_prompt(disabled_tools)}]
+            last_usage = None
             pending_interruption = False
             print(f"{name} is now {setting}. Conversation cleared.\n")
             continue
         if command == "/clear" and not command_arg:
             messages[:] = [{"role": "system", "content": system_prompt(disabled_tools)}]
+            last_usage = None
             pending_interruption = False
             refresh_mcp_tools()
             print("Conversation cleared.\n")
@@ -2255,7 +2295,7 @@ def run_agent(
                 continue
             try:
                 with Throbber("Summarizing session"):
-                    summary = compact_session(
+                    summary, last_usage = compact_session(
                         messages, base_url, api_key, model, temperature,
                         max_tokens, request_timeout,
                     )
@@ -2284,6 +2324,7 @@ def run_agent(
                 print(f"Cannot change working directory: {exc}\n")
                 continue
             messages[:] = [{"role": "system", "content": system_prompt(disabled_tools)}]
+            last_usage = None
             pending_interruption = False
             refresh_mcp_tools()
             print(f"Working directory: {Path.cwd()}")
@@ -2395,6 +2436,7 @@ def run_agent(
                     lambda: chat_completion(**request_args),
                     on_interrupt=cancellation.cancel,
                 )
+                last_usage = completion_usage(response)
             except AgentInterrupted:
                 pending_interruption = True
                 print("\nInterrupted. Enter new instruction.\n")
@@ -2602,6 +2644,13 @@ def parse_args() -> argparse.Namespace:
         help="Model name (default: OPENAI_MODEL or the first model from /models; falls back to 'local-model')",
     )
     parser.add_argument(
+        "--workdir",
+        type=directory_path,
+        default=None,
+        metavar="PATH",
+        help="Set the initial working directory",
+    )
+    parser.add_argument(
         "--temperature",
         type=temperature_value,
         default=DEFAULT_TEMPERATURE,
@@ -2677,6 +2726,17 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def directory_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(f"cannot access directory: {value}") from exc
+    if not resolved.is_dir():
+        raise argparse.ArgumentTypeError(f"not a directory: {value}")
+    return resolved
+
+
 def temperature_value(value: str) -> float:
     parsed = float(value)
     if not 0.0 <= parsed <= 2.0:
@@ -2696,6 +2756,8 @@ def main() -> None:
     MAX_TOOL_RESULT_CHARS = args.max_tool_result_chars
     configure_colors(disabled=args.no_color)
     try:
+        if args.workdir is not None:
+            os.chdir(args.workdir)
         run_agent(
             base_url=args.base_url,
             api_key=args.api_key,
