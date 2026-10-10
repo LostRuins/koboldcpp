@@ -3099,6 +3099,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "▁<PRE>"          // CodeLlama
                         || t.first == "<|code_prefix|>" // GLM-4.5
                         || t.first == "<|prefix|>"      // Falcon-H1-Tiny-Coder
+                        || t.first == "<|plamo:fim_prefix|>" // PLaMo-3
                         ) {
                     special_fim_pre_id = t.second;
                     if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -3120,6 +3121,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "▁<SUF>"         // CodeLlama
                         || t.first == "<|code_suffix|>" // GLM-4.5
                         || t.first == "<|suffix|>"      // Falcon-H1-Tiny-Coder
+                        || t.first == "<|plamo:fim_suffix|>" // PLaMo-3
                         ) {
                     special_fim_suf_id = t.second;
                     if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -3141,6 +3143,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "▁<MID>"         // CodeLlama
                         || t.first == "<|code_middle|>" // GLM-4.5
                         || t.first == "<|middle|>"      // Falcon-H1-Tiny-Coder
+                        || t.first == "<|plamo:fim_middle|>" // PLaMo-3
                         ) {
                     special_fim_mid_id = t.second;
                     if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -3191,6 +3194,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             if (special_fim_sep_id == LLAMA_TOKEN_NULL) {
                 if (false
                         || t.first == "<|file_sep|>" // Qwen
+                        || t.first == "<|plamo:file_separator|>" // PLaMo-2/3
                         ) {
                     special_fim_sep_id = t.second;
                     if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {

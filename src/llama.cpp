@@ -22,6 +22,7 @@
 #include "llama-memory-recurrent.cpp"
 #include "llama-model-loader.cpp"
 #include "llama-model-saver.cpp"
+#include "llama-moe-cache.cpp"
 #include "llama-quant.cpp"
 #include "llama-hparams.cpp"
 #include "llama-graph.cpp"

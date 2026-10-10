@@ -6087,7 +6087,7 @@ std::string gpttype_parse_chat_tool_calls(const std::string & generated_text,
         common_chat_msg parsed;
         try
         {
-            parsed = common_chat_parse(generated_text, is_partial, parser_params);
+            parsed = common_chat_parse(common_chat_input(generated_text), is_partial, parser_params);
         }
         catch(...)
         {
