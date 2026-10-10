@@ -428,16 +428,6 @@ bool ModelLoader::init_from_torch_zip_file(const std::string& file_path, const s
     return true;
 }
 
-bool ModelLoader::has_diffusion_model_tensors()
-{
-    for (auto& [name, tensor_storage] : tensor_storage_map) {
-        if (tensor_storage.name.find("model.diffusion_model.") != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /*================================================= DiffusersModelLoader ==================================================*/
 
 bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const std::string& prefix) {
