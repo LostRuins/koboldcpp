@@ -73,6 +73,7 @@ INTERRUPTED_TASK_NOTICE = "[Task was interrupted before the agent finished. Foll
 # Older agents must reject sessions whose confirmation overrides they cannot enforce.
 SESSION_FORMAT_VERSION = 2
 CONFIRMATION_MODES = ("on", "off", "auto")
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 ANSI_RESET = "\033[0m"
 ANSI_BOLD_CYAN = "\033[1;36m"
@@ -1383,6 +1384,7 @@ def review_tool_call(
     model: str,
     max_tokens: int | None,
     request_timeout: int,
+    reasoning_effort: str | None = None,
 ) -> bool:
     """Append a temporary review turn without changing the conversation prefix."""
     review_messages = [
@@ -1407,7 +1409,7 @@ def review_tool_call(
         max_tokens=min(max_tokens, 100) if max_tokens is not None else 100,
         request_timeout=request_timeout,
         tool_choice="none",
-        reasoning_effort="none",
+        reasoning_effort=reasoning_effort,
     )
     try:
         choice = response["choices"][0]
@@ -1450,6 +1452,7 @@ def tool_view_image(
     model: str,
     max_tokens: int | None,
     request_timeout: int,
+    reasoning_effort: str | None = None,
 ) -> str:
     path = Path(args["path"]).expanduser()
     if not path.is_file():
@@ -1491,6 +1494,7 @@ def tool_view_image(
         temperature=DEFAULT_TEMPERATURE,
         max_tokens=max_tokens,
         request_timeout=request_timeout,
+        reasoning_effort=reasoning_effort,
     )
     try:
         choice = response["choices"][0]
@@ -1804,6 +1808,18 @@ def session_path(command_arg: str) -> Path:
     return path
 
 
+def load_session_path(value: str) -> Path:
+    """Resolve an existing session path for command-line loading."""
+    path = session_path(value)
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(f"cannot access session file: {value}") from exc
+    if not resolved.is_file():
+        raise argparse.ArgumentTypeError(f"not a file: {value}")
+    return resolved
+
+
 def save_session_file(
     path: Path,
     *,
@@ -1821,6 +1837,7 @@ def save_session_file(
     workdir: Path,
     tool_confirmation: dict[str, str] | None = None,
     max_agent_steps: int = MAX_AGENT_STEPS,
+    reasoning_effort: str | None = None,
 ) -> None:
     """Save all session state except model endpoint credentials."""
     session = {
@@ -1830,6 +1847,7 @@ def save_session_file(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "reasoning_effort": reasoning_effort,
         # Agent-only state follows. Never add base_url, api_key, or model here.
         "max_agent_steps": max_agent_steps,
         "disabled_tools": sorted(disabled_tools),
@@ -1880,6 +1898,14 @@ def load_session_file(path: Path) -> dict[str, Any]:
         not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1
     ):
         raise ValueError("max_tokens must be null or a positive integer")
+    session.setdefault("reasoning_effort", None)
+    if (
+        session["reasoning_effort"] is not None
+        and session["reasoning_effort"] not in REASONING_EFFORTS
+    ):
+        raise ValueError(
+            "reasoning_effort must be null, none, minimal, low, medium, high, xhigh, or max"
+        )
     disabled_tools = session.get("disabled_tools")
     if not isinstance(disabled_tools, list) or not all(
         isinstance(name, str) and name for name in disabled_tools
@@ -1914,6 +1940,37 @@ def load_session_file(path: Path) -> dict[str, Any]:
     return session
 
 
+def session_history_stats(messages: list[dict[str, Any]]) -> tuple[int, int, int]:
+    """Return message count, user-turn count, and textual payload characters."""
+    def count_characters(value: Any) -> int:
+        if isinstance(value, str):
+            return len(value)
+        if isinstance(value, list):
+            return sum(count_characters(item) for item in value)
+        if isinstance(value, dict):
+            return sum(count_characters(item) for item in value.values())
+        return 0
+
+    user_turns = sum(message.get("role") == "user" for message in messages)
+    character_count = sum(
+        count_characters(message.get(field))
+        for message in messages
+        for field in ("content", "reasoning", "reasoning_content", "tool_calls")
+    )
+    return len(messages), user_turns, character_count
+
+
+def print_session_loaded(path: Path, messages: list[dict[str, Any]]) -> None:
+    message_count, user_turns, character_count = session_history_stats(messages)
+    turn_label = "turn" if user_turns == 1 else "turns"
+    message_label = "message" if message_count == 1 else "messages"
+    print(f"Session loaded: {path}")
+    print(
+        f"History: {user_turns:,} user {turn_label}, {message_count:,} {message_label}, "
+        f"{character_count:,} characters"
+    )
+
+
 def print_runtime_status(
     base_url: str,
     model: str,
@@ -1923,6 +1980,7 @@ def print_runtime_status(
     max_tokens: int | None,
     tool_confirmation: dict[str, str] | None = None,
     max_agent_steps: int = MAX_AGENT_STEPS,
+    reasoning_effort: str | None = None,
 ) -> None:
     max_tokens_status = str(max_tokens) if max_tokens is not None else "server default"
     print(color("Current status:", ANSI_BOLD_CYAN))
@@ -1930,6 +1988,7 @@ def print_runtime_status(
     print(color("Endpoint:", ANSI_CYAN) + f" {base_url}")
     print(color("Working directory:", ANSI_CYAN) + f" {Path.cwd()}")
     print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens_status}")
+    print(color("Reasoning effort:", ANSI_CYAN) + f" {reasoning_effort or 'default'}")
     print(color("Max agent steps:", ANSI_CYAN) + f" {max_agent_steps}")
     print(color("Default confirmation:", ANSI_CYAN) + f" {confirmation_status(confirmation_mode)}")
     if tool_confirmation:
@@ -1948,6 +2007,7 @@ def print_runtime_help(
     max_tokens: int | None,
     tool_confirmation: dict[str, str] | None = None,
     max_agent_steps: int = MAX_AGENT_STEPS,
+    reasoning_effort: str | None = None,
 ) -> None:
     rows = (
         ("/help", "Show this help"),
@@ -1969,6 +2029,8 @@ def print_runtime_help(
         ("/reasoning", "Show reasoning display status"),
         ("/reasoning on", "Display model reasoning"),
         ("/reasoning off", "Hide model reasoning"),
+        ("/reasoningeffort", "Show the reasoning effort override"),
+        ("/reasoningeffort EFFORT", "Set default|none|minimal|low|medium|high|xhigh|max"),
         ("/verbose", "Show verbose display status"),
         ("/verbose on", "Expand arguments and show result contents"),
         ("/verbose off", "Use compact tool displays"),
@@ -1982,7 +2044,7 @@ def print_runtime_help(
     print()
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
-        tool_confirmation, max_agent_steps,
+        tool_confirmation, max_agent_steps, reasoning_effort,
     )
     print()
 
@@ -2035,6 +2097,7 @@ def compact_session(
     temperature: float,
     max_tokens: int | None,
     request_timeout: int,
+    reasoning_effort: str | None = None,
 ) -> tuple[str, dict[str, int] | None]:
     """Summarize the complete conversation without changing it on failure."""
     summary_request = [
@@ -2059,6 +2122,7 @@ def compact_session(
         temperature=temperature,
         max_tokens=max_tokens,
         request_timeout=request_timeout,
+        reasoning_effort=reasoning_effort,
     )
     try:
         choice = response["choices"][0]
@@ -2083,12 +2147,31 @@ def run_agent(
     no_color: bool = False,
     tool_confirmation: dict[str, str] | None = None,
     max_agent_steps: int = MAX_AGENT_STEPS,
+    load_session: Path | None = None,
+    reasoning_effort: str | None = None,
 ) -> None:
     global MAX_TOOL_RESULT_CHARS
 
+    session = None
+    loaded_session_path = None
+    if load_session is not None:
+        loaded_session_path = load_session.resolve()
+        session = load_session_file(load_session)
+        os.chdir(session["workdir"])
+        temperature = float(session["temperature"])
+        max_tokens = session["max_tokens"]
+        reasoning_effort = session["reasoning_effort"]
+        max_agent_steps = session["max_agent_steps"]
+        confirmation_mode = session["confirmation_mode"]
+        tool_confirmation = session["tool_confirmation"]
+        no_color = session["no_color"]
+        request_timeout = session["request_timeout"]
+        MAX_TOOL_RESULT_CHARS = session["max_tool_result_chars"]
+        configure_colors(disabled=no_color)
+
     base_url = normalize_base_url(base_url)
-    show_reasoning = False
-    verbose = False
+    show_reasoning = session["show_reasoning"] if session is not None else False
+    verbose = session["verbose"] if session is not None else False
     print(color("***\nWelcome to KoboldCpp Agent", ANSI_BOLD_CYAN))
     print(f"Connecting to {base_url}, please wait...")
     print(color("***", ANSI_BOLD_CYAN) + "\n")
@@ -2104,7 +2187,7 @@ def run_agent(
     else:
         model = model or (models[0] if models else "local-model")
 
-    disabled_tools: set[str] = set()
+    disabled_tools = set(session["disabled_tools"]) if session is not None else set()
     tool_confirmation = dict(tool_confirmation or {})
     all_tools = list(TOOLS)
     available_tools = list(TOOLS)
@@ -2137,15 +2220,18 @@ def run_agent(
 
     refresh_mcp_tools()
 
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt(disabled_tools)}
-    ]
+    messages: list[dict[str, Any]] = (
+        session["messages"] if session is not None else
+        [{"role": "system", "content": system_prompt(disabled_tools)}]
+    )
     last_usage: dict[str, int] | None = None
-    pending_interruption = False
+    pending_interruption = session["pending_interruption"] if session is not None else False
 
+    if loaded_session_path is not None:
+        print_session_loaded(loaded_session_path, messages)
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
-        tool_confirmation, max_agent_steps,
+        tool_confirmation, max_agent_steps, reasoning_effort,
     )
     print("\nKoboldCpp Agent has full shell access, exercise caution when approving commands.")
     print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
@@ -2168,7 +2254,7 @@ def run_agent(
         if command == "/help":
             print_runtime_help(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
-                max_tokens, tool_confirmation, max_agent_steps,
+                max_tokens, tool_confirmation, max_agent_steps, reasoning_effort,
             )
             continue
         if command == "/maxsteps":
@@ -2194,6 +2280,7 @@ def run_agent(
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    reasoning_effort=reasoning_effort,
                     max_agent_steps=max_agent_steps,
                     disabled_tools=disabled_tools,
                     confirmation_mode=confirmation_mode,
@@ -2209,7 +2296,7 @@ def run_agent(
             except (OSError, TypeError, ValueError) as exc:
                 print(f"Cannot save session: {exc}\n")
                 continue
-            print(f"Session saved: {path.resolve()}\n")
+            print(f"\nSession saved: {path.resolve()}\n")
             continue
         if command == "/load":
             try:
@@ -2224,6 +2311,7 @@ def run_agent(
             last_usage = None
             temperature = float(session["temperature"])
             max_tokens = session["max_tokens"]
+            reasoning_effort = session["reasoning_effort"]
             max_agent_steps = session["max_agent_steps"]
             disabled_tools.clear()
             disabled_tools.update(session["disabled_tools"])
@@ -2237,10 +2325,11 @@ def run_agent(
             MAX_TOOL_RESULT_CHARS = session["max_tool_result_chars"]
             pending_interruption = session["pending_interruption"]
             refresh_mcp_tools()
-            print(f"Session loaded: {loaded_path}")
+            print()
+            print_session_loaded(loaded_path, messages)
             print_runtime_status(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
-                max_tokens, tool_confirmation, max_agent_steps,
+                max_tokens, tool_confirmation, max_agent_steps, reasoning_effort,
             )
             print()
             continue
@@ -2297,7 +2386,7 @@ def run_agent(
                 with Throbber("Summarizing session"):
                     summary, _ = compact_session(
                         messages, base_url, api_key, model, temperature,
-                        max_tokens, request_timeout,
+                        max_tokens, request_timeout, reasoning_effort,
                     )
             except (EndpointUnavailableError, APIResponseError) as exc:
                 print(f"Compaction failed: {exc}. Conversation unchanged.\n")
@@ -2373,6 +2462,22 @@ def run_agent(
             else:
                 print("Usage: /reasoning [on|off]\n")
             continue
+        if command == "/reasoningeffort":
+            setting = command_arg.lower()
+            if not setting:
+                print(f"Reasoning effort: {reasoning_effort or 'default'}.\n")
+            elif setting == "default":
+                reasoning_effort = None
+                print("Reasoning effort reset to default (parameter omitted).\n")
+            elif setting in REASONING_EFFORTS:
+                reasoning_effort = setting
+                print(f"Reasoning effort set to {reasoning_effort}.\n")
+            else:
+                print(
+                    "Usage: /reasoningeffort "
+                    "[default|none|minimal|low|medium|high|xhigh|max]\n"
+                )
+            continue
         if command == "/verbose":
             setting = command_arg.lower()
             if not setting:
@@ -2431,6 +2536,7 @@ def run_agent(
                     temperature=temperature,
                     max_tokens=max_tokens,
                     request_timeout=request_timeout,
+                    reasoning_effort=reasoning_effort,
                     cancellation=cancellation,
                 )
                 response = run_interruptible_request(
@@ -2561,7 +2667,7 @@ def run_agent(
                                             reviewed_safe = review_tool_call(
                                                 messages, available_tools, call_id, name,
                                                 base_url, api_key, model, max_tokens,
-                                                request_timeout,
+                                                request_timeout, reasoning_effort,
                                             )
                                     except Exception as exc:
                                         print(f"Automatic review unavailable: {exc}")
@@ -2600,7 +2706,7 @@ def run_agent(
                                     elif name == "view_image":
                                         result = tool_view_image(
                                             args, base_url, api_key, model,
-                                            max_tokens, request_timeout,
+                                            max_tokens, request_timeout, reasoning_effort,
                                         )
                                     else:
                                         result = TOOL_IMPL[name](args)
@@ -2650,6 +2756,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         metavar="PATH",
         help="Set the initial working directory",
+    )
+    parser.add_argument(
+        "--load-session",
+        type=load_session_path,
+        default=None,
+        metavar="FILE",
+        help="Load conversation and runtime settings from a KoboldCpp Agent JSON save file",
     )
     parser.add_argument(
         "--temperature",
@@ -2770,6 +2883,7 @@ def main() -> None:
             max_agent_steps=args.max_agent_steps,
             request_timeout=args.request_timeout,
             no_color=args.no_color,
+            load_session=args.load_session,
         )
     except KeyboardInterrupt:
         print("\nExiting.")

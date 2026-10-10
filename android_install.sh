@@ -57,6 +57,26 @@ require_koboldcpp_dir() {
     fi
 }
 
+launch_model() {
+    local model="$1"
+    local context_size="${2:-}"
+
+    if [ -z "$context_size" ] && [ -t 0 ]; then
+        read -r -p "Enter desired context size [8192]: " context_size
+    fi
+    context_size="${context_size:-8192}"
+
+    if ! [[ "$context_size" =~ ^[0-9]+$ ]] || [ "$context_size" -lt 256 ] || [ "$context_size" -gt 524288 ]; then
+        echo "Error: Context size must be an integer between 256 and 524288."
+        exit 1
+    fi
+
+    context_size=$((10#$context_size))
+    echo "[*] Launching with context size $context_size..."
+    python koboldcpp.py --contextsize "$context_size" --model "$model"
+}
+
+CONTEXT_SIZE_ARG="${2:-}"
 FORCE_REBUILD=false
 
 # handle user choice
@@ -85,14 +105,14 @@ elif [ "$choice" = "4" ]; then
     SELECTED_MODEL="${MODEL_FILES[$selected_index]}"
     echo "Now launching with model $SELECTED_MODEL"
     cd "$KOBOLDCPP_DIR"
-    python koboldcpp.py --model "$SELECTED_MODEL"
+    launch_model "$SELECTED_MODEL" "$CONTEXT_SIZE_ARG"
     exit 0
 elif [ "$choice" = "3" ]; then
     require_koboldcpp_dir
     read -r -p "Please input FULL URL of model you wish to download and run: " SELECTED_MODEL
     echo "Starting download of model $SELECTED_MODEL"
     cd "$KOBOLDCPP_DIR"
-    python koboldcpp.py --model "$SELECTED_MODEL"
+    launch_model "$SELECTED_MODEL" "$CONTEXT_SIZE_ARG"
     exit 0
 elif [ "$choice" = "5" ]; then
     echo "[*] Rebuild existing KoboldCPP installation..."
@@ -153,7 +173,7 @@ echo "==="
 echo "[*] Your KoboldCPP Installation is Complete!"
 if [ "$INSTALL_MODEL" = true ]; then
     echo "[*] Downloading Gemma3-1B, a small GGUF model..."
-    python koboldcpp.py --model https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf
+    launch_model "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf" "$CONTEXT_SIZE_ARG"
 else
     echo "To use it, please obtain a GGUF model, then run it with the command 'python koboldcpp.py --model (your_gguf)' and then open a web browser to http://localhost:5001"
 fi

@@ -9236,7 +9236,7 @@ def show_gui():
 
     admin_var = ctk.IntVar(value=0)
     agent_var = ctk.IntVar(value=1 if args.agent else 0)
-    agent_workdir_var = ctk.StringVar(value=args.agentworkdir)
+    agent_load_var = ctk.StringVar(value=args.agentload)
     admin_dir_var = ctk.StringVar()
     baseconfig_var = ctk.StringVar()
     admin_password_var = ctk.StringVar()
@@ -10273,7 +10273,7 @@ def show_gui():
 
     agent_tab = tabcontent["Agent"]
     makecheckbox(agent_tab, "Launch KoboldCpp Agent", agent_var, 1, 0, tooltiptxt="Open the local tool-using agent in a new terminal after the KoboldCpp API is ready.")
-    makefileentry(agent_tab, "Agent Working Directory:", "Select the agent's initial working directory", agent_workdir_var, 3, width=280, dialog_type=2, tooltiptxt="Set the initial working directory used by the agent's shell and file tools.")
+    makefileentry(agent_tab, "Load Agent Session:", "Select a KoboldCpp Agent JSON save file", agent_load_var, 3, width=280, filetypes=[("JSON save file", "*.json")], tooltiptxt="Load the agent's conversation, working directory, and runtime settings from a JSON save file.")
 
     admin_tab = tabcontent["Admin"]
     def toggleadmin(a,b,c):
@@ -10652,7 +10652,7 @@ def show_gui():
 
         args.admin = (admin_var.get()==1 and not args.cli)
         args.agent = agent_var.get()==1
-        args.agentworkdir = agent_workdir_var.get()
+        args.agentload = agent_load_var.get()
         args.admindir = admin_dir_var.get()
         args.adminpassword = admin_password_var.get()
         args.singleinstance = (singleinstance_var.get()==1)
@@ -10968,7 +10968,7 @@ def show_gui():
 
         admin_var.set(mydict["admin"] if ("admin" in mydict) else 0)
         agent_var.set(mydict["agent"] if ("agent" in mydict) else 0)
-        agent_workdir_var.set(mydict["agentworkdir"] if ("agentworkdir" in mydict and mydict["agentworkdir"]) else "")
+        agent_load_var.set(mydict["agentload"] if ("agentload" in mydict and mydict["agentload"]) else "")
         router_mode_var.set(mydict["routermode"] if ("routermode" in mydict) else 0)
         autoswap_mode_var.set(mydict["autoswapmode"] if ("autoswapmode" in mydict) else 0)
         autoswap_threshold_var.set(mydict["autoswapthreshold"] if ("autoswapthreshold" in mydict) else default_autoswap_threshold)
@@ -11930,7 +11930,7 @@ def get_kobold_agent_path():
     return os.path.join(base_path, "kcpp_agent.py")
 
 
-def run_bundled_kobold_agent(base_url=None, api_key=None, workdir=None):
+def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None):
     """Run the bundled agent script inside a frozen KoboldCpp process."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
@@ -11945,14 +11945,14 @@ def run_bundled_kobold_agent(base_url=None, api_key=None, workdir=None):
             sys.argv.extend(["--base-url", base_url])
         if api_key:
             sys.argv.extend(["--api-key", api_key])
-        if workdir:
-            sys.argv.extend(["--workdir", workdir])
+        if load_session:
+            sys.argv.extend(["--load-session", load_session])
         kcpp_agent.main()
     finally:
         sys.argv = old_argv
 
 
-def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=False, workdir=None):
+def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=False, load_session=None):
     """Run the agent in a new or existing terminal, using the bundled runner when frozen."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
@@ -11966,8 +11966,8 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
         command.extend(["--agent-base-url" if is_frozen else "--base-url", base_url])
     if api_key:
         command.extend(["--agent-api-key" if is_frozen else "--api-key", api_key])
-    if workdir:
-        command.extend(["--agentworkdir" if is_frozen else "--workdir", workdir])
+    if load_session:
+        command.extend(["--agentload" if is_frozen else "--load-session", load_session])
 
     try:
         if same_terminal:
@@ -12218,12 +12218,12 @@ def main(launch_args, default_args):
     args = launch_args #note: these are NOT shared with the child processes!
 
     if args.run_bundled_agent:
-        run_bundled_kobold_agent(args.agent_base_url, args.agent_api_key, args.agentworkdir)
+        run_bundled_kobold_agent(args.agent_base_url, args.agent_api_key, args.agentload)
         return
 
-    standalone_agent_args = cli_arg_overrides and cli_arg_overrides <= {"agent", "agentworkdir"}
+    standalone_agent_args = cli_arg_overrides and cli_arg_overrides <= {"agent", "agentload"}
     if args.agent and (len(sys.argv) == 2 or standalone_agent_args):
-        launch_kobold_agent_terminal(workdir=args.agentworkdir)
+        launch_kobold_agent_terminal(load_session=args.agentload)
         return
 
     if (args.version) and len(sys.argv) <= 2:
@@ -13709,15 +13709,15 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 if args.cli:
                     if args.mcpfile:
                         time.sleep(2)
-                    success = launch_kobold_agent_terminal(agent_base_url, args.password, same_terminal=True, workdir=args.agentworkdir)
+                    success = launch_kobold_agent_terminal(agent_base_url, args.password, same_terminal=True, load_session=args.agentload)
                     raise SystemExit(0 if success else 1)
                 if args.mcpfile:
                     agent_timer = threading.Timer(
-                        2, launch_kobold_agent_terminal, args=(agent_base_url, args.password), kwargs={"workdir": args.agentworkdir}
+                        2, launch_kobold_agent_terminal, args=(agent_base_url, args.password), kwargs={"load_session": args.agentload}
                     )
                     agent_timer.start()
                     return True
-                return launch_kobold_agent_terminal(agent_base_url, args.password, workdir=args.agentworkdir)
+                return launch_kobold_agent_terminal(agent_base_url, args.password, load_session=args.agentload)
         asyncio.run(RunServerMultiThreaded(args.host, args.port, KcppServerRequestHandler, on_server_ready))
     else:
         # Flush stdout for previous win32 issue so the client can see output.
@@ -13762,7 +13762,7 @@ if __name__ == '__main__':
     #more advanced params
     advparser = parser.add_argument_group('Advanced Commands')
     advparser.add_argument("--agent", help="Launches the simple KoboldCpp Agent in a new terminal window, or the current terminal with --cli.", action='store_true')
-    advparser.add_argument("--agentworkdir", metavar=('[directory]'), help="Set the initial working directory for the KoboldCpp Agent.", default="")
+    advparser.add_argument("--agentload", metavar=('[filename]'), help="Load a KoboldCpp Agent JSON save file when launching the agent.", default="")
     advparser.add_argument("--analyze", metavar=('[filename]'), help="Reads the metadata, weight types and tensor names in any GGUF or safetensors file.", default="")
     advparser.add_argument("--autofit","--fit","-fit", help="Forces autofit, which attempts to fit the model in the best possible way. Overrides everything else.", action='store_true')
     advparser.add_argument("--autofitpadding", metavar=('[padding in MB]'), help="How much spare allowance in MB should autofit reserve? If it's too little, the load might fail.", type=int, default=default_autofit_padding)
