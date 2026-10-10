@@ -223,6 +223,36 @@ def input_prompt(text: str) -> str:
     return label + " "
 
 
+def drain_terminal_input() -> None:
+    """Best-effort discard of queued terminal input before a new prompt.
+
+    This leaves redirected input alone. It cannot discard input already buffered
+    by a Python reader or input that arrives after the flush.
+    """
+    try:
+        if not sys.stdin.isatty():
+            return
+        fd = sys.stdin.fileno()
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            import msvcrt
+
+            flush_input = ctypes.windll.kernel32.FlushConsoleInputBuffer
+            flush_input.argtypes = [wintypes.HANDLE]
+            flush_input.restype = wintypes.BOOL
+            flush_input(msvcrt.get_osfhandle(fd))
+        else:
+            import termios
+
+            try:
+                termios.tcflush(fd, termios.TCIFLUSH)
+            except termios.error:
+                pass
+    except (AttributeError, ImportError, OSError, ValueError):
+        pass  # Unsupported terminal controls must not prevent prompting.
+
+
 def toggle_status(enabled: bool) -> str:
     return color("ON" if enabled else "OFF", ANSI_GREEN if enabled else ANSI_YELLOW)
 
@@ -850,6 +880,7 @@ def tool_ask_user(args: dict[str, Any]) -> str:
         raise ValueError("question must be a non-empty string")
     print("\n" + color("Agent asks:", ANSI_CYAN) + f" {question.strip()}")
     try:
+        drain_terminal_input()
         answer = input(input_prompt("Your answer>"))
     except (EOFError, KeyboardInterrupt):
         print()
@@ -1162,6 +1193,7 @@ def tool_arguments_preview(
 
 def read_tool_approval(prompt: str) -> str:
     """Read a yes/no line, but let Escape interrupt without waiting for Enter."""
+    drain_terminal_input()
     if not (stream_is_interactive(sys.stdin) and stream_is_interactive(sys.stdout)):
         return input(prompt)
 
@@ -1709,6 +1741,7 @@ def recover_connection(
         print("  [W] Open connection wizard")
         print("  [C] Cancel")
         try:
+            drain_terminal_input()
             answer = input("Choose [r/w/c]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
@@ -1737,6 +1770,7 @@ def prompt_for_connection(
     print("\nConnect to a model endpoint. Press Enter to accept a default, or type /cancel.")
     try:
         while True:
+            drain_terminal_input()
             requested_url = input(f"Endpoint URL [{current_url}]: ").strip()
             if requested_url.lower() == "/cancel":
                 print("Connection unchanged.\n")
@@ -1748,6 +1782,7 @@ def prompt_for_connection(
                 print(f"Invalid endpoint: {exc}")
 
         key_status = "set" if current_key else "not set"
+        drain_terminal_input()
         requested_key = getpass.getpass(f"API key [{key_status}; Enter to keep]: ")
         if requested_key.strip().lower() == "/cancel":
             print("Connection unchanged.\n")
@@ -1767,6 +1802,7 @@ def prompt_for_connection(
         else:
             print("No model names available. Enter a model name manually if needed.")
             default_model = current_model or "local-model"
+        drain_terminal_input()
         requested_model = input(f"Model [{default_model}]: ").strip()
         if requested_model.lower() == "/cancel":
             print("Connection unchanged.\n")
@@ -2314,6 +2350,7 @@ def run_agent(
 
     while True:
         try:
+            drain_terminal_input()
             user_text = input(input_prompt("User>")).strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
