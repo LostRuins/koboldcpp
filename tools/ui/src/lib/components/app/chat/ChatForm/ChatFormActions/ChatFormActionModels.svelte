@@ -56,8 +56,8 @@
 				modelsStore.selectedModelName = conversationModel;
 				modelsStore.selectModelByName(conversationModel);
 			} else {
-				modelsStore.selectedModelId = null;
-				modelsStore.selectedModelName = conversationModel;
+				modelsStore.selectedModelName = null;
+				modelsStore.clearSelection();
 			}
 
 			lastSyncedConversationModel = conversationModel;
@@ -116,7 +116,21 @@
 	});
 
 	$effect(() => {
-		isSelectedModelInCache = !isRouter || !!conversationModel || !!selectedModelId();
+		if (!isRouter) {
+			isSelectedModelInCache = true;
+		} else if (conversationModel) {
+			isSelectedModelInCache = modelsStore.models.some(
+				(option) => option.model === conversationModel
+			);
+		} else {
+			const currentModelId = modelsStore.selectedModelId;
+
+			if (!currentModelId) {
+				isSelectedModelInCache = false;
+			} else {
+				isSelectedModelInCache = modelsStore.models.some((option) => option.id === currentModelId);
+			}
+		}
 	});
 
 	$effect(() => {

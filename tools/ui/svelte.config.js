@@ -18,10 +18,9 @@ const config = {
 			strict: true
 		}),
 		output: {
-			bundleStrategy: 'inline'
+			bundleStrategy: 'single'
 		},
 		paths: {
-			base: '/lcpp',
 			relative: true
 		},
 		router: { type: 'hash' }

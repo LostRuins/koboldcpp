@@ -581,11 +581,8 @@ export class ChatService {
 						done = true;
 						value = undefined;
 					}
-					if (done)
-					{
-						streamFinished = true;
-						break;
-					}
+
+					if (done) break;
 
 					if (abortSignal?.aborted) break;
 

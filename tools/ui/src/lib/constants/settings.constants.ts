@@ -118,7 +118,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
+				defaultValue: false,
 				help: 'Enable "Continue" button for assistant messages, including reasoning models.',
 				isExperimental: true,
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
