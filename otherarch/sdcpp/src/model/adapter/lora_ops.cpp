@@ -11,7 +11,9 @@ ggml_tensor* ggml_ext_merge_lora(ggml_context* ctx,
                                  ggml_tensor* lora_mid) {
     ggml_tensor* updown;
     // flat lora tensors to multiply it
-    int64_t lora_up_rows  = lora_up->ne[ggml_n_dims(lora_up) - 1];
+    // ggml_n_dims drops the output dimension when a linear layer has one output.
+    int lora_up_n_dims    = ggml_n_dims(lora_up);
+    int64_t lora_up_rows  = lora_up_n_dims == 1 ? 1 : lora_up->ne[lora_up_n_dims - 1];
     lora_up               = ggml_reshape_2d(ctx, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
     auto lora_down_n_dims = ggml_n_dims(lora_down);
     // assume n_dims should always be a multiple of 2 (otherwise rank 1 doesn't work)

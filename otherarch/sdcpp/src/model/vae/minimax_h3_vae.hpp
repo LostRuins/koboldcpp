@@ -228,11 +228,12 @@ namespace MiniMaxH3VAE {
         return ggml_reshape_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2] * x->ne[3]);
     }
 
-    static ggml_tensor* apply_partial_rope(ggml_context* ctx,
+    static ggml_tensor* apply_partial_rope(GGMLRunnerContext* runner_ctx,
                                            ggml_tensor* x,
                                            ggml_tensor* pe) {
+        auto ctx        = runner_ctx->ggml_ctx;
         int64_t rot_dim = pe->ne[2] * 2;
-        auto rotated    = Rope::apply_rope(ctx,
+        auto rotated    = Rope::apply_rope(runner_ctx,
                                            ggml_ext_slice(ctx, x, 0, 0, rot_dim),
                                            pe,
                                            false);
@@ -289,8 +290,8 @@ namespace MiniMaxH3VAE {
                                                   batch_size);
             q                   = ggml_rms_norm(ctx->ggml_ctx, q, 1e-5f);
             k                   = ggml_rms_norm(ctx->ggml_ctx, k, 1e-5f);
-            q                   = apply_partial_rope(ctx->ggml_ctx, q, pe);
-            k                   = apply_partial_rope(ctx->ggml_ctx, k, pe);
+            q                   = apply_partial_rope(ctx, q, pe);
+            k                   = apply_partial_rope(ctx, k, pe);
             auto out            = ggml_ext_attention_ext(ctx,
                                                          q,
                                                          k,

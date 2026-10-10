@@ -176,11 +176,20 @@ public:
         int scale_factor = 8;
         if (version == VERSION_LTXAV) {
             scale_factor = 32;
-        } else if (version == VERSION_WAN2_2_TI2V || version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
+        } else if (version == VERSION_WAN2_2_TI2V ||
+                   version == VERSION_QWEN_IMAGE_2_1 ||
+                   sd_version_is_hunyuan_video(version) ||
+                   sd_version_is_mage_flow(version) ||
+                   sd_version_is_minimax_h3(version)) {
             scale_factor = 16;
         } else if (sd_version_uses_flux2_vae(version)) {
             scale_factor = 16;
-        } else if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version) || sd_version_is_z_image_l2p(version)) {
+        } else if (version == VERSION_CHROMA_RADIANCE ||
+                   version == VERSION_HIDREAM_O1 ||
+                   sd_version_is_minit2i(version) ||
+                   sd_version_is_sensenova_u1(version) ||
+                   sd_version_is_z_image_l2p(version) ||
+                   version == VERSION_IRIS) {
             scale_factor = 1;
         }
         return scale_factor;

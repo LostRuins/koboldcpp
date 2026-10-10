@@ -65,6 +65,7 @@ enum SDVersion {
     VERSION_PIXART,
     VERSION_MING_IMAGE,
     VERSION_Z_IMAGE_L2P,
+    VERSION_IRIS,
     VERSION_COUNT,
 };
 
@@ -334,7 +335,8 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_krea2(version) ||
         sd_version_is_mage_flow(version) ||
         sd_version_is_sensenova_u1(version) ||
-        sd_version_is_pixart(version)) {
+        sd_version_is_pixart(version) ||
+        version == VERSION_IRIS) {
         return true;
     }
     return false;
