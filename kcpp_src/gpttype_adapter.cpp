@@ -2649,6 +2649,7 @@ static bool kcpp_parse_attached_media_placeholder(
     size_t pos,
     int image_count,
     int audio_count,
+    const std::vector<media_object> & objects,
     int & media_index,
     size_t & placeholder_len)
 {
@@ -2695,7 +2696,7 @@ static bool kcpp_parse_attached_media_placeholder(
         {
             candidate = image_count + number - 1;
         }
-        else if(number <= (int) media_objects.size() && media_objects[number - 1].is_audio)
+        else if(number <= (int) objects.size() && objects[number - 1].is_audio)
         {
             candidate = number - 1;
         }
@@ -2706,13 +2707,13 @@ static bool kcpp_parse_attached_media_placeholder(
         {
             candidate = number - 1;
         }
-        else if(number <= (int) media_objects.size() && !media_objects[number - 1].is_audio)
+        else if(number <= (int) objects.size() && !objects[number - 1].is_audio)
         {
             candidate = number - 1;
         }
     }
 
-    if(candidate < 0 || candidate >= (int) media_objects.size())
+    if(candidate < 0 || candidate >= (int) objects.size())
     {
         return false;
     }
@@ -2721,14 +2722,18 @@ static bool kcpp_parse_attached_media_placeholder(
     return true;
 }
 
-static void kcpp_append_media_placeholder_tokens(std::vector<int> & tokens, int media_index)
+static void kcpp_append_media_placeholder_tokens(
+    std::vector<int> & tokens,
+    int media_index,
+    const std::vector<int> & token_counts,
+    int media_identifier)
 {
-    if(media_index < 0 || media_index >= (int) media_object_token_counts.size())
+    if(media_index < 0 || media_index >= (int) token_counts.size())
     {
         return;
     }
-    const int token_count = media_object_token_counts[media_index];
-    const int media_token = kcpp_media_token_for_index(media_index);
+    const int token_count = token_counts[media_index];
+    const int media_token = media_identifier - (media_index * 2);
     for(int i = 0; i < token_count; ++i)
     {
         tokens.push_back(media_token);
@@ -2741,7 +2746,10 @@ static bool kcpp_tokenize_prompt_with_inline_media(
     FileFormat file_format,
     bool add_bos,
     int image_count,
-    int audio_count)
+    int audio_count,
+    const std::vector<media_object> & objects,
+    const std::vector<int> & token_counts,
+    int media_identifier)
 {
     output_tokens.clear();
     bool inserted_media = false;
@@ -2764,7 +2772,7 @@ static bool kcpp_tokenize_prompt_with_inline_media(
     {
         int media_index = -1;
         size_t placeholder_len = 0;
-        if(kcpp_parse_attached_media_placeholder(prompt, pos, image_count, audio_count, media_index, placeholder_len))
+        if(kcpp_parse_attached_media_placeholder(prompt, pos, image_count, audio_count, objects, media_index, placeholder_len))
         {
             append_text(text_start, pos);
             if(add_bos && !emitted_anything)
@@ -2773,7 +2781,7 @@ static bool kcpp_tokenize_prompt_with_inline_media(
                 TokenizeString("", bos, file_format, true);
                 output_tokens.insert(output_tokens.end(), bos.begin(), bos.end());
             }
-            kcpp_append_media_placeholder_tokens(output_tokens, media_index);
+            kcpp_append_media_placeholder_tokens(output_tokens, media_index, token_counts, media_identifier);
             emitted_anything = true;
             inserted_media = true;
             pos += placeholder_len - 1;
@@ -2796,7 +2804,7 @@ static int kcpp_adjust_media_truncation_start(const std::vector<int> & tokens, i
         return offset;
     }
     const int token = tokens[offset];
-    if(kcpp_is_media_token(token) && tokens[offset - 1] == token)
+    if(kcpp_is_media_token(token))
     {
         while(offset < (int) tokens.size() && tokens[offset] == token)
         {
@@ -2813,6 +2821,22 @@ static bool kcpp_media_span_boundary_ok(const std::vector<int> & tokens, int pos
         return true;
     }
     return !(kcpp_is_media_token(tokens[pos]) && tokens[pos - 1] == tokens[pos]);
+}
+
+static void kcpp_free_media_objects(std::vector<media_object> & objects)
+{
+    for(auto & object : objects)
+    {
+        for(auto & chunk : object.mediachunks)
+        {
+            if(chunk.mtmd_chunk)
+            {
+                mtmd_input_chunk_free(static_cast<mtmd_input_chunk *>(chunk.mtmd_chunk));
+                chunk.mtmd_chunk = nullptr;
+            }
+        }
+        object.mediachunks.clear();
+    }
 }
 
 //given an old GGUF context and a new context that has some middle portion removed,
@@ -4346,6 +4370,7 @@ void AppendDedicatedMemoryAndNegativePrompt(std::vector<int> & embd_inp, const s
         if (embd_inp_mem_copy.size() > 0 && embd_inp_mem_copy.size() + n_predict + 4 > nctx)
         {
             int offset = embd_inp_mem_copy.size() - nctx + n_predict + 4;
+            offset = kcpp_adjust_media_truncation_start(embd_inp_mem_copy, offset);
             embd_inp_mem_copy = std::vector<int>(embd_inp_mem_copy.begin() + offset, embd_inp_mem_copy.end());
             //replace bos into front if exists
             if(bos.size()>0 && embd_inp_mem_copy.size()>0)
@@ -4360,6 +4385,7 @@ void AppendDedicatedMemoryAndNegativePrompt(std::vector<int> & embd_inp, const s
         if(totalsize > nctx)
         {
             int excess = totalsize - nctx;
+            excess = kcpp_adjust_media_truncation_start(embd_inp, excess);
             if (embd_inp.size() >= excess) {
                 embd_inp.erase(embd_inp.begin(), embd_inp.begin() + excess);
             } else {
@@ -4382,11 +4408,33 @@ void AppendDedicatedMemoryAndNegativePrompt(std::vector<int> & embd_inp, const s
 enum class BatchState
 {
     WAITING,
+    PREPARING,
     PREFILL,
     GENERATING,
     FINISHED,
     FAILED,
     ABORTED,
+};
+
+struct BatchMediaState
+{
+    std::vector<media_object> objects;
+    std::vector<int> token_counts;
+    std::vector<int> placeholder_tokens;
+    std::vector<int> intro_tokens;
+    std::vector<int> outro_tokens;
+    int image_count = 0;
+    int audio_count = 0;
+    int identifier = MEDIA_TOKEN_IDENTIFIER_A;
+
+    BatchMediaState() = default;
+    BatchMediaState(const BatchMediaState &) = delete;
+    BatchMediaState & operator=(const BatchMediaState &) = delete;
+
+    ~BatchMediaState()
+    {
+        kcpp_free_media_objects(objects);
+    }
 };
 
 struct BatchGenerateRequest
@@ -4436,6 +4484,7 @@ struct BatchGenerateRequest
     bool allow_eos_token = true;
     bool bypass_eos_token = false;
     bool render_special = false;
+    BatchMediaState media;
     std::vector<llama_token> prompt_tokens;
     int prompt_pos = 0;
     int n_past = 0;
@@ -4494,7 +4543,7 @@ static BatchGenerateRequest * batch_find_request_locked(int request_id)
 
 static bool batch_is_live_state(BatchState state)
 {
-    return state == BatchState::WAITING || state == BatchState::PREFILL || state == BatchState::GENERATING;
+    return state == BatchState::WAITING || state == BatchState::PREPARING || state == BatchState::PREFILL || state == BatchState::GENERATING;
 }
 
 static bool batch_has_live_locked()
@@ -4563,7 +4612,7 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(draft_ctx || guidance_ctx || inputs.images_len>0 || inputs.audio_len>0)
+    if(draft_ctx || guidance_ctx)
     {
         return false;
     }
@@ -4575,7 +4624,17 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(inputs.images_len > 0 || inputs.audio_len > 0 || inputs.guidance_scale != 1.0f)
+    if(inputs.guidance_scale != 1.0f)
+    {
+        return false;
+    }
+    if(inputs.images_len < 0 || inputs.audio_len < 0 || inputs.images_len > 2048 ||
+       inputs.audio_len > 2048 || inputs.images_len + inputs.audio_len > 2048)
+    {
+        return false;
+    }
+    if((inputs.images_len > 0 && (!mtmd_ctx || !vision_multimodal_supported)) ||
+       (inputs.audio_len > 0 && (!mtmd_ctx || !audio_multimodal_supported)))
     {
         return false;
     }
@@ -5104,6 +5163,10 @@ static void batch_prime_reasoning_sampler(
     const size_t start_pos = (size_t) (start_end + 1 - (int) start_tokens.size());
     for(size_t i = start_pos; i < prompt_tokens.size(); ++i)
     {
+        if(prompt_tokens[i] < 0)
+        {
+            continue;
+        }
         llama_sampler_accept(reasoning_sampler, prompt_tokens[i]);
         if(common_reasoning_budget_get_state(reasoning_sampler) == REASONING_BUDGET_FORCING)
         {
@@ -5205,7 +5268,10 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
             dry_breakers.size());
         for(llama_token token : req.prompt_tokens)
         {
-            llama_sampler_accept(dry_sampler, token);
+            if(token >= 0 && token < sampler_n_vocab)
+            {
+                llama_sampler_accept(dry_sampler, token);
+            }
         }
         llama_sampler_chain_add(chain, dry_sampler);
     }
@@ -5219,7 +5285,10 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
             req.presence_penalty);
         for(llama_token token : req.prompt_tokens)
         {
-            llama_sampler_accept(rep_pen_sampler, token);
+            if(token >= 0 && token < sampler_n_vocab)
+            {
+                llama_sampler_accept(rep_pen_sampler, token);
+            }
         }
         llama_sampler_chain_add(chain, rep_pen_sampler);
     };
@@ -5366,6 +5435,64 @@ static bool batch_output_hit_stop(const BatchGenerateRequest & req)
     return false;
 }
 
+static int batch_media_index_from_token(const BatchGenerateRequest & req, llama_token token)
+{
+    const int diff = req.media.identifier - token;
+    if(diff < 0 || (diff % 2) != 0)
+    {
+        return -1;
+    }
+    const int index = diff / 2;
+    return index < (int) req.media.objects.size() ? index : -1;
+}
+
+static int batch_add_token(common_batch & batch, llama_token token, llama_pos pos, llama_seq_id seq_id, bool output)
+{
+    const int index = batch.add(token, pos, seq_id, output);
+    if(use_mrope)
+    {
+        batch.tokens[index].pos = { pos, pos, pos, 0 };
+    }
+    return index;
+}
+
+static bool batch_prepare_request(BatchGenerateRequest & req);
+static bool batch_process_media(BatchGenerateRequest & req, bool & final_logits);
+
+static void batch_sample_request_locked(BatchGenerateRequest & req, int logits_index, bool completed_prefill, std::chrono::steady_clock::time_point decode_finish_time)
+{
+    if(completed_prefill && req.generation_start_time.time_since_epoch().count() == 0)
+    {
+        req.generation_start_time = decode_finish_time;
+        req.process_time = std::chrono::duration<float>(decode_finish_time - req.process_start_time).count();
+    }
+    llama_token sampled = llama_sampler_sample(req.sampler, llama_ctx_v4, logits_index);
+    req.completion_token_count++;
+    const std::vector<llama_token> eog_tokens = GetEogIDs(file_format,n_vocab);
+    bool is_eog = std::find(eog_tokens.begin(), eog_tokens.end(), sampled) != eog_tokens.end();
+    if(is_eog && !req.bypass_eos_token)
+    {
+        batch_finish_request_locked(req, stop_reason::EOS_TOKEN_HIT);
+        return;
+    }
+    std::string piece = FileFormatTokenizeID(sampled, file_format, req.render_special);
+    req.generated_pieces.push_back(piece);
+    req.output += piece;
+    if(batch_output_hit_stop(req))
+    {
+        batch_finish_request_locked(req, stop_reason::CUSTOM_STOPPER);
+        return;
+    }
+    if(req.max_length > 0 && req.completion_token_count >= req.max_length)
+    {
+        batch_finish_request_locked(req, stop_reason::OUT_OF_TOKENS);
+        return;
+    }
+    req.pending_token = sampled;
+    req.has_pending = true;
+    req.i_batch = -1;
+}
+
 static bool batch_claim_waiting_locked()
 {
     bool claimed = false;
@@ -5392,55 +5519,10 @@ static bool batch_claim_waiting_locked()
             continue;
         }
         req->slot = slot;
-        req->state = BatchState::PREFILL;
+        req->state = BatchState::PREPARING;
         batch_touched_since_legacy = true;
         req->start_time = std::chrono::steady_clock::now();
-
-        ApplyPromptFormatAdjustments(req->prompt_added_memory, req->prompt);
-        std::vector<llama_token> added_memory_tokens; //temporary buf before copying over
-
-        TokenizeString(req->prompt, req->prompt_tokens, file_format, add_bos_token);
-        if(req->prompt_tokens.empty())
-        {
-            TokenizeString("", req->prompt_tokens, file_format, add_bos_token);
-        }
-        if(req->prompt_added_memory!="")
-        {
-            TokenizeString(req->prompt_added_memory, added_memory_tokens, file_format, add_bos_token);
-        }
-
-        int n_ctx = req->max_context_length > 0 ? std::min(req->max_context_length, kcpp_data->n_ctx) : kcpp_data->n_ctx;
-        AppendDedicatedMemoryAndNegativePrompt(req->prompt_tokens, added_memory_tokens, std::vector<llama_token>(), req->max_length, n_ctx);
-
-        if(req->max_length > 0 && (int) req->prompt_tokens.size() + req->max_length > n_ctx)
-        {
-            int keep = std::max(1, n_ctx - req->max_length);
-            if((int) req->prompt_tokens.size() > keep)
-            {
-                req->prompt_tokens.erase(req->prompt_tokens.begin(), req->prompt_tokens.end() - keep);
-            }
-        }
-
-        if (debugmode==1 && !is_quiet)
-        {
-            std::string outstr = "";
-            printf("\n\n[Debug: Dump %zu Raw Input Tokens]\n",req->prompt_tokens.size());
-            outstr += get_tok_vec_str(req->prompt_tokens);
-            printf("%s\n", RemoveBell(outstr).c_str());
-        }
-
-        req->prompt_token_count = req->prompt_tokens.size();
-        req->sampler = batch_build_sampler(*req);
-        req->prompt_pos = 0;
-        req->n_past = 0;
-        req->has_pending = false;
-        req->i_batch = -1;
-        req->i_batch_is_prefill = false;
         llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), slot, -1, -1);
-        req->process_start_time = std::chrono::steady_clock::now();
-        req->generation_start_time = std::chrono::steady_clock::time_point();
-        req->init_time = std::chrono::duration<float>(req->process_start_time - req->start_time).count();
-        req->process_time = 0.0f;
         claimed = true;
     }
     return claimed;
@@ -5453,6 +5535,9 @@ static void batch_worker_loop()
     while(true)
     {
         std::vector<int> decode_ids;
+        std::vector<int> affected_ids;
+        BatchGenerateRequest * prepare_req = nullptr;
+        BatchGenerateRequest * media_req = nullptr;
         {
             std::unique_lock<std::mutex> lock(batch_mutex);
             batch_cv.wait_for(lock, std::chrono::milliseconds(5), [](){
@@ -5467,60 +5552,166 @@ static void batch_worker_loop()
                 continue;
             }
             batch_claim_waiting_locked();
-            batch.clear();
+
             for(auto & req_ptr : batch_requests)
             {
-                if(!req_ptr || !batch_is_live_state(req_ptr->state) || req_ptr->slot < 0 || batch.size() >= batch_cap)
+                if(req_ptr && batch_is_live_state(req_ptr->state) && req_ptr->abort_requested)
                 {
-                    continue;
-                }
-                BatchGenerateRequest & req = *req_ptr;
-                req.i_batch = -1;
-                req.i_batch_is_prefill = false;
-                if(req.abort_requested)
-                {
-                    batch_finish_request_locked(req, stop_reason::INVALID);
-                    continue;
-                }
-                if(req.state == BatchState::PREFILL)
-                {
-                    while(req.prompt_pos < (int) req.prompt_tokens.size() && batch.size() < batch_cap)
-                    {
-                        bool is_last = req.prompt_pos == (int) req.prompt_tokens.size() - 1;
-                        if(is_last)
-                        {
-                            req.i_batch = batch.size();
-                            req.i_batch_is_prefill = true;
-                        }
-                        batch.add(req.prompt_tokens[req.prompt_pos], req.n_past, req.slot, is_last);
-                        req.prompt_pos++;
-                        req.n_past++;
-                    }
-                    if(req.prompt_pos == (int) req.prompt_tokens.size())
-                    {
-                        req.state = BatchState::GENERATING;
-                    }
-                }
-                else if(req.state == BatchState::GENERATING && req.has_pending)
-                {
-                    req.i_batch = batch.size();
-                    req.i_batch_is_prefill = false;
-                    batch.add(req.pending_token, req.n_past, req.slot, true);
-                    req.n_past++;
-                    req.has_pending = false;
+                    batch_finish_request_locked(*req_ptr, stop_reason::INVALID);
                 }
             }
-            if(batch.size() == 0)
+            for(auto & req_ptr : batch_requests)
+            {
+                if(req_ptr && req_ptr->state == BatchState::PREPARING && req_ptr->slot >= 0)
+                {
+                    prepare_req = req_ptr.get();
+                    break;
+                }
+            }
+            if(!prepare_req)
+            {
+                for(auto & req_ptr : batch_requests)
+                {
+                    if(!req_ptr || req_ptr->state != BatchState::PREFILL || req_ptr->slot < 0 ||
+                       req_ptr->prompt_pos >= (int) req_ptr->prompt_tokens.size())
+                    {
+                        continue;
+                    }
+                    if(batch_media_index_from_token(*req_ptr, req_ptr->prompt_tokens[req_ptr->prompt_pos]) >= 0)
+                    {
+                        media_req = req_ptr.get();
+                        break;
+                    }
+                }
+            }
+            if(!prepare_req && !media_req)
+            {
+                batch.clear();
+                for(auto & req_ptr : batch_requests)
+                {
+                    if(req_ptr && batch_is_live_state(req_ptr->state))
+                    {
+                        req_ptr->i_batch = -1;
+                        req_ptr->i_batch_is_prefill = false;
+                    }
+                }
+                for(auto & req_ptr : batch_requests)
+                {
+                    if(!req_ptr || !batch_is_live_state(req_ptr->state) || req_ptr->slot < 0 || batch.size() >= batch_cap)
+                    {
+                        continue;
+                    }
+                    BatchGenerateRequest & req = *req_ptr;
+                    if(req.state == BatchState::PREFILL)
+                    {
+                        while(req.prompt_pos < (int) req.prompt_tokens.size() && batch.size() < batch_cap)
+                        {
+                            if(batch_media_index_from_token(req, req.prompt_tokens[req.prompt_pos]) >= 0)
+                            {
+                                break;
+                            }
+                            if(affected_ids.empty() || affected_ids.back() != req.id)
+                            {
+                                affected_ids.push_back(req.id);
+                            }
+                            bool is_last = req.prompt_pos == (int) req.prompt_tokens.size() - 1;
+                            if(is_last)
+                            {
+                                req.i_batch = batch.size();
+                                req.i_batch_is_prefill = true;
+                            }
+                            batch_add_token(batch, req.prompt_tokens[req.prompt_pos], req.n_past, req.slot, is_last);
+                            req.prompt_pos++;
+                            req.n_past++;
+                        }
+                        if(req.prompt_pos == (int) req.prompt_tokens.size())
+                        {
+                            req.state = BatchState::GENERATING;
+                        }
+                    }
+                    else if(req.state == BatchState::GENERATING && req.has_pending)
+                    {
+                        affected_ids.push_back(req.id);
+                        req.i_batch = batch.size();
+                        req.i_batch_is_prefill = false;
+                        batch_add_token(batch, req.pending_token, req.n_past, req.slot, true);
+                        req.n_past++;
+                        req.has_pending = false;
+                    }
+                }
+                for(auto & req_ptr : batch_requests)
+                {
+                    if(req_ptr && req_ptr->i_batch >= 0)
+                    {
+                        decode_ids.push_back(req_ptr->id);
+                    }
+                }
+            }
+        }
+
+        if(prepare_req)
+        {
+            const int request_id = prepare_req->id;
+            bool prepared = batch_prepare_request(*prepare_req);
+            std::lock_guard<std::mutex> lock(batch_mutex);
+            BatchGenerateRequest * req = batch_find_request_locked(request_id);
+            if(!req || req->state != BatchState::PREPARING)
             {
                 continue;
             }
-            for(auto & req_ptr : batch_requests)
+            if(req->abort_requested)
             {
-                if(req_ptr && req_ptr->i_batch >= 0)
+                batch_finish_request_locked(*req, stop_reason::INVALID);
+            }
+            else if(!prepared)
+            {
+                batch_finish_request_locked(*req, stop_reason::ERROR_ENCOUNTERED);
+            }
+            else
+            {
+                req->state = BatchState::PREFILL;
+            }
+            continue;
+        }
+
+        if(media_req)
+        {
+            const int request_id = media_req->id;
+            bool final_logits = false;
+            bool processed = batch_process_media(*media_req, final_logits);
+            auto decode_finish_time = std::chrono::steady_clock::now();
+            std::lock_guard<std::mutex> lock(batch_mutex);
+            BatchGenerateRequest * req = batch_find_request_locked(request_id);
+            if(!req || req->state != BatchState::PREFILL)
+            {
+                continue;
+            }
+            if(req->abort_requested)
+            {
+                batch_finish_request_locked(*req, stop_reason::INVALID);
+            }
+            else if(!processed)
+            {
+                batch_finish_request_locked(*req, stop_reason::ERROR_ENCOUNTERED);
+            }
+            else if(req->prompt_pos == (int) req->prompt_tokens.size())
+            {
+                req->state = BatchState::GENERATING;
+                if(!final_logits)
                 {
-                    decode_ids.push_back(req_ptr->id);
+                    batch_finish_request_locked(*req, stop_reason::ERROR_ENCOUNTERED);
+                }
+                else
+                {
+                    batch_sample_request_locked(*req, -1, true, decode_finish_time);
                 }
             }
+            continue;
+        }
+
+        if(batch.size() == 0)
+        {
+            continue;
         }
 
         int decode_status = llama_process(llama_ctx_v4, LLAMA_PROCESS_TYPE_DECODE, batch.get());
@@ -5529,7 +5720,7 @@ static void batch_worker_loop()
         std::lock_guard<std::mutex> lock(batch_mutex);
         if(decode_status != 0)
         {
-            for(int request_id : decode_ids)
+            for(int request_id : affected_ids)
             {
                 BatchGenerateRequest * req = batch_find_request_locked(request_id);
                 if(req && batch_is_live_state(req->state))
@@ -5540,8 +5731,6 @@ static void batch_worker_loop()
             continue;
         }
 
-        const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(llama_ctx_v4));
-        const std::vector<llama_token> eog_tokens = GetEogIDs(file_format,n_vocab);
         for(int request_id : decode_ids)
         {
             BatchGenerateRequest * req = batch_find_request_locked(request_id);
@@ -5549,35 +5738,7 @@ static void batch_worker_loop()
             {
                 continue;
             }
-            if(req->i_batch_is_prefill && req->generation_start_time.time_since_epoch().count() == 0)
-            {
-                req->generation_start_time = decode_finish_time;
-                req->process_time = std::chrono::duration<float>(decode_finish_time - req->process_start_time).count();
-            }
-            llama_token sampled = llama_sampler_sample(req->sampler, llama_ctx_v4, req->i_batch);
-            req->completion_token_count++;
-            bool is_eog = std::find(eog_tokens.begin(), eog_tokens.end(), sampled) != eog_tokens.end();
-            if(is_eog && !req->bypass_eos_token)
-            {
-                batch_finish_request_locked(*req, stop_reason::EOS_TOKEN_HIT);
-                continue;
-            }
-            std::string piece = FileFormatTokenizeID(sampled, file_format, req->render_special);
-            req->generated_pieces.push_back(piece);
-            req->output += piece;
-            if(batch_output_hit_stop(*req))
-            {
-                batch_finish_request_locked(*req, stop_reason::CUSTOM_STOPPER);
-                continue;
-            }
-            if(req->max_length > 0 && req->completion_token_count >= req->max_length)
-            {
-                batch_finish_request_locked(*req, stop_reason::OUT_OF_TOKENS);
-                continue;
-            }
-            req->pending_token = sampled;
-            req->has_pending = true;
-            req->i_batch = -1;
+            batch_sample_request_locked(*req, req->i_batch, req->i_batch_is_prefill, decode_finish_time);
         }
     }
 }
@@ -5615,6 +5776,28 @@ int gpttype_batch_generate_submit(const generation_inputs inputs)
     req->prompt = inputs.prompt ? inputs.prompt : "";
     req->prompt_added_memory = inputs.memory ? inputs.memory : "";
     req->grammar = inputs.grammar ? inputs.grammar : "";
+    for(int i = 0; i < inputs.images_len; ++i)
+    {
+        if(inputs.images && inputs.images[i] && inputs.images[i][0] != '\0')
+        {
+            media_object object;
+            object.b64data = inputs.images[i];
+            object.is_audio = false;
+            req->media.objects.push_back(std::move(object));
+            req->media.image_count++;
+        }
+    }
+    for(int i = 0; i < inputs.audio_len; ++i)
+    {
+        if(inputs.audio && inputs.audio[i] && inputs.audio[i][0] != '\0')
+        {
+            media_object object;
+            object.b64data = inputs.audio[i];
+            object.is_audio = true;
+            req->media.objects.push_back(std::move(object));
+            req->media.audio_count++;
+        }
+    }
     req->max_context_length = inputs.max_context_length;
     req->max_length = inputs.max_length;
     req->seed = inputs.seed;
@@ -6130,26 +6313,36 @@ static mtmd_bitmap * kcpp_mtmd_bitmap_init_image_from_buf(const unsigned char * 
     return bitmap;
 }
 
-//this function prepares the mtmd chunks for media. it's only needed when media changes
-static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_intro, const std::vector<int> & media_outro)
+static bool PrepareMediaEmbdsForObjects(
+    std::vector<media_object> & objects,
+    std::vector<int> & token_counts,
+    std::vector<int> & placeholder_tokens,
+    const int nctx,
+    const std::vector<int> & media_intro,
+    const std::vector<int> & media_outro,
+    const int media_identifier)
 {
-    if (mtmd_ctx)
+    if (!mtmd_ctx)
     {
-        int introsize = media_intro.size();
-        int outrosize = media_outro.size();
-        last_media_mem.clear();
-        media_object_token_counts.clear();
+        return false;
+    }
+    int introsize = media_intro.size();
+    int outrosize = media_outro.size();
+    token_counts.clear();
+    placeholder_tokens.clear();
+    bool success = true;
 
-        for(int i=0;i<media_objects.size();++i)
+        for(int i=0;i<objects.size();++i)
         {
-            std::string media_obj = media_objects[i].b64data;
+            std::string media_obj = objects[i].b64data;
             const std::vector<uint8_t> media_data_buffer = kcpp_base64_decode(media_obj);
-            mtmd::bitmap bitmap(media_objects[i].is_audio
+            mtmd::bitmap bitmap(objects[i].is_audio
                 ? mtmd_helper_bitmap_init_from_buf(mtmd_ctx, media_data_buffer.data(), media_data_buffer.size(), false, mtmd_helper_init_opt_default()).bitmap
                 : kcpp_mtmd_bitmap_init_image_from_buf(media_data_buffer.data(), media_data_buffer.size(), vision_max_res));
             if(!bitmap.ptr)
             {
-                media_object_token_counts.push_back(0);
+                token_counts.push_back(0);
+                success = false;
                 printf("\nError: MTMD media %d failed to load!",i);
                 continue;
             }
@@ -6165,8 +6358,8 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             int32_t tokenized = mtmd_tokenize(mtmd_ctx, chunks.ptr.get(), &inp_txt, bitmaps.data(), bitmaps.size());
             if(tokenized != 0)
             {
-                media_object_token_counts.push_back(0);
-                media_composite_image_signature = ""; //force invalidate
+                token_counts.push_back(0);
+                success = false;
                 printf("\nError: MTMD media %d failed to tokenize! (status %d)",i, tokenized);
                 continue;
             }
@@ -6198,11 +6391,20 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
                     continue;
                 }
                 media_chunk chunk;
-                chunk.is_audio = media_objects[i].is_audio;
+                chunk.is_audio = objects[i].is_audio;
                 chunk.mtmd_chunk = mtmd_input_chunk_copy(mtmdchunk);
                 chunk.clp_image_tokens = mtmd_input_chunk_get_n_pos(mtmdchunk);
+                if(!chunk.mtmd_chunk || chunk.clp_image_tokens <= 0)
+                {
+                    if(chunk.mtmd_chunk)
+                    {
+                        mtmd_input_chunk_free(static_cast<mtmd_input_chunk *>(chunk.mtmd_chunk));
+                    }
+                    success = false;
+                    continue;
+                }
                 mediatokensneeded += chunk.clp_image_tokens;
-                media_objects[i].mediachunks.push_back(chunk);
+                objects[i].mediachunks.push_back(chunk);
                 if(mtmd_input_chunk_get_type(mtmdchunk) != MTMD_INPUT_CHUNK_TYPE_TEXT)
                 {
                     seen_media_embedding = true;
@@ -6210,17 +6412,17 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             }
             if(fallback_start_seq.size() > 0)
             {
-                media_objects[i].chunk_start_seq.insert(media_objects[i].chunk_start_seq.end(), fallback_start_seq.begin(), fallback_start_seq.end());
+                objects[i].chunk_start_seq.insert(objects[i].chunk_start_seq.end(), fallback_start_seq.begin(), fallback_start_seq.end());
             }
             if(fallback_end_seq.size() > 0)
             {
-                media_objects[i].chunk_end_seq.insert(media_objects[i].chunk_end_seq.begin(), fallback_end_seq.begin(), fallback_end_seq.end());
+                objects[i].chunk_end_seq.insert(objects[i].chunk_end_seq.begin(), fallback_end_seq.begin(), fallback_end_seq.end());
             }
             if(used_fallback_boundary_tokens)
             {
                 printf("\nWarning: MTMD media %d produced invalid model-specific boundary tokens. Falling back to generic <media> and </media> marker text.", i);
             }
-            const int boundarytokensneeded = media_objects[i].chunk_start_seq.size() + media_objects[i].chunk_end_seq.size();
+            const int boundarytokensneeded = objects[i].chunk_start_seq.size() + objects[i].chunk_end_seq.size();
             mediatokensneeded += boundarytokensneeded;
             if(debugmode==1 && !is_quiet)
             {
@@ -6228,26 +6430,287 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
             }
             if(mediatokensneeded>0 && mediatokensneeded < nctx)
             {
-                media_object_token_counts.push_back(mediatokensneeded);
+                token_counts.push_back(mediatokensneeded);
                 int tokcnt = mediatokensneeded;
                 if(i==0)
                 {
                     tokcnt += introsize + outrosize;
                 }
-                const int media_token = kcpp_media_token_for_index(i);
+                const int media_token = media_identifier - (i * 2);
                 for(int n=0;n<tokcnt;++n)
                 {
-                    last_media_mem.push_back(media_token);
+                    placeholder_tokens.push_back(media_token);
                 }
             }
             else
             {
-                media_object_token_counts.push_back(0);
-                media_composite_image_signature = ""; //force invalidate
+                token_counts.push_back(0);
+                success = false;
                 printf("\nWarning: Media excluded - Context size too low or not enough mtmd tokens! (needed %d)\nMedia will be IGNORED! You probably want to relaunch with a larger context size!\n",mediatokensneeded);
             }
         }
+    return success;
+}
+
+//this function prepares the mtmd chunks for media. it's only needed when media changes
+static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_intro, const std::vector<int> & media_outro)
+{
+    if(!PrepareMediaEmbdsForObjects(media_objects, media_object_token_counts, last_media_mem, nctx,
+                                    media_intro, media_outro, current_media_identifier))
+    {
+        media_composite_image_signature = ""; //force invalidate
     }
+}
+
+static bool batch_prepare_request(BatchGenerateRequest & req)
+{
+    ApplyPromptFormatAdjustments(req.prompt_added_memory, req.prompt);
+    const int n_ctx = req.max_context_length > 0 ? std::min(req.max_context_length, kcpp_data->n_ctx) : kcpp_data->n_ctx;
+    const int n_predict = std::clamp(req.max_length, 0, std::max(0, n_ctx - 1));
+    req.max_length = n_predict;
+    std::vector<llama_token> added_memory_tokens;
+
+    if(!req.media.objects.empty())
+    {
+        TokenizeString("\nAttached Media:\n", req.media.intro_tokens, file_format, false);
+        for(auto & object : req.media.objects)
+        {
+            TokenizeString("\n\n", object.chunk_end_seq, file_format, false);
+        }
+        // Invalid individual media objects are filtered out by receiving a zero token count.
+        PrepareMediaEmbdsForObjects(req.media.objects, req.media.token_counts, req.media.placeholder_tokens,
+                                    n_ctx, req.media.intro_tokens, req.media.outro_tokens, req.media.identifier);
+    }
+
+    bool media_inserted_inline = false;
+    if(!req.media.placeholder_tokens.empty())
+    {
+        media_inserted_inline = kcpp_tokenize_prompt_with_inline_media(
+            req.prompt,
+            req.prompt_tokens,
+            file_format,
+            add_bos_token,
+            req.media.image_count,
+            req.media.audio_count,
+            req.media.objects,
+            req.media.token_counts,
+            req.media.identifier);
+    }
+    if(!media_inserted_inline)
+    {
+        TokenizeString(req.prompt, req.prompt_tokens, file_format, add_bos_token);
+    }
+    if(!req.prompt_added_memory.empty())
+    {
+        TokenizeString(req.prompt_added_memory, added_memory_tokens, file_format, add_bos_token);
+    }
+
+    if((int) req.prompt_tokens.size() + n_predict > n_ctx)
+    {
+        std::vector<int> bos;
+        TokenizeString("", bos, file_format, add_bos_token);
+        int offset = (int) req.prompt_tokens.size() - n_ctx + n_predict;
+        offset = kcpp_adjust_media_truncation_start(req.prompt_tokens, offset);
+        req.prompt_tokens.erase(req.prompt_tokens.begin(), req.prompt_tokens.begin() + offset);
+        if(!bos.empty() && !req.prompt_tokens.empty())
+        {
+            if(kcpp_is_media_token(req.prompt_tokens.front()))
+            {
+                req.prompt_tokens.insert(req.prompt_tokens.begin(), bos[0]);
+            }
+            else
+            {
+                req.prompt_tokens[0] = bos[0];
+            }
+        }
+    }
+
+    if(!req.media.placeholder_tokens.empty() && !media_inserted_inline)
+    {
+        std::vector<int> bos;
+        TokenizeString("", bos, file_format, add_bos_token);
+        const int media_prefix_size = (int) req.media.placeholder_tokens.size() + (bos.empty() ? 0 : 1);
+        if(media_prefix_size + n_predict + 4 > n_ctx)
+        {
+            printf("\nWarning: Too many multimodal tokens for batch request %d; media will be ignored.\n", req.id);
+        }
+        else
+        {
+            if(!added_memory_tokens.empty() && !bos.empty() && added_memory_tokens[0] == bos[0])
+            {
+                added_memory_tokens.erase(added_memory_tokens.begin());
+            }
+            added_memory_tokens.insert(added_memory_tokens.begin(), req.media.placeholder_tokens.begin(), req.media.placeholder_tokens.end());
+            if(!bos.empty())
+            {
+                added_memory_tokens.insert(added_memory_tokens.begin(), bos[0]);
+            }
+            const int memory_limit = std::max(0, n_ctx - (n_predict + 4));
+            if((int) added_memory_tokens.size() > memory_limit)
+            {
+                added_memory_tokens.resize(memory_limit);
+            }
+        }
+    }
+
+    AppendDedicatedMemoryAndNegativePrompt(req.prompt_tokens, added_memory_tokens, std::vector<llama_token>(), n_predict, n_ctx);
+    if(req.prompt_tokens.empty())
+    {
+        TokenizeString("", req.prompt_tokens, file_format, add_bos_token);
+    }
+
+    if(debugmode==1 && !is_quiet)
+    {
+        printf("\n\n[Debug: Dump %zu Raw Input Tokens]\n", req.prompt_tokens.size());
+        printf("%s\n", RemoveBell(get_tok_vec_str(req.prompt_tokens)).c_str());
+    }
+
+    req.prompt_token_count = req.prompt_tokens.size();
+    req.sampler = batch_build_sampler(req);
+    req.prompt_pos = 0;
+    req.n_past = 0;
+    req.has_pending = false;
+    req.i_batch = -1;
+    req.i_batch_is_prefill = false;
+    req.process_start_time = std::chrono::steady_clock::now();
+    req.generation_start_time = std::chrono::steady_clock::time_point();
+    req.init_time = std::chrono::duration<float>(req.process_start_time - req.start_time).count();
+    req.process_time = 0.0f;
+    return req.sampler != nullptr && !req.prompt_tokens.empty();
+}
+
+static bool batch_decode_media_tokens(BatchGenerateRequest & req, const std::vector<int> & tokens, bool logits_last)
+{
+    const int batch_cap = std::max(1, kcpp_data->n_batch);
+    int offset = 0;
+    while(offset < (int) tokens.size())
+    {
+        const int count = std::min(batch_cap, (int) tokens.size() - offset);
+        common_batch batch(llama_ctx_v4);
+        for(int i = 0; i < count; ++i)
+        {
+            const bool output = logits_last && offset + i == (int) tokens.size() - 1;
+            batch_add_token(batch, tokens[offset + i], req.n_past + i, req.slot, output);
+        }
+        if(llama_process(llama_ctx_v4, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0)
+        {
+            return false;
+        }
+        req.n_past += count;
+        offset += count;
+    }
+    return true;
+}
+
+static bool batch_process_media(BatchGenerateRequest & req, bool & final_logits)
+{
+    final_logits = false;
+    if(req.prompt_pos >= (int) req.prompt_tokens.size())
+    {
+        return false;
+    }
+    const llama_token marker = req.prompt_tokens[req.prompt_pos];
+    const int media_index = batch_media_index_from_token(req, marker);
+    if(media_index < 0 || media_index >= (int) req.media.token_counts.size())
+    {
+        return false;
+    }
+
+    int placeholder_count = 0;
+    while(req.prompt_pos < (int) req.prompt_tokens.size() && req.prompt_tokens[req.prompt_pos] == marker)
+    {
+        req.prompt_pos++;
+        placeholder_count++;
+    }
+    const bool include_header = media_index == 0 &&
+        placeholder_count == req.media.token_counts[media_index] + (int) req.media.intro_tokens.size() + (int) req.media.outro_tokens.size();
+    media_object & object = req.media.objects[media_index];
+    int repetitions = 1;
+    if(!include_header)
+    {
+        const int object_positions = req.media.token_counts[media_index];
+        if(object_positions <= 0 || placeholder_count % object_positions != 0)
+        {
+            return false;
+        }
+        repetitions = placeholder_count / object_positions;
+    }
+
+    int operation_count = 0;
+    operation_count += include_header && !req.media.intro_tokens.empty();
+    operation_count += repetitions * (!object.chunk_start_seq.empty() + (int) object.mediachunks.size() + !object.chunk_end_seq.empty());
+    operation_count += include_header && !req.media.outro_tokens.empty();
+    const bool is_final_prompt_operation = req.prompt_pos == (int) req.prompt_tokens.size();
+    int operation = 0;
+    int evaluated_positions = 0;
+
+    auto decode_tokens = [&](const std::vector<int> & tokens) -> bool
+    {
+        if(tokens.empty())
+        {
+            return true;
+        }
+        operation++;
+        const bool output = is_final_prompt_operation && operation == operation_count;
+        if(!batch_decode_media_tokens(req, tokens, output))
+        {
+            return false;
+        }
+        evaluated_positions += tokens.size();
+        final_logits = final_logits || output;
+        return true;
+    };
+
+    if(include_header && !decode_tokens(req.media.intro_tokens))
+    {
+        return false;
+    }
+    for(int repetition = 0; repetition < repetitions; ++repetition)
+    {
+        if(!decode_tokens(object.chunk_start_seq))
+        {
+            return false;
+        }
+        for(const media_chunk & chunk : object.mediachunks)
+        {
+            operation++;
+            const bool output = is_final_prompt_operation && operation == operation_count;
+            llama_pos new_n_past = req.n_past;
+            int32_t result = mtmd_helper_eval_chunk_single(
+                mtmd_ctx,
+                llama_ctx_v4,
+                static_cast<const mtmd_input_chunk *>(chunk.mtmd_chunk),
+                req.n_past,
+                req.slot,
+                std::max(1, kcpp_data->n_batch),
+                output,
+                &new_n_past);
+            if(result != 0)
+            {
+                fprintf(stderr, "\nFailed to evaluate media for batch request %d (status %d).\n", req.id, result);
+                return false;
+            }
+            req.n_past = new_n_past;
+            evaluated_positions += chunk.clp_image_tokens;
+            final_logits = final_logits || output;
+        }
+        if(!decode_tokens(object.chunk_end_seq))
+        {
+            return false;
+        }
+    }
+    if(include_header && !decode_tokens(req.media.outro_tokens))
+    {
+        return false;
+    }
+
+    if(placeholder_count != evaluated_positions)
+    {
+        fprintf(stderr, "\nMedia token mismatch for batch request %d (%d placeholders, %d positions).\n",
+                req.id, placeholder_count, evaluated_positions);
+        return false;
+    }
+    return true;
 }
 
 static const int smartcache_snapshot_min_spacing = 150;
@@ -6556,21 +7019,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     TokenizeString(intro, media_intro, file_format, false);
 
     //clear previous run media memory, just-in-time free
-    for(int i=0;i<media_objects.size();++i)
-    {
-        if(media_objects[i].b64data!="")
-        {
-            for(int j=0;j<media_objects[i].mediachunks.size();++j)
-            {
-                if(media_objects[i].mediachunks[j].mtmd_chunk!=nullptr)
-                {
-                    mtmd_input_chunk_free(static_cast<mtmd_input_chunk *>(media_objects[i].mediachunks[j].mtmd_chunk));
-                    media_objects[i].mediachunks[j].mtmd_chunk = nullptr;
-                }
-            }
-            media_objects[i].mediachunks.clear();
-        }
-    }
+    kcpp_free_media_objects(media_objects);
     media_objects.clear();
     std::string new_media_composite = "";
 
@@ -6783,7 +7232,10 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             file_format,
             add_bos_token,
             inputs.images_len,
-            inputs.audio_len);
+            inputs.audio_len,
+            media_objects,
+            media_object_token_counts,
+            current_media_identifier);
     }
     if(!media_inserted_inline)
     {
