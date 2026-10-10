@@ -33946,10 +33946,10 @@ Current version indicated by LITEVER below.
 					<div style="display: inline-block;">
 					Main Message Role:
 					<select title="Main Message Role" class="form-control" style="height: 25px; font-size:12px; margin-bottom: 2px; margin-right:4px; padding:4px;display:inline;width:100px" id="oairoledropdown">
+						<option value="3" selected>AutoRole</option>
 						<option value="0">User</option>
 						<option value="1">Assistant</option>
 						<option value="2">System</option>
-						<option value="3" selected>AutoRole</option>
 					</select>
 					</div>
 					<div style="display: inline-block;">

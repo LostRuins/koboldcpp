@@ -21,9 +21,10 @@ elif [ -t 0 ]; then
     echo "[2] - Proceed to install without a model, you can download one later."
     echo "[3] - Download GGUF model from web URL (Requires already installed)"
     echo "[4] - Load existing GGUF model from disk (Requires already installed)"
-    echo "[5] - Exit script"
+    echo "[5] - Rebuild existing KoboldCPP installation"
+    echo "[6] - Exit script"
     echo "--------------------------------------------"
-    read -p "Enter your choice [1-5]: " choice
+    read -r -p "Enter your choice [1-6]: " choice
 else
     # Non-interactive, default to choice 1
     echo "Defaulting to normal install and model download. Run script interactively for other options. Install will start in 3 seconds."
@@ -38,39 +39,66 @@ else
     SCRIPT_DIR="$(pwd)"  # Piped execution (curl | sh)
 fi
 
+# Locate an existing checkout regardless of the caller's current directory.
+find_koboldcpp_dir() {
+    if [ -f "$SCRIPT_DIR/koboldcpp.py" ]; then
+        KOBOLDCPP_DIR="$SCRIPT_DIR"
+    elif [ -f "$SCRIPT_DIR/koboldcpp/koboldcpp.py" ]; then
+        KOBOLDCPP_DIR="$SCRIPT_DIR/koboldcpp"
+    else
+        return 1
+    fi
+}
+
+require_koboldcpp_dir() {
+    if ! find_koboldcpp_dir; then
+        echo "Error: No existing KoboldCPP installation found near $SCRIPT_DIR"
+        exit 1
+    fi
+}
+
+FORCE_REBUILD=false
+
 # handle user choice
-if [ "$choice" = "5" ]; then
+if [ "$choice" = "6" ]; then
     echo "Exiting script. Goodbye!"
     exit 0
 elif [ "$choice" = "4" ]; then
-    echo "[*] Searching for .gguf model files in $SCRIPT_DIR..."
-    MODEL_FILES=$(find "$SCRIPT_DIR" -type f -maxdepth 1 -name "*.gguf" 2>/dev/null)
-    if [ -z "$MODEL_FILES" ]; then
-        echo "No .gguf model files found in $SCRIPT_DIR"
+    require_koboldcpp_dir
+    echo "[*] Searching for .gguf model files in $KOBOLDCPP_DIR..."
+    mapfile -d '' -t MODEL_FILES < <(find "$KOBOLDCPP_DIR" -maxdepth 1 -type f -iname "*.gguf" -print0 2>/dev/null)
+    if [ "${#MODEL_FILES[@]}" -eq 0 ]; then
+        echo "No .gguf model files found in $KOBOLDCPP_DIR"
         exit 1
     fi
     echo "Available model files:"
-    i=1
-    for file in $MODEL_FILES; do
-        echo "[$i] $file"
-        eval "MODEL_$i=\"$file\""
-        i=$((i+1))
+    for i in "${!MODEL_FILES[@]}"; do
+        echo "[$((i+1))] ${MODEL_FILES[$i]}"
     done
-    read -p "Enter the number of the model you want to load: " model_choice
+    read -r -p "Enter the number of the model you want to load: " model_choice
     # Validate input
-    if ! [[ "$model_choice" =~ ^[0-9]+$ ]] || [ "$model_choice" -lt 1 ] || [ "$model_choice" -ge "$i" ]; then
+    if ! [[ "$model_choice" =~ ^[0-9]+$ ]] || [ "$model_choice" -lt 1 ] || [ "$model_choice" -gt "${#MODEL_FILES[@]}" ]; then
         echo "Invalid selection."
         exit 1
     fi
-    eval "SELECTED_MODEL=\$MODEL_$model_choice"
+    selected_index=$((10#$model_choice - 1))
+    SELECTED_MODEL="${MODEL_FILES[$selected_index]}"
     echo "Now launching with model $SELECTED_MODEL"
-    python koboldcpp.py --model $SELECTED_MODEL
+    cd "$KOBOLDCPP_DIR"
+    python koboldcpp.py --model "$SELECTED_MODEL"
     exit 0
 elif [ "$choice" = "3" ]; then
+    require_koboldcpp_dir
     read -r -p "Please input FULL URL of model you wish to download and run: " SELECTED_MODEL
     echo "Starting download of model $SELECTED_MODEL"
-    python koboldcpp.py --model $SELECTED_MODEL
+    cd "$KOBOLDCPP_DIR"
+    python koboldcpp.py --model "$SELECTED_MODEL"
     exit 0
+elif [ "$choice" = "5" ]; then
+    echo "[*] Rebuild existing KoboldCPP installation..."
+    require_koboldcpp_dir
+    INSTALL_MODEL=false
+    FORCE_REBUILD=true
 elif [ "$choice" = "2" ]; then
     echo "[*] Install without model download..."
     INSTALL_MODEL=false
@@ -97,12 +125,8 @@ else
 fi
 
 # Check if koboldcpp.py already exists nearby
-if [ -f "$SCRIPT_DIR/koboldcpp.py" ]; then
-    echo "[*] Detected existing koboldcpp.py in $SCRIPT_DIR"
-    KOBOLDCPP_DIR="$SCRIPT_DIR"
-elif [ -d "$SCRIPT_DIR/koboldcpp" ] && [ -f "$SCRIPT_DIR/koboldcpp/koboldcpp.py" ]; then
-    echo "[*] Detected existing koboldcpp clone in $SCRIPT_DIR/koboldcpp"
-    KOBOLDCPP_DIR="$SCRIPT_DIR/koboldcpp"
+if find_koboldcpp_dir; then
+    echo "[*] Detected existing koboldcpp.py in $KOBOLDCPP_DIR"
 else
     echo "[*] No existing koboldcpp found. Cloning repository..."
     cd "$SCRIPT_DIR"
@@ -112,7 +136,12 @@ fi
 
 # build if needed
 cd "$KOBOLDCPP_DIR"
-if [ -f "$KOBOLDCPP_DIR/koboldcpp_default.so" ]; then
+if [ "$FORCE_REBUILD" = true ]; then
+    echo "[*] Cleaning the existing build..."
+    make clean
+    echo "[*] Rebuilding KoboldCPP now..."
+    make -j 2
+elif [ -f "$KOBOLDCPP_DIR/koboldcpp_default.so" ]; then
     echo "[*] Found koboldcpp_default.so — skipping build step."
 else
     echo "[*] Building KoboldCPP now..."
@@ -120,6 +149,7 @@ else
 fi
 
 # grab model if needed
+echo "==="
 echo "[*] Your KoboldCPP Installation is Complete!"
 if [ "$INSTALL_MODEL" = true ]; then
     echo "[*] Downloading Gemma3-1B, a small GGUF model..."
