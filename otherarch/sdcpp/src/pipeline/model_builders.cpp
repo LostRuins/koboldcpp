@@ -18,6 +18,7 @@
 #include "model/diffusion/hidream_o1.hpp"
 #include "model/diffusion/hunyuan.hpp"
 #include "model/diffusion/ideogram4.hpp"
+#include "model/diffusion/iris.hpp"
 #include "model/diffusion/krea2.hpp"
 #include "model/diffusion/lens.hpp"
 #include "model/diffusion/lingbot_video.hpp"
@@ -456,6 +457,11 @@ namespace sd::model_builders {
                                                                   tensor_storage_map,
                                                                   "model.diffusion_model",
                                                                   weight_manager);
+        } else if (version == VERSION_IRIS) {
+            result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                               tensor_storage_map, version, "", false, weight_manager, tokenizers);
+            result.diffusion   = std::make_shared<Iris::IrisRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                  tensor_storage_map, "model.diffusion_model", weight_manager);
         } else {  // SD1.x SD2.x SDXL
             std::map<std::string, std::string> embbeding_map;
             for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -626,7 +632,12 @@ namespace sd::model_builders {
             }
         };
 
-        if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version) || sd_version_is_z_image_l2p(version)) {
+        if (version == VERSION_CHROMA_RADIANCE ||
+            version == VERSION_HIDREAM_O1 ||
+            sd_version_is_minit2i(version) ||
+            sd_version_is_sensenova_u1(version) ||
+            sd_version_is_z_image_l2p(version) ||
+            version == VERSION_IRIS) {
             LOG_INFO("using FakeVAE");
             result.vae = std::make_shared<FakeVAE>(version,
                                                    ctx.backends.runtime_backend(SDBackendModule::VAE),

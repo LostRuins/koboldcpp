@@ -108,6 +108,7 @@ const char* model_version_to_str[] = {
     "PixArt",
     "Ming-Image",
     "Z-Image L2P",
+    "Iris-3B",
 };
 
 static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
@@ -1634,7 +1635,8 @@ bool StableDiffusionGGML::build_denoiser() {
                    sd_version_is_llada_image(version) ||
                    sd_version_is_boogu_image(version) ||
                    sd_version_is_pid(version) ||
-                   sd_version_is_ideogram4(version)) {
+                   sd_version_is_ideogram4(version) ||
+                   version == VERSION_IRIS) {
             pred_type = FLOW_PRED;
             if (sd_version_is_wan(version)) {
                 default_flow_shift = 5.f;
@@ -1642,7 +1644,7 @@ bool StableDiffusionGGML::build_denoiser() {
                 default_flow_shift = 7.f;
             } else if (sd_version_is_minimax_h3(version)) {
                 default_flow_shift = 12.f;
-            } else if (sd_version_is_ernie_image(version)) {
+            } else if (sd_version_is_ernie_image(version) || version == VERSION_IRIS) {
                 default_flow_shift = 4.f;
             } else if (sd_version_is_pid(version)) {
                 default_flow_shift = 1.5f;
@@ -3035,7 +3037,7 @@ int StableDiffusionGGML::get_diffusion_model_down_factor() {
     if (sd_version_is_dit(version)) {
         if (sd_version_is_sensenova_u1(version)) {
             down_factor = 32;
-        } else if (sd_version_is_z_image_l2p(version)) {
+        } else if (sd_version_is_z_image_l2p(version) || version == VERSION_IRIS) {
             down_factor = 16;
         } else if (version == VERSION_QWEN_IMAGE_2_1 || version == VERSION_MING_IMAGE || sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_minimax_h3(version) || sd_version_is_pixart(version)) {
             down_factor = 2;
@@ -3069,7 +3071,7 @@ int StableDiffusionGGML::get_latent_channel() {
             latent_channel = 3;
         } else if (sd_version_is_z_image_l2p(version)) {
             latent_channel = 3;
-        } else if (sd_version_is_pid(version)) {
+        } else if (sd_version_is_pid(version) || version == VERSION_IRIS) {
             latent_channel = 3;
         } else if (sd_version_is_sefi_image(version)) {
             latent_channel = 144;
@@ -3170,7 +3172,7 @@ sd::Tensor<float> StableDiffusionGGML::encode_first_stage(const sd::Tensor<float
 }
 
 sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float>& x, bool decode_video) {
-    if (sd_version_is_pid(version) || sd_version_is_minit2i(version)) {
+    if (sd_version_is_pid(version) || sd_version_is_minit2i(version) || version == VERSION_IRIS) {
         return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
     }
     auto latents                      = first_stage_model->diffusion_to_vae_latents(x);

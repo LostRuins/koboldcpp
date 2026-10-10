@@ -588,6 +588,10 @@ SDVersion ModelLoader::get_sd_version() const {
             tensor_storage_map.find("model.diffusion_model.audio_patch_proj.weight") != tensor_storage_map.end()) {
             return VERSION_MINIMAX_H3;
         }
+        if (name == "model.diffusion_model.y_embedder.layer_pool.weight" &&
+            tensor_storage_map.count("model.diffusion_model.modulation_cores.adaln_img.weight")) {
+            return VERSION_IRIS;
+        }
         if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
             is_wan = true;
         }
