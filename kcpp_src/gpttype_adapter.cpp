@@ -2251,7 +2251,7 @@ void sample_grammar(FileFormat file_format, int32_t n_vocab, llama_token_data_ar
             rejects[i] = true;
         } else {
             candidates_decoded.push_back(kcpp_decode_utf8(piece, grammar->partial_utf8));
-            candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second });
+            candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second, id });
         }
     }
 
@@ -2552,15 +2552,7 @@ static void grammar_accept_token(FileFormat file_format, int32_t n_vocab, struct
         GGML_ASSERT(false);
     }
     const std::string piece = FileFormatTokenizeID(token,file_format);
-
-    // Note terminating 0 in decoded string
-    const auto   decoded     = kcpp_decode_utf8(piece, grammar->partial_utf8);
-    const auto & code_points = decoded.first;
-    for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-        llama_grammar_accept(grammar, *it);
-    }
-    grammar->partial_utf8 = decoded.second;
-    GGML_ASSERT(!grammar->stacks.empty());
+    llama_grammar_accept_token(*grammar, token, piece);
 }
 
 static void load_grammar(const std::string & gammarstr)
