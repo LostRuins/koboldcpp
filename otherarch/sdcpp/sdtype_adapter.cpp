@@ -392,6 +392,15 @@ static SDVersion detect_model_version(SDParams& params)
             tempver = m_loader.get_sd_version();
             if (tempver != VERSION_COUNT) {
                 // normal main
+                if (tempver == VERSION_ANIMA && !m_loader.has_diffusion_model_tensors()) {
+                    // Anima checkpoints store the DiT tensors without the
+                    // "model.diffusion_model." prefix. The engine inits
+                    // diffusion_model_path with that prefix, so load the same
+                    // file there as well; model_path keeps the bare names
+                    // (used by the LLM conditioner).
+                    params.diffusion_model_path = params.model_path;
+                    printf("  Anima: also loading %s as diffusion model\n", params.model_path.c_str());
+                }
             } else if ((m_status = d_loader.init_from_file(params.model_path, "model.diffusion_model."))) {
                 tempver = d_loader.get_sd_version();
                 if (tempver != VERSION_COUNT) {
@@ -491,6 +500,18 @@ static bool kcpp_set_model_paths(SDParams& params, const sd_load_model_inputs& i
                 std::swap(params.clip_vision_path, params.clip_l_path);
             }
         }
+        else if(has_llm_vision && params.clip_g_path.empty() && params.llm_vision_path.empty() &&
+                toLowerCase(params.clip_l_path).find("mmproj") != std::string::npos)
+        {
+            // vision projector (mmproj) passed on CLIP-1 — mirrors the old
+            // "llm loaded as t5 by mistake" rescue
+            std::swap(params.llm_vision_path, params.clip_l_path);
+        }
+        else if(is_ltx && params.clip_g_path.empty() && params.embeddings_connectors_path.empty())
+        {
+            // embeddings connectors passed on CLIP-1
+            std::swap(params.embeddings_connectors_path, params.clip_l_path);
+        }
     }
 
     std::string kcpp_main_tokenizer;
@@ -529,6 +550,18 @@ static bool kcpp_set_model_paths(SDParams& params, const sd_load_model_inputs& i
         toLowerCase(params.llm_path).find("mmproj") != std::string::npos)
         {
             std::swap(params.llm_path, params.llm_vision_path);
+        }
+    }
+
+    // mmproj passed on the LLM slot: move it to the vision slot, and take
+    // the model LLM from CLIP-1 if it's there
+    if(has_llm_vision && params.llm_vision_path.empty() &&
+       toLowerCase(params.llm_path).find("mmproj") != std::string::npos)
+    {
+        std::swap(params.llm_path, params.llm_vision_path);
+        if(!params.clip_l_path.empty() && toLowerCase(params.clip_l_path).find("mmproj") == std::string::npos)
+        {
+            std::swap(params.llm_path, params.clip_l_path);
         }
     }
 
