@@ -68,7 +68,7 @@ default_autoswap_threshold = 256
 overridekv_max = 16
 default_autofit_padding = 1024
 lora_filenames_max = 10
-multiuser_concurrent_limit = 10
+queue_concurrent_limit = 10
 swa_padding_default = 0
 default_reqtimeout = 600 # 10 min default
 default_maxctx = 16384
@@ -140,7 +140,7 @@ exitcounter = -1
 punishcounter = 0 #causes a timeout if too many errors
 rewardcounter = 0 #reduces error counts for successful jobs
 totalgens = 0
-currentusergenkey = "" #store a special key so polled streaming works even in multiuser
+currentusergenkey = "" #store a special key so polled streaming works even in with multiple users
 pendingabortkey = "" #if an abort is received for the non-active request, remember it (at least 1) to cancel later
 args = None #global args
 runmode_untouched = True
@@ -265,6 +265,7 @@ deprecated_keys = {
     "flashattention",
     "useswa",
     "jinja_tools",
+    "multiuser",
 }
 
 saved_stdout = None
@@ -7486,7 +7487,7 @@ Change Mode<br>
                 multiuserkey = ""
 
             if totalgens>0:
-                if (multiuserkey=="" and multiuserkey==currentusergenkey and requestsinqueue==0) or (multiuserkey!="" and multiuserkey==currentusergenkey): #avoid leaking prompts in multiuser
+                if (multiuserkey=="" and multiuserkey==currentusergenkey and requestsinqueue==0) or (multiuserkey!="" and multiuserkey==currentusergenkey): #avoid leaking prompts when multiple users
                     pendtxt = handle.get_pending_output()
                     pendtxtStr = ctypes.string_at(pendtxt).decode("UTF-8","ignore")
             response_body = (json.dumps({"results": [{"text": pendtxtStr}]}).encode())
@@ -7504,7 +7505,7 @@ Change Mode<br>
                 multiuserkey = ""
 
             if totalgens>0:
-                if (multiuserkey=="" and multiuserkey==currentusergenkey and requestsinqueue==0) or (multiuserkey!="" and multiuserkey==currentusergenkey): #avoid leaking prompts in multiuser
+                if (multiuserkey=="" and multiuserkey==currentusergenkey and requestsinqueue==0) or (multiuserkey!="" and multiuserkey==currentusergenkey): #avoid leaking prompts with multiple users
                     lastlogprobs = handle.last_logprobs()
                     logprobsdict = parse_last_logprobs(lastlogprobs)
             response_body = (json.dumps({"logprobs":logprobsdict}).encode())
@@ -7808,13 +7809,12 @@ Change Mode<br>
                     }}).encode())
                 return
             ratelimitlookup[client_ip] = datetime.now()
-        muint = int(args.multiuser)
-        if muint<=0 and ((args.whispermodel and args.whispermodel!="") or (args.sdmodel and args.sdmodel!="") or (args.ttsmodel and args.ttsmodel!="") or (args.embeddingsmodel and args.embeddingsmodel!="")):
+        muint = int(args.queuelimit)
+        if muint < 2 and ((args.whispermodel and args.whispermodel!="") or (args.sdmodel and args.sdmodel!="") or (args.ttsmodel and args.ttsmodel!="") or (args.embeddingsmodel and args.embeddingsmodel!="")):
             muint = 2 # this prevents errors when using voice/img together with text
         if args.parallelrequests > 1 and muint <=0:
-            muint = multiuser_concurrent_limit # multiuser required for batching
-        multiuserlimit = ((muint-1) if muint > 1 else multiuser_concurrent_limit)
-        #backwards compatibility for up to X concurrent requests, use default limit of X if multiuser set to 1
+            muint = queue_concurrent_limit # required for batching
+        multiuserlimit = (muint if muint > 0 else queue_concurrent_limit)
         if muint > 0 and requestsinqueue < multiuserlimit:
             reqblocking = True
             requestsinqueue += 1
@@ -8824,7 +8824,7 @@ def save_config_dict(filename, savdict, template):
         filenamestr += ".kcpps"
     if not filenamestr.endswith(".kcppt") and template:
         filenamestr += ".kcppt"
-    do_not_save = {'agent_api_key', 'agent_base_url', 'allow_config_onready', 'analyze', 'config', 'exportconfig', 'exporttemplate', 'run_bundled_agent', 'testmemory', 'unpack', 'version'}
+    do_not_save = {'agent_api_key', 'agent_base_url', 'allow_config_onready', 'analyze', 'config', 'exportconfig', 'exporttemplate', 'run_bundled_agent', 'testmemory', 'unpack', 'version'} | deprecated_keys
     filtered = {k: v for k, v in savdict.items() if k not in do_not_save}
     if 'gendefaults' in filtered:
         gendefaults = parse_json_object(filtered['gendefaults'], 'gendefaults')
@@ -9166,7 +9166,7 @@ def show_gui():
 
     port_var = ctk.StringVar(value=defaultport)
     host_var = ctk.StringVar(value="")
-    multiuser_var = ctk.StringVar(value=str(multiuser_concurrent_limit))
+    queuelimit_var = ctk.StringVar(value=str(queue_concurrent_limit))
     multiplayer_var = ctk.IntVar(value=has_multiplayer)
     websearch_var = ctk.IntVar(value=0)
     horde_name_var = ctk.StringVar(value="koboldcpp")
@@ -10108,11 +10108,11 @@ def show_gui():
     makefileentry(network_tab, "SSL Key:", "Select Unencrypted SSL key.pem file", ssl_key_var, 22, width=200, filetypes=[("*.pem *.crt *.key", "*.pem *.key")], singlerow=True, tooltiptxt="Select your unencrypted .pem SSL key file for https.\nCan be generated with OpenSSL.")
     makelabelentry(network_tab, "Password: ", password_var, 24, 200, padx=(100), singleline=True, tooltip="Enter a password required to use this instance.\nThis key will be required for all text endpoints.\nImage endpoints are not secured.")
 
-    makelabelentry(network_tab, "Multiuser Queue:", multiuser_var, row=30, width=50, padx=(120), singleline=True, tooltip="Maximum queued incoming requests.")
+    makelabelentry(network_tab, "Queue Limit:", queuelimit_var, row=30, width=50, padx=(120), singleline=True, tooltip="Maximum queued incoming requests.")
     makelabelentry(network_tab, "Max Req. Size (MB):", maxrequestsize_var, row=30, width=50, padx=(340), singleline=True, tooltip="Specify a max request payload size. Any requests to the server larger than this size will be dropped. Do not change if unsure.",labelpadx=210)
-    makelabelentry(network_tab, "IP Rate Limiter (s):", ratelimit_var, row=34, width=50, padx=(120), singleline=True, tooltip="Rate limits each IP to allow a new request once per X seconds. Do not change if unsure.")
+    makelabelentry(network_tab, "Parallel Requests:", parallel_requests_var, row=34, width=50, padx=(120), singleline=True, tooltip="Allows multiple requests to be batched and executed in parallel. Only works for basic text generation requests. Experimental!")
     makelabelentry(network_tab, "Request Timeout (s):", reqtimeout_var, row=34, width=50, padx=(340), singleline=True, tooltip="Timeout in seconds for HTTP requests",labelpadx=210)
-    makelabelentry(network_tab, "Parallel Requests:", parallel_requests_var, row=38, width=50, padx=(120), singleline=True, tooltip="Allows multiple requests to be batched and executed in parallel. Only works for basic text generation requests. Experimental!")
+    makelabelentry(network_tab, "IP Rate Limiter (s):", ratelimit_var, row=38, width=50, padx=(120), singleline=True, tooltip="Rate limits each IP to allow a new request once per X seconds. Do not change if unsure.")
 
 
     def togglerpcmode(a,b,c):
@@ -10570,7 +10570,7 @@ def show_gui():
         args.port_param = defaultport if port_var.get()=="" else int(port_var.get())
         args.port = args.port_param
         args.host = host_var.get()
-        args.multiuser = int(multiuser_var.get()) if multiuser_var.get()!="" else multiuser_concurrent_limit
+        args.queuelimit = int(queuelimit_var.get()) if queuelimit_var.get()!="" else queue_concurrent_limit
         args.multiplayer = (multiplayer_var.get()==1)
         args.websearch = (websearch_var.get()==1)
         args.maxrequestsize = int(maxrequestsize_var.get()) if maxrequestsize_var.get()!="" else 32
@@ -10891,7 +10891,7 @@ def show_gui():
         chatcompletionsadapter_var.set(mydict["chatcompletionsadapter"] if ("chatcompletionsadapter" in mydict and mydict["chatcompletionsadapter"]) else "")
         port_var.set(mydict["port_param"] if ("port_param" in mydict and mydict["port_param"]) else defaultport)
         host_var.set(mydict["host"] if ("host" in mydict and mydict["host"]) else "")
-        multiuser_var.set(mydict["multiuser"] if ("multiuser" in mydict and mydict["multiuser"]>1) else multiuser_concurrent_limit)
+        queuelimit_var.set(mydict["queuelimit"] if "queuelimit" in mydict else queue_concurrent_limit)
         multiplayer_var.set(mydict["multiplayer"] if ("multiplayer" in mydict) else 0)
         websearch_var.set(mydict["websearch"] if ("websearch" in mydict) else 0)
         download_dir_var.set(mydict["downloaddir"] if ("downloaddir" in mydict and mydict["downloaddir"]) else "")
@@ -13805,7 +13805,6 @@ if __name__ == '__main__':
     advparser.add_argument("--moecpu","--n-cpu-moe", "-ncmoe", metavar=('[layers affected]'), help="Keep the Mixture of Experts (MoE) weights of the first N layers in the CPU. If no value is provided, applies to all layers.", nargs='?', const=999, type=int, default=0)
     advparser.add_argument("--ffncpu","--n-cpu-ffn", "-ncffn", metavar=('[layers affected]'), help="Keep the dense FFN weights of the first N layers in the CPU. If no value is provided, applies to all layers.", nargs='?', const=999, type=int, default=0)
     advparser.add_argument("--moeexperts", metavar=('[num of experts]'), help="How many experts to use for MoE models (default=follow gguf)", type=int, default=-1)
-    advparser.add_argument("--multiuser", help="Set maximum number of queued incoming requests allowed.", metavar=('limit'), type=int, nargs='?', const=multiuser_concurrent_limit, default=multiuser_concurrent_limit)
     advparser.add_argument("--multiplayer", help="Hosts a shared multiplayer session that others can join.", action='store_true')
     advparser.add_argument("--nocertify", help="Allows insecure SSL connections. Use this if you have cert errors and need to bypass certificate restrictions.", action='store_true')
     advparser.add_argument("--nofastforward", help="If set, do not attempt to fast forward GGUF context (always reprocess). Will also enable noshift", action='store_true')
@@ -13826,6 +13825,7 @@ if __name__ == '__main__':
     advparser.add_argument("--preloadstory", metavar=('[savefile]'), help="Configures a prepared story json save file to be hosted on the server, which frontends (such as KoboldAI Lite) can access over the API.", default="")
     advparser.add_argument("--prompt","-p", metavar=('[prompt]'), help="Passing a prompt string triggers a direct inference, loading the model, outputs the response to stdout and exits. Can be used alone or with benchmark.", type=str, default="")
     advparser.add_argument("--quantkv", help="Sets the KV cache data type quantization, options are f16/bf16/q8_0/q5_1/q4_0. Requires Flash Attention for full effect, otherwise only K cache is quantized.",metavar=('[quantization level f16/bf16/q8_0/q5_1/q4_0]'), type=str, choices=["f16","bf16","q8_0","q5_1","q4_0","0","1","2","3"], default="f16")
+    advparser.add_argument("--queuelimit", help="Set maximum number of queued incoming requests allowed.", metavar=('limit'), type=int, default=queue_concurrent_limit)
     advparser.add_argument("--quiet", help="Enable quiet mode, which hides generation inputs and outputs in the terminal. Quiet mode is automatically enabled when running a horde worker.", action='store_true')
     advparser.add_argument("--ratelimit", metavar=('[seconds]'), help="If enabled, rate limit generative request by IP address. Each IP can only send a new request once per X seconds.", type=int, default=0)
     advparser.add_argument("--reasoningeffort", help="A quick way to set the default reasoning effort. API values override this.", type=str, choices=['default','none','low','medium','high','xhigh'], default="default")
@@ -13943,6 +13943,7 @@ if __name__ == '__main__':
     deprecatedgroup.add_argument("--sdgendefaults", help=argparse.SUPPRESS, action='store_true') # legacy option, see gendefaults
     deprecatedgroup.add_argument("--flashattention","--flash-attn","-fa", help=argparse.SUPPRESS, action='store_true') #flash attention now default on
     deprecatedgroup.add_argument("--useswa", help=argparse.SUPPRESS, action='store_true')
+    deprecatedgroup.add_argument("--multiuser", help=argparse.SUPPRESS, metavar=('limit'), type=int, nargs='?', const=queue_concurrent_limit, default=None)
 
     internalgroup = parser.add_argument_group('Internal Commands')
     internalgroup.add_argument("--testmemory", help=argparse.SUPPRESS, action='store_true')

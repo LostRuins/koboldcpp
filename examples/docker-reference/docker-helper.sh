@@ -29,7 +29,7 @@ if [[ ! -n "$KCPP_MODEL" ]] && [[ ! -n "$KCPP_IMGMODEL" ]] && [[ ! -n "$KCPP_WHI
                 echo
                 echo "To use KoboldCpp in a docker you must define environment variables."
                 echo "Our built in Model Downloader can be used with KCPP_MODEL, KCPP_IMGMODEL, KCPP_MMPROJ, KCPP_EMBEDMODEL, KCPP_TTSMODEL and KCPP_WHISPERMODEL"
-                echo "Additional arguments can be specified with KCPP_ARGS, for example for GPU usage: --usecuda mmq --gpulayers 99 --multiuser 20"
+                echo "Additional arguments can be specified with KCPP_ARGS, for example for GPU usage: --usecuda mmq --gpulayers 99"
                 echo "KoboldCpp runs on port 5001 by default, make sure to port forward in docker if you wish to run on your local network."
                 echo "For a full list of arguments use --help as the KCPP_ARGS argument."
                 echo "Mounting your own models locally instead? Use the --model arg instead of our KCPP_MODEL environment variable"

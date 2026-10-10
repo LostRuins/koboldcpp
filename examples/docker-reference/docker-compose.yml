@@ -19,7 +19,7 @@ services:
     environment:
       - KCPP_DONT_UPDATE=false
       - KCPP_DONT_TUNNEL=true
-      - KCPP_ARGS=--model https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_S.gguf?download=true --gpulayers 99 --multiuser 20 --admin --admindir . --adminpassword ChangeMe # For split models in the 00001-of format specify the first file as the --model, remove --gpulayers 99 --multiuser 20 if you do not have a GPU
+      - KCPP_ARGS=--model https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_S.gguf?download=true --gpulayers 99 --admin --admindir . --adminpassword ChangeMe # For split models in the 00001-of format specify the first file as the --model, remove --gpulayers 99 if you do not have a GPU
       # Don't forget to change the model for production, the default model was chosen to fit on many systems rather than for its quality.
     ports:
       - "5001:5001"
