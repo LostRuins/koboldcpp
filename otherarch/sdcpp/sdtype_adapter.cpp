@@ -389,13 +389,15 @@ static SDVersion detect_model_version(SDParams& params)
     if (!params.model_path.empty()) {
         bool m_status;
         if ((m_status = m_loader.init_from_file(params.model_path))) {
-            if (m_loader.has_diffusion_model_tensors()) {
+            tempver = m_loader.get_sd_version();
+            if (tempver != VERSION_COUNT) {
                 // normal main
-                tempver = m_loader.get_sd_version();
             } else if ((m_status = d_loader.init_from_file(params.model_path, "model.diffusion_model."))) {
-                // diffusion passed as main
-                swap_models = true;
                 tempver = d_loader.get_sd_version();
+                if (tempver != VERSION_COUNT) {
+                    // diffusion passed as main
+                    swap_models = true;
+                }
             }
         }
         if (!m_status) {
@@ -404,7 +406,7 @@ static SDVersion detect_model_version(SDParams& params)
     }
 
     if (tempver == VERSION_COUNT) {
-        printf("Error: image model version detection failed!\n");
+        printf("Warning: image model version detection failed!\n");
         fflush(stdout);
         return tempver;
     }
@@ -426,9 +428,6 @@ static SDVersion detect_model_version(SDParams& params)
 static bool kcpp_set_model_paths(SDParams& params, const sd_load_model_inputs& inputs)
 {
     SDVersion tempver = detect_model_version(params);
-
-    if (tempver == VERSION_COUNT)
-        return false;
 
     auto toLowerCase = [](const std::string& str) -> std::string {
         std::string result;
