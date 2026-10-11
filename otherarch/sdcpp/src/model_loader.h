@@ -149,7 +149,6 @@ public:
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type) const;
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT) const;
     ~ModelLoader() = default;
-    bool has_diffusion_model_tensors();
 };
 
 #endif  // __MODEL_LOADER_H__
