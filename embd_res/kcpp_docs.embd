@@ -482,6 +482,372 @@
                          }
                       },
                       "type": "object"
+                   },
+                   "OpenAIUsage": {
+                      "type": "object",
+                      "description": "Token counts reported by KoboldCpp.",
+                      "properties": {
+                         "prompt_tokens": {"type": "integer"},
+                         "completion_tokens": {"type": "integer"},
+                         "total_tokens": {"type": "integer"}
+                      },
+                      "required": ["prompt_tokens", "completion_tokens", "total_tokens"]
+                   },
+                   "OpenAIFunctionDefinition": {
+                      "type": "object",
+                      "properties": {
+                         "name": {"type": "string"},
+                         "description": {"type": "string"},
+                         "parameters": {"type": "object", "description": "JSON Schema describing the function arguments.", "additionalProperties": true}
+                      },
+                      "required": ["name", "parameters"]
+                   },
+                   "OpenAITool": {
+                      "type": "object",
+                      "description": "Function tool definition. KoboldCpp uses the name, description, and JSON Schema parameters.",
+                      "properties": {
+                         "type": {"type": "string", "enum": ["function"]},
+                         "function": {"$ref": "#/components/schemas/OpenAIFunctionDefinition"}
+                      },
+                      "required": ["type", "function"]
+                   },
+                   "OpenAIToolCall": {
+                      "type": "object",
+                      "properties": {
+                         "id": {"type": "string"},
+                         "type": {"type": "string", "enum": ["function"]},
+                         "function": {
+                            "type": "object",
+                            "properties": {
+                               "name": {"type": "string"},
+                               "arguments": {"type": "string", "description": "JSON-encoded function arguments."}
+                            },
+                            "required": ["name", "arguments"]
+                         }
+                      },
+                      "required": ["id", "type", "function"]
+                   },
+                   "OpenAIToolCallDelta": {
+                      "type": "object",
+                      "description": "A partial streamed tool call. Metadata and argument text may arrive in separate chunks.",
+                      "properties": {
+                         "index": {"type": "integer"}, "id": {"type": "string"}, "type": {"type": "string", "enum": ["function"]},
+                         "function": {"type": "object", "properties": {"name": {"type": "string"}, "arguments": {"type": "string"}}}
+                      },
+                      "required": ["index"]
+                   },
+                   "OpenAIContentPart": {
+                      "oneOf": [
+                         {
+                            "type": "object",
+                            "properties": {"type": {"type": "string", "enum": ["text"]}, "text": {"type": "string"}},
+                            "required": ["type", "text"]
+                         },
+                         {
+                            "type": "object",
+                            "description": "KoboldCpp consumes data:image URLs. Remote image URLs are not downloaded.",
+                            "properties": {"type": {"type": "string", "enum": ["image_url"]}, "image_url": {"type": "object", "properties": {"url": {"type": "string", "description": "A data:image/...;base64,... URL."}}, "required": ["url"]}},
+                            "required": ["type", "image_url"]
+                         },
+                         {
+                            "type": "object",
+                            "properties": {"type": {"type": "string", "enum": ["input_audio"]}, "input_audio": {"type": "object", "properties": {"data": {"type": "string", "format": "byte"}, "format": {"type": "string", "example": "wav"}}, "required": ["data"]}},
+                            "required": ["type", "input_audio"]
+                         }
+                      ]
+                   },
+                   "OpenAIChatMessage": {
+                      "type": "object",
+                      "properties": {
+                         "role": {"type": "string", "enum": ["system", "user", "assistant", "tool"]},
+                         "content": {
+                            "nullable": true,
+                            "description": "Text, or OpenAI-style text, image_url, and input_audio content parts.",
+                            "oneOf": [
+                               {"type": "string"},
+                               {"type": "array", "items": {"$ref": "#/components/schemas/OpenAIContentPart"}}
+                            ]
+                         },
+                         "tool_calls": {"type": "array", "items": {"$ref": "#/components/schemas/OpenAIToolCall"}},
+                         "tool_call_id": {"type": "string"}
+                      },
+                      "required": ["role"]
+                   },
+                   "OpenAICompletionRequest": {
+                      "type": "object",
+                      "properties": {
+                         "model": {"type": "string"},
+                         "prompt": {"type": "string"},
+                         "max_tokens": {"type": "integer", "minimum": 1},
+                         "max_completion_tokens": {"type": "integer", "minimum": 1, "description": "Accepted as a fallback when max_tokens is absent."},
+                         "temperature": {"type": "number"},
+                         "top_p": {"type": "number"},
+                         "presence_penalty": {"type": "number"},
+                         "frequency_penalty": {"type": "number", "description": "Accepted as a fallback alias for presence_penalty."},
+                         "stop": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                         "seed": {"type": "integer"},
+                         "stream": {"type": "boolean", "default": false},
+                         "logprobs": {"description": "Truthy values request log probabilities.", "oneOf": [{"type": "boolean"}, {"type": "integer"}]}
+                      },
+                      "required": ["prompt"],
+                      "additionalProperties": true
+                   },
+                   "OpenAICompletionResponse": {
+                      "type": "object",
+                      "properties": {
+                         "id": {"type": "string"}, "object": {"type": "string", "enum": ["text_completion"]}, "created": {"type": "integer"}, "model": {"type": "string"},
+                         "choices": {"type": "array", "items": {"type": "object", "properties": {"text": {"type": "string"}, "index": {"type": "integer"}, "finish_reason": {"type": "string", "enum": ["stop", "length", "error"]}, "logprobs": {"type": "object", "nullable": true, "additionalProperties": true}}, "required": ["text", "index", "finish_reason"]}},
+                         "usage": {"$ref": "#/components/schemas/OpenAIUsage"}
+                      },
+                      "required": ["id", "object", "choices"]
+                   },
+                   "OpenAIChatCompletionRequest": {
+                      "type": "object",
+                      "properties": {
+                         "model": {"type": "string"},
+                         "messages": {"type": "array", "items": {"$ref": "#/components/schemas/OpenAIChatMessage"}},
+                         "max_tokens": {"type": "integer", "minimum": 1},
+                         "max_completion_tokens": {"type": "integer", "minimum": 1},
+                         "temperature": {"type": "number"},
+                         "top_p": {"type": "number"},
+                         "presence_penalty": {"type": "number"},
+                         "frequency_penalty": {"type": "number", "description": "Accepted as a fallback alias for presence_penalty."},
+                         "stop": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                         "seed": {"type": "integer"},
+                         "stream": {"type": "boolean", "default": false},
+                         "stream_options": {"type": "object", "properties": {"include_usage": {"type": "boolean"}}},
+                         "tools": {"type": "array", "items": {"$ref": "#/components/schemas/OpenAITool"}},
+                         "tool_choice": {"description": "Supports auto, required, none, an exact function name, or an OpenAI-style function choice object.", "oneOf": [{"type": "string"}, {"type": "object", "additionalProperties": true}]},
+                         "response_format": {
+                            "type": "object",
+                            "description": "json_object and json_schema are converted to a generation grammar.",
+                            "properties": {"type": {"type": "string", "enum": ["json_object", "json_schema"]}, "json_schema": {"type": "object", "properties": {"name": {"type": "string"}, "schema": {"type": "object", "additionalProperties": true}}}},
+                            "required": ["type"]
+                         },
+                         "reasoning_effort": {"type": "string", "description": "Forwarded to the active Jinja chat template."},
+                         "chat_template_kwargs": {"type": "object", "additionalProperties": true},
+                         "continue_assistant_turn": {"type": "boolean", "default": true},
+                         "encapsulate_thinking": {"type": "boolean", "default": true},
+                         "logprobs": {"type": "boolean"}
+                      },
+                      "required": ["messages"],
+                      "additionalProperties": true
+                   },
+                   "OpenAIChatCompletionResponse": {
+                      "type": "object",
+                      "properties": {
+                         "id": {"type": "string"}, "object": {"type": "string", "enum": ["chat.completion"]}, "created": {"type": "integer"}, "model": {"type": "string"},
+                         "choices": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "integer"}, "message": {"$ref": "#/components/schemas/OpenAIChatMessage"}, "finish_reason": {"type": "string", "enum": ["stop", "length", "tool_calls", "error"]}, "logprobs": {"type": "object", "nullable": true, "additionalProperties": true}}, "required": ["index", "message", "finish_reason"]}},
+                         "usage": {"$ref": "#/components/schemas/OpenAIUsage"}
+                      },
+                      "required": ["id", "object", "created", "model", "choices", "usage"]
+                   },
+                   "OpenAICompletionChunk": {
+                      "type": "object",
+                      "description": "JSON value carried by each data: line. The stream ends with data: [DONE].",
+                      "properties": {
+                         "id": {"type": "string"}, "object": {"type": "string", "enum": ["text_completion"]}, "created": {"type": "integer"}, "model": {"type": "string"},
+                         "choices": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "integer"}, "text": {"type": "string"}, "finish_reason": {"type": "string", "nullable": true, "enum": ["stop", "length", "error"]}, "logprobs": {"type": "object", "nullable": true, "additionalProperties": true}}, "required": ["index", "text"]}}
+                      },
+                      "required": ["id", "object", "created", "model", "choices"]
+                   },
+                   "OpenAIChatCompletionChunk": {
+                      "type": "object",
+                      "description": "JSON value carried by each data: line. Tool calls may be buffered and emitted near the end. The stream ends with data: [DONE].",
+                      "properties": {
+                         "id": {"type": "string"}, "object": {"type": "string", "enum": ["chat.completion.chunk"]}, "created": {"type": "integer"}, "model": {"type": "string"},
+                         "choices": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "integer"}, "finish_reason": {"type": "string", "nullable": true, "enum": ["stop", "length", "tool_calls", "error"]}, "delta": {"type": "object", "properties": {"role": {"type": "string", "enum": ["assistant"]}, "content": {"type": "string"}, "reasoning_content": {"type": "string"}, "tool_calls": {"type": "array", "items": {"$ref": "#/components/schemas/OpenAIToolCallDelta"}}}}, "logprobs": {"type": "object", "nullable": true, "additionalProperties": true}}, "required": ["index", "delta"]}},
+                         "usage": {"$ref": "#/components/schemas/OpenAIUsage"}
+                      },
+                      "required": ["id", "object", "created", "model", "choices"]
+                   },
+                   "OpenAIResponsesInputPart": {
+                      "oneOf": [
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["input_text"]}, "text": {"type": "string"}}, "required": ["type", "text"]},
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["input_image"]}, "image_url": {"type": "string", "description": "Use a data:image/...;base64,... URL."}}, "required": ["type", "image_url"]}
+                      ]
+                   },
+                   "OpenAIResponsesInputItem": {
+                      "type": "object",
+                      "properties": {"role": {"type": "string", "enum": ["system", "user", "assistant"]}, "content": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"$ref": "#/components/schemas/OpenAIResponsesInputPart"}}]}},
+                      "required": ["role", "content"]
+                   },
+                   "OpenAIResponsesRequest": {
+                      "type": "object",
+                      "description": "Experimental subset converted internally to Chat Completions.",
+                      "properties": {
+                         "model": {"type": "string"},
+                         "input": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"oneOf": [{"type": "string"}, {"$ref": "#/components/schemas/OpenAIResponsesInputItem"}]}}]},
+                         "instructions": {"type": "string"},
+                         "max_tokens": {"type": "integer", "description": "KoboldCpp compatibility field; max_output_tokens is not currently consumed."},
+                         "temperature": {"type": "number"},
+                         "top_p": {"type": "number"},
+                         "stream": {"type": "boolean", "default": false},
+                         "tools": {"type": "array", "items": {"$ref": "#/components/schemas/OpenAITool"}},
+                         "tool_choice": {"oneOf": [{"type": "string"}, {"type": "object", "additionalProperties": true}]}
+                      },
+                      "required": ["input"],
+                      "additionalProperties": true
+                   },
+                   "OpenAIResponseObject": {
+                      "type": "object",
+                      "properties": {
+                         "id": {"type": "string"}, "object": {"type": "string", "enum": ["response"]}, "created_at": {"type": "integer"}, "completed_at": {"type": "integer", "nullable": true}, "status": {"type": "string", "enum": ["in_progress", "completed", "failed"]}, "model": {"type": "string"},
+                         "incomplete_details": {"type": "object", "nullable": true, "additionalProperties": true},
+                         "previous_response_id": {"type": "string", "nullable": true},
+                         "truncation": {"type": "string", "enum": ["disabled"]},
+                         "parallel_tool_calls": {"type": "boolean"},
+                         "text": {"type": "object", "properties": {"format": {"type": "object", "properties": {"type": {"type": "string", "enum": ["text"]}}}, "verbosity": {"type": "string"}}},
+                         "instructions": {"type": "string", "nullable": true},
+                         "error": {"type": "object", "nullable": true, "additionalProperties": true},
+                         "metadata": {"type": "object", "additionalProperties": true},
+                         "tools": {"type": "array", "items": {"$ref": "#/components/schemas/OpenAITool"}},
+                         "tool_choice": {"type": "string"},
+                         "background": {"type": "boolean"},
+                         "service_tier": {"type": "string"},
+                         "safety_identifier": {"type": "string", "nullable": true},
+                         "prompt_cache_key": {"type": "string", "nullable": true},
+                         "max_tool_calls": {"type": "integer", "nullable": true},
+                         "store": {"type": "boolean"},
+                         "top_p": {"type": "number"},
+                         "max_output_tokens": {"type": "integer", "nullable": true},
+                         "presence_penalty": {"type": "number"},
+                         "frequency_penalty": {"type": "number"},
+                         "top_logprobs": {"type": "integer"},
+                         "temperature": {"type": "number"},
+                         "reasoning": {"type": "object", "properties": {"effort": {"type": "string", "nullable": true}, "summary": {"type": "string", "nullable": true}}},
+                         "output": {"type": "array", "description": "Assistant message and function_call output items.", "items": {"oneOf": [
+                            {"type": "object", "properties": {"type": {"type": "string", "enum": ["message"]}, "id": {"type": "string"}, "status": {"type": "string"}, "role": {"type": "string", "enum": ["assistant"]}, "content": {"type": "array", "items": {"type": "object", "properties": {"type": {"type": "string", "enum": ["output_text"]}, "text": {"type": "string"}, "annotations": {"type": "array", "items": {}}, "logprobs": {"type": "array", "items": {}}}, "required": ["type", "text"]}}}, "required": ["type", "id", "status", "role", "content"]},
+                            {"type": "object", "properties": {"type": {"type": "string", "enum": ["function_call"]}, "id": {"type": "string"}, "call_id": {"type": "string"}, "name": {"type": "string"}, "arguments": {"type": "string"}, "status": {"type": "string"}}, "required": ["type", "id", "call_id", "name", "arguments", "status"]}
+                         ]}},
+                         "usage": {"type": "object", "nullable": true, "properties": {"input_tokens": {"type": "integer"}, "output_tokens": {"type": "integer"}, "total_tokens": {"type": "integer"}}, "required": ["input_tokens", "output_tokens", "total_tokens"]}
+                      },
+                      "required": ["id", "object", "created_at", "status", "model", "output", "usage"]
+                   },
+                   "OpenAIErrorResponse": {
+                      "type": "object",
+                      "properties": {"error": {"type": "object", "properties": {"message": {"type": "string"}, "type": {"type": "string"}, "param": {"type": "string", "nullable": true}, "code": {"type": "string"}}, "required": ["message", "type", "code"]}},
+                      "required": ["error"]
+                   },
+                   "OpenAIResponseStreamEvent": {
+                      "type": "object",
+                      "description": "Data object for one Responses SSE event. KoboldCpp emits response.created, response.output_item.added, response.content_part.added, response.output_text.delta, response.output_text.done, response.output_item.done, and response.completed.",
+                      "properties": {
+                         "type": {"type": "string", "enum": ["response.created", "response.output_item.added", "response.content_part.added", "response.output_text.delta", "response.output_text.done", "response.output_item.done", "response.completed"]},
+                         "sequence_number": {"type": "integer"}, "response": {"$ref": "#/components/schemas/OpenAIResponseObject"}, "output_index": {"type": "integer"}, "content_index": {"type": "integer"}, "item_id": {"type": "string"}, "delta": {"type": "string"}, "text": {"type": "string"}, "item": {"type": "object", "additionalProperties": true}, "part": {"type": "object", "additionalProperties": true}, "logprobs": {"type": "array", "items": {}}
+                      },
+                      "required": ["type", "sequence_number"]
+                   },
+                   "OpenAIImageRequest": {
+                      "type": "object",
+                      "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}, "size": {"type": "string", "example": "512x512"}, "response_format": {"type": "string", "enum": ["b64_json"]}, "n": {"type": "integer", "description": "Accepted, but KoboldCpp returns one image."}},
+                      "required": ["prompt"],
+                      "additionalProperties": true
+                   },
+                   "OpenAIImageEditRequest": {
+                      "type": "object",
+                      "properties": {"image": {"type": "string", "format": "binary"}, "mask": {"type": "string", "format": "binary"}, "prompt": {"type": "string"}, "model": {"type": "string"}, "size": {"type": "string"}, "response_format": {"type": "string", "enum": ["b64_json"]}},
+                      "required": ["image", "prompt"],
+                      "additionalProperties": true
+                   },
+                   "OpenAIImageResponse": {
+                      "type": "object",
+                      "properties": {"created": {"type": "integer"}, "data": {"type": "array", "items": {"type": "object", "properties": {"b64_json": {"type": "string", "format": "byte"}}, "required": ["b64_json"]}}, "background": {"type": "string"}, "output_format": {"type": "string"}, "size": {"type": "string"}, "quality": {"type": "string"}},
+                      "required": ["created", "data"]
+                   },
+                   "OpenAIModelList": {
+                      "type": "object",
+                      "properties": {"object": {"type": "string", "enum": ["list"]}, "data": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "object": {"type": "string", "enum": ["model"]}, "created": {"type": "integer"}, "owned_by": {"type": "string"}, "status": {"type": "object", "additionalProperties": true}, "permission": {"type": "array", "items": {"type": "object"}}, "root": {"type": "string"}}, "required": ["id", "object", "created", "owned_by"]}}},
+                      "required": ["object", "data"]
+                   },
+                   "OpenAITranscriptionRequest": {
+                      "type": "object",
+                      "properties": {"file": {"type": "string", "format": "binary"}, "model": {"type": "string"}, "prompt": {"type": "string"}, "language": {"type": "string", "description": "Language code, or auto when omitted."}},
+                      "required": ["file"]
+                   },
+                   "OpenAISpeechRequest": {
+                      "type": "object",
+                      "properties": {"model": {"type": "string"}, "input": {"type": "string"}, "voice": {"type": "string"}, "response_format": {"type": "string", "enum": ["wav", "mp3"], "default": "wav"}, "seed": {"type": "integer"}, "language": {"type": "string"}, "instruction": {"type": "string"}},
+                      "required": ["input"]
+                   },
+                   "OpenAIVoiceList": {
+                      "type": "object",
+                      "properties": {"status": {"type": "string", "enum": ["ok"]}, "voices": {"type": "array", "items": {"type": "string"}}},
+                      "required": ["status", "voices"]
+                   },
+                   "OpenAIEmbeddingRequest": {
+                      "type": "object",
+                      "properties": {"model": {"type": "string"}, "input": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}, "encoding_format": {"type": "string", "enum": ["float", "base64"]}, "truncate": {"type": "boolean", "default": true}},
+                      "required": ["input"]
+                   },
+                   "OpenAIEmbeddingResponse": {
+                      "type": "object",
+                      "properties": {"object": {"type": "string", "enum": ["list"]}, "data": {"type": "array", "items": {"type": "object", "properties": {"object": {"type": "string", "enum": ["embedding"]}, "index": {"type": "integer"}, "embedding": {"oneOf": [{"type": "array", "items": {"type": "number", "format": "float"}}, {"type": "string", "format": "byte"}]}}, "required": ["object", "index", "embedding"]}}, "model": {"type": "string"}, "usage": {"type": "object", "properties": {"prompt_tokens": {"type": "integer"}, "total_tokens": {"type": "integer"}}, "required": ["prompt_tokens", "total_tokens"]}},
+                      "required": ["object", "data", "model", "usage"]
+                   },
+                   "AnthropicSource": {
+                      "type": "object",
+                      "description": "Media/document source. Images and audio are usable as model media when supplied as base64; URL image sources are not downloaded. Document text/data is inserted as text.",
+                      "properties": {"type": {"type": "string", "enum": ["base64", "url", "text"]}, "media_type": {"type": "string"}, "data": {"type": "string"}, "url": {"type": "string"}, "text": {"type": "string"}},
+                      "required": ["type"]
+                   },
+                   "AnthropicContentBlock": {
+                      "oneOf": [
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["text"]}, "text": {"type": "string"}}, "required": ["type", "text"]},
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["image", "audio", "document"]}, "source": {"$ref": "#/components/schemas/AnthropicSource"}}, "required": ["type", "source"]},
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["tool_use"]}, "id": {"type": "string"}, "name": {"type": "string"}, "input": {"type": "object", "additionalProperties": true}}, "required": ["type", "id", "name", "input"]},
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["tool_result"]}, "tool_use_id": {"type": "string"}, "content": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"$ref": "#/components/schemas/AnthropicContentBlock"}}]}, "is_error": {"type": "boolean"}}, "required": ["type", "tool_use_id", "content"]}
+                      ]
+                   },
+                   "AnthropicMessage": {
+                      "type": "object",
+                      "properties": {"role": {"type": "string", "enum": ["user", "assistant"]}, "content": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"$ref": "#/components/schemas/AnthropicContentBlock"}}]}},
+                      "required": ["role", "content"]
+                   },
+                   "AnthropicTool": {
+                      "type": "object",
+                      "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "input_schema": {"type": "object", "additionalProperties": true}},
+                      "required": ["name", "input_schema"]
+                   },
+                   "AnthropicMessagesRequest": {
+                      "type": "object",
+                      "properties": {
+                         "model": {"type": "string", "description": "Compatibility model identifier. KoboldCpp generates with the active text model and reports that model's name in the response."},
+                         "messages": {"type": "array", "items": {"$ref": "#/components/schemas/AnthropicMessage"}},
+                         "system": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "object", "properties": {"type": {"type": "string", "enum": ["text"]}, "text": {"type": "string"}}, "required": ["type", "text"]}}]},
+                         "max_tokens": {"type": "integer", "minimum": 1},
+                         "temperature": {"type": "number"}, "top_p": {"type": "number"}, "top_k": {"type": "integer"},
+                         "stop_sequences": {"type": "array", "items": {"type": "string"}, "description": "Accepted in the payload but not currently mapped to stopping. Use the KoboldCpp/OpenAI-compatible stop field for working stop strings."},
+                         "stop": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                         "stream": {"type": "boolean", "default": false},
+                         "tools": {"type": "array", "items": {"$ref": "#/components/schemas/AnthropicTool"}},
+                         "tool_choice": {"description": "Supports auto, required, none, an exact function name, or an OpenAI-style function choice object. Anthropic's native {type: tool, name: ...} object is not currently interpreted.", "oneOf": [{"type": "string"}, {"type": "object", "additionalProperties": true}]},
+                         "encapsulate_thinking": {"type": "boolean", "default": true}
+                      },
+                      "required": ["messages", "max_tokens"],
+                      "additionalProperties": true
+                   },
+                   "AnthropicMessagesResponse": {
+                      "type": "object",
+                      "properties": {"id": {"type": "string"}, "type": {"type": "string", "enum": ["message"]}, "role": {"type": "string", "enum": ["assistant"]}, "model": {"type": "string"}, "content": {"type": "array", "items": {"oneOf": [
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["text"]}, "text": {"type": "string"}}, "required": ["type", "text"]},
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["thinking"]}, "thinking": {"type": "string"}}, "required": ["type", "thinking"]},
+                         {"type": "object", "properties": {"type": {"type": "string", "enum": ["tool_use"]}, "id": {"type": "string"}, "name": {"type": "string"}, "input": {"type": "object", "additionalProperties": true}}, "required": ["type", "id", "name", "input"]}
+                      ]}}, "stop_reason": {"type": "string", "enum": ["end_turn", "max_tokens", "stop_sequence", "tool_use"]}, "stop_sequence": {"type": "string", "nullable": true}, "usage": {"type": "object", "properties": {"input_tokens": {"type": "integer"}, "output_tokens": {"type": "integer"}}, "required": ["input_tokens", "output_tokens"]}},
+                      "required": ["id", "type", "role", "model", "content", "stop_reason", "usage"]
+                   },
+                   "AnthropicStreamEvent": {
+                      "type": "object",
+                      "description": "Data object for an Anthropic-style SSE event. The SSE event name matches type.",
+                      "properties": {
+                         "type": {"type": "string", "enum": ["message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"]},
+                         "message": {"type": "object", "description": "Partial message supplied by message_start.", "properties": {"type": {"type": "string", "enum": ["message"]}, "id": {"type": "string"}, "role": {"type": "string", "enum": ["assistant"]}, "model": {"type": "string"}, "content": {"type": "array", "items": {}}, "stop_reason": {"type": "string", "nullable": true}, "stop_sequence": {"type": "string", "nullable": true}, "usage": {"type": "object", "properties": {"input_tokens": {"type": "integer"}, "output_tokens": {"type": "integer"}}}}, "required": ["type", "id", "role", "model", "usage"]},
+                         "index": {"type": "integer"},
+                         "content_block": {"type": "object", "additionalProperties": true},
+                         "delta": {"type": "object", "description": "text_delta, thinking_delta, input_json_delta, or final stop information.", "additionalProperties": true},
+                         "usage": {"type": "object", "properties": {"input_tokens": {"type": "integer"}, "output_tokens": {"type": "integer"}}}
+                      },
+                      "required": ["type"]
                    }
                 },
                 "securitySchemes": {
@@ -534,10 +900,7 @@
                          "content": {
                             "application/json": {
                                "example": {"model":"kcpp","prompt": "Hi, my name is Kobo and", "temperature": 0.8,"max_tokens": 64},
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
+                               "schema": {"$ref": "#/components/schemas/OpenAICompletionRequest"}
                             }
                          },
                          "required": true
@@ -545,7 +908,14 @@
                       "tags": [
                          "v1"
                       ],
-                      "responses": {"default": {"description": ""}}
+                      "responses": {
+                         "200": {"description": "Completion response, or an SSE stream when stream=true.", "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/OpenAICompletionResponse"}},
+                            "text/event-stream": {"schema": {"oneOf": [{"$ref": "#/components/schemas/OpenAICompletionChunk"}, {"$ref": "#/components/schemas/OpenAIErrorResponse"}], "description": "Each data payload is a completion chunk or, after headers have been committed, an error object. The stream terminates with [DONE]."}}
+                         }},
+                         "401": {"$ref": "#/components/responses/Unauthorized"},
+                         "500": {"description": "The backend failed to generate a completion.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OpenAIErrorResponse"}}}}
+                      }
                    }
                 },
                 "/v1/chat/completions": {
@@ -557,10 +927,7 @@
                          "content": {
                             "application/json": {
                                "example": {"model":"kcpp","messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Tell me a joke about Kobolds."}],  "temperature": 0.7},
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
+                               "schema": {"$ref": "#/components/schemas/OpenAIChatCompletionRequest"}
                             }
                          },
                          "required": true
@@ -568,7 +935,14 @@
                       "tags": [
                          "v1"
                       ],
-                      "responses": {"default": {"description": ""}}
+                      "responses": {
+                         "200": {"description": "Chat completion, or an SSE stream when stream=true.", "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/OpenAIChatCompletionResponse"}},
+                            "text/event-stream": {"schema": {"oneOf": [{"$ref": "#/components/schemas/OpenAIChatCompletionChunk"}, {"$ref": "#/components/schemas/OpenAIErrorResponse"}], "description": "Each data payload is a chat chunk or, after headers have been committed, an error object. The stream terminates with [DONE]."}}
+                         }},
+                         "401": {"$ref": "#/components/responses/Unauthorized"},
+                         "500": {"description": "The backend failed to generate a chat completion.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OpenAIErrorResponse"}}}}
+                      }
                    }
                 },
                 "/v1/responses": {
@@ -580,10 +954,7 @@
                          "content": {
                             "application/json": {
                                "example": {"model":"kcpp","input": "Tell me a joke about Kobolds."},
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
+                               "schema": {"$ref": "#/components/schemas/OpenAIResponsesRequest"}
                             }
                          },
                          "required": true
@@ -591,7 +962,13 @@
                       "tags": [
                          "v1"
                       ],
-                      "responses": {"default": {"description": ""}}
+                      "responses": {
+                         "200": {"description": "Response object, or named SSE events when stream=true.", "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/OpenAIResponseObject"}},
+                            "text/event-stream": {"schema": {"$ref": "#/components/schemas/OpenAIResponseStreamEvent"}}
+                         }},
+                         "401": {"$ref": "#/components/responses/Unauthorized"}
+                      }
                    }
                 },
                 "/v1/images/generations": {
@@ -602,35 +979,7 @@
                          "content": {
                             "application/json": {
                                "example": {"model":"kcpp","prompt": "picture of a kobold, high quality HD render", "n": 1, "size": "512x512", "response_format": "b64_json"},
-                               "schema": {
-                                  "properties": {
-                                     "model": {
-                                        "type": "string",
-                                        "description": "Model identifier. Use kcpp for the currently loaded image model."
-                                     },
-                                     "prompt": {
-                                        "type": "string",
-                                        "description": "Text prompt describing the image to generate."
-                                     },
-                                     "n": {
-                                        "type": "integer",
-                                        "description": "Number of images to generate.",
-                                        "minimum": 1
-                                     },
-                                     "size": {
-                                        "type": "string",
-                                        "description": "Requested image size, such as 512x512 or 1024x1024."
-                                     },
-                                     "response_format": {
-                                        "type": "string",
-                                        "description": "Response image format. b64_json returns base64 encoded image data."
-                                     }
-                                  },
-                                  "required": [
-                                     "prompt"
-                                  ],
-                                  "type": "object"
-                               }
+                               "schema": {"$ref": "#/components/schemas/OpenAIImageRequest"}
                             }
                          },
                          "required": true
@@ -643,36 +992,21 @@
                             "content": {
                                "application/json": {
                                   "example": {"created": 1710000000, "data": [{"b64_json": "base64_image_data"}]},
-                                  "schema": {
-                                     "properties": {
-                                        "created": {
-                                           "type": "integer",
-                                           "description": "Unix timestamp for the generation request."
-                                        },
-                                        "data": {
-                                           "type": "array",
-                                           "items": {
-                                              "type": "object",
-                                              "properties": {
-                                                 "b64_json": {
-                                                    "type": "string",
-                                                    "description": "Base64 encoded image data."
-                                                 },
-                                                 "url": {
-                                                    "type": "string",
-                                                    "description": "Image URL, if URL responses are supported."
-                                                 }
-                                              }
-                                           }
-                                        }
-                                     },
-                                     "type": "object"
-                                  }
+                                  "schema": {"$ref": "#/components/schemas/OpenAIImageResponse"}
                                }
                             },
                             "description": "Successful request"
                          }
                       }
+                   }
+                },
+                "/v1/images/edits": {
+                   "post": {
+                      "summary": "Edit an image using the OpenAI-compatible multipart format",
+                      "description": "Requires a loaded image model. Repeated image or image[] fields and an optional mask are accepted. KoboldCpp returns one base64 PNG image and intentionally bypasses --password authentication.",
+                      "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/OpenAIImageEditRequest"}}}},
+                      "tags": ["v1"],
+                      "responses": {"200": {"description": "Edited image.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OpenAIImageResponse"}}}}}
                    }
                 },
                 "/v1/models": {
@@ -682,18 +1016,22 @@
                       "tags": [
                          "v1"
                       ],
-                      "responses": {"default": {"description": ""}}
+                      "responses": {"200": {"description": "Model list.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OpenAIModelList"}}}}}
                    }
                 },
                 "/v1/audio/transcriptions": {
                    "post": {
                       "security": [{"BearerAuth": []}],
-                      "summary": "Transcribes a wav file with speech to text using loaded Whisper model. Please refer to OpenAI documentation",
-                      "description": "Transcribes a wav file with speech to text using loaded Whisper model.\n\n This is an OpenAI compatibility endpoint.\n\n Please refer to OpenAI documentation at [https://developers.openai.com/docs/api-reference/audio/createTranscription](https://developers.openai.com/docs/api-reference/audio/createTranscription)",
+                      "summary": "Create an OpenAI-compatible audio transcription",
+                      "description": "Accepts a multipart audio file plus optional prompt and language. Uses the loaded Whisper model, or an audio-capable multimodal projector when Whisper is unavailable.",
+                      "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/OpenAITranscriptionRequest"}}}},
                       "tags": [
                          "v1"
                       ],
-                      "responses": {"default": {"description": ""}}
+                      "responses": {
+                         "200": {"description": "Transcription text.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TranscriptionResult"}}}},
+                         "401": {"$ref": "#/components/responses/Unauthorized"}
+                      }
                    }
                 },
                 "/v1/audio/speech": {
@@ -705,10 +1043,7 @@
                          "content": {
                             "application/json": {
                                "example": {"model":"kcpp","input": "Hello, my name is Kobold and I love to play.", "voice": "alloy"},
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
+                               "schema": {"$ref": "#/components/schemas/OpenAISpeechRequest"}
                             }
                          },
                          "required": true
@@ -716,7 +1051,18 @@
                       "tags": [
                          "v1"
                       ],
-                      "responses": {"default": {"description": ""}}
+                      "responses": {
+                         "200": {"description": "Generated audio bytes.", "content": {"audio/wav": {"schema": {"type": "string", "format": "binary"}}, "audio/mpeg": {"schema": {"type": "string", "format": "binary"}}}},
+                         "401": {"$ref": "#/components/responses/Unauthorized"}
+                      }
+                   }
+                },
+                "/v1/audio/voices": {
+                   "get": {
+                      "summary": "List voices available to the OpenAI-compatible speech endpoint",
+                      "description": "KoboldCpp extension used by compatible TTS clients. This public endpoint does not enforce --password.",
+                      "tags": ["v1"],
+                      "responses": {"200": {"description": "Available voice names.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OpenAIVoiceList"}}}}}
                    }
                 },
                 "/v1/embeddings": {
@@ -732,10 +1078,7 @@
                                  "input": "Niko the Kobold is in town today.",
                                  "truncate": true,
                               },
-                               "schema": {
-                                  "properties": {},
-                                  "type": "object"
-                               }
+                               "schema": {"$ref": "#/components/schemas/OpenAIEmbeddingRequest"}
                             }
                          },
                          "required": true
@@ -743,7 +1086,10 @@
                       "tags": [
                          "v1"
                       ],
-                      "responses": {"default": {"description": ""}}
+                      "responses": {
+                         "200": {"description": "Embedding list.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OpenAIEmbeddingResponse"}}}},
+                         "401": {"$ref": "#/components/responses/Unauthorized"}
+                      }
                    }
                 },
                 "/v1/messages": {
@@ -768,7 +1114,7 @@
                            "name": "anthropic-version",
                            "in": "header",
                            "required": false,
-                           "description": "Anthropic API version. Currently, '2023-06-01' is expected.",
+                           "description": "Accepted for Anthropic client compatibility but not inspected or validated by KoboldCpp.",
                            "schema": {
                               "type": "string",
                               "default": "2023-06-01"
@@ -776,7 +1122,7 @@
                         }
                      ],
                      "requestBody": {
-                        "required": false,
+                        "required": true,
                         "content": {
                            "application/json": {
                               "example": {
@@ -791,81 +1137,30 @@
                                  ],
                                  "temperature": 0.7
                               },
-                              "schema": {
-                                 "type": "object",
-                                 "required": [
-                                    "model",
-                                    "messages",
-                                    "max_tokens"
-                                 ],
-                                 "properties": {
-                                    "model": {
-                                       "type": "string",
-                                       "description": "The model that will handle the request."
-                                    },
-                                    "messages": {
-                                       "type": "array",
-                                       "description": "Input messages. Roles must alternate between user and assistant.",
-                                       "items": {
-                                          "type": "object",
-                                          "required": [
-                                             "role",
-                                             "content"
-                                          ],
-                                          "properties": {
-                                             "role": {
-                                                "type": "string",
-                                                "enum": ["user", "assistant"]
-                                             },
-                                             "content": {
-                                                "oneOf": [
-                                                   { "type": "string" },
-                                                   {
-                                                      "type": "array",
-                                                      "items": {
-                                                         "type": "object",
-                                                         "properties": {
-                                                            "type": {
-                                                               "type": "string",
-                                                               "enum": ["text", "image"]
-                                                            },
-                                                            "text": { "type": "string" }
-                                                         }
-                                                      }
-                                                   }
-                                                ]
-                                             }
-                                          }
-                                       }
-                                    },
-                                    "system": {
-                                       "type": "string",
-                                       "description": "System prompt to define the behavior and tone of the model."
-                                    },
-                                    "max_tokens": {
-                                       "type": "integer",
-                                       "description": "The maximum number of tokens to generate."
-                                    },
-                                    "temperature": {
-                                       "type": "number",
-                                       "minimum": 0.0,
-                                       "maximum": 1.0
-                                    },
-                                    "stream": {
-                                       "type": "boolean"
-                                    }
-                                 }
-                              }
+                              "schema": {"$ref": "#/components/schemas/AnthropicMessagesRequest"}
                            }
                         }
                      },
                      "responses": {
-                        "default": {
-                           "description": ""
-                        }
+                        "200": {"description": "Message response, or named Anthropic-style SSE events when stream=true.", "content": {
+                           "application/json": {"schema": {"$ref": "#/components/schemas/AnthropicMessagesResponse"}},
+                           "text/event-stream": {"schema": {"$ref": "#/components/schemas/AnthropicStreamEvent"}}
+                        }},
+                        "401": {"$ref": "#/components/responses/Unauthorized"}
                      }
                   }
                 },
+                "/v1/completion": {"$ref": "#/paths/~1v1~1completions"},
+                "/completions": {"$ref": "#/paths/~1v1~1completions"},
+                "/chat/completions": {"$ref": "#/paths/~1v1~1chat~1completions"},
+                "/responses": {"$ref": "#/paths/~1v1~1responses"},
+                "/images/generations": {"$ref": "#/paths/~1v1~1images~1generations"},
+                "/images/edits": {"$ref": "#/paths/~1v1~1images~1edits"},
+                "/models": {"$ref": "#/paths/~1v1~1models"},
+                "/audio/transcriptions": {"$ref": "#/paths/~1v1~1audio~1transcriptions"},
+                "/audio/speech": {"$ref": "#/paths/~1v1~1audio~1speech"},
+                "/audio/voices": {"$ref": "#/paths/~1v1~1audio~1voices"},
+                "/messages": {"$ref": "#/paths/~1v1~1messages"},
                 "/api/v1/config/max_context_length": {
                    "get": {
                       "responses": {
@@ -3264,7 +3559,7 @@
              ],
              "tags": [
                 {
-                   "description": "OpenAI Compatible APIs. Recommended for beginners.",
+                   "description": "OpenAI Compatible and Anthropic APIs. Recommended for beginners.",
                    "name": "v1"
                 },
                 {
