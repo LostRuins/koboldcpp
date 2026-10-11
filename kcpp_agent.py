@@ -1573,7 +1573,7 @@ def deterministic_auto_approval(
         if not glob_pattern_stays_within_root(args.get("pattern")):
             return None
 
-    return "Approved automatically (non-destructive action inside workdir)."
+    return "Approved automatically (action inside workdir)."
 
 
 def tool_view_image(
