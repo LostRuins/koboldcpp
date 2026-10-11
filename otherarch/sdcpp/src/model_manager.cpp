@@ -1904,6 +1904,49 @@ bool ModelManager::ensure_compute_backend_capacity(
         }
     }
 
+    // The loader retains mmap buffers after storage blocks are released, so
+    // demoting mapped states would only force duplicate allocations on reload.
+    std::unordered_set<TensorState*> mapped_states;
+    for (const auto& block : params_storage_blocks_) {
+        if (!block->mmap_tensor_stores.empty()) {
+            mapped_states.insert(block->states.begin(), block->states.end());
+        }
+    }
+    std::unordered_set<TensorState*> required_set(required_states.begin(), required_states.end());
+    std::vector<TensorState*> demoted_states;
+    auto revert_demotions = [&]() {
+        for (TensorState* state : demoted_states) {
+            if (state->loaded_to_params_backend) {
+                state->residency_mode = ResidencyMode::ParamBackend;
+            }
+        }
+    };
+    auto can_demote_to_disk = [&](TensorState* state) {
+        return state != nullptr && state->tensor != nullptr && state->tensor->view_src == nullptr &&
+               state->residency_mode == ResidencyMode::ParamBackend &&
+               state->params_backend != nullptr && state->params_backend == state->compute_backend &&
+               state->compute_backend == compute_backend && !sd_backend_is_cpu(state->params_backend) &&
+               state->pin_count == 0 && !state->staged_to_compute_backend && state->loaded_to_params_backend &&
+               protected_states.find(state) == protected_states.end() &&
+               required_set.find(state) == required_set.end() &&
+               mapped_states.find(state) == mapped_states.end() &&
+               !state->sources.empty() && state->applied_lora_epoch == UINT64_MAX &&
+               state->split_buffer_type == nullptr;
+    };
+    for (TensorState* state : global_candidates) {
+        if (!can_demote_to_disk(state)) {
+            continue;
+        }
+        state->residency_mode = ResidencyMode::Disk;
+        demoted_states.push_back(state);
+        add_evictable_state(state);
+        if (release_eviction_states()) {
+            revert_demotions();
+            return true;
+        }
+    }
+    revert_demotions();
+
     const auto capacity                = check_capacity(request, required_states, true);
     const std::string available_device = capacity.available_device_bytes == SIZE_MAX
                                              ? "unknown"

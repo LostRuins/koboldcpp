@@ -157,6 +157,7 @@ struct SDContextParams {
     bool disable_prefetch          = false;
     bool disable_segmented_compute = false;
     bool eager_load                = false;
+    bool batched_cfg               = true;
     std::string backend;
     std::string params_backend;
     std::string split_mode;

@@ -245,6 +245,7 @@ typedef struct {
     const char* rpc_servers;
     const char* model_args;
     bool disable_segmented_compute;  // Force monolithic graph execution even when automatic graph cutting would fit memory better
+    bool batched_cfg;                // Run the conditional and unconditional CFG branches in one batched UNet forward when supported
     float linear_scale;              // Override linear input scaling; 0 keeps the model default
     float attn_scale;                // Override flash-attention K/V scaling; 0 keeps the model default
     const char* tokenizer;           // tokenizer.json path or main=FILE,clip-l=FILE,clip-g=FILE assignments; required for PiD and Lens

@@ -378,6 +378,23 @@ static int parse_scale_override(int argc, const char** argv, int index, float& s
     return 1;
 }
 
+static int parse_on_off_arg(int argc, const char** argv, int index, const char* option, bool& value) {
+    if (++index >= argc) {
+        LOG_ERROR("%s requires 'on' or 'off'", option);
+        return -1;
+    }
+    const std::string arg = argv[index];
+    if (arg == "on") {
+        value = true;
+    } else if (arg == "off") {
+        value = false;
+    } else {
+        LOG_ERROR("invalid %s value '%s'; expected 'on' or 'off'", option, argv[index]);
+        return -1;
+    }
+    return 1;
+}
+
 ArgOptions SDContextParams::get_options() {
     ArgOptions options;
     options.string_options = {
@@ -637,23 +654,6 @@ ArgOptions SDContextParams::get_options() {
          true, &vae_conv_direct},
     };
 
-    auto on_auto_fit_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            LOG_ERROR("--auto-fit requires 'on' or 'off'");
-            return -1;
-        }
-        const std::string arg = argv[index];
-        if (arg == "on") {
-            auto_fit = true;
-        } else if (arg == "off") {
-            auto_fit = false;
-        } else {
-            LOG_ERROR("invalid --auto-fit value '%s'; expected 'on' or 'off'", argv[index]);
-            return -1;
-        }
-        return 1;
-    };
-
     auto on_type_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
@@ -742,7 +742,15 @@ ArgOptions SDContextParams::get_options() {
          "on|off (default: on). Preserve --backend (otherwise select one GPU) and place weights on the compute GPU, "
          "RAM, another GPU, or disk in that order, according to available memory (--max-vram limits GPU budgets). "
          "Disabled by explicit --params-backend; uses automatic graph segmentation when needed",
-         on_auto_fit_arg},
+         [this](int argc, const char** argv, int index) {
+             return parse_on_off_arg(argc, argv, index, "--auto-fit", auto_fit);
+         }},
+        {"",
+         "--batched-cfg",
+         "on|off (default: on). Run the conditional and unconditional CFG branches in one batched UNet forward when supported",
+         [this](int argc, const char** argv, int index) {
+             return parse_on_off_arg(argc, argv, index, "--batched-cfg", batched_cfg);
+         }},
         {"",
          "--type",
          "weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). "
@@ -940,6 +948,7 @@ std::string SDContextParams::to_string() const {
         << "  max_vram: \"" << max_vram << "\",\n"
         << "  disable_prefetch: " << (disable_prefetch ? "true" : "false") << ",\n"
         << "  disable_segmented_compute: " << (disable_segmented_compute ? "true" : "false") << ",\n"
+        << "  batched_cfg: " << (batched_cfg ? "true" : "false") << ",\n"
         << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
@@ -1022,6 +1031,7 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.max_vram                        = max_vram.c_str();
     sd_ctx_params.disable_prefetch                = disable_prefetch;
     sd_ctx_params.disable_segmented_compute       = disable_segmented_compute;
+    sd_ctx_params.batched_cfg                     = batched_cfg;
     sd_ctx_params.eager_load                      = eager_load;
     sd_ctx_params.backend                         = effective_backend.c_str();
     sd_ctx_params.params_backend                  = effective_params_backend.c_str();
