@@ -373,6 +373,30 @@ public:
 // resolve model / diffusion_model and text encoder / llm / proj / vision paths
 static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params)
 {
+    //if t5 is set, and model is a gguf, load it as a diffusion model path
+    bool endswithgguf = (sd_params.model_path.rfind(".gguf") == sd_params.model_path.size() - 5);
+    if((sd_params.t5xxl_path!="" || sd_params.clip_l_path!="" || sd_params.clip_g_path!="") && endswithgguf)
+    {
+        //extra check - make sure there is no diffusion model prefix already inside!
+        if(!gguf_tensor_exists(sd_params.model_path,"model.diffusion_model.",false))
+        {
+            printf("\nSwap to Diffusion Model Path:%s",sd_params.model_path.c_str());
+            sd_params.diffusion_model_path = sd_params.model_path;
+            sd_params.model_path = "";
+        }
+    }
+
+    params.model_path = sd_params.model_path.c_str();
+    params.clip_l_path = sd_params.clip_l_path.c_str();
+    params.clip_g_path = sd_params.clip_g_path.c_str();
+    params.t5xxl_path = sd_params.t5xxl_path.c_str();
+    params.diffusion_model_path = sd_params.diffusion_model_path.c_str();
+    params.vae_path = sd_params.vae_path.c_str();
+    params.audio_vae_path = sd_params.audio_vae_path.c_str();
+    params.taesd_path = sd_params.taesd_path.c_str();
+    params.photo_maker_path = sd_params.stacked_id_embeddings_path.c_str();
+    params.tokenizer = "";
+
     auto path_empty = [](const char* path) -> bool {
         return path == nullptr || *path == '\0';
     };
@@ -815,32 +839,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     sd_params->stacked_id_embeddings_path = photomaker_filename;
     sd_params->lora_map = lora_map;
     sd_params->lora_dynamic = lora_dynamic;
-    //if t5 is set, and model is a gguf, load it as a diffusion model path
-    bool endswithgguf = (sd_params->model_path.rfind(".gguf") == sd_params->model_path.size() - 5);
-    if((sd_params->t5xxl_path!="" || sd_params->clip_l_path!="" || sd_params->clip_g_path!="") && endswithgguf)
-    {
-        //extra check - make sure there is no diffusion model prefix already inside!
-        if(!gguf_tensor_exists(sd_params->model_path,"model.diffusion_model.",false))
-        {
-            printf("\nSwap to Diffusion Model Path:%s",sd_params->model_path.c_str());
-            sd_params->diffusion_model_path = sd_params->model_path;
-            sd_params->model_path = "";
-        }
-    }
 
     sd_ctx_params_t params = {};
     sd_ctx_params_init(&params);
-
-    params.model_path = sd_params->model_path.c_str();
-    params.clip_l_path = sd_params->clip_l_path.c_str();
-    params.clip_g_path = sd_params->clip_g_path.c_str();
-    params.t5xxl_path = sd_params->t5xxl_path.c_str();
-    params.diffusion_model_path = sd_params->diffusion_model_path.c_str();
-    params.vae_path = sd_params->vae_path.c_str();
-    params.audio_vae_path = sd_params->audio_vae_path.c_str();
-    params.taesd_path = sd_params->taesd_path.c_str();
-    params.photo_maker_path = sd_params->stacked_id_embeddings_path.c_str();
-    params.tokenizer = "";
 
     params.rng_type = CUDA_RNG;
 
