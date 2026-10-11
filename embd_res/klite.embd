@@ -25801,7 +25801,7 @@ Current version indicated by LITEVER below.
 						}
 
 						synchro_polled_resptoolcalls = null;
-						render_gametext(false,false);
+						render_gametext(true,false);
 					}
 					if(synchro_polled_respimg)
 					{
