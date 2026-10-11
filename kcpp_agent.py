@@ -1479,11 +1479,25 @@ def review_tool_call(
     except (KeyError, IndexError, TypeError):
         return False
     return (
-        choice.get("finish_reason") != "length"
-        and not choice["message"].get("tool_calls")
-        and isinstance(content, str)
+        isinstance(content, str)
         and re.match(r"\s*APPROVED[^\w\s]*(?:\s|$)", content, re.IGNORECASE) is not None
     )
+
+
+def path_is_within_workdir(
+    path_value: Any,
+    workdir: Path | None = None,
+) -> bool:
+    """Return whether a path resolves inside the current working directory."""
+    try:
+        root = (workdir or Path.cwd()).resolve()
+        path = Path(path_value).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        path.resolve(strict=False).relative_to(root)
+    except (TypeError, ValueError, OSError, RuntimeError):
+        return False
+    return True
 
 
 def write_path_requires_confirmation(
@@ -1491,20 +1505,75 @@ def write_path_requires_confirmation(
     args: dict[str, Any],
     workdir: Path | None = None,
 ) -> bool:
-    """Return whether an auto-mode write/edit targets outside the workdir."""
+    """Return whether an auto-mode write/edit needs explicit confirmation."""
     if name not in {"write", "edit"}:
         return False
+    return not path_is_within_workdir(args.get("path"), workdir)
 
+
+def auto_mode_manual_confirmation_reason(
+    name: str,
+    args: dict[str, Any],
+    workdir: Path | None = None,
+) -> str | None:
+    """Explain why an auto-mode call must bypass automatic review."""
+    if name == "shell":
+        return "Shell commands require explicit confirmation in auto mode."
+    if write_path_requires_confirmation(name, args, workdir):
+        return "Write/edit outside the working directory requires explicit confirmation."
+    return None
+
+
+def glob_pattern_stays_within_root(pattern_value: Any) -> bool:
+    """Return whether every supported glob expansion avoids parent traversal."""
     try:
-        root = (workdir or Path.cwd()).resolve()
-        path = Path(args["path"]).expanduser()
-        if not path.is_absolute():
-            path = root / path
-        path.resolve(strict=False).relative_to(root)
-    except (KeyError, TypeError, ValueError, OSError, RuntimeError):
-        # Invalid or unresolvable paths should fail closed and require a person.
-        return True
-    return False
+        patterns = [str(pattern_value)]
+        while any(re.search(r"\{[^{}]+\}", item) for item in patterns):
+            expanded = []
+            for item in patterns:
+                group = re.search(r"\{([^{}]+)\}", item)
+                if group:
+                    expanded.extend(
+                        item[:group.start()] + alternative + item[group.end():]
+                        for alternative in group.group(1).split(",")
+                    )
+                else:
+                    expanded.append(item)
+            if len(expanded) > 256:
+                return False
+            patterns = expanded
+        return all(
+            not Path(pattern).is_absolute() and ".." not in Path(pattern).parts
+            for pattern in patterns
+        )
+    except (TypeError, ValueError, OSError):
+        return False
+
+
+def deterministic_auto_approval(
+    name: str,
+    args: dict[str, Any],
+    workdir: Path | None = None,
+) -> str | None:
+    """Return an approval label for clearly safe auto-mode built-in calls."""
+    path_value: Any
+    if name in {"read", "write", "edit", "view_image"}:
+        path_value = args.get("path")
+    elif name in {"glob", "grep"}:
+        path_value = args.get("path", ".")
+    else:
+        return None
+
+    if not path_is_within_workdir(path_value, workdir):
+        return None
+
+    if name == "glob":
+        # A search rooted inside the workdir must not use its pattern to walk
+        # back out, including through the brace expansion supported by glob.
+        if not glob_pattern_stays_within_root(args.get("pattern")):
+            return None
+
+    return "Approved automatically (non-destructive action inside workdir)."
 
 
 def tool_view_image(
@@ -2107,7 +2176,7 @@ def print_runtime_help(
         ("/workdir", "Show the current working directory"),
         ("/workdir PATH", "Change directory and clear the session"),
         ("/confirm", "Show global default confirmation and tool overrides"),
-        ("/confirm on|off|auto", "Set global default: ask, approve, or automatic review"),
+        ("/confirm on|off|auto", "Set global default: ask, approve, or safe automatic handling"),
         ("/confirm NAME", "Show a tool's confirmation setting"),
         ("/confirm NAME on|off|auto", "Override confirmation for a tool. Overrides win over the default"),
         ("/confirm NAME default", "Remove the tool's override"),
@@ -2827,38 +2896,53 @@ def run_agent(
                                 result = f"ERROR: {type(exc).__name__}: {exc}"
                         else:
                             effective_mode = tool_confirmation.get(name, confirmation_mode)
+                            automatic_approval = None
                             reviewed_safe = False
                             if effective_mode == "auto":
-                                outside_workdir = write_path_requires_confirmation(name, args)
-                                if outside_workdir:
-                                    print(
-                                        "Write/edit outside the working directory "
-                                        "requires confirmation."
-                                    )
+                                manual_reason = auto_mode_manual_confirmation_reason(
+                                    name, args
+                                )
+                                if manual_reason is not None:
+                                    print(manual_reason)
                                 else:
-                                    try:
-                                        with Throbber("Reviewing tool call"):
-                                            reviewed_safe = review_tool_call(
-                                                messages, available_tools, call_id, name,
-                                                base_url, api_key, model, max_tokens,
-                                                request_timeout, reasoning_effort,
-                                            )
-                                    except Exception as exc:
-                                        print(f"Automatic review unavailable: {exc}")
-                                if not reviewed_safe and not outside_workdir:
+                                    automatic_approval = deterministic_auto_approval(name, args)
+                                    if automatic_approval is None:
+                                        try:
+                                            with Throbber("Reviewing tool call"):
+                                                reviewed_safe = review_tool_call(
+                                                    messages, available_tools, call_id, name,
+                                                    base_url, api_key, model, max_tokens,
+                                                    request_timeout, reasoning_effort,
+                                                )
+                                        except Exception as exc:
+                                            print(f"Automatic review unavailable: {exc}")
+                                if (
+                                    automatic_approval is None
+                                    and not reviewed_safe
+                                    and manual_reason is None
+                                ):
                                     print("Automatic review requests confirmation.")
+                            auto_approve = (
+                                effective_mode == "off"
+                                or automatic_approval is not None
+                                or reviewed_safe
+                            )
+                            if automatic_approval is not None:
+                                approval_label = automatic_approval
+                            elif reviewed_safe:
+                                approval_label = "Approved by automatic review."
+                            elif name in tool_confirmation:
+                                approval_label = (
+                                    f"Approved automatically (/confirm {name} off)."
+                                )
+                            else:
+                                approval_label = "Approved automatically (confirm off)."
                             try:
                                 approved = confirm_tool_call(
                                     display_name, args,
-                                    effective_mode == "off" or reviewed_safe,
+                                    auto_approve,
                                     verbose,
-                                    approval_label=(
-                                        "Approved by automatic review."
-                                        if reviewed_safe else (
-                                            f"Approved automatically (/confirm {name} off)."
-                                            if name in tool_confirmation else "Approved automatically (confirm off)."
-                                        )
-                                    ),
+                                    approval_label=approval_label,
                                 )
                             except AgentInterrupted:
                                 pending_interruption = True
@@ -2988,9 +3072,11 @@ def parse_args() -> argparse.Namespace:
         choices=CONFIRMATION_MODES,
         default="on",
         help=(
-            "Default tool confirmation: 'on' asks, 'off' approves, and 'auto' asks "
-            "when automatic review does not approve; write/edit paths outside the "
-            "working directory always ask in auto mode (default: %(default)s). "
+            "Default tool confirmation: 'on' asks, 'off' approves, and 'auto' "
+            "approves non-destructive built-in actions inside the working directory "
+            "and asks when automatic review does not approve. Shell commands and "
+            "write/edit paths outside the working directory always ask in auto mode "
+            "(default: %(default)s). "
             "Per-tool overrides take precedence; ask_user prompts directly unless overridden."
         ),
     )
