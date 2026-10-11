@@ -404,7 +404,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params)
 
         tempver = model_loader.get_sd_version();
 
-        bool fallback_swapped = false;
+        bool fallback_prefixed = false;
 
         // kcpp fallback to separate diffusion model passed as model
         if (!path_empty(params.model_path) &&
@@ -418,13 +418,14 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params)
                 if (!model_loader.init_from_file(params.model_path, "model.diffusion_model.")) {
                     printf("loading diffusion model from '%s' failed", params.model_path);
                 }
-                fallback_swapped = true;
-                std::swap(params.diffusion_model_path, params.model_path);
+                fallback_prefixed = true;
+                // Keep both paths so VAE or conditioner tensors that must remain at their original names still work.
+                params.diffusion_model_path = params.model_path;
                 tempver = model_loader.get_sd_version();
             }
         }
 
-        if (tempver == VERSION_ANIMA && !fallback_swapped &&
+        if (tempver == VERSION_ANIMA && !fallback_prefixed &&
             !path_empty(params.model_path) &&
             path_empty(params.diffusion_model_path) &&
             !model_loader.has_diffusion_model_tensors()
