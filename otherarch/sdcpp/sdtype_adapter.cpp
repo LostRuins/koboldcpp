@@ -1567,14 +1567,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     int vae_tile_size = -1;
     if (dotile) {
+        // bump tile size to 1/4 of the configured maximum non-tiled image size
+        // (so 1/4 of the memory that would be used for that image)
+        const int minimum_tile_size = 256; // from mainline sdcpp
         int new_vae_tile_size = cfg_tiled_vae_threshold;
         new_vae_tile_size = new_vae_tile_size / 2;
-        new_vae_tile_size -= new_vae_tile_size % 2;
-        // VAE tiling requires at least four latent pixels on each spatial axis.
-        // --sdtiledvae is expressed in image pixels, so clamp low custom values
-        // before passing them to stable-diffusion.cpp's tiling validation.
-        new_vae_tile_size = std::max(new_vae_tile_size, 4 * info.vae_scale_factor);
-        if (new_vae_tile_size > vae_tile_size) {
+        new_vae_tile_size = roundup_to(new_vae_tile_size, 64);
+        if (new_vae_tile_size > minimum_tile_size) {
             vae_tile_size = new_vae_tile_size;
         }
     }
