@@ -1,3 +1,4 @@
+import argparse
 import math
 import os
 import sys
@@ -10,6 +11,12 @@ import koboldcpp
 
 
 class NumericParsingTests(unittest.TestCase):
+    def test_reqtimeout_parsing(self):
+        self.assertEqual(koboldcpp.parse_reqtimeout("0"), koboldcpp.default_reqtimeout)
+        self.assertEqual(koboldcpp.parse_reqtimeout("30"), 30)
+        with self.assertRaises(argparse.ArgumentTypeError):
+            koboldcpp.parse_reqtimeout("-1")
+
     def test_valid_numeric_values_keep_existing_behavior(self):
         self.assertEqual(koboldcpp.tryparseint("12", 17), 12)
         self.assertEqual(koboldcpp.tryparseint("true", 17), 1)

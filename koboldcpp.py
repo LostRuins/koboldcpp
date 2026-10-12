@@ -73,6 +73,15 @@ swa_padding_default = 0
 default_reqtimeout = 600 # 10 min default
 default_maxctx = 16384
 
+def parse_reqtimeout(value):
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("must be a valid integer")
+    if timeout < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
+    return timeout or default_reqtimeout
+
 # abuse prevention
 stop_token_max = 256
 ban_token_max = 768
@@ -5484,7 +5493,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                         time.sleep(3)
                         global_memory["last_active_timestamp"] = datetime.now()
                         global_memory["triggered_sleeping"] = False
-                        if not self.wait_for_upstream_ready(upstream_port,120,0.5):
+                        if not self.wait_for_upstream_ready(upstream_port,args.reqtimeout,0.5):
                             self.send_error(504, "KoboldCpp model swap reload timed out")
                             return
                         time.sleep(0.1)
@@ -5534,7 +5543,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                     resp = conn.getresponse()
                     time.sleep(3)
                     global_memory["last_active_timestamp"] = datetime.now()
-                    if not self.wait_for_upstream_ready(upstream_port,120,0.5):
+                    if not self.wait_for_upstream_ready(upstream_port,args.reqtimeout,0.5):
                         self.send_error(504, "KoboldCpp model swap reload timed out")
                         return
                     time.sleep(0.1)
@@ -13922,7 +13931,7 @@ if __name__ == '__main__':
     admingroup.add_argument("--admindir", metavar=('[directory]'), help="Specify a directory to look for .kcpps configs in, which can be used to swap models.", default="")
     admingroup.add_argument("--adminunloadtimeout", help="Set an idle timeout in seconds after which KoboldCpp will automatically unload the current model.", type=int, default=0)
     admingroup.add_argument("--routermode", help="Router mode uses a reverse proxy router, allowing you to easily hotswap models and configs within a single request. Requires admin mode.", action='store_true')
-    admingroup.add_argument("--reqtimeout", metavar=('[seconds]'), help="Timeout in seconds for HTTP requests.", type=int, default=default_reqtimeout)
+    admingroup.add_argument("--reqtimeout", metavar=('[seconds]'), help="Timeout in seconds for HTTP requests. Use 0 for the default timeout.", type=parse_reqtimeout, default=default_reqtimeout)
     admingroup.add_argument("--autoswapmode", help="Autoswap mode builds on router mode to allow switching of model types within the same config automatically. Requires admin mode and router mode. All models desired must be defined within the same config.", action='store_true')
     admingroup.add_argument("--autoswapthreshold", help=f"Keep model families at or below this combined file size resident in autoswap mode, in MB (default {default_autoswap_threshold}). Only one model family above the threshold is loaded at a time.", type=check_range(int,0,1048576), default=default_autoswap_threshold)
     admingroup.add_argument("--baseconfig", help="Specify a base .kcpps config to apply, if no custom base config is selected during a model swap", default="")
