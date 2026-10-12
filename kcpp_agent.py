@@ -2176,7 +2176,7 @@ def print_runtime_help(
         ("/workdir", "Show the current working directory"),
         ("/workdir PATH", "Change directory and clear the session"),
         ("/confirm", "Show global default confirmation and tool overrides"),
-        ("/confirm on|off|auto", "Set global default: ask, approve, or safe automatic handling"),
+        ("/confirm on|off|auto", "Set global default: always ask, always approve, or auto (approve only within workdir)"),
         ("/confirm NAME", "Show a tool's confirmation setting"),
         ("/confirm NAME on|off|auto", "Override confirmation for a tool. Overrides win over the default"),
         ("/confirm NAME default", "Remove the tool's override"),
