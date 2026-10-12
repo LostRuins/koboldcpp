@@ -4563,6 +4563,9 @@ def compress_tools_array(tools_array):
         tool_data = tool_dict
         if 'function' in tool_dict:
             tool_data = tool_dict['function']
+        if not isinstance(tool_data, dict) or not tool_data.get("name"):
+            print(f"Warning: Skipping unsupported tool (type: {tool_dict.get('type', 'unknown') if isinstance(tool_dict, dict) else 'unknown'}). Only OpenAI function tools are supported.")
+            continue
         tool_props = {}
         params = tool_data.get("parameters", {})
         props = params.get("properties", {})
