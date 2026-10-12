@@ -232,6 +232,18 @@ def gendefaults_parse_meta_field(*args, **kwargs):
     '''
     return koboldcpp.gendefaults_parse_meta_field(*args, **kwargs)
 
+def compress_tools_array(*args, **kwargs):
+    """
+    >>> compress_tools_array([{"type": "function", "function": {"name": "get_time", "parameters": {"properties": {"tz": {"type": "string"}}}}}])
+    [{'name': 'get_time', 'description': '', 'properties': {'tz': 'string'}}]
+
+    Built-in tool types without a name (e.g. a native web_search tool) are skipped
+    >>> compress_tools_array([{"type": "web_search"}, {"type": "function", "function": {"name": "f"}}])
+    Warning: Skipping unsupported tool (type: web_search). Only OpenAI function tools are supported.
+    [{'name': 'f', 'description': '', 'properties': {}}]
+    """
+    return koboldcpp.compress_tools_array(*args, **kwargs)
+
 
 if __name__ == '__main__':
     import doctest
