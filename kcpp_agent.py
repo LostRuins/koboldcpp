@@ -1810,6 +1810,7 @@ def probe_endpoint(base_url: str, api_key: str, timeout: int) -> tuple[bool, str
                     model_id = entry.get("id") if isinstance(entry, dict) else None
                     if isinstance(model_id, str) and model_id.strip() and model_id not in models:
                         models.append(model_id)
+            models.sort(key=str.casefold)
             return True, detail, models
     except urllib.error.HTTPError as exc:
         # Authentication failures and servers without /models are still reachable.
