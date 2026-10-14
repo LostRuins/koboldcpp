@@ -12,7 +12,7 @@ Current version indicated by LITEVER below.
 -->
 <head>
 	<script id="init-config">
-	const LITEVER = 348;
+	const LITEVER = 349;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -81,6 +81,7 @@ Current version indicated by LITEVER below.
 		--img_corpo_delete:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAA7AAAAOwBeShxvQAAADxQTFRFAAAAmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZa/DskgAAABR0Uk5TAP8ZE8/k2cbhH56BdA9kAixGQ1txX8NpAAAAuElEQVR4nL2TyRbDIAhFAxqTOiQd/v9fmzikgNhd60qQd8F3dJr+s54+JpkzMdzb/gEAzvBznI9kq/DHHhZWgfbMhRqFM2CMrAfYWrsVOKPowSWRWJHpaVMsDItUrwyVGYqeMVQ9Zeh6whjoCWOgpwxd/7k/zDg4v1rY2zd9ZigV7f5lDtdVXP7VQskg/qHGYP4rDOF/xzDSf8nw/ZMrDF9DO3q0S42i4n9mxBrsm/JxUvSvXSZ/s96e2ATDYcXDVgAAAABJRU5ErkJggg==');
 		--img_corpo_theme:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAOxAAADsQBlSsOGwAAAEtQTFRFAAAAmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZCNPppgAAABl0Uk5TAP9EmbvlZocD/vsGPIjPfaJbLtdJl+Y6R35RHH0AAACySURBVHictZPJFoMgDEV5WoqA89D6/19aLIg1yaq1d4OPc48Jk1IX4JsHIrrxLAYaHBgWAxrP9K8amsUAkKttnyReIlhUaaKClYQJXRHpMEnCYPOy7CAJquhvkb7gLXEEYTRlxIyiMLvcg5slocVyjyxolXIfq3bvkcwcfrn5vCipKHR17vmbha9531ZRIDvPBXJ2XCCnz4V/XDmNOk2ka3+KAXN+KSQGvNH7WzOexd95AaOkBtmsQk/EAAAAAElFTkSuQmCC');
 		--img_corpo_plus:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgBAMAAACBVGfHAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAA7AAAAOwBeShxvQAAACdQTFRFAAAA////////////////////////////////////////////////rj1KOQAAAA10Uk5TAP/HEMgRAqWcN8vzIPkiUbkAAABLSURBVHicY2AgFszoROWzFYonoAgwKwoZDDYBtlAgiFkodRREg5w73QUIvDZKLwHRlUCBRkEkIIFNAEMLhqGDxbfYBTAiCiMq8QAA2C0hvciur8sAAAAASUVORK5CYII=');
+		--img_corpo_copy:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgBAMAAACBVGfHAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAA7AAAAOwBeShxvQAAAC1QTFRFAAAAlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWzeCBmwAAAA90Uk5TAP9VqgfrJ13bzD2NuJ12b2kN0QAAAKBJREFUeJxjYCAOsCmBgZYDjD9REALCoQKpgjBQABG4KFME1qItGAIRCGyBKt0oBaEFDaACikIgMjcQor/PASLAFggz8QhEgFOw2RgEbALlIAKJMlDnpEpABBTFoSbyCEIFhKACzINHAOx9JAFIACEJQIIQWQAcyAuloQIeopBocBXcBA5h9YOyEAl2eBzAgroUypdJgAqwLIJEJIxPCAAAeKMhAJi+weoAAAAASUVORK5CYII=');
 		--img_gear:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAA7AAAAOwBeShxvQAAADxQTFRFiYmJAAAAiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJ1owGHwAAABR0Uk5T/wAOBObNRLP0Fih22YC+ZVE1n4prfQ+hAAAA7UlEQVR4nJWT2xaEIAhFEbxk2v3//3WsmUCLVmt4It15kCNgXgIkpZ4uSQNgsuDinkUHNuEVmC2UyDPinPfM+hYY4BZbA3R3APoacG/Aet+35h8ArSKxCEBB2QeHP6CfuMTgI3qm8xR3YJJ/0lc28UI3F2Dkz3C2VxTHAmT+OrtrPC/lAkgT2SAUDR2IDSAteJCoiqRbkaEAixg10MV7uxydRF4JHqPnI8NCpxdVsyRWErNIMavD2m7FLde8h/EFQO1N1hJR2YdYS/BFszsPG5oajD/u4cpLxu1o0WVw6tEzqbOJp1MbXkPa8D7FB+prBiyq3W6BAAAAAElFTkSuQmCC');
 		--img_corpo_left:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAMAAADXqc3KAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAAnQAAAJ0Bj3LnbgAAADxQTFRFAAAAmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZa/DskgAAABR0Uk5TAP0C1vSFKA1oFwjrPK3DS6DRtVwhct1aAAAAhUlEQVR4nKWRyRIDIQhEaXfFZdT//9eY68CkkgrH1w3VANF/ZYK3Pv4gHM6wQeGXA/uscD48mBuP9YKz0l9qY8yUFb/Kn/wUuoPdUXAKDPQqN6OYLLBqkUp+K63KWSbuqfeYnCZcG8q0kqbDHEq0Mk7ovrWefZQlz35Sj8VNnJE+vPabegE7dATMPe9UFwAAAABJRU5ErkJggg==');
 		--img_corpo_right:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAMAAADXqc3KAAAAAXNSR0IB2cksfwAAAAlwSFlzAAAAnQAAAJ0Bj3LnbgAAADxQTFRFAAAAmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZa/DskgAAABR0Uk5TAP0C1oUoDfRoFwjqPK3DS6DRtVyphxJ2AAAAg0lEQVR4nJ2RSxLEIAhERVRE/ES9/13H2QYyVRmW/eyiW5z7b1LAEP0bEBHEJBwE6DKIj4eIRY4HCa6atIfzBGm1PJBHD5metBGoR6NO7QCiQakLALNa4mv76my+nzvdO5bRCGbmm+7TOFFnVlHL7ifo0BXiOvrWuuMma+jP+HHBN/MBKVwEvjDYz2QAAAAASUVORK5CYII=');
@@ -4489,7 +4490,7 @@ Current version indicated by LITEVER below.
 		instruct_endtag_end: "",
 		instruct_systag_end: "",
 		instruct_sysprompt: "",
-		instruct_gentag: "",
+		instruct_tag_gen: "",
 		instruct_has_markdown: true,
 		instruct_has_latex: true,
 		placeholder_tags: true,
@@ -5583,12 +5584,15 @@ Current version indicated by LITEVER below.
 
 	document.getElementById("lastreq1lp").innerHTML = document.getElementById("lastreq2lp").innerHTML =	document.getElementById("lastreq3lp").innerHTML = "";
 
+	let webbeta = is_using_web_lite_beta();
+	let LITEBETATAG = (webbeta?" Beta":"");
+
 	document.getElementById("lastreq1").innerHTML =
 	document.getElementById("lastreq2").innerHTML =
 	document.getElementById("lastreq3").innerHTML =
 	`<a href="#" class="color_footer mainnav" title="KoboldAI Lite Information"
     onclick="msgbox('Source code is available at <a class=&quot;color_blueurl&quot; target=&quot;_blank&quot; href=&quot;https://github.com/LostRuins/lite.koboldai.net&quot;>https://github.com/LostRuins/lite.koboldai.net</a><br>Please report any bugs you find there.<br><br>For local use, check out <a class=&quot;color_blueurl&quot; target=&quot;_blank&quot; title=&quot;KoboldCpp Github&quot; href=&quot;https://github.com/LostRuins/koboldcpp&quot;>KoboldCpp</a>. For help, visit our <a class=&quot;color_blueurl&quot; target=&quot;_blank&quot; title=&quot;KoboldAI Discord&quot; href=&quot;https://koboldai.org/discord&quot;>Discord</a>.','Information',true)">
-    KoboldAI Lite</a> v${LITEVER} Web - Frontend for
+    KoboldAI Lite${LITEBETATAG}</a> v${LITEVER} Web - Frontend for
     <a href="#" class="color_footer mainnav" title="KoboldAI Lite Disclaimer"
     onclick="msgbox('KoboldAI Lite allows you to connect to various third-party AI services. We do not control or assume responsibility for the models or content generated by these services. The user is responsible for ensuring that their usage of this software is legal in their country, and complies with the terms of service of the service they are connected to. Use at your own discretion. ','Disclaimer', true)">
     External LLM APIs</a>.`;
@@ -6339,18 +6343,18 @@ Current version indicated by LITEVER below.
 
 		}
 
-		// now fix final assist tag with an assist gen tag if applicable
+		// now fix final assist tag with an assist gen if applicable
 		let replaceDone = false;
 		let memoryEtIndex = memory.lastIndexOf(et);
 		let promptEtIndex = prompt.lastIndexOf(et);
-		if(prompt && promptEtIndex!=-1 && localsettings.instruct_gentag)
+		if(prompt && promptEtIndex!=-1 && localsettings.instruct_tag_gen)
 		{
-			prompt = replaceLast(prompt,et,localsettings.instruct_gentag.replaceAll("\\n", "\n"));
+			prompt = replaceLast(prompt,et,localsettings.instruct_tag_gen.replaceAll("\\n", "\n"));
 			replaceDone = true;
 		}
-		if(!replaceDone && memory && memoryEtIndex!=-1 && localsettings.instruct_gentag)
+		if(!replaceDone && memory && memoryEtIndex!=-1 && localsettings.instruct_tag_gen)
 		{
-			memory = replaceLast(memory,et,localsettings.instruct_gentag.replaceAll("\\n", "\n"));
+			memory = replaceLast(memory,et,localsettings.instruct_tag_gen.replaceAll("\\n", "\n"));
 			replaceDone = true;
 		}
 
@@ -10677,6 +10681,10 @@ Current version indicated by LITEVER below.
 	function is_using_web_lite()
 	{
 		return (window.location.hostname.includes("koboldai.net") || window.location.hostname.includes("lostruins.github.io"));
+	}
+	function is_using_web_lite_beta()
+	{
+		return (window.location.hostname.includes("lite-beta.koboldai.net"));
 	}
 	function is_using_kcpp_with_embeddings() {
 		return (custom_kobold_endpoint != "" && koboldcpp_version && koboldcpp_version != "" && compare_version_str(koboldcpp_version, "1.84") >= 0 && koboldcpp_has_embeddings);
@@ -17163,7 +17171,7 @@ Current version indicated by LITEVER below.
 		document.getElementById("instruct_starttag_end").value = localsettings.instruct_starttag_end;
 		document.getElementById("instruct_systag_end").value = localsettings.instruct_systag_end;
 		document.getElementById("instruct_endtag_end").value = localsettings.instruct_endtag_end;
-		document.getElementById("instruct_gentag").value = localsettings.instruct_gentag;
+		document.getElementById("instruct_tag_gen").value = localsettings.instruct_tag_gen;
 		document.getElementById("raw_instruct_tags").checked = localsettings.raw_instruct_tags;
 		document.getElementById("show_endpoint_selector").checked = localsettings.show_endpoint_selector;
 		document.getElementById("no_warn_unsaved").checked = localsettings.no_warn_unsaved;
@@ -18070,7 +18078,7 @@ Current version indicated by LITEVER below.
 		localsettings.instruct_starttag_end = document.getElementById("instruct_starttag_end").value;
 		localsettings.instruct_endtag_end = document.getElementById("instruct_endtag_end").value;
 		localsettings.instruct_systag_end = document.getElementById("instruct_systag_end").value;
-		localsettings.instruct_gentag = document.getElementById("instruct_gentag").value;
+		localsettings.instruct_tag_gen = document.getElementById("instruct_tag_gen").value;
 	}
 
 	function confirm_settings() {
@@ -18462,7 +18470,7 @@ Current version indicated by LITEVER below.
 				document.getElementById('instruct_endtag_end').value = itags.assistant_end;
 				document.getElementById('instruct_systag_end').value = itags.system_end;
 			}
-			document.getElementById('instruct_gentag').value = itags.assistant_gen?itags.assistant_gen:"";
+			document.getElementById('instruct_tag_gen').value = itags.assistant_gen?itags.assistant_gen:"";
 		}
 	}
 	function find_matching_instruct_preset(starttag, endtag)
@@ -18506,7 +18514,7 @@ Current version indicated by LITEVER below.
 			let st_end = document.getElementById('instruct_starttag_end').value;
 			let et_end = document.getElementById('instruct_endtag_end').value;
 			let sys_end = document.getElementById('instruct_systag_end').value;
-			let astgen = document.getElementById('instruct_gentag').value?document.getElementById('instruct_gentag').value:"";
+			let astgen = document.getElementById('instruct_tag_gen').value?document.getElementById('instruct_tag_gen').value:"";
 			let matched_astgen = (itags.assistant_gen?itags.assistant_gen:"");
 			if (!use_et) {
 				let matched_st = (itags.nonsplit_excludes_endtags?itags.user_start:(itags.assistant_end + itags.user_start));
@@ -26699,8 +26707,10 @@ Current version indicated by LITEVER below.
 			document.getElementById("fvico").href = favivon_normal;
 		}
 		else if (selected_models.length == 0 && selected_workers.length == 0) {
+			let webbeta = is_using_web_lite_beta();
+			let LITEBETATAG = (webbeta?" Beta":"");
 			let perfinfo = `There are <span class="color_orange">${perfdata.worker_count}</span> total <a class="color_blueurl mainnav" tabindex="${mainmenu_is_untab?`-1`:`0`}" href="#" onclick="get_and_show_workers()">volunteer(s)</a> in the AI Horde, and <span class="color_orange">${perfdata.queued_requests}</span> request(s) in queues.<br>A total of <span class="color_orange">${perfdata.past_minute_tokens}</span> tokens were generated in the last minute.<br><br>`;
-			document.getElementById("gametext").innerHTML = `Welcome to <span class="color_kobotext">KoboldAI Lite</span>!<br><br>${perfinfo}<a href="#" class="color_blueurl" onclick="display_endpoint_container()">Please select an AI service to use!</a><br>`;
+			document.getElementById("gametext").innerHTML = `Welcome to <span class="color_kobotext">KoboldAI Lite${LITEBETATAG}</span>!<br><br>${perfinfo}<a href="#" class="color_blueurl" onclick="display_endpoint_container()">Please select an AI service to use!</a><br>`;
 			document.getElementById("fvico").href = favivon_normal;
 		}
 		else if (pending_response_id == "") {
@@ -26934,6 +26944,33 @@ Current version indicated by LITEVER below.
 	{
 		corpo_retry_chunk(idx);
 	}
+	function copy_turn(idx, allow_blank=false)
+	{
+		let chatunits = [];
+		let currctx = concat_gametext(false, "", "", "", false);
+		currctx = replace_instruct_placeholders(currctx);
+		if(localsettings.opmode==3)
+		{
+			chatunits = repack_chat_history(currctx);
+		}
+		else if(localsettings.opmode==2)
+		{
+			chatunits = repack_adventure_history(currctx);
+		}
+		else if(localsettings.opmode==1)
+		{
+			chatunits = repack_story_history(currctx);
+		}
+		else
+		{
+			chatunits = repack_instruct_history(currctx, allow_blank);
+		}
+
+		if(idx >= 0 && idx < chatunits.length)
+		{
+			copyToClipboard(chatunits[idx].msg);
+		}
+	}
 
 	function classic_click_turn(button,idx,toggleopen = true)
 	{
@@ -26949,14 +26986,16 @@ Current version indicated by LITEVER below.
 		const popupMenu = document.getElementById('classicturnmenu');
 
 		let popcontent = `<button type="button" onclick="classic_edit_turn(${idx})">Edit Turn</button>`;
+		popcontent += `<button type="button" onclick="copy_turn(${idx}, true)">Copy Turn</button>`;
 		popcontent += `<button type="button" onclick="classic_delete_turn(${idx})">Delete Turn</button>`;
 		popcontent += `<button type="button" onclick="classic_retry_turn(${idx})">Retry Turn</button>`;
 		popcontent += `<button type="button" onclick="">Cancel</button>`;
 		popupMenu.innerHTML = popcontent;
 
+		const openDownward = rect.top < window.innerHeight / 2;
 		popupMenu.style.left = `${rect.left}px`;
-		popupMenu.style.top = `${rect.top - 10}px`;
-		popupMenu.style.transform = 'translateY(-100%)'; // makes it grow upward
+		popupMenu.style.top = openDownward ? `${rect.bottom + 10}px` : `${rect.top - 10}px`;
+		popupMenu.style.transform = openDownward ? 'none' : 'translateY(-100%)';
 
 		document.removeEventListener('click', handleOutsideClickClassicTurn);
 		popupMenu.style.display = (popupMenu.style.display === 'flex' ? 'none' : 'flex');
@@ -27196,12 +27235,13 @@ Current version indicated by LITEVER below.
 	function render_regular_welcome()
 	{
 		let outputhtml = "";
+		let webbeta = is_using_web_lite_beta();
+		let LITEBETATAG = (webbeta?" Beta":"");
 		if (perfdata == null) {
-			if(document.getElementById("connectstatus").innerHTML == "Offline Mode")
-			{
-				outputhtml = "Welcome to <span class=\"color_kobotext\">KoboldAI Lite</span>!<br>You are in <span class=\"color_red\">Offline Mode</span>.<br>You will still be able to load and edit stories, but not generate new text."
-			}else{
-				outputhtml = "Welcome to <span class=\"color_kobotext\">KoboldAI Lite</span>!<br><span class=\"color_orange\">Attempting to Connect...</span>"
+			if (document.getElementById("connectstatus").innerHTML == "Offline Mode") {
+				outputhtml = `Welcome to <span class="color_kobotext">KoboldAI Lite${LITEBETATAG}</span>!<br>You are in <span class="color_red">Offline Mode</span>.<br>You will still be able to load and edit stories, but not generate new text.`;
+			} else {
+				outputhtml = `Welcome to <span class="color_kobotext">KoboldAI Lite${LITEBETATAG}</span>!<br><span class="color_orange">Attempting to Connect...</span>`;
 			}
 		} else {
 			let whorun = "";
@@ -27235,7 +27275,7 @@ Current version indicated by LITEVER below.
 				selmodelstr = selected_models.reduce((s, a) => s + (s == "" ? "" : ", ") + a.name, "");
 			}
 
-			outputhtml = `Welcome to <span class="color_kobotext">KoboldAI Lite</span>!`+
+			outputhtml = `Welcome to <span class="color_kobotext">KoboldAI Lite${LITEBETATAG}</span>!`+
 			`<br>You are using the models <span class="color_lightgreen">${selmodelstr}</span>${(selected_workers.length == 0 ? `` : ` (Pinned to ${selected_workers.length} worker IDs)`)}.`+
 			`${whorun}.`+
 			(multiplayer_active?(!multiplayer_pinged?`<br><br><span class="color_orange">[ Trying to join Multiplayer... ]</span>`:`<br><br><span class="color_green">[ Multiplayer is <b>Active</b>! This session is shared with other server participants.]<br>[ You can leave via exit button in top right corner. ]</span>`):(is_using_kcpp_with_multiplayer()?`<br><br>[ <a href="#" tabindex="${mainmenu_is_untab?`-1`:`0`}" class="color_blueurl mainnav" onclick="join_multiplayer()"><span class="color_lightgreen">Multiplayer Available</span> - Click Here To Join</a> ]`:``))+
@@ -28037,6 +28077,7 @@ Current version indicated by LITEVER below.
 			let chunkbtns = (corpo_editing_turn == i ? `` : `<div style="line-height: 1">`+
 				historical_btns +
 				`<button title="Edit Chunk" onclick="corpo_edit_chunk_start(${i})" class="corpo_hover_btn" type="button" style="background-image: var(--img_corpo_edit);"></button>`+
+				`<button title="Copy Turn" onclick="copy_turn(${i})" class="corpo_hover_btn" type="button" style="background-image: var(--img_corpo_copy);"></button>`+
 				(curr.myturn ? `` : `<button title="Retry Chunk" onclick="corpo_retry_chunk(${i})" class="corpo_hover_btn" type="button" style="background-image: var(--img_corpo_retry);"></button>`)
 				+ `</div>`);
 
@@ -31975,9 +32016,9 @@ Current version indicated by LITEVER below.
 									</div>
 								</div>
 								<div class="justifyleft" style="display: flex; width: 100%; margin:2px">
-									<div style="width:120px">Assist. GenTag <span class="helpicon">?<span class="helptext">The sequence used to start the final turn of an assistant response. Leave blank if unsure</span></span></div>
+									<div style="width:120px">Assist. Tag Gen <span class="helpicon">?<span class="helptext">The sequence used to start the final turn of an assistant response. Leave blank if unsure</span></span></div>
 									<div style="width:calc(100% - 100px); display:flex; gap:2px">
-									<input class="settinglabel miniinput" title="Assistant Final Gen Tag" style="width:100%" type="text" placeholder="(Final Gen Start)" value="" id="instruct_gentag" onchange="edit_instruct_tag_format()">
+									<input class="settinglabel miniinput" title="Assistant Final Tag" style="width:100%" type="text" placeholder="(Final Gen Start)" value="" id="instruct_tag_gen" onchange="edit_instruct_tag_format()">
 									</div>
 								</div>
 							</div>
