@@ -22,6 +22,33 @@ jobs:
       image: ubuntu:20.04
       options: --privileged
     steps:
+      - name: Show runner hardware
+        shell: bash
+        run: |
+          echo "::group::GitHub runner"
+          echo "Name: ${RUNNER_NAME:-unknown}"
+          echo "OS/architecture: ${RUNNER_OS:-unknown} / ${RUNNER_ARCH:-unknown}"
+          echo "Image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          echo "::endgroup::"
+          echo "::group::Machine and operating system"
+          uname -a
+          for item in sys_vendor product_name product_version; do
+            file="/sys/class/dmi/id/$item"
+            if [ -r "$file" ]; then printf '%s: ' "$item"; cat "$file"; fi
+          done
+          echo "::endgroup::"
+          echo "::group::CPU"
+          if command -v lscpu >/dev/null 2>&1; then lscpu; else cat /proc/cpuinfo; fi
+          echo "Online processors: $(getconf _NPROCESSORS_ONLN)"
+          echo "::endgroup::"
+          echo "::group::Memory"
+          grep -E '^Mem(Total|Available|Free):' /proc/meminfo
+          awk '/^MemTotal:/ { printf "RAM visible to the OS: %d KiB (%.2f GiB)\n", $2, $2 / 1048576 }' /proc/meminfo
+          for file in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+            if [ -r "$file" ]; then printf 'Cgroup memory limit (%s): ' "$file"; cat "$file"; fi
+          done
+          echo "::endgroup::"
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v5

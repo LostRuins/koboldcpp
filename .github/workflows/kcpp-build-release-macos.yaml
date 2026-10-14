@@ -16,6 +16,31 @@ jobs:
     runs-on: macos-14
     permissions: write-all
     steps:
+      - name: Show runner hardware
+        shell: bash
+        run: |
+          echo "::group::GitHub runner"
+          echo "Name: ${RUNNER_NAME:-unknown}"
+          echo "OS/architecture: ${RUNNER_OS:-unknown} / ${RUNNER_ARCH:-unknown}"
+          echo "Image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          echo "::endgroup::"
+          echo "::group::Machine and operating system"
+          sw_vers
+          uname -a
+          system_profiler SPHardwareDataType | awk '/Model Name:|Model Identifier:|Chip:|Processor Name:|Processor Speed:|Number of Processors:|Total Number of Cores:|Memory:/'
+          echo "::endgroup::"
+          echo "::group::CPU"
+          sysctl -n machdep.cpu.brand_string 2>/dev/null || true
+          echo "Physical CPU cores: $(sysctl -n hw.physicalcpu)"
+          echo "Logical CPU cores: $(sysctl -n hw.logicalcpu)"
+          echo "::endgroup::"
+          echo "::group::Memory"
+          memory_bytes=$(sysctl -n hw.memsize)
+          echo "Installed RAM: ${memory_bytes} bytes"
+          awk -v bytes="$memory_bytes" 'BEGIN { printf "Installed RAM: %.2f GiB\n", bytes / 1073741824 }'
+          vm_stat
+          echo "::endgroup::"
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v5
