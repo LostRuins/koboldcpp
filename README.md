@@ -266,7 +266,7 @@ The following are all official KoboldCpp resources
 - [KoboldAI Subreddit](https://www.reddit.com/r/KoboldAi/)
 - [KoboldCpp Wiki](https://github.com/LostRuins/koboldcpp/wiki)
 - [KoboldCpp API Reference](https://lite.koboldai.net/koboldcpp_api)
-- [KoboldAI Lite Online WebUI](https://lite.koboldai.net)
+- [KoboldAI Lite Online WebUI](https://lite.koboldai.net) (and [KoboldAI Lite Beta](https://lite-beta.koboldai.net))
 - [KoboldCpp Colab Notebook](https://colab.research.google.com/github/LostRuins/koboldcpp/blob/concedo/colab.ipynb)
 - [KoboldCpp Public Demo](https://koboldai-koboldcpp-tiefighter.hf.space/)
 - [KoboldCpp RunPod Cloud Image](https://koboldai.org/runpodcpp)
