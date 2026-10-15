@@ -13036,7 +13036,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         nocertify = True
         ssl._create_default_https_context = ssl._create_unverified_context
 
-    if args.usecpu and args.rpcmode!="connect":
+    if args.usecpu and sys.platform!="darwin" and args.rpcmode!="connect":
         args.gpulayers = 0
         args.autofit = False
 
