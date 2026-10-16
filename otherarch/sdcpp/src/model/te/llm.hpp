@@ -2338,7 +2338,8 @@ namespace LLM {
                                  const DeepStackImageEmbeds& deepstack_image_embeds_tensor,
                                  const std::vector<ImageGrid>& image_grids,
                                  std::set<int> out_layers,
-                                 bool return_all_hidden_states = false) {
+                                 bool return_all_hidden_states           = false,
+                                 const sd::Tensor<int32_t>& position_ids = {}) {
             ggml_cgraph* gf        = new_graph_custom(LLM_GRAPH_SIZE);
             ggml_tensor* input_ids = make_input(input_ids_tensor);
             std::vector<std::pair<int, ggml_tensor*>> image_embeds;
@@ -2402,6 +2403,10 @@ namespace LLM {
                 }
             }
 
+            if (!position_ids.empty()) {
+                GGML_ASSERT(position_ids.numel() == static_cast<int64_t>(input_pos_vec.size()));
+                input_pos_vec = position_ids.values();
+            }
             auto input_pos = ggml_new_tensor_1d(compute_ctx,
                                                 GGML_TYPE_I32,
                                                 input_pos_vec.size());
@@ -2475,7 +2480,8 @@ namespace LLM {
                                   bool return_all_hidden_states                      = false,
                                   bool auto_runner_end                               = true,
                                   const DeepStackImageEmbeds& deepstack_image_embeds = {},
-                                  const std::vector<ImageGrid>& image_grids          = {}) {
+                                  const std::vector<ImageGrid>& image_grids          = {},
+                                  const sd::Tensor<int32_t>& position_ids            = {}) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input_ids,
                                    attention_mask,
@@ -2483,7 +2489,8 @@ namespace LLM {
                                    deepstack_image_embeds,
                                    image_grids,
                                    out_layers,
-                                   return_all_hidden_states);
+                                   return_all_hidden_states,
+                                   position_ids);
             };
             return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, auto_runner_end),
                                                    input_ids.dim() + 1);

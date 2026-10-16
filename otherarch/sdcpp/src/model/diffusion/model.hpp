@@ -64,6 +64,10 @@ struct FluxDiffusionExtra {
     float pulid_id_weight               = 1.0f;
 };
 
+struct Flux3DiffusionExtra {
+    const sd::Tensor<float>* target_timestep = nullptr;
+};
+
 struct AnimaDiffusionExtra {
     const sd::Tensor<int32_t>* t5_ids   = nullptr;
     const sd::Tensor<float>* t5_weights = nullptr;
@@ -149,6 +153,7 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           UNetDiffusionExtra,
                                           SkipLayerDiffusionExtra,
                                           FluxDiffusionExtra,
+                                          Flux3DiffusionExtra,
                                           AnimaDiffusionExtra,
                                           QwenImage21DiffusionExtra,
                                           WanDiffusionExtra,

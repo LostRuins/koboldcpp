@@ -696,9 +696,9 @@ int main(int argc, const char* argv[]) {
 
     LOG_VERBOSE("version: %s", version_string().c_str());
     LOG_VERBOSE("%s", sd_get_system_info());
-    LOG_VERBOSE("%s", cli_params.to_string().c_str());
-    LOG_VERBOSE("%s", ctx_params.to_string().c_str());
-    LOG_VERBOSE("%s", gen_params.to_string().c_str());
+    LOG_DEBUG("%s", cli_params.to_string().c_str());
+    LOG_DEBUG("%s", ctx_params.to_string().c_str());
+    LOG_DEBUG("%s", gen_params.to_string().c_str());
 
     if (!cli_params.imatrix_out.empty()) {
         if (fs::exists(cli_params.imatrix_out) &&

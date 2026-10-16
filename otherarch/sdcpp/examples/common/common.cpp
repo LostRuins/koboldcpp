@@ -633,25 +633,9 @@ ArgOptions SDContextParams::get_options() {
          "deprecated; use --backend vae=cpu",
          true, &vae_on_cpu},
         {"",
-         "--fa",
-         "use flash attention",
-         true, &flash_attn},
-        {"",
-         "--diffusion-fa",
-         "use flash attention in the diffusion model only",
-         true, &diffusion_flash_attn},
-        {"",
          "--sage-attn",
          "use native CUDA SageAttention in the diffusion model, with flash/default attention fallback",
          true, &sage_attn},
-        {"",
-         "--diffusion-conv-direct",
-         "use ggml_conv2d_direct in the diffusion model",
-         true, &diffusion_conv_direct},
-        {"",
-         "--vae-conv-direct",
-         "use direct 2D and 3D convolutions in the vae model",
-         true, &vae_conv_direct},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -733,9 +717,68 @@ ArgOptions SDContextParams::get_options() {
          }},
         {"",
          "--attn-scale",
-         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); requires --fa or --diffusion-fa",
+         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); applies when flash attention is selected",
          [this](int argc, const char** argv, int index) {
              return parse_scale_override(argc, argv, index, attn_scale);
+         }},
+        {"",
+         "--diffusion-conv-direct",
+         "deprecated; use --conv-direct auto,diffusion=on,controlnet=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--diffusion-conv-direct is deprecated; use --conv-direct auto,diffusion=on,controlnet=on instead.");
+             diffusion_conv_direct = true;
+             return 0;
+         }},
+        {"",
+         "--vae-conv-direct",
+         "deprecated; use --conv-direct auto,vae=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--vae-conv-direct is deprecated; use --conv-direct auto,vae=on instead.");
+             vae_conv_direct = true;
+             return 0;
+         }},
+        {"",
+         "--conv-direct",
+         "on|off|auto or diffusion/vae/controlnet assignments (default: auto), e.g. auto,vae=off. Overrides legacy convolution flags",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0') {
+                 LOG_ERROR("--conv-direct requires on, off, auto, or module assignments");
+                 return -1;
+             }
+             conv_direct_mode = argv[index];
+             return 1;
+         }},
+        {"",
+         "--flash-attn",
+         "on|off|auto or module assignments (default: auto), e.g. auto,te=off,vae=on. Last repeated option wins",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc) {
+                 LOG_ERROR("--flash-attn requires on, off, or auto");
+                 return -1;
+             }
+             const std::string value = argv[index];
+             if (value.empty()) {
+                 LOG_ERROR("--flash-attn requires a nonempty value");
+                 return -1;
+             }
+             flash_attn_mode = value;
+             return 1;
+         }},
+        {"",
+         "--fa",
+         "deprecated; use --flash-attn on",
+         [this](int, const char**, int) {
+             LOG_WARN("--fa is deprecated; use --flash-attn on instead.");
+             flash_attn_mode = "on";
+             return 0;
+         }},
+        {"",
+         "--diffusion-fa",
+         "deprecated; use --flash-attn off,diffusion=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--diffusion-fa is deprecated; use --flash-attn off,diffusion=on instead.");
+             flash_attn_mode = "off,diffusion=on";
+             return 0;
          }},
         {"",
          "--auto-fit",
@@ -959,8 +1002,8 @@ std::string SDContextParams::to_string() const {
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
-        << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
-        << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
+        << "  flash_attn_mode: " << flash_attn_mode << ",\n"
+        << "  conv_direct_mode: " << (conv_direct_mode.empty() ? "auto (legacy flags honored)" : conv_direct_mode) << ",\n"
         << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
@@ -1018,8 +1061,8 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
     sd_ctx_params.prediction                      = prediction;
     sd_ctx_params.lora_apply_mode                 = lora_apply_mode;
     sd_ctx_params.enable_mmap                     = enable_mmap;
-    sd_ctx_params.flash_attn                      = flash_attn;
-    sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
+    sd_ctx_params.flash_attn_mode                 = flash_attn_mode.c_str();
+    sd_ctx_params.conv_direct_mode                = conv_direct_mode.c_str();
     sd_ctx_params.sage_attn                       = sage_attn;
     sd_ctx_params.linear_scale                    = linear_scale;
     sd_ctx_params.attn_scale                      = attn_scale;
@@ -1475,6 +1518,9 @@ ArgOptions SDGenerationParams::get_options() {
             return -1;
         }
         std::string sigmas_str = value;
+        if (sigmas_str == "qwen-image-2.1-turbo") {
+            sigmas_str = "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0";
+        }
         if (!sigmas_str.empty() && sigmas_str.front() == '[') {
             sigmas_str.erase(0, 1);
         }
@@ -1721,11 +1767,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_scheduler_arg},
         {"",
          "--sigmas",
-         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\").",
+         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo.",
          on_sigmas_arg},
         {"",
          "--hires-sigmas",
-         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\").",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo.",
          on_hires_sigmas_arg},
         {"",
          "--skip-layers",
