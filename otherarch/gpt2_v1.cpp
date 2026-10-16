@@ -330,8 +330,6 @@ bool legacy_gpt2_eval(
               std::vector<float>         & embd_w,
               size_t                     & mem_per_token,
               FileFormat file_format) {
-    const int N = embd_inp.size();
-
     const auto & hparams = model.hparams;
 
     const int n_embd  = hparams.n_embd;
@@ -339,6 +337,22 @@ bool legacy_gpt2_eval(
     const int n_ctx   = hparams.n_ctx;
     const int n_head  = hparams.n_head;
     const int n_vocab = hparams.n_vocab;
+
+    if (n_vocab <= 0 || n_ctx <= 0 || n_past < 0 || n_past > n_ctx || embd_inp.empty() ||
+        embd_inp.size() > static_cast<size_t>(n_ctx - n_past)) {
+        fprintf(stderr, "%s: invalid token range: n_past = %d, n_tokens = %zu, n_ctx = %d\n",
+                __func__, n_past, embd_inp.size(), n_ctx);
+        return false;
+    }
+    for (const gpt_vocab::id token : embd_inp) {
+        if (token < 0 || token >= n_vocab) {
+            fprintf(stderr, "%s: invalid token id %d for vocabulary size %d\n",
+                    __func__, token, n_vocab);
+            return false;
+        }
+    }
+
+    const int N = static_cast<int>(embd_inp.size());
 
     static size_t buf_size = 256u*1024*1024;
     static void * buf = malloc(buf_size);

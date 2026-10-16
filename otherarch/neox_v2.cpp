@@ -99,6 +99,17 @@ ModelLoadResult gpt_neox_v2_model_load(const std::string & fname, gpt_neox_v2_mo
         return ModelLoadResult::FAIL;
     }
 
+    const auto & hparams = model.hparams;
+    const int wtype_block_size = ggml_v2_blck_size(wtype);
+    if (hparams.n_vocab <= 0 || hparams.n_ctx <= 0 || hparams.n_embd <= 0 ||
+        hparams.n_head <= 0 || hparams.n_layer <= 0 || hparams.n_rot <= 0 ||
+        hparams.n_rot > hparams.n_embd || hparams.n_embd % hparams.n_head != 0 ||
+        wtype_block_size <= 0 || hparams.n_embd % wtype_block_size != 0) {
+        fprintf(stderr, "%s: invalid model file '%s' (invalid model dimensions for tensor type %s)\n",
+                __func__, fname.c_str(), ggml_v2_type_name(wtype));
+        return ModelLoadResult::FAIL;
+    }
+
     auto & ctx = model.ctx;
 
     size_t ctx_size = 0;
@@ -304,6 +315,12 @@ ModelLoadResult gpt_neox_v2_model_load(const std::string & fname, gpt_neox_v2_mo
                 printf("%24s - [%5d, %5d], type = %6s, %6.2f MB, %9zu bytes\n", name.data(), ne[0], ne[1], ggml_v2_type_name(ggml_v2_type(ttype)), ggml_v2_nbytes(tensor)/1024.0/1024.0, ggml_v2_nbytes(tensor));
             }
 
+            if (ttype < 0 || ttype >= GGML_V2_TYPE_COUNT) {
+                fprintf(stderr, "%s: tensor '%s' has invalid type %d\n",
+                        __func__, name.data(), ttype);
+                return ModelLoadResult::FAIL;
+            }
+
             size_t bpe = ggml_v2_type_size(ggml_v2_type(ttype));
 
             if(file_format==FileFormat::NEOX_1)
@@ -401,8 +418,6 @@ bool gpt_neox_v2_eval(
         const std::vector<gpt_vocab::id> & embd_inp,
               std::vector<float>         & embd_w,
               size_t                     & mem_per_token) {
-    const int N = embd_inp.size();
-
     const auto & hparams = model.hparams;
 
     const int n_embd  = hparams.n_embd;
@@ -411,6 +426,22 @@ bool gpt_neox_v2_eval(
     const int n_head  = hparams.n_head;
     const int n_vocab = hparams.n_vocab;
     const int n_rot   = hparams.n_rot;
+
+    if (n_vocab <= 0 || n_ctx <= 0 || n_past < 0 || n_past > n_ctx || embd_inp.empty() ||
+        embd_inp.size() > static_cast<size_t>(n_ctx - n_past)) {
+        fprintf(stderr, "%s: invalid token range: n_past = %d, n_tokens = %zu, n_ctx = %d\n",
+                __func__, n_past, embd_inp.size(), n_ctx);
+        return false;
+    }
+    for (const gpt_vocab::id token : embd_inp) {
+        if (token < 0 || token >= n_vocab) {
+            fprintf(stderr, "%s: invalid token id %d for vocabulary size %d\n",
+                    __func__, token, n_vocab);
+            return false;
+        }
+    }
+
+    const int N = static_cast<int>(embd_inp.size());
 
     static size_t buf_size = 256u*1024*1024;
     static void * buf = malloc(buf_size);

@@ -3923,10 +3923,20 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         if (file_format == FileFormat::RWKV_1)
         {
             rwkv_ctx_v2 = rwkv_v2_init_from_file(kcpp_data->model_filename.c_str(), kcpp_data->n_threads);
+            if (rwkv_ctx_v2 == NULL)
+            {
+                fprintf(stderr, "\nFailed to initialize legacy RWKV model.\n");
+                return ModelLoadResult::FAIL;
+            }
         }
         else //rwkv_2
         {
             rwkv_ctx_v3 = rwkv_init_from_file(kcpp_data->model_filename.c_str(), kcpp_data->n_threads);
+            if (rwkv_ctx_v3 == NULL)
+            {
+                fprintf(stderr, "\nFailed to initialize RWKV model.\n");
+                return ModelLoadResult::FAIL;
+            }
 
             if(inputs.gpulayers>0)
             {
@@ -3971,52 +3981,80 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
 
             //setup buffers for rwkv state
             auto padding = 512u;
-            auto statebufsiz = rwkv_v2_get_state_buffer_element_count(rwkv_ctx_v2) * sizeof(float) + padding;
-            auto logitbufsiz = rwkv_v2_get_logits_buffer_element_count(rwkv_ctx_v2) * sizeof(float) + padding;
+            const size_t state_count = rwkv_v2_get_state_buffer_element_count(rwkv_ctx_v2);
+            const size_t logit_count = rwkv_v2_get_logits_buffer_element_count(rwkv_ctx_v2);
+            if (state_count > (SIZE_MAX - padding) / sizeof(float) ||
+                logit_count > (SIZE_MAX - padding) / sizeof(float) ||
+                (size_t) vocabsiz > logit_count)
+            {
+                fprintf(stderr, "\nInvalid RWKV state, logits, or vocabulary size.\n");
+                return ModelLoadResult::FAIL;
+            }
+            auto statebufsiz = state_count * sizeof(float) + padding;
+            auto logitbufsiz = logit_count * sizeof(float) + padding;
 
             printf("\nRWKV old Init: State Buffer:%lu, Logit Buffer:%lu\n", statebufsiz, logitbufsiz);
             rwkv_ctx_v2->state_out = (float *)malloc(statebufsiz);
             rwkv_ctx_v2->logits_out = (float *)malloc(logitbufsiz);
             rwkv_ctx_v2->state_in = nullptr;
+            if (rwkv_ctx_v2->state_out == NULL || rwkv_ctx_v2->logits_out == NULL)
+            {
+                fprintf(stderr, "\nFailed to allocate legacy RWKV state or logits buffers.\n");
+                free(rwkv_ctx_v2->state_out);
+                free(rwkv_ctx_v2->logits_out);
+                rwkv_ctx_v2->state_out = NULL;
+                rwkv_ctx_v2->logits_out = NULL;
+                return ModelLoadResult::FAIL;
+            }
 
             bool testeval = rwkv_v2_eval(rwkv_ctx_v2, 0, rwkv_ctx_v2->state_in, rwkv_ctx_v2->state_out, rwkv_ctx_v2->logits_out);
             if (!testeval)
             {
                 printf("\nError: RWKV old Init Eval Failed!\n");
+                return ModelLoadResult::FAIL;
             }
 
             memcpy(logits.data(), rwkv_ctx_v2->logits_out, sizeof(float) * vocabsiz);
-
-            if (rwkv_ctx_v2 == NULL)
-            {
-                return ModelLoadResult::FAIL;
-            }
             return ModelLoadResult::SUCCESS;
         }
         else
         {
             //setup buffers for rwkv state
             auto padding = 512u;
-            auto statebufsiz = rwkv_get_state_buffer_element_count(rwkv_ctx_v3) * sizeof(float) + padding;
-            auto logitbufsiz = rwkv_get_logits_buffer_element_count(rwkv_ctx_v3) * sizeof(float) + padding;
+            const size_t state_count = rwkv_get_state_buffer_element_count(rwkv_ctx_v3);
+            const size_t logit_count = rwkv_get_logits_buffer_element_count(rwkv_ctx_v3);
+            if (state_count > (SIZE_MAX - padding) / sizeof(float) ||
+                logit_count > (SIZE_MAX - padding) / sizeof(float) ||
+                (size_t) vocabsiz > logit_count)
+            {
+                fprintf(stderr, "\nInvalid RWKV state, logits, or vocabulary size.\n");
+                return ModelLoadResult::FAIL;
+            }
+            auto statebufsiz = state_count * sizeof(float) + padding;
+            auto logitbufsiz = logit_count * sizeof(float) + padding;
 
             printf("\nRWKV Init: State Buffer:%lu, Logit Buffer:%lu\n", statebufsiz, logitbufsiz);
             rwkv_ctx_v3->state_out = (float *)malloc(statebufsiz);
             rwkv_ctx_v3->logits_out = (float *)malloc(logitbufsiz);
             rwkv_ctx_v3->state_in = nullptr;
+            if (rwkv_ctx_v3->state_out == NULL || rwkv_ctx_v3->logits_out == NULL)
+            {
+                fprintf(stderr, "\nFailed to allocate RWKV state or logits buffers.\n");
+                free(rwkv_ctx_v3->state_out);
+                free(rwkv_ctx_v3->logits_out);
+                rwkv_ctx_v3->state_out = NULL;
+                rwkv_ctx_v3->logits_out = NULL;
+                return ModelLoadResult::FAIL;
+            }
 
             bool testeval = rwkv_eval(rwkv_ctx_v3, kcpp_data->n_threads, 0, rwkv_ctx_v3->state_in, rwkv_ctx_v3->state_out, rwkv_ctx_v3->logits_out);
             if (!testeval)
             {
                 printf("\nError: RWKV Init Eval Failed!\n");
+                return ModelLoadResult::FAIL;
             }
 
             memcpy(logits.data(), rwkv_ctx_v3->logits_out, sizeof(float) * vocabsiz);
-
-            if (rwkv_ctx_v3 == NULL)
-            {
-                return ModelLoadResult::FAIL;
-            }
             return ModelLoadResult::SUCCESS;
         }
     }
@@ -7881,8 +7919,15 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 if (file_format == FileFormat::RWKV_1)
                 {
                     evalres = rwkv_v2_eval(rwkv_ctx_v2, embd[0], rwkv_ctx_v2->state_in, rwkv_ctx_v2->state_out, rwkv_ctx_v2->logits_out);
-                    memcpy(logits.data(), rwkv_ctx_v2->logits_out, sizeof(float) * rwkv_vocab.size());
-                    rwkv_ctx_v2->state_in = rwkv_ctx_v2->state_out;
+                    if (evalres && rwkv_vocab.size() <= rwkv_v2_get_logits_buffer_element_count(rwkv_ctx_v2))
+                    {
+                        memcpy(logits.data(), rwkv_ctx_v2->logits_out, sizeof(float) * rwkv_vocab.size());
+                        rwkv_ctx_v2->state_in = rwkv_ctx_v2->state_out;
+                    }
+                    else
+                    {
+                        evalres = false;
+                    }
                 }
                 else
                 {
@@ -7896,8 +7941,15 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         evalres = rwkv_eval(rwkv_ctx_v3, GetThreadsToUse(blasmode), embd[0], rwkv_ctx_v3->state_in, rwkv_ctx_v3->state_out, ignoreLogits?nullptr:rwkv_ctx_v3->logits_out);
                     }
 
-                    memcpy(logits.data(), rwkv_ctx_v3->logits_out, sizeof(float) * rwkv_vocab.size());
-                    rwkv_ctx_v3->state_in = rwkv_ctx_v3->state_out;
+                    if (evalres && rwkv_vocab.size() <= rwkv_get_logits_buffer_element_count(rwkv_ctx_v3))
+                    {
+                        memcpy(logits.data(), rwkv_ctx_v3->logits_out, sizeof(float) * rwkv_vocab.size());
+                        rwkv_ctx_v3->state_in = rwkv_ctx_v3->state_out;
+                    }
+                    else
+                    {
+                        evalres = false;
+                    }
                 }
             }
             else if(file_format==FileFormat::GPT2_1)

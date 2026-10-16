@@ -299,11 +299,21 @@ static std::string llama_v2_format_tensor_shape(const std::vector<uint32_t> & ne
 }
 
 static size_t llama_v2_calc_tensor_size(const std::vector<uint32_t> & ne, enum ggml_v2_type type) {
+    if (ne.empty() || type < 0 || type >= GGML_V2_TYPE_COUNT) {
+        throw format_old("invalid tensor shape or type");
+    }
+    const size_t block_size = ggml_v2_blck_size(type);
+    if (ne[0] == 0 || block_size == 0 || ne[0] % block_size != 0) {
+        throw format_old("invalid tensor row size %u for block size %zu", ne[0], block_size);
+    }
     size_t size = ggml_v2_type_size(type);
     for (uint32_t dim : ne) {
+        if (dim == 0) {
+            throw format_old("invalid zero-sized tensor dimension");
+        }
         size = checked_mul2<size_t>(size, dim);
     }
-    return size / ggml_v2_blck_size(type);
+    return checked_div2(size, block_size);
 }
 
 struct llama_v2_load_tensor_shard {
@@ -494,12 +504,15 @@ struct llama_v2_file_loader {
             uint32_t n_dims = file.read_u32();
             uint32_t name_len = file.read_u32();
             shard.type = (enum ggml_v2_type) file.read_u32();
+            if (n_dims < 1 || n_dims > 2) {
+                throw format_old("llama.cpp: invalid tensor dimension count %u", n_dims);
+            }
+            if (name_len == 0 || name_len > 1024) {
+                throw format_old("llama.cpp: invalid tensor name length %u", name_len);
+            }
             shard.ne.resize(n_dims);
             file.read_raw(shard.ne.data(), sizeof(shard.ne[0]) * n_dims);
             std::string name = file.read_string(name_len);
-            if (n_dims < 1 || n_dims > 2) {
-                throw format_old("llama.cpp: tensor '%s' should not be %u-dimensional", name.c_str(), n_dims);
-            }
             switch (shard.type) {
                 case GGML_V2_TYPE_F32:
                 case GGML_V2_TYPE_F16:
@@ -2362,11 +2375,22 @@ int llama_v2_apply_lora_from_file_internal(struct llama_v2_context * ctx, const 
             fin.read(reinterpret_cast<char *>(&ne[i]), sizeof(ne[i]));
         }
 
-        std::string name;
-        {
-            char buf[1024];
-            fin.read(buf, length);
-            name = std::string(buf, length);
+        if (length <= 0 || length > 1024) {
+            fprintf(stderr, "%s: invalid tensor name length %d in lora file\n", __func__, length);
+            return 1;
+        }
+        for (int i = 0; i < n_dims; ++i) {
+            if (ne[i] <= 0) {
+                fprintf(stderr, "%s: invalid tensor dimension %d in lora file\n", __func__, ne[i]);
+                return 1;
+            }
+        }
+
+        std::string name((size_t) length, '\0');
+        fin.read(&name[0], length);
+        if (!fin) {
+            fprintf(stderr, "%s: truncated tensor name in lora file\n", __func__);
+            return 1;
         }
 
         // check for lora suffix and get the type of tensor

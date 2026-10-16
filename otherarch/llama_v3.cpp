@@ -3563,11 +3563,22 @@ int llama_v3_apply_lora_from_file_internal(const struct llama_v3_model & model, 
             fin.read(reinterpret_cast<char *>(&ne[i]), sizeof(ne[i]));
         }
 
-        std::string name;
-        {
-            char buf[1024];
-            fin.read(buf, length);
-            name = std::string(buf, length);
+        if (length <= 0 || length > 1024) {
+            LLAMA_V3_LOG_ERROR("%s: invalid tensor name length %d in lora file\n", __func__, length);
+            return 1;
+        }
+        for (int i = 0; i < n_dims; ++i) {
+            if (ne[i] <= 0) {
+                LLAMA_V3_LOG_ERROR("%s: invalid tensor dimension %d in lora file\n", __func__, ne[i]);
+                return 1;
+            }
+        }
+
+        std::string name((size_t) length, '\0');
+        fin.read(&name[0], length);
+        if (!fin) {
+            LLAMA_V3_LOG_ERROR("%s: truncated tensor name in lora file\n", __func__);
+            return 1;
         }
 
         // check for lora suffix and get the type of tensor

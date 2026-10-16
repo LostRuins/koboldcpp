@@ -305,14 +305,30 @@ struct rwkv_v2_context * rwkv_v2_init_from_file(const char * file_path, uint32_t
 
         if (dim_count == 1) {
             rwkv_v2_read_int32(file, &x);
-            tensor = ggml_v2_new_tensor_1d(ctx, ggml_v2_data_type, x);
         } else if (dim_count == 2) {
             rwkv_v2_read_int32(file, &x);
             rwkv_v2_read_int32(file, &y);
-            tensor = ggml_v2_new_tensor_2d(ctx, ggml_v2_data_type, x, y);
         } else {
             abort();
         }
+
+        RWKV_V2_ASSERT_NULL(x > 0, "Non-positive tensor row size %d", x);
+        RWKV_V2_ASSERT_NULL(dim_count == 1 || y > 0, "Non-positive tensor row count %d", y);
+
+        const int block_size = ggml_v2_blck_size(ggml_v2_data_type);
+        RWKV_V2_ASSERT_NULL(
+            block_size > 0 && x % block_size == 0,
+            "Invalid tensor row size %d for block size %d",
+            x,
+            block_size
+        );
+
+        if (dim_count == 1) {
+            tensor = ggml_v2_new_tensor_1d(ctx, ggml_v2_data_type, x);
+        } else {
+            tensor = ggml_v2_new_tensor_2d(ctx, ggml_v2_data_type, x, y);
+        }
+        RWKV_V2_ASSERT_NULL(tensor != NULL, "Failed to allocate parameter tensor");
 
         std::string key(key_length, 0);
         RWKV_V2_ASSERT_NULL(fread(&key[0], 1, key_length, file) == uint32_t(key_length), "Failed to read parameter key");

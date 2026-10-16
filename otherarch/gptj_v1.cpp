@@ -98,6 +98,17 @@ ModelLoadResult legacy_gptj_model_load(const std::string & fname, gptj_v1_model 
                 }
     }
 
+    const auto & hparams = model.hparams;
+    const int wtype_block_size = ggml_v1_blck_size(wtype);
+    if (hparams.n_vocab <= 0 || hparams.n_ctx <= 0 || hparams.n_embd <= 0 ||
+        hparams.n_head <= 0 || hparams.n_layer <= 0 || hparams.n_rot <= 0 ||
+        hparams.n_rot > hparams.n_embd || hparams.n_embd % hparams.n_head != 0 ||
+        wtype_block_size <= 0 || hparams.n_embd % wtype_block_size != 0) {
+        fprintf(stderr, "%s: invalid model file '%s' (invalid model dimensions for quantized tensor type)\n",
+                __func__, fname.c_str());
+        return ModelLoadResult::FAIL;
+    }
+
     const ggml_v1_type wtype2 = GGML_V1_TYPE_F32;
 
     auto & ctx = model.ctx;
@@ -377,8 +388,6 @@ bool legacy_gptj_eval(
        FileFormat file_format) {
 
     bool super_old_format = (file_format==FileFormat::GPTJ_1);
-    const int N = embd_inp.size();
-
     const auto & hparams = model.hparams;
 
     const int n_embd  = hparams.n_embd;
@@ -387,6 +396,22 @@ bool legacy_gptj_eval(
     const int n_head  = hparams.n_head;
     const int n_vocab = hparams.n_vocab;
     const int n_rot   = hparams.n_rot;
+
+    if (n_vocab <= 0 || n_ctx <= 0 || n_past < 0 || n_past > n_ctx || embd_inp.empty() ||
+        embd_inp.size() > static_cast<size_t>(n_ctx - n_past)) {
+        fprintf(stderr, "%s: invalid token range: n_past = %d, n_tokens = %zu, n_ctx = %d\n",
+                __func__, n_past, embd_inp.size(), n_ctx);
+        return false;
+    }
+    for (const gpt_vocab::id token : embd_inp) {
+        if (token < 0 || token >= n_vocab) {
+            fprintf(stderr, "%s: invalid token id %d for vocabulary size %d\n",
+                    __func__, token, n_vocab);
+            return false;
+        }
+    }
+
+    const int N = static_cast<int>(embd_inp.size());
 
     const int d_key = n_embd/n_head;
 
