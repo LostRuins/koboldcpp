@@ -26,9 +26,8 @@ void dia_model::assign_to_encoder(std::vector<std::string> parts, struct ggml_te
         encoder->norm = ggml_dup_tensor(ctx, tensor);
         set_tensor(encoder->norm, tensor);
     } else if (parts[2] == "layers") {
-        TTS_ASSERT(parts.size() >= 4);
-        int index = std::stoi(parts[3]);
-        TTS_ASSERT(index < decoder->layers.size());
+        TTS_ASSERT(parts.size() >= 5);
+        const size_t index = tts_checked_index(parts[3], encoder->layers.size(), name);
         assign_to_encoder_layer(parts[4], encoder->layers[index], tensor);
     } else {
         TTS_ABORT("Unrecognized tensor '%s' when loading Dia from GGUF file.", name.c_str());
@@ -37,24 +36,21 @@ void dia_model::assign_to_encoder(std::vector<std::string> parts, struct ggml_te
 
 void dia_model::assign_to_decoder(std::vector<std::string> parts, struct ggml_tensor * tensor, std::string name) {
     if (parts[2] == "embeddings") {
-        TTS_ASSERT(parts.size() > 2);
-        int index = std::stoi(parts[3]);
-        TTS_ASSERT(index < decoder->embds.size());
+        TTS_ASSERT(parts.size() >= 4);
+        const size_t index = tts_checked_index(parts[3], decoder->embds.size(), name);
         decoder->embds[index] = ggml_dup_tensor(ctx, tensor);
         set_tensor(decoder->embds[index], tensor);
     } else if (parts[2] == "norm") {
         decoder->norm = ggml_dup_tensor(ctx, tensor);
         set_tensor(decoder->norm, tensor);
     } else if (parts[2] == "heads") {
-        TTS_ASSERT(parts.size() > 2);
-        int index = std::stoi(parts[3]);
-        TTS_ASSERT(index < decoder->heads.size());
+        TTS_ASSERT(parts.size() >= 4);
+        const size_t index = tts_checked_index(parts[3], decoder->heads.size(), name);
         decoder->heads[index] = ggml_dup_tensor(ctx, tensor);
         set_tensor(decoder->heads[index], tensor);
     } else if (parts[2] == "layers") {
-        TTS_ASSERT(parts.size() >= 4);
-        int index = std::stoi(parts[3]);
-        TTS_ASSERT(index < decoder->layers.size());
+        TTS_ASSERT(parts.size() >= 5);
+        const size_t index = tts_checked_index(parts[3], decoder->layers.size(), name);
         assign_to_decoder_layer(parts[4], decoder->layers[index], tensor);
     } else {
         TTS_ABORT("Unrecognized tensor '%s' when loading Dia from GGUF file.", name.c_str());

@@ -74,12 +74,14 @@ void snac_model::assign_weight(std::string name, ggml_tensor * tensor) {
         auto pair = parse_layer_count(name);
         int l = pair.first;
         std::string lt_name = pair.second;
-        general_neural_audio_codec::assign_to_layer((tts_model *) this, layers[l], lt_name, tensor);
+        const size_t index = tts_checked_index(l, layers.size(), name);
+        general_neural_audio_codec::assign_to_layer((tts_model *) this, layers[index], lt_name, tensor);
     } else if (has_prefix(name, "quantizers")) {
         auto pair = parse_layer_count(name);
         int l = pair.first;
         std::string lt_name = pair.second;
-        general_neural_audio_codec::assign_to_quantize_layer((tts_model *) this, quantizer_layers[l], lt_name, tensor);
+        const size_t index = tts_checked_index(l, quantizer_layers.size(), name);
+        general_neural_audio_codec::assign_to_quantize_layer((tts_model *) this, quantizer_layers[index], lt_name, tensor);
     }
 }
 

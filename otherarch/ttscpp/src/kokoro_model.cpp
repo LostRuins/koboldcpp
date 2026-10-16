@@ -394,21 +394,25 @@ void kokoro_model::post_load_assign() {
 
 void kokoro_model::assign_lstm(lstm * rnn, std::string name, ggml_tensor * tensor) {
 	std::vector<std::string> parts = split(name, ".");
-	int i = std::stoi(parts[0]);
-	int ii = std::stoi(parts[2]);
-	if (parts[1] == "weights") {
-		rnn->cells[i]->weights[ii] = ggml_dup_tensor(ctx, tensor);
-		set_tensor(rnn->cells[i]->weights[ii], tensor);
-	} else if (parts[1] == "biases") {
-		rnn->cells[i]->biases[ii] = ggml_dup_tensor(ctx, tensor);
-		set_tensor(rnn->cells[i]->biases[ii], tensor);
-	} else if (parts[1] == "reverse_weights") {
-		rnn->cells[i]->reverse_weights[ii] = ggml_dup_tensor(ctx, tensor);
-		set_tensor(rnn->cells[i]->reverse_weights[ii], tensor);
-	} else if (parts[1] == "reverse_biases") {
-		rnn->cells[i]->reverse_biases[ii] = ggml_dup_tensor(ctx, tensor);
-		set_tensor(rnn->cells[i]->reverse_biases[ii], tensor);
+	if (parts.size() < 3) {
+		TTS_ABORT("Malformed Kokoro LSTM tensor name '%s'.", name.c_str());
 	}
+	const size_t i = tts_checked_index(parts[0], rnn->cells.size(), name);
+	std::vector<ggml_tensor *> * targets = nullptr;
+	if (parts[1] == "weights") {
+		targets = &rnn->cells[i]->weights;
+	} else if (parts[1] == "biases") {
+		targets = &rnn->cells[i]->biases;
+	} else if (parts[1] == "reverse_weights") {
+		targets = &rnn->cells[i]->reverse_weights;
+	} else if (parts[1] == "reverse_biases") {
+		targets = &rnn->cells[i]->reverse_biases;
+	} else {
+		TTS_ABORT("Unrecognized Kokoro LSTM tensor '%s'.", name.c_str());
+	}
+	const size_t ii = tts_checked_index(parts[2], targets->size(), name);
+	(*targets)[ii] = ggml_dup_tensor(ctx, tensor);
+	set_tensor((*targets)[ii], tensor);
 }
 
 void kokoro_model::assign_weight(std::string name, ggml_tensor * tensor) {
@@ -426,6 +430,9 @@ void kokoro_model::assign_weight(std::string name, ggml_tensor * tensor) {
 	} else if (parts[1] == "decoder") {
 		assign_decoder_weight(name.substr(7+parts[1].size()+1), tensor);
 	} else if (parts[1] == "voice_tensors") {
+		if (parts.size() < 3) {
+			TTS_ABORT("Malformed Kokoro voice tensor name '%s'.", name.c_str());
+		}
 		voices[parts[2]] = ggml_dup_tensor(ctx, tensor);
 		set_tensor(voices[parts[2]], tensor);
 	}
@@ -446,8 +453,11 @@ void kokoro_model::assign_generator_weight(kokoro_generator * generator, std::st
 		set_tensor(generator->out_conv_bias, tensor);
 	} else {
 		std::vector<std::string> parts = split(name, ".");
-		int i = std::stoi(parts[1]);
+		if (parts.size() < 3) {
+			TTS_ABORT("Malformed Kokoro generator tensor name '%s'.", name.c_str());
+		}
 		if (parts[0] == "noise_blocks") {
+			const size_t i = tts_checked_index(parts[1], generator->noise_blocks.size(), name);
 			if (parts[2] == "conv_weight") {
 				generator->noise_blocks[i]->input_conv = ggml_dup_tensor(ctx, tensor);
 				set_tensor(generator->noise_blocks[i]->input_conv, tensor);
@@ -455,11 +465,19 @@ void kokoro_model::assign_generator_weight(kokoro_generator * generator, std::st
 				generator->noise_blocks[i]->input_conv_bias = ggml_dup_tensor(ctx, ggml_transpose(ctx, tensor));
 				set_tensor(generator->noise_blocks[i]->input_conv_bias, tensor);
 			} else if (parts[2] == "resblock") {
+				if (parts.size() < 5) {
+					TTS_ABORT("Malformed Kokoro noise residual tensor name '%s'.", name.c_str());
+				}
 				assign_gen_resblock(generator->noise_blocks[i]->res_block, name.substr(parts[0].size()+parts[1].size()+parts[2].size()+3), tensor);
 			}
 		} else if (parts[0] == "resblocks") {
+			if (parts.size() < 4) {
+				TTS_ABORT("Malformed Kokoro residual tensor name '%s'.", name.c_str());
+			}
+			const size_t i = tts_checked_index(parts[1], generator->res_blocks.size(), name);
 			assign_gen_resblock(generator->res_blocks[i], name.substr(parts[0].size()+parts[1].size()+2), tensor);
 		} else if (parts[0] == "ups") {
+			const size_t i = tts_checked_index(parts[1], generator->ups.size(), name);
 			if (parts[2] == "weight") {
 				generator->ups[i]->upsample_weight = ggml_dup_tensor(ctx, tensor);
 				set_tensor(generator->ups[i]->upsample_weight, tensor);
@@ -467,13 +485,18 @@ void kokoro_model::assign_generator_weight(kokoro_generator * generator, std::st
 				generator->ups[i]->upsample_bias = ggml_dup_tensor(ctx, ggml_transpose(ctx, tensor));
 				set_tensor(generator->ups[i]->upsample_bias, tensor);
 			}
+		} else {
+			TTS_ABORT("Unrecognized Kokoro generator tensor '%s'.", name.c_str());
 		}
 	}
 }
 
 void kokoro_model::assign_gen_resblock(kokoro_generator_residual_block * block, std::string name, ggml_tensor * tensor) {
 	std::vector<std::string> parts = split(name, ".");
-	int i = std::stoi(parts[0]);
+	if (parts.size() < 2) {
+		TTS_ABORT("Malformed Kokoro residual tensor name '%s'.", name.c_str());
+	}
+	const size_t i = tts_checked_index(parts[0], block->convs1_weights.size(), name);
 	if (parts[1] == "gamma1_weight") {
 		block->adain1d_1_gamma_weights[i] = ggml_dup_tensor(ctx, tensor);
 		set_tensor(block->adain1d_1_gamma_weights[i], tensor);
@@ -604,10 +627,16 @@ void kokoro_model::assign_decoder_weight(std::string name, ggml_tensor * tensor)
 		set_tensor(decoder->asr_conv_bias, tensor);
 	} else if (has_prefix(name, "decoder_blocks")) {
 		std::vector<std::string> parts = split(name, ".");
-		int i = std::stoi(parts[1]);
+		if (parts.size() < 3) {
+			TTS_ABORT("Malformed Kokoro decoder block tensor name '%s'.", name.c_str());
+		}
+		const size_t i = tts_checked_index(parts[1], decoder->decoder_blocks.size(), name);
 		assign_ada_res_block(decoder->decoder_blocks[i], parts[2], tensor);
 	} else if (has_prefix(name, "encoder_block")) {
 		std::vector<std::string> parts = split(name, ".");
+		if (parts.size() < 2) {
+			TTS_ABORT("Malformed Kokoro encoder block tensor name '%s'.", name.c_str());
+		}
 		assign_ada_res_block(decoder->encoder_block, parts[1], tensor);
 	} else if (has_prefix(name, "generator")) {
 		assign_generator_weight(decoder->generator, name.substr(10), tensor);
@@ -643,19 +672,34 @@ void kokoro_model::assign_duration_weight(std::string name, ggml_tensor * tensor
 		set_tensor(prosody_pred->f0_proj_bias, tensor);
 	} else {
 		std::vector<std::string> parts = split(name, ".");
+		if (parts.empty()) {
+			TTS_ABORT("Malformed Kokoro duration tensor name '%s'.", name.c_str());
+		}
 		if (parts[0] == "shared_lstm") {
 			assign_lstm(prosody_pred->shared_lstm, name.substr(parts[0].size()+1), tensor);
 		} else if (parts[0] == "duration_lstm") {
 			assign_lstm(prosody_pred->duration_proj_lstm, name.substr(parts[0].size()+1), tensor);
 		} else if (parts[0] == "f0_blocks") {
-			int i = std::stoi(parts[1]);
+			if (parts.size() < 3) {
+				TTS_ABORT("Malformed Kokoro f0 block tensor name '%s'.", name.c_str());
+			}
+			const size_t i = tts_checked_index(parts[1], prosody_pred->f0_blocks.size(), name);
 			assign_ada_res_block(prosody_pred->f0_blocks[i], parts[2], tensor);
 		} else if (parts[0] == "n_blocks") {
-			int i = std::stoi(parts[1]);
+			if (parts.size() < 3) {
+				TTS_ABORT("Malformed Kokoro n block tensor name '%s'.", name.c_str());
+			}
+			const size_t i = tts_checked_index(parts[1], prosody_pred->n_blocks.size(), name);
 			assign_ada_res_block(prosody_pred->n_blocks[i], parts[2], tensor);
 		} else if (parts[0] == "layers") {
-			int i = std::stoi(parts[1]);
-			i = i / 2;
+			if (parts.size() < 3) {
+				TTS_ABORT("Malformed Kokoro duration layer tensor name '%s'.", name.c_str());
+			}
+			const size_t sequence_index = tts_checked_index(parts[1], prosody_pred->layers.size() * 2, name);
+			if (sequence_index % 2 != 0) {
+				TTS_ABORT("Invalid Kokoro duration layer index %zu in tensor '%s'.", sequence_index, name.c_str());
+			}
+			const size_t i = sequence_index / 2;
 			if (parts[2] == "gamma_weight") {
 				prosody_pred->layers[i]->ada_norm_gamma_weight = ggml_dup_tensor(ctx, tensor);
 				set_tensor(prosody_pred->layers[i]->ada_norm_gamma_weight , tensor);
@@ -683,7 +727,10 @@ void kokoro_model::assign_text_encoder_weight(std::string name, ggml_tensor * te
 		assign_lstm(text_encoder->out_lstm, name.substr(5), tensor);
 	} else if (has_prefix(name, "layers")) {
 		std::vector<std::string> parts = split(name, ".");
-		int i = std::stoi(parts[1]);
+		if (parts.size() < 3) {
+			TTS_ABORT("Malformed Kokoro text encoder tensor name '%s'.", name.c_str());
+		}
+		const size_t i = tts_checked_index(parts[1], text_encoder->conv_layers.size(), name);
 		if (parts[2] == "gamma") {
 			text_encoder->conv_layers[i]->norm_gamma = ggml_dup_tensor(ctx, tensor);
 			set_tensor(text_encoder->conv_layers[i]->norm_gamma, tensor);
@@ -724,7 +771,10 @@ void kokoro_model::assign_albert_weight(std::string name, ggml_tensor * tensor) 
 		set_tensor(static_token_type_values, tensor);
 	} else if (has_prefix(name, "layer")) {
 		std::vector<std::string> parts = split(name, '.');
-		int i = std::stoi(parts[1]);
+		if (parts.size() < 3) {
+			TTS_ABORT("Malformed Kokoro Albert tensor name '%s'.", name.c_str());
+		}
+		const size_t i = tts_checked_index(parts[1], layers.size(), name);
 		if (parts[2] == "ffn") {
 			layers[i]->ffn = ggml_dup_tensor(ctx, tensor);
 			set_tensor(layers[i]->ffn, tensor);

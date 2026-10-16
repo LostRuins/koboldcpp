@@ -102,7 +102,8 @@ void assign_to_t5_encoder(t5_encoder * model, const std::string name, ggml_tenso
         int l = pair.first;
         std::string lt_name = pair.second;
 
-        assign_to_t5_layer(model, model->layers[l], lt_name, tensor);
+        const size_t index = tts_checked_index(l, model->layers.size(), name);
+        assign_to_t5_layer(model, model->layers[index], lt_name, tensor);
     } else {
         return;
     }

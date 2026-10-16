@@ -298,13 +298,16 @@ void assign_to_decoder(parler_tts_model * model, const std::string name, ggml_te
         int layer = pair.first;
         std::string lt_name = pair.second;
         if (name.find("embed_tokens") != std::string::npos) {
-            model->embds[layer] = ggml_dup_tensor(model->ctx, tensor);
-            model->set_tensor(model->embds[layer], tensor);
+            const size_t index = tts_checked_index(layer, model->embds.size(), name);
+            model->embds[index] = ggml_dup_tensor(model->ctx, tensor);
+            model->set_tensor(model->embds[index], tensor);
         } else if (name.find("lm_heads") != std::string::npos) {
-            model->heads[layer] = ggml_dup_tensor(model->ctx, tensor);
-            model->set_tensor(model->heads[layer], tensor);
+            const size_t index = tts_checked_index(layer, model->heads.size(), name);
+            model->heads[index] = ggml_dup_tensor(model->ctx, tensor);
+            model->set_tensor(model->heads[index], tensor);
         } else {
-            assign_parler_layer(model, model->layers[layer], lt_name, tensor);
+            const size_t index = tts_checked_index(layer, model->layers.size(), name);
+            assign_parler_layer(model, model->layers[index], lt_name, tensor);
         }
     }
 }

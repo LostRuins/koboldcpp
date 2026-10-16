@@ -96,7 +96,8 @@ namespace general_neural_audio_codec {
             auto pair = parse_layer_count(name);
             int i = pair.first;
             std::string lt_name = pair.second;
-            assign_to_residual_unit(model, l.residual_blocks[i], lt_name, tensor);
+            const size_t index = tts_checked_index(i, l.residual_blocks.size(), name);
+            assign_to_residual_unit(model, l.residual_blocks[index], lt_name, tensor);
         } else {
             TTS_ABORT("Tensor, '%s', is not a valid tensor general_neural_audio_codec::layer tensor.", name.c_str());
         }

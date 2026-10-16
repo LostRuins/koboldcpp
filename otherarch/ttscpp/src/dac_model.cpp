@@ -89,9 +89,14 @@ void assign_to_audio_encoder(dac_model * model, std::string name, ggml_tensor * 
         int l = pair.first;
         std::string lt_name = pair.second;
         if (name.find("quantizers") != std::string::npos) {
-            general_neural_audio_codec::assign_to_quantize_layer((tts_model *) model, model->quantizer_layers[l], lt_name, tensor);
+            const size_t index = tts_checked_index(l, model->quantizer_layers.size(), name);
+            general_neural_audio_codec::assign_to_quantize_layer((tts_model *) model, model->quantizer_layers[index], lt_name, tensor);
         } else {
-            general_neural_audio_codec::assign_to_layer((tts_model *) model, model->layers[l - 1], lt_name, tensor);
+            if (l == 0) {
+                TTS_ABORT("Invalid one-based layer index 0 in tensor '%s'.", name.c_str());
+            }
+            const size_t index = tts_checked_index(l - 1, model->layers.size(), name);
+            general_neural_audio_codec::assign_to_layer((tts_model *) model, model->layers[index], lt_name, tensor);
         }
     }
 }

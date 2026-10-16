@@ -1,7 +1,9 @@
 #include "ttsutil.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <limits>
 #include <stdarg.h>
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -21,6 +23,36 @@ void tts_abort(const char * file, int line, const char * fmt, ...) {
     abort();
 }
 
+size_t tts_checked_index(int index, size_t upper_bound, const std::string & tensor_name) {
+    if (index < 0 || static_cast<size_t>(index) >= upper_bound) {
+        TTS_ABORT("Invalid index %d in tensor '%s' (container size: %zu).", index, tensor_name.c_str(), upper_bound);
+    }
+    return static_cast<size_t>(index);
+}
+
+size_t tts_checked_index(const std::string & index, size_t upper_bound, const std::string & tensor_name) {
+    if (index.empty()) {
+        TTS_ABORT("Missing index in tensor '%s'.", tensor_name.c_str());
+    }
+
+    size_t result = 0;
+    for (unsigned char c : index) {
+        if (!std::isdigit(c)) {
+            TTS_ABORT("Invalid index '%s' in tensor '%s'.", index.c_str(), tensor_name.c_str());
+        }
+        const size_t digit = static_cast<size_t>(c - '0');
+        if (result > (std::numeric_limits<size_t>::max() - digit) / 10) {
+            TTS_ABORT("Index '%s' in tensor '%s' is too large.", index.c_str(), tensor_name.c_str());
+        }
+        result = result * 10 + digit;
+    }
+
+    if (result >= upper_bound) {
+        TTS_ABORT("Invalid index %zu in tensor '%s' (container size: %zu).", result, tensor_name.c_str(), upper_bound);
+    }
+    return result;
+}
+
 // Simple helper function for getting layer count from tensor name
 std::pair<int, std::string> parse_layer_count(std::string name, int skip) {
     bool found = false;
@@ -36,7 +68,7 @@ std::pair<int, std::string> parse_layer_count(std::string name, int skip) {
         count += 1;
         if (after_layer) {
             after_layer_name += c;
-        } else if (std::isdigit(c)) {
+        } else if (std::isdigit(static_cast<unsigned char>(c))) {
             found = true;
             digit_chars += c;
         } else if (!found) {
@@ -49,7 +81,11 @@ std::pair<int, std::string> parse_layer_count(std::string name, int skip) {
     if (digit_chars.size() == 0) {
         return std::make_pair(-1, name);
     }
-    return std::make_pair(std::stoi(digit_chars), after_layer_name);
+    const size_t parsed = tts_checked_index(
+        digit_chars,
+        static_cast<size_t>(std::numeric_limits<int>::max()) + 1,
+        name);
+    return std::make_pair(static_cast<int>(parsed), after_layer_name);
 }
 
 int search_for_gguf_keys(gguf_context * meta, std::vector<std::string> possible_keys) {

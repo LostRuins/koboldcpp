@@ -35,6 +35,8 @@ void random_uniform_gen(int count, float * tgt, float min = 0.0f, float max = 1.
 void random_normal_gen(int count, float * tgt, float mean = 0.0f, float std = 1.0f);
 
 std::pair<int, std::string> parse_layer_count(std::string name, int skip = 0);
+size_t tts_checked_index(int index, size_t upper_bound, const std::string & tensor_name);
+size_t tts_checked_index(const std::string & index, size_t upper_bound, const std::string & tensor_name);
 
 struct model_tensor_meta compute_tensor_meta(std::string name_prefix, ggml_context * weight_ctx, std::function<void(ggml_tensor*)>* callback = nullptr);
 struct ggml_tensor * snake_1d(ggml_context * ctx, struct ggml_tensor * alpha, struct ggml_tensor * a);

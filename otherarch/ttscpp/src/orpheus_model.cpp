@@ -25,7 +25,8 @@ void orpheus_model::assign_weight(std::string name, struct ggml_tensor * tensor)
         auto lpair = parse_layer_count(name);
         int l = lpair.first;
         std::string lt_name = lpair.second;
-        assign_to_layer(lt_name, layers[l], tensor);
+        const size_t index = tts_checked_index(l, layers.size(), name);
+        assign_to_layer(lt_name, layers[index], tensor);
     }
 }
 
