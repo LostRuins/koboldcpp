@@ -139,7 +139,6 @@ struct SDParams {
     float eta                     = -1.0f;
     float strength                = 0.75f;
     int64_t seed                  = 42;
-    bool diffusion_flash_attn     = false;
     bool diffusion_conv_direct    = false;
     bool vae_conv_direct          = false;
     std::string ref_image_args    = "";
@@ -665,6 +664,16 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         params.tensor_type_rules = "^model.language_model.layers.[0-9]+.mlp.down_proj.weight=bf16";
     }
 
+    params.flash_attn_mode = "off";
+    if(inputs.flash_attention) {
+        if(sd_version_is_qwen_image(tempver)) {
+            // edit 14feb, breaks qwen image edit (moved from diffusion_engine)
+            params.flash_attn_mode = "on,te=off";
+        } else {
+            params.flash_attn_mode = "on";
+        }
+    }
+
     //debug print
     // printf("\n\nclip_g: %s\nclip_l: %s\nclip_vision: %s\nllm: %s\nllm_vision: %s\nt5xxl: %s\ntaesd: %s\n",
     // params.clip_g_path, params.clip_l_path, params.clip_vision_path,
@@ -825,7 +834,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("Diffusion Model quantized to %s\n", sd_type_name(sd_params->wtype));
     }
     sd_params->n_threads = inputs.threads; //if -1 use physical cores
-    sd_params->diffusion_flash_attn = inputs.flash_attention;
     sd_params->diffusion_conv_direct = inputs.diffusion_conv_direct;
     sd_params->vae_conv_direct = inputs.vae_conv_direct;
     sd_params->vae_path = vaefilename;
@@ -844,7 +852,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     params.n_threads = sd_params->n_threads;
     params.wtype = sd_params->wtype;
-    params.diffusion_flash_attn = sd_params->diffusion_flash_attn;
     params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.model_args = "chroma_use_dit_mask=true";
@@ -856,9 +863,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.split_mode = split_mode.c_str();
     params.auto_fit = inputs.auto_fit;
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
-
-    // also switches flash attn for the vae and conditioner
-    params.flash_attn = params.diffusion_flash_attn;
 
     kcpp_set_model_paths(params, *sd_params, inputs);
 
