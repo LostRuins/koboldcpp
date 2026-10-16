@@ -761,7 +761,7 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
     }
 #endif
 
-    if (kqv == nullptr && (flash_attn || sage_attn)) {
+    if (kqv == nullptr && flash_attn) {
         // LOG_VERBOSE("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         bool can_use_flash_attn = true;
         if (mask != nullptr) {

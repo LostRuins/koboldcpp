@@ -15,6 +15,7 @@
 #include "model/diffusion/control.hpp"
 #include "model/diffusion/ernie_image.hpp"
 #include "model/diffusion/flux.hpp"
+#include "model/diffusion/flux3.hpp"
 #include "model/diffusion/hidream_o1.hpp"
 #include "model/diffusion/hunyuan.hpp"
 #include "model/diffusion/ideogram4.hpp"
@@ -173,6 +174,11 @@ namespace sd::model_builders {
                                                                   version,
                                                                   weight_manager,
                                                                   sd_ctx_params->model_args);
+        } else if (sd_version_is_flux3(version)) {
+            result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                               tensor_storage_map, version, "", false, weight_manager, tokenizers);
+            result.diffusion   = std::make_shared<Flux3::Flux3Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                    tensor_storage_map, "model.diffusion_model", weight_manager);
         } else if (sd_version_is_flux2(version) || sd_version_is_sefi_image(version)) {
             bool is_chroma     = false;
             result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
@@ -478,10 +484,6 @@ namespace sd::model_builders {
                                                                  "model.diffusion_model",
                                                                  version,
                                                                  weight_manager);
-            if (sd_ctx_params->diffusion_conv_direct) {
-                LOG_INFO("Using Conv2d direct in the diffusion model");
-                result.diffusion->set_conv2d_direct_enabled(true);
-            }
         }
 
         if (strlen(SAFE_STR(sd_ctx_params->ip_adapter_path)) > 0 && result.clip_vision == nullptr) {
@@ -533,7 +535,7 @@ namespace sd::model_builders {
         }
 
         auto create_tae = [&](bool decode_only) -> std::shared_ptr<VAE> {
-            if (sd_version_uses_wan_vae(version) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version)) {
+            if ((sd_version_uses_wan_vae(version) && version != VERSION_QWEN_IMAGE_2_1) || sd_version_is_hunyuan_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version)) {
                 return std::make_shared<TinyVideoAutoEncoder>(ctx.backends.runtime_backend(SDBackendModule::VAE),
                                                               tensor_storage_map,
                                                               "decoder",
@@ -668,15 +670,6 @@ namespace sd::model_builders {
             }
         }
 
-        if (sd_ctx_params->vae_conv_direct) {
-            LOG_INFO("Using Conv2d/Conv3d direct in the vae model");
-            result.vae->set_conv2d_direct_enabled(true);
-            result.vae->set_conv3d_direct_enabled(true);
-            if (result.preview) {
-                result.preview->set_conv2d_direct_enabled(true);
-                result.preview->set_conv3d_direct_enabled(true);
-            }
-        }
         if (result.vae) {
             result.vae->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         }
@@ -703,10 +696,6 @@ namespace sd::model_builders {
                                                         version,
                                                         "",
                                                         weight_manager);
-        if (sd_ctx_params->diffusion_conv_direct) {
-            LOG_INFO("Using Conv2d direct in the control net");
-            control_net->set_conv2d_direct_enabled(true);
-        }
         control_net->set_scale_overrides(sd_ctx_params->linear_scale, sd_ctx_params->attn_scale);
         runner = std::move(control_net);
         return true;

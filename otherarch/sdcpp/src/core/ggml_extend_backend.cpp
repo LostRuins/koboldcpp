@@ -6,10 +6,15 @@
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #ifdef SD_USE_CUDA
 #include <cuda.h>
+#endif
+
+#ifdef SD_USE_HIP
+#include <hip/hip_runtime_api.h>
 #endif
 
 #include "core/util.h"
@@ -452,23 +457,23 @@ ggml_backend_buffer_t sd_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t dev
     return buffer;
 }
 
-bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
+static int cuda_compiled_arch(ggml_backend_t backend) {
 #ifdef SD_USE_CUDA
     if (!sd_backend_is(backend, "CUDA")) {
-        return false;
+        return 0;
     }
     auto dev = ggml_backend_get_device(backend);
     if (dev == nullptr) {
-        return false;
+        return 0;
     }
     static std::mutex mutex;
-    static std::unordered_map<ggml_backend_dev_t, bool> cache;
+    static std::unordered_map<ggml_backend_dev_t, int> cache;
     std::lock_guard<std::mutex> lock(mutex);
     auto it = cache.find(dev);
     if (it != cache.end()) {
         return it->second;
     }
-    const bool supported = [&]() {
+    const int arch = [&]() {
         ggml_backend_dev_props props{};
         ggml_backend_dev_get_props(dev, &props);
         CUdevice device;
@@ -477,13 +482,13 @@ bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
             cuDeviceGetByPCIBusId(&device, props.device_id) != CUDA_SUCCESS ||
             cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device) != CUDA_SUCCESS ||
             cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device) != CUDA_SUCCESS) {
-            return false;
+            return 0;
         }
         auto reg          = ggml_backend_dev_backend_reg(dev);
         auto get_features = reinterpret_cast<ggml_backend_get_features_t>(
             ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features"));
         if (get_features == nullptr) {
-            return false;
+            return 0;
         }
         // Match ggml's highest compiled architecture for this device, including PTX fallback.
         const int cc      = 100 * major + 10 * minor;
@@ -506,14 +511,76 @@ bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
                 arch = end;
             }
         }
-        return compiled_arch == 700 || compiled_arch >= 750;
+        return compiled_arch;
     }();
-    cache.emplace(dev, supported);
-    return supported;
+    cache.emplace(dev, arch);
+    return arch;
+#else
+    (void)backend;
+    return 0;
+#endif
+}
+
+bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
+    const int arch = cuda_compiled_arch(backend);
+    return arch == 700 || arch >= 750;
+}
+
+bool sd_backend_supports_hip_mma(ggml_backend_t backend) {
+#ifdef SD_USE_HIP
+    if (!sd_backend_is(backend, "ROCm")) {
+        return false;
+    }
+    auto dev = ggml_backend_get_device(backend);
+    if (dev == nullptr) {
+        return false;
+    }
+    ggml_backend_dev_props props{};
+    ggml_backend_dev_get_props(dev, &props);
+    int device = 0;
+    hipDeviceProp_t hip_props{};
+    if (props.device_id == nullptr ||
+        hipDeviceGetByPCIBusId(&device, props.device_id) != hipSuccess ||
+        hipGetDeviceProperties(&hip_props, device) != hipSuccess) {
+        return false;
+    }
+    const char* arch = hip_props.gcnArchName;
+    if (std::strncmp(arch, "gfx", 3) != 0) {
+        return false;
+    }
+    char* end        = nullptr;
+    const long value = std::strtol(arch + 3, &end, 16);
+    if (end == arch + 3 || (*end != '\0' && *end != ':')) {
+        return false;
+    }
+    // Match the HIP FA kernels; keep unknown architecture families on the probe path.
+    if (value >= 0x1100 && value < 0x1300) {
+        return true;
+    }
+#ifdef SD_HIP_MFMA
+    return value == 0x908 || value == 0x90a ||
+           value == 0x940 || value == 0x941 || value == 0x942 || value == 0x950;
+#else
+    return false;
+#endif
 #else
     (void)backend;
     return false;
 #endif
+}
+
+bool sd_backend_supports_conv_implicit_gemm(ggml_backend_t backend, bool conv3d) {
+    if (backend == nullptr) {
+        return false;
+    }
+    if (sd_backend_is(backend, "Vulkan") || sd_backend_is(backend, "MUSA")) {
+        return true;
+    }
+    // CUDA/HIP Conv3d also implements SIMT implicit GEMM; Conv2d requires MMA.
+    if (conv3d) {
+        return sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "ROCm");
+    }
+    return cuda_compiled_arch(backend) >= 750 || sd_backend_supports_hip_mma(backend);
 }
 
 ggml_backend_t sd_backend_cpu_init() {
@@ -732,6 +799,72 @@ bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* a
         assignment->set_module(module, value);
     }
     return true;
+}
+
+static bool parse_operation_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error, bool convolution) {
+    const std::string operation = convolution ? "direct convolution" : "flash attention";
+    if (assignment == nullptr) {
+        return false;
+    }
+    SDBackendAssignment result;
+    result.set_default("auto");
+    std::istringstream stream(spec);
+    std::string part;
+    while (std::getline(stream, part, ',')) {
+        SDBackendAssignment entry;
+        if (!sd_parse_backend_assignment(part, &entry, error)) {
+            return false;
+        }
+        auto valid_mode = [&](const std::string& mode) {
+            if (mode == "on" || mode == "off" || mode == "auto") {
+                return true;
+            }
+            if (error != nullptr) {
+                *error = "invalid " + operation + " mode '" + mode + "': expected on, off, or auto";
+            }
+            return false;
+        };
+        if (!entry.default_name.empty()) {
+            if (!valid_mode(entry.default_name)) {
+                return false;
+            }
+            result.set_default(entry.default_name);
+        }
+        for (const auto& setting : entry.module_names) {
+            switch (setting.first) {
+                case SDBackendModule::DIFFUSION:
+                case SDBackendModule::VAE:
+                case SDBackendModule::CONTROL_NET:
+                    break;
+                case SDBackendModule::TE:
+                case SDBackendModule::CLIP_VISION:
+                case SDBackendModule::AUDIO_ENCODER:
+                    if (!convolution) {
+                        break;
+                    }
+                    [[fallthrough]];
+                default:
+                    if (error != nullptr) {
+                        *error = operation + " is not configurable for module '" + sd_backend_module_name(setting.first) + "'";
+                    }
+                    return false;
+            }
+            if (!valid_mode(setting.second)) {
+                return false;
+            }
+            result.set_module(setting.first, setting.second);
+        }
+    }
+    *assignment = std::move(result);
+    return true;
+}
+
+bool sd_parse_flash_attention_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+    return parse_operation_assignment(spec, assignment, error, false);
+}
+
+bool sd_parse_conv_direct_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+    return parse_operation_assignment(spec, assignment, error, true);
 }
 
 bool SDBackendAssignment::empty() const {

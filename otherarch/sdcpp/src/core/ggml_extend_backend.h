@@ -88,6 +88,8 @@ private:
 bool sd_backend_is(ggml_backend_t backend, const std::string& name);
 bool sd_backend_is_cpu(ggml_backend_t backend);
 bool sd_backend_supports_cuda_mma(ggml_backend_t backend);
+bool sd_backend_supports_hip_mma(ggml_backend_t backend);
+bool sd_backend_supports_conv_implicit_gemm(ggml_backend_t backend, bool conv3d);
 ggml_backend_buffer_t sd_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device,
                                                           void* ptr,
                                                           size_t size,
@@ -100,6 +102,8 @@ ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
                                                         void* callback_eval_user_data);
 std::string sd_backend_resolve_name(const std::string& name);
 bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
+bool sd_parse_flash_attention_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
+bool sd_parse_conv_direct_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
 const char* sd_backend_module_name(SDBackendModule module);
 void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value);
 bool add_rpc_devices(const std::string& servers);
