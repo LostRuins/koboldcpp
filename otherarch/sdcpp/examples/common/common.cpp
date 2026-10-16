@@ -75,7 +75,7 @@ static std::string utf16_to_utf8(const std::wstring& wstr) {
     return utf8;
 }
 
-static std::string argv_to_utf8(int index, const char** argv) {
+std::string argv_to_utf8(int index, const char** argv) {
     (void)argv;
     int argc;
     wchar_t** argv_w = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -91,7 +91,7 @@ static std::string argv_to_utf8(int index, const char** argv) {
 }
 
 #else  // Linux / macOS
-static std::string argv_to_utf8(int index, const char** argv) {
+std::string argv_to_utf8(int index, const char** argv) {
     return std::string(argv[index]);
 }
 
@@ -839,16 +839,17 @@ ArgOptions SDContextParams::get_options() {
 void SDContextParams::build_embedding_map() {
     static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
 
-    if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
+    const fs::path embedding_dir_path = fs::u8path(embedding_dir);
+    if (!fs::exists(embedding_dir_path) || !fs::is_directory(embedding_dir_path)) {
         return;
     }
 
-    for (auto& p : fs::directory_iterator(embedding_dir)) {
+    for (auto& p : fs::directory_iterator(embedding_dir_path)) {
         if (!p.is_regular_file())
             continue;
 
         auto path       = p.path();
-        std::string ext = path.extension().string();
+        std::string ext = path.extension().u8string();
 
         bool valid = false;
         for (auto& e : valid_ext) {
@@ -860,8 +861,8 @@ void SDContextParams::build_embedding_map() {
         if (!valid)
             continue;
 
-        std::string key   = path.stem().string();
-        std::string value = path.string();
+        std::string key   = path.stem().u8string();
+        std::string value = path.u8string();
 
         embedding_map[key] = value;
     }
@@ -1572,7 +1573,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_image_paths.push_back(argv[index]);
+        ref_image_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1580,7 +1581,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_video_paths.push_back(argv[index]);
+        ref_video_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1588,7 +1589,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_video_audio_paths.push_back(argv[index]);
+        ref_video_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1596,7 +1597,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_audio_paths.push_back(argv[index]);
+        ref_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1604,7 +1605,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_audio_paths.push_back(argv[index]);
+        ref_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1703,15 +1704,15 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg = argv[index];
-        std::ifstream f(arg, std::ios::binary);
+        const std::string arg = argv_to_utf8(index, argv);
+        std::ifstream f(fs::u8path(arg), std::ios::binary);
         try {
             prompt = std::string(std::istreambuf_iterator<char>{f}, {});
         } catch (const std::ios_base::failure&) {
             f.setstate(std::ios_base::failbit);
         }
         if (f.fail()) {
-            LOG_ERROR("error: failed to read prompt file '%s'\n", arg);
+            LOG_ERROR("error: failed to read prompt file '%s'\n", arg.c_str());
             return -1;
         }
         return 1;
@@ -1721,15 +1722,15 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg = argv[index];
-        std::ifstream f(arg, std::ios::binary);
+        const std::string arg = argv_to_utf8(index, argv);
+        std::ifstream f(fs::u8path(arg), std::ios::binary);
         try {
             negative_prompt = std::string(std::istreambuf_iterator<char>{f}, {});
         } catch (const std::ios_base::failure&) {
             f.setstate(std::ios_base::failbit);
         }
         if (f.fail()) {
-            LOG_ERROR("error: failed to read negative prompt file '%s'\n", arg);
+            LOG_ERROR("error: failed to read negative prompt file '%s'\n", arg.c_str());
             return -1;
         }
         return 1;
@@ -2050,22 +2051,22 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
     if (model_name.empty() ||
         model_name.find('/') != std::string::npos ||
         model_name.find('\\') != std::string::npos ||
-        fs::path(model_name).has_root_path() ||
+        fs::u8path(model_name).has_root_path() ||
         ends_with_valid_ext()) {
         LOG_ERROR("%s must be a model name without path or extension: %s", label, model_name.c_str());
         return false;
     }
 
-    fs::path model_dir_path = model_dir;
+    fs::path model_dir_path = fs::u8path(model_dir);
     for (const auto& ext : valid_ext) {
-        fs::path try_path = model_dir_path / (model_name + ext);
+        fs::path try_path = model_dir_path / fs::u8path(model_name + ext);
         if (fs::exists(try_path) && fs::is_regular_file(try_path)) {
-            resolved_path = try_path.lexically_normal().string();
+            resolved_path = try_path.lexically_normal().u8string();
             return true;
         }
     }
 
-    LOG_ERROR("can not find %s %s in %s", label, model_name.c_str(), model_dir_path.lexically_normal().string().c_str());
+    LOG_ERROR("can not find %s %s in %s", label, model_name.c_str(), model_dir_path.lexically_normal().u8string().c_str());
     return false;
 }
 
@@ -2359,10 +2360,18 @@ bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
         }
 
         fs::path final_path;
-        if (is_absolute_path(raw_path)) {
-            final_path = raw_path;
-        } else {
-            final_path = fs::path(lora_model_dir) / raw_path;
+        try {
+            if (is_absolute_path(raw_path)) {
+                final_path = fs::u8path(raw_path);
+            } else {
+                final_path = fs::u8path(lora_model_dir) / fs::u8path(raw_path);
+            }
+        } catch (const std::exception&) {  // not UTF-8, e.g. a prompt file in another encoding
+            LOG_WARN("invalid lora path %s", raw_path.c_str());
+            tmp     = m.suffix().str();
+            prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+            missing = true;
+            continue;
         }
         if (!fs::exists(final_path)) {
             bool found = false;
@@ -2376,7 +2385,7 @@ bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
                 }
             }
             if (!found) {
-                LOG_WARN("can not found lora %s", final_path.lexically_normal().string().c_str());
+                LOG_WARN("can not found lora %s", final_path.lexically_normal().u8string().c_str());
                 tmp     = m.suffix().str();
                 prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
                 missing = true;
@@ -2384,7 +2393,7 @@ bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
             }
         }
 
-        const std::string key = final_path.lexically_normal().string();
+        const std::string key = final_path.lexically_normal().u8string();
 
         if (is_high_noise)
             high_noise_lora_map[key] += mul;

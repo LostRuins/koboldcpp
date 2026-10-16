@@ -2,6 +2,7 @@
 #define __SD_MODEL_IO_GGUF_READER_EXT_H__
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -184,7 +185,7 @@ private:
 
 public:
     bool load(const std::string& file_path) {
-        std::ifstream fin(sd_get_u8path(file_path), std::ios::binary | std::ios::ate);
+        std::ifstream fin(std::filesystem::u8path(file_path), std::ios::binary | std::ios::ate);
         if (!fin) {
             LOG_ERROR("failed to open '%s'", file_path.c_str());
             return false;

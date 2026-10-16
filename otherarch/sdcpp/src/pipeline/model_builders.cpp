@@ -31,6 +31,7 @@
 #include "model/diffusion/minit2i.hpp"
 #include "model/diffusion/mmdit.hpp"
 #include "model/diffusion/model.hpp"
+#include "model/diffusion/moss_image.hpp"
 #include "model/diffusion/pid.hpp"
 #include "model/diffusion/pixart.hpp"
 #include "model/diffusion/qwen_image.hpp"
@@ -468,6 +469,11 @@ namespace sd::model_builders {
                                                                tensor_storage_map, version, "", false, weight_manager, tokenizers);
             result.diffusion   = std::make_shared<Iris::IrisRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                   tensor_storage_map, "model.diffusion_model", weight_manager);
+        } else if (version == VERSION_MOSS_IMAGE) {
+            result.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                               tensor_storage_map, version, "", false, weight_manager, tokenizers);
+            result.diffusion   = std::make_shared<MOSSImage::MOSSImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                            tensor_storage_map, "model.diffusion_model", weight_manager);
         } else {  // SD1.x SD2.x SDXL
             std::map<std::string, std::string> embbeding_map;
             for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {

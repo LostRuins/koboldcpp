@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 
 #include "core/ggml_extend_backend.h"
@@ -100,7 +101,7 @@ void ggml_ext_tensor_diff(
 }
 
 ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_path) {
-    std::ifstream file(sd_get_u8path(file_path), std::ios::binary);
+    std::ifstream file(std::filesystem::u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         LOG_ERROR("failed to open '%s'", file_path.c_str());
         return nullptr;

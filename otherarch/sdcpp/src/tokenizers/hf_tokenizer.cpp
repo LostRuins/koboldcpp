@@ -4,6 +4,7 @@
 #include <array>
 #include <climits>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <queue>
 #include <sstream>
@@ -495,7 +496,7 @@ struct HFTokenizer::Impl {
 
 HFTokenizer::HFTokenizer(const std::string& path)
     : impl_(new Impl) {
-    std::ifstream stream(path, std::ios::binary);
+    std::ifstream stream(std::filesystem::u8path(path), std::ios::binary);
     tokenizer_require(stream.good(), "cannot open " + path);
     TokenizerJSON config;
     stream >> config;

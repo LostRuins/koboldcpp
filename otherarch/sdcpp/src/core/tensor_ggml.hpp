@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -105,7 +106,7 @@ namespace sd {
 
     template <typename T>
     inline Tensor<T> load_tensor_from_file_as_tensor(const std::string& file_path) {
-        std::ifstream file(file_path, std::ios::binary);
+        std::ifstream file(std::filesystem::u8path(file_path), std::ios::binary);
         if (!file.is_open()) {
             throw std::runtime_error("failed to open tensor file: " + file_path);
         }

@@ -15,10 +15,12 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
+#define STBI_WINDOWS_UTF8
 #include "stb_image.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
+#define STBIW_WINDOWS_UTF8
 #include "stb_image_write.h"
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -147,7 +149,7 @@ private:
 #endif
 
 bool read_binary_file_bytes(const char* path, std::vector<uint8_t>& data) {
-    std::ifstream fin(fs::path(path), std::ios::binary);
+    std::ifstream fin(fs::u8path(path), std::ios::binary);
     if (!fin) {
         return false;
     }
@@ -170,7 +172,7 @@ bool read_binary_file_bytes(const char* path, std::vector<uint8_t>& data) {
 }
 
 bool write_binary_file_bytes(const std::string& path, const std::vector<uint8_t>& data) {
-    std::ofstream fout(fs::path(path), std::ios::binary);
+    std::ofstream fout(fs::u8path(path), std::ios::binary);
     if (!fout) {
         return false;
     }
@@ -728,7 +730,7 @@ static std::pair<uint64_t, uint64_t> audio_sample_range_for_video_frame(const sd
 }
 
 EncodedImageFormat encoded_image_format_from_path(const std::string& path) {
-    std::string ext = fs::path(path).extension().string();
+    std::string ext = fs::u8path(path).extension().u8string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
     if (ext == ".jpg" || ext == ".jpeg" || ext == ".jpe") {
@@ -1427,7 +1429,7 @@ bool write_wav_to_file(const std::string& path,
         return false;
     }
 
-    std::ofstream file(path, std::ios::binary);
+    std::ofstream file(fs::u8path(path), std::ios::binary);
     if (!file.is_open()) {
         return false;
     }
@@ -1590,7 +1592,7 @@ bool load_wav_from_file(const std::string& path,
     sample_rate = 0;
     channels    = 0;
 
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(fs::u8path(path), std::ios::binary);
     uint8_t riff_header[12];
     if (!file.read(reinterpret_cast<char*>(riff_header), sizeof(riff_header)) ||
         std::memcmp(riff_header, "RIFF", 4) != 0 ||

@@ -221,6 +221,11 @@ static struct {
     }
 } sd_generation;
 
+static std::string sd_get_u8path(const std::string& file_path)
+{
+    return std::filesystem::u8path(file_path).string();
+}
+
 static std::string read_str_from_disk(std::string filepath)
 {
     std::string output;

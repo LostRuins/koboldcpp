@@ -344,22 +344,15 @@ ggml_tensor* ggml_ext_pad(ggml_context* ctx,
 }
 
 static ggml_tensor* conv_1d(ggml_context* ctx, ggml_tensor* x, ggml_tensor* w, int s0, int p0, int d0, bool force_prec_f32) {
-    ggml_tensor* result;
-    if (force_prec_f32) {
-        ggml_tensor* patches = ggml_im2col(ctx, w, x, s0, 0, p0, 0, d0, 0, false, GGML_TYPE_F32);
-        result               = ggml_mul_mat(ctx,
-                                            ggml_reshape_2d(ctx, patches, patches->ne[0], patches->ne[2] * patches->ne[1]),
-                                            ggml_reshape_2d(ctx, w, w->ne[0] * w->ne[1], w->ne[2]));
-        result               = ggml_reshape_3d(ctx, result, patches->ne[1], w->ne[2], patches->ne[2]);
-    } else {
-        result = ggml_conv_1d(ctx, w, x, s0, p0, d0);
+    if (!force_prec_f32) {
+        return ggml_conv_1d(ctx, w, x, s0, p0, d0);
     }
-    if (x->ne[2] > 1) {
-        // mul_mat packs positions and batches before output channels: [OL, N, OC].
-        result = ggml_reshape_3d(ctx, result, result->ne[0], x->ne[2], w->ne[2]);
-        result = ggml_cont(ctx, ggml_permute(ctx, result, 0, 2, 1, 3));
-    }
-    return result;
+    ggml_tensor* patches = ggml_im2col(ctx, w, x, s0, 0, p0, 0, d0, 0, false, GGML_TYPE_F32);
+    ggml_tensor* result  = ggml_mul_mat(ctx,
+                                        ggml_reshape_2d(ctx, patches, patches->ne[0], patches->ne[2] * patches->ne[1]),
+                                        ggml_reshape_2d(ctx, w, w->ne[0] * w->ne[1], w->ne[2]));
+    result               = ggml_reshape_3d(ctx, result, patches->ne[1], patches->ne[2], w->ne[2]);
+    return ggml_cont(ctx, ggml_permute(ctx, result, 0, 2, 1, 3));
 }
 
 ggml_tensor* ggml_ext_conv_1d(ggml_context* ctx,
