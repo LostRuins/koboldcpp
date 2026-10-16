@@ -31,6 +31,7 @@
 #include "parsers/minimax-m3.cpp"
 #include "parsers/ministral3.cpp"
 #include "parsers/muse-glimmer.cpp"
+#include "parsers/muse-spark.cpp"
 #include "parsers/qwen3-coder.cpp"
 #include "parsers/translate-gemma.cpp"
 
@@ -1143,6 +1144,12 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
     if (src.find("<|channel|>") != std::string::npos) {
         LOG_DBG("Using specialized template: GPT-OSS\n");
         return common_chat_params_init_gpt_oss;
+    }
+
+    // Muse Spark shares the Muse recipient protocol and adds a commentary recipient.
+    if (src.find("to=commentary") != std::string::npos && src.find("<|eom|>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Muse Spark\n");
+        return common_chat_params_init_muse_spark;
     }
 
     // Muse Glimmer format using " to=<recipient>" recipients and <|eom|>/<|eot|> message terminators.
