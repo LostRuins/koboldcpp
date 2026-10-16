@@ -479,8 +479,10 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool iswan = sd_version_is_wan(tempver);
     bool is_wan21 = sd_version_is_wan(tempver) && tempver != VERSION_WAN2_2_TI2V;
     bool is_qwenimg = sd_version_is_qwen_image(tempver);
-    bool iszimg = sd_version_is_z_image(tempver);
-    bool isflux2 = sd_version_is_flux2(tempver);
+    bool is_zimg = sd_version_is_z_image(tempver);
+    bool is_zimg_l2p = sd_version_is_z_image_l2p(tempver);
+    bool is_iris = (tempver == VERSION_IRIS);
+    bool is_flux2 = sd_version_is_flux2(tempver);
     bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
     bool is_anima = sd_version_is_anima(tempver);
     bool is_ernie = sd_version_is_ernie_image(tempver);
@@ -495,7 +497,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_sefi = sd_version_is_sefi_image(tempver);
     bool is_mageflow = sd_version_is_mage_flow(tempver);
     bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
-    bool conditioner_is_llm = (is_qwenimg || iszimg || isflux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming);
+    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
     bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
 
     //kcpp qol fallback: if a llm was loaded as t5 by mistake
