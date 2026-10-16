@@ -488,6 +488,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_iris = (tempver == VERSION_IRIS);
     bool is_flux2 = sd_version_is_flux2(tempver);
     bool is_flux3 = sd_version_is_flux3(tempver);
+    bool is_mosi = (tempver == VERSION_MOSS_IMAGE);
     bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
     bool is_anima = sd_version_is_anima(tempver);
     bool is_ernie = sd_version_is_ernie_image(tempver);
@@ -502,8 +503,9 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_sefi = sd_version_is_sefi_image(tempver);
     bool is_mageflow = sd_version_is_mage_flow(tempver);
     bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
-    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_flux3 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
+    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_flux3 || is_mosi || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
     bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
+    bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi);
 
     //kcpp qol fallback: if a llm was loaded as t5 by mistake
     if(conditioner_is_llm && !path_empty(params.t5xxl_path))
@@ -561,7 +563,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         {
             std::swap(params.uncond_diffusion_model_path, params.clip_g_path);
         }
-        else if ((is_lens || is_pid || is_ming) && kcpp_main_tokenizer.empty())
+        else if (has_tokenizer && kcpp_main_tokenizer.empty())
         {
             // accept a tokenizer.json on clip_2
             kcpp_main_tokenizer = params.clip_g_path;
