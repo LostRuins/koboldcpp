@@ -188,7 +188,7 @@ struct SDCliParams {
             if (++index >= argc) {
                 return -1;
             }
-            imatrix_in.push_back(argv[index]);
+            imatrix_in.push_back(argv_to_utf8(index, argv));
             return 1;
         };
 
@@ -323,13 +323,14 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 bool load_images_from_dir(const std::string dir,
                           std::vector<SDImageOwner>& images,
                           int max_image_num = 0) {
-    if (!fs::exists(dir) || !fs::is_directory(dir)) {
+    const fs::path dir_path = fs::u8path(dir);
+    if (!fs::exists(dir_path) || !fs::is_directory(dir_path)) {
         LOG_ERROR("'%s' is not a valid directory\n", dir.c_str());
         return false;
     }
 
     std::vector<fs::directory_entry> entries;
-    for (const auto& entry : fs::directory_iterator(dir)) {
+    for (const auto& entry : fs::directory_iterator(dir_path)) {
         if (entry.is_regular_file()) {
             entries.push_back(entry);
         }
@@ -337,12 +338,12 @@ bool load_images_from_dir(const std::string dir,
 
     std::sort(entries.begin(), entries.end(),
               [](const fs::directory_entry& a, const fs::directory_entry& b) {
-                  return a.path().filename().string() < b.path().filename().string();
+                  return a.path().filename().u8string() < b.path().filename().u8string();
               });
 
     for (const auto& entry : entries) {
-        std::string path = entry.path().string();
-        std::string ext  = entry.path().extension().string();
+        std::string path = entry.path().u8string();
+        std::string ext  = entry.path().extension().u8string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
         if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".webp") {
@@ -397,19 +398,19 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
     // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
     // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
-        fs::path path = cli_params->preview_path;
-        if (encoded_image_format_from_path(path.string()) == EncodedImageFormat::UNKNOWN)
+        fs::path path = fs::u8path(cli_params->preview_path);
+        if (encoded_image_format_from_path(path.u8string()) == EncodedImageFormat::UNKNOWN)
             path += ".png";
-        if (std::regex_search(path.string(), format_specifier_regex))
-            path = fs::path(format_frame_idx(path.string(), continuous_preview_counter++));
-        if (!write_image_to_file(path.string(),
+        if (std::regex_search(path.u8string(), format_specifier_regex))
+            path = fs::u8path(format_frame_idx(path.u8string(), continuous_preview_counter++));
+        if (!write_image_to_file(path.u8string(),
                                  image->data,
                                  image->width,
                                  image->height,
                                  image->channel,
                                  "",
                                  cli_params->compression_quality)) {
-            LOG_ERROR("save preview image to '%s' failed", path.string().c_str());
+            LOG_ERROR("save preview image to '%s' failed", path.u8string().c_str());
         }
     } else {
         int fps = cli_params->preview_method == PREVIEW_PROJ ? cli_params->preview_fps / 4 : cli_params->preview_fps;
@@ -420,12 +421,12 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
 }
 
 static fs::path get_video_audio_sidecar_path(const SDCliParams& cli_params) {
-    fs::path out_path     = cli_params.output_path;
+    fs::path out_path     = fs::u8path(cli_params.output_path);
     fs::path base_path    = out_path;
     fs::path ext          = out_path.has_extension() ? out_path.extension() : fs::path{};
-    std::string ext_lower = ext.string();
+    std::string ext_lower = ext.u8string();
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
-    const EncodedImageFormat output_format = encoded_image_format_from_path(out_path.string());
+    const EncodedImageFormat output_format = encoded_image_format_from_path(out_path.u8string());
     if (!ext.empty()) {
         if (output_format == EncodedImageFormat::JPEG ||
             output_format == EncodedImageFormat::PNG ||
@@ -450,14 +451,14 @@ bool save_results(const SDCliParams& cli_params,
     }
 
     namespace fs      = std::filesystem;
-    fs::path out_path = cli_params.output_path;
+    fs::path out_path = fs::u8path(cli_params.output_path);
 
     if (!out_path.parent_path().empty()) {
         std::error_code ec;
         fs::create_directories(out_path.parent_path(), ec);
         if (ec) {
             LOG_ERROR("failed to create directory '%s': %s",
-                      out_path.parent_path().string().c_str(), ec.message().c_str());
+                      out_path.parent_path().u8string().c_str(), ec.message().c_str());
             return false;
         }
     }
@@ -465,9 +466,9 @@ bool save_results(const SDCliParams& cli_params,
     fs::path base_path = out_path;
     fs::path ext       = out_path.has_extension() ? out_path.extension() : fs::path{};
 
-    std::string ext_lower = ext.string();
+    std::string ext_lower = ext.u8string();
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
-    const EncodedImageFormat output_format = encoded_image_format_from_path(out_path.string());
+    const EncodedImageFormat output_format = encoded_image_format_from_path(out_path.u8string());
     if (!ext.empty()) {
         if (output_format == EncodedImageFormat::JPEG ||
             output_format == EncodedImageFormat::PNG ||
@@ -493,8 +494,8 @@ bool save_results(const SDCliParams& cli_params,
         std::string params          = gen_params.embed_image_metadata
                                           ? get_image_params(ctx_params, gen_params, metadata_seed, cli_params.mode)
                                           : "";
-        const bool ok               = write_image_to_file(path.string(), img.data, img.width, img.height, img.channel, params, cli_params.compression_quality);
-        LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
+        const bool ok               = write_image_to_file(path.u8string(), img.data, img.width, img.height, img.channel, params, cli_params.compression_quality);
+        LOG_INFO("save result image %d to '%s' (%s)", idx, path.u8string().c_str(), ok ? "success" : "failure");
         return ok;
     };
 
@@ -502,14 +503,14 @@ bool save_results(const SDCliParams& cli_params,
         if (generated_audio == nullptr) {
             return;
         }
-        if (write_wav_to_file(wav_path.string(),
+        if (write_wav_to_file(wav_path.u8string(),
                               generated_audio->data,
                               generated_audio->sample_count,
                               generated_audio->channels,
                               generated_audio->sample_rate)) {
-            LOG_INFO("save result audio to '%s'", wav_path.string().c_str());
+            LOG_INFO("save result audio to '%s'", wav_path.u8string().c_str());
         } else {
-            LOG_WARN("failed to save result audio to '%s'", wav_path.string().c_str());
+            LOG_WARN("failed to save result audio to '%s'", wav_path.u8string().c_str());
         }
     };
 
@@ -522,7 +523,7 @@ bool save_results(const SDCliParams& cli_params,
         pattern += ext;
 
         for (int i = 0; i < num_results; ++i) {
-            fs::path img_path = format_frame_idx(pattern.string(), output_begin_idx + i);
+            fs::path img_path = fs::u8path(format_frame_idx(pattern.u8string(), output_begin_idx + i));
             if (write_image(img_path, i)) {
                 sucessful_reults++;
             }
@@ -540,11 +541,11 @@ bool save_results(const SDCliParams& cli_params,
 
         fs::path video_path = base_path;
         video_path += ext;
-        std::string final_ext_lower = ext.string();
+        std::string final_ext_lower = ext.u8string();
         std::transform(final_ext_lower.begin(), final_ext_lower.end(), final_ext_lower.begin(), ::tolower);
         const bool mux_audio = generated_audio != nullptr && (final_ext_lower == ".avi" || final_ext_lower == ".webm");
-        if (create_video_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps, cli_params.compression_quality, mux_audio ? generated_audio : nullptr, params) == 0) {
-            LOG_INFO("save result video to '%s'", video_path.string().c_str());
+        if (create_video_from_sd_images(video_path.u8string().c_str(), results, num_results, gen_params.fps, cli_params.compression_quality, mux_audio ? generated_audio : nullptr, params) == 0) {
+            LOG_INFO("save result video to '%s'", video_path.u8string().c_str());
             if (generated_audio != nullptr && !mux_audio) {
                 fs::path wav_path = video_path;
                 wav_path.replace_extension(".wav");
@@ -552,7 +553,7 @@ bool save_results(const SDCliParams& cli_params,
             }
             return true;
         } else {
-            LOG_ERROR("Failed to save result video to '%s'", video_path.string().c_str());
+            LOG_ERROR("Failed to save result video to '%s'", video_path.u8string().c_str());
             return false;
         }
     }
@@ -701,7 +702,7 @@ int main(int argc, const char* argv[]) {
     LOG_DEBUG("%s", gen_params.to_string().c_str());
 
     if (!cli_params.imatrix_out.empty()) {
-        if (fs::exists(cli_params.imatrix_out) &&
+        if (fs::exists(fs::u8path(cli_params.imatrix_out)) &&
             std::find(cli_params.imatrix_in.begin(), cli_params.imatrix_in.end(), cli_params.imatrix_out) == cli_params.imatrix_in.end()) {
             LOG_WARN("imatrix file '%s' already exists and will be overwritten", cli_params.imatrix_out.c_str());
         }

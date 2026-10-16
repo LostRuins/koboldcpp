@@ -1995,6 +1995,9 @@ struct LLMEmbedder : public Conditioner {
             if (sd_version_is_pid(version)) {
                 throw std::runtime_error("PiD requires an external Gemma 2 tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
             }
+            if (version == VERSION_MOSS_IMAGE) {
+                throw std::runtime_error("MOSS-Image requires the official Qwen3.5 tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
+            }
         }
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (version == VERSION_FLUX2) {
@@ -2018,6 +2021,8 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::QWEN3_VL;
         } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
+        } else if (version == VERSION_MOSS_IMAGE) {
+            arch = LLM::LLMArch::QWEN3_5;
         }
         llm        = std::make_shared<LLM::LLMRunner>(arch,
                                                backend,
@@ -2032,6 +2037,8 @@ struct LLMEmbedder : public Conditioner {
             pad_id = 199999;
         } else if (arch == LLM::LLMArch::GEMMA2_2B) {
             pad_id = 0;
+        } else if (arch == LLM::LLMArch::QWEN3_5) {
+            pad_id = 248044;
         }
         tokenizer = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, pad_id);
         if (!tokenizer) {
@@ -3039,6 +3046,11 @@ struct LLMEmbedder : public Conditioner {
 
                 prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
+        } else if (version == VERSION_MOSS_IMAGE) {
+            prompt_template_encode_start_idx = 0;
+            max_length                       = 4096;
+            prompt                           = "<|im_start|>user\n" + conditioner_params.text + "<|im_end|>\n<|im_start|>assistant\n<think>\n";
+            prompt_attn_range                = {0, 0};
         } else if (sd_version_is_flux3(version)) {
             prompt_template_encode_start_idx = 0;
             max_length                       = 4096;

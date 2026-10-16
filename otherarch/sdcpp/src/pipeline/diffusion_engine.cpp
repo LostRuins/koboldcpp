@@ -112,6 +112,7 @@ const char* model_version_to_str[] = {
     "Z-Image L2P",
     "Iris-3B",
     "Flux.3 Image Klein",
+    "MOSS-Image",
 };
 
 static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
@@ -1490,9 +1491,10 @@ bool StableDiffusionGGML::build_denoiser() {
                    sd_version_is_boogu_image(version) ||
                    sd_version_is_pid(version) ||
                    sd_version_is_ideogram4(version) ||
-                   version == VERSION_IRIS) {
+                   version == VERSION_IRIS ||
+                   version == VERSION_MOSS_IMAGE) {
             pred_type = FLOW_PRED;
-            if (sd_version_is_wan(version)) {
+            if (sd_version_is_wan(version) || version == VERSION_MOSS_IMAGE) {
                 default_flow_shift = 5.f;
             } else if (sd_version_is_hunyuan_video(version)) {
                 default_flow_shift = 7.f;
@@ -2662,7 +2664,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     unet_extra.ip_scale   = ip_adapter_strength;
                 }
                 diffusion_params.extra = unet_extra;
-            } else if (sd_version_is_sd3(version)) {
+            } else if (sd_version_is_sd3(version) || version == VERSION_MOSS_IMAGE) {
                 diffusion_params.extra = SkipLayerDiffusionExtra{local_skip_layers};
             } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version) || sd_version_is_sefi_image(version)) {
                 diffusion_params.extra = FluxDiffusionExtra{&guidance_tensor,
@@ -2891,9 +2893,12 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         if (uncond_out.empty() && !uncond.empty()) {
             if (!skip_uncond) {
                 const std::vector<int>* uncond_skip_layers = nullptr;
+                const std::vector<int> moss_skip_layers    = {22};
                 if (is_skiplayer_step && slg_uncond) {
                     LOG_VERBOSE("Skipping layers at uncond step %d\n", step);
                     uncond_skip_layers = &skip_layer_guidance.layers();
+                } else if (version == VERSION_MOSS_IMAGE) {
+                    uncond_skip_layers = &moss_skip_layers;
                 }
                 uncond_out = run_condition(uncond,
                                            uncond.c_concat.empty() ? nullptr : &uncond.c_concat,

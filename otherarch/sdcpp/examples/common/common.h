@@ -12,6 +12,10 @@
 #include "resource_owners.hpp"
 #include "stable-diffusion.h"
 
+// The command-line argument at `index` as UTF-8 (on Windows, read again from
+// the UTF-16 command line: argv itself is in the ANSI code page).
+std::string argv_to_utf8(int index, const char** argv);
+
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
