@@ -587,7 +587,9 @@ public:
             label_emb      = ggml_silu_inplace(ctx->ggml_ctx, label_emb);
             label_emb      = label_embed_2->forward(ctx, label_emb);  // [N, time_embed_dim]
 
-            emb = ggml_add(ctx->ggml_ctx, emb, label_emb);  // [N, time_embed_dim]
+            emb = label_emb->ne[1] > emb->ne[1]
+                      ? ggml_add(ctx->ggml_ctx, label_emb, emb)
+                      : ggml_add(ctx->ggml_ctx, emb, label_emb);  // [N, time_embed_dim]
         }
         // sd::ggml_graph_cut::mark_graph_cut(emb, "unet.prelude", "emb");
 

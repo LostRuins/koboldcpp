@@ -497,11 +497,7 @@ namespace sd::backend_fit {
                 return false;
             }
             auto smaller_tile = [&](int size) {
-                int next_size = size / 2;
-                if (!tiling_params.enabled) {
-                    next_size = std::min(next_size, 256 / scale_factor);
-                }
-                return std::min(size, std::max(4, next_size));
+                return std::min(size, std::max(4, size / 2));
             };
             const int tile_size_w = smaller_tile(latent_tile_size_w);
             const int tile_size_h = smaller_tile(latent_tile_size_h);

@@ -29,6 +29,7 @@ bool contains(const std::string& str, const std::string& substr);
 std::string sd_format(const char* fmt, ...);
 
 void replace_all_chars(std::string& str, char target, char replacement);
+std::string escape_newlines(const std::string& text);
 
 int round_up_to(int value, int base);
 
@@ -103,6 +104,7 @@ std::vector<std::pair<std::string, float>> split_quotation_attention(
 sd_progress_cb_t sd_get_progress_callback();
 void* sd_get_progress_callback_data();
 
+void sd_begin_preview_pass(int total_steps);
 sd_preview_cb_t sd_get_preview_callback();
 void* sd_get_preview_callback_data();
 preview_t sd_get_preview_mode();

@@ -188,8 +188,8 @@ namespace Qwen {
             auto v = project("to_v");
             q      = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, q);
             k      = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, k);
-            q      = Rope::apply_rope(ctx->ggml_ctx, q, pe);
-            k      = Rope::apply_rope(ctx->ggml_ctx, k, pe);
+            q      = Rope::apply_rope(ctx, q, pe);
+            k      = Rope::apply_rope(ctx, k, pe);
             if (cache.mode == QwenImage21PrefixCache::Mode::STORE) {
                 // Preserve query-first attention evaluation while writing each layer's
                 // prefix before its full-sequence K/V can accumulate across layers.
