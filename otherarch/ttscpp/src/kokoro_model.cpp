@@ -696,9 +696,6 @@ void kokoro_model::assign_duration_weight(std::string name, ggml_tensor * tensor
 				TTS_ABORT("Malformed Kokoro duration layer tensor name '%s'.", name.c_str());
 			}
 			const size_t sequence_index = tts_checked_index(parts[1], prosody_pred->layers.size() * 2, name);
-			if (sequence_index % 2 != 0) {
-				TTS_ABORT("Invalid Kokoro duration layer index %zu in tensor '%s'.", sequence_index, name.c_str());
-			}
 			const size_t i = sequence_index / 2;
 			if (parts[2] == "gamma_weight") {
 				prosody_pred->layers[i]->ada_norm_gamma_weight = ggml_dup_tensor(ctx, tensor);
