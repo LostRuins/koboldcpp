@@ -1663,6 +1663,26 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     replace_with_prefix_map(name, prefix_map);
 
+    if (version == VERSION_MOSS_IMAGE) {
+        const std::string te_prefix = "text_encoders.llm.";
+        if (starts_with(name, te_prefix + "blk.")) {
+            static const std::vector<std::pair<std::string, std::string>> qwen35_name_map = {
+                {"attn_post_norm.", "post_attention_layernorm."},
+                {"post_attention_norm.", "post_attention_layernorm."},
+                {"attn_qkv.", "linear_attn.in_proj_qkv."},
+                {"attn_gate.", "linear_attn.in_proj_z."},
+                {"ssm_conv1d.", "linear_attn.conv1d."},
+                {"ssm_dt.bias", "linear_attn.dt_bias"},
+                {"ssm_norm.", "linear_attn.norm."},
+                {"ssm_out.", "linear_attn.out_proj."},
+                {"ssm_alpha.", "linear_attn.in_proj_a."},
+                {"ssm_beta.", "linear_attn.in_proj_b."},
+                {"ssm_a", "linear_attn.A"},
+            };
+            replace_with_name_map(name, qwen35_name_map);
+        }
+    }
+
     if (version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
         const std::string hf_vision_prefix = "text_encoders.llm.model.visual.";
         if (starts_with(name, hf_vision_prefix)) {

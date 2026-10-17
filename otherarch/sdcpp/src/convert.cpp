@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -108,7 +109,7 @@ static bool preallocate_output_file(const std::string& output_path, uint64_t fil
         return true;
     }
 
-    std::fstream file(output_path, std::ios::binary | std::ios::in | std::ios::out);
+    std::fstream file(std::filesystem::u8path(output_path), std::ios::binary | std::ios::in | std::ios::out);
     if (!file.is_open()) {
         if (error != nullptr) {
             *error = "failed to open output file '" + output_path + "' for preallocation";
@@ -251,7 +252,7 @@ static bool stream_tensor_data(ModelLoader& model_loader,
 
     for (int worker = 0; worker < n_threads; worker++) {
         workers.emplace_back([&]() {
-            std::fstream output_file(output_path, std::ios::binary | std::ios::in | std::ios::out);
+            std::fstream output_file(std::filesystem::u8path(output_path), std::ios::binary | std::ios::in | std::ios::out);
             if (!output_file.is_open()) {
                 fail("failed to open output file '" + output_path + "' for tensor writing");
                 return;

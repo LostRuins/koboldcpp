@@ -139,7 +139,6 @@ struct SDParams {
     float eta                     = -1.0f;
     float strength                = 0.75f;
     int64_t seed                  = 42;
-    bool diffusion_flash_attn     = false;
     bool diffusion_conv_direct    = false;
     bool vae_conv_direct          = false;
     std::string ref_image_args    = "";
@@ -221,6 +220,11 @@ static struct {
         return outputs(0);
     }
 } sd_generation;
+
+static std::string sd_get_u8path(const std::string& file_path)
+{
+    return std::filesystem::u8path(file_path).string();
+}
 
 static std::string read_str_from_disk(std::string filepath)
 {
@@ -483,6 +487,8 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_zimg_l2p = sd_version_is_z_image_l2p(tempver);
     bool is_iris = (tempver == VERSION_IRIS);
     bool is_flux2 = sd_version_is_flux2(tempver);
+    bool is_flux3 = sd_version_is_flux3(tempver);
+    bool is_mosi = (tempver == VERSION_MOSS_IMAGE);
     bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
     bool is_anima = sd_version_is_anima(tempver);
     bool is_ernie = sd_version_is_ernie_image(tempver);
@@ -497,8 +503,9 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_sefi = sd_version_is_sefi_image(tempver);
     bool is_mageflow = sd_version_is_mage_flow(tempver);
     bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
-    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
+    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_flux3 || is_mosi || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
     bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
+    bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi);
 
     //kcpp qol fallback: if a llm was loaded as t5 by mistake
     if(conditioner_is_llm && !path_empty(params.t5xxl_path))
@@ -556,7 +563,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         {
             std::swap(params.uncond_diffusion_model_path, params.clip_g_path);
         }
-        else if ((is_lens || is_pid || is_ming) && kcpp_main_tokenizer.empty())
+        else if (has_tokenizer && kcpp_main_tokenizer.empty())
         {
             // accept a tokenizer.json on clip_2
             kcpp_main_tokenizer = params.clip_g_path;
@@ -663,6 +670,16 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     if(tempver == VERSION_HIDREAM_O1 && path_empty(params.tensor_type_rules))
     {
         params.tensor_type_rules = "^model.language_model.layers.[0-9]+.mlp.down_proj.weight=bf16";
+    }
+
+    params.flash_attn_mode = "off";
+    if(inputs.flash_attention) {
+        if(sd_version_is_qwen_image(tempver)) {
+            // edit 14feb, breaks qwen image edit (moved from diffusion_engine)
+            params.flash_attn_mode = "on,te=off";
+        } else {
+            params.flash_attn_mode = "on";
+        }
     }
 
     //debug print
@@ -825,7 +842,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("Diffusion Model quantized to %s\n", sd_type_name(sd_params->wtype));
     }
     sd_params->n_threads = inputs.threads; //if -1 use physical cores
-    sd_params->diffusion_flash_attn = inputs.flash_attention;
     sd_params->diffusion_conv_direct = inputs.diffusion_conv_direct;
     sd_params->vae_conv_direct = inputs.vae_conv_direct;
     sd_params->vae_path = vaefilename;
@@ -844,7 +860,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     params.n_threads = sd_params->n_threads;
     params.wtype = sd_params->wtype;
-    params.diffusion_flash_attn = sd_params->diffusion_flash_attn;
     params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
     params.vae_conv_direct = sd_params->vae_conv_direct;
     params.model_args = "chroma_use_dit_mask=true";
@@ -856,9 +871,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.split_mode = split_mode.c_str();
     params.auto_fit = inputs.auto_fit;
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
-
-    // also switches flash attn for the vae and conditioner
-    params.flash_attn = params.diffusion_flash_attn;
 
     kcpp_set_model_paths(params, *sd_params, inputs);
 

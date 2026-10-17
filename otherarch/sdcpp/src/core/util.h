@@ -41,8 +41,6 @@ std::string utf32_to_utf8(const std::u32string& utf32_str);
 std::u32string unicode_value_to_utf32(int unicode_value);
 // std::string sd_basename(const std::string& path);
 
-std::string sd_get_u8path(const std::string& file_path);
-
 sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index = 0);
 
 sd::Tensor<float> sd_image_to_tensor(sd_image_t image,

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/ggml_extend.h"
+#include "core/ggml_extend_backend.h"
 #include "core/ggml_runner.h"
 #include "model.h"
 
@@ -222,7 +223,7 @@ public:
                 if (force_prec_f32) {
                     ggml_prec_set_acc(fp8_matmul, GGML_PREC_F32);
                 }
-                supports_fp8_matmul = ggml_backend_supports_op(ctx->backend, fp8_matmul);
+                supports_fp8_matmul = ggml_backend_supports_op(ctx->backend, fp8_matmul) && !sd_backend_is_cpu(ctx->backend);
             }
             if (!supports_fp8_matmul) {
                 w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_BF16);
