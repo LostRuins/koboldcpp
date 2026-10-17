@@ -554,6 +554,7 @@ static size_t estimate_draft_autofit_tax_mb(
     llama_context_params draft_ctx_params = llama_context_default_params();
 
     draft_model_params.load_mode = base_model_params.load_mode;
+    draft_model_params.lazy_mode = base_model_params.lazy_mode;
     draft_model_params.n_gpu_layers = has_draft_model ? draft_gpulayers : 0;
     draft_model_params.devices = base_model_params.devices;
     draft_model_params.main_gpu = base_model_params.main_gpu;
@@ -944,6 +945,8 @@ static void mtp_decoding_setup(llama_model * main_model, llama_context * main_ct
     }
 
     llama_context_params mtp_ctx_params = base_ctx_params;
+    // Match upstream: only the target context owns an expert cache.
+    mtp_ctx_params.moe_cache_size = 0;
     mtp_ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     mtp_ctx_params.ctx_other = main_ctx;
     mtp_ctx_params.n_rs_seq = 0;
@@ -969,6 +972,7 @@ static void speculative_decoding_setup(std::string spec_model_filename, llama_co
     llama_context_params draft_ctx_params = llama_context_default_params();
 
     draft_model_params.load_mode = base_model_params.load_mode;
+    draft_model_params.lazy_mode = base_model_params.lazy_mode;
     draft_model_params.n_gpu_layers = draft_gpulayers; //layers offload the speculative model.
     draft_model_params.devices = base_model_params.devices;
     draft_model_params.load_mtp = true;
@@ -3375,6 +3379,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
 
         llama_model_params model_params = llama_model_default_params();
         llama_context_params llama_ctx_params = llama_context_default_params();
+        model_params.lazy_mode = static_cast<llama_lazy_mode>(inputs.lazy_mode);
+        llama_ctx_params.moe_cache_size = static_cast<size_t>(inputs.moe_cache_mib) * 1024 * 1024;
         llama_ctx_params.n_ctx = clamped_max_context_length;
         llama_ctx_params.n_ctx += extra_context_handle_fragmentation;
 
