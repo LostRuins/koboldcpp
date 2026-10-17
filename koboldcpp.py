@@ -355,6 +355,8 @@ class load_model_inputs(ctypes.Structure):
                 ("overridenativecontext", ctypes.c_int),
                 ("moe_experts", ctypes.c_int),
                 ("moecpu", ctypes.c_int),
+                ("lazy_mode", ctypes.c_int),
+                ("moe_cache_mib", ctypes.c_int),
                 ("ffncpu", ctypes.c_int),
                 ("no_bos_token", ctypes.c_bool),
                 ("load_guidance", ctypes.c_bool),
@@ -2109,7 +2111,14 @@ def auto_set_backend_cli():
 
 def load_model(model_filename):
     global args, calulated_gpu_overhead, savestate_limit
+    # Config files bypass argparse's choices/type checks.
+    if args.lazy_mode not in ("auto", "on", "off"):
+        raise ValueError("--lazy-mode must be auto, on or off")
+    if type(args.moe_cache_mib) is not int or not 0 <= args.moe_cache_mib <= 2147483647:
+        raise ValueError("--moe-cache-mib must be an integer between 0 and 2147483647")
     inputs = load_model_inputs()
+    inputs.lazy_mode = {"off": 0, "auto": 1, "on": 2}[args.lazy_mode]
+    inputs.moe_cache_mib = args.moe_cache_mib
     inputs.model_filename = model_filename.encode("UTF-8")
     inputs.max_context_length = maxctx #initial value to use for ctx, can be overwritten
     inputs.threads = args.threads
@@ -9145,6 +9154,8 @@ def show_gui():
     think_effort_var = ctk.StringVar(value="default")
     moeexperts_var = ctk.StringVar(value=str(-1))
     moecpu_var = ctk.StringVar(value=str(0))
+    lazy_mode_var = ctk.StringVar(value="auto")
+    moe_cache_mib_var = ctk.StringVar(value="0")
     ffncpu_var = ctk.StringVar(value=str(0))
     defaultgenamt_var = ctk.StringVar(value=str(default_genlen))
     genlimit_var = ctk.StringVar(value=str(0))
@@ -10032,6 +10043,9 @@ def show_gui():
     makelabelentry(context_tab, "Override KV:", override_kv_var, row=57, padx=(86), singleline=True, width=130, tooltip="Override metadata value by key. Separate multiple values with commas. Format is name=type:value. Types: int, float, bool, str")
     tenos_box,tenos_box_lbl = makelabelentry(context_tab, "Override Tensors:", override_tensors_var, row=57, padx=(334), singleline=True, width=130, tooltip="Override selected backend for specific tensors matching tensor_name_regex_pattern=buffer_type, same as in llama.cpp.", labelpadx=(230))
 
+    makelabelcombobox(context_tab, "Lazy Tensors:", lazy_mode_var, row=59, padx=100, width=90, values=["auto", "on", "off"], tooltiptxt="Load architecture-marked tensors such as Qwen PLE/ngram embeddings on demand. Auto: lazy for tensors larger than 4 GiB. On: always lazy. Off: keep resident, using more memory.")
+    makelabelentry(context_tab, "MoE Cache MiB:", moe_cache_mib_var, row=59, labelpadx=220, padx=334, width=90, singleline=True, tooltip="Experimental GPU cache for CPU-resident MoE experts. 0 disables it. Uses additional VRAM; combine with MoE CPU Layers or Autofit. Avoid Low VRAM mode. CLI: --moe-cache-mib.")
+
     # Model Tab
     model_tab = tabcontent["Loaded Files"]
 
@@ -10522,6 +10536,10 @@ def show_gui():
             args.overridenativecontext = 0
         args.moeexperts = int(moeexperts_var.get()) if moeexperts_var.get()!="" else -1
         args.moecpu = int(moecpu_var.get()) if moecpu_var.get()!="" else 0
+        args.lazy_mode = lazy_mode_var.get()
+        args.moe_cache_mib = int(moe_cache_mib_var.get()) if moe_cache_mib_var.get() != "" else 0
+        if not 0 <= args.moe_cache_mib <= 2147483647:
+            raise ValueError("MoE Cache MiB must be between 0 and 2147483647")
         args.ffncpu = int(ffncpu_var.get()) if ffncpu_var.get()!="" else 0
         args.defaultgenamt = int(defaultgenamt_var.get()) if defaultgenamt_var.get()!="" else default_genlen
         args.genlimit = int(genlimit_var.get()) if genlimit_var.get()!="" else 0
@@ -10810,6 +10828,8 @@ def show_gui():
             moeexperts_var.set(mydict["moeexperts"])
         if "moecpu" in mydict and mydict["moecpu"]:
             moecpu_var.set(mydict["moecpu"])
+        lazy_mode_var.set(mydict.get("lazy_mode", "auto"))
+        moe_cache_mib_var.set(str(mydict.get("moe_cache_mib", 0)))
         if "ffncpu" in mydict and mydict["ffncpu"]:
             ffncpu_var.set(mydict["ffncpu"])
         if "defaultgenamt" in mydict and mydict["defaultgenamt"]:
@@ -13810,6 +13830,8 @@ if __name__ == '__main__':
     advparser.add_argument("--mcpfile", metavar=('[mcp json file]'), help="Specify path to mcp.json which contains the Cladue Desktop compatible MCP server config.", default="")
     advparser.add_argument("--mmproj", metavar=('[filename]'), help="Select a multimodal projector file for vision models.", default="")
     advparser.add_argument("--mmprojcpu","--no-mmproj-offload", help="Force CLIP for Vision mmproj always on CPU.", action='store_true')
+    advparser.add_argument("--lazy-mode", "--lazymode", dest="lazy_mode", choices=["auto", "on", "off"], default="auto", help="On-demand reading of architecture-marked tensors such as Qwen PLE embeddings: auto for tensors larger than 4 GiB, on to force lazy reading, off to keep them resident (default=auto).")
+    advparser.add_argument("--moe-cache-mib", "--moecache", dest="moe_cache_mib", type=check_range(int, 0, 2147483647), default=0, metavar="MiB", help="Experimental GPU cache size in MiB for CPU-resident MoE experts. Split among GPUs like layers. Uses additional VRAM; combine with --moecpu or --autofit (default=0, disabled).")
     advparser.add_argument("--moecpu","--n-cpu-moe", "-ncmoe", metavar=('[layers affected]'), help="Keep the Mixture of Experts (MoE) weights of the first N layers in the CPU. If no value is provided, applies to all layers.", nargs='?', const=999, type=int, default=0)
     advparser.add_argument("--ffncpu","--n-cpu-ffn", "-ncffn", metavar=('[layers affected]'), help="Keep the dense FFN weights of the first N layers in the CPU. If no value is provided, applies to all layers.", nargs='?', const=999, type=int, default=0)
     advparser.add_argument("--moeexperts", metavar=('[num of experts]'), help="How many experts to use for MoE models (default=follow gguf)", type=int, default=-1)
