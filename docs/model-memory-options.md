@@ -82,9 +82,10 @@ Executed locally on Windows:
 
 - CUDA CMake build: successful, including the shared DLL link; existing compiler
   warnings remain.
-- `python -m unittest discover -s tests -p test_model_memory_options.py`: five tests
-  pass (defaults/aliases, CLI rejection, config rejection, native input mapping,
-  and GUI config round trips including zero and old-config defaults).
+- Five temporary checks passed during development (defaults/aliases, CLI
+  rejection, config rejection, native input mapping, and GUI config round trips
+  including zero and old-config defaults). The temporary test file was removed
+  from the proposal at the owner's request.
 - `python -m unittest discover -s tests -p test_numeric_parsing.py`: six tests pass.
 - Python and C++ input declarations use the same field order and integer types.
 - `git diff --check` passes.
