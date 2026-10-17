@@ -224,6 +224,21 @@ static inline void log_callback_off(ggml_log_level level, const char* text, void
     return;
 }
 
+static ggml_log_callback kcpp_original_log_callback = nullptr;
+static void * kcpp_original_log_user_data = nullptr;
+
+static void kcpp_log_callback(ggml_log_level level, const char * text, void *) {
+    // The scheduler reports every reallocation at INFO level. Keep this
+    // diagnostic available in verbose mode without flooding normal output.
+    if (level == GGML_LOG_LEVEL_INFO && text &&
+        strncmp(text, "sched_graph_realloc: graph reallocation:",
+                sizeof("sched_graph_realloc: graph reallocation:") - 1) == 0 &&
+        (debugmode != 1 || is_quiet)) {
+        return;
+    }
+    kcpp_original_log_callback(level, text, kcpp_original_log_user_data);
+}
+
 static inline void kcpp_flush_log_output()
 {
     common_log_flush(common_log_main());
@@ -3157,6 +3172,15 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->swa_full = inputs.prevent_swa;
 
     debugmode = inputs.debugmode;
+    // Preserve an existing logger and avoid wrapping ourselves on reload.
+    ggml_log_callback current_log_callback;
+    void * current_log_user_data;
+    llama_log_get(&current_log_callback, &current_log_user_data);
+    if (current_log_callback != kcpp_log_callback) {
+        kcpp_original_log_callback = current_log_callback;
+        kcpp_original_log_user_data = current_log_user_data;
+        llama_log_set(kcpp_log_callback, nullptr);
+    }
     if(draft_spec)
     {
         common_speculative_free(draft_spec);
