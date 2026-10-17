@@ -92,6 +92,32 @@ int last_draft_failed = 0;
 stop_reason last_stop_reason = stop_reason::INVALID;
 std::vector<std::string> generated_tokens;
 static int continuous_batching_slots = 0;
+static constexpr int batch_checkpoint_prompt_tail = 32;
+static common_context_seq_rm_type batch_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
+static int32_t batch_swa_size = 0;
+
+struct BatchPrefixCache
+{
+    int slot = -1;
+    int n_past = 0;
+    std::vector<llama_token> tokens;
+    common_prompt_checkpoint checkpoint{};
+
+    bool valid() const
+    {
+        return slot >= 0 && n_past > 0 && tokens.size() == (size_t) n_past;
+    }
+
+    void reset()
+    {
+        slot = -1;
+        n_past = 0;
+        tokens.clear();
+        checkpoint.clear();
+    }
+};
+
+static BatchPrefixCache batch_prefix_cache;
 
 llama_grammar *  grammar = nullptr; //currently used grammar
 llama_grammar_parser parsed_grammar;
@@ -3136,6 +3162,9 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->n_batch = GetBatchSize(inputs.batchsize, in_file_format);
     kcpp_data->n_ubatch = inputs.ubatchsize > 0 ? std::min(inputs.ubatchsize, kcpp_data->n_batch) : kcpp_data->n_batch;
     continuous_batching_slots = (isGguf && inputs.continuous_batching_slots > 1) ? inputs.continuous_batching_slots : 0;
+    batch_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
+    batch_swa_size = 0;
+    batch_prefix_cache.reset();
     if(continuous_batching_slots > 0)
     {
         printf("Continuous batching: prepared %d GGUF sequence slots.\n", continuous_batching_slots);
@@ -3387,6 +3416,9 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             // Match llama-server's target rollback slots for speculative verification.
             llama_ctx_params.n_rs_seq = inputs.draft_amount;
         }
+        const bool configure_batch_cache = continuous_batching_slots > 0 &&
+            !inputs.use_mtp && draftmodel_filename.empty() && !load_guidance &&
+            !kcpp_data->use_smartcontext && !kcpp_data->use_contextshift;
         if(inputs.use_direct_io)
         {
             model_params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
@@ -3915,6 +3947,18 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         if(er!=0)
         {
             printf("\nModel Warmup Failed! (code:%d)\n",er);
+        }
+        if(configure_batch_cache)
+        {
+            batch_seq_rm_type = common_context_can_seq_rm(llama_ctx_v4);
+            batch_swa_size = kcpp_data->swa_full ? 0 : std::max(0, llama_model_n_swa(llamamodel));
+            if(debugmode==1 && !is_quiet)
+            {
+                printf("\n[Continuous batching cache: seq_rm=%d, SWA=%d, prompt checkpoints=%s]\n",
+                    (int) batch_seq_rm_type, batch_swa_size,
+                    (batch_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                     batch_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS || batch_swa_size > 0) ? "enabled" : "not needed");
+            }
         }
         return ModelLoadResult::SUCCESS;
     }
@@ -4533,9 +4577,17 @@ struct BatchGenerateRequest
     int i_batch = -1;
     bool i_batch_is_prefill = false;
     llama_sampler * sampler = nullptr;
+    std::vector<llama_token> generated_token_ids;
     std::vector<std::string> generated_pieces;
+    bool cache_candidate = false;
+    int cached_n_past = 0;
+    std::vector<llama_token> cached_tokens;
+    common_prompt_checkpoint cached_checkpoint{};
+    common_prompt_checkpoint prompt_checkpoint{};
+    int checkpoint_target = -1;
     std::string output;
     int prompt_token_count = 0;
+    int reused_prompt_token_count = 0;
     int completion_token_count = 0;
     std::chrono::steady_clock::time_point start_time;
     std::chrono::steady_clock::time_point process_start_time;
@@ -4598,6 +4650,15 @@ static bool batch_has_live_locked()
     return false;
 }
 
+static void batch_clear_prefix_cache_locked()
+{
+    if(batch_prefix_cache.slot >= 0 && llama_ctx_v4)
+    {
+        llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), batch_prefix_cache.slot, -1, -1);
+    }
+    batch_prefix_cache.reset();
+}
+
 static void batch_invalidate_legacy_context_locked()
 {
     if(!batch_touched_since_legacy)
@@ -4610,6 +4671,7 @@ static void batch_invalidate_legacy_context_locked()
     last_n_tokens.clear();
     smartcontext.clear();
     loaded_latest_logits.clear();
+    batch_clear_prefix_cache_locked();
     if(llama_ctx_v4)
     {
         llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), 0, -1, -1);
@@ -4656,7 +4718,7 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
-    if(kcpp_data->use_smartcontext || kcpp_data->use_contextshift || kcpp_data->smartcache)
+    if(kcpp_data->use_smartcontext || kcpp_data->use_contextshift)
     {
         return false;
     }
@@ -5439,11 +5501,12 @@ static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason 
     float init_time = req.init_time;
     float process_time = req.process_time;
     float gen_time = req.generation_start_time.time_since_epoch().count() == 0 ? 0.0f : std::chrono::duration<float>(finish_time - req.generation_start_time).count();
-    if(process_time == 0.0f && req.prompt_token_count > 0 && total_time > 0.0f)
+    const int processed_token_count = std::max(0, req.prompt_token_count - req.reused_prompt_token_count);
+    if(process_time == 0.0f && processed_token_count > 0 && total_time > 0.0f)
     {
         process_time = std::max(0.0f, total_time - init_time);
     }
-    float processed_tps = process_time > 0.0f ? (float) req.prompt_token_count / process_time : 0.0f;
+    float processed_tps = process_time > 0.0f ? (float) processed_token_count / process_time : 0.0f;
     float generated_tps = gen_time > 0.0f ? (float) req.completion_token_count / gen_time : 0.0f;
     req.finish_reason = reason;
     req.result.status = (reason == stop_reason::ERROR_ENCOUNTERED) ? 0 : 1;
@@ -5454,11 +5517,47 @@ static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason 
     req.state = reason == stop_reason::ERROR_ENCOUNTERED ? BatchState::FAILED : (reason == stop_reason::INVALID ? BatchState::ABORTED : BatchState::FINISHED);
     if(req.slot >= 0 && llama_ctx_v4)
     {
-        llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), req.slot, -1, -1);
+        const bool retain = req.state == BatchState::FINISHED && req.media.objects.empty() && req.n_past > 0 &&
+            batch_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO;
+        std::vector<llama_token> context_tokens;
+        if(retain)
+        {
+            context_tokens = req.prompt_tokens;
+            context_tokens.insert(context_tokens.end(), req.generated_token_ids.begin(), req.generated_token_ids.end());
+        }
+        if(retain && context_tokens.size() >= (size_t) req.n_past)
+        {
+            context_tokens.resize(req.n_past);
+            batch_clear_prefix_cache_locked();
+            batch_prefix_cache.slot = req.slot;
+            batch_prefix_cache.n_past = req.n_past;
+            batch_prefix_cache.tokens = std::move(context_tokens);
+            if(!req.prompt_checkpoint.empty() && req.prompt_checkpoint.n_tokens > 0 &&
+               req.prompt_checkpoint.n_tokens <= req.n_past)
+            {
+                batch_prefix_cache.checkpoint = std::move(req.prompt_checkpoint);
+            }
+            if(debugmode==1 && !is_quiet)
+            {
+                if(batch_prefix_cache.checkpoint.empty())
+                {
+                    printf("\n[Batch cache retained %d tokens in slot %d]\n", req.n_past, req.slot);
+                }
+                else
+                {
+                    printf("\n[Batch cache retained %d tokens in slot %d with checkpoint at %lld]\n",
+                        req.n_past, req.slot, (long long) batch_prefix_cache.checkpoint.n_tokens);
+                }
+            }
+        }
+        else
+        {
+            llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), req.slot, -1, -1);
+        }
     }
     req.slot = -1;
-    printf("\n[%s] BatchRequest:%d, Init:%.2fs, Processed:%d in %.2fs (%.2fT/s), Generated:%d/%d in %.2fs (%.2fT/s), Total:%.2fs, Stop:%d",
-        get_timestamp_str().c_str(), req.id, init_time, req.prompt_token_count, process_time, processed_tps, req.completion_token_count, req.max_length, gen_time, generated_tps, total_time, (int) reason);
+    printf("\n[%s] BatchRequest:%d, Init:%.2fs, Prompt:%d, Cached:%d, Processed:%d in %.2fs (%.2fT/s), Generated:%d/%d in %.2fs (%.2fT/s), Total:%.2fs, Stop:%d",
+        get_timestamp_str().c_str(), req.id, init_time, req.prompt_token_count, req.reused_prompt_token_count, processed_token_count, process_time, processed_tps, req.completion_token_count, req.max_length, gen_time, generated_tps, total_time, (int) reason);
     fflush(stdout);
     batch_cv.notify_all();
 }
@@ -5498,6 +5597,7 @@ static int batch_add_token(common_batch & batch, llama_token token, llama_pos po
 
 static bool batch_prepare_request(BatchGenerateRequest & req);
 static bool batch_process_media(BatchGenerateRequest & req, bool & final_logits);
+static bool batch_capture_prompt_checkpoint(BatchGenerateRequest & req, int n_tokens);
 
 static void batch_sample_request_locked(BatchGenerateRequest & req, int logits_index, bool completed_prefill, std::chrono::steady_clock::time_point decode_finish_time)
 {
@@ -5508,6 +5608,7 @@ static void batch_sample_request_locked(BatchGenerateRequest & req, int logits_i
     }
     llama_token sampled = llama_sampler_sample(req.sampler, llama_ctx_v4, logits_index);
     req.completion_token_count++;
+    req.generated_token_ids.push_back(sampled);
     const std::vector<llama_token> eog_tokens = GetEogIDs(file_format,n_vocab);
     bool is_eog = std::find(eog_tokens.begin(), eog_tokens.end(), sampled) != eog_tokens.end();
     if(is_eog && !req.bypass_eos_token)
@@ -5536,7 +5637,7 @@ static void batch_sample_request_locked(BatchGenerateRequest & req, int logits_i
 static bool batch_claim_waiting_locked()
 {
     bool claimed = false;
-    for(int slot = 1; slot <= continuous_batching_slots && !batch_waiting.empty(); ++slot)
+    auto claim_slot = [&](int slot, bool use_cache) -> bool
     {
         bool occupied = false;
         for(const auto & req : batch_requests)
@@ -5549,21 +5650,45 @@ static bool batch_claim_waiting_locked()
         }
         if(occupied)
         {
-            continue;
+            return false;
         }
-        int request_id = batch_waiting.front();
-        batch_waiting.pop_front();
-        BatchGenerateRequest * req = batch_find_request_locked(request_id);
-        if(!req || req->state != BatchState::WAITING)
+        while(!batch_waiting.empty())
         {
-            continue;
+            int request_id = batch_waiting.front();
+            batch_waiting.pop_front();
+            BatchGenerateRequest * req = batch_find_request_locked(request_id);
+            if(!req || req->state != BatchState::WAITING)
+            {
+                continue;
+            }
+            req->slot = slot;
+            req->state = BatchState::PREPARING;
+            batch_touched_since_legacy = true;
+            req->start_time = std::chrono::steady_clock::now();
+            if(use_cache && batch_prefix_cache.valid() && batch_prefix_cache.slot == slot)
+            {
+                req->cache_candidate = true;
+                req->cached_n_past = batch_prefix_cache.n_past;
+                req->cached_tokens = std::move(batch_prefix_cache.tokens);
+                req->cached_checkpoint = std::move(batch_prefix_cache.checkpoint);
+                batch_prefix_cache.reset();
+            }
+            else
+            {
+                llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), slot, -1, -1);
+            }
+            return true;
         }
-        req->slot = slot;
-        req->state = BatchState::PREPARING;
-        batch_touched_since_legacy = true;
-        req->start_time = std::chrono::steady_clock::now();
-        llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), slot, -1, -1);
-        claimed = true;
+        return false;
+    };
+
+    if(batch_prefix_cache.valid() && !batch_waiting.empty())
+    {
+        claimed = claim_slot(batch_prefix_cache.slot, true) || claimed;
+    }
+    for(int slot = 1; slot <= continuous_batching_slots && !batch_waiting.empty(); ++slot)
+    {
+        claimed = claim_slot(slot, false) || claimed;
     }
     return claimed;
 }
@@ -5577,6 +5702,7 @@ static void batch_worker_loop()
         std::vector<int> decode_ids;
         std::vector<int> affected_ids;
         BatchGenerateRequest * prepare_req = nullptr;
+        BatchGenerateRequest * checkpoint_req = nullptr;
         BatchGenerateRequest * media_req = nullptr;
         {
             std::unique_lock<std::mutex> lock(batch_mutex);
@@ -5612,6 +5738,18 @@ static void batch_worker_loop()
             {
                 for(auto & req_ptr : batch_requests)
                 {
+                    if(req_ptr && req_ptr->state == BatchState::PREFILL && req_ptr->slot >= 0 &&
+                       req_ptr->checkpoint_target > 0 && req_ptr->prompt_pos == req_ptr->checkpoint_target)
+                    {
+                        checkpoint_req = req_ptr.get();
+                        break;
+                    }
+                }
+            }
+            if(!prepare_req && !checkpoint_req)
+            {
+                for(auto & req_ptr : batch_requests)
+                {
                     if(!req_ptr || req_ptr->state != BatchState::PREFILL || req_ptr->slot < 0 ||
                        req_ptr->prompt_pos >= (int) req_ptr->prompt_tokens.size())
                     {
@@ -5624,7 +5762,7 @@ static void batch_worker_loop()
                     }
                 }
             }
-            if(!prepare_req && !media_req)
+            if(!prepare_req && !checkpoint_req && !media_req)
             {
                 batch.clear();
                 for(auto & req_ptr : batch_requests)
@@ -5646,6 +5784,10 @@ static void batch_worker_loop()
                     {
                         while(req.prompt_pos < (int) req.prompt_tokens.size() && batch.size() < batch_cap)
                         {
+                            if(req.checkpoint_target > 0 && req.prompt_pos == req.checkpoint_target)
+                            {
+                                break;
+                            }
                             if(batch_media_index_from_token(req, req.prompt_tokens[req.prompt_pos]) >= 0)
                             {
                                 break;
@@ -5710,6 +5852,33 @@ static void batch_worker_loop()
             else
             {
                 req->state = BatchState::PREFILL;
+            }
+            continue;
+        }
+
+        if(checkpoint_req)
+        {
+            const int request_id = checkpoint_req->id;
+            const int checkpoint_target = checkpoint_req->checkpoint_target;
+            const bool captured = batch_capture_prompt_checkpoint(*checkpoint_req, checkpoint_target);
+            std::lock_guard<std::mutex> lock(batch_mutex);
+            BatchGenerateRequest * req = batch_find_request_locked(request_id);
+            if(req && req->state == BatchState::PREFILL && req->checkpoint_target == checkpoint_target)
+            {
+                req->checkpoint_target = -1;
+                if(debugmode==1 && !is_quiet)
+                {
+                    if(captured)
+                    {
+                        printf("\n[Batch cache checkpoint captured for request %d at %d tokens]\n",
+                            req->id, checkpoint_target);
+                    }
+                    else
+                    {
+                        printf("\n[Batch cache checkpoint unavailable for request %d at %d tokens]\n",
+                            req->id, checkpoint_target);
+                    }
+                }
             }
             continue;
         }
@@ -6501,6 +6670,178 @@ static void PrepareMediaEmbds(const int nctx, const std::vector<int> & media_int
     }
 }
 
+static int batch_reuse_cached_prefix(BatchGenerateRequest & req)
+{
+    if(!req.cache_candidate)
+    {
+        return 0;
+    }
+
+    auto clear_candidate = [&]()
+    {
+        req.cache_candidate = false;
+        req.cached_n_past = 0;
+        req.cached_tokens.clear();
+        req.cached_checkpoint.clear();
+    };
+
+    auto miss = [&](const char * reason, int rollback = -1) -> int
+    {
+        llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), req.slot, -1, -1);
+        clear_candidate();
+        if(debugmode==1 && !is_quiet)
+        {
+            if(rollback >= 0)
+            {
+                printf("\n[Batch cache miss for request %d: %s (rollback %d tokens)]\n",
+                    req.id, reason, rollback);
+            }
+            else
+            {
+                printf("\n[Batch cache miss for request %d: %s]\n", req.id, reason);
+            }
+        }
+        return 0;
+    };
+
+    if(!req.media.objects.empty())
+    {
+        return miss("media request");
+    }
+    if(req.cached_n_past <= 0 || req.cached_tokens.size() != (size_t) req.cached_n_past || req.prompt_tokens.empty())
+    {
+        return miss("invalid cache metadata");
+    }
+    if(batch_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO)
+    {
+        return miss("context memory unavailable");
+    }
+
+    size_t common = 0;
+    const size_t common_limit = std::min(req.cached_tokens.size(), req.prompt_tokens.size());
+    while(common < common_limit && req.cached_tokens[common] == req.prompt_tokens[common])
+    {
+        common++;
+    }
+
+    // Always evaluate at least one prompt token so the request has fresh final logits.
+    const int reuse = (int) std::min(common, req.prompt_tokens.size() - 1);
+    if(reuse <= 0)
+    {
+        return miss("no reusable prefix");
+    }
+
+    const int rollback = req.cached_n_past - reuse;
+    if(rollback < 0)
+    {
+        return miss("invalid rollback distance");
+    }
+
+    auto restore_checkpoint = [&](const char * reason) -> int
+    {
+        if(req.cached_checkpoint.empty() || req.cached_checkpoint.n_tokens <= 0 ||
+           req.cached_checkpoint.n_tokens > reuse)
+        {
+            return miss(reason, rollback);
+        }
+
+        const int checkpoint_tokens = (int) req.cached_checkpoint.n_tokens;
+        if(!req.cached_checkpoint.load_tgt(llama_ctx_v4, req.slot, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY))
+        {
+            return miss("checkpoint restore failed", rollback);
+        }
+        if(!llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), req.slot, checkpoint_tokens, -1))
+        {
+            return miss("checkpoint suffix removal failed", rollback);
+        }
+
+        req.prompt_checkpoint = std::move(req.cached_checkpoint);
+        req.cache_candidate = false;
+        req.cached_n_past = 0;
+        req.cached_tokens.clear();
+        if(debugmode==1 && !is_quiet)
+        {
+            printf("\n[Batch cache checkpoint hit for request %d: restored %d tokens instead of rolling back %d]\n",
+                req.id, checkpoint_tokens, rollback);
+        }
+        return checkpoint_tokens;
+    };
+
+    if(rollback > 0)
+    {
+        if(batch_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+           batch_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS)
+        {
+            return restore_checkpoint("no usable recurrent checkpoint");
+        }
+        if(batch_swa_size > 0)
+        {
+            const llama_pos pos_min = llama_memory_seq_pos_min(llama_get_memory(llama_ctx_v4), req.slot);
+            const llama_pos pos_eval = reuse;
+            const llama_pos pos_min_thold = std::max<llama_pos>(0, pos_eval - batch_swa_size + 2);
+            if(pos_min < 0 || pos_min >= pos_min_thold)
+            {
+                return restore_checkpoint("no usable SWA checkpoint");
+            }
+        }
+        if(!llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), req.slot, reuse, -1))
+        {
+            return miss("sequence removal failed");
+        }
+    }
+
+    if(!req.cached_checkpoint.empty() && req.cached_checkpoint.n_tokens > 0 &&
+       req.cached_checkpoint.n_tokens <= reuse)
+    {
+        req.prompt_checkpoint = std::move(req.cached_checkpoint);
+    }
+    req.cache_candidate = false;
+    req.cached_n_past = 0;
+    req.cached_tokens.clear();
+    req.cached_checkpoint.clear();
+    if(debugmode==1 && !is_quiet)
+    {
+        printf("\n[Batch cache hit for request %d: reused %d tokens, rollback %d]\n", req.id, reuse, rollback);
+    }
+    return reuse;
+}
+
+static bool batch_capture_prompt_checkpoint(BatchGenerateRequest & req, int n_tokens)
+{
+    if(n_tokens <= 0 || req.slot < 0 || req.n_past != n_tokens || !llama_ctx_v4)
+    {
+        return false;
+    }
+
+    const llama_pos pos_min = llama_memory_seq_pos_min(llama_get_memory(llama_ctx_v4), req.slot);
+    const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(llama_ctx_v4), req.slot);
+    if(pos_min < 0 || pos_max < 0)
+    {
+        return false;
+    }
+
+    try
+    {
+        common_prompt_checkpoint checkpoint{};
+        checkpoint.update_pos(n_tokens, pos_min, pos_max);
+        checkpoint.update_tgt(llama_ctx_v4, req.slot, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        if(checkpoint.empty())
+        {
+            return false;
+        }
+        req.prompt_checkpoint = std::move(checkpoint);
+        return true;
+    }
+    catch(const std::exception & error)
+    {
+        if(debugmode==1 && !is_quiet)
+        {
+            printf("\n[Batch cache checkpoint failed for request %d: %s]\n", req.id, error.what());
+        }
+        return false;
+    }
+}
+
 static bool batch_prepare_request(BatchGenerateRequest & req)
 {
     ApplyPromptFormatAdjustments(req.prompt_added_memory, req.prompt);
@@ -6605,9 +6946,30 @@ static bool batch_prepare_request(BatchGenerateRequest & req)
     }
 
     req.prompt_token_count = req.prompt_tokens.size();
+    const int reused_tokens = batch_reuse_cached_prefix(req);
+    req.reused_prompt_token_count = reused_tokens;
+    req.prompt_pos = reused_tokens;
+    req.n_past = reused_tokens;
+    req.checkpoint_target = -1;
+    const bool needs_checkpoint = req.media.objects.empty() &&
+        (batch_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+         batch_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS || batch_swa_size > 0);
+    if(needs_checkpoint && req.prompt_tokens.size() > 1)
+    {
+        const int checkpoint_target = std::max(1, (int) req.prompt_tokens.size() - batch_checkpoint_prompt_tail);
+        if(reused_tokens >= checkpoint_target)
+        {
+            if(batch_capture_prompt_checkpoint(req, reused_tokens) && debugmode==1 && !is_quiet)
+            {
+                printf("\n[Batch cache checkpoint captured for request %d at %d tokens]\n", req.id, reused_tokens);
+            }
+        }
+        else
+        {
+            req.checkpoint_target = checkpoint_target;
+        }
+    }
     req.sampler = batch_build_sampler(req);
-    req.prompt_pos = 0;
-    req.n_past = 0;
     req.has_pending = false;
     req.i_batch = -1;
     req.i_batch_is_prefill = false;
