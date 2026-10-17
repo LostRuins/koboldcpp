@@ -3150,6 +3150,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->use_fastforward = inputs.use_fastforward;
     kcpp_data->smartcache = inputs.smartcache;
     kcpp_extra_swa_padding = inputs.swa_padding;
+    constexpr int min_swa_padding = 512; //add extra 512 swa padding
+    kcpp_extra_swa_padding = std::max(inputs.swa_padding, min_swa_padding);
     kcpp_data->swa_full = inputs.prevent_swa;
 
     debugmode = inputs.debugmode;
@@ -7607,10 +7609,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             {
                 const int swa_pos_min = llama_memory_seq_pos_min(llama_get_memory(llama_ctx_v4), 0); //this is the furthest back we can rewind to.
                 int goal_npast = ComputeSharedPrefixLength(current_context_tokens,embd_inp); //this is where we want to rewind to.
-                goal_npast -= 4;
+                goal_npast -= 64; //technically, to be safe pos_min_threshold = std::max<llama_pos>(0, pos_eval - n_swa + 2), but seems like a small-ish overlap works
                 goal_npast = goal_npast < 0 ? 0 : goal_npast;
                 if (swa_pos_min < 0 || goal_npast <= swa_pos_min) {
-                    ff_swa_retain_amount = kcpp_active_swa_size;
+                    constexpr float swa_warmup_multiplier = 1.5; //warmup a bit beyond the window for extra coherency
+                    ff_swa_retain_amount = (int)(kcpp_active_swa_size * swa_warmup_multiplier);
                     if (debugmode==1 && !is_quiet)
                     {
                          printf("\nNote: SWA context cannot be reused (Desired n_past=%d, SWA lowest n_past=%d), to avoid this, disable SWA or increase SWA padding), output may degrade.\n", goal_npast, swa_pos_min);
