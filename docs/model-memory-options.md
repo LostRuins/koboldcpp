@@ -98,4 +98,3 @@ and MTP inference with these options. Before release, compare the
 same model/prompt/context/seed at cache budgets 0 and 4096 MiB, then compare lazy
 mode auto versus off. Include a no-flags baseline and an MTP smoke test. Record
 hardware, quant, startup memory, prompt processing speed, and generation speed.
-
