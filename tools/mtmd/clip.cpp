@@ -2068,9 +2068,13 @@ struct clip_model_loader {
                         hparams.n_merge = 2;
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
-                        get_f32(KEY_SWIGLU_CLAMP, hparams.swiglu_clamp, true);
-                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
-                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        // pre-upstream files: swiglu_limit, no pixel budget keys
+                        const bool legacy = gguf_find_key(ctx_gguf.get(), KEY_SWIGLU_CLAMP) < 0;
+                        get_f32(legacy ? "clip.vision.swiglu_limit" : KEY_SWIGLU_CLAMP, hparams.swiglu_clamp, true);
+                        hparams.image_min_pixels = 12544;
+                        hparams.image_max_pixels = 6272000;
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels, !legacy);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, !legacy);
                         hparams.set_limit_image_tokens();
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
