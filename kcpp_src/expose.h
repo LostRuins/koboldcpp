@@ -199,8 +199,7 @@ struct sd_load_model_inputs
     const bool flash_attention = false;
     const char * params_backend = nullptr;
     const bool use_mmap = false;
-    const bool diffusion_conv_direct = false;
-    const bool vae_conv_direct = false;
+    const char * conv_direct_mode = nullptr;
     const bool taesd = false;
     const int tiled_vae_threshold = 0;
     const char * llm_filename = nullptr;

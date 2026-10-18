@@ -139,8 +139,6 @@ struct SDParams {
     float eta                     = -1.0f;
     float strength                = 0.75f;
     int64_t seed                  = 42;
-    bool diffusion_conv_direct    = false;
-    bool vae_conv_direct          = false;
     std::string ref_image_args    = "";
 
     LoraMap lora_map;
@@ -719,6 +717,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     std::string backend = inputs.backend ? inputs.backend : "";
     std::string params_backend = inputs.params_backend ? inputs.params_backend : "";
     std::string split_mode = inputs.split_mode ? inputs.split_mode : "";
+    std::string conv_direct_mode = inputs.conv_direct_mode ? inputs.conv_direct_mode : "";
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
@@ -790,13 +789,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     {
         printf("Flash Attention is enabled\n");
     }
-    if(inputs.diffusion_conv_direct)
+    if(!conv_direct_mode.empty())
     {
-        printf("Conv2D Direct for diffusion model is enabled\n");
-    }
-    if(inputs.vae_conv_direct)
-    {
-        printf("Conv2D Direct for VAE model is enabled\n");
+        printf("Conv2D Direct mode: \"%s\"\n", conv_direct_mode.c_str());
     }
     if(backend != "")
     {
@@ -842,8 +837,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("Diffusion Model quantized to %s\n", sd_type_name(sd_params->wtype));
     }
     sd_params->n_threads = inputs.threads; //if -1 use physical cores
-    sd_params->diffusion_conv_direct = inputs.diffusion_conv_direct;
-    sd_params->vae_conv_direct = inputs.vae_conv_direct;
     sd_params->vae_path = vaefilename;
     sd_params->audio_vae_path = audiovaefilename;
     sd_params->t5xxl_path = t5xxl_filename;
@@ -860,8 +853,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     params.n_threads = sd_params->n_threads;
     params.wtype = sd_params->wtype;
-    params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
-    params.vae_conv_direct = sd_params->vae_conv_direct;
+    params.conv_direct_mode = conv_direct_mode.c_str();
     params.model_args = "chroma_use_dit_mask=true";
     params.max_vram = max_vram.c_str();
     params.eager_load = true; //kcpp should preload everything
@@ -915,7 +907,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if (upscaler_filename!="") {
         const int upscale_tile_size = 128;
         upscaler_ctx = new_upscaler_ctx(upscaler_filename.c_str(),
-                                        params.diffusion_conv_direct,
+                                        conv_direct_mode == "on",
                                         params.n_threads,
                                         upscale_tile_size,
                                         params.backend,
