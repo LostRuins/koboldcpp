@@ -108,7 +108,7 @@ std::vector<int> gpttype_get_token_arr(const std::string & input, bool addbos);
 std::string gpttype_detokenize(const std::vector<int> & input, bool render_special);
 const std::vector<TopPicksData> gpttype_get_top_picks_data();
 
-bool host_rpc_server(std::string endpoint, std::string devices);
+bool host_rpc_server(std::string endpoint, std::string devices, std::string cache_dir);
 
 bool sdtype_load_model(const sd_load_model_inputs inputs);
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs);
