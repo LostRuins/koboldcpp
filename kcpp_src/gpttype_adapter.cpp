@@ -3852,7 +3852,12 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         llama_ctx_v4 = llama_init_from_model(llamamodel, llama_ctx_params);
         if(load_guidance)
         {
-            guidance_ctx = llama_init_from_model(llamamodel, llama_ctx_params);
+            // The configured cache is a target-context VRAM budget. Reusing the
+            // same params here would allocate it a second time and autofit only
+            // accounts for the target context.
+            llama_context_params guidance_ctx_params = llama_ctx_params;
+            guidance_ctx_params.moe_cache_size = 0;
+            guidance_ctx = llama_init_from_model(llamamodel, guidance_ctx_params);
         }
 
         if (llama_ctx_v4 == NULL)
