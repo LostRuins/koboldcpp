@@ -14215,7 +14215,7 @@ Current version indicated by LITEVER below.
 	var pendingcustomfieldssampler = {};
 	function show_customfields_sampler()
 	{
-		inputBoxOkCancel("Insert JSON object containing custom fields to send. These values will be added to every generation payload.","Extra Custom Fields",JSON.stringify(pendingcustomfieldssampler),"Paste JSON Here",()=>{
+		inputBoxOkCancel("Insert JSON object containing custom fields to send. These values will be added to every generation payload.","Extra Custom Fields",JSON.stringify(pendingcustomfieldssampler, null, 2),"Paste JSON Here",()=>{
 		let userinput = getInputBoxValue().trim();
 		try
 		{
