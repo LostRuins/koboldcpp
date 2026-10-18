@@ -4449,6 +4449,7 @@ Current version indicated by LITEVER below.
 	var koboldcpp_has_mcp = false;
 	var koboldcpp_has_musicgen = false;
 	var koboldcpp_has_routermode = false;
+	var koboldcpp_has_lookahead = false; //look-ahead segment sampler
 	var no_escape_html = false;
 	var timetaken_timestamp = performance.now();
 	var bg_silence = null;
@@ -4688,6 +4689,44 @@ Current version indicated by LITEVER below.
 		xtc_probability: 0.0,
 		adaptivep_target: -1.0,
 		adaptivep_decay: 0.9,
+		lookahead_retries: 0,
+		lookahead_threshold: 0.35,
+		lookahead_sentences: 2,
+		lookahead_min_len: 6,
+		lookahead_max_len: 48,
+		lookahead_w_rep: 1.0,
+		lookahead_w_slop: 1.0,
+		lookahead_w_struct: 0.6,
+		lookahead_w_lp: 0.5,
+		lookahead_slop: [ //shown and editable in the Look-Ahead Slop List. Capitalized single words are names.
+			["delve",0.8],["tapestry",0.8],["testament to",0.8],["a sense of",0.3],
+			["it's worth noting",0.8],["it is worth noting",0.8],["it's important to note",0.8],
+			["it is important to note",0.8],["in conclusion",0.5],["in summary",0.5],
+			["barely above a whisper",1.0],["shivers down",1.0],["shiver down",1.0],
+			["sends shivers",1.0],["sent shivers",1.0],["maybe, just maybe",1.0],
+			["ministrations",1.0],["palpable",0.6],["a mix of",0.4],["a mixture of",0.4],
+			["eyes sparkling",0.7],["eyes glinting",0.7],["with mischief",0.7],
+			["mischievous glint",1.0],["husky voice",0.7],["voice barely",0.6],
+			["can't help but",0.6],["couldn't help but",0.6],["the air was thick",0.8],
+			["hung heavy in the air",1.0],["little did",0.6],["unspoken",0.4],
+			["a dance of",0.8],["intricate dance",1.0],["symphony of",0.8],
+			["ever-evolving",0.8],["ever-changing landscape",1.0],["navigate the complexities",1.0],
+			["rich tapestry",1.0],["embark on",0.6],["journey of self",0.8],
+			["i hope this helps",0.6],["feel free to",0.4],["great question",0.8],
+			["certainly!",0.6],["absolutely!",0.6],["let's dive",0.8],["dive into",0.5],
+			["stark reminder",0.8],["a reminder that",0.4],["in a world where",0.8],
+			["game-changer",0.8],["unwavering",0.5],["profound",0.3],["resonate",0.4],
+			["Elara",1.0],["Seraphina",1.0],["Lyra",1.0],["Kael",1.0],["Kaelen",1.0],["Elowen",1.0],
+			["Eldoria",1.0],["Elysia",1.0],["Liora",1.0],["Aelira",1.0],["Thorne",1.0],["Blackwood",1.0],
+			["Nyx",1.0],["Zephyr",1.0],["Vex",1.0],["Voss",1.0],["Sable",1.0],["Aria",1.0],
+			["Isolde",1.0],["Evelyn",1.0],["Lysandra",1.0],["Caelum",1.0],["Orion",1.0],["Selene",1.0],
+			["Aurelia",1.0],["Vesper",1.0]
+		],
+		lookahead_fuzzy_cutoff: 0.6,
+		lookahead_fuzzy_base: 0.3,
+		lookahead_fuzzy_boost: 1.5,
+		lookahead_track: false,
+		lookahead_track_min: 3,
 		sampler_order: [6, 0, 1, 3, 4, 2, 5],
 		custom_sampler_fields: {},
 	};
@@ -10721,6 +10760,10 @@ Current version indicated by LITEVER below.
 	{
 		return (custom_kobold_endpoint!="" && koboldcpp_version && koboldcpp_version!="" && compare_version_str(koboldcpp_version, "1.70") >= 0);
 	}
+	function is_using_kcpp_with_lookahead()
+	{
+		return (custom_kobold_endpoint!="" && koboldcpp_version && koboldcpp_version!="" && koboldcpp_has_lookahead);
+	}
 	function is_using_kcpp_with_xtc()
 	{
 		return (custom_kobold_endpoint!="" && koboldcpp_version && koboldcpp_version!="" && compare_version_str(koboldcpp_version, "1.74") >= 0);
@@ -14283,6 +14326,32 @@ Current version indicated by LITEVER below.
 		},false,true);
 	}
 
+	var pendinglookaheadslop = [];
+	function setLookaheadSlop()
+	{
+		let slopString = pendinglookaheadslop.map((x) => (x[1]==1 ? x[0] : (x[0] + " | " + x[1])).replace(/\n/g, "\\n")).join("\n");
+		inputBox("Enter each slop phrase on a separate line.\nOptional weight after a pipe, e.g.: shivers down | 1.0\nWeights are 0 to 1+, default 1. Use \\n for a newline.\nCapitalize a single-word name (e.g. Elara) to also catch names that sound like it.\nClear the box and save to restore the default list.\n","Set Look-Ahead Slop Phrases",slopString,"",()=>{
+			let userinput = getInputBoxValue();
+			if(userinput.trim()=="")
+			{
+				pendinglookaheadslop = JSON.parse(JSON.stringify(defaultsettings.lookahead_slop));
+				document.getElementById("lookahead_slop_count").innerText = pendinglookaheadslop.length;
+				return;
+			}
+			pendinglookaheadslop = userinput.split("\n").map((x)=>x.trim()).filter(Boolean).map((x) => {
+				let w = 1;
+				let idx = x.lastIndexOf("|");
+				if(idx>0)
+				{
+					let pw = parseFloat(x.substring(idx+1).trim());
+					if(!isNaN(pw)) { w = pw; x = x.substring(0,idx).trim(); }
+				}
+				return [x.replace(/\\n/g, "\n"), w];
+			}).filter((x)=>x[0]!="" && x[1]>0);
+			document.getElementById("lookahead_slop_count").innerText = pendinglookaheadslop.length;
+		},false,true);
+	}
+
 	var pendingassistantjailbreak = "";
 	function set_assistant_jailbreak()
 	{
@@ -15611,6 +15680,7 @@ Current version indicated by LITEVER below.
 									koboldcpp_has_mcp = (data.mcp ? true : false);
 									koboldcpp_has_musicgen = (data.music ? true : false);
 									koboldcpp_has_routermode = (data.router ? true:false);
+									koboldcpp_has_lookahead = (data.lookahead ? true:false);
 									let has_password = (data.protected?true:false);
 									koboldcpp_has_txt2img = (data.txt2img?true:false);
 									let no_txt_model = (mdlname=="inactive");
@@ -17364,6 +17434,22 @@ Current version indicated by LITEVER below.
 		document.getElementById("dry_base").value = localsettings.dry_base;
 		document.getElementById("dry_allowed_length").value = localsettings.dry_allowed_length;
 		document.getElementById("dry_penalty_last_n").value = localsettings.dry_penalty_last_n;
+		document.getElementById("lookahead_retries").value = localsettings.lookahead_retries;
+		document.getElementById("lookahead_threshold").value = localsettings.lookahead_threshold;
+		document.getElementById("lookahead_sentences").value = (localsettings.lookahead_sentences==null ? defaultsettings.lookahead_sentences : localsettings.lookahead_sentences);
+		document.getElementById("lookahead_min_len").value = localsettings.lookahead_min_len;
+		document.getElementById("lookahead_max_len").value = localsettings.lookahead_max_len;
+		document.getElementById("lookahead_w_rep").value = localsettings.lookahead_w_rep;
+		document.getElementById("lookahead_w_slop").value = localsettings.lookahead_w_slop;
+		document.getElementById("lookahead_w_struct").value = localsettings.lookahead_w_struct;
+		document.getElementById("lookahead_w_lp").value = localsettings.lookahead_w_lp;
+		document.getElementById("lookahead_fuzzy_cutoff").value = (localsettings.lookahead_fuzzy_cutoff==null ? defaultsettings.lookahead_fuzzy_cutoff : localsettings.lookahead_fuzzy_cutoff);
+		document.getElementById("lookahead_fuzzy_base").value = (localsettings.lookahead_fuzzy_base==null ? defaultsettings.lookahead_fuzzy_base : localsettings.lookahead_fuzzy_base);
+		document.getElementById("lookahead_fuzzy_boost").value = (localsettings.lookahead_fuzzy_boost==null ? defaultsettings.lookahead_fuzzy_boost : localsettings.lookahead_fuzzy_boost);
+		document.getElementById("lookahead_track").checked = (localsettings.lookahead_track ? true : false);
+		document.getElementById("lookahead_track_min").value = (localsettings.lookahead_track_min==null ? defaultsettings.lookahead_track_min : localsettings.lookahead_track_min);
+		pendinglookaheadslop = JSON.parse(JSON.stringify(localsettings.lookahead_slop || []));
+		document.getElementById("lookahead_slop_count").innerText = pendinglookaheadslop.length;
 		document.getElementById("token_count_multiplier").value = localsettings.token_count_multiplier;
 		document.getElementById("second_ep_qty").value = localsettings.second_ep_qty;
 		document.getElementById("second_ep_model").value = localsettings.second_ep_model;
@@ -17396,6 +17482,16 @@ Current version indicated by LITEVER below.
 		{
 			document.getElementById("drysupporteddiv").classList.add("hidden");
 			document.getElementById("dryunsupporteddiv").classList.remove("hidden");
+		}
+		if(is_using_kcpp_with_lookahead())
+		{
+			document.getElementById("lookaheadsupporteddiv").classList.remove("hidden");
+			document.getElementById("lookaheadunsupporteddiv").classList.add("hidden");
+		}
+		else
+		{
+			document.getElementById("lookaheadsupporteddiv").classList.add("hidden");
+			document.getElementById("lookaheadunsupporteddiv").classList.remove("hidden");
 		}
 		if(is_using_kcpp_with_xtc())
 		{
@@ -17780,6 +17876,19 @@ Current version indicated by LITEVER below.
 		document.getElementById("dry_allowed_length").value = cleannum(parseInt(document.getElementById("dry_allowed_length").value), 0, 100);
 		document.getElementById("dry_penalty_last_n").value = cleannum(parseInt(document.getElementById("dry_penalty_last_n").value), 0, parseInt(document.getElementById("max_context_length").value));
 		document.getElementById("xtc_threshold").value = cleannum(parseFloat(document.getElementById("xtc_threshold").value), 0.0, 1.0);
+		document.getElementById("lookahead_retries").value = cleannum(parseInt(document.getElementById("lookahead_retries").value), 0, 16);
+		document.getElementById("lookahead_threshold").value = cleannum(parseFloat(document.getElementById("lookahead_threshold").value), 0.01, 10.0);
+		document.getElementById("lookahead_sentences").value = cleannum(parseInt(document.getElementById("lookahead_sentences").value), 1, 8);
+		document.getElementById("lookahead_min_len").value = cleannum(parseInt(document.getElementById("lookahead_min_len").value), 1, 512);
+		document.getElementById("lookahead_max_len").value = cleannum(parseInt(document.getElementById("lookahead_max_len").value), parseInt(document.getElementById("lookahead_min_len").value), 512);
+		document.getElementById("lookahead_w_rep").value = cleannum(parseFloat(document.getElementById("lookahead_w_rep").value), 0.0, 10.0);
+		document.getElementById("lookahead_w_slop").value = cleannum(parseFloat(document.getElementById("lookahead_w_slop").value), 0.0, 10.0);
+		document.getElementById("lookahead_w_struct").value = cleannum(parseFloat(document.getElementById("lookahead_w_struct").value), 0.0, 10.0);
+		document.getElementById("lookahead_fuzzy_cutoff").value = cleannum(parseFloat(document.getElementById("lookahead_fuzzy_cutoff").value), 0.0, 1.0);
+		document.getElementById("lookahead_fuzzy_base").value = cleannum(parseFloat(document.getElementById("lookahead_fuzzy_base").value), 0.0, 10.0);
+		document.getElementById("lookahead_fuzzy_boost").value = cleannum(parseFloat(document.getElementById("lookahead_fuzzy_boost").value), 0.0, 10.0);
+		document.getElementById("lookahead_track_min").value = cleannum(parseInt(document.getElementById("lookahead_track_min").value), 1, 1000);
+		document.getElementById("lookahead_w_lp").value = cleannum(parseFloat(document.getElementById("lookahead_w_lp").value), 0.0, 10.0);
 		document.getElementById("xtc_probability").value = cleannum(parseFloat(document.getElementById("xtc_probability").value), 0.0, 1.0);
 		document.getElementById("adaptivep_target").value = cleannum(parseFloat(document.getElementById("adaptivep_target").value), -1, 1);
 		document.getElementById("adaptivep_decay").value = cleannum(parseFloat(document.getElementById("adaptivep_decay").value), 0.01, 0.99);
@@ -18347,6 +18456,21 @@ Current version indicated by LITEVER below.
 		localsettings.dry_allowed_length = parseInt(document.getElementById("dry_allowed_length").value);
 		localsettings.dry_penalty_last_n = parseInt(document.getElementById("dry_penalty_last_n").value);
 		localsettings.dry_sequence_breakers = pendingsequencebreakers;
+		localsettings.lookahead_retries = parseInt(document.getElementById("lookahead_retries").value);
+		localsettings.lookahead_threshold = parseFloat(document.getElementById("lookahead_threshold").value);
+		localsettings.lookahead_sentences = parseInt(document.getElementById("lookahead_sentences").value);
+		localsettings.lookahead_min_len = parseInt(document.getElementById("lookahead_min_len").value);
+		localsettings.lookahead_max_len = parseInt(document.getElementById("lookahead_max_len").value);
+		localsettings.lookahead_w_rep = parseFloat(document.getElementById("lookahead_w_rep").value);
+		localsettings.lookahead_w_slop = parseFloat(document.getElementById("lookahead_w_slop").value);
+		localsettings.lookahead_w_struct = parseFloat(document.getElementById("lookahead_w_struct").value);
+		localsettings.lookahead_w_lp = parseFloat(document.getElementById("lookahead_w_lp").value);
+		localsettings.lookahead_slop = pendinglookaheadslop;
+		localsettings.lookahead_fuzzy_cutoff = parseFloat(document.getElementById("lookahead_fuzzy_cutoff").value);
+		localsettings.lookahead_fuzzy_base = parseFloat(document.getElementById("lookahead_fuzzy_base").value);
+		localsettings.lookahead_fuzzy_boost = parseFloat(document.getElementById("lookahead_fuzzy_boost").value);
+		localsettings.lookahead_track = document.getElementById("lookahead_track").checked;
+		localsettings.lookahead_track_min = parseInt(document.getElementById("lookahead_track_min").value);
 		localsettings.custom_jailbreak_text = pendingassistantjailbreak;
 		localsettings.xtc_threshold = parseFloat(document.getElementById("xtc_threshold").value);
 		localsettings.xtc_probability = parseFloat(document.getElementById("xtc_probability").value);
@@ -22656,6 +22780,25 @@ Current version indicated by LITEVER below.
 			submit_payload.params.dry_allowed_length = localsettings.dry_allowed_length;
 			submit_payload.params.dry_penalty_last_n = localsettings.dry_penalty_last_n;
 			submit_payload.params.dry_sequence_breakers = JSON.parse(JSON.stringify(localsettings.dry_sequence_breakers));
+		}
+
+		if(custom_kobold_endpoint != "" && is_using_kcpp_with_lookahead() && localsettings.lookahead_retries > 0)
+		{
+			submit_payload.params.lookahead_retries = localsettings.lookahead_retries;
+			submit_payload.params.lookahead_threshold = localsettings.lookahead_threshold;
+			submit_payload.params.lookahead_sentences = localsettings.lookahead_sentences;
+			submit_payload.params.lookahead_min_len = localsettings.lookahead_min_len;
+			submit_payload.params.lookahead_max_len = localsettings.lookahead_max_len;
+			submit_payload.params.lookahead_w_rep = localsettings.lookahead_w_rep;
+			submit_payload.params.lookahead_w_slop = localsettings.lookahead_w_slop;
+			submit_payload.params.lookahead_w_struct = localsettings.lookahead_w_struct;
+			submit_payload.params.lookahead_w_lp = localsettings.lookahead_w_lp;
+			submit_payload.params.lookahead_slop = JSON.parse(JSON.stringify(localsettings.lookahead_slop || []));
+			submit_payload.params.lookahead_fuzzy_cutoff = localsettings.lookahead_fuzzy_cutoff;
+			submit_payload.params.lookahead_fuzzy_base = localsettings.lookahead_fuzzy_base;
+			submit_payload.params.lookahead_fuzzy_boost = localsettings.lookahead_fuzzy_boost;
+			submit_payload.params.lookahead_track = localsettings.lookahead_track;
+			submit_payload.params.lookahead_track_min = localsettings.lookahead_track_min;
 		}
 
 		if(custom_kobold_endpoint != "" && is_using_kcpp_with_xtc() && localsettings.xtc_probability > 0)
@@ -32837,7 +32980,116 @@ Current version indicated by LITEVER below.
 											</div>
 										</div>
 										<div id="xtcunsupporteddiv" class="color_red" style="font-weight:bold;padding:3px;font-size:12px">Unsupported</div>
+									</div>
+								</div>
+							</div>
+
+							<div style="display:flex;width:100%;">
+								<div class="settinglabel settingcell">
+									<div class="justifyleft" style="width:100%">Look-Ahead <span class="helpicon">?<span class="helptext">Look-Ahead Sentence Sampler. Each sentence is scored for repetition, slop phrases/names and structural tics (not X but Y, em-dashes, repeated openers). A bad sentence is regenerated up to Retries times, with the token that started a slop phrase banned for the retries. If every attempt fails, it backtracks and regenerates the previous sentence instead. Retries 0 = off. Thresh: accept a sentence when its score is at or below this. Sent: how many sentences are held back, which is how far it can backtrack (1 = no backtracking). Min/Max: sentence length in tokens. Output streams a sentence at a time. KoboldCpp only, not for RNN models, grammar or negative prompts.</span></span></div>
+									<div class="justifyleft" style="width:100%">
+									<div id="lookaheadsupporteddiv">
+									<div style="display:flex">
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Retries per Segment (0 = Off)" class="justifyleft" style="width:100%">Retries</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Retries per Segment (0 = Off)" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_retries"></div>
 										</div>
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Accept Threshold" class="justifyleft" style="width:100%">Thresh.</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Accept Threshold" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_threshold"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Sentences Held Back (backtrack depth)" class="justifyleft" style="width:100%">Sent.</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Sentences Held Back (backtrack depth)" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_sentences"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Min Segment Tokens" class="justifyleft" style="width:100%">Min</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Min Segment Tokens" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_min_len"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Max Segment Tokens" class="justifyleft" style="width:100%">Max</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Max Segment Tokens" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_max_len"></div>
+										</div>
+									</div>
+									</div>
+									<div id="lookaheadunsupporteddiv" class="color_red" style="font-weight:bold;padding:3px;font-size:12px">Unsupported</div>
+									</div>
+								</div>
+								<div class="settinglabel settingcell">
+									<div class="justifyleft" style="width:100%">L.A. Weights <span class="helpicon">?<span class="helptext">Weight of each look-ahead critic. Rep: repetition of earlier text. Slop: slop phrase list. Struct: structural tics. LP: drop in model likelihood vs. the running average (keeps rewrites fluent). Set to 0 to disable a critic. Slop List: view and edit the phrases and names that are checked; it starts with the default list.</span></span></div>
+									<div class="justifyleft" style="width:100%">
+									<div style="display:flex">
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Repetition Weight" class="justifyleft" style="width:100%">Rep</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Repetition Weight" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_w_rep"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Slop Weight" class="justifyleft" style="width:100%">Slop</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Slop Weight" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_w_slop"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Structure Weight" class="justifyleft" style="width:100%">Struct</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Structure Weight" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_w_struct"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Look-Ahead Logprob Weight" class="justifyleft" style="width:100%">LP</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Look-Ahead Logprob Weight" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_w_lp"></div>
+										</div>
+									</div>
+									<div style="display:flex;align-items:center;gap:4px;">
+										<button type="button" class="btn btn-primary" style="flex:1; padding:2px 3px; font-size:12px;" title="View and edit the look-ahead slop phrases and names" onclick="setLookaheadSlop()">Slop List (<span id="lookahead_slop_count">0</span>)</button>
+									</div>
+									</div>
+								</div>
+							</div>
+
+							<div style="display:flex;width:100%;">
+								<div class="settinglabel settingcell">
+									<div class="justifyleft" style="width:100%">Near-Slop <span class="helpicon">?<span class="helptext">Sound-alike names. Words that sound like a listed name (Elena ~ Elara, Lira ~ Lyra) are penalized by similarity x (Base + Boost x suppressed mass). Suppressed mass is how much probability the model had put on a banned word at that spot, so stand-ins for a banned name are hit hardest. Base only applies when the first sound matches. Cut: minimum similarity, 1 = off. Built-in names and Capitalized single words in your slop list are treated as names.</span></span></div>
+									<div class="justifyleft" style="width:100%">
+									<div style="display:flex">
+										<div class="settinglabel settingcell">
+											<div title="Near-Slop Similarity Cutoff (1 = off)" class="justifyleft" style="width:100%">Cut</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Near-Slop Similarity Cutoff (1 = off)" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_fuzzy_cutoff"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Near-Slop Base Weight" class="justifyleft" style="width:100%">Base</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Near-Slop Base Weight" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_fuzzy_base"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Near-Slop Suppression Boost" class="justifyleft" style="width:100%">Boost</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Near-Slop Suppression Boost" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_fuzzy_boost"></div>
+										</div>
+									</div>
+									</div>
+								</div>
+								<div class="settinglabel settingcell">
+									<div class="justifyleft" style="width:100%">Stand-in Tracking <span class="helpicon">?<span class="helptext">Counts words the model picks when a banned name had most of the probability, across generations. Counts are kept in server memory only (nothing is written to disk) and reset when KoboldCpp restarts; current counts are listed in the performance stats. A word seen at least Min times becomes a soft slop entry, so the model's next favourite gets caught too.</span></span></div>
+									<div class="justifyleft" style="width:100%">
+									<div style="display:flex;align-items:center;">
+										<div class="settinglabel settingcell">
+											<div title="Stand-in count needed to become a soft slop entry" class="justifyleft" style="width:100%">Min</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Stand-in count needed to become a soft slop entry" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_track_min"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div class="justifyleft" style="width:100%">Enabled</div>
+											<div class="justifyleft" style="width:100%"><input type="checkbox" class="smallcheckbox" style="vertical-align:middle;" title="Enable stand-in tracking" id="lookahead_track"></div>
+											</div>
+										</div>
+									</div>
 								</div>
 							</div>
 

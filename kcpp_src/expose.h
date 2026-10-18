@@ -154,6 +154,25 @@ struct generation_inputs
     const int banned_tokens_len = 0;
     const char ** banned_tokens = nullptr;
     const int reasoning_budget = -1;
+    const int lookahead_retries = 0; //look-ahead segment sampler, 0 = off
+    const float lookahead_threshold = 0.35f;
+    const int lookahead_min_len = 6;
+    const int lookahead_max_len = 48;
+    const float lookahead_w_rep = 1.0f;
+    const float lookahead_w_slop = 1.0f;
+    const float lookahead_w_struct = 0.6f;
+    const float lookahead_w_lp = 0.5f;
+    const int lookahead_slop_len = 0;
+    const char ** lookahead_slop = nullptr; //the full phrase list, the API layer fills in the visible default list
+    const float * lookahead_slop_weights = nullptr;
+    const int lookahead_sentences = 2; //sentences held back, a sentence that fails all retries backtracks into the previous one
+    const float lookahead_fuzzy_cutoff = 0.6f; //near-slop: minimum sound similarity to a listed name
+    const float lookahead_fuzzy_base = 0.3f; //near-slop weight with nothing suppressed
+    const float lookahead_fuzzy_boost = 1.5f; //near-slop weight per unit of suppressed mass
+    const bool lookahead_track = false; //count stand-ins across generations (in memory only)
+    const int lookahead_track_min = 3; //stand-in count at which it becomes a soft slop entry
+    const int lookahead_allow_len = -1; //words never penalized, on top of names established in the context
+    const char ** lookahead_allow = nullptr;
 };
 struct generation_outputs
 {
