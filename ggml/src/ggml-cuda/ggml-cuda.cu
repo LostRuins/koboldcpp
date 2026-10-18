@@ -2705,9 +2705,6 @@ static bool ggml_cuda_graph_debug_enabled() {
 static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
     bool use_cuda_graph = true;
-    // Opt-in ADD capture: preserve the existing restriction by default.
-    // This does not bypass other capture compatibility checks.
-    static const bool allow_add_capture = ggml_cuda_env_flag("GGML_CUDA_GRAPH_ALLOW_ADD");
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -2725,17 +2722,8 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
                 // ref: https://github.com/ggml-org/llama.cpp/pull/18958
                 use_cuda_graph = false;
                 if (ggml_cuda_graph_debug_enabled()) {
-                    GGML_LOG_DEBUG("%s: CUDA%d disabling CUDA graphs at MUL_MAT_ID node '%s'\n",
-                            __func__, ggml_cuda_get_device(), node->name);
+                    GGML_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported node type\n", __func__);
                 }
-            }
-        }
-
-        if (!allow_add_capture && node->op == GGML_OP_ADD && node->src[1] && node->src[1]->ne[1] > 1) {
-            use_cuda_graph = false;
-            if (ggml_cuda_graph_debug_enabled()) {
-                GGML_LOG_DEBUG("%s: CUDA%d disabling CUDA graphs at ADD node '%s', src1 ne[1]=%lld\n",
-                        __func__, ggml_cuda_get_device(), node->name, (long long) node->src[1]->ne[1]);
             }
         }
 
