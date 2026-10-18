@@ -6,7 +6,7 @@ Inspired by **KoboldAI** and built on **llama.cpp**
 
 One executable file, no installation required. Ready-to-run downloads are available for Windows, Linux, and macOS.
 
-**[Download KoboldCpp](https://github.com/LostRuins/koboldcpp/releases/latest) | [Quick Start](#quick-start) |  [Website](https://koboldcpp.net) |  [Official Resources](#official-resources)**
+**[Download KoboldCpp](https://github.com/LostRuins/koboldcpp/releases/latest) | [Quick Start](#quick-start) |  [Official Website](https://koboldcpp.net) |  [Official Resources](#official-resources)**
 
 ![Integrated Web UI](media/preview.png)
 ![Roleplay Chat Mode](media/preview2.png)
@@ -271,10 +271,10 @@ The following are all official KoboldCpp resources
 - [KoboldCpp Public Demo](https://koboldai-koboldcpp-tiefighter.hf.space/)
 - [KoboldCpp RunPod Cloud Image](https://koboldai.org/runpodcpp)
 - [KoboldCpp Docker image](https://hub.docker.com/r/koboldai/koboldcpp) (Caution: For experts only)
-- [KoboldCpp Official Community Website](https://koboldcpp.net)
+- [KoboldCpp Official Website](https://koboldcpp.net)
 
-## KoboldCpp Community Website
-- NEW: KoboldCpp now has its own official KoboldCpp Community Website at **[https://koboldcpp.net](https://koboldcpp.net)**
+## KoboldCpp Website
+- NEW: KoboldCpp now has its own official KoboldCpp Website at **[https://koboldcpp.net](https://koboldcpp.net)**
 - This community website provides simple resources and instructions to help newbies get started, and links to release binaries on the KoboldCpp Github repo. Contributions are welcome.
 
 ## Third Party Resources
