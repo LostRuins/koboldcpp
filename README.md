@@ -6,7 +6,7 @@ Inspired by **KoboldAI** and built on **llama.cpp**
 
 One executable file, no installation required. Ready-to-run downloads are available for Windows, Linux, and macOS.
 
-**[Download KoboldCpp](https://github.com/LostRuins/koboldcpp/releases/latest) | [Quick Start](#quick-start) |  [Official Resources](#official-resources)**
+**[Download KoboldCpp](https://github.com/LostRuins/koboldcpp/releases/latest) | [Quick Start](#quick-start) |  [Website](https://koboldcpp.net) |  [Official Resources](#official-resources)**
 
 ![Integrated Web UI](media/preview.png)
 ![Roleplay Chat Mode](media/preview2.png)
