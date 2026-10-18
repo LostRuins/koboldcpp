@@ -250,6 +250,21 @@ static inline void log_callback_off(ggml_log_level level, const char* text, void
     return;
 }
 
+static ggml_log_callback kcpp_original_log_callback = nullptr;
+static void * kcpp_original_log_user_data = nullptr;
+
+static void kcpp_log_callback(ggml_log_level level, const char * text, void *) {
+    // The scheduler reports every reallocation at INFO level. Keep this
+    // diagnostic available in verbose mode without flooding normal output.
+    if (level == GGML_LOG_LEVEL_INFO && text &&
+        strncmp(text, "sched_graph_realloc: graph reallocation:",
+                sizeof("sched_graph_realloc: graph reallocation:") - 1) == 0 &&
+        (debugmode != 1 || is_quiet)) {
+        return;
+    }
+    kcpp_original_log_callback(level, text, kcpp_original_log_user_data);
+}
+
 static inline void kcpp_flush_log_output()
 {
     common_log_flush(common_log_main());
@@ -580,6 +595,7 @@ static size_t estimate_draft_autofit_tax_mb(
     llama_context_params draft_ctx_params = llama_context_default_params();
 
     draft_model_params.load_mode = base_model_params.load_mode;
+    draft_model_params.lazy_mode = base_model_params.lazy_mode;
     draft_model_params.n_gpu_layers = has_draft_model ? draft_gpulayers : 0;
     draft_model_params.devices = base_model_params.devices;
     draft_model_params.main_gpu = base_model_params.main_gpu;
@@ -970,6 +986,8 @@ static void mtp_decoding_setup(llama_model * main_model, llama_context * main_ct
     }
 
     llama_context_params mtp_ctx_params = base_ctx_params;
+    // Match upstream: only the target context owns an expert cache.
+    mtp_ctx_params.moe_cache_size = 0;
     mtp_ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     mtp_ctx_params.ctx_other = main_ctx;
     mtp_ctx_params.n_rs_seq = 0;
@@ -995,6 +1013,7 @@ static void speculative_decoding_setup(std::string spec_model_filename, llama_co
     llama_context_params draft_ctx_params = llama_context_default_params();
 
     draft_model_params.load_mode = base_model_params.load_mode;
+    draft_model_params.lazy_mode = base_model_params.lazy_mode;
     draft_model_params.n_gpu_layers = draft_gpulayers; //layers offload the speculative model.
     draft_model_params.devices = base_model_params.devices;
     draft_model_params.load_mtp = true;
@@ -3184,6 +3203,15 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->swa_full = inputs.prevent_swa;
 
     debugmode = inputs.debugmode;
+    // Preserve an existing logger and avoid wrapping ourselves on reload.
+    ggml_log_callback current_log_callback;
+    void * current_log_user_data;
+    llama_log_get(&current_log_callback, &current_log_user_data);
+    if (current_log_callback != kcpp_log_callback) {
+        kcpp_original_log_callback = current_log_callback;
+        kcpp_original_log_user_data = current_log_user_data;
+        llama_log_set(kcpp_log_callback, nullptr);
+    }
     if(draft_spec)
     {
         common_speculative_free(draft_spec);
@@ -3406,6 +3434,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
 
         llama_model_params model_params = llama_model_default_params();
         llama_context_params llama_ctx_params = llama_context_default_params();
+        model_params.lazy_mode = static_cast<llama_lazy_mode>(inputs.lazy_mode);
+        llama_ctx_params.moe_cache_size = static_cast<size_t>(inputs.moe_cache_mib) * 1024 * 1024;
         llama_ctx_params.n_ctx = clamped_max_context_length;
         llama_ctx_params.n_ctx += extra_context_handle_fragmentation;
 
