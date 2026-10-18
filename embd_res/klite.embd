@@ -4727,6 +4727,7 @@ Current version indicated by LITEVER below.
 		lookahead_fuzzy_boost: 1.5,
 		lookahead_track: false,
 		lookahead_track_min: 3,
+		lookahead_retry_temp: 0.2,
 		sampler_order: [6, 0, 1, 3, 4, 2, 5],
 		custom_sampler_fields: {},
 	};
@@ -17448,6 +17449,7 @@ Current version indicated by LITEVER below.
 		document.getElementById("lookahead_fuzzy_boost").value = (localsettings.lookahead_fuzzy_boost==null ? defaultsettings.lookahead_fuzzy_boost : localsettings.lookahead_fuzzy_boost);
 		document.getElementById("lookahead_track").checked = (localsettings.lookahead_track ? true : false);
 		document.getElementById("lookahead_track_min").value = (localsettings.lookahead_track_min==null ? defaultsettings.lookahead_track_min : localsettings.lookahead_track_min);
+		document.getElementById("lookahead_retry_temp").value = (localsettings.lookahead_retry_temp==null ? defaultsettings.lookahead_retry_temp : localsettings.lookahead_retry_temp);
 		pendinglookaheadslop = JSON.parse(JSON.stringify(localsettings.lookahead_slop || []));
 		document.getElementById("lookahead_slop_count").innerText = pendinglookaheadslop.length;
 		document.getElementById("token_count_multiplier").value = localsettings.token_count_multiplier;
@@ -17888,6 +17890,7 @@ Current version indicated by LITEVER below.
 		document.getElementById("lookahead_fuzzy_base").value = cleannum(parseFloat(document.getElementById("lookahead_fuzzy_base").value), 0.0, 10.0);
 		document.getElementById("lookahead_fuzzy_boost").value = cleannum(parseFloat(document.getElementById("lookahead_fuzzy_boost").value), 0.0, 10.0);
 		document.getElementById("lookahead_track_min").value = cleannum(parseInt(document.getElementById("lookahead_track_min").value), 1, 1000);
+		document.getElementById("lookahead_retry_temp").value = cleannum(parseFloat(document.getElementById("lookahead_retry_temp").value), 0.0, 2.0);
 		document.getElementById("lookahead_w_lp").value = cleannum(parseFloat(document.getElementById("lookahead_w_lp").value), 0.0, 10.0);
 		document.getElementById("xtc_probability").value = cleannum(parseFloat(document.getElementById("xtc_probability").value), 0.0, 1.0);
 		document.getElementById("adaptivep_target").value = cleannum(parseFloat(document.getElementById("adaptivep_target").value), -1, 1);
@@ -18471,6 +18474,7 @@ Current version indicated by LITEVER below.
 		localsettings.lookahead_fuzzy_boost = parseFloat(document.getElementById("lookahead_fuzzy_boost").value);
 		localsettings.lookahead_track = document.getElementById("lookahead_track").checked;
 		localsettings.lookahead_track_min = parseInt(document.getElementById("lookahead_track_min").value);
+		localsettings.lookahead_retry_temp = parseFloat(document.getElementById("lookahead_retry_temp").value);
 		localsettings.custom_jailbreak_text = pendingassistantjailbreak;
 		localsettings.xtc_threshold = parseFloat(document.getElementById("xtc_threshold").value);
 		localsettings.xtc_probability = parseFloat(document.getElementById("xtc_probability").value);
@@ -22799,6 +22803,7 @@ Current version indicated by LITEVER below.
 			submit_payload.params.lookahead_fuzzy_boost = localsettings.lookahead_fuzzy_boost;
 			submit_payload.params.lookahead_track = localsettings.lookahead_track;
 			submit_payload.params.lookahead_track_min = localsettings.lookahead_track_min;
+			submit_payload.params.lookahead_retry_temp = localsettings.lookahead_retry_temp;
 		}
 
 		if(custom_kobold_endpoint != "" && is_using_kcpp_with_xtc() && localsettings.xtc_probability > 0)
@@ -32980,13 +32985,13 @@ Current version indicated by LITEVER below.
 											</div>
 										</div>
 										<div id="xtcunsupporteddiv" class="color_red" style="font-weight:bold;padding:3px;font-size:12px">Unsupported</div>
-									</div>
+										</div>
 								</div>
 							</div>
 
 							<div style="display:flex;width:100%;">
 								<div class="settinglabel settingcell">
-									<div class="justifyleft" style="width:100%">Look-Ahead <span class="helpicon">?<span class="helptext">Look-Ahead Sentence Sampler. Each sentence is scored for repetition, slop phrases/names and structural tics (not X but Y, em-dashes, repeated openers). A bad sentence is regenerated up to Retries times, with the token that started a slop phrase banned for the retries. If every attempt fails, it backtracks and regenerates the previous sentence instead. Retries 0 = off. Thresh: accept a sentence when its score is at or below this. Sent: how many sentences are held back, which is how far it can backtrack (1 = no backtracking). Min/Max: sentence length in tokens. Output streams a sentence at a time. KoboldCpp only, not for RNN models, grammar or negative prompts.</span></span></div>
+									<div class="justifyleft" style="width:100%">Look-Ahead <span class="helpicon">?<span class="helptext">Look-Ahead Sentence Sampler. Each sentence is scored for repetition, slop phrases/names and structural tics (not X but Y, em-dashes, repeated openers). A bad sentence is regenerated up to Retries times, with the token that started a slop phrase banned for the retries. If every attempt fails, it backtracks and regenerates the previous sentence instead. Retries 0 = off. Thresh: accept a sentence when its score is at or below this. Sent: how many sentences are held back, which is how far it can backtrack (1 = no backtracking). Min/Max: sentence length in tokens. +Temp: temperature added for every retry of the same sentence, so retries explore instead of repeating the rejected sentence. Output streams a sentence at a time. KoboldCpp only, not for RNN models, grammar or negative prompts.</span></span></div>
 									<div class="justifyleft" style="width:100%">
 									<div id="lookaheadsupporteddiv">
 									<div style="display:flex">
@@ -33014,6 +33019,11 @@ Current version indicated by LITEVER below.
 											<div title="Look-Ahead Max Segment Tokens" class="justifyleft" style="width:100%">Max</div>
 											<div class="justifyleft" style="width:100%">
 											<input title="Look-Ahead Max Segment Tokens" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_max_len"></div>
+										</div>
+										<div class="settinglabel settingcell">
+											<div title="Temperature added for every retry of the same sentence" class="justifyleft" style="width:100%">+Temp</div>
+											<div class="justifyleft" style="width:100%">
+											<input title="Temperature added for every retry of the same sentence" class="settinglabel miniinput" type="text" inputmode="decimal" placeholder="0" value="0" id="lookahead_retry_temp"></div>
 										</div>
 									</div>
 									</div>
@@ -33087,8 +33097,8 @@ Current version indicated by LITEVER below.
 										<div class="settinglabel settingcell">
 											<div class="justifyleft" style="width:100%">Enabled</div>
 											<div class="justifyleft" style="width:100%"><input type="checkbox" class="smallcheckbox" style="vertical-align:middle;" title="Enable stand-in tracking" id="lookahead_track"></div>
-											</div>
 										</div>
+									</div>
 									</div>
 								</div>
 							</div>

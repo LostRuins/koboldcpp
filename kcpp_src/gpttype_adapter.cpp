@@ -8108,6 +8108,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         //stand-in tracking across generations
         lookahead_cfg.track = inputs.lookahead_track;
         if(inputs.lookahead_track_min > 0) { lookahead_cfg.track_min = inputs.lookahead_track_min; }
+        if(std::isfinite(inputs.lookahead_retry_temp) && inputs.lookahead_retry_temp >= 0.0f) { lookahead_cfg.retry_temp = std::min(inputs.lookahead_retry_temp, 2.0f); }
         if(lookahead_cfg.track)
         {
             std::lock_guard<std::mutex> lock(lookahead_standins_mtx);
@@ -8130,8 +8131,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         }
         if(debugmode==1 && !is_quiet)
         {
-            printf("\nLook-ahead sampler: retries=%d sentences=%d threshold=%.2f sentence len=%d..%d weights(rep=%.2f slop=%.2f struct=%.2f lp=%.2f) slop phrases=%zu\n",
-            lookahead_cfg.retries, lookahead_cfg.sentences, lookahead_cfg.threshold, lookahead_cfg.min_len, lookahead_cfg.max_len,
+            printf("\nLook-ahead sampler: retry temp +%.2f, retries=%d sentences=%d threshold=%.2f sentence len=%d..%d weights(rep=%.2f slop=%.2f struct=%.2f lp=%.2f) slop phrases=%zu\n",
+            lookahead_cfg.retry_temp, lookahead_cfg.retries, lookahead_cfg.sentences, lookahead_cfg.threshold, lookahead_cfg.min_len, lookahead_cfg.max_len,
             lookahead_cfg.w_rep, lookahead_cfg.w_slop, lookahead_cfg.w_struct, lookahead_cfg.w_lp, lookahead_cfg.slop_phrases.size());
         }
     }
@@ -9339,8 +9340,15 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                 }
 
+                //look-ahead: every retry of a sentence (or of a sentence it backtracked into) samples hotter
+                float sample_temp = temp;
+                if(lookahead_st.active && !lookahead_st.slots.empty() && lookahead_cfg.retry_temp > 0.0f)
+                {
+                    const int prior = (int)lookahead_st.slots.back().attempts.size();
+                    if(prior > 0) { sample_temp = std::min(std::max(temp, 0.0f) + lookahead_cfg.retry_temp * prior, std::max(temp, 2.0f)); }
+                }
                 id = SampleLogits(logitsPtr, nctx, n_vocab, last_n_size, repeat_penalty, kcpp_data->rep_pen_slope, presence_penalty,
-                top_k, top_a, top_p, min_p, typical_p, tfs_z, nsigma, temp, rng,
+                top_k, top_a, top_p, min_p, typical_p, tfs_z, nsigma, sample_temp, rng,
                 kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta,
                 kcpp_data->dry_multiplier, kcpp_data->dry_base,
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,

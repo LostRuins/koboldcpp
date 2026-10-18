@@ -455,6 +455,7 @@ class generation_inputs(ctypes.Structure):
                 ("lookahead_fuzzy_boost", ctypes.c_float),
                 ("lookahead_track", ctypes.c_bool),
                 ("lookahead_track_min", ctypes.c_int),
+                ("lookahead_retry_temp", ctypes.c_float),
                 ("lookahead_allow_len", ctypes.c_int),
                 ("lookahead_allow", ctypes.POINTER(ctypes.c_char_p))]
 
@@ -2593,6 +2594,7 @@ def generate(genparams, stream_flag=False):
     lookahead_track = genparams.get('lookahead_track', False)
     inputs.lookahead_track = (lookahead_track.strip().lower() in ("1","true","yes","on")) if isinstance(lookahead_track, str) else bool(lookahead_track)
     inputs.lookahead_track_min = max(1, tryparseint(genparams.get('lookahead_track_min', 3),3))
+    inputs.lookahead_retry_temp = max(0.0, min(2.0, tryparsefloat(genparams.get('lookahead_retry_temp', 0.2),0.2)))
     # words never penalized (e.g. established character names), on top of names that already appear
     # at least twice in the context
     lookahead_allow = genparams.get('lookahead_allow', None)
