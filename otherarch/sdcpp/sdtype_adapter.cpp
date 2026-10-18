@@ -25,6 +25,8 @@
 #include "src/core/util.h"
 #include "src/model.h"
 #include "src/model_loader.h"
+#include "src/model_io/gguf_io.h"
+#include "src/model_io/safetensors_io.h"
 #include "ggml-backend.h"
 
 using namespace kcpp_sd;
@@ -373,12 +375,12 @@ public:
 // resolve model / diffusion_model and text encoder / llm / proj / vision paths
 static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, const sd_load_model_inputs& inputs)
 {
-    //if t5 is set, and model is a gguf, load it as a diffusion model path
-    bool endswithgguf = (sd_params.model_path.rfind(".gguf") == sd_params.model_path.size() - 5);
-    if((sd_params.t5xxl_path!="" || sd_params.clip_l_path!="" || sd_params.clip_g_path!="") && endswithgguf)
+    bool model_is_gguf = false;
+    if(sd_params.t5xxl_path!="" || sd_params.clip_l_path!="" || sd_params.clip_g_path!="")
     {
+        model_is_gguf = is_gguf_file(sd_params.model_path);
         //extra check - make sure there is no diffusion model prefix already inside!
-        if(!gguf_tensor_exists(sd_params.model_path,"model.diffusion_model.",false))
+        if(model_is_gguf && !gguf_tensor_exists(sd_params.model_path,"model.diffusion_model.",false))
         {
             printf("\nSwap to Diffusion Model Path:%s",sd_params.model_path.c_str());
             sd_params.diffusion_model_path = sd_params.model_path;
@@ -435,8 +437,8 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
             path_empty(params.diffusion_model_path) &&
             (!path_empty(params.t5xxl_path)||!path_empty(params.clip_l_path)))
         {
-            bool endswithsafetensors = ends_with(params.model_path, ".safetensors");
-            if(endswithsafetensors && !model_loader.has_diffusion_model_tensors())
+            bool model_is_safetensors = !model_is_gguf && is_safetensors_file(sd_params.model_path);
+            if(model_is_safetensors && !model_loader.has_diffusion_model_tensors())
             {
                 printf("SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
                 if (!model_loader.init_from_file(params.model_path, "model.diffusion_model.")) {
