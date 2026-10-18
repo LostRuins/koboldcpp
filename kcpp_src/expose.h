@@ -70,8 +70,6 @@ struct load_model_inputs
     const int overridenativecontext = 0;
     const int moe_experts = -1;
     const int moecpu = 0;
-    const int lazy_mode = 1; // llama_lazy_mode: off=0, auto=1, on=2
-    const int moe_cache_mib = 0;
     const int ffncpu = 0;
     const bool no_bos_token = false;
     const bool load_guidance = false;
@@ -95,6 +93,8 @@ struct load_model_inputs
     const int continuous_batching_slots = 0;
     const int rpc_mode = 0; //0=disabled, 1=connect, 2=host
     const char * rpc_targets = nullptr;
+    const int lazy_mode = 1; // llama_lazy_mode: off=0, auto=1, on=2
+    const int moe_cache_mib = 0;
 };
 struct generation_inputs
 {
