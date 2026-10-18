@@ -172,6 +172,7 @@ struct generation_inputs
     const float lookahead_fuzzy_boost = 1.5f; //near-slop weight per unit of suppressed mass
     const bool lookahead_track = false; //count stand-ins across generations (in memory only)
     const int lookahead_track_min = 3; //stand-in count at which it becomes a soft slop entry
+    const float lookahead_retry_temp = 0.2f; //temperature added for every retry of the same sentence
     const int lookahead_allow_len = -1; //words never penalized, on top of names established in the context
     const char ** lookahead_allow = nullptr;
 };

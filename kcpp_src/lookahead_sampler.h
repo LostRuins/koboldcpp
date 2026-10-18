@@ -1,38 +1,3 @@
-// Look-ahead segment sampler (model-agnostic)
-//
-// Generates the response one sentence at a time and holds back a window of the last
-// `sentences` accepted sentences from output. Each finished sentence is scored with
-// text-level critics (repetition, slop phrases, structural tics) plus a fluency term
-// (raw model logprob vs. the running average).
-//  - score <= threshold: the sentence is accepted; once the window is full the oldest
-//    sentence is released to output.
-//  - worse: rewind to the sentence start and regenerate it, up to `retries` extra times.
-//    Tokens that started a slop phrase are banned for the remaining attempts.
-//  - all attempts failed: backtrack into the previous held-back sentence and regenerate
-//    that one instead (it gets a dead-end penalty). If there is nothing to backtrack into,
-//    or its attempts are used up, the best attempt of the current sentence is committed
-//    (replayed into the KV cache if it wasn't the last attempt).
-//
-// Near-slop: names in the slop list are also matched by sound (Elena ~ Elara, Lira ~ Lyra).
-// How hard a sound-alike is penalized depends on the "suppressed mass" at its position: the
-// raw probability the model had put on the banned tokens there. A high value means the word
-// is a stand-in the model reached for because its favourite was banned.
-// Stand-ins can optionally be counted across generations (in memory, for the lifetime of the
-// server); ones that keep coming back are added to the list as soft entries.
-//
-// The slop phrase list itself always comes from the request (the API layer supplies a visible
-// default list when the request has none), so nothing is hardcoded here.
-//
-// JSON output (tool calls, structured output, grammars): only the contents of string values are
-// scored. Structure, numbers and keys are masked out, each value counts as its own sentence, and the
-// repetition critic is skipped since JSON repeats its own structure by design. A grammar, if active,
-// has its parse state saved at every sentence start and restored on rewind. The grammar object itself
-// is never cloned: its stacks point into its rules, and the grammar sampler's memo cache is keyed on
-// those addresses, so a clone would leave the cache cold on every token.
-//
-// Everything here works on detokenized text and raw logits, so it does not depend on the
-// model architecture, vocabulary or weights.
-
 #pragma once
 
 #include <string>
@@ -72,6 +37,7 @@ struct lookahead_config
     bool track = false;         // count stand-ins across generations
     int track_min = 3;          // stand-in count at which it becomes a soft slop entry
     float track_weight = 0.5f;  // weight of tracked entries
+    float retry_temp = 0.2f;    // temperature added per retry of a sentence, so a retry does not just repeat the rejected one
     std::vector<std::string> allow; // lowercase words that are never penalized (e.g. the names of established characters)
 };
 
