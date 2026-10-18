@@ -1161,6 +1161,227 @@
                 "/audio/speech": {"$ref": "#/paths/~1v1~1audio~1speech"},
                 "/audio/voices": {"$ref": "#/paths/~1v1~1audio~1voices"},
                 "/messages": {"$ref": "#/paths/~1v1~1messages"},
+                "/api/generate": {
+                   "post": {
+                      "security": [{"BearerAuth": []}],
+                      "summary": "Generate text using the Ollama API format",
+                      "description": "A basic Ollama-compatible generation endpoint. Streaming is enabled by default and returns newline-delimited JSON objects, not SSE events.",
+                      "tags": ["ollama"],
+                      "requestBody": {
+                         "required": true,
+                         "content": {
+                            "application/json": {
+                               "schema": {
+                                  "type": "object",
+                                  "properties": {
+                                     "model": {"type": "string", "description": "Accepted for compatibility; KoboldCpp uses the active model."},
+                                     "prompt": {"type": "string"},
+                                     "system": {"type": "string"},
+                                     "context": {"type": "array", "items": {"type": "integer"}},
+                                     "stream": {"type": "boolean", "default": true},
+                                     "stop": {"type": "array", "items": {"type": "string"}},
+                                     "options": {
+                                        "type": "object",
+                                        "properties": {
+                                           "num_predict": {"type": "integer"},
+                                           "num_ctx": {"type": "integer"},
+                                           "temperature": {"type": "number"},
+                                           "top_k": {"type": "integer"},
+                                           "top_p": {"type": "number"},
+                                           "seed": {"type": "integer"},
+                                           "stop": {"type": "array", "items": {"type": "string"}}
+                                        }
+                                     }
+                                  },
+                                  "required": ["prompt"]
+                               }
+                            }
+                         }
+                      },
+                      "responses": {
+                         "200": {
+                            "description": "A single JSON response when stream=false, or one JSON object per line when stream=true.",
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "object",
+                                     "properties": {
+                                        "model": {"type": "string"},
+                                        "created_at": {"type": "string"},
+                                        "response": {"type": "string"},
+                                        "done": {"type": "boolean"},
+                                        "done_reason": {"type": "string"},
+                                        "context": {"type": "array", "items": {"type": "integer"}}
+                                     }
+                                  }
+                               },
+                               "application/x-ndjson": {
+                                  "schema": {"type": "object", "additionalProperties": true}
+                               }
+                            }
+                         },
+                         "401": {"$ref": "#/components/responses/Unauthorized"},
+                         "503": {"description": "Server is busy.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ServerBusyError"}}}}
+                      }
+                   }
+                },
+                "/api/chat": {
+                   "post": {
+                      "security": [{"BearerAuth": []}],
+                      "summary": "Generate a chat response using the Ollama API format",
+                      "description": "A basic Ollama-compatible chat endpoint. Streaming is enabled by default and returns newline-delimited JSON objects. Text messages, base64 images, and function tools are supported.",
+                      "tags": ["ollama"],
+                      "requestBody": {
+                         "required": true,
+                         "content": {
+                            "application/json": {
+                               "schema": {
+                                  "type": "object",
+                                  "properties": {
+                                     "model": {"type": "string", "description": "Accepted for compatibility; KoboldCpp uses the active model."},
+                                     "messages": {
+                                        "type": "array",
+                                        "items": {
+                                           "type": "object",
+                                           "properties": {
+                                              "role": {"type": "string", "enum": ["system", "user", "assistant", "tool"]},
+                                              "content": {"type": "string"},
+                                              "images": {"type": "array", "items": {"type": "string"}},
+                                              "tool_calls": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+                                           },
+                                           "required": ["role", "content"]
+                                        }
+                                     },
+                                     "tools": {"type": "array", "items": {"type": "object", "additionalProperties": true}, "description": "Ollama/OpenAI-style function tool definitions."},
+                                     "stream": {"type": "boolean", "default": true}
+                                  },
+                                  "required": ["messages"]
+                               }
+                            }
+                         }
+                      },
+                      "responses": {
+                         "200": {
+                            "description": "A single JSON response when stream=false, or one JSON object per line when stream=true.",
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "object",
+                                     "properties": {
+                                        "model": {"type": "string"},
+                                        "created_at": {"type": "string"},
+                                        "message": {
+                                           "type": "object",
+                                           "properties": {
+                                              "role": {"type": "string", "enum": ["assistant"]},
+                                              "content": {"type": "string"},
+                                              "tool_calls": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+                                           }
+                                        },
+                                        "done": {"type": "boolean"},
+                                        "done_reason": {"type": "string"}
+                                     }
+                                  }
+                               },
+                               "application/x-ndjson": {
+                                  "schema": {"type": "object", "additionalProperties": true}
+                               }
+                            }
+                         },
+                         "401": {"$ref": "#/components/responses/Unauthorized"},
+                         "503": {"description": "Server is busy.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ServerBusyError"}}}}
+                      }
+                   }
+                },
+                "/api/tags": {
+                   "get": {
+                      "summary": "List the active model in Ollama format",
+                      "description": "Returns synthetic Ollama model metadata for the active KoboldCpp model.",
+                      "tags": ["ollama"],
+                      "responses": {
+                         "200": {
+                            "description": "Ollama-compatible model list.",
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "object",
+                                     "properties": {
+                                        "models": {
+                                           "type": "array",
+                                           "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                 "name": {"type": "string"},
+                                                 "model": {"type": "string"},
+                                                 "modified_at": {"type": "string"},
+                                                 "expires_at": {"type": "string"},
+                                                 "size": {"type": "integer"},
+                                                 "size_vram": {"type": "integer"},
+                                                 "digest": {"type": "string"},
+                                                 "details": {"type": "object", "additionalProperties": true}
+                                              }
+                                           }
+                                        }
+                                     },
+                                     "required": ["models"]
+                                  }
+                               }
+                            }
+                         }
+                      }
+                   }
+                },
+                "/api/ps": {"$ref": "#/paths/~1api~1tags"},
+                "/mcp": {
+                   "post": {
+                      "security": [{"BearerAuth": []}],
+                      "summary": "Call tools exposed by configured MCP servers",
+                      "description": "A minimal JSON-RPC MCP proxy supporting initialize, tools/list, and tools/call. Requests without an id are treated as notifications and return 202 without a response body.",
+                      "tags": ["mcp"],
+                      "requestBody": {
+                         "required": true,
+                         "content": {
+                            "application/json": {
+                               "schema": {
+                                  "type": "object",
+                                  "properties": {
+                                     "jsonrpc": {"type": "string", "enum": ["2.0"]},
+                                     "id": {"oneOf": [{"type": "integer"}, {"type": "string"}], "nullable": true},
+                                     "method": {"type": "string", "enum": ["initialize", "tools/list", "tools/call"]},
+                                     "params": {"type": "object", "additionalProperties": true}
+                                  },
+                                  "required": ["jsonrpc", "method"]
+                               }
+                            }
+                         }
+                      },
+                      "responses": {
+                         "200": {
+                            "description": "JSON-RPC result or error returned by KoboldCpp or the selected MCP server.",
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "object",
+                                     "properties": {
+                                        "jsonrpc": {"type": "string", "enum": ["2.0"]},
+                                        "id": {"oneOf": [{"type": "integer"}, {"type": "string"}], "nullable": true},
+                                        "result": {"type": "object", "additionalProperties": true},
+                                        "error": {
+                                           "type": "object",
+                                           "properties": {"code": {"type": "integer"}, "message": {"type": "string"}},
+                                           "required": ["code", "message"]
+                                        }
+                                     }
+                                  }
+                               }
+                            }
+                         },
+                         "202": {"description": "Notification accepted; no response body."},
+                         "400": {"description": "Invalid JSON-RPC input."},
+                         "401": {"$ref": "#/components/responses/Unauthorized"}
+                      }
+                   }
+                },
                 "/api/v1/config/max_context_length": {
                    "get": {
                       "responses": {
@@ -1718,6 +1939,31 @@
                    }
                 },
                 "/api/extra/last_logprobs": {
+                   "get": {
+                      "security": [{"BearerAuth": []}],
+                      "description": "Obtains the token logprobs of the most recent request. In multiuser mode, use POST with a genkey instead.",
+                      "responses": {
+                         "200": {
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "object",
+                                     "properties": {
+                                        "logprobs": {
+                                           "type": "object",
+                                           "nullable": true,
+                                           "additionalProperties": true
+                                        }
+                                     }
+                                  }
+                               }
+                            },
+                            "description": "The most recent logprobs, or null when none are available."
+                         }
+                      },
+                      "summary": "Obtains the most recent token logprobs.",
+                      "tags": ["api/extra"]
+                   },
                    "post": {
                       "security": [{"BearerAuth": []}],
                       "description": "Obtains the token logprobs of the most recent request. A unique genkey previously submitted is required in multiuser mode.",
@@ -1912,6 +2158,8 @@
                                      "properties": {
                                         "logprobs": {
                                            "type": "object",
+                                           "nullable": true,
+                                           "additionalProperties": true,
                                            "description": "A logprobs object in the same format as OpenAI API."
                                         }
                                      }
@@ -1993,6 +2241,7 @@
                       ]
                    }
                 },
+                "/api/extra/tokenize": {"$ref": "#/paths/~1api~1extra~1tokencount"},
                 "/api/extra/detokenize": {
                    "post": {
                       "security": [{"BearerAuth": []}],
@@ -2124,7 +2373,7 @@
                                   "properties": {
                                      "audio_data": {
                                         "type": "string",
-                                        "description": "Base64 respresentation of a 16-bit 16kHz wave file to be transcribed to text."
+                                        "description": "Base64 representation of an audio file to transcribe. A data:audio URL is also accepted."
                                      },
                                      "prompt": {
                                         "type": "string",
@@ -2134,12 +2383,28 @@
                                         "type": "string",
                                         "description": "Two letter language code, or use auto to autodetect."
                                      },
+                                     "language": {
+                                        "type": "string",
+                                        "description": "Alias for langcode."
+                                     },
                                      "suppress_non_speech": {
                                         "type": "boolean",
                                         "description": "Prevent noise tokens, always generate words for speech."
                                      }
                                   },
+                                  "required": ["audio_data"],
                                   "type": "object"
+                               }
+                            },
+                            "multipart/form-data": {
+                               "schema": {
+                                  "type": "object",
+                                  "properties": {
+                                     "file": {"type": "string", "format": "binary"},
+                                     "prompt": {"type": "string"},
+                                     "language": {"type": "string", "description": "Language code, or auto when omitted."}
+                                  },
+                                  "required": ["file"]
                                }
                             }
                          },
@@ -2235,7 +2500,8 @@
                                "example": {
                                   "input": "hello world, how are you today?",
                                   "voice": "kobo",
-                                  "instruction":"",
+                                  "language": "en",
+                                  "response_format": "wav"
                                },
                                "schema": {
                                   "properties": {
@@ -2247,6 +2513,10 @@
                                         "type": "string",
                                         "description": "The voice to use when generating the audio. You can enter anything you like, a unique speaker will be generated. If using Qwen3TTS, voice cloning is supported, load the wav samples directory with --ttsdir. There are a few preset voices you can use: kobo,cheery,sleepy,shouty,chatty"
                                      },
+                                     "speaker_wav": {
+                                        "type": "string",
+                                        "description": "Alias for voice, accepted for compatible TTS clients."
+                                     },
                                      "speaker_json": {
                                         "type": "string",
                                         "description": "Custom speaker JSON. More info at https://github.com/LostRuins/koboldcpp/tree/concedo/examples/outetts"
@@ -2254,8 +2524,28 @@
                                      "instruction": {
                                         "type": "string",
                                         "description": "Qwen3TTS VoiceDesign and CustomVoice only. Provide an instruction on how the narration should sound e.g. Angry man shouting with posh british accent"
+                                     },
+                                     "language": {
+                                        "type": "string",
+                                        "default": "en",
+                                        "description": "Language code passed to the TTS backend."
+                                     },
+                                     "response_format": {
+                                        "type": "string",
+                                        "enum": ["wav", "mp3"],
+                                        "default": "wav"
+                                     },
+                                     "use_mp3": {
+                                        "type": "boolean",
+                                        "description": "KoboldCpp alias for requesting MP3 output."
+                                     },
+                                     "seed": {
+                                        "type": "integer",
+                                        "default": -1,
+                                        "description": "Audio generation seed."
                                      }
                                   },
+                                  "required": ["input"],
                                   "type": "object"
                                }
                             }
@@ -2266,6 +2556,12 @@
                          "200": {
                             "content": {
                                  "audio/wav": {
+                                    "schema": {
+                                       "type": "string",
+                                       "format": "binary"
+                                    }
+                                 },
+                                 "audio/mpeg": {
                                     "schema": {
                                        "type": "string",
                                        "format": "binary"
@@ -3196,6 +3492,150 @@
                       ]
                    }
                 },
+                "/sdapi/v1/loras": {
+                   "get": {
+                      "summary": "List available image LoRAs",
+                      "description": "Returns non-preloaded LoRAs available to the image backend.",
+                      "tags": ["sdapi/v1"],
+                      "responses": {
+                         "200": {
+                            "description": "Available LoRAs.",
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "array",
+                                     "items": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}, "path": {"type": "string"}},
+                                        "required": ["name", "path"]
+                                     }
+                                  }
+                               }
+                            }
+                         }
+                      }
+                   }
+                },
+                "/sdapi/v1/upscalers": {
+                   "get": {
+                      "summary": "List available image upscalers",
+                      "tags": ["sdapi/v1"],
+                      "responses": {
+                         "200": {
+                            "description": "The ESRGAN upscaler when configured, otherwise an empty list.",
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "array",
+                                     "items": {
+                                        "type": "object",
+                                        "properties": {
+                                           "name": {"type": "string"},
+                                           "model_name": {"type": "string"},
+                                           "model_path": {"type": "string"},
+                                           "model_url": {"type": "string", "nullable": true},
+                                           "scale": {"type": "integer"}
+                                        }
+                                     }
+                                  }
+                               }
+                            }
+                         }
+                      }
+                   }
+                },
+                "/sdapi/v1/schedulers": {
+                   "get": {
+                      "summary": "List supported image schedulers",
+                      "tags": ["sdapi/v1"],
+                      "responses": {
+                         "200": {
+                            "description": "Available schedulers and configured custom sigma schedules.",
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "array",
+                                     "items": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}, "label": {"type": "string"}},
+                                        "required": ["name", "label"]
+                                     }
+                                  }
+                               }
+                            }
+                         }
+                      }
+                   }
+                },
+                "/sdapi/v1/latent-upscale-modes": {
+                   "get": {
+                      "summary": "List latent upscale modes",
+                      "description": "KoboldCpp does not provide latent upscale modes, so this endpoint returns an empty list.",
+                      "tags": ["sdapi/v1"],
+                      "responses": {
+                         "200": {
+                            "description": "An empty list.",
+                            "content": {"application/json": {"schema": {"type": "array", "items": {"type": "object"}}}}
+                         }
+                      }
+                   }
+                },
+                "/sdapi/v1/progress": {
+                   "get": {
+                      "summary": "Get image generation progress",
+                      "description": "Returns active progress only when genkey matches the current image generation; otherwise returns the idle state.",
+                      "tags": ["sdapi/v1"],
+                      "parameters": [
+                         {"name": "genkey", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Generation key returned for the active request."},
+                         {"name": "skip_current_image", "in": "query", "required": false, "schema": {"type": "boolean", "default": false}, "description": "Do not request a base64 preview image."}
+                      ],
+                      "responses": {
+                         "200": {
+                            "description": "AUTOMATIC1111-compatible progress information.",
+                            "content": {
+                               "application/json": {
+                                  "schema": {
+                                     "type": "object",
+                                     "properties": {
+                                        "progress": {"type": "number"},
+                                        "eta_relative": {"type": "number"},
+                                        "state": {
+                                           "type": "object",
+                                           "properties": {
+                                              "job_count": {"type": "integer"},
+                                              "job_no": {"type": "integer"},
+                                              "sampling_step": {"type": "integer"},
+                                              "sampling_steps": {"type": "integer"},
+                                              "interrupted": {"type": "boolean"},
+                                              "skipped": {"type": "boolean"}
+                                           }
+                                        },
+                                        "current_image": {"type": "string", "nullable": true},
+                                        "textinfo": {"type": "string", "nullable": true}
+                                     },
+                                     "required": ["progress", "eta_relative", "state", "current_image", "textinfo"]
+                                  }
+                               }
+                            }
+                         }
+                      }
+                   }
+                },
+                "/sdapi/v1/get_last.json": {
+                   "get": {
+                      "summary": "Retrieve the cached result of an image generation",
+                      "description": "Returns the cached image-generation response when genkey matches the most recently cached request.",
+                      "tags": ["sdapi/v1"],
+                      "parameters": [
+                         {"name": "genkey", "in": "query", "required": true, "schema": {"type": "string"}}
+                      ],
+                      "responses": {
+                         "200": {"description": "Cached generation result.", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}},
+                         "404": {"description": "No cached result matches the supplied generation key."}
+                      }
+                   }
+                },
+                "/sdapi/v1/extra-single-image": {"$ref": "#/paths/~1sdapi~1v1~1upscale"},
                 "/sdapi/v1/txt2img": {
                    "post": {
                       "description": "Generates an image from a text prompt, and returns a base64 encoded png.",
@@ -3577,6 +4017,14 @@
                 {
                    "description": "Image Generation API (A1111 compatible)",
                    "name": "sdapi/v1"
+                },
+                {
+                   "description": "Basic Ollama-compatible text generation and model discovery endpoints",
+                   "name": "ollama"
+                },
+                {
+                   "description": "Minimal JSON-RPC proxy for tools exposed by configured MCP servers",
+                   "name": "mcp"
                 },
                 {
                    "description": "Common identity API for LLM services",
