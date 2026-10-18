@@ -355,8 +355,6 @@ class load_model_inputs(ctypes.Structure):
                 ("overridenativecontext", ctypes.c_int),
                 ("moe_experts", ctypes.c_int),
                 ("moecpu", ctypes.c_int),
-                ("lazy_mode", ctypes.c_int),
-                ("moe_cache_mib", ctypes.c_int),
                 ("ffncpu", ctypes.c_int),
                 ("no_bos_token", ctypes.c_bool),
                 ("load_guidance", ctypes.c_bool),
@@ -379,7 +377,9 @@ class load_model_inputs(ctypes.Structure):
                 ("debugmode", ctypes.c_int),
                 ("continuous_batching_slots", ctypes.c_int),
                 ("rpc_mode", ctypes.c_int),
-                ("rpc_targets", ctypes.c_char_p)]
+                ("rpc_targets", ctypes.c_char_p),
+                ("lazy_mode", ctypes.c_int),
+                ("moe_cache_mib", ctypes.c_int)]
 
 class generation_inputs(ctypes.Structure):
     _fields_ = [("seed", ctypes.c_int),
