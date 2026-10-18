@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A tiny, cross-platform OpenAI Chat Completions-compatible local agent, for use in KoboldCpp.
 
-Nine built-in tools, plus tools exposed by a local KoboldCpp MCP proxy:
+Nine built-in tools, plus tools exposed by an MCP server:
   - read
   - write
   - edit
@@ -57,6 +57,7 @@ COMPACT_TOOL_RESULT_DISPLAY_CHARS = 600
 MAX_AGENT_STEPS = 48
 MAX_FETCH_BYTES = 4000000
 MAX_VIEW_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_MCP_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_PROJECT_INSTRUCTION_CHARS = 12000
 DEFAULT_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:5001/v1")
 DEFAULT_API_KEY = os.getenv("OPENAI_API_KEY", "local")
@@ -79,6 +80,7 @@ AUTOCOMPACT_RESUME_NOTICE = (
 SESSION_FORMAT_VERSION = 2
 CONFIRMATION_MODES = ("on", "off", "auto")
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+MCP_PROTOCOL_VERSION = "2025-06-18"
 
 ANSI_RESET = "\033[0m"
 ANSI_BOLD_CYAN = "\033[1;36m"
@@ -96,6 +98,14 @@ class EndpointUnavailableError(RuntimeError):
 
 class APIResponseError(RuntimeError):
     """The server responded, but the API request or response was invalid."""
+
+
+class MCPHTTPError(RuntimeError):
+    """An MCP endpoint returned an unsuccessful HTTP response."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
 
 
 class AgentInterrupted(Exception):
@@ -521,7 +531,7 @@ def system_prompt(disabled_tools: set[str] | None = None) -> str:
     rules.append("After finishing tool use, briefly tell the user what was done.")
     return (
         f"You are a small, careful local computer assistant running on {platform.system()}.\n"
-        f"{introduction} A local KoboldCpp server may also supply MCP tools.\n\nRules:\n"
+        f"{introduction} An MCP server may also supply additional tools.\n\nRules:\n"
         + "\n".join(f"- {rule}" for rule in rules)
         + "\n"
         + load_workdir_instructions()
@@ -1664,7 +1674,12 @@ def api_url(base_url: str, resource: str) -> str:
 
 def is_local_endpoint(base_url: str) -> bool:
     """Return whether an endpoint explicitly targets this device's loopback interface."""
-    hostname = urllib.parse.urlsplit(normalize_base_url(base_url)).hostname
+    return url_targets_loopback(normalize_base_url(base_url))
+
+
+def url_targets_loopback(value: str) -> bool:
+    """Return whether an HTTP URL explicitly names a loopback host."""
+    hostname = urllib.parse.urlsplit(value).hostname
     if hostname is None:
         return False
     hostname = hostname.rstrip(".")
@@ -1682,52 +1697,214 @@ def mcp_url(base_url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(path="/mcp", query="", fragment=""))
 
 
-def mcp_request(
-    base_url: str,
-    api_key: str,
-    method: str,
-    params: dict[str, Any],
-    timeout: int,
-) -> dict[str, Any]:
-    if not is_local_endpoint(base_url):
-        raise RuntimeError("MCP tools are only available for localhost endpoints")
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": method,
-        "params": params,
-    }
-    request = urllib.request.Request(
-        mcp_url(base_url),
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
+def normalize_mcp_url(value: str) -> str:
+    """Validate an exact Streamable HTTP MCP endpoint URL."""
+    value = value.strip()
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("MCP endpoint must be an http:// or https:// URL with a host")
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=API_SSL_CONTEXT) as response:
-            value = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"MCP HTTP {exc.code}: {limit_text(body, 'error response')}") from exc
-    except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
-        raise RuntimeError(f"Could not reach KoboldCpp MCP proxy: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"KoboldCpp MCP proxy returned invalid JSON: {exc}") from exc
-    if not isinstance(value, dict):
-        raise RuntimeError("KoboldCpp MCP proxy returned a non-object response")
-    if value.get("error") is not None:
-        raise RuntimeError(f"MCP error: {json.dumps(value['error'], ensure_ascii=False)}")
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"invalid MCP endpoint host or port: {exc}") from exc
+    if hostname is None:
+        raise ValueError("MCP endpoint must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("MCP endpoint must not contain embedded credentials")
+    if parsed.fragment:
+        raise ValueError("MCP endpoint must not contain a fragment")
     return value
 
 
+def read_limited_response(response: Any, limit: int, label: str) -> bytes:
+    body = response.read(limit + 1)
+    if len(body) > limit:
+        raise RuntimeError(f"{label} exceeds {limit:,} bytes")
+    return body
+
+
+def parse_mcp_sse(body: bytes, request_id: int) -> dict[str, Any]:
+    """Return the JSON-RPC response matching request_id from an SSE body."""
+    data_lines: list[str] = []
+    messages: list[dict[str, Any]] = []
+
+    def finish_event() -> None:
+        if not data_lines:
+            return
+        payload = "\n".join(data_lines)
+        data_lines.clear()
+        try:
+            value = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"MCP server returned invalid JSON in an SSE event: {exc}") from exc
+        if isinstance(value, dict):
+            messages.append(value)
+
+    for raw_line in body.decode("utf-8", errors="replace").splitlines():
+        if not raw_line:
+            finish_event()
+        elif raw_line.startswith("data:"):
+            data_lines.append(raw_line[5:].lstrip())
+    finish_event()
+
+    for message in messages:
+        if message.get("id") == request_id:
+            return message
+    raise RuntimeError("MCP SSE response did not contain the matching JSON-RPC response")
+
+
+class MCPStreamableHTTPClient:
+    """Small synchronous, tool-only Streamable HTTP MCP client."""
+
+    def __init__(self, url: str, api_key: str, timeout: int):
+        self.url = normalize_mcp_url(url)
+        self.api_key = api_key
+        self.timeout = timeout
+        self.session_id: str | None = None
+        self.protocol_version: str | None = None
+        self.initialized = False
+        self.next_request_id = 1
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.session_id:
+            headers["Mcp-Session-Id"] = self.session_id
+        if self.protocol_version:
+            headers["MCP-Protocol-Version"] = self.protocol_version
+        return headers
+
+    def _post(
+        self,
+        payload: dict[str, Any],
+        request_id: int | None,
+    ) -> dict[str, Any] | None:
+        request = urllib.request.Request(
+            self.url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=self.timeout, context=API_SSL_CONTEXT
+            ) as response:
+                received_session_id = response.headers.get("Mcp-Session-Id")
+                if received_session_id:
+                    self.session_id = received_session_id
+                body = read_limited_response(
+                    response, MAX_MCP_RESPONSE_BYTES, "MCP response"
+                )
+                content_type = response.headers.get("Content-Type", "").lower()
+        except urllib.error.HTTPError as exc:
+            body = exc.read(MAX_MCP_RESPONSE_BYTES + 1).decode(
+                "utf-8", errors="replace"
+            )
+            raise MCPHTTPError(
+                exc.code,
+                f"MCP HTTP {exc.code}: {limit_text(body, 'error response')}",
+            ) from exc
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+            raise RuntimeError(f"Could not reach MCP endpoint: {exc}") from exc
+
+        if request_id is None:
+            return None
+        if not body:
+            raise RuntimeError("MCP server returned an empty response")
+        if "text/event-stream" in content_type:
+            value = parse_mcp_sse(body, request_id)
+        else:
+            try:
+                value = json.loads(body.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"MCP server returned invalid JSON: {exc}") from exc
+            if not isinstance(value, dict):
+                raise RuntimeError("MCP server returned a non-object JSON response")
+        if value.get("id") != request_id:
+            raise RuntimeError("MCP server returned a mismatched JSON-RPC response id")
+        if value.get("error") is not None:
+            raise RuntimeError(
+                f"MCP error: {json.dumps(value['error'], ensure_ascii=False)}"
+            )
+        return value
+
+    def _request_without_connect(
+        self, method: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        request_id = self.next_request_id
+        self.next_request_id += 1
+        response = self._post(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": params,
+            },
+            request_id,
+        )
+        if response is None:
+            raise RuntimeError("MCP server returned no JSON-RPC response")
+        return response
+
+    def connect(self) -> None:
+        if self.initialized:
+            return
+        response = self._request_without_connect(
+            "initialize",
+            {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "koboldcpp-agent", "version": "1.0.0"},
+            },
+        )
+        result = response.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("MCP initialize response did not contain a result object")
+        negotiated_version = result.get("protocolVersion")
+        if not isinstance(negotiated_version, str) or not negotiated_version:
+            raise RuntimeError("MCP initialize response did not contain a protocol version")
+        self.protocol_version = negotiated_version
+        self._post(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            None,
+        )
+        self.initialized = True
+
+    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self.connect()
+        return self._request_without_connect(method, params)
+
+    def close(self) -> None:
+        if not self.session_id:
+            return
+        request = urllib.request.Request(
+            self.url, headers=self._headers(), method="DELETE"
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=min(self.timeout, 5), context=API_SSL_CONTEXT
+            ):
+                pass
+        except Exception:
+            pass
+        finally:
+            self.session_id = None
+            self.initialized = False
+
+
 def discover_mcp_tools(
-    base_url: str, api_key: str, timeout: int
+    client: MCPStreamableHTTPClient,
 ) -> tuple[list[dict[str, Any]], set[str], list[str]]:
-    response = mcp_request(base_url, api_key, "tools/list", {}, timeout)
+    response = client.request("tools/list", {})
     result = response.get("result", {})
     raw_tools = result.get("tools", []) if isinstance(result, dict) else []
     if not isinstance(raw_tools, list):
@@ -1770,18 +1947,12 @@ def discover_mcp_tools(
 
 
 def call_mcp_tool(
-    base_url: str,
-    api_key: str,
+    client: MCPStreamableHTTPClient,
     name: str,
     arguments: dict[str, Any],
-    timeout: int,
 ) -> str:
-    response = mcp_request(
-        base_url,
-        api_key,
-        "tools/call",
-        {"name": name, "arguments": arguments},
-        timeout,
+    response = client.request(
+        "tools/call", {"name": name, "arguments": arguments}
     )
     result = response.get("result")
     if isinstance(result, str):
@@ -1910,6 +2081,104 @@ def prompt_for_connection(
     return candidate_url, candidate_key, candidate_model
 
 
+def mcp_status_text(
+    base_url: str,
+    follows_model: bool,
+    endpoint: str | None,
+    api_key: str,
+) -> str:
+    if follows_model:
+        derived_url = mcp_url(base_url)
+        if is_local_endpoint(base_url):
+            return f"automatic ({derived_url})"
+        return "off (automatic; model endpoint is not loopback)"
+    if endpoint is None:
+        return "off"
+    key_status = "API key set" if api_key else "no API key"
+    return f"custom ({endpoint}; {key_status})"
+
+
+def prompt_for_mcp(
+    base_url: str,
+    follows_model: bool,
+    endpoint: str | None,
+    api_key: str,
+) -> tuple[bool, str | None, str] | None:
+    """Run the interactive MCP endpoint wizard without changing live settings."""
+    derived_url = mcp_url(base_url)
+    current_choice = "1" if follows_model else "3" if endpoint is None else "2"
+    automatic_note = (
+        "enabled when available"
+        if is_local_endpoint(base_url)
+        else "currently off because the model endpoint is not loopback"
+    )
+    print("\nConfigure MCP:")
+    print(f"  1. Automatic - {derived_url} ({automatic_note})")
+    print("  2. Custom Streamable HTTP URL")
+    print("  3. Off")
+    print("  4. Cancel")
+    try:
+        drain_terminal_input()
+        choice = input(f"Choice [{current_choice}]: ").strip().lower() or current_choice
+        if choice in {"4", "c", "cancel", "/cancel"}:
+            print("MCP settings unchanged.\n")
+            return None
+        if choice in {"1", "a", "auto", "automatic"}:
+            return True, None, ""
+        if choice in {"3", "off"}:
+            return False, None, ""
+        if choice not in {"2", "custom"}:
+            print("MCP settings unchanged: choose 1, 2, 3, or 4.\n")
+            return None
+
+        default_url = endpoint if not follows_model and endpoint else derived_url
+        while True:
+            drain_terminal_input()
+            requested_url = input(f"MCP URL [{default_url}]: ").strip()
+            if requested_url.lower() == "/cancel":
+                print("MCP settings unchanged.\n")
+                return None
+            try:
+                candidate_url = normalize_mcp_url(requested_url or default_url)
+                break
+            except ValueError as exc:
+                print(f"Invalid MCP endpoint: {exc}")
+
+        if not url_targets_loopback(candidate_url):
+            print(
+                "This remote server will receive MCP tool arguments and return "
+                "content to the model."
+            )
+            drain_terminal_input()
+            answer = input("Enable this remote MCP server? [y/N]: ").strip().lower()
+            if answer not in {"y", "yes"}:
+                print("MCP settings unchanged.\n")
+                return None
+
+        same_custom_endpoint = not follows_model and endpoint == candidate_url
+        if same_custom_endpoint and api_key:
+            key_prompt = "MCP bearer API key [set; Enter to keep, '-' to clear]: "
+        else:
+            key_prompt = "MCP bearer API key [optional; Enter for none]: "
+        print("Custom MCP API keys are kept only for this run and are not saved.")
+        drain_terminal_input()
+        requested_key = getpass.getpass(key_prompt)
+        if requested_key.strip().lower() == "/cancel":
+            print("MCP settings unchanged.\n")
+            return None
+        if same_custom_endpoint and api_key and not requested_key:
+            candidate_key = api_key
+        elif requested_key == "-":
+            candidate_key = ""
+        else:
+            candidate_key = requested_key
+    except (EOFError, KeyboardInterrupt):
+        print("\nMCP settings unchanged.\n")
+        return None
+
+    return False, candidate_url, candidate_key
+
+
 def confirmation_status(mode: str) -> str:
     return color(mode.upper(), ANSI_GREEN if mode == "on" else ANSI_YELLOW)
 
@@ -1975,6 +2244,8 @@ def save_session_file(
     max_agent_steps: int = MAX_AGENT_STEPS,
     reasoning_effort: str | None = None,
     autocompact_tokens: int | None = None,
+    mcp_follows_model: bool = True,
+    mcp_endpoint: str | None = None,
 ) -> None:
     """Save all session state except model endpoint credentials."""
     session = {
@@ -1988,6 +2259,8 @@ def save_session_file(
         # Agent-only state follows. Never add base_url, api_key, or model here.
         "max_agent_steps": max_agent_steps,
         "autocompact_tokens": autocompact_tokens,
+        "mcp_follows_model": mcp_follows_model,
+        "mcp_endpoint": mcp_endpoint,
         "disabled_tools": sorted(disabled_tools),
         "workdir": str(workdir),
         "confirmation_mode": confirmation_mode,
@@ -2044,6 +2317,18 @@ def load_session_file(path: Path) -> dict[str, Any]:
         raise ValueError(
             "reasoning_effort must be null, none, minimal, low, medium, high, xhigh, or max"
         )
+    if "mcp_follows_model" not in session:
+        session["mcp_follows_model"] = session.get("mcp_mode") != "off"
+    if not isinstance(session["mcp_follows_model"], bool):
+        raise ValueError("mcp_follows_model must be a boolean")
+    session.setdefault("mcp_endpoint", None)
+    if session["mcp_endpoint"] is not None:
+        if not isinstance(session["mcp_endpoint"], str):
+            raise ValueError("mcp_endpoint must be null or an HTTP URL")
+        try:
+            session["mcp_endpoint"] = normalize_mcp_url(session["mcp_endpoint"])
+        except ValueError as exc:
+            raise ValueError(f"invalid mcp_endpoint: {exc}") from exc
     disabled_tools = session.get("disabled_tools")
     if not isinstance(disabled_tools, list) or not all(
         isinstance(name, str) and name for name in disabled_tools
@@ -2128,6 +2413,7 @@ def print_runtime_status(
     max_agent_steps: int = MAX_AGENT_STEPS,
     reasoning_effort: str | None = None,
     autocompact_tokens: int | None = None,
+    mcp_status: str = "off",
 ) -> None:
     max_tokens_status = str(max_tokens) if max_tokens is not None else "server default"
     print(color("Current status:", ANSI_BOLD_CYAN))
@@ -2142,6 +2428,7 @@ def print_runtime_status(
         if autocompact_tokens is not None else "off"
     )
     print(color("Automatic compaction:", ANSI_CYAN) + f" {autocompact_status}")
+    print(color("MCP:", ANSI_CYAN) + f" {mcp_status}")
     print(color("Default confirmation:", ANSI_CYAN) + f" {confirmation_status(confirmation_mode)}")
     if tool_confirmation:
         settings = ", ".join(f"{name}={mode}" for name, mode in sorted(tool_confirmation.items()))
@@ -2161,6 +2448,7 @@ def print_runtime_help(
     max_agent_steps: int = MAX_AGENT_STEPS,
     reasoning_effort: str | None = None,
     autocompact_tokens: int | None = None,
+    mcp_status: str = "off",
 ) -> None:
     rows = (
         ("/help", "Show this help"),
@@ -2176,6 +2464,7 @@ def print_runtime_help(
         ("/maxsteps [N]", "Show or set the maximum model turns per user message (N >= 1)"),
         ("/workdir", "Show the current working directory"),
         ("/workdir PATH", "Change directory and clear the session"),
+        ("/mcp", "Configure the MCP endpoint or turn MCP off"),
         ("/confirm", "Show global default confirmation and tool overrides"),
         ("/confirm on|off|auto", "Set global default: always ask, always approve, or auto (approve only within workdir)"),
         ("/confirm NAME", "Show a tool's confirmation setting"),
@@ -2200,6 +2489,7 @@ def print_runtime_help(
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
         tool_confirmation, max_agent_steps, reasoning_effort, autocompact_tokens,
+        mcp_status,
     )
     print()
 
@@ -2342,6 +2632,11 @@ def run_agent(
         autocompact_tokens = None
 
     base_url = normalize_base_url(base_url)
+    mcp_follows_model = (
+        session["mcp_follows_model"] if session is not None else True
+    )
+    mcp_endpoint = session["mcp_endpoint"] if session is not None else None
+    mcp_api_key = ""  # Custom MCP credentials are intentionally never saved.
     show_reasoning = session["show_reasoning"] if session is not None else False
     verbose = session["verbose"] if session is not None else False
     print(color("***\nWelcome to KoboldCpp Agent", ANSI_BOLD_CYAN))
@@ -2364,16 +2659,45 @@ def run_agent(
     all_tools = list(TOOLS)
     available_tools = list(TOOLS)
     mcp_tool_names: set[str] = set()
+    mcp_client: MCPStreamableHTTPClient | None = None
+
+    def active_mcp_config() -> tuple[str, str] | None:
+        if mcp_follows_model:
+            if not is_local_endpoint(base_url):
+                return None
+            return mcp_url(base_url), api_key
+        if mcp_endpoint is None:
+            return None
+        return mcp_endpoint, mcp_api_key
+
+    def get_mcp_client() -> MCPStreamableHTTPClient | None:
+        nonlocal mcp_client
+        config = active_mcp_config()
+        if config is None:
+            if mcp_client is not None:
+                mcp_client.close()
+                mcp_client = None
+            return None
+        endpoint, key = config
+        if (
+            mcp_client is None
+            or mcp_client.url != endpoint
+            or mcp_client.api_key != key
+            or mcp_client.timeout != request_timeout
+        ):
+            if mcp_client is not None:
+                mcp_client.close()
+            mcp_client = MCPStreamableHTTPClient(endpoint, key, request_timeout)
+        return mcp_client
 
     def refresh_mcp_tools() -> None:
         nonlocal all_tools, available_tools, mcp_tool_names
         all_tools = list(TOOLS)
         mcp_tool_names = set()
-        if is_local_endpoint(base_url):
+        client = get_mcp_client()
+        if client is not None:
             try:
-                mcp_tools, mcp_tool_names, warnings = discover_mcp_tools(
-                    base_url, api_key, request_timeout
-                )
+                mcp_tools, mcp_tool_names, warnings = discover_mcp_tools(client)
                 all_tools.extend(mcp_tools)
                 for warning in warnings:
                     print(color("MCP warning:", ANSI_YELLOW) + f" {warning}")
@@ -2440,6 +2764,7 @@ def run_agent(
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
         tool_confirmation, max_agent_steps, reasoning_effort, autocompact_tokens,
+        mcp_status_text(base_url, mcp_follows_model, mcp_endpoint, mcp_api_key),
     )
     print("\nKoboldCpp Agent has full shell access, exercise caution when approving commands.")
     print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
@@ -2480,6 +2805,9 @@ def run_agent(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
                 max_tokens, tool_confirmation, max_agent_steps, reasoning_effort,
                 autocompact_tokens,
+                mcp_status_text(
+                    base_url, mcp_follows_model, mcp_endpoint, mcp_api_key
+                ),
             )
             continue
         if command == "/maxsteps":
@@ -2526,6 +2854,8 @@ def run_agent(
                     reasoning_effort=reasoning_effort,
                     max_agent_steps=max_agent_steps,
                     autocompact_tokens=autocompact_tokens,
+                    mcp_follows_model=mcp_follows_model,
+                    mcp_endpoint=mcp_endpoint,
                     disabled_tools=disabled_tools,
                     confirmation_mode=confirmation_mode,
                     tool_confirmation=tool_confirmation,
@@ -2558,6 +2888,9 @@ def run_agent(
             reasoning_effort = session["reasoning_effort"]
             max_agent_steps = session["max_agent_steps"]
             autocompact_tokens = session["autocompact_tokens"]
+            mcp_follows_model = session["mcp_follows_model"]
+            mcp_endpoint = session["mcp_endpoint"]
+            mcp_api_key = ""
             disabled_tools.clear()
             disabled_tools.update(session["disabled_tools"])
             confirmation_mode = session["confirmation_mode"]
@@ -2576,6 +2909,9 @@ def run_agent(
                 base_url, model, confirmation_mode, show_reasoning, verbose,
                 max_tokens, tool_confirmation, max_agent_steps, reasoning_effort,
                 autocompact_tokens,
+                mcp_status_text(
+                    base_url, mcp_follows_model, mcp_endpoint, mcp_api_key
+                ),
             )
             print()
             continue
@@ -2651,6 +2987,24 @@ def run_agent(
             refresh_mcp_tools()
             print(f"Working directory: {Path.cwd()}")
             print("Conversation cleared (/clear fresh session).\n")
+            continue
+        if command == "/mcp":
+            if command_arg:
+                print("Usage: /mcp\n")
+                continue
+            mcp_settings = prompt_for_mcp(
+                base_url, mcp_follows_model, mcp_endpoint, mcp_api_key
+            )
+            if mcp_settings is not None:
+                mcp_follows_model, mcp_endpoint, mcp_api_key = mcp_settings
+                refresh_mcp_tools()
+                print(
+                    "MCP: "
+                    + mcp_status_text(
+                        base_url, mcp_follows_model, mcp_endpoint, mcp_api_key
+                    )
+                    + ".\n"
+                )
             continue
         if command == "/confirm":
             parts = command_arg.split()
@@ -2955,13 +3309,10 @@ def run_agent(
                             else:
                                 try:
                                     if name in mcp_tool_names:
-                                        result = call_mcp_tool(
-                                            base_url,
-                                            api_key,
-                                            name,
-                                            args,
-                                            request_timeout,
-                                        )
+                                        client = get_mcp_client()
+                                        if client is None:
+                                            raise RuntimeError("MCP is off")
+                                        result = call_mcp_tool(client, name, args)
                                     elif name == "view_image":
                                         result = tool_view_image(
                                             args, base_url, api_key, model,
@@ -3013,7 +3364,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--api-key",
         default=DEFAULT_API_KEY,
-        help="API key for model requests and the KoboldCpp MCP proxy (default: OPENAI_API_KEY or 'local')",
+        help=(
+            "API key for model requests and the automatic same-origin MCP endpoint "
+            "(default: OPENAI_API_KEY or 'local')"
+        ),
     )
     parser.add_argument(
         "--model",
