@@ -142,6 +142,11 @@ if (LLAMA_CUBLAS)
 
         set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} CUDA::cuda_driver)
 
+    # CUDA graphs are independent of whether GPU architectures were supplied.
+    if(CUDAToolkit_VERSION VERSION_GREATER 12)
+        add_compile_definitions(GGML_CUDA_USE_GRAPHS)
+    endif()
+
     if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         # 50 == lowest CUDA 12 standard
         # 60 == f16 CUDA intrinsics
@@ -151,11 +156,9 @@ if (LLAMA_CUBLAS)
         # 80 == Ampere, asynchronous data loading, faster tensor core instructions
         message("CUDA Toolkit Version: ${CUDAToolkit_VERSION}")
         if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13)
-                add_compile_definitions(GGML_CUDA_USE_GRAPHS) #try enable cuda graphs on cu12 build
                 add_compile_definitions(KCPP_LIMIT_CUDA_MAX_ARCH=860)
                 set(CMAKE_CUDA_ARCHITECTURES "75-virtual;80-virtual;86-virtual") # lowest CUDA 13 standard
         elseif(CUDAToolkit_VERSION VERSION_GREATER 12)
-                add_compile_definitions(GGML_CUDA_USE_GRAPHS) #try enable cuda graphs on cu12 build
                 add_compile_definitions(KCPP_LIMIT_CUDA_MAX_ARCH=800)
                 set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;75-virtual;80-virtual") # lowest CUDA 12 standard + lowest for integer intrinsics
         else()
