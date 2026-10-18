@@ -500,27 +500,27 @@ $(info )
 #
 
 ggml.o: ggml/src/ggml.c ggml/include/ggml.h
-	$(CC)  $(FASTCFLAGS) $(FULLCFLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(FULLCFLAGS) -c $< -o $@
 ggml_v4_failsafe.o: ggml/src/ggml.c ggml/include/ggml.h
-	$(CC)  $(FASTCFLAGS) $(NONECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(NONECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 ggml_v4_noavx2.o: ggml/src/ggml.c ggml/include/ggml.h
-	$(CC)  $(FASTCFLAGS) $(SIMPLECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(SIMPLECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 ggml_v4_cublas.o: ggml/src/ggml.c ggml/include/ggml.h
-	$(CC)  $(FASTCFLAGS) $(FULLCFLAGS) $(CUBLAS_FLAGS) $(HIPFLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(FULLCFLAGS) $(CUBLAS_FLAGS) $(HIPFLAGS) -c $< -o $@
 ggml_v4_vulkan.o: ggml/src/ggml.c ggml/include/ggml.h
-	$(CC)  $(FASTCFLAGS) $(FULLCFLAGS) $(VULKAN_FLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(FULLCFLAGS) $(VULKAN_FLAGS) -c $< -o $@
 ggml_v4_vulkan_noavx2.o: ggml/src/ggml.c ggml/include/ggml.h
-	$(CC)  $(FASTCFLAGS) $(SIMPLECFLAGS) $(VULKAN_FLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(SIMPLECFLAGS) $(VULKAN_FLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 ggml_v4_vulkan_failsafe.o: ggml/src/ggml.c ggml/include/ggml.h
-	$(CC)  $(FASTCFLAGS) $(SIMPLERCFLAGS) $(VULKAN_FLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(SIMPLERCFLAGS) $(VULKAN_FLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 
 # addon cpu files
 ggml-cpu.o: ggml/src/ggml-cpu/ggml-cpu.c ggml/include/ggml-cpu.h
-	$(CC)  $(FASTCFLAGS) $(FULLCFLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(FULLCFLAGS) -c $< -o $@
 ggml-cpu_v4_failsafe.o: ggml/src/ggml-cpu/ggml-cpu.c ggml/include/ggml-cpu.h
-	$(CC)  $(FASTCFLAGS) $(NONECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(NONECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 ggml-cpu_v4_noavx2.o: ggml/src/ggml-cpu/ggml-cpu.c ggml/include/ggml-cpu.h
-	$(CC)  $(FASTCFLAGS) $(SIMPLECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
+	$(CC)  $(CFLAGS) $(SIMPLECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 ggml-binops.o: ggml/src/ggml-cpu/binary-ops.cpp ggml/src/ggml-cpu/binary-ops.h ggml/src/ggml-cpu/common.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 ggml-unops.o: ggml/src/ggml-cpu/unary-ops.cpp ggml/src/ggml-cpu/unary-ops.h ggml/src/ggml-cpu/common.h
@@ -532,11 +532,11 @@ ggml-ops-noavx2.o: ggml/src/ggml-cpu/ops.cpp ggml/src/ggml-cpu/ops.h
 ggml-ops-failsafe.o: ggml/src/ggml-cpu/ops.cpp ggml/src/ggml-cpu/ops.h
 	$(CXX) $(CXXFLAGS) $(NONECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 ggml-vec.o: ggml/src/ggml-cpu/vec.cpp ggml/src/ggml-cpu/vec.h
-	$(CXX) $(FASTCXXFLAGS) $(FULLCFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(FULLCFLAGS) -c $< -o $@
 ggml-vec-noavx2.o: ggml/src/ggml-cpu/vec.cpp ggml/src/ggml-cpu/vec.h
-	$(CXX) $(FASTCXXFLAGS) $(SIMPLECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(SIMPLECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 ggml-vec-failsafe.o: ggml/src/ggml-cpu/vec.cpp ggml/src/ggml-cpu/vec.h
-	$(CXX) $(FASTCXXFLAGS) $(NONECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NONECFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
 ggml-tiled.o: ggml/src/ggml-cpu/tiled/tiled.cpp ggml/src/ggml-cpu/tiled/tiled.h ggml/src/ggml-cpu/tiled/tiled-kernel.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 ggml-tiled-kernel.o: ggml/src/ggml-cpu/tiled/tiled-kernel.cpp ggml/src/ggml-cpu/tiled/tiled-kernel.h
