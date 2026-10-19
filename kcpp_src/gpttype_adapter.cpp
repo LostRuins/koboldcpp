@@ -8026,7 +8026,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         {
                             // Replay unchanged tokens before the reuse point, regardless of the new
                             // suffix length. Use the attention window, not padded cache capacity.
-                            constexpr float swa_warmup_multiplier = 3.0f;
+                            constexpr float swa_warmup_multiplier = 2.0f;
                             const int warmup_tokens = (int)(swa_window * swa_warmup_multiplier);
                             // Replaying from a chunk boundary avoids missing local dependencies there.
                             const int warmup_start = chunked_swa ? required_start : std::max(0, n_past - warmup_tokens);
