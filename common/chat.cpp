@@ -21,6 +21,7 @@
 #include "parsers/gemma4.cpp"
 #include "parsers/gigachat-v3.cpp"
 #include "parsers/gpt-oss.cpp"
+#include "parsers/harmony-xml.cpp"
 #include "parsers/k2-horizon.cpp"
 #include "parsers/kimi-k2.cpp"
 #include "parsers/kimi-k3.cpp"
@@ -1138,6 +1139,13 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
     if (src.find("chat_format=llm-jp-harmony-v1") != std::string::npos) {
         LOG_DBG("Using specialized template: LLM-jp Harmony v1\n");
         return common_chat_params_init_llm_jp_harmony;
+    }
+
+    // Harmony XML tool calls, checked before the GPT-OSS JSON calls
+    if (src.find("<|channel|>") != std::string::npos && src.find("<|constrain|>xml") != std::string::npos &&
+        src.find("rfl:parameter") != std::string::npos) {
+        LOG_DBG("Using specialized template: Harmony XML\n");
+        return common_chat_params_init_harmony_xml;
     }
 
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
