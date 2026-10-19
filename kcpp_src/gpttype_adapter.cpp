@@ -3198,8 +3198,6 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->use_fastforward = inputs.use_fastforward;
     kcpp_data->smartcache = inputs.smartcache;
     kcpp_extra_swa_padding = inputs.swa_padding;
-    constexpr int min_swa_padding = 512; //add extra 512 swa padding
-    kcpp_extra_swa_padding = std::max(inputs.swa_padding, min_swa_padding);
     kcpp_data->swa_full = inputs.prevent_swa;
 
     debugmode = inputs.debugmode;
