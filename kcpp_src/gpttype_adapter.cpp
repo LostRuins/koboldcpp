@@ -220,7 +220,6 @@ extern bool kcpp_permit_any_repack;
 extern bool kcpp_pipeline_parallelism;
 extern bool OldBPETokenizerMode;
 extern int kcpp_extra_swa_padding;
-extern int kcpp_active_swa_size;
 
 inline bool IsNanCheck(float f)
 {
@@ -7999,22 +7998,6 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         bool attempted_fastforward = false;
         if(!blank_prompt) //special case for blank prompts, no fast forward or shifts
         {
-            int ff_swa_retain_amount = 0; //a hack for SWA to improve coherency for illegal rewinds
-            if(triggerff && !kcpp_data->swa_full && (file_format == FileFormat::GGUF_GENERIC))
-            {
-                const int swa_pos_min = llama_memory_seq_pos_min(llama_get_memory(llama_ctx_v4), 0); //this is the furthest back we can rewind to.
-                int goal_npast = ComputeSharedPrefixLength(current_context_tokens,embd_inp); //this is where we want to rewind to.
-                goal_npast -= 64; //technically, to be safe pos_min_threshold = std::max<llama_pos>(0, pos_eval - n_swa + 2), but seems like a small-ish overlap works
-                goal_npast = goal_npast < 0 ? 0 : goal_npast;
-                if (swa_pos_min < 0 || goal_npast <= swa_pos_min) {
-                    constexpr float swa_warmup_multiplier = 1.5; //warmup a bit beyond the window for extra coherency
-                    ff_swa_retain_amount = (int)(kcpp_active_swa_size * swa_warmup_multiplier);
-                    if (debugmode==1 && !is_quiet)
-                    {
-                         printf("\nNote: SWA context cannot be reused (Desired n_past=%d, SWA lowest n_past=%d), to avoid this, disable SWA or increase SWA padding), output may degrade.\n", goal_npast, swa_pos_min);
-                    }
-                }
-            }
             if(triggerff && kcpp_data->use_contextshift && (file_format == FileFormat::GGUF_GENERIC) && !media_data_changed)
             {
                 DoContextShifting(llama_ctx_v4, draft_ctx, current_context_tokens, embd_inp, inputs.max_length, nctx, false);
@@ -8024,7 +8007,48 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             {
                 embd_inp_before_fastforward = embd_inp;
                 attempted_fastforward = true;
-                ContextFastForward(current_context_tokens, embd_inp, n_past, last_n_tokens, nctx, smartcontext, triggersc, false, 4, ff_swa_retain_amount);
+                ContextFastForward(current_context_tokens, embd_inp, n_past, last_n_tokens, nctx, smartcontext, triggersc, false, 4, 0);
+                if(n_past > 0 && !kcpp_data->swa_full && file_format == FileFormat::GGUF_GENERIC)
+                {
+                    const auto * model = llama_get_model(llama_ctx_v4);
+                    const int swa_window = llama_model_n_swa(model);
+                    if(swa_window > 0)
+                    {
+                        const auto memory = llama_get_memory(llama_ctx_v4);
+                        const int swa_pos_min = llama_memory_seq_pos_min(memory, 0);
+                        const int swa_pos_max = llama_memory_seq_pos_max(memory, 0);
+                        // Chunked attention (Llama 4) only needs history within the current chunk.
+                        const bool chunked_swa = model->hparams.swa_type == LLAMA_SWA_TYPE_CHUNKED;
+                        const int required_start = chunked_swa ? (n_past / swa_window) * swa_window
+                                                               : std::max(0, n_past - (swa_window - 1));
+                        if(required_start < n_past &&
+                           (swa_pos_min < 0 || swa_pos_min > required_start || swa_pos_max < n_past - 1))
+                        {
+                            // Replay unchanged tokens before the reuse point, regardless of the new
+                            // suffix length. Use the attention window, not padded cache capacity.
+                            constexpr float swa_warmup_multiplier = 3.0f;
+                            const int warmup_tokens = (int)(swa_window * swa_warmup_multiplier);
+                            // Replaying from a chunk boundary avoids missing local dependencies there.
+                            const int warmup_start = chunked_swa ? required_start : std::max(0, n_past - warmup_tokens);
+                            embd_inp.insert(embd_inp.begin(), current_context_tokens.begin() + warmup_start,
+                                            current_context_tokens.begin() + n_past);
+
+                            // Rebuild repetition history at the earlier position; replay adds the rest.
+                            std::fill(last_n_tokens.begin(), last_n_tokens.end(), 0);
+                            const int history_count = std::min(warmup_start, (int)last_n_tokens.size());
+                            std::copy(current_context_tokens.begin() + warmup_start - history_count,
+                                      current_context_tokens.begin() + warmup_start,
+                                      last_n_tokens.end() - history_count);
+                            if(debugmode==1 && !is_quiet)
+                            {
+                                printf("\nNote: SWA warmup: replaying %d cached tokens from %d to %d (window=%d, available=%d..%d); %s recovery.\n",
+                                       n_past - warmup_start, warmup_start, n_past, swa_window, swa_pos_min, swa_pos_max,
+                                       chunked_swa ? "chunk-aligned" : "approximate");
+                            }
+                            n_past = warmup_start;
+                        }
+                    }
+                }
             }
         }
         if(file_format == FileFormat::GGUF_GENERIC)
