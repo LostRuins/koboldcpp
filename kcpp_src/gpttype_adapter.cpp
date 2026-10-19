@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <thread>
 
@@ -92,6 +93,7 @@ int last_draft_failed = 0;
 stop_reason last_stop_reason = stop_reason::INVALID;
 std::vector<std::string> generated_tokens;
 static int continuous_batching_slots = 0;
+static int64_t batch_kv_token_budget = 0;
 static constexpr int batch_checkpoint_prompt_tail = 32;
 static common_context_seq_rm_type batch_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 static int32_t batch_swa_size = 0;
@@ -3180,6 +3182,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->n_batch = GetBatchSize(inputs.batchsize, in_file_format);
     kcpp_data->n_ubatch = inputs.ubatchsize > 0 ? std::min(inputs.ubatchsize, kcpp_data->n_batch) : kcpp_data->n_batch;
     continuous_batching_slots = (isGguf && inputs.continuous_batching_slots > 1) ? inputs.continuous_batching_slots : 0;
+    batch_kv_token_budget = 0;
     batch_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     batch_swa_size = 0;
     batch_prefix_cache.reset();
@@ -3433,8 +3436,35 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         llama_context_params llama_ctx_params = llama_context_default_params();
         model_params.lazy_mode = static_cast<llama_lazy_mode>(inputs.lazy_mode);
         llama_ctx_params.moe_cache_size = static_cast<size_t>(inputs.moe_cache_mib) * 1024 * 1024;
-        llama_ctx_params.n_ctx = clamped_max_context_length;
+        const bool configure_batch_cache = continuous_batching_slots > 1 &&
+            !inputs.use_mtp && draftmodel_filename.empty() && !load_guidance &&
+            !kcpp_data->use_smartcontext && !kcpp_data->use_contextshift;
+        uint64_t kv_token_budget = std::max(1, clamped_max_context_length);
+        if(configure_batch_cache)
+        {
+            // Scale the shared pool sublinearly and cap it at 3.2x. Admission control
+            // queues requests whose combined reservations do not fit in this budget.
+            static constexpr uint64_t budget_tenths_by_slots[] = {10, 16, 21, 26, 29, 31, 32};
+            const int budget_slot_index = std::min(continuous_batching_slots, 7) - 1;
+            kv_token_budget = (kv_token_budget * budget_tenths_by_slots[budget_slot_index] + 9) / 10;
+        }
+        const uint64_t max_kv_token_budget = (uint64_t)std::numeric_limits<uint32_t>::max() -
+            extra_context_handle_fragmentation - 255; // leave room for llama.cpp's 256-token alignment
+        if(kv_token_budget > max_kv_token_budget)
+        {
+            printf("Warning: Requested continuous batching KV pool is too large; clamping to %llu tokens.\n",
+                (unsigned long long)max_kv_token_budget);
+            kv_token_budget = max_kv_token_budget;
+        }
+        batch_kv_token_budget = (int64_t)kv_token_budget;
+        llama_ctx_params.n_ctx = (uint32_t)kv_token_budget;
         llama_ctx_params.n_ctx += extra_context_handle_fragmentation;
+        if(configure_batch_cache)
+        {
+            printf("Continuous batching: shared KV token budget is %lld (%.2fx per-request context).\n",
+                (long long)batch_kv_token_budget,
+                (double)batch_kv_token_budget / std::max(1, clamped_max_context_length));
+        }
 
         llama_ctx_params.offload_kqv = !inputs.low_vram;
         llama_ctx_params.kv_unified = true;
@@ -3443,9 +3473,6 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             // Match llama-server's target rollback slots for speculative verification.
             llama_ctx_params.n_rs_seq = inputs.draft_amount;
         }
-        const bool configure_batch_cache = continuous_batching_slots > 0 &&
-            !inputs.use_mtp && draftmodel_filename.empty() && !load_guidance &&
-            !kcpp_data->use_smartcontext && !kcpp_data->use_contextshift;
         if(inputs.use_direct_io)
         {
             model_params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
@@ -4525,6 +4552,7 @@ enum class BatchState
 {
     WAITING,
     PREPARING,
+    READY,
     PREFILL,
     GENERATING,
     FINISHED,
@@ -4628,6 +4656,7 @@ struct BatchGenerateRequest
     float process_time = 0.0f;
     stop_reason finish_reason = stop_reason::INVALID;
     bool abort_requested = false;
+    bool admission_wait_logged = false;
     generation_outputs result;
 
     ~BatchGenerateRequest()
@@ -4667,7 +4696,8 @@ static BatchGenerateRequest * batch_find_request_locked(int request_id)
 
 static bool batch_is_live_state(BatchState state)
 {
-    return state == BatchState::WAITING || state == BatchState::PREPARING || state == BatchState::PREFILL || state == BatchState::GENERATING;
+    return state == BatchState::WAITING || state == BatchState::PREPARING || state == BatchState::READY ||
+        state == BatchState::PREFILL || state == BatchState::GENERATING;
 }
 
 static bool batch_has_live_locked()
@@ -4675,6 +4705,19 @@ static bool batch_has_live_locked()
     for(const auto & req : batch_requests)
     {
         if(req && batch_is_live_state(req->state))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool batch_has_other_unadmitted_locked(const BatchGenerateRequest & current)
+{
+    for(const auto & req : batch_requests)
+    {
+        if(req && req.get() != &current &&
+           (req->state == BatchState::WAITING || req->state == BatchState::PREPARING || req->state == BatchState::READY))
         {
             return true;
         }
@@ -5526,6 +5569,9 @@ static llama_sampler * batch_build_sampler(const BatchGenerateRequest & req)
     return chain;
 }
 
+static int64_t batch_request_reserved_cells(const BatchGenerateRequest & req);
+static int64_t batch_reserved_cells_locked();
+
 static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason reason)
 {
     auto finish_time = std::chrono::steady_clock::now();
@@ -5549,8 +5595,10 @@ static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason 
     req.state = reason == stop_reason::ERROR_ENCOUNTERED ? BatchState::FAILED : (reason == stop_reason::INVALID ? BatchState::ABORTED : BatchState::FINISHED);
     if(req.slot >= 0 && llama_ctx_v4)
     {
-        const bool retain = req.state == BatchState::FINISHED && req.media.objects.empty() && req.n_past > 0 &&
+        const bool cacheable = req.state == BatchState::FINISHED && req.media.objects.empty() && req.n_past > 0 &&
             batch_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO;
+        const bool retain = cacheable && !batch_has_other_unadmitted_locked(req) &&
+            batch_reserved_cells_locked() + req.n_past <= batch_kv_token_budget;
         std::vector<llama_token> context_tokens;
         if(retain)
         {
@@ -5585,6 +5633,10 @@ static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason 
         else
         {
             llama_memory_seq_rm(llama_get_memory(llama_ctx_v4), req.slot, -1, -1);
+            if(cacheable && debugmode==1 && !is_quiet)
+            {
+                printf("\n[Batch cache evicted for request %d: KV budget needed by another request]\n", req.id);
+            }
         }
     }
     req.slot = -1;
@@ -5592,6 +5644,79 @@ static void batch_finish_request_locked(BatchGenerateRequest & req, stop_reason 
         get_timestamp_str().c_str(), req.id, init_time, req.prompt_token_count, req.reused_prompt_token_count, processed_token_count, process_time, processed_tps, req.completion_token_count, req.max_length, gen_time, generated_tps, total_time, (int) reason);
     fflush(stdout);
     batch_cv.notify_all();
+}
+
+static int64_t batch_request_reserved_cells(const BatchGenerateRequest & req)
+{
+    const int64_t prompt_cells = (int64_t)req.prompt_tokens.size();
+    if(req.max_length > 0)
+    {
+        // Reserve one cell per requested token. The final sampled token is normally
+        // not evaluated, so this is deliberately conservative by one cell.
+        return prompt_cells + req.max_length;
+    }
+    const int64_t request_limit = req.max_context_length > 0 ?
+        std::min(req.max_context_length, kcpp_data->n_ctx) : kcpp_data->n_ctx;
+    return std::max(prompt_cells, request_limit);
+}
+
+static int64_t batch_reserved_cells_locked()
+{
+    int64_t reserved = 0;
+    for(const auto & req : batch_requests)
+    {
+        if(req && (req->state == BatchState::PREFILL || req->state == BatchState::GENERATING))
+        {
+            reserved += batch_request_reserved_cells(*req);
+        }
+    }
+    return reserved;
+}
+
+static bool batch_admit_ready_locked()
+{
+    bool admitted = false;
+    int64_t reserved = batch_reserved_cells_locked();
+    const int64_t capacity = std::max<int64_t>(1, batch_kv_token_budget);
+    for(auto & req_ptr : batch_requests)
+    {
+        if(!req_ptr || req_ptr->state != BatchState::READY)
+        {
+            continue;
+        }
+        BatchGenerateRequest & req = *req_ptr;
+        const int64_t needed = batch_request_reserved_cells(req);
+        if(needed > capacity)
+        {
+            fprintf(stderr, "\nBatch request %d requires %lld KV cells, exceeding the %lld-token batch pool.\n",
+                req.id, (long long)needed, (long long)capacity);
+            batch_finish_request_locked(req, stop_reason::ERROR_ENCOUNTERED);
+            continue;
+        }
+        if(reserved + needed > capacity)
+        {
+            if(!req.admission_wait_logged && debugmode==1 && !is_quiet)
+            {
+                printf("\n[Batch request %d waiting for KV budget: %lld + %lld > %lld]\n",
+                    req.id, (long long)reserved, (long long)needed, (long long)capacity);
+                req.admission_wait_logged = true;
+            }
+            // Preserve FIFO admission so a stream of small requests cannot starve this request.
+            break;
+        }
+        reserved += needed;
+        req.state = BatchState::PREFILL;
+        req.admission_wait_logged = false;
+        req.process_start_time = std::chrono::steady_clock::now();
+        req.init_time = std::chrono::duration<float>(req.process_start_time - req.start_time).count();
+        if(debugmode==1 && !is_quiet)
+        {
+            printf("\n[Batch request %d admitted: reserved %lld/%lld KV cells]\n",
+                req.id, (long long)reserved, (long long)capacity);
+        }
+        admitted = true;
+    }
+    return admitted;
 }
 
 static bool batch_output_hit_stop(const BatchGenerateRequest & req)
@@ -5758,6 +5883,7 @@ static void batch_worker_loop()
                     batch_finish_request_locked(*req_ptr, stop_reason::INVALID);
                 }
             }
+            batch_admit_ready_locked();
             for(auto & req_ptr : batch_requests)
             {
                 if(req_ptr && req_ptr->state == BatchState::PREPARING && req_ptr->slot >= 0)
@@ -5883,7 +6009,8 @@ static void batch_worker_loop()
             }
             else
             {
-                req->state = BatchState::PREFILL;
+                req->state = BatchState::READY;
+                batch_admit_ready_locked();
             }
             continue;
         }
