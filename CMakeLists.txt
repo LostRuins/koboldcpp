@@ -547,6 +547,9 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/core/ggml_graph_cut.cpp
             otherarch/sdcpp/src/core/ggml_graph_cut.h
             otherarch/sdcpp/src/core/parallel.cpp
+            otherarch/sdcpp/src/core/probe/backend_probe.cpp
+            otherarch/sdcpp/src/core/probe/conv_direct.cpp
+            otherarch/sdcpp/src/core/probe/flash_attn.cpp
             otherarch/sdcpp/src/core/regex.cpp
             otherarch/sdcpp/src/core/ggml_tensor_utils.cpp
             otherarch/sdcpp/src/core/runner_cache.cpp
