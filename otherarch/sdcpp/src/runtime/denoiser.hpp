@@ -1452,6 +1452,29 @@ struct FluxFlowDenoiser : public DiscreteFlowDenoiser {
     }
 };
 
+struct Flux3FlowDenoiser : public FluxFlowDenoiser {
+    float t_to_sigma(float t) override {
+        float u = (t + 1.f) / TIMESTEPS;
+        return shift * u / (1.f + (shift - 1.f) * u);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) override {
+        if (scheduler_type != DISCRETE_SCHEDULER) {
+            return Denoiser::get_sigmas(n, image_seq_len, scheduler_type, version, extra_sample_args);
+        }
+        if (n == 0) {
+            return {};
+        }
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+        for (uint32_t i = 0; i <= n; ++i) {
+            float u = 1.f - static_cast<float>(i) / n;
+            sigmas.push_back(shift * u / (1.f + (shift - 1.f) * u));
+        }
+        return sigmas;
+    }
+};
+
 struct SefiFlowDenoiser;
 
 struct SefiFlowDenoiser : public FluxFlowDenoiser {

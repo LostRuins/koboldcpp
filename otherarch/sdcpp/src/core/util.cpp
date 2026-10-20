@@ -128,18 +128,13 @@ int round_up_to(int value, int base) {
 #include <windows.h>
 
 bool file_exists(const std::string& filename) {
-    DWORD attributes = GetFileAttributesA(filename.c_str());
+    DWORD attributes = GetFileAttributesW(std::filesystem::u8path(filename).c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
 bool is_directory(const std::string& path) {
-    DWORD attributes = GetFileAttributesA(path.c_str());
+    DWORD attributes = GetFileAttributesW(std::filesystem::u8path(path).c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
-}
-
-std::string sd_get_u8path(const std::string& file_path)
-{
-    return std::filesystem::u8path(file_path).string();
 }
 
 class MmapWrapperImpl : public MmapWrapper {
@@ -162,8 +157,8 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bo
     void* mapped_data = nullptr;
     size_t file_size  = 0;
 
-    HANDLE file_handle = CreateFileA(
-        filename.c_str(),
+    HANDLE file_handle = CreateFileW(
+        std::filesystem::u8path(filename).c_str(),
         GENERIC_READ,
         FILE_SHARE_READ,
         nullptr,
@@ -220,11 +215,6 @@ bool file_exists(const std::string& filename) {
 bool is_directory(const std::string& path) {
     struct stat buffer;
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
-}
-
-std::string sd_get_u8path(const std::string& file_path)
-{
-    return std::filesystem::path(file_path).string();
 }
 
 struct MmapFlags {
@@ -623,6 +613,7 @@ static void print_progress_line(int step, int steps, const std::string& speed_te
     printf("\r%s %i/%i - %s\033[K%s", progress.c_str(), step, steps, speed_text.c_str(), lf);
     fflush(stdout);  // for linux
 }
+
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
         sd_progress_cb(step, steps, time, sd_progress_cb_data);

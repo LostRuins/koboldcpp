@@ -128,7 +128,7 @@ imglora_cached = True
 imglora_initial_fixed = True
 maxctx = default_maxctx
 maxhordectx = 0 #set to whatever maxctx is if 0
-maxhordelen = 1024
+maxhordelen = default_genlen
 modelbusy = threading.Lock()
 token_count_lock = threading.Lock()
 detokenize_lock = threading.Lock()
@@ -379,7 +379,8 @@ class load_model_inputs(ctypes.Structure):
                 ("rpc_mode", ctypes.c_int),
                 ("rpc_targets", ctypes.c_char_p),
                 ("lazy_mode", ctypes.c_int),
-                ("moe_cache_mib", ctypes.c_int)]
+                ("moe_cache_mib", ctypes.c_int),
+                ("parallel_total_context", ctypes.c_int)]
 
 class generation_inputs(ctypes.Structure):
     _fields_ = [("seed", ctypes.c_int),
@@ -475,8 +476,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("flash_attention", ctypes.c_bool),
                 ("params_backend", ctypes.c_char_p),
                 ("use_mmap", ctypes.c_bool),
-                ("diffusion_conv_direct", ctypes.c_bool),
-                ("vae_conv_direct", ctypes.c_bool),
+                ("conv_direct_mode", ctypes.c_char_p),
                 ("taesd", ctypes.c_bool),
                 ("tiled_vae_threshold", ctypes.c_int),
                 ("llm_filename", ctypes.c_char_p),
@@ -2137,6 +2137,8 @@ def load_model(model_filename):
         raise ValueError("--lazy-mode must be auto, on or off")
     if type(args.moe_cache_mib) is not int or not 0 <= args.moe_cache_mib <= 2147483647:
         raise ValueError("--moe-cache-mib must be an integer between 0 and 2147483647")
+    if type(args.paralleltotalcontext) is not int or not 0 <= args.paralleltotalcontext <= 2147483647:
+        raise ValueError("--paralleltotalcontext must be an integer between 0 and 2147483647")
     inputs = load_model_inputs()
     inputs.lazy_mode = {"off": 0, "auto": 1, "on": 2}[args.lazy_mode]
     inputs.moe_cache_mib = args.moe_cache_mib
@@ -2255,6 +2257,7 @@ def load_model(model_filename):
     savestate_limit = sclimit
     inputs.smartcacheslots = sclimit
     inputs.continuous_batching_slots = args.parallelrequests if (args.parallelrequests>1) else 0
+    inputs.parallel_total_context = args.paralleltotalcontext if (args.parallelrequests>1) else 0
     inputs.rpc_mode = (2 if args.rpcmode=="host" else (1 if args.rpcmode=="connect" else 0))
     inputs.rpc_targets = (args.rpctargets if args.rpcmode=="connect" else "").encode("UTF-8")
 
@@ -2787,6 +2790,15 @@ def sd_convdirect_option(value):
         return 'full'
     raise argparse.ArgumentTypeError(f"Invalid sdconvdirect option \"{value}\". Must be one of {sd_convdirect_choices}.")
 
+def sd_convdirect_mode(value):
+    '''maps the sdconvdirect option to the stable-diffusion.cpp conv_direct_mode syntax'''
+    value = sd_convdirect_option(value)
+    if value == 'full':
+        return 'on'
+    if value == 'vaeonly':
+        return 'off,vae=on'
+    return 'off'
+
 sd_quant_choices = ['off','q8','q4']
 
 def sd_quant_option(value):
@@ -2866,9 +2878,7 @@ def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_
         sd_get_device_override(sd_resolve_device(args.sdvaedevice, default_sdvaedevice), 'VAE'),
     ]
     inputs.backend = ','.join([b for b in backends if b]).encode("UTF-8")
-    sdconvdirect = sd_convdirect_option(args.sdconvdirect)
-    inputs.diffusion_conv_direct = sdconvdirect == 'full'
-    inputs.vae_conv_direct = sdconvdirect in ['vaeonly', 'full']
+    inputs.conv_direct_mode = sd_convdirect_mode(args.sdconvdirect).encode('UTF-8')
     inputs.taesd = True if args.sdvaeauto else False
     inputs.tiled_vae_threshold = args.sdtiledvae
     inputs.vae_filename = vae_filename.encode("UTF-8")
@@ -9320,6 +9330,7 @@ def show_gui():
     ratelimit_var = ctk.StringVar(value=str(0))
     reqtimeout_var = ctk.StringVar(value=str(default_reqtimeout))
     parallel_requests_var = ctk.StringVar(value=str(1))
+    parallel_total_context_var = ctk.StringVar(value="")
     rpcmode_var =  ctk.StringVar(value=str("disabled"))
     rpcendpoints_var = ctk.StringVar(value="")
     rpc_host_var = ctk.StringVar(value="0.0.0.0")
@@ -10251,9 +10262,24 @@ def show_gui():
 
     makelabelentry(network_tab, "Queue Limit:", queuelimit_var, row=30, width=50, padx=(120), singleline=True, tooltip="Maximum queued incoming requests.")
     makelabelentry(network_tab, "Max Req. Size (MB):", maxrequestsize_var, row=30, width=50, padx=(340), singleline=True, tooltip="Specify a max request payload size. Any requests to the server larger than this size will be dropped. Do not change if unsure.",labelpadx=210)
-    makelabelentry(network_tab, "Parallel Requests:", parallel_requests_var, row=34, width=50, padx=(120), singleline=True, tooltip="Allows multiple requests to be batched and executed in parallel. Only works for basic text generation requests. Experimental!")
+    makelabelentry(network_tab, "IP Rate Limiter (s):", ratelimit_var, row=34, width=50, padx=(120), singleline=True, tooltip="Rate limits each IP to allow a new request once per X seconds. Do not change if unsure.")
     makelabelentry(network_tab, "Request Timeout (s):", reqtimeout_var, row=34, width=50, padx=(340), singleline=True, tooltip="Timeout in seconds for HTTP requests",labelpadx=210)
-    makelabelentry(network_tab, "IP Rate Limiter (s):", ratelimit_var, row=38, width=50, padx=(120), singleline=True, tooltip="Rate limits each IP to allow a new request once per X seconds. Do not change if unsure.")
+    makelabelentry(network_tab, "Parallel Requests:", parallel_requests_var, row=38, width=50, padx=(120), singleline=True, tooltip="Allows multiple requests to be batched and executed in parallel.")
+    parallel_total_context_entry, parallel_total_context_label = makelabelentry(network_tab, "Parallel Total Context:", parallel_total_context_var, row=38, width=80, padx=(340), singleline=True, tooltip="Optional total number of shared KV cache token cells for parallel requests. Leave blank to use the normal context size. Values below the normal context size are raised to that minimum.", labelpadx=210)
+
+    def toggle_parallel_total_context(a=None,b=None,c=None):
+        try:
+            show_parallel_total_context = int(parallel_requests_var.get()) > 1
+        except (TypeError, ValueError):
+            show_parallel_total_context = False
+        if show_parallel_total_context:
+            parallel_total_context_entry.grid()
+            parallel_total_context_label.grid()
+        else:
+            parallel_total_context_entry.grid_remove()
+            parallel_total_context_label.grid_remove()
+    parallel_requests_var.trace_add("write", toggle_parallel_total_context)
+    toggle_parallel_total_context()
 
 
     def togglerpcmode(a,b,c):
@@ -10724,6 +10750,7 @@ def show_gui():
         if not args.reqtimeout:
             args.reqtimeout = default_reqtimeout
         args.parallelrequests = int(parallel_requests_var.get()) if parallel_requests_var.get()!="" else 1
+        args.paralleltotalcontext = int(parallel_total_context_var.get()) if parallel_total_context_var.get()!="" else 0
 
         args.rpcmode = rpcmode_var.get() if rpcmode_var.get() else "disabled"
         args.rpchost = rpc_host_var.get() if (args.rpcmode=="host" and rpc_host_var.get()) else "0.0.0.0"
@@ -11043,6 +11070,7 @@ def show_gui():
         websearch_var.set(mydict["websearch"] if ("websearch" in mydict) else 0)
         download_dir_var.set(mydict["downloaddir"] if ("downloaddir" in mydict and mydict["downloaddir"]) else "")
         parallel_requests_var.set(mydict["parallelrequests"] if ("parallelrequests" in mydict and mydict["parallelrequests"]>1) else 1)
+        parallel_total_context_var.set(mydict["paralleltotalcontext"] if ("paralleltotalcontext" in mydict and mydict["paralleltotalcontext"]>0) else "")
 
         horde_name_var.set(mydict["hordemodelname"] if ("hordemodelname" in mydict and mydict["hordemodelname"]) else "koboldcpp")
         horde_context_var.set(mydict["hordemaxctx"] if ("hordemaxctx" in mydict and mydict["hordemaxctx"]) else maxhordectx)
@@ -13970,6 +13998,7 @@ if __name__ == '__main__':
     advparser.add_argument("--overridenativecontext", help="Overrides the native trained context of the loaded model with a custom value to be used for Rope scaling.",metavar=('[trained context]'), type=int, default=0)
     advparser.add_argument("--overridetensors","--override-tensor","-ot", metavar=('[tensor name pattern=buffer type]'), help="Override selected backend for specific tensors matching tensor_name_regex_pattern=buffer_type, same as in llama.cpp.", default="")
     advparser.add_argument("--parallelrequests","--continuous-batching","--contbatch", help="Allows multiple text and multimodal generation requests to be processed in parallel (Experimental).", metavar=('[slots]'), type=check_range(int,0,32), default=1)
+    advparser.add_argument("--paralleltotalcontext","--parallel-total-context", help="Sets the total shared KV cache size in tokens for parallel requests. Defaults to --contextsize when unset; lower values are raised to --contextsize.", metavar=('[tokens]'), type=check_range(int,0,2147483647), default=0)
     advparser.add_argument("--password", metavar=('[API key]'), help="Enter a password required to use this instance. This key will be required for all text endpoints. Image endpoints are not secured. Can also be set with env var KCPP_PASSWORD", default=os.getenv('KCPP_PASSWORD',None))
     advparser.add_argument("--preloadstory", metavar=('[savefile]'), help="Configures a prepared story json save file to be hosted on the server, which frontends (such as KoboldAI Lite) can access over the API.", default="")
     advparser.add_argument("--prompt","-p", metavar=('[prompt]'), help="Passing a prompt string triggers a direct inference, loading the model, outputs the response to stdout and exits. Can be used alone or with benchmark.", type=str, default="")

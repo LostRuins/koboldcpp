@@ -84,12 +84,17 @@ class TinyEncoder : public UnaryBlock {
     int channels    = 64;
     int z_channels  = 4;
     int num_blocks  = 3;
+    bool f16;
 
 public:
-    TinyEncoder(int z_channels = 4, bool use_midblock_gn = false)
-        : z_channels(z_channels) {
-        int index                       = 0;
+    TinyEncoder(int z_channels = 4, bool use_midblock_gn = false, bool f16 = false)
+        : z_channels(z_channels), f16(f16) {
+        in_channels                     = f16 ? 16 : 3;
+        int index                       = f16 ? 1 : 0;
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, channels, {3, 3}, {1, 1}, {1, 1}));
+        if (f16) {
+            index++;  // nn.ReLU()
+        }
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
 
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
@@ -97,12 +102,14 @@ public:
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, f16 ? channels * 2 : channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+        channels *= f16 ? 2 : 1;
         for (int i = 0; i < num_blocks; i++) {
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, f16 ? channels * 2 : channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+        channels *= f16 ? 2 : 1;
         for (int i = 0; i < num_blocks; i++) {
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, use_midblock_gn));
         }
@@ -114,7 +121,11 @@ public:
         // x: [n, in_channels, h, w]
         // return: [n, z_channels, h/8, w/8]
 
-        for (int i = 0; i < num_blocks * 3 + 6; i++) {
+        for (int i = f16 ? 1 : 0; i < num_blocks * 3 + 6 + (f16 ? 2 : 0); i++) {
+            if (f16 && i == 2) {
+                x = ggml_relu_inplace(ctx->ggml_ctx, x);
+                continue;
+            }
             auto block = std::dynamic_pointer_cast<UnaryBlock>(blocks[std::to_string(i)]);
 
             x = block->forward(ctx, x);
@@ -131,9 +142,11 @@ class TinyDecoder : public UnaryBlock {
     int num_blocks   = 3;
 
 public:
-    TinyDecoder(int z_channels = 4, bool use_midblock_gn = false)
+    TinyDecoder(int z_channels = 4, bool use_midblock_gn = false, bool f16 = false)
         : z_channels(z_channels) {
-        int index = 0;
+        channels     = f16 ? 256 : 64;
+        out_channels = f16 ? 16 : 3;
+        int index    = 0;
 
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, channels, {3, 3}, {1, 1}, {1, 1}));
         index++;  // nn.ReLU()
@@ -142,13 +155,15 @@ public:
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, use_midblock_gn));
         }
         index++;  // nn.Upsample()
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, f16 ? channels / 2 : channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
+        channels /= f16 ? 2 : 1;
 
         for (int i = 0; i < num_blocks; i++) {
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
         index++;  // nn.Upsample()
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, f16 ? channels / 2 : channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
+        channels /= f16 ? 2 : 1;
 
         for (int i = 0; i < num_blocks; i++) {
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
@@ -691,6 +706,7 @@ class TAESD : public GGMLBlock {
 protected:
     bool decode_only;
     bool taef2 = false;
+    bool f16   = false;
 
 public:
     int z_channels = 4;
@@ -708,10 +724,14 @@ public:
             z_channels      = 32;
             use_midblock_gn = true;
         }
-        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels, use_midblock_gn));
+        f16 = version == VERSION_QWEN_IMAGE_2_1;
+        if (f16) {
+            z_channels = 64;
+        }
+        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels, use_midblock_gn, f16));
 
         if (!decode_only) {
-            blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder(z_channels, use_midblock_gn));
+            blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder(z_channels, use_midblock_gn, f16));
         }
     }
 
@@ -720,10 +740,15 @@ public:
         if (taef2) {
             z = unpatchify(ctx->ggml_ctx, z, 2);
         }
-        return decoder->forward(ctx, z);
+        auto x = decoder->forward(ctx, z);
+        return f16 ? unpatchify(ctx->ggml_ctx, x, 2) : x;
     }
 
     ggml_tensor* encode(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        if (f16) {
+            GGML_ASSERT(x->ne[0] % 2 == 0 && x->ne[1] % 2 == 0);
+            x = patchify(ctx->ggml_ctx, x, 2);
+        }
         auto encoder = std::dynamic_pointer_cast<TinyEncoder>(blocks["encoder.layers"]);
         auto z       = encoder->forward(ctx, x);
         if (taef2) {

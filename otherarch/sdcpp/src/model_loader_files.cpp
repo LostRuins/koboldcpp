@@ -324,6 +324,24 @@ ModelLoader ModelLoader::file_reader(FileId id, SDVersion version) const {
     return reader;
 }
 
+std::map<std::string, std::string> ModelLoader::file_metadata(FileId id) const {
+    for (const auto& file : files_) {
+        if (file.id == id) {
+            return file.metadata;
+        }
+    }
+    return {};
+}
+
+String2TensorStorage ModelLoader::file_tensors(FileId id) const {
+    for (const auto& file : files_) {
+        if (file.id == id) {
+            return file.tensors;
+        }
+    }
+    return {};
+}
+
 String2TensorStorage ModelLoader::file_tensors(FileId id, SDVersion version) const {
     return file_reader(id, version).tensor_storage_map;
 }

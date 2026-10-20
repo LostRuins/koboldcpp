@@ -25,6 +25,8 @@
 #include "src/core/util.h"
 #include "src/model.h"
 #include "src/model_loader.h"
+#include "src/model_io/gguf_io.h"
+#include "src/model_io/safetensors_io.h"
 #include "ggml-backend.h"
 
 using namespace kcpp_sd;
@@ -139,9 +141,6 @@ struct SDParams {
     float eta                     = -1.0f;
     float strength                = 0.75f;
     int64_t seed                  = 42;
-    bool diffusion_flash_attn     = false;
-    bool diffusion_conv_direct    = false;
-    bool vae_conv_direct          = false;
     std::string ref_image_args    = "";
 
     LoraMap lora_map;
@@ -221,6 +220,11 @@ static struct {
         return outputs(0);
     }
 } sd_generation;
+
+static std::string sd_get_u8path(const std::string& file_path)
+{
+    return std::filesystem::u8path(file_path).string();
+}
 
 static std::string read_str_from_disk(std::string filepath)
 {
@@ -373,12 +377,12 @@ public:
 // resolve model / diffusion_model and text encoder / llm / proj / vision paths
 static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, const sd_load_model_inputs& inputs)
 {
-    //if t5 is set, and model is a gguf, load it as a diffusion model path
-    bool endswithgguf = (sd_params.model_path.rfind(".gguf") == sd_params.model_path.size() - 5);
-    if((sd_params.t5xxl_path!="" || sd_params.clip_l_path!="" || sd_params.clip_g_path!="") && endswithgguf)
+    bool model_is_gguf = false;
+    if(sd_params.t5xxl_path!="" || sd_params.clip_l_path!="" || sd_params.clip_g_path!="")
     {
+        model_is_gguf = is_gguf_file(sd_params.model_path);
         //extra check - make sure there is no diffusion model prefix already inside!
-        if(!gguf_tensor_exists(sd_params.model_path,"model.diffusion_model.",false))
+        if(model_is_gguf && !gguf_tensor_exists(sd_params.model_path,"model.diffusion_model.",false))
         {
             printf("\nSwap to Diffusion Model Path:%s",sd_params.model_path.c_str());
             sd_params.diffusion_model_path = sd_params.model_path;
@@ -435,8 +439,8 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
             path_empty(params.diffusion_model_path) &&
             (!path_empty(params.t5xxl_path)||!path_empty(params.clip_l_path)))
         {
-            bool endswithsafetensors = ends_with(params.model_path, ".safetensors");
-            if(endswithsafetensors && !model_loader.has_diffusion_model_tensors())
+            bool model_is_safetensors = !model_is_gguf && is_safetensors_file(sd_params.model_path);
+            if(model_is_safetensors && !model_loader.has_diffusion_model_tensors())
             {
                 printf("SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
                 if (!model_loader.init_from_file(params.model_path, "model.diffusion_model.")) {
@@ -483,6 +487,8 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_zimg_l2p = sd_version_is_z_image_l2p(tempver);
     bool is_iris = (tempver == VERSION_IRIS);
     bool is_flux2 = sd_version_is_flux2(tempver);
+    bool is_flux3 = sd_version_is_flux3(tempver);
+    bool is_mosi = (tempver == VERSION_MOSS_IMAGE);
     bool is_ovis =  (tempver==VERSION_OVIS_IMAGE);
     bool is_anima = sd_version_is_anima(tempver);
     bool is_ernie = sd_version_is_ernie_image(tempver);
@@ -497,8 +503,9 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_sefi = sd_version_is_sefi_image(tempver);
     bool is_mageflow = sd_version_is_mage_flow(tempver);
     bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
-    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
+    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_flux3 || is_mosi || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
     bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
+    bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi);
 
     //kcpp qol fallback: if a llm was loaded as t5 by mistake
     if(conditioner_is_llm && !path_empty(params.t5xxl_path))
@@ -556,7 +563,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         {
             std::swap(params.uncond_diffusion_model_path, params.clip_g_path);
         }
-        else if ((is_lens || is_pid || is_ming) && kcpp_main_tokenizer.empty())
+        else if (has_tokenizer && kcpp_main_tokenizer.empty())
         {
             // accept a tokenizer.json on clip_2
             kcpp_main_tokenizer = params.clip_g_path;
@@ -665,6 +672,16 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         params.tensor_type_rules = "^model.language_model.layers.[0-9]+.mlp.down_proj.weight=bf16";
     }
 
+    params.flash_attn_mode = "off";
+    if(inputs.flash_attention) {
+        if(sd_version_is_qwen_image(tempver)) {
+            // edit 14feb, breaks qwen image edit (moved from diffusion_engine)
+            params.flash_attn_mode = "on,te=off";
+        } else {
+            params.flash_attn_mode = "on";
+        }
+    }
+
     //debug print
     // printf("\n\nclip_g: %s\nclip_l: %s\nclip_vision: %s\nllm: %s\nllm_vision: %s\nt5xxl: %s\ntaesd: %s\n",
     // params.clip_g_path, params.clip_l_path, params.clip_vision_path,
@@ -702,6 +719,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     std::string backend = inputs.backend ? inputs.backend : "";
     std::string params_backend = inputs.params_backend ? inputs.params_backend : "";
     std::string split_mode = inputs.split_mode ? inputs.split_mode : "";
+    std::string conv_direct_mode = inputs.conv_direct_mode ? inputs.conv_direct_mode : "";
 
     int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
     bool lora_dynamic = false;
@@ -773,13 +791,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     {
         printf("Flash Attention is enabled\n");
     }
-    if(inputs.diffusion_conv_direct)
+    if(!conv_direct_mode.empty())
     {
-        printf("Conv2D Direct for diffusion model is enabled\n");
-    }
-    if(inputs.vae_conv_direct)
-    {
-        printf("Conv2D Direct for VAE model is enabled\n");
+        printf("Conv2D Direct mode: \"%s\"\n", conv_direct_mode.c_str());
     }
     if(backend != "")
     {
@@ -825,9 +839,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("Diffusion Model quantized to %s\n", sd_type_name(sd_params->wtype));
     }
     sd_params->n_threads = inputs.threads; //if -1 use physical cores
-    sd_params->diffusion_flash_attn = inputs.flash_attention;
-    sd_params->diffusion_conv_direct = inputs.diffusion_conv_direct;
-    sd_params->vae_conv_direct = inputs.vae_conv_direct;
     sd_params->vae_path = vaefilename;
     sd_params->audio_vae_path = audiovaefilename;
     sd_params->t5xxl_path = t5xxl_filename;
@@ -844,9 +855,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     params.n_threads = sd_params->n_threads;
     params.wtype = sd_params->wtype;
-    params.diffusion_flash_attn = sd_params->diffusion_flash_attn;
-    params.diffusion_conv_direct = sd_params->diffusion_conv_direct;
-    params.vae_conv_direct = sd_params->vae_conv_direct;
+    params.conv_direct_mode = conv_direct_mode.c_str();
     params.model_args = "chroma_use_dit_mask=true";
     params.max_vram = max_vram.c_str();
     params.eager_load = true; //kcpp should preload everything
@@ -856,9 +865,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     params.split_mode = split_mode.c_str();
     params.auto_fit = inputs.auto_fit;
     params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
-
-    // also switches flash attn for the vae and conditioner
-    params.flash_attn = params.diffusion_flash_attn;
 
     kcpp_set_model_paths(params, *sd_params, inputs);
 
@@ -903,7 +909,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if (upscaler_filename!="") {
         const int upscale_tile_size = 128;
         upscaler_ctx = new_upscaler_ctx(upscaler_filename.c_str(),
-                                        params.diffusion_conv_direct,
+                                        conv_direct_mode == "on",
                                         params.n_threads,
                                         upscale_tile_size,
                                         params.backend,

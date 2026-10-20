@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <ostream>
 #include <string>
@@ -19,7 +20,7 @@ static void set_error(std::string* error, const std::string& message) {
 }
 
 bool is_gguf_file(const std::string& file_path) {
-    std::ifstream file(file_path, std::ios::binary);
+    std::ifstream file(std::filesystem::u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         return false;
     }
@@ -178,7 +179,7 @@ bool GGUFStreamingWriter::write_metadata(const std::string& file_path,
     }
 
     LOG_INFO("trying to save tensors to %s", file_path.c_str());
-    FILE* file = fopen(file_path.c_str(), "wb+");
+    FILE* file = ggml_fopen(file_path.c_str(), "wb+");
     if (file == nullptr) {
         set_error(error, "failed to open output file '" + file_path + "'");
         close();

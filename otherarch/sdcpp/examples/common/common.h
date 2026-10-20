@@ -12,6 +12,10 @@
 #include "resource_owners.hpp"
 #include "stable-diffusion.h"
 
+// The command-line argument at `index` as UTF-8 (on Windows, read again from
+// the UTF-16 command line: argv itself is in the ANSI code page).
+std::string argv_to_utf8(int index, const char** argv);
+
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
@@ -166,12 +170,12 @@ struct SDContextParams {
     std::string rpc_servers;
     std::string effective_backend;
     std::string effective_params_backend;
-    bool enable_mmap           = false;
-    bool control_net_cpu       = false;
-    bool clip_on_cpu           = false;
-    bool vae_on_cpu            = false;
-    bool flash_attn            = false;
-    bool diffusion_flash_attn  = false;
+    bool enable_mmap            = false;
+    bool control_net_cpu        = false;
+    bool clip_on_cpu            = false;
+    bool vae_on_cpu             = false;
+    std::string flash_attn_mode = "auto";
+    std::string conv_direct_mode;  // Empty selects auto while honoring legacy convolution flags.
     bool sage_attn             = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;

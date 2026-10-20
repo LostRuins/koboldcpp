@@ -1013,6 +1013,16 @@ static std::string convert_diffusers_dit_to_original_pixart(std::string name) {
     return prefix + name;
 }
 
+static std::string convert_moss_image_dit_name(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {".proj.q.weight", ".proj.qkv.weight"},
+        {".proj.k.weight", ".proj.qkv.weight.1"},
+        {".proj.v.weight", ".proj.qkv.weight.2"},
+    };
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
 static std::string convert_ming_image_dit_name(std::string name) {
     static const std::vector<std::pair<std::string, std::string>> name_map = {
         {"all_x_embedder.2-1.", "x_embedder."},
@@ -1020,6 +1030,24 @@ static std::string convert_ming_image_dit_name(std::string name) {
         {"attention.norm_q.", "attention.q_norm."},
         {"attention.norm_k.", "attention.k_norm."},
     };
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
+std::string convert_diffusers_dit_to_original_minimax_h3(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> prefix_map = {
+        {"transformer_blocks.", "blocks."},
+        {"token_refiner.refiner_blocks.", "token_refiner.blocks."},
+    };
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {".attn.to_q.weight", ".attn.qkv_proj.weight"},
+        {".attn.to_k.weight", ".attn.qkv_proj.weight.1"},
+        {".attn.to_v.weight", ".attn.qkv_proj.weight.2"},
+        {".attn.to_out.0.", ".attn.out_proj."},
+        {".ff.net.0.proj.", ".mlp.fc1."},
+        {".ff.net.2.", ".mlp.fc2."},
+    };
+    replace_with_prefix_map(name, prefix_map);
     replace_with_name_map(name, name_map);
     return name;
 }
@@ -1035,6 +1063,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_hunyuan_video(version)) {
         name = convert_hunyuan_video_to_original_flux(name);
+    } else if (version == VERSION_MOSS_IMAGE) {
+        name = convert_moss_image_dit_name(name);
     } else if (version == VERSION_MING_IMAGE) {
         name = convert_ming_image_dit_name(name);
     } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version)) {
@@ -1047,6 +1077,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_krea2(name);
     } else if (sd_version_is_pixart(version)) {
         name = convert_diffusers_dit_to_original_pixart(name);
+    } else if (sd_version_is_minimax_h3(version)) {
+        name = convert_diffusers_dit_to_original_minimax_h3(name);
     }
     return name;
 }
@@ -1662,6 +1694,26 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
     }
 
     replace_with_prefix_map(name, prefix_map);
+
+    if (version == VERSION_MOSS_IMAGE) {
+        const std::string te_prefix = "text_encoders.llm.";
+        if (starts_with(name, te_prefix + "blk.")) {
+            static const std::vector<std::pair<std::string, std::string>> qwen35_name_map = {
+                {"attn_post_norm.", "post_attention_layernorm."},
+                {"post_attention_norm.", "post_attention_layernorm."},
+                {"attn_qkv.", "linear_attn.in_proj_qkv."},
+                {"attn_gate.", "linear_attn.in_proj_z."},
+                {"ssm_conv1d.", "linear_attn.conv1d."},
+                {"ssm_dt.bias", "linear_attn.dt_bias"},
+                {"ssm_norm.", "linear_attn.norm."},
+                {"ssm_out.", "linear_attn.out_proj."},
+                {"ssm_alpha.", "linear_attn.in_proj_a."},
+                {"ssm_beta.", "linear_attn.in_proj_b."},
+                {"ssm_a", "linear_attn.A"},
+            };
+            replace_with_name_map(name, qwen35_name_map);
+        }
+    }
 
     if (version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
         const std::string hf_vision_prefix = "text_encoders.llm.model.visual.";
