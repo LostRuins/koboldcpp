@@ -105,6 +105,8 @@ public:
     bool del_file(FileId id);
     uint64_t file_revision(FileId id) const;
     std::string file_path(FileId id) const;
+    std::map<std::string, std::string> file_metadata(FileId id) const;
+    String2TensorStorage file_tensors(FileId id) const;
     String2TensorStorage file_tensors(FileId id, SDVersion version) const;
     bool load_file_tensors(FileId id, SDVersion version, on_new_tensor_cb_t callback, const std::set<std::string>& names, bool use_mmap = false) const;
     bool refresh_files(bool include_isolated = true);

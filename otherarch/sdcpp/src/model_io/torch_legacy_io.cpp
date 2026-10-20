@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -98,7 +99,7 @@ static std::string torch_legacy_diagnostics(const std::string& file_path, const 
 bool read_torch_legacy_file(const std::string& file_path,
                             std::vector<TensorStorage>& tensor_storages,
                             std::string* error) {
-    std::ifstream file(file_path, std::ios::binary);
+    std::ifstream file(std::filesystem::u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
         set_error(error, "failed to open '" + file_path + "'");
         return false;

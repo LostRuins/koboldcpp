@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 
 static IMatrixCollector imatrix_collector;
 
@@ -227,7 +228,7 @@ void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
         LOG_WARN("storing only %zu out of %zu entries\n", to_store.size(), stats_.size());
     }
 
-    std::ofstream out(fname, std::ios::binary);
+    std::ofstream out(std::filesystem::u8path(fname), std::ios::binary);
     out.write((const char*)&n_entries, sizeof(n_entries));
     for (const auto& name : to_store) {
         const auto& stat = stats_.at(name);
@@ -251,7 +252,7 @@ void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
 }
 
 bool IMatrixCollector::load_imatrix(const char* fname) {
-    std::ifstream in(fname, std::ios::binary);
+    std::ifstream in(std::filesystem::u8path(fname), std::ios::binary);
     if (!in) {
         LOG_ERROR("failed to open %s\n", fname);
         return false;

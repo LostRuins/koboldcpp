@@ -455,8 +455,7 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("flash_attention", ctypes.c_bool),
                 ("params_backend", ctypes.c_char_p),
                 ("use_mmap", ctypes.c_bool),
-                ("diffusion_conv_direct", ctypes.c_bool),
-                ("vae_conv_direct", ctypes.c_bool),
+                ("conv_direct_mode", ctypes.c_char_p),
                 ("taesd", ctypes.c_bool),
                 ("tiled_vae_threshold", ctypes.c_int),
                 ("llm_filename", ctypes.c_char_p),
@@ -2673,6 +2672,15 @@ def sd_convdirect_option(value):
         return 'full'
     raise argparse.ArgumentTypeError(f"Invalid sdconvdirect option \"{value}\". Must be one of {sd_convdirect_choices}.")
 
+def sd_convdirect_mode(value):
+    '''maps the sdconvdirect option to the stable-diffusion.cpp conv_direct_mode syntax'''
+    value = sd_convdirect_option(value)
+    if value == 'full':
+        return 'on'
+    if value == 'vaeonly':
+        return 'off,vae=on'
+    return 'off'
+
 sd_quant_choices = ['off','q8','q4']
 
 def sd_quant_option(value):
@@ -2752,9 +2760,7 @@ def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_
         sd_get_device_override(sd_resolve_device(args.sdvaedevice, default_sdvaedevice), 'VAE'),
     ]
     inputs.backend = ','.join([b for b in backends if b]).encode("UTF-8")
-    sdconvdirect = sd_convdirect_option(args.sdconvdirect)
-    inputs.diffusion_conv_direct = sdconvdirect == 'full'
-    inputs.vae_conv_direct = sdconvdirect in ['vaeonly', 'full']
+    inputs.conv_direct_mode = sd_convdirect_mode(args.sdconvdirect).encode('UTF-8')
     inputs.taesd = True if args.sdvaeauto else False
     inputs.tiled_vae_threshold = args.sdtiledvae
     inputs.vae_filename = vae_filename.encode("UTF-8")

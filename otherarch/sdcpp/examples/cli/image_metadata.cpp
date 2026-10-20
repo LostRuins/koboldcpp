@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -276,7 +277,7 @@ namespace {
     }
 
     bool read_file(const std::string& path, std::vector<uint8_t>& data, std::string& error) {
-        std::ifstream fin(path, std::ios::binary);
+        std::ifstream fin(std::filesystem::u8path(path), std::ios::binary);
         if (!fin) {
             error = "failed to open file: " + path;
             return false;
