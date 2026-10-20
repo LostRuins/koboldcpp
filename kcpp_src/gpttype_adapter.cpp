@@ -3440,13 +3440,17 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             !inputs.use_mtp && draftmodel_filename.empty() && !load_guidance &&
             !kcpp_data->use_smartcontext && !kcpp_data->use_contextshift;
         uint64_t kv_token_budget = std::max(1, clamped_max_context_length);
-        if(configure_batch_cache)
+        if(configure_batch_cache && inputs.parallel_total_context > 0)
         {
-            // Scale the shared pool sublinearly and cap it at 3.2x. Admission control
-            // queues requests whose combined reservations do not fit in this budget.
-            static constexpr uint64_t budget_tenths_by_slots[] = {10, 16, 21, 26, 29, 31, 32};
-            const int budget_slot_index = std::min(continuous_batching_slots, 7) - 1;
-            kv_token_budget = (kv_token_budget * budget_tenths_by_slots[budget_slot_index] + 9) / 10;
+            if(inputs.parallel_total_context < clamped_max_context_length)
+            {
+                printf("Warning: Parallel total context cannot be smaller than the per-request context; using %d tokens.\n",
+                    clamped_max_context_length);
+            }
+            else
+            {
+                kv_token_budget = (uint64_t)inputs.parallel_total_context;
+            }
         }
         const uint64_t max_kv_token_budget = (uint64_t)std::numeric_limits<uint32_t>::max() -
             extra_context_handle_fragmentation - 255; // leave room for llama.cpp's 256-token alignment
