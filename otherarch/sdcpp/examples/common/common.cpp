@@ -2218,7 +2218,8 @@ bool SDGenerationParams::from_json_str(
         }
         if (target_custom_sigmas != nullptr &&
             sample_json.contains("custom_sigmas") &&
-            sample_json["custom_sigmas"].is_array()) {
+            sample_json["custom_sigmas"].is_array() &&
+            !sample_json["custom_sigmas"].empty()) { // empty [] = "not specified", keep server/CLI default
             *target_custom_sigmas = sample_json["custom_sigmas"].get<std::vector<float>>();
         }
         if (sample_json.contains("sample_method") && sample_json["sample_method"].is_string()) {
