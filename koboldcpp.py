@@ -4357,6 +4357,39 @@ def normalize_openai_tools_input(tools):
             print(f"Dropped unsupported tool: {tool}")
     return normalized
 
+def filter_tools_for_tool_choice(tools, tool_choice):
+    """Return the tools exposed to the model after applying an explicit tool choice."""
+    choice_type = ""
+    requested_name = None
+    if isinstance(tool_choice, str):
+        choice_type = tool_choice.lower()
+    elif isinstance(tool_choice, dict):
+        choice_type = str(tool_choice.get("type", "")).lower()
+        function = tool_choice.get("function")
+        if choice_type == "function" and isinstance(function, dict):
+            requested_name = function.get("name")
+        elif choice_type in ("function", "tool"):
+            # OpenAI Responses uses {"type":"function","name":"..."}; Anthropic uses
+            # {"type":"tool","name":"..."}.
+            requested_name = tool_choice.get("name")
+
+    if choice_type == "none":
+        return [], None, True
+    if not isinstance(requested_name, str) or not requested_name:
+        return tools, None, False
+
+    requested_name_folded = requested_name.casefold()
+    matching_tools = []
+    canonical_name = requested_name
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        name = function.get("name") if isinstance(function, dict) else None
+        if isinstance(name, str) and name.casefold() == requested_name_folded:
+            matching_tools.append(tool)
+            if len(matching_tools) == 1:
+                canonical_name = name
+    return matching_tools, canonical_name, False
+
 def normalize_tool_call_resp(obj): # Normalize various tool call formats to OpenAI format
     if "type" in obj and "function" in obj: # Already in OpenAI format
         return obj
@@ -4861,6 +4894,16 @@ ws ::= | " " | "\n" [ \t]{0,20}
         if api_format==4 or api_format==7: #handle ollama chat here too
             if genparams.get("tools"):
                 genparams["tools"] = normalize_openai_tools_input(genparams["tools"])
+            effective_tools, named_tool_choice, tool_choice_none = filter_tools_for_tool_choice(
+                genparams.get("tools", []), genparams.get("tool_choice", "auto"))
+            genparams["tools"] = effective_tools
+            genparams.pop('_tool_choice_function_name', None)
+            if named_tool_choice:
+                genparams['_tool_choice_function_name'] = named_tool_choice
+            if tool_choice_none:
+                # Do not expose or parse tools, and do not let a client-provided internal flag
+                # turn tool handling back on. Historical tool messages still render normally.
+                genparams["using_openai_tools"] = False
             # translate openai chat completion messages format into one big string.
             messages_array = genparams.get('messages', [])
             messages_string = adapter_obj.get("chat_start", "")
@@ -5953,10 +5996,22 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                             flat.append(obj)
                     tool_calls = [normalize_tool_call_resp(obj) for obj in flat]
                     tool_calls = [tc for tc in tool_calls if isinstance(tc, dict) and isinstance(tc.get("function", None), dict) and tc["function"].get("name")]
+                named_tool_choice = genparams.get('_tool_choice_function_name')
+                if tool_calls and named_tool_choice:
+                    # The native parser knows the filtered tool list, but the permissive fallback can
+                    # still recognize a model-emitted name that was not offered. Never surface it.
+                    matching_tool_calls = []
+                    for tc in tool_calls:
+                        function = tc.get("function", {})
+                        name = function.get("name")
+                        if isinstance(name, str) and name.casefold() == named_tool_choice.casefold():
+                            function["name"] = named_tool_choice
+                            matching_tool_calls.append(tc)
+                    tool_calls = matching_tool_calls
                 if tool_calls and len(tool_calls)>0:
                     for tc in tool_calls:
                         tcarg = tc.get("function",{}).get("arguments",None)
-                        tc["id"] = f"call_{random.randint(10000, 99999)}"
+                        tc["id"] = f"call_{random.randint(1000000, 9999999)}"
                         if tcarg is not None and not isinstance(tcarg, str):
                             tc["function"]["arguments"] = json.dumps(tcarg)
                     recvtxt = extract_toolcall_prose_prefix_content(recvtxt)
@@ -6033,7 +6088,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                             raw_args = {}
                     content_blocks.append({
                         "type": "tool_use",
-                        "id": tc.get("id", f"toolu_{random.randint(10000,99999)}"),
+                        "id": tc.get("id", f"toolu_{random.randint(1000000,9999999)}"),
                         "name": func.get("name", ""),
                         "input": raw_args,
                     })
@@ -6621,7 +6676,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     async def handle_request(self, genparams, api_format, stream_flag):
         tasks = []
-        genparams["oai_uniqueid"] = random.randint(100000, 999999)
+        genparams["oai_uniqueid"] = random.randint(1000000, 9999999)
         for key in ('_sse_stream_started', '_sse_stream_finished', '_oai_generation_pending', '_oai_generation_error', '_anthropic_stream_state', '_client_disconnected', '_json_keepalive_started'):
             genparams.pop(key, None)
         monitor_task = None
@@ -8138,7 +8193,7 @@ Change Mode<br>
                                     for block in gendat.get("content", []):
                                         if block.get("type") == "tool_use":
                                             toolsdata_res.append({
-                                                "id": block.get("id", f"toolu_{random.randint(10000,99999)}"),
+                                                "id": block.get("id", f"toolu_{random.randint(1000000,9999999)}"),
                                                 "type": "function",
                                                 "function": {
                                                     "name": block.get("name", ""),
@@ -8189,7 +8244,7 @@ Change Mode<br>
                                                 raw_args = json.loads(raw_args)
                                             except Exception:
                                                 raw_args = {}
-                                        tc_id = tool_call.get("id", f"toolu_{random.randint(10000,99999)}")
+                                        tc_id = tool_call.get("id", f"toolu_{random.randint(1000000,9999999)}")
                                         tc_name = func.get("name", "")
                                         # Start block with EMPTY input — the actual args come in the delta
                                         tc_block = {"type": "tool_use", "id": tc_id, "name": tc_name, "input": {}}
@@ -12202,7 +12257,7 @@ def load_mcp_async(args):
                 try:
                     init_payload = {
                         "jsonrpc": "2.0",
-                        "id": random.randint(100000, 999999),
+                        "id": random.randint(1000000, 9999999),
                         "method": "initialize",
                         "params": {
                             "protocolVersion": "2024-11-05",
@@ -12216,7 +12271,7 @@ def load_mcp_async(args):
                     }
                     toolget_payload = {
                         "jsonrpc": "2.0",
-                        "id": random.randint(100000, 999999),
+                        "id": random.randint(1000000, 9999999),
                         "method": "tools/list",
                         "params": {}
                     }
