@@ -301,6 +301,10 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
     log_level = cli_params.log_level;
     log_color = cli_params.color;
 
+    if (ctx_params.list_devices) {
+        exit(ctx_params.print_devices() ? 0 : 1);
+    }
+
     bool valid = cli_params.resolve_and_validate();
     if (valid && cli_params.mode != METADATA) {
         valid = ctx_params.resolve_and_validate(cli_params.mode) &&

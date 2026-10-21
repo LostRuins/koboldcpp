@@ -291,7 +291,9 @@ static void filter_and_sort_detections(std::vector<ADetailerDetection>* detectio
         std::partial_sort(detections->begin(),
                           detections->begin() + params.mask_k_largest,
                           detections->end(),
-                          [](const auto& a, const auto& b) { return detection_area(a) > detection_area(b); });
+                          [&](const auto& a, const auto& b) {
+                              return params.mask_filter_by_confidence ? a.confidence > b.confidence : detection_area(a) > detection_area(b);
+                          });
         detections->resize(params.mask_k_largest);
     }
 
@@ -545,7 +547,16 @@ static sd_image_t resize_crop_mask(const Mask& source, const CropRegion& crop, i
     return output;
 }
 
-static sd_image_t copy_as_rgb(const sd_image_t& source) {
+static sd_image_t copy_for_detailing(const sd_image_t& source) {
+    if (source.channel == 4) {
+        sd_image_t output = source;
+        size_t bytes      = static_cast<size_t>(source.width) * source.height * source.channel;
+        output.data       = static_cast<uint8_t*>(malloc(bytes));
+        if (output.data != nullptr) {
+            memcpy(output.data, source.data, bytes);
+        }
+        return output;
+    }
     CropRegion full{0, 0, static_cast<int>(source.width), static_cast<int>(source.height)};
     return resize_crop_image(source, full, source.width, source.height);
 }
@@ -566,7 +577,7 @@ static void composite_crop(sd_image_t* destination,
                 continue;
             }
             float source_x           = (x - crop.x1 + 0.5f) * scale_x - 0.5f;
-            size_t destination_index = (static_cast<size_t>(y) * destination->width + x) * 3;
+            size_t destination_index = (static_cast<size_t>(y) * destination->width + x) * destination->channel;
             for (int c = 0; c < 3; ++c) {
                 float generated_value                    = bilinear_channel(generated, source_x, source_y, c) * 255.f;
                 float original_value                     = destination->data[destination_index + c];
@@ -787,6 +798,10 @@ static bool parse_adetailer_params(const sd_adetailer_params_t& public_params,
             ok = parse_int(value, &params->max_detections);
         } else if (key == "mask_k_largest") {
             ok = parse_int(value, &params->mask_k_largest);
+        } else if (key == "mask_filter_method") {
+            const std::string method          = lower_copy(value);
+            ok                                = method == "area" || method == "confidence";
+            params->mask_filter_by_confidence = method == "confidence";
         } else if (key == "mask_min_ratio") {
             ok = parse_float(value, &params->mask_min_ratio);
         } else if (key == "mask_max_ratio") {
@@ -805,6 +820,8 @@ static bool parse_adetailer_params(const sd_adetailer_params_t& public_params,
             ok = parse_int(value, &params->mask_blur);
         } else if (key == "inpaint_padding") {
             ok = parse_int(value, &params->inpaint_padding);
+        } else if (key == "inpaint_only_masked") {
+            ok = parse_bool(value, &params->inpaint_only_masked);
         } else if (key == "inpaint_width") {
             ok = parse_int(value, &params->inpaint_width);
         } else if (key == "inpaint_height") {
@@ -920,7 +937,7 @@ bool adetail_image(adetailer_ctx_t* context,
     filter_and_sort_detections(&detections, input_image.width, input_image.height, params);
     auto masks = make_masks(detections, input_image.width, input_image.height, params);
 
-    sd_image_t current = copy_as_rgb(input_image);
+    sd_image_t current = copy_for_detailing(input_image);
     if (current.data == nullptr) {
         return false;
     }
@@ -939,12 +956,13 @@ bool adetail_image(adetailer_ctx_t* context,
         if (!mask_bbox(masks[i], &crop)) {
             continue;
         }
-        crop                   = expand_crop(crop,
-                                             current.width,
-                                             current.height,
-                                             params.inpaint_padding,
-                                             params.inpaint_width,
-                                             params.inpaint_height);
+        crop                   = params.inpaint_only_masked ? expand_crop(crop,
+                                                                          current.width,
+                                                                          current.height,
+                                                                          params.inpaint_padding,
+                                                                          params.inpaint_width,
+                                                                          params.inpaint_height)
+                                                            : CropRegion{0, 0, static_cast<int>(current.width), static_cast<int>(current.height)};
         sd_image_t local_image = resize_crop_image(current, crop, params.inpaint_width, params.inpaint_height);
         sd_image_t local_mask  = resize_crop_mask(masks[i], crop, params.inpaint_width, params.inpaint_height);
         if (local_image.data == nullptr || local_mask.data == nullptr) {

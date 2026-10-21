@@ -68,6 +68,7 @@ enum SDVersion {
     VERSION_IRIS,
     VERSION_FLUX3,
     VERSION_MOSS_IMAGE,
+    VERSION_FIBO2,
     VERSION_COUNT,
 };
 
@@ -293,7 +294,8 @@ static inline bool sd_version_uses_flux2_vae(SDVersion version) {
         sd_version_is_ideogram4(version) ||
         sd_version_is_sefi_image(version) ||
         sd_version_is_llada_image(version) ||
-        version == VERSION_MOSS_IMAGE) {
+        version == VERSION_MOSS_IMAGE ||
+        version == VERSION_FIBO2) {
         return true;
     }
     return false;
@@ -351,7 +353,8 @@ static inline bool sd_version_is_dit(SDVersion version) {
         sd_version_is_sensenova_u1(version) ||
         sd_version_is_pixart(version) ||
         version == VERSION_IRIS ||
-        version == VERSION_MOSS_IMAGE) {
+        version == VERSION_MOSS_IMAGE ||
+        version == VERSION_FIBO2) {
         return true;
     }
     return false;
@@ -385,7 +388,8 @@ static inline bool sd_version_supports_ref_image_conditioning(SDVersion version)
            sd_version_is_mage_flow(version) ||
            sd_version_is_anima(version) ||
            sd_version_is_sefi_image(version) ||
-           sd_version_is_pid(version);
+           sd_version_is_pid(version) ||
+           version == VERSION_FIBO2;
 }
 
 static bool sd_version_is_inpaint_or_unet_edit(SDVersion version) {

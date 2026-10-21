@@ -641,6 +641,11 @@ SD_API const char* sd_version(void);
 // terminator. Passing nullptr or buffer_size 0 only queries the required size.
 SD_API size_t sd_list_devices(char* buffer, size_t buffer_size);
 
+// Register comma-separated RPC endpoints (host:port) before listing devices.
+// Repeated endpoints are safe; nullptr or an empty string is a no-op.
+// Returns false if RPC is unavailable or an endpoint has no usable devices.
+SD_API bool sd_add_rpc_servers(const char* servers);
+
 // for C API, caller needs to call free_sd_images to free the memory after use
 // This helps avoid CRT problems on Windows when memory is allocated in the library but freed in the caller, which may use a different CRT.
 SD_API void free_sd_images(sd_image_t* result_images, int num_images);

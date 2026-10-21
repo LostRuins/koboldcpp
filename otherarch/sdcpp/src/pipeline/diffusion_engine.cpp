@@ -113,6 +113,7 @@ const char* model_version_to_str[] = {
     "Iris-3B",
     "Flux.3 Image Klein",
     "MOSS-Image",
+    "Fibo-2.0",
 };
 
 static_assert(VERSION_COUNT == sizeof(model_version_to_str) / sizeof(model_version_to_str[0]),
@@ -1499,7 +1500,8 @@ bool StableDiffusionGGML::build_denoiser() {
                    sd_version_is_pid(version) ||
                    sd_version_is_ideogram4(version) ||
                    version == VERSION_IRIS ||
-                   version == VERSION_MOSS_IMAGE) {
+                   version == VERSION_MOSS_IMAGE ||
+                   version == VERSION_FIBO2) {
             pred_type = FLOW_PRED;
             if (sd_version_is_wan(version) || version == VERSION_MOSS_IMAGE) {
                 default_flow_shift = 5.f;
@@ -3223,7 +3225,9 @@ bool StableDiffusionGGML::is_flow_denoiser() {
 }
 
 std::string StableDiffusionGGML::get_default_ref_image_preset(SDVersion version) const {
-    if (sd_version_is_longcat(version)) {
+    if (version == VERSION_FIBO2) {
+        return "fibo2";
+    } else if (sd_version_is_longcat(version)) {
         return "longcat";
     } else if (sd_version_is_flux(version)) {
         return "flux_kontext";
@@ -3275,6 +3279,9 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
         LOG_INFO("Using '%s' preset for reference images", preset_name.c_str());
         params = REF_IMAGE_PRESETS.at(preset_name);
     }
+    if (version == VERSION_QWEN_IMAGE_2_1) {
+        params.vlm_use_vae_input = true;
+    }
 
     for (const auto& [key, value] : parse_key_value_args(ref_image_args, "reference image args")) {
         if (key == "pass_to_vlm") {
@@ -3301,6 +3308,26 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
             }
         } else if (key == "resize_before_vae") {
             if (!parse_strict_bool(value, params.resize_before_vae)) {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+            }
+        } else if (key == "resize_vae_to_target") {
+            if (!parse_strict_bool(value, params.resize_vae_to_target)) {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+            }
+        } else if (key == "resize_single_ref_to_target") {
+            if (!parse_strict_bool(value, params.resize_single_ref_to_target)) {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+            }
+        } else if (key == "vae_size_buckets") {
+            if (!parse_strict_bool(value, params.vae_size_buckets)) {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+            }
+        } else if (key == "vae_center_crop") {
+            if (!parse_strict_bool(value, params.vae_center_crop)) {
+                LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
+            }
+        } else if (key == "vlm_use_vae_input") {
+            if (!parse_strict_bool(value, params.vlm_use_vae_input)) {
                 LOG_WARN("ignoring invalid reference image arg '%s=%s'", key.c_str(), value.c_str());
             }
         } else if (key == "vae_input_max_pixels") {
