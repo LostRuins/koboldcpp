@@ -56,6 +56,7 @@ default_draft_amount = 4
 default_ttsmaxlen = 4096
 default_embeddingsmaxctx = 4096
 default_visionmaxres = 1024
+tools_max_temperature = 1.0 #chat requests with tools are clamped to this temperature; the horde worker declares it as a limit
 net_save_slots = 12
 savestate_limit_default = 5
 savestate_limit = 0 #savestate slots start at 0, only set when load model
@@ -4925,15 +4926,17 @@ ws ::= | " " | "\n" [ \t]{0,20}
             # handle structured outputs
             respformat = genparams.get('response_format', None)
             if respformat:
+                respformat_grammar = ""
                 try:
                     rt = respformat.get('type')
                     if rt.lower() == "json_schema":
                         schema = respformat.get('json_schema').get('schema')
                         decoded = convert_json_to_gbnf(schema)
                         if decoded:
-                            genparams["grammar"] = decoded
+                            genparams["grammar"] = respformat_grammar = decoded
                     elif rt.lower() == "json_object":
-                        genparams["grammar"] = jsongrammar
+                        # the shared grammar is rooted at an array for tool calls; a json_object reply is one object
+                        genparams["grammar"] = respformat_grammar = jsongrammar.replace("root   ::= arr", "root   ::= object", 1)
                 except Exception:
                     # In case of any issues, just do normal gen
                     print("Structured Output not valid - discarded")
@@ -4980,8 +4983,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     genparams["using_openai_tools"] = True
                     genparams['_jinja_tool_formatting_used'] = True
                     if api_format == 4:
-                        # Default Jinja tool requests to 0.5 and cap their temperature at 1.0.
-                        genparams["temperature"] = min(tryparsefloat(genparams.get("temperature", 0.5), 0.5), 1.0)
+                        # Default Jinja tool requests to 0.5 and cap their temperature at tools_max_temperature.
+                        genparams["temperature"] = min(tryparsefloat(genparams.get("temperature", 0.5), 0.5), tools_max_temperature)
                 # handle media
                 images_added, audio_added = sweep_media_from_messages(messages_array)
             else:
@@ -5075,7 +5078,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
                             toolparamjson = None
                             toolname = None
                             # Set temperature lower automatically if function calling, cannot exceed 0.5
-                            genparams["temperature"] = (1.0 if genparams.get("temperature", 0.5) > 1.0 else genparams.get("temperature", 0.5))
+                            genparams["temperature"] = (tools_max_temperature if genparams.get("temperature", 0.5) > tools_max_temperature else genparams.get("temperature", 0.5))
                             genparams["using_openai_tools"] = True
                             genparams['_generic_tool_json_array_fix'] = True
                             # Set grammar to llamacpp example grammar to force json response (see https://github.com/ggerganov/llama.cpp/blob/master/grammars/json_arr.gbnf)
@@ -5085,6 +5088,14 @@ ws ::= | " " | "\n" [ \t]{0,20}
                                 toolparamjson = used_tool_json.get('function').get('parameters')
                                 bettergrammarjson = {"type":"array","items":{"type":"object","properties":{"id":{"type":"string","enum":["call_001"]},"type":{"type":"string","enum":["function"]},"function":{"type":"object","properties":{"name":{"type":"string"},"arguments":{}},"required":["name","arguments"],"additionalProperties":False}},"required":["id","type","function"],"additionalProperties":False}}
                                 bettergrammarjson["items"]["properties"]["function"]["properties"]["arguments"] = toolparamjson
+                                # Once the generic path selects a tool, require a call to that tool and honor the
+                                # request's parallel call setting. A function without parameters takes an empty object.
+                                bettergrammarjson["items"]["properties"]["function"]["properties"]["name"]["enum"] = [toolname]
+                                bettergrammarjson["minItems"] = 1
+                                if genparams.get("parallel_tool_calls", True) is False:
+                                    bettergrammarjson["maxItems"] = 1
+                                if toolparamjson is None:
+                                    bettergrammarjson["items"]["properties"]["function"]["properties"]["arguments"] = {"type":"object","properties":{}}
                                 decoded = convert_json_to_gbnf(bettergrammarjson)
                                 if decoded:
                                     genparams["grammar"] = decoded
@@ -11291,7 +11302,8 @@ def show_gui_yesnobox(title,message,icon='error'):
 def print_with_time(txt):
     print(f"{datetime.now().strftime('[%H:%M:%S]')} " + txt, flush=True)
 
-def make_url_request(url, data, method='POST', headers={}, timeout=600):
+def make_url_request(url, data, method='POST', headers={}, timeout=600, error_info=None):
+    #error_info, when given, receives the http status and the json body's return code of a refused request
     global nocertify
     try:
         request = None
@@ -11314,11 +11326,19 @@ def make_url_request(url, data, method='POST', headers={}, timeout=600):
                 json_response = json.loads(response_data.decode('utf-8',"ignore"))
                 return json_response
     except urllib.error.HTTPError as e:
+        errmsg = ""
+        if error_info is not None:
+            error_info["status"] = e.code
         try:
             errmsg = e.read().decode('utf-8',"ignore")
             print_with_time(f"Error: {e} - {errmsg}")
         except Exception as e:
             print_with_time(f"Error: {e}")
+        if error_info is not None:
+            try:
+                error_info["rc"] = json.loads(errmsg).get("rc")
+            except Exception:
+                pass
         return None
     except Exception as e:
         print_with_time(f"Error: {e} - {response_data}")
