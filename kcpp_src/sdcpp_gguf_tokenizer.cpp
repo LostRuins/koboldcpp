@@ -1,11 +1,14 @@
 #include "sdcpp_gguf_tokenizer.h"
 
+#include <algorithm>
 #include <array>
 #include <climits>
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "gguf.h"
@@ -87,8 +90,11 @@ int read_id(const gguf_context* context, const char* key) {
     return static_cast<int>(value);
 }
 
-std::string read_string(const gguf_context* context, const char* key) {
-    const int64_t index = find_key(context, key);
+std::string read_string(const gguf_context* context, const char* key, bool required = true) {
+    const int64_t index = find_key(context, key, required);
+    if (index < 0) {
+        return {};
+    }
     require(gguf_get_kv_type(context, index) == GGUF_TYPE_STRING, std::string("'") + key + "' must be a string");
     return gguf_get_val_str(context, index);
 }
@@ -150,7 +156,7 @@ std::vector<float> read_scores(const gguf_context* context, size_t token_count) 
 tokenizer_metadata read_metadata(const gguf_context* context) {
     tokenizer_metadata data;
     data.model = read_string(context, "tokenizer.ggml.model");
-    data.pre = read_string(context, "tokenizer.ggml.pre");
+    data.pre = read_string(context, "tokenizer.ggml.pre", false);
     data.tokens = read_string_array(context, "tokenizer.ggml.tokens");
     data.token_types = read_token_types(context, data.tokens.size());
     data.merges = read_string_array(context, "tokenizer.ggml.merges", false);
@@ -317,6 +323,120 @@ std::string serialize_bpe(tokenizer_metadata data, tokenizer_profile profile) {
     return config.dump();
 }
 
+std::string serialize_unigram(const tokenizer_metadata& data) {
+    require(data.model == "t5", "unsupported tokenizer.ggml.model '" + data.model + "' (Unigram/t5 expected)");
+    require(data.scores.size() == data.tokens.size(), "missing or incomplete 'tokenizer.ggml.scores'");
+
+    json vocab = json::array();
+    for (size_t id = 0; id < data.tokens.size(); ++id) {
+        // T5UniGramTokenizer deliberately requires JSON floating-point scores.
+        vocab.push_back(json::array({data.tokens[id], static_cast<double>(data.scores[id])}));
+    }
+
+    json config = {
+        {"pre_tokenizer",
+         {{"replacement", "\xE2\x96\x81"},
+          {"add_prefix_space", data.add_space_prefix}}},
+        {"model",
+         {{"type", "Unigram"},
+          {"unk_id", data.unk_id >= 0 ? data.unk_id : 3},
+          {"vocab", std::move(vocab)}}},
+    };
+    return config.dump();
+}
+
+void serialize_vocab_and_merges(const tokenizer_metadata& data,
+                                std::string& vocab_output,
+                                std::string& merges_output) {
+    require(data.model == "gpt2" || data.model == "gemma4" || data.model == "llama",
+            "unsupported tokenizer.ggml.model '" + data.model + "' (Gemma BPE expected)");
+
+    json vocab = json::object();
+    for (size_t id = 0; id < data.tokens.size(); ++id) {
+        const auto found = vocab.find(data.tokens[id]);
+        require(found == vocab.end() || found->get<size_t>() == id,
+                "duplicate token string has conflicting IDs");
+        vocab[data.tokens[id]] = id;
+    }
+    vocab_output = vocab.dump();
+
+    merges_output.clear();
+    if (!data.merges.empty()) {
+        for (const std::string& merge : data.merges) {
+            require(merge.find('\n') == std::string::npos && merge.find('\r') == std::string::npos,
+                    "merge contains a line break");
+            require(merge.find(' ') != std::string::npos, "merge does not contain a token separator");
+            merges_output += merge;
+            merges_output += '\n';
+        }
+        return;
+    }
+
+    // Gemma 3 GGUFs converted from tokenizer.model use SentencePiece's
+    // `llama` representation. SentencePiece stores the BPE rank as each
+    // piece's score rather than an explicit merge array. This is the same
+    // slow-to-fast reconstruction used to produce the HF tokenizer merges:
+    // visit normal pieces by descending score and emit every valid split,
+    // rightmost split first.
+    require(data.model == "llama", "missing or empty 'tokenizer.ggml.merges'");
+    require(data.scores.size() == data.tokens.size(), "missing or incomplete 'tokenizer.ggml.scores'");
+
+    std::unordered_set<std::string> token_set(data.tokens.begin(), data.tokens.end());
+    std::vector<size_t> piece_ids(data.tokens.size());
+    std::iota(piece_ids.begin(), piece_ids.end(), 0);
+    std::stable_sort(piece_ids.begin(), piece_ids.end(), [&](size_t left, size_t right) {
+        return data.scores[left] > data.scores[right];
+    });
+
+    size_t merge_count = 0;
+    for (size_t id : piece_ids) {
+        if (data.token_types[id] != 1) {  // NORMAL
+            continue;
+        }
+        const std::string& piece = data.tokens[id];
+        std::vector<size_t> split_offsets;
+        for (size_t offset = 1; offset < piece.size(); ++offset) {
+            const unsigned char byte = static_cast<unsigned char>(piece[offset]);
+            if ((byte & 0xC0) != 0x80) {
+                split_offsets.push_back(offset);
+            }
+        }
+        for (auto split = split_offsets.rbegin(); split != split_offsets.rend(); ++split) {
+            const std::string left = piece.substr(0, *split);
+            const std::string right = piece.substr(*split);
+            if (token_set.find(left) == token_set.end() || token_set.find(right) == token_set.end()) {
+                continue;
+            }
+            require(left.find_first_of("\r\n") == std::string::npos &&
+                        right.find_first_of("\r\n") == std::string::npos,
+                    "reconstructed merge contains a line break");
+            require(left.find(' ') == std::string::npos,
+                    "reconstructed left-hand token contains a literal space");
+            merges_output += left;
+            merges_output += ' ';
+            merges_output += right;
+            merges_output += '\n';
+            ++merge_count;
+        }
+    }
+    require(merge_count > 0, "could not reconstruct merges from SentencePiece scores");
+}
+
+template <typename Serializer>
+bool extract(const std::string& gguf_path, std::string& error, Serializer&& serializer) {
+    error.clear();
+    try {
+        gguf_context* context = gguf_init_from_file(gguf_path.c_str(), {/*.no_alloc =*/ true, /*.ctx =*/ nullptr});
+        require(context != nullptr, "cannot open '" + gguf_path + "'");
+        std::unique_ptr<gguf_context, decltype(&gguf_free)> owner(context, &gguf_free);
+        serializer(context);
+        return true;
+    } catch (const std::exception& exception) {
+        error = exception.what();
+        return false;
+    }
+}
+
 }  // namespace
 
 bool gguf_tokenizer_extractor::to_hf_json(const std::string& gguf_path,
@@ -324,30 +444,42 @@ bool gguf_tokenizer_extractor::to_hf_json(const std::string& gguf_path,
                                           std::string& error,
                                           tokenizer_profile profile) {
     output.clear();
-    error.clear();
-    try {
-        gguf_context* context = gguf_init_from_file(gguf_path.c_str(), {/*.no_alloc =*/ true, /*.ctx =*/ nullptr});
-        require(context != nullptr, "cannot open '" + gguf_path + "'");
-        std::unique_ptr<gguf_context, decltype(&gguf_free)> owner(context, &gguf_free);
-
+    return extract(gguf_path, error, [&](const gguf_context* context) {
         const int64_t hf_json_index = find_key(context, "tokenizer.huggingface.json", false);
         if (hf_json_index >= 0 && profile == tokenizer_profile::DEFAULT) {
             require(gguf_get_kv_type(context, hf_json_index) == GGUF_TYPE_STRING,
                     "'tokenizer.huggingface.json' must be a string");
             output = gguf_get_val_str(context, hf_json_index);
-            return true;
+            return;
         }
 
         const tokenizer_metadata data = read_metadata(context);
         if (data.model == "gpt2") {
             output = serialize_bpe(data, profile);
-            return true;
+            return;
         }
         fail("unsupported tokenizer.ggml.model '" + data.model + "'; currently supported: gpt2/BPE");
-    } catch (const std::exception& exception) {
-        error = exception.what();
-        return false;
-    }
+    });
+}
+
+bool gguf_tokenizer_extractor::to_unigram_json(const std::string& gguf_path,
+                                                std::string& output,
+                                                std::string& error) {
+    output.clear();
+    return extract(gguf_path, error, [&](const gguf_context* context) {
+        output = serialize_unigram(read_metadata(context));
+    });
+}
+
+bool gguf_tokenizer_extractor::to_vocab_and_merges(const std::string& gguf_path,
+                                                    std::string& vocab_output,
+                                                    std::string& merges_output,
+                                                    std::string& error) {
+    vocab_output.clear();
+    merges_output.clear();
+    return extract(gguf_path, error, [&](const gguf_context* context) {
+        serialize_vocab_and_merges(read_metadata(context), vocab_output, merges_output);
+    });
 }
 
 }  // namespace kcpp_sd

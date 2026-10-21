@@ -18,6 +18,17 @@ public:
                            std::string& json,
                            std::string& error,
                            tokenizer_profile profile = tokenizer_profile::DEFAULT);
+
+    // Builds the subset of tokenizer.json consumed by T5UniGramTokenizer.
+    static bool to_unigram_json(const std::string& gguf_path,
+                                std::string& json,
+                                std::string& error);
+
+    // Builds the two legacy resources consumed by GemmaTokenizer.
+    static bool to_vocab_and_merges(const std::string& gguf_path,
+                                    std::string& vocab_json,
+                                    std::string& merges,
+                                    std::string& error);
 };
 
 }  // namespace kcpp_sd
