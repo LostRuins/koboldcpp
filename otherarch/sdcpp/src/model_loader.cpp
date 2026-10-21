@@ -456,6 +456,10 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
 SDVersion ModelLoader::get_sd_version() const {
     TensorStorage token_embedding_weight, input_block_weight, context_ebedding_weight;
 
+    if (tensor_storage_map.count("model.diffusion_model.perceiver.latent_queries")) {
+        return VERSION_FIBO2;
+    }
+
     if (tensor_storage_map.find("model.diffusion_model.emb_in.image.weight") != tensor_storage_map.end() &&
         tensor_storage_map.find("model.diffusion_model.txt_mode_blocks.0.q_proj.weight") != tensor_storage_map.end()) {
         return VERSION_FLUX3;

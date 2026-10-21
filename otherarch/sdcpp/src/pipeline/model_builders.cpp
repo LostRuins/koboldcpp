@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "conditioning/conditioner.hpp"
+#include "conditioning/fibo2.hpp"
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "extensions/generation_extension.h"
@@ -14,6 +15,7 @@
 #include "model/diffusion/boogu.hpp"
 #include "model/diffusion/control.hpp"
 #include "model/diffusion/ernie_image.hpp"
+#include "model/diffusion/fibo2.hpp"
 #include "model/diffusion/flux.hpp"
 #include "model/diffusion/flux3.hpp"
 #include "model/diffusion/hidream_o1.hpp"
@@ -94,7 +96,12 @@ namespace sd::model_builders {
             return false;
         }
 
-        if (sd_version_is_sd3(version)) {
+        if (version == VERSION_FIBO2) {
+            result.conditioner = std::make_shared<Fibo2Conditioner>(ctx.backends.runtime_backend(SDBackendModule::TE),
+                                                                    tensor_storage_map, weight_manager, tokenizers);
+            result.diffusion   = std::make_shared<Fibo2::Fibo2Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
+                                                                    tensor_storage_map, "model.diffusion_model", weight_manager);
+        } else if (sd_version_is_sd3(version)) {
             result.conditioner = std::make_shared<SD3CLIPEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                                    tensor_storage_map,
                                                                    weight_manager,

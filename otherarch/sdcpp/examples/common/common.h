@@ -168,6 +168,7 @@ struct SDContextParams {
     std::string model_args;
     bool auto_fit = true;
     std::string rpc_servers;
+    bool list_devices = false;
     std::string effective_backend;
     std::string effective_params_backend;
     bool enable_mmap            = false;
@@ -189,6 +190,7 @@ struct SDContextParams {
 
     float flow_shift = INFINITY;
     ArgOptions get_options();
+    bool print_devices() const;
     void build_embedding_map();
     void prepare_backend_assignments();
     bool resolve(SDMode mode);

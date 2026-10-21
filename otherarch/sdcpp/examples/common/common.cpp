@@ -597,6 +597,11 @@ ArgOptions SDContextParams::get_options() {
 
     options.bool_options = {
         {"",
+         "--list-devices",
+         "list available ggml backend devices, including --rpc-servers (one 'name<TAB>description' per line), and exit; "
+         "the names are the device names accepted by --backend and --params-backend",
+         true, &list_devices},
+        {"",
          "--disable-prefetch",
          "disable asynchronous next-segment weight prefetch (defaults to false)",
          true, &disable_prefetch},
@@ -819,21 +824,20 @@ ArgOptions SDContextParams::get_options() {
          "but it usually offers faster inference speed and, in some cases, lower memory usage. "
          "The at_runtime mode, on the other hand, is exactly the opposite.",
          on_lora_apply_mode_arg},
-        {"",
-         "--list-devices",
-         "list available ggml backend devices (one 'name<TAB>description' per line) and exit; "
-         "the names are the device names accepted by --backend and --params-backend",
-         [](int /*argc*/, const char** /*argv*/, int /*index*/) {
-             size_t device_list_size = sd_list_devices(nullptr, 0);
-             std::vector<char> devices(device_list_size + 1);
-             sd_list_devices(devices.data(), devices.size());
-             fputs(devices.data(), stdout);
-             std::exit(0);
-             return 0;
-         }},
     };
 
     return options;
+}
+
+bool SDContextParams::print_devices() const {
+    if (!sd_add_rpc_servers(rpc_servers.c_str())) {
+        return false;
+    }
+    size_t device_list_size = sd_list_devices(nullptr, 0);
+    std::vector<char> devices(device_list_size + 1);
+    sd_list_devices(devices.data(), devices.size());
+    fputs(devices.data(), stdout);
+    return true;
 }
 
 void SDContextParams::build_embedding_map() {
@@ -2219,7 +2223,7 @@ bool SDGenerationParams::from_json_str(
         if (target_custom_sigmas != nullptr &&
             sample_json.contains("custom_sigmas") &&
             sample_json["custom_sigmas"].is_array() &&
-            !sample_json["custom_sigmas"].empty()) { // empty [] = "not specified", keep server/CLI default
+            !sample_json["custom_sigmas"].empty()) {  // empty [] = "not specified", keep server/CLI default
             *target_custom_sigmas = sample_json["custom_sigmas"].get<std::vector<float>>();
         }
         if (sample_json.contains("sample_method") && sample_json["sample_method"].is_string()) {

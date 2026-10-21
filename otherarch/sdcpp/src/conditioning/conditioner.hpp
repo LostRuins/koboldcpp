@@ -2008,7 +2008,8 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::GPT_OSS_20B;
         } else if (sd_version_is_pid(version)) {
             arch = LLM::LLMArch::GEMMA2_2B;
-        } else if (version == VERSION_QWEN_IMAGE_2_1 ||
+        } else if (version == VERSION_FIBO2 ||
+                   version == VERSION_QWEN_IMAGE_2_1 ||
                    sd_version_is_flux3(version) ||
                    sd_version_is_lingbot_video(version) ||
                    sd_version_is_ideogram4(version) ||
@@ -2367,6 +2368,53 @@ struct LLMEmbedder : public Conditioner {
         }
     }
 
+    bool expand_vision_marker(std::string& prompt,
+                              size_t& marker_start,
+                              std::vector<sd::Tensor<float>> outputs,
+                              int grid_h,
+                              int grid_w,
+                              std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
+                              LLM::DeepStackImageEmbeds& deepstack_image_embeds,
+                              std::vector<LLM::ImageGrid>& image_grids,
+                              int max_length = std::numeric_limits<int>::max()) {
+        if (outputs.empty()) {
+            return false;
+        }
+        const std::string placeholder = "<|image_pad|>";
+        size_t position               = prompt.find(placeholder, marker_start);
+        if (position == std::string::npos) {
+            LOG_ERROR("Reference image marker is missing");
+            return false;
+        }
+        std::vector<int> prefix_tokens;
+        if (!tokenizer->encode(prompt.substr(0, position), prefix_tokens, nullptr)) {
+            return false;
+        }
+        int index = static_cast<int>(prefix_tokens.size());
+        int count = static_cast<int>(outputs[0].shape()[1]);
+        if (index > max_length || count > max_length - index) {
+            LOG_ERROR("Reference images exceed the %d-token context", max_length);
+            return false;
+        }
+        if (deepstack_image_embeds.empty()) {
+            deepstack_image_embeds.resize(outputs.size() - 1);
+        }
+        GGML_ASSERT(deepstack_image_embeds.size() == outputs.size() - 1);
+        image_embeds.emplace_back(index, std::move(outputs[0]));
+        for (size_t layer = 1; layer < outputs.size(); ++layer) {
+            deepstack_image_embeds[layer - 1].emplace_back(index, std::move(outputs[layer]));
+        }
+        image_grids.push_back({index, count, grid_h, grid_w});
+        std::string markers;
+        markers.reserve(static_cast<size_t>(count) * placeholder.size());
+        for (int i = 0; i < count; ++i) {
+            markers += placeholder;
+        }
+        prompt.replace(position, placeholder.size(), markers);
+        marker_start = position + markers.size();
+        return true;
+    }
+
     SDCondition get_learned_condition(int n_threads,
                                       const ConditionerParams& conditioner_params) override {
         std::string prompt;
@@ -2394,9 +2442,8 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range                = {0, 0};
 
             if (llm->enable_vision) {
-                const std::string placeholder = "<|image_pad|>";
-                const int patch_size          = llm->config.vision.patch_size;
-                const int factor              = patch_size * llm->config.vision.spatial_merge_size;
+                const int patch_size = llm->config.vision.patch_size;
+                const int factor     = patch_size * llm->config.vision.spatial_merge_size;
 
                 auto resize_for_vision = [&](const sd::Tensor<float>& image) {
                     int height = static_cast<int>(image.shape()[1]);
@@ -2424,29 +2471,11 @@ struct LLMEmbedder : public Conditioner {
                                               int grid_h,
                                               int grid_w) {
                     GGML_ASSERT(image_outputs.size() == 4);
-                    auto image_embed = std::move(image_outputs[0]);
                     prompt += "<|vision_start|>";
-                    std::vector<int> prefix_tokens;
-                    if (!tokenizer->encode(prompt, prefix_tokens, nullptr)) {
-                        return false;
-                    }
-                    int image_embed_idx = static_cast<int>(prefix_tokens.size());
-                    image_embeds.emplace_back(image_embed_idx, image_embed);
-                    if (deepstack_image_embeds.empty()) {
-                        deepstack_image_embeds.resize(image_outputs.size() - 1);
-                    }
-                    for (size_t layer = 0; layer < deepstack_image_embeds.size(); ++layer) {
-                        deepstack_image_embeds[layer].emplace_back(image_embed_idx, std::move(image_outputs[layer + 1]));
-                    }
-                    image_grids.push_back({image_embed_idx,
-                                           static_cast<int>(image_embed.shape()[1]),
-                                           grid_h,
-                                           grid_w});
-                    for (int64_t i = 0; i < image_embed.shape()[1]; ++i) {
-                        prompt += placeholder;
-                    }
-                    prompt += "<|vision_end|>";
-                    return true;
+                    size_t marker_start = prompt.size();
+                    prompt += "<|image_pad|><|vision_end|>";
+                    return expand_vision_marker(prompt, marker_start, std::move(image_outputs), grid_h, grid_w,
+                                                image_embeds, deepstack_image_embeds, image_grids);
                 };
 
                 const auto* references = conditioner_params.minimax_h3_references;
@@ -2660,26 +2689,14 @@ struct LLMEmbedder : public Conditioner {
                         return {};
                     }
                     prompt += (i == 0 ? "" : " ") + std::string("<image") + std::to_string(i + 1) + "><|vision_start|>";
-                    std::vector<int> prefix_tokens;
-                    if (!tokenizer->encode(prompt, prefix_tokens, nullptr)) {
+                    size_t marker_start = prompt.size();
+                    prompt += "<|image_pad|><|vision_end|>";
+                    if (!expand_vision_marker(prompt, marker_start, std::move(outputs),
+                                              static_cast<int>(height) / llm->config.vision.patch_size,
+                                              static_cast<int>(width) / llm->config.vision.patch_size,
+                                              image_embeds, deepstack_image_embeds, image_grids)) {
                         return {};
                     }
-                    int index = static_cast<int>(prefix_tokens.size());
-                    int count = static_cast<int>(outputs[0].shape()[1]);
-                    image_embeds.emplace_back(index, std::move(outputs[0]));
-                    if (deepstack_image_embeds.empty()) {
-                        deepstack_image_embeds.resize(outputs.size() - 1);
-                    }
-                    for (size_t layer = 1; layer < outputs.size(); ++layer) {
-                        deepstack_image_embeds[layer - 1].emplace_back(index, std::move(outputs[layer]));
-                    }
-                    image_grids.push_back({index, count,
-                                           static_cast<int>(height) / llm->config.vision.patch_size,
-                                           static_cast<int>(width) / llm->config.vision.patch_size});
-                    for (int j = 0; j < count; ++j) {
-                        prompt += "<|image_pad|>";
-                    }
-                    prompt += "<|vision_end|>";
                 }
             }
             prompt_attn_range.first = static_cast<int>(prompt.size());
