@@ -539,6 +539,7 @@ endif()
 set_source_files_properties(vendor/hash/sha256/sha256.c PROPERTIES COMPILE_OPTIONS ${KCPP_HASH_NO_WARN_FLAG})
 
 add_library(sdtype_adapter
+            kcpp_src/sdcpp_gguf_tokenizer.cpp
             otherarch/sdcpp/sdtype_adapter.cpp
             otherarch/sdcpp/src/conditioning/wan_audio.cpp
             otherarch/sdcpp/src/core/compute_workspace.cpp

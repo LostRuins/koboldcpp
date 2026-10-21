@@ -22,6 +22,7 @@
 
 #include "stable-diffusion.h"
 #include "src/kcpp_sd_extensions.h"
+#include "sdcpp_gguf_tokenizer.h"
 #include "src/core/util.h"
 #include "src/model.h"
 #include "src/model_loader.h"
@@ -496,6 +497,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_lens = sd_version_is_lens(tempver);
     bool is_ming = (tempver == VERSION_MING_IMAGE);
     bool is_pid = sd_version_is_pid(tempver);
+    bool is_llada = sd_version_is_llada_image(tempver);
     bool is_ltx = sd_version_is_ltxav(tempver);
     bool is_ideogram = sd_version_is_ideogram4(tempver);
     bool is_boogu = sd_version_is_boogu_image(tempver);
@@ -503,9 +505,9 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_sefi = sd_version_is_sefi_image(tempver);
     bool is_mageflow = sd_version_is_mage_flow(tempver);
     bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
-    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_flux3 || is_mosi || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
+    bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_flux3 || is_mosi || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_llada || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris);
     bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu);
-    bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi);
+    bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi || is_llada);
 
     //kcpp qol fallback: if a llm was loaded as t5 by mistake
     if(conditioner_is_llm && !path_empty(params.t5xxl_path))
@@ -663,6 +665,41 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         kcpp_tokenizer_path += "main=";
         kcpp_tokenizer_path += kcpp_main_tokenizer;
         params.tokenizer = kcpp_tokenizer_path.c_str();
+    } else if (kcpp_tokenizer_path.empty()) {
+        // Explicit tokenizer JSON wins. Models with built-in tokenizer assets
+        // keep using them; GGUF metadata is only the final in-memory fallback.
+        const bool uses_baked_qwen = conditioner_is_llm && !has_tokenizer && !is_flux2 && !is_ernie && !is_ltx;
+        const bool uses_baked_mistral = is_flux2 || is_ernie;
+        const bool uses_baked_gemma = is_ltx;
+        const auto resource_missing = [&](const char* name) {
+            return !file_exists(executable_path + "embd_res/" + name);
+        };
+        const bool baked_missing =
+            (uses_baked_qwen && resource_missing("qwen2_merges_utf8_c_str.embd")) ||
+            (uses_baked_mistral &&
+             (resource_missing("mistral2_merges_utf8_c_str.embd") || resource_missing("mistral2_vocab_json.embd"))) ||
+            (uses_baked_gemma &&
+             (resource_missing("gemma_merges_utf8_c_str.embd") || resource_missing("gemma_vocab_json.embd")));
+
+        if (has_tokenizer || baked_missing) {
+            const char* tokenizer_gguf = !path_empty(params.llm_path) ? params.llm_path : params.model_path;
+            if (!path_empty(tokenizer_gguf) && is_gguf_file(tokenizer_gguf)) {
+                std::string tokenizer_error;
+                const auto profile = is_mosi ? kcpp_sd::tokenizer_profile::MOSS_IMAGE
+                                             : kcpp_sd::tokenizer_profile::DEFAULT;
+                if (kcpp_sd::gguf_tokenizer_extractor::to_hf_json(tokenizer_gguf,
+                                                                  kcpp_tokenizer_path,
+                                                                  tokenizer_error,
+                                                                  profile)) {
+                    params.tokenizer = kcpp_tokenizer_path.c_str();
+                    printf("\nKCPP: using tokenizer metadata from %s\n", tokenizer_gguf);
+                } else {
+                    printf("\nKCPP: could not use tokenizer metadata from %s: %s\n",
+                           tokenizer_gguf,
+                           tokenizer_error.c_str());
+                }
+            }
+        }
     }
 
     // patch hidream to fix broken images on vulkan
@@ -870,7 +907,12 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     if(inputs.debugmode==1)
     {
+        const char* tokenizer = params.tokenizer;
+        if (tokenizer != nullptr && *tokenizer == '{') {
+            params.tokenizer = "<in-memory tokenizer JSON>";
+        }
         char* buf = sd_ctx_params_to_str(&params);
+        params.tokenizer = tokenizer;
         if(buf)
         {
             printf("\n%s\n", buf);

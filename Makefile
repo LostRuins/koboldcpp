@@ -738,10 +738,13 @@ otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
 otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp otherarch/sdcpp/include/stable-diffusion.h otherarch/sdcpp/src/kcpp_sd_extensions.h kcpp_src/model_adapter.h otherarch/utils.h
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src $(CXXFLAGS) -c $< -o $@
 
+kcpp_sdcpp_tokenizer.o: kcpp_src/sdcpp_gguf_tokenizer.cpp kcpp_src/sdcpp_gguf_tokenizer.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-OBJS_SDTYPE := otherarch/sdcpp/sdtype_adapter.o $(OBJS_SDCOMMON)
+OBJS_SDTYPE := otherarch/sdcpp/sdtype_adapter.o kcpp_sdcpp_tokenizer.o $(OBJS_SDCOMMON)
 
 LLAMASERVER_SRCS := tools/server/main.cpp tools/server/server.cpp tools/server/server-schema.cpp tools/server/server-chat.cpp tools/server/server-common.cpp tools/server/server-context.cpp tools/server/server-http.cpp tools/server/server-models.cpp tools/server/server-queue.cpp tools/server/server-task.cpp tools/server/server-tools.cpp tools/server/server-mcp.cpp tools/server/server-decision.cpp tools/server/ui.cpp tools/server/server-stream.cpp common/subproc.cpp
 COMMON_DOWNLOAD_SRCS := common/download.cpp common/hf-cache.cpp vendor/cpp-httplib/httplib.cpp
