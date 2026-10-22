@@ -2456,6 +2456,22 @@ static int apply_reasoning_budget(int id, const std::vector<int> & start_think, 
     return id;
 }
 
+static void grammar_accept_token(FileFormat file_format, int32_t n_vocab, struct llama_grammar * grammar, llama_token token)
+{
+    const std::vector<llama_token> eog_tokens = GetEogIDs(file_format,n_vocab);
+    bool found_eog = std::find(eog_tokens.begin(), eog_tokens.end(), token) != eog_tokens.end();
+    if (found_eog) {
+        for (const auto & stack : grammar->stacks) {
+            if (stack.empty()) {
+                return;
+            }
+        }
+        GGML_ASSERT(false);
+    }
+    const std::string piece = FileFormatTokenizeID(token,file_format);
+    llama_grammar_accept_token(*grammar, token, piece);
+}
+
 int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float temp, std::mt19937 & rng,
 int mirostat, float mirostat_tau, float mirostat_eta, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
 const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve, float adaptive_target, float adaptive_decay,
@@ -2582,23 +2598,12 @@ const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq
         id = sample_adaptive_p(adaptive_target, adaptive_p_weighted_sum, adaptive_p_total_weight, &candidates_p, adaptive_decay, rng);
     }
 
-    return id;
-}
-
-static void grammar_accept_token(FileFormat file_format, int32_t n_vocab, struct llama_grammar * grammar, llama_token token)
-{
-    const std::vector<llama_token> eog_tokens = GetEogIDs(file_format,n_vocab);
-    bool found_eog = std::find(eog_tokens.begin(), eog_tokens.end(), token) != eog_tokens.end();
-    if (found_eog) {
-        for (const auto & stack : grammar->stacks) {
-            if (stack.empty()) {
-                return;
-            }
-        }
-        GGML_ASSERT(false);
+    // Only advance the grammar for sampled tokens, not forced reasoning-budget tokens.
+    if (grammar != nullptr) {
+        grammar_accept_token(file_format, n_vocab, grammar, id);
     }
-    const std::string piece = FileFormatTokenizeID(token,file_format);
-    llama_grammar_accept_token(*grammar, token, piece);
+
+    return id;
 }
 
 static void load_grammar(const std::string & gammarstr)
@@ -8774,10 +8779,6 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         std::string realtok = FileFormatTokenizeID(id, file_format, true);
                         printf("(Draft Bonus): Actual=%d (%s)\n",id,realtok.c_str());
                     }
-                }
-
-                if (grammar != nullptr) {
-                    grammar_accept_token(file_format, n_vocab, grammar, id);
                 }
 
                 if (!last_n_tokens.empty())
