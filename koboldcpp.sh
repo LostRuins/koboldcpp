@@ -14,6 +14,34 @@ kcpp_mamba() {
 	"$KCPP_MICROMAMBA" "$command" -r "$KCPP_MAMBA_ROOT_PREFIX" -p "$KCPP_MAMBA_ENV_PREFIX" "$@"
 }
 
+kcpp_find_rocm_data() {
+	local lib_dir
+	local -a lib_dirs
+	# Library locations need not share a prefix with the ROCm tools.
+	if [ -n "$ROCM_LIB_PATH" ]; then
+		lib_dirs=("$ROCM_LIB_PATH")
+	elif [ -n "$ROCM_PATH" ]; then
+		lib_dirs=("$ROCM_PATH/lib" "$ROCM_PATH/lib64")
+	else
+		lib_dirs=(/opt/rocm/lib /opt/rocm/lib64 /usr/lib64 /usr/lib)
+	fi
+	KCPP_ROCBLAS_DATA=""
+	KCPP_AMD_COMGR=""
+	for lib_dir in "${lib_dirs[@]}"; do
+		if [ -z "$KCPP_ROCBLAS_DATA" ] && [ -d "$lib_dir/rocblas" ]; then
+			KCPP_ROCBLAS_DATA="$lib_dir/rocblas"
+		fi
+		if [ -z "$KCPP_AMD_COMGR" ] && [ -f "$lib_dir/libamd_comgr.so" ]; then
+			KCPP_AMD_COMGR="$lib_dir/libamd_comgr.so"
+		fi
+	done
+	if [ -z "$KCPP_ROCBLAS_DATA" ] || [ -z "$KCPP_AMD_COMGR" ]; then
+		printf 'Error: ROCm packaging requires rocblas/ and libamd_comgr.so. Searched: %s\n' "${lib_dirs[*]}" >&2
+		echo "Set ROCM_LIB_PATH to the library directory (for example /usr/lib64), independently of ROCM_PATH." >&2
+		return 1
+	fi
+}
+
 KCPP_ENVIRONMENT_TMP=""
 KCPP_RESTORE_OCL_ICD=0
 kcpp_cleanup() {
@@ -83,7 +111,7 @@ if [ "$KCPP_CREATE_ENV" = 1 ] && [ -z "$KCPP_CUDA" ]; then
 		else
 			KCPP_CUDA=12.1.0
 		fi
-	elif command -v rocmsmi >/dev/null 2>&1 || [ -d /opt/rocm ]; then
+	elif command -v rocmsmi >/dev/null 2>&1 || command -v rocminfo >/dev/null 2>&1 || [ -d /opt/rocm ]; then
 		KCPP_CUDA=rocm
 	else
 		KCPP_CUDA=12.1.0
@@ -168,6 +196,9 @@ elif [[ $1 == "dist" ]]; then
 	# Packaging inputs and outputs are relative to the repository. Keep the
 	# caller's working directory for normal launches and relative model paths.
 	cd -- "$KCPP_REPO_DIR" || exit 1
+	if [ "$KCPP_CUDA" = "rocm" ]; then
+		kcpp_find_rocm_data || exit 1
+	fi
 	if [ ! -n "$KCPP_PORTABLE" ]; then
 		echo "WARNING: KCPP_PORTABLE NOT SPECIFIED, THIS BINARY WILL ONLY RUN ON YOUR SYSTEM!!"
 		sleep 5
@@ -176,15 +207,12 @@ elif [[ $1 == "dist" ]]; then
 	kcpp_mamba remove --no-rc --force ocl-icd -y || exit $?
 	kcpp_mamba run pyinstaller --noconfirm --onedir --collect-all customtkinter --collect-all jinja2 --collect-all psutil --add-data './koboldcpp.py:.' --add-data './kcpp_agent.py:.' --add-data './kcpp_src/json_to_gbnf.py:.' --clean --console koboldcpp.py -n "koboldcpp-launcher" || exit $?
 	if [ "$KCPP_CUDA" = "rocm" ]; then
-		if [ ! -n "$ROCM_PATH" ]; then
-			ROCM_PATH=/opt/rocm
-		fi
 		if [[ "$ARCH" = x64 && -n "$NOAVX1" ]]; then
-			kcpp_mamba run pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil --add-data './dist/koboldcpp-launcher/koboldcpp-launcher:.' --add-data './koboldcpp_hipblas.so:.' $PORTABLE_SO $VULKAN_FAILSAFE_SO --add-data './kcpp_adapters:./kcpp_adapters' --add-data './koboldcpp.py:.' --add-data './kcpp_agent.py:.' --add-data './kcpp_src/json_to_gbnf.py:.' --add-data './LICENSE.md:.' --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' --add-data './embd_res:./embd_res' --add-data "$ROCM_PATH/lib/rocblas:." --add-data "$ROCM_PATH/lib/libamd_comgr.so:." --clean --console koboldcpp.py -n "koboldcpp-linux-$ARCH-rocm" || exit $?
+			kcpp_mamba run pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil --add-data './dist/koboldcpp-launcher/koboldcpp-launcher:.' --add-data './koboldcpp_hipblas.so:.' $PORTABLE_SO $VULKAN_FAILSAFE_SO --add-data './kcpp_adapters:./kcpp_adapters' --add-data './koboldcpp.py:.' --add-data './kcpp_agent.py:.' --add-data './kcpp_src/json_to_gbnf.py:.' --add-data './LICENSE.md:.' --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' --add-data './embd_res:./embd_res' --add-data "$KCPP_ROCBLAS_DATA:." --add-data "$KCPP_AMD_COMGR:." --clean --console koboldcpp.py -n "koboldcpp-linux-$ARCH-rocm" || exit $?
 		elif [[ "$ARCH" = x64 && -n "$NOAVX2" ]]; then
-			kcpp_mamba run pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil --add-data './dist/koboldcpp-launcher/koboldcpp-launcher:.' --add-data './koboldcpp_hipblas.so:.' $PORTABLE_SO $VULKAN_FAILSAFE_SO --add-data './kcpp_adapters:./kcpp_adapters' --add-data './koboldcpp.py:.' --add-data './kcpp_agent.py:.' --add-data './kcpp_src/json_to_gbnf.py:.' --add-data './LICENSE.md:.' --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' --add-data './embd_res:./embd_res' --add-data "$ROCM_PATH/lib/rocblas:." --add-data "$ROCM_PATH/lib/libamd_comgr.so:." --clean --console koboldcpp.py -n "koboldcpp-linux-$ARCH-rocm" || exit $?
+			kcpp_mamba run pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil --add-data './dist/koboldcpp-launcher/koboldcpp-launcher:.' --add-data './koboldcpp_hipblas.so:.' $PORTABLE_SO $VULKAN_FAILSAFE_SO --add-data './kcpp_adapters:./kcpp_adapters' --add-data './koboldcpp.py:.' --add-data './kcpp_agent.py:.' --add-data './kcpp_src/json_to_gbnf.py:.' --add-data './LICENSE.md:.' --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' --add-data './embd_res:./embd_res' --add-data "$KCPP_ROCBLAS_DATA:." --add-data "$KCPP_AMD_COMGR:." --clean --console koboldcpp.py -n "koboldcpp-linux-$ARCH-rocm" || exit $?
 		else
-			kcpp_mamba run pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil --add-data './dist/koboldcpp-launcher/koboldcpp-launcher:.' --add-data './koboldcpp_default.so:.' --add-data './koboldcpp_hipblas.so:.' --add-data './koboldcpp_vulkan.so:.' $PORTABLE_SO $VULKAN_FAILSAFE_SO --add-data './kcpp_adapters:./kcpp_adapters' --add-data './koboldcpp.py:.' --add-data './kcpp_agent.py:.' --add-data './kcpp_src/json_to_gbnf.py:.' --add-data './LICENSE.md:.' --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' --add-data './embd_res:./embd_res' --add-data "$ROCM_PATH/lib/rocblas:." --add-data "$ROCM_PATH/lib/libamd_comgr.so:." --clean --console koboldcpp.py -n "koboldcpp-linux-$ARCH-rocm" || exit $?
+			kcpp_mamba run pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil --add-data './dist/koboldcpp-launcher/koboldcpp-launcher:.' --add-data './koboldcpp_default.so:.' --add-data './koboldcpp_hipblas.so:.' --add-data './koboldcpp_vulkan.so:.' $PORTABLE_SO $VULKAN_FAILSAFE_SO --add-data './kcpp_adapters:./kcpp_adapters' --add-data './koboldcpp.py:.' --add-data './kcpp_agent.py:.' --add-data './kcpp_src/json_to_gbnf.py:.' --add-data './LICENSE.md:.' --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' --add-data './embd_res:./embd_res' --add-data "$KCPP_ROCBLAS_DATA:." --add-data "$KCPP_AMD_COMGR:." --clean --console koboldcpp.py -n "koboldcpp-linux-$ARCH-rocm" || exit $?
 		fi
 	else
 		if [[ "$ARCH" = x64 && -n "$NOAVX1" ]]; then
