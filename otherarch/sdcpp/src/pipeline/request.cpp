@@ -320,6 +320,11 @@ namespace sd::pipeline {
     }
 
     void GenerationRequest::resolve(StableDiffusionGGML* sd) {
+        if (sd_version_is_minit2i(sd->version) && (width != 512 || height != 512)) {
+            width  = 512;
+            height = 512;
+            LOG_WARN("align to fixed size 512x512 for MiniT2I");
+        }
         align_generation_request_size();
         resolve_hires();
         seed = resolve_seed(seed);
