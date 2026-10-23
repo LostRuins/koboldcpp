@@ -703,7 +703,11 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         {
             tae_name = "taesd_f2.embd";
         }
-        else if(sd_version_uses_wan_vae(tempver) && tempver != VERSION_QWEN_IMAGE_2_1) // qwen 2.1 + tae crashing as of master-917
+        else if(tempver == VERSION_QWEN_IMAGE_2_1)
+        {
+            tae_name = "taesd_qi21.embd";
+        }
+        else if(sd_version_uses_wan_vae(tempver))
         {
             tae_name = "taesd_w21.embd";
         }
