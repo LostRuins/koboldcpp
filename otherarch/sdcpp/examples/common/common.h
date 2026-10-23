@@ -180,6 +180,7 @@ struct SDContextParams {
     bool sage_attn             = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
+    bool taesd_preview_only    = false;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
@@ -197,7 +198,7 @@ struct SDContextParams {
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
-    sd_ctx_params_t to_sd_ctx_params_t(bool taesd_preview);
+    sd_ctx_params_t to_sd_ctx_params_t();
 };
 
 struct SDGenerationParams {

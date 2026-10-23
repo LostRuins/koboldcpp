@@ -47,7 +47,6 @@ struct SDCliParams {
     int preview_interval     = 1;
     std::string preview_path = "preview.png";
     int preview_fps          = 16;
-    bool taesd_preview       = false;
     bool preview_noisy       = false;
     bool color               = false;
     bool metadata_raw        = false;
@@ -114,10 +113,6 @@ struct SDCliParams {
              "--color",
              "colors the logging tags according to level",
              true, &color},
-            {"",
-             "--taesd-preview-only",
-             std::string("prevents usage of taesd for decoding the final image. (for use with --preview ") + previews_str[PREVIEW_TAE] + ")",
-             true, &taesd_preview},
             {"",
              "--preview-noisy",
              "enables previewing noisy inputs of the models rather than the denoised outputs",
@@ -268,7 +263,6 @@ struct SDCliParams {
             << "  preview_interval: " << preview_interval << ",\n"
             << "  preview_path: \"" << preview_path << "\",\n"
             << "  preview_fps: " << preview_fps << ",\n"
-            << "  taesd_preview: " << (taesd_preview ? "true" : "false") << ",\n"
             << "  preview_noisy: " << (preview_noisy ? "true" : "false") << ",\n"
             << "  imatrix_out: \"" << imatrix_out << "\",\n"
             << "  metadata_raw: " << (metadata_raw ? "true" : "false") << ",\n"
@@ -885,7 +879,7 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(cli_params.taesd_preview);
+    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t();
 
     SDImageVec results;
     int num_results             = 0;

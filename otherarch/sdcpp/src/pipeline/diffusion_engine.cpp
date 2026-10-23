@@ -3241,7 +3241,7 @@ std::string StableDiffusionGGML::get_default_ref_image_preset(SDVersion version)
         return "qwen";
     } else if (sd_version_is_mage_flow(version)) {
         return "mage_flow";
-    } else if (sd_version_is_z_image(version) || sd_version_is_boogu_image(version)) {
+    } else if (sd_version_is_boogu_image(version)) {
         return "z_image_omni";
     } else if (sd_version_is_llada_image(version)) {
         return "llada_image";
