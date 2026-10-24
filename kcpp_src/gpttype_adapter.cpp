@@ -3989,7 +3989,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             printf("\nThis architecture has explicitly disabled the BOS token - if you need it, you must add it manually.\n");
             add_bos_token = false;
         }
-        if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM4 || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM4_MOE || file_format_meta.model_architecture == llm_arch::LLM_ARCH_DEEPSEEK2)) {
+        if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM4 || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM4_MOE || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM_DSA || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM5_NEXT || file_format_meta.model_architecture == llm_arch::LLM_ARCH_DEEPSEEK2)) {
             std::string temp = gpttype_get_chat_template();
             if (temp.find("[gMASK]<sop>") != std::string::npos) {
                 printf("GLM-4 will have no automatic BOS token.\n");
@@ -4447,9 +4447,9 @@ bool gpttype_generate_abort()
 //some quick prompt manipulation helper functions, these mutate the inputs
 void ApplyPromptFormatAdjustments(std::string & added_memory, std::string & input_prompt)
 {
-    //prompt mod to improve coherency for GLM4, by ensuring injection for gmask, sop and an extra space
+    //prompt mod to improve coherency for GLM4, by ensuring gmask and sop are injected once at the front
     //deepseek2 is actually used for glm 4.7 flash
-    if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM4 || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM4_MOE || file_format_meta.model_architecture == llm_arch::LLM_ARCH_DEEPSEEK2)) {
+    if (file_format == FileFormat::GGUF_GENERIC && (file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM4 || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM4_MOE || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM_DSA || file_format_meta.model_architecture == llm_arch::LLM_ARCH_GLM5_NEXT || file_format_meta.model_architecture == llm_arch::LLM_ARCH_DEEPSEEK2)) {
         std::string temp = gpttype_get_chat_template();
         if (temp.find("[gMASK]<sop>") != std::string::npos) {
             if (added_memory == "") {
@@ -4459,10 +4459,7 @@ void ApplyPromptFormatAdjustments(std::string & added_memory, std::string & inpu
                 if (!input_prompt.empty() && input_prompt.rfind("<sop>", 0) == 0) {  //check startswith
                     input_prompt.erase(0, 5);
                 }
-                if (!input_prompt.empty() && input_prompt[0] == ' ') {  // check for leading space
-                    input_prompt.erase(0, 1);
-                }
-                added_memory = "[gMASK]<sop> ";
+                added_memory = "[gMASK]<sop>";
             } else {
                 if (!added_memory.empty() && added_memory.rfind("[gMASK]", 0) == 0) {  //check startswith
                     added_memory.erase(0, 7);
@@ -4470,10 +4467,7 @@ void ApplyPromptFormatAdjustments(std::string & added_memory, std::string & inpu
                 if (!added_memory.empty() && added_memory.rfind("<sop>", 0) == 0) {  //check startswith
                     added_memory.erase(0, 5);
                 }
-                if (!added_memory.empty() && added_memory[0] == ' ') {  // check for leading space
-                    added_memory.erase(0, 1);
-                }
-                added_memory = "[gMASK]<sop> " + added_memory;
+                added_memory = "[gMASK]<sop>" + added_memory;
             }
         }
     }
