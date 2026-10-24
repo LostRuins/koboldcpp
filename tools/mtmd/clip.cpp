@@ -85,6 +85,7 @@
 #include "models/qwen3vl.cpp"
 #include "models/sensenova-u1.cpp"
 #include "models/siglip.cpp"
+#include "models/soprano.cpp"
 #include "models/step3vl.cpp"
 #include "models/voxtral-rt.cpp"
 #include "models/whisper-enc.cpp"
