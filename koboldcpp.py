@@ -11484,7 +11484,11 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
 
     def submit_completed_generation(url, jobid, sessionstart, submit_dict):
         global exitcounter, punishcounter, session_kudos_earned, session_jobs, rewardcounter
-        reply = make_url_request_horde(url, submit_dict)
+        error_info = {}
+        reply = make_url_request_horde(url, submit_dict, error_info=error_info)
+        if not reply and "message" in submit_dict and error_info.get("rc") in ("ChatSubmitInvalid", "ChatSubmitNonconformant", "ChatModelMismatch"):
+            # A refused chat reply still needs to release its job.
+            reply = make_url_request_horde(url, {"id": jobid, "model_id": friendlymodelname, "state": "faulted", "fault_reason": "reply_refused"})
         if not reply:
             punishcounter += 1
             print_with_time(f"Worker {worker_id} - Error, Job submit failed.")
@@ -11509,15 +11513,160 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
                 if exitcounter > 1:
                     exitcounter -= 1
 
-    def make_url_request_horde(url, data, method='POST',addmykey=False):
+    def horde_headers(addmykey=False):
         global password
-        headers = headers = {"apikey": api_key,'User-Agent':'KoboldCppEmbeddedWorkerV2','Client-Agent':'KoboldCppEmbedWorker:2'}
+        headers = {"apikey": api_key,'User-Agent':'KoboldCppEmbeddedWorkerV2','Client-Agent':'KoboldCppEmbedWorker:2'}
         if addmykey and password!="":
             headers["Authorization"] = f"Bearer {password}"
-        ret = make_url_request(url, data, method, headers)
+        return headers
+
+    def make_url_request_horde(url, data, method='POST',addmykey=False,error_info=None):
+        ret = make_url_request(url, data, method, horde_headers(addmykey), error_info=error_info)
         if not ret:
             print(f"Worker {worker_id} - Make sure your Horde API key and worker name is valid!")
         return ret
+
+    def horde_chat_job(genurl, payload, jobid):
+        # Return a submit body, or None when Horde has already settled a cancelled job.
+        submit = {"id": jobid, "model_id": friendlymodelname, "state": "faulted"}
+        try:
+            messages_url = payload.pop("messages_url", None)
+            if messages_url:
+                with urllib.request.urlopen(messages_url, timeout=10) as response:
+                    source = gzip.GzipFile(fileobj=response) if response.headers.get('Content-Encoding', '').lower() == 'gzip' else response
+                    body = source.read(32 * 1024 * 1024 + 1)
+                if len(body) > 32 * 1024 * 1024:
+                    raise ValueError("messages exceed the 32 MiB limit")
+                payload["messages"] = json.loads(body)
+                if not isinstance(payload["messages"], list):
+                    raise ValueError("messages_url did not contain a messages array")
+
+            # Rough estimate of tokens to handle prompt_overflow_refused
+            count_payload = {key: copy.deepcopy(payload[key]) for key in ("messages", "tools", "response_format") if key in payload}
+            image_tokens = 0
+            for message in count_payload.get("messages", []):
+                if isinstance(message.get("content"), list):
+                    for part in message["content"]:
+                        if part.get("type") == "image_url":
+                            part["image_url"] = {} # Base64 size is unrelated to the image's token cost.
+                            image_tokens += 512
+            count_text = json.dumps(count_payload, ensure_ascii=False)
+            prompt_tokens = token_count_text(count_text, True)
+            if prompt_tokens < 0:
+                prompt_tokens = (len(count_text) + 2) // 3
+            prompt_tokens += 32 + 16 * len(count_payload.get("messages", [])) + image_tokens
+            context_limit = min(horde_ctxlimit, int(payload.get("max_context_length", horde_ctxlimit)))
+            output_tokens = int(payload.get("max_length", args.defaultgenamt))
+            if prompt_tokens + output_tokens > context_limit:
+                print_with_time(f"Worker {worker_id} - Chat job {jobid} estimated at {prompt_tokens} prompt + {output_tokens} output tokens exceeds context {context_limit}.")
+                submit["fault_reason"] = "prompt_overflow"
+                return submit
+
+            # Tool parsing needs the complete reply. Ordinary non-streamed jobs also use JSON.
+            stream = payload.pop("stream_progress", False) is True and not payload.get("tools")
+            payload["stream"] = stream
+            if not stream:
+                generation = make_url_request_horde(genurl, payload, addmykey=True)
+            else:
+                payload["stream_options"] = {"include_usage": True}
+                message = {"role": "assistant", "content": "", "reasoning_content": ""}
+                generation = None
+                done = threading.Event()
+
+                def read_stream():
+                    nonlocal generation
+                    try:
+                        request = urllib.request.Request(genurl, data=json.dumps(payload).encode('utf-8'), headers=horde_headers(True))
+                        request.add_header('Content-Type', 'application/json')
+                        with urllib.request.urlopen(request, timeout=600) as response:
+                            if 'text/event-stream' not in response.headers.get('Content-Type', ''):
+                                generation = json.loads(response.read())
+                                return
+                            finish_reason, usage = None, {}
+                            for line in response:
+                                if not line.startswith(b'data:'):
+                                    continue # Local chat SSE emits one JSON data line per event, plus keepalives.
+                                data = line[5:].strip()
+                                if data == b'[DONE]':
+                                    if finish_reason is not None:
+                                        generation = {"choices": [{"message": message, "finish_reason": finish_reason}], "usage": usage}
+                                        return
+                                    break
+                                event = json.loads(data)
+                                if event.get("error"):
+                                    raise ValueError(event["error"])
+                                usage = event.get("usage") or usage
+                                for choice in event.get("choices", []):
+                                    delta = choice.get("delta") or {}
+                                    if delta.get("tool_calls"):
+                                        raise ValueError("unexpected tool call in a text stream")
+                                    for key in ("content", "reasoning_content"):
+                                        message[key] += delta.get(key) or ""
+                                    finish_reason = choice.get("finish_reason") or finish_reason
+                            raise ValueError("chat stream ended before a completed reply")
+                    except Exception as e:
+                        print_with_time(f"Worker {worker_id} - Chat stream failed: {e}")
+                    finally:
+                        done.set()
+
+                reader = threading.Thread(target=read_stream, daemon=True)
+                reader.start()
+                offsets = {"content": 0, "reasoning_content": 0}
+                seq, cancelled = 1, False
+                try:
+                    while True:
+                        finished = done.wait(1)
+                        if finished and not generation:
+                            break
+                        # Strings are replaced by the reader; each slice is a stable prefix.
+                        delta = {key: message[key][offset:offset + 65536] for key, offset in offsets.items()}
+                        if not any(delta.values()):
+                            if finished:
+                                break
+                            continue
+                        progress = {"id": jobid, "seq": seq, "delta": delta}
+                        for attempt in range(3):
+                            error_info = {}
+                            ack = make_url_request(f'{cluster}/api/v2/generate/text/progress', progress, headers=horde_headers(), timeout=10, error_info=error_info)
+                            if ack is not None or error_info.get("status") in (400, 401, 403, 404, 409, 413):
+                                break
+                            if attempt < 2:
+                                time.sleep(1) # Retry the identical seq and delta, including after a lost acknowledgement.
+                        if not isinstance(ack, dict) or ack.get("accepted_seq") != seq:
+                            print_with_time(f"Worker {worker_id} - Chat progress stopped; will submit the final reply.")
+                            break
+                        if ack.get("cancelled") is True:
+                            cancelled = True
+                            make_url_request(f'{epurl}/api/extra/abort', {"genkey": payload["genkey"]}, headers=horde_headers(True), timeout=10)
+                            break
+                        for key in offsets:
+                            offsets[key] += len(delta[key])
+                        seq += 1
+                finally:
+                    reader.join() # No progress posts may outlive this job's final submission.
+                if cancelled:
+                    print_with_time(f"Worker {worker_id} - Chat job {jobid} cancelled by Horde.")
+                    return None
+
+            if not generation or generation.get("error"):
+                raise ValueError("backend did not return a chat completion")
+            choice = generation["choices"][0]
+            message = choice["message"]
+            finish_reason = choice["finish_reason"]
+            if finish_reason not in ("stop", "length", "tool_calls", "content_filter"):
+                raise ValueError(f"invalid finish_reason: {finish_reason}")
+            reply = {"role": "assistant", "content": message.get("content") or ""}
+            for key in ("tool_calls", "reasoning_content"):
+                if message.get(key):
+                    reply[key] = message[key]
+            for key in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
+                value = (generation.get("usage") or {}).get(key)
+                if value is not None:
+                    submit[key] = value
+            submit.update(message=reply, finish_reason=finish_reason, state="ok")
+        except Exception as e:
+            print_with_time(f"Worker {worker_id} - Chat job {jobid} failed: {e}")
+        return submit
 
     current_id = None
     current_payload = None
@@ -11576,6 +11725,23 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
         }
         if parallel_batching_threads>1:
             gen_dict["threads"] = parallel_batching_threads
+
+        horde_ctxlimit = min(maxctx, maxctx if maxhordectx == 0 else maxhordectx)
+        horde_chat_limits = {
+            "max_context_length": horde_ctxlimit,
+            "max_length": maxhordelen,
+            "tools_max_temperature": tools_max_temperature,
+        }
+        gen_dict["chat_jobs"] = True
+        gen_dict["chat_features"] = ["seed", "presence_penalty", "tools", "json_object", "json_schema"]
+        gen_dict["image_transports"] = ["messages_url"]
+        if has_vision_support:
+            gen_dict["chat_features"].append("vision")
+            gen_dict["image_transports"].append("base64")
+
+        gen_dict["chat_features"].append("prompt_overflow_refused")
+        gen_dict["chat_limits"] = dict(horde_chat_limits)
+        gen_dict["model_id"] = friendlymodelname
         pop = make_url_request_horde(f'{cluster}/api/v2/generate/text/pop',gen_dict)
         if not pop:
             punishcounter += 1
@@ -11593,15 +11759,21 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
         sleepy_counter = 0
         current_id = pop['id']
         current_payload = pop['payload']
+        is_chat_job = bool(pop.get('chat', False))
         print("") #empty newline
         print_with_time(f"Job {current_id} received from {cluster} for {current_payload.get('max_length',0)} tokens and {current_payload.get('max_context_length',0)} max context. Starting generation...")
 
         #do gen
+        submit_dict = None
         while exitcounter < 10:
             if parallel_batching_threads>1 or not modelbusy.locked():
                 #horde gets a genkey to avoid KCPP overlap
-                current_payload['genkey'] = f"HORDEREQ_{random.randint(100, 999)}"
-                current_generation = make_url_request_horde(f'{epurl}/api/v1/generate', current_payload, method='POST',addmykey=True)
+                current_payload['genkey'] = f"HORDEREQ_{current_id}" if is_chat_job else f"HORDEREQ_{random.randint(100, 999)}"
+                genurl = f'{epurl}/v1/chat/completions' if is_chat_job else f'{epurl}/api/v1/generate'
+                if is_chat_job:
+                    submit_dict = horde_chat_job(genurl, current_payload, current_id)
+                    break # A failed chat job is faulted, never regenerated after publishing partial text.
+                current_generation = make_url_request_horde(genurl, current_payload, method='POST',addmykey=True)
                 if current_generation:
                     break
                 else:
@@ -11620,11 +11792,12 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
                 "generation": current_generation["results"][0]["text"],
                 "state": "ok"
             }
+        elif not is_chat_job:
+            print_with_time(f"Worker {worker_id} - Error, Abandoned current job due to errors. Getting new job.")
+        if submit_dict is not None:
             submiturl = cluster + '/api/v2/generate/text/submit'
             submit_thread = threading.Thread(target=submit_completed_generation, args=(submiturl, current_id, session_starttime, submit_dict))
             submit_thread.start() #submit job in new thread so nothing is waiting
-        else:
-            print_with_time(f"Worker {worker_id} - Error, Abandoned current job due to errors. Getting new job.")
         current_id = None
         current_payload = None
         time.sleep(0.1)
