@@ -32,7 +32,9 @@ struct std::hash<bytes>
     }
 };
 
-using candidates_memos = std::unordered_map<size_t, llama_grammar_candidates>;
+// Cached values are candidate indices only. Full candidates hold code_points pointers into
+// buffers owned by the caller, which are freed after each call, so they can't be cached.
+using candidates_memos = std::unordered_map<size_t, std::vector<size_t>>;
 using stack_memos = std::unordered_map<size_t, candidates_memos>;
 static stack_memos memo_cache;
 
@@ -1104,7 +1106,14 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     auto stack_hash_size  = sizeof(stack[0]) * stack.size();
     auto stack_hash       = std::hash<bytes>{}({ stack_hash_start, stack_hash_size });
 
-    llama_grammar_candidates * cache_target = nullptr;
+    std::vector<size_t> * cache_target = nullptr;
+    auto store_rejects = [&]() {
+        cache_target->clear();
+        cache_target->reserve(rejects.size());
+        for (const auto & r : rejects) {
+            cache_target->push_back(r.index);
+        }
+    };
 
     // Tests show that >75% of candidate lists are under 1280 and 50% are under 640b.
     // Most 'problem' loops are under 24b. However, candidate lists can be over 72k,
@@ -1138,7 +1147,13 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
                 }
             }
             if (auto cache_hit2 = candidates_memos.find(candidates_hash); cache_hit2 != candidates_memos.end()) {
-                return cache_hit2->second;
+                // rebuild the rejects from the current candidates so code_points stay valid
+                for (size_t idx : cache_hit2->second) {
+                    for (const auto & c : candidates) {
+                        if (c.index == idx) { rejects.push_back(c); break; }
+                    }
+                }
+                return rejects;
             } else {
                 cache_target = &(candidates_memos[candidates_hash]);
             }
@@ -1165,7 +1180,7 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         // cache_target was set by operator[] which pre-inserted an empty vector; write the
         // result here so subsequent lookups don't return an empty reject set.
         if (cache_target) {
-            *cache_target = rejects;
+            store_rejects();
         }
         return rejects;
     }
@@ -1204,7 +1219,7 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     }
 
     if (cache_target) {
-        *cache_target = rejects;
+        store_rejects();
     }
     return rejects;
 }
