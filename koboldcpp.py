@@ -11956,7 +11956,7 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
             "tools_max_temperature": tools_max_temperature,
         }
         gen_dict["chat_jobs"] = True
-        gen_dict["chat_features"] = ["seed", "presence_penalty", "tools", "json_object", "json_schema"]
+        gen_dict["chat_features"] = ["seed", "presence_penalty", "tools", "json_object", "json_schema", "reasoning_effort"]
         gen_dict["image_transports"] = ["messages_url"]
         if has_vision_support:
             gen_dict["chat_features"].append("vision")
