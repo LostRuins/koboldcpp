@@ -195,7 +195,6 @@
 #include "models/sensenova-u1.cpp"
 #include "models/smallthinker.cpp"
 #include "models/smollm3.cpp"
-#include "models/soprano.cpp"
 #include "models/spark2-5.cpp"
 #include "models/stablelm.cpp"
 #include "models/starcoder.cpp"
