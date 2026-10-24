@@ -5049,17 +5049,16 @@ ws ::= | " " | "\n" [ \t]{0,20}
             # handle structured outputs
             respformat = genparams.get('response_format', None)
             if respformat:
-                respformat_grammar = ""
                 try:
                     rt = respformat.get('type')
                     if rt.lower() == "json_schema":
                         schema = respformat.get('json_schema').get('schema')
                         decoded = convert_json_to_gbnf(schema)
                         if decoded:
-                            genparams["grammar"] = respformat_grammar = decoded
+                            genparams["grammar"] = decoded
                     elif rt.lower() == "json_object":
                         # the shared grammar is rooted at an array for tool calls; a json_object reply is one object
-                        genparams["grammar"] = respformat_grammar = jsongrammar.replace("root   ::= arr", "root   ::= object", 1)
+                        genparams["grammar"] = jsongrammar.replace("root   ::= arr", "root   ::= object", 1)
                 except Exception:
                     # In case of any issues, just do normal gen
                     print("Structured Output not valid - discarded")
