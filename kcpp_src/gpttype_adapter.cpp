@@ -35,6 +35,7 @@
 #include "utils.h"
 #include "llmutils.h"
 #include "kcpp_src/kcpp_backend.h"
+#include "kcpp_src/lookahead_sampler.h"
 
 #include "llama_v2.cpp"
 #include "llama_v3.cpp"
@@ -211,6 +212,11 @@ static std::string overridden_jinja_template = ""; //if set, overrides jinja tem
 static int delayed_generated_tokens_limit = 0;
 std::deque<std::string> delayed_generated_tokens; //for use with antislop sampling
 static std::map<int,std::vector<int>> antislop_banned_token_ids; //first is the npast position, second is the array of banned ids at that index
+static lookahead_config lookahead_cfg; //look-ahead segment sampler settings
+static lookahead_state lookahead_st; //look-ahead segment sampler runtime state
+static std::map<std::string,int> lookahead_standins; //stand-in word -> times seen (in memory only, persists across generations until restart)
+static std::mutex lookahead_standins_mtx;
+static const size_t lookahead_standins_cap = 512; //bound the tracker on long-running servers
 
 static int savestate_limit = 0;
 static std::vector<savestate_data> savestates;
@@ -901,6 +907,617 @@ bool ContextRewind(std::vector<int> &embd, std::vector<int> &current_context_tok
         embd.push_back(current_context_tokens[current_context_tokens.size()-1]);
     }
     return true;
+}
+
+//look-ahead stand-in tracker. Kept in memory only (no file I/O); readable through the perf endpoint.
+std::string gpttype_get_lookahead_standins()
+{
+    std::lock_guard<std::mutex> lock(lookahead_standins_mtx);
+    std::vector<std::pair<std::string,int>> items(lookahead_standins.begin(), lookahead_standins.end());
+    std::sort(items.begin(), items.end(), [](const std::pair<std::string,int> & x, const std::pair<std::string,int> & y) { return x.second > y.second; });
+    std::string out;
+    for(const auto & kv : items)
+    {
+        out += (out.empty() ? "" : ", ") + kv.first + ":" + std::to_string(kv.second);
+    }
+    return out;
+}
+
+static void lookahead_standins_trim()
+{
+    //drop the least seen words when the tracker grows past the cap
+    while(lookahead_standins.size() > lookahead_standins_cap)
+    {
+        auto lowest = lookahead_standins.begin();
+        for(auto it = lookahead_standins.begin(); it != lookahead_standins.end(); ++it)
+        {
+            if(it->second < lowest->second) { lowest = it; }
+        }
+        lookahead_standins.erase(lowest);
+    }
+}
+
+//count name-like words that were picked while a banned slop token had most of the probability
+static void lookahead_track_candidate(const lookahead_candidate & c)
+{
+    if(!lookahead_cfg.track) { return; }
+    std::string seg_lower;
+    std::vector<size_t> offs;
+    std::vector<lookahead_word> words = la_extract_words(c.scored_strs.empty() ? c.strs : c.scored_strs, c.supp, seg_lower, offs);
+    for(const auto & w : words)
+    {
+        if(w.supp < 0.5f || !w.capitalized || w.lower.size() < 3 || la_is_stopword(w.lower)) { continue; }
+        bool alpha = true;
+        for(char ch : w.lower) { if(!std::isalpha((unsigned char)ch)) { alpha = false; break; } }
+        if(!alpha) { continue; }
+        int n = 0;
+        {
+            std::lock_guard<std::mutex> lock(lookahead_standins_mtx);
+            n = ++lookahead_standins[w.lower];
+            lookahead_standins_trim();
+        }
+        if(debugmode==1 && !is_quiet)
+        {
+            printf("(Look-ahead: stand-in \"%s\" seen %d time%s, suppressed mass %.2f)\n", w.lower.c_str(), n, (n==1?"":"s"), w.supp);
+        }
+    }
+}
+
+//end of generation: count the sentences still in the window
+static void lookahead_finish()
+{
+    if(lookahead_st.active && lookahead_cfg.track)
+    {
+        for(const auto & sl : lookahead_st.slots)
+        {
+            if(sl.accepted && sl.accepted_idx >= 0) { lookahead_track_candidate(sl.attempts[sl.accepted_idx]); }
+        }
+    }
+    lookahead_st.active = false;
+}
+
+//look-ahead segment sampler helpers
+static void grammar_accept_token(FileFormat file_format, int32_t n_vocab, struct llama_grammar * grammar, llama_token token);
+
+//the mutable part of a grammar. Restored into the same grammar object, so the stack pointers stay valid
+//and the grammar memo cache (keyed on those pointers) keeps hitting
+struct lookahead_grammar_state
+{
+    const llama_grammar * owner = nullptr;
+    llama_grammar_stacks stacks;
+    llama_partial_utf8 partial_utf8;
+    bool awaiting_trigger = false;
+    std::string trigger_buffer;
+    std::vector<llama_grammar::token_pos> trigger_buffer_positions;
+};
+
+static void lookahead_new_slot(int ctxsz)
+{
+    lookahead_slot slot;
+    slot.start = ctxsz;
+    if(grammar != nullptr)
+    {
+        auto gs = std::make_shared<lookahead_grammar_state>();
+        gs->owner = grammar;
+        gs->stacks = grammar->stacks;
+        gs->partial_utf8 = grammar->partial_utf8;
+        gs->awaiting_trigger = grammar->awaiting_trigger;
+        gs->trigger_buffer = grammar->trigger_buffer;
+        gs->trigger_buffer_positions = grammar->trigger_buffer_positions;
+        slot.grammar_snap = gs;
+    }
+    {
+        std::lock_guard<std::mutex> lock(top_picks_history_mtx);
+        slot.picks_start = (int)top_picks_history.size();
+    }
+    lookahead_st.slots.push_back(slot);
+    lookahead_st.seg_lps.clear();
+    lookahead_st.seg_supp.clear();
+}
+
+//after a rewind or replay, rebuild the grammar from the current sentence's snapshot plus the tokens
+//generated since the sentence started, so it matches the context again
+static void lookahead_grammar_resync(const std::vector<int> & current_context_tokens)
+{
+    if(grammar == nullptr || lookahead_st.slots.empty()) { return; }
+    const lookahead_slot & sl = lookahead_st.slots.back();
+    if(!sl.grammar_snap || sl.grammar_snap->owner != grammar) { return; }
+    grammar->stacks = sl.grammar_snap->stacks;
+    grammar->partial_utf8 = sl.grammar_snap->partial_utf8;
+    grammar->awaiting_trigger = sl.grammar_snap->awaiting_trigger;
+    grammar->trigger_buffer = sl.grammar_snap->trigger_buffer;
+    grammar->trigger_buffer_positions = sl.grammar_snap->trigger_buffer_positions;
+    for(int i=sl.start;i<(int)current_context_tokens.size();++i)
+    {
+        grammar_accept_token(file_format, n_vocab, grammar, current_context_tokens[i]);
+    }
+}
+
+//per generated token: decide once whether the reply is JSON, then lex only that token
+static void lookahead_on_token(const std::string & tokstr)
+{
+    lookahead_state & st = lookahead_st;
+    if(st.mode == 0) { return; } //plain text: nothing to track
+    if(st.mode == 1)
+    {
+        la_json_lex lx = st.lex_tok.empty() ? la_json_lex() : st.lex_tok.back();
+        st.scored_tok.push_back(la_json_lex_token(tokstr, lx));
+        st.lex_tok.push_back(lx);
+        return;
+    }
+    st.raw_tok.push_back(tokstr);
+    std::string prefix;
+    for(const auto & t : st.raw_tok) { prefix += t; }
+    size_t js = 0;
+    int d = la_json_detect(prefix, js);
+    if(d < 0 && prefix.size() > 256) { d = 0; }
+    if(d < 0) { return; }
+    st.mode = d;
+    st.mode_at = (int)st.raw_tok.size();
+    if(d == 1)
+    {
+        //lex everything so far; bytes before the JSON start are scored as they are
+        la_json_lex lx;
+        size_t pos = 0;
+        for(const auto & t : st.raw_tok)
+        {
+            std::string m;
+            if(pos + t.size() <= js) { m = t; }
+            else if(pos >= js) { m = la_json_lex_token(t, lx); }
+            else { size_t k = js - pos; m = t.substr(0, k) + la_json_lex_token(t.substr(k), lx); }
+            st.scored_tok.push_back(m);
+            st.lex_tok.push_back(lx);
+            pos += t.size();
+        }
+    }
+}
+
+//after any rewind: drop the per-token tracking past the new end of the context
+static void lookahead_lex_truncate(int ctxsz)
+{
+    lookahead_state & st = lookahead_st;
+    const int n = std::max(0, ctxsz - st.gen_start);
+    if(st.mode != -1 && n < st.mode_at)
+    {
+        st.mode = -1; //rewound to before the mode was decided, decide again
+        st.scored_tok.clear();
+        st.lex_tok.clear();
+    }
+    if((int)st.raw_tok.size() > n) { st.raw_tok.resize(n); }
+    if((int)st.scored_tok.size() > n) { st.scored_tok.resize(n); }
+    if((int)st.lex_tok.size() > n) { st.lex_tok.resize(n); }
+}
+
+//first held-back token index: everything from here on is withheld from output
+static int lookahead_window_start()
+{
+    return lookahead_st.slots.empty() ? 0 : lookahead_st.slots.front().start;
+}
+
+static std::string lookahead_escape_newlines(const std::string & s)
+{
+    std::string out;
+    for(char c : s)
+    {
+        if(c=='\n') { out += "\\n"; } else { out.push_back(c); }
+    }
+    return out;
+}
+
+//the text a candidate was scored on (JSON-masked in JSON mode)
+static std::string lookahead_cand_text(const lookahead_candidate & c)
+{
+    std::string t;
+    for(const auto & s : (c.scored_strs.empty() ? c.strs : c.scored_strs)) { t += s; }
+    return t;
+}
+
+//accept the in-progress sentence, release sentences that fall out of the window, start a new one
+static void lookahead_accept_and_advance(int ctxsz)
+{
+    lookahead_state & st = lookahead_st;
+    while(!st.slots.empty() && (int)st.slots.size() >= lookahead_cfg.sentences)
+    {
+        lookahead_slot & rel = st.slots.front();
+        if(rel.accepted && rel.accepted_idx >= 0)
+        {
+            const lookahead_candidate & c = rel.attempts[rel.accepted_idx];
+            lookahead_track_candidate(c);
+            for(float v : c.lps)
+            {
+                if(!st.base_lp_init) { st.base_lp = v; st.base_lp_init = true; }
+                else { st.base_lp = 0.95f * st.base_lp + 0.05f * v; }
+            }
+            for(const auto & sent : la_split_sentences(la_lower(lookahead_cand_text(c))))
+            {
+                std::string op = la_opener(sent);
+                if(!op.empty()) { st.recent_openers.push_back(op); }
+            }
+            while(st.recent_openers.size() > 6) { st.recent_openers.pop_front(); }
+        }
+        st.slots.erase(st.slots.begin());
+        st.attempts_since_release = 0;
+    }
+    lookahead_new_slot(ctxsz);
+}
+
+//look-ahead segment sampler. Called once per sampled token, after the token was appended to the
+//context and to delayed_generated_tokens. Returns true if the context was rewound or replaced, in
+//which case the caller must not act on `id` (e.g. EOS) any more.
+bool LookaheadSegmentStep(std::vector<int> &embd, std::vector<int> &current_context_tokens, int &n_past,
+    std::vector<int> &last_n_tokens, int &remaining, const int id, const std::vector<llama_token> &eog_tokens,
+    const float temp, const int ctx_before_antislop, bool &abort_draft, const bool allow_prints)
+{
+    const lookahead_config & cfg = lookahead_cfg;
+    lookahead_state & st = lookahead_st;
+    const int ctxsz = (int)current_context_tokens.size();
+
+    if(st.slots.empty())
+    {
+        lookahead_new_slot(ctxsz);
+        return false;
+    }
+    lookahead_lex_truncate(ctxsz);
+
+    //an antislop rewind reached back into earlier sentences of the window
+    while(st.slots.size() > 1 && st.slots.back().start > ctxsz)
+    {
+        st.slots.pop_back();
+        lookahead_slot & back = st.slots.back();
+        back.accepted = false;
+        st.seg_lps.clear();
+        st.seg_supp.clear();
+        if(back.accepted_idx >= 0)
+        {
+            const auto & lps = back.attempts[back.accepted_idx].lps;
+            const auto & sup = back.attempts[back.accepted_idx].supp;
+            int keep = std::max(0, std::min((int)lps.size(), ctxsz - back.start));
+            st.seg_lps.assign(lps.begin(), lps.begin() + keep);
+            st.seg_supp.assign(sup.begin(), sup.begin() + std::min(keep, (int)sup.size()));
+        }
+        back.accepted_idx = -1;
+    }
+    if(st.slots.back().start > ctxsz)
+    {
+        st.slots.clear();
+        lookahead_new_slot(ctxsz);
+        return false;
+    }
+    if(grammar != nullptr && ctxsz != ctx_before_antislop)
+    {
+        lookahead_grammar_resync(current_context_tokens); //antislop rewound without touching the grammar
+    }
+
+    lookahead_slot & cur = st.slots.back();
+    const int seg_len = ctxsz - cur.start;
+    if((int)st.seg_lps.size() > seg_len)
+    {
+        st.seg_lps.resize(seg_len);
+    }
+    if((int)st.seg_supp.size() > seg_len)
+    {
+        st.seg_supp.resize(seg_len);
+    }
+    if(ctxsz != ctx_before_antislop || seg_len <= 0 || cur.start < 1)
+    {
+        return false; //antislop just rewound this step, wait for the next token
+    }
+    if((int)delayed_generated_tokens.size() < seg_len || (int)st.seg_lps.size() != seg_len || (int)st.seg_supp.size() != seg_len)
+    {
+        return false; //bookkeeping out of sync, let the sentence run on
+    }
+
+    const int dsz = (int)delayed_generated_tokens.size();
+    const bool is_eog = std::find(eog_tokens.begin(), eog_tokens.end(), id) != eog_tokens.end();
+    const bool at_limit = (remaining <= 0);
+
+    //token loop inside this sentence: cut it back to one copy and ban the token that started the repeat
+    //at that position. This runs per token because a loop never reaches a sentence end.
+    {
+        int period = 0;
+        const int cut = la_find_loop(current_context_tokens, cur.start, period);
+        bool real_loop = (cut > cur.start);
+        if(real_loop && st.mode == 1 && (int)st.scored_tok.size() == ctxsz - st.gen_start)
+        {
+            //JSON: only loops inside string values count, repeated structure is normal
+            bool has_text = false;
+            for(int i = cut - st.gen_start; i < (int)st.scored_tok.size() && !has_text; ++i)
+            {
+                has_text = (st.scored_tok[i].find_first_not_of(" \n") != std::string::npos);
+            }
+            real_loop = has_text;
+        }
+        if(real_loop)
+        {
+            const int amount = ctxsz - cut;
+            const int loop_tok = current_context_tokens[cut];
+            if(ContextRewind(embd, current_context_tokens, n_past, last_n_tokens, amount))
+            {
+                delayed_generated_tokens.resize(delayed_generated_tokens.size() - amount);
+                remaining += amount;
+                abort_draft = true;
+                st.loop_fixes += 1;
+                lookahead_grammar_resync(current_context_tokens);
+                lookahead_lex_truncate((int)current_context_tokens.size());
+                std::vector<int> & bans = antislop_banned_token_ids[(int)current_context_tokens.size()];
+                if(std::find(bans.begin(), bans.end(), loop_tok) == bans.end()) { bans.push_back(loop_tok); }
+                if(st.loop_fixes > 32) { st.stop_requested = true; } //it keeps finding new loops: stop rather than emit them
+                if(debugmode==1 && allow_prints)
+                {
+                    printf("\n(Look-ahead: token loop of period %d cut, %d tokens removed, token %d banned at that position%s)\n",
+                        period, amount, loop_tok, (st.stop_requested ? "; too many loops, stopping" : ""));
+                }
+                return true;
+            }
+        }
+    }
+
+    //JSON output (tool calls, structured output): only string values are scored, each value is a sentence
+    const int ngen = ctxsz - st.gen_start;
+    const bool json = (st.mode == 1 && (int)st.scored_tok.size() == ngen && ngen >= seg_len);
+    bool sentence_end = false;
+    if(seg_len >= cfg.min_len)
+    {
+        sentence_end = la_is_segment_end(json ? st.scored_tok.back() : delayed_generated_tokens.back());
+    }
+    if(!(sentence_end || seg_len >= cfg.max_len || is_eog || at_limit))
+    {
+        return false; //mid-sentence
+    }
+
+    //collect the sentence and the text before it
+    lookahead_candidate cand;
+    std::string seg_text, seg_lower;
+    std::vector<size_t> tok_offsets; //byte offset of each token in seg_lower
+    for(int i=dsz-seg_len;i<dsz;++i)
+    {
+        cand.strs.push_back(delayed_generated_tokens[i]);
+        seg_text += delayed_generated_tokens[i];
+    }
+    if(json) { cand.scored_strs.assign(st.scored_tok.end() - seg_len, st.scored_tok.end()); }
+    else { cand.scored_strs = cand.strs; }
+    cand.tokens.assign(current_context_tokens.begin() + cur.start, current_context_tokens.end());
+    cand.lps = st.seg_lps;
+    cand.supp = st.seg_supp;
+    std::vector<lookahead_word> seg_words = la_extract_words(cand.scored_strs, cand.supp, seg_lower, tok_offsets);
+    {
+        std::lock_guard<std::mutex> lock(top_picks_history_mtx);
+        if((int)top_picks_history.size() - cur.picks_start == seg_len)
+        {
+            cand.picks.assign(top_picks_history.begin() + cur.picks_start, top_picks_history.end());
+        }
+    }
+
+    std::string hist_text = st.prompt_tail;
+    {
+        const size_t histmax = 6000;
+        if(json)
+        {
+            std::string before;
+            for(int i = ngen - seg_len - 1; i >= 0 && before.size() < histmax; --i) { before = st.scored_tok[i] + before; }
+            hist_text += before;
+        }
+        else
+        {
+            hist_text += (concat_output.size() > histmax ? concat_output.substr(concat_output.size() - histmax) : concat_output);
+            for(int i=0;i<dsz-seg_len;++i) { hist_text += delayed_generated_tokens[i]; }
+        }
+    }
+
+    //sentence openers: released ones plus the held-back accepted sentences before this one
+    std::deque<std::string> openers = st.recent_openers;
+    for(size_t si=0; si+1<st.slots.size(); ++si)
+    {
+        const lookahead_slot & sl = st.slots[si];
+        if(sl.accepted_idx < 0) { continue; }
+        for(const auto & sent : la_split_sentences(la_lower(lookahead_cand_text(sl.attempts[sl.accepted_idx]))))
+        {
+            std::string op = la_opener(sent);
+            if(!op.empty()) { openers.push_back(op); }
+        }
+    }
+
+    float mean_lp = 0.0f;
+    for(float v : cand.lps) { mean_lp += v; }
+    mean_lp = cand.lps.empty() ? 0.0f : mean_lp / (float)cand.lps.size();
+
+    lookahead_score_detail sd = la_score_segment(seg_lower, seg_words, hist_text, mean_lp, openers, st, cfg, json);
+    cand.score = sd.total;
+
+    bool duplicate = false;
+    for(const auto & c : cur.attempts)
+    {
+        if(c.tokens == cand.tokens) { duplicate = true; break; }
+    }
+    const int first_tok = cand.tokens[0];
+    cur.attempts.push_back(cand);
+    st.attempts_since_release += 1;
+    const int slot_idx = (int)st.slots.size() - 1;
+
+    if(debugmode==1 && allow_prints)
+    {
+        std::string hit_names;
+        for(const auto & h : sd.slop_hits)
+        {
+            if(hit_names.size() < 240)
+            {
+                std::string hn = h.text;
+                if(h.text != cfg.slop_phrases[h.phrase])
+                {
+                    char buf[96];
+                    snprintf(buf, sizeof(buf), "~%s sim %.2f supp %.2f", cfg.slop_phrases[h.phrase].c_str(), h.sim, h.supp);
+                    hn += buf;
+                }
+                hit_names += (hit_names.empty() ? "" : ", ") + hn;
+            }
+        }
+        printf("\n(Look-ahead %s %d, attempt %zu/%d: score %.3f [rep %.2f slop %.2f struct %.2f lp %.2f]%s%s%s \"%s\")\n",
+            (json ? "JSON value" : "sentence"), slot_idx+1, cur.attempts.size(), cfg.retries+1, sd.total, sd.rep, sd.slop, sd.structure, sd.lp,
+            (hit_names.empty() ? "" : " slop: ("), hit_names.c_str(), (hit_names.empty() ? "" : ")"),
+            lookahead_escape_newlines(seg_text).c_str());
+    }
+
+    //accepted
+    if(cand.score <= cfg.threshold)
+    {
+        cur.accepted = true;
+        cur.accepted_idx = (int)cur.attempts.size() - 1;
+        if(!is_eog && !at_limit)
+        {
+            lookahead_accept_and_advance(ctxsz);
+        }
+        return false;
+    }
+
+    //bound the total work per window, so deep backtracking can't explode
+    const int attempt_budget = (cfg.retries + 1) * (cfg.sentences + 1) * 2;
+    const bool budget_ok = (st.attempts_since_release < attempt_budget);
+
+    //rejected, retry this sentence
+    if((int)cur.attempts.size() <= cfg.retries && budget_ok)
+    {
+        if(!ContextRewind(embd, current_context_tokens, n_past, last_n_tokens, seg_len))
+        {
+            st.active = false;
+            return false;
+        }
+        delayed_generated_tokens.resize(delayed_generated_tokens.size() - seg_len);
+        remaining += seg_len; //only committed tokens count against the budget
+        st.seg_lps.clear();
+        st.seg_supp.clear();
+        abort_draft = true;
+        st.total_retries += 1;
+        lookahead_grammar_resync(current_context_tokens);
+        lookahead_lex_truncate((int)current_context_tokens.size());
+        //ban the token that started each slop phrase for the rest of this sentence's attempts,
+        //otherwise the retry tends to walk straight back into the same word or name
+        for(const auto & h : sd.slop_hits)
+        {
+            int ti = 0;
+            while(ti + 1 < (int)tok_offsets.size() && tok_offsets[ti+1] <= h.pos) { ++ti; }
+            std::string tl = la_lower(cand.strs[ti]);
+            size_t nonspace = tl.find_first_not_of(" \t\r\n");
+            if(nonspace == std::string::npos) { continue; }
+            tl = tl.substr(nonspace);
+            const std::string & ph = h.text; //the listed phrase, or the sound-alike word that was hit
+            size_t into = h.pos - tok_offsets[ti]; //phrase start inside this token
+            bool token_starts_phrase = (into <= nonspace);
+            bool single_word = (ph.find(' ') == std::string::npos);
+            bool specific = (tl.size() >= 4) || (single_word && tl.size() >= 2);
+            size_t cmplen = std::min(tl.size(), ph.size());
+            bool is_prefix = (ph.compare(0, cmplen, tl, 0, cmplen) == 0);
+            if(token_starts_phrase && specific && is_prefix)
+            {
+                int bt = cand.tokens[ti];
+                if(std::find(cur.bans.begin(), cur.bans.end(), bt) == cur.bans.end())
+                {
+                    cur.bans.push_back(bt);
+                }
+            }
+        }
+        //near-greedy sampling would just reproduce the same sentence, so force a different opening
+        if(temp <= 0.25f || duplicate)
+        {
+            std::vector<int> & bans = antislop_banned_token_ids[(int)current_context_tokens.size()];
+            if(std::find(bans.begin(), bans.end(), first_tok) == bans.end())
+            {
+                bans.push_back(first_tok);
+            }
+        }
+        return true;
+    }
+
+    //all attempts failed: backtrack into the previous held-back sentence if it has attempts left
+    if(st.slots.size() >= 2 && budget_ok)
+    {
+        lookahead_slot & prev = st.slots[st.slots.size()-2];
+        if(prev.accepted_idx >= 0 && (int)prev.attempts.size() <= cfg.retries && prev.start >= 1)
+        {
+            float best_fail = cur.attempts[0].score;
+            for(const auto & c : cur.attempts) { best_fail = std::min(best_fail, c.score); }
+            //the previous sentence led into a dead end, so it should lose to an alternative that doesn't
+            prev.attempts[prev.accepted_idx].score += best_fail;
+            const int prev_first_tok = prev.attempts[prev.accepted_idx].tokens.empty() ? -1 : prev.attempts[prev.accepted_idx].tokens[0];
+            const int amount = ctxsz - prev.start;
+            if(ContextRewind(embd, current_context_tokens, n_past, last_n_tokens, amount))
+            {
+                delayed_generated_tokens.resize(delayed_generated_tokens.size() - amount);
+                remaining += amount;
+                st.slots.pop_back();
+                lookahead_slot & np = st.slots.back();
+                np.accepted = false;
+                np.accepted_idx = -1;
+                st.seg_lps.clear();
+                st.seg_supp.clear();
+                abort_draft = true;
+                st.total_backtracks += 1;
+                lookahead_grammar_resync(current_context_tokens);
+                lookahead_lex_truncate((int)current_context_tokens.size());
+                if(temp <= 0.25f && prev_first_tok >= 0)
+                {
+                    std::vector<int> & bans = antislop_banned_token_ids[(int)current_context_tokens.size()];
+                    if(std::find(bans.begin(), bans.end(), prev_first_tok) == bans.end())
+                    {
+                        bans.push_back(prev_first_tok);
+                    }
+                }
+                if(debugmode==1 && allow_prints)
+                {
+                    printf("(Look-ahead: sentence %d failed all attempts, backtracking into sentence %d)\n", slot_idx+1, slot_idx);
+                }
+                return true;
+            }
+        }
+    }
+
+    //nothing left to try: commit the best attempt of this sentence
+    int best = 0;
+    for(int i=1;i<(int)cur.attempts.size();++i)
+    {
+        if(cur.attempts[i].score < cur.attempts[best].score) { best = i; }
+    }
+    bool replaced = false;
+    //at the token limit the last attempt is kept, since a replay could not be decoded any more
+    if(best != (int)cur.attempts.size()-1 && !at_limit)
+    {
+        const lookahead_candidate chosen = cur.attempts[best];
+        if(ContextRewind(embd, current_context_tokens, n_past, last_n_tokens, seg_len))
+        {
+            delayed_generated_tokens.resize(delayed_generated_tokens.size() - seg_len);
+            remaining += seg_len;
+            lookahead_lex_truncate((int)current_context_tokens.size());
+            for(size_t i=0;i<chosen.tokens.size();++i)
+            {
+                lookahead_on_token(chosen.strs[i]);
+                current_context_tokens.push_back(chosen.tokens[i]);
+                last_n_tokens.push_back(chosen.tokens[i]);
+                embd.push_back(chosen.tokens[i]);
+                delayed_generated_tokens.push_back(chosen.strs[i]);
+            }
+            if(!chosen.picks.empty())
+            {
+                std::lock_guard<std::mutex> lock(top_picks_history_mtx);
+                top_picks_history.insert(top_picks_history.end(), chosen.picks.begin(), chosen.picks.end());
+            }
+            remaining -= (int)chosen.tokens.size();
+            abort_draft = true;
+            st.total_replays += 1;
+            replaced = true;
+            lookahead_grammar_resync(current_context_tokens);
+        }
+    }
+    if(!replaced) { best = (int)cur.attempts.size()-1; }
+    cur.accepted = true;
+    cur.accepted_idx = best;
+    if(debugmode==1 && allow_prints)
+    {
+        printf("(Look-ahead: sentence %d committed attempt %d of %zu, score %.3f%s)\n", slot_idx+1, best+1, cur.attempts.size(), cur.attempts[best].score, (replaced ? ", replayed" : ""));
+    }
+    if(!(is_eog && !replaced) && !at_limit)
+    {
+        lookahead_accept_and_advance((int)current_context_tokens.size());
+    }
+    return replaced;
 }
 
 const char * kcpp_print_system_info(void) {
@@ -4828,6 +5445,10 @@ static bool batch_inputs_eligible(const generation_inputs & inputs)
     {
         return false;
     }
+    if(inputs.lookahead_retries > 0) //look-ahead sampler only runs on the single-request path
+    {
+        return false;
+    }
     if(inputs.banned_tokens_len > 0)
     {
         return false;
@@ -7567,6 +8188,88 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         printf("\nBanned a total of %zu phrases, with max token count of %d.\n",banned_phrases.size(),delayed_generated_tokens_limit);
     }
 
+    //look-ahead segment sampler settings
+    lookahead_st.reset();
+    lookahead_cfg = lookahead_config();
+    lookahead_cfg.retries = std::max(0, std::min(inputs.lookahead_retries, 16));
+    lookahead_cfg.enabled = (lookahead_cfg.retries > 0);
+    if(lookahead_cfg.enabled)
+    {
+        if(std::isfinite(inputs.lookahead_threshold) && inputs.lookahead_threshold > 0.0f) { lookahead_cfg.threshold = inputs.lookahead_threshold; }
+        lookahead_cfg.sentences = std::max(1, std::min(inputs.lookahead_sentences, 8));
+        if(inputs.lookahead_min_len > 0) { lookahead_cfg.min_len = inputs.lookahead_min_len; }
+        if(inputs.lookahead_max_len > 0) { lookahead_cfg.max_len = std::min(inputs.lookahead_max_len, 512); }
+        lookahead_cfg.max_len = std::max(lookahead_cfg.max_len, lookahead_cfg.min_len);
+        if(std::isfinite(inputs.lookahead_w_rep) && inputs.lookahead_w_rep >= 0.0f) { lookahead_cfg.w_rep = inputs.lookahead_w_rep; }
+        if(std::isfinite(inputs.lookahead_w_slop) && inputs.lookahead_w_slop >= 0.0f) { lookahead_cfg.w_slop = inputs.lookahead_w_slop; }
+        if(std::isfinite(inputs.lookahead_w_struct) && inputs.lookahead_w_struct >= 0.0f) { lookahead_cfg.w_struct = inputs.lookahead_w_struct; }
+        if(std::isfinite(inputs.lookahead_w_lp) && inputs.lookahead_w_lp >= 0.0f) { lookahead_cfg.w_lp = inputs.lookahead_w_lp; }
+        for(int x=0;x<inputs.lookahead_slop_len;++x)
+        {
+            if(!inputs.lookahead_slop || !inputs.lookahead_slop[x]) { continue; }
+            std::string raw = inputs.lookahead_slop[x];
+            std::string phrase = la_lower(raw);
+            float w = (inputs.lookahead_slop_weights ? inputs.lookahead_slop_weights[x] : 1.0f);
+            if(phrase!="" && std::isfinite(w) && w > 0.0f)
+            {
+                //a capitalized single word is a name: whole word, exempt once established, sound-alike matching
+                bool all_alpha = phrase.size() >= 3;
+                for(char c : phrase) { if(!std::isalpha((unsigned char)c)) { all_alpha = false; break; } }
+                bool is_name = all_alpha && std::isupper((unsigned char)raw[0]);
+                lookahead_cfg.slop_phrases.push_back(phrase);
+                lookahead_cfg.slop_weights.push_back(w);
+                lookahead_cfg.slop_whole_word.push_back(is_name ? 1 : 0);
+                lookahead_cfg.slop_exempt_seen.push_back(is_name ? 1 : 0);
+                lookahead_cfg.slop_is_name.push_back(is_name ? 1 : 0);
+            }
+        }
+        //words never penalized, in addition to names already established in the context
+        if(inputs.lookahead_allow_len >= 0)
+        {
+            for(int x=0;x<inputs.lookahead_allow_len;++x)
+            {
+                if(inputs.lookahead_allow && inputs.lookahead_allow[x] && inputs.lookahead_allow[x][0]!='\0')
+                {
+                    lookahead_cfg.allow.push_back(la_lower(inputs.lookahead_allow[x]));
+                }
+            }
+        }
+        //near-slop (sound-alike names)
+        if(std::isfinite(inputs.lookahead_fuzzy_cutoff) && inputs.lookahead_fuzzy_cutoff >= 0.0f) { lookahead_cfg.fuzzy_cutoff = inputs.lookahead_fuzzy_cutoff; }
+        if(std::isfinite(inputs.lookahead_fuzzy_base) && inputs.lookahead_fuzzy_base >= 0.0f) { lookahead_cfg.fuzzy_base = inputs.lookahead_fuzzy_base; }
+        if(std::isfinite(inputs.lookahead_fuzzy_boost) && inputs.lookahead_fuzzy_boost >= 0.0f) { lookahead_cfg.fuzzy_boost = inputs.lookahead_fuzzy_boost; }
+        //stand-in tracking across generations
+        lookahead_cfg.track = inputs.lookahead_track;
+        if(inputs.lookahead_track_min > 0) { lookahead_cfg.track_min = inputs.lookahead_track_min; }
+        if(std::isfinite(inputs.lookahead_retry_temp) && inputs.lookahead_retry_temp >= 0.0f) { lookahead_cfg.retry_temp = std::min(inputs.lookahead_retry_temp, 2.0f); }
+        if(lookahead_cfg.track)
+        {
+            std::lock_guard<std::mutex> lock(lookahead_standins_mtx);
+            int added = 0;
+            for(const auto & kv : lookahead_standins)
+            {
+                if(kv.second < lookahead_cfg.track_min) { continue; }
+                if(std::find(lookahead_cfg.slop_phrases.begin(), lookahead_cfg.slop_phrases.end(), kv.first) != lookahead_cfg.slop_phrases.end()) { continue; }
+                lookahead_cfg.slop_phrases.push_back(kv.first);
+                lookahead_cfg.slop_weights.push_back(lookahead_cfg.track_weight);
+                lookahead_cfg.slop_whole_word.push_back(1);
+                lookahead_cfg.slop_exempt_seen.push_back(1);
+                lookahead_cfg.slop_is_name.push_back(1);
+                ++added;
+            }
+            if(debugmode==1 && !is_quiet)
+            {
+                printf("\nLook-ahead stand-in tracker: %zu words tracked, %d added as soft slop entries\n", lookahead_standins.size(), added);
+            }
+        }
+        if(debugmode==1 && !is_quiet)
+        {
+            printf("\nLook-ahead sampler: retry temp +%.2f, retries=%d sentences=%d threshold=%.2f sentence len=%d..%d weights(rep=%.2f slop=%.2f struct=%.2f lp=%.2f) slop phrases=%zu\n",
+            lookahead_cfg.retry_temp, lookahead_cfg.retries, lookahead_cfg.sentences, lookahead_cfg.threshold, lookahead_cfg.min_len, lookahead_cfg.max_len,
+            lookahead_cfg.w_rep, lookahead_cfg.w_slop, lookahead_cfg.w_struct, lookahead_cfg.w_lp, lookahead_cfg.slop_phrases.size());
+        }
+    }
+
     logit_biases.clear();
     for(int x=0;x<inputs.logit_biases_len;++x)
     {
@@ -8604,6 +9307,36 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             if (!startedsampling)
             {
                 startedsampling = true;
+                if(lookahead_cfg.enabled)
+                {
+                    const char * la_block = nullptr;
+                    if(file_format != FileFormat::GGUF_GENERIC) { la_block = "unsupported model format"; }
+                    else if(is_recurrent) { la_block = "recurrent/hybrid models cannot rewind"; }
+                    else if(guidance_ctx && negprompt_tokens.size()>0 && inputs.guidance_scale!=1.0f) { la_block = "negative prompt guidance is active"; }
+                    else if(draft_is_mtp) { la_block = "MTP drafting is active"; }
+                    else if(current_context_tokens.size() < 1) { la_block = "empty context"; }
+                    if(la_block)
+                    {
+                        if(allow_regular_prints)
+                        {
+                            printf("\n(Look-ahead sampler disabled: %s)\n", la_block);
+                        }
+                    }
+                    else
+                    {
+                        lookahead_st.active = true;
+                        lookahead_st.gen_start = (int)current_context_tokens.size();
+                        lookahead_new_slot((int)current_context_tokens.size());
+                        //detokenized prompt tail, so repeating earlier turns is also penalized
+                        const int tailn = 2048;
+                        int from = std::max(0, (int)current_context_tokens.size() - tailn);
+                        for(int t=from;t<(int)current_context_tokens.size();++t)
+                        {
+                            lookahead_st.prompt_tail += FileFormatTokenizeID(current_context_tokens[t], file_format, false);
+                        }
+                        lookahead_st.prompt_tail += "\n";
+                    }
+                }
                 if(draft_spec)
                 {
                     llama_tokens prompt_tokens;
@@ -8737,6 +9470,25 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                 }
 
+                //look-ahead: tokens that started a slop phrase in a rejected attempt of this segment.
+                //Before banning, measure how much raw probability the bans remove (suppressed mass):
+                //a high value means whatever gets picked here is a stand-in for the banned word.
+                float lookahead_lse = 0.0f;
+                float lookahead_supp = 0.0f;
+                if (lookahead_st.active)
+                {
+                    lookahead_lse = la_logsumexp(logitsPtr, n_vocab);
+                    if(!lookahead_st.slots.empty() && !lookahead_st.slots.back().bans.empty())
+                    {
+                        for(int t : lookahead_st.slots.back().bans)
+                        {
+                            lookahead_supp += std::exp(logitsPtr[t] - lookahead_lse);
+                            logitsPtr[t] = lowestLogit;
+                        }
+                        lookahead_supp = std::min(1.0f, lookahead_supp);
+                    }
+                }
+
                 //handle temp bans from antislop
                 if (antislop_banned_token_ids.find(n_past) != antislop_banned_token_ids.end()) {
                     std::vector<int>& bans = antislop_banned_token_ids[n_past];
@@ -8746,13 +9498,26 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                 }
 
+                //look-ahead: every retry of a sentence (or of a sentence it backtracked into) samples hotter
+                float sample_temp = temp;
+                if(lookahead_st.active && !lookahead_st.slots.empty() && lookahead_cfg.retry_temp > 0.0f)
+                {
+                    const int prior = (int)lookahead_st.slots.back().attempts.size();
+                    if(prior > 0) { sample_temp = std::min(std::max(temp, 0.0f) + lookahead_cfg.retry_temp * prior, std::max(temp, 2.0f)); }
+                }
                 id = SampleLogits(logitsPtr, nctx, n_vocab, last_n_size, repeat_penalty, kcpp_data->rep_pen_slope, presence_penalty,
-                top_k, top_a, top_p, min_p, typical_p, tfs_z, nsigma, temp, rng,
+                top_k, top_a, top_p, min_p, typical_p, tfs_z, nsigma, sample_temp, rng,
                 kcpp_data->mirostat, kcpp_data->mirostat_tau, kcpp_data->mirostat_eta,
                 kcpp_data->dry_multiplier, kcpp_data->dry_base,
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,
                 sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve, adaptive_target, adaptive_decay,
                 thinking_start_sequence, thinking_end_sequence, thinking_end_phrase_toksleft, kcpp_data->reasoning_budget);
+
+                float lookahead_tok_lp = 0.0f;
+                if(lookahead_st.active)
+                {
+                    lookahead_tok_lp = logitsPtr[id] - lookahead_lse; //raw logprob, before the look-ahead bans
+                }
 
                 if(draft_used)
                 {
@@ -8805,7 +9570,16 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
 
                     delayed_generated_tokens.push_back(tokenizedstr);
-                    while(delayed_generated_tokens.size() > delayed_generated_tokens_limit && delayed_generated_tokens.size() > 0)
+                    //the look-ahead sampler holds back the whole pending segment
+                    int la_pending = 0;
+                    if(lookahead_st.active)
+                    {
+                        lookahead_st.seg_lps.push_back(lookahead_tok_lp);
+                        lookahead_st.seg_supp.push_back(lookahead_supp);
+                        lookahead_on_token(tokenizedstr);
+                        la_pending = std::max(0, (int)current_context_tokens.size() - lookahead_window_start());
+                    }
+                    while(delayed_generated_tokens.size() > (size_t)(delayed_generated_tokens_limit + la_pending) && delayed_generated_tokens.size() > 0)
                     {
                         concat_output_mtx.lock();
                         generated_tokens.push_back(delayed_generated_tokens[0]);
@@ -8842,6 +9616,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                     printf("]\n");
                 }
+
+                const int la_ctx_before_antislop = (int)current_context_tokens.size();
 
                 //anti slop detection
                 if (banned_phrases.size() > 0)
@@ -8904,7 +9680,24 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                 }
 
-                if(!early_abort)
+                //look-ahead segment sampler: score finished segments, regenerate or commit
+                bool la_changed = false; //look-ahead rewound or replaced the token, so it must not trigger EOS
+                if (lookahead_st.active && !early_abort)
+                {
+                    la_changed = LookaheadSegmentStep(embd, current_context_tokens, n_past, last_n_tokens, remaining_tokens,
+                        id, eog_tokens, temp, la_ctx_before_antislop, abort_draft, allow_regular_prints);
+                    if(lookahead_st.stop_requested)
+                    {
+                        if(allow_regular_prints)
+                        {
+                            printf("\n(Look-ahead: the model kept looping, generation stopped)");
+                        }
+                        early_abort = true;
+                        last_stop_reason = stop_reason::EOS_TOKEN_HIT;
+                    }
+                }
+
+                if(!early_abort && !la_changed)
                 {
                     bool found_eog = std::find(eog_tokens.begin(), eog_tokens.end(), id) != eog_tokens.end();
                     if(!inputs.bypass_eos_token && inputs.allow_eos_token && found_eog)
@@ -8918,7 +9711,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                 }
 
-                if(!early_abort)
+                if(!early_abort && !la_changed)
                 {
                     for (const auto &matched : special_stop_sequence)
                     {
@@ -8937,9 +9730,18 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
 
                 if(!early_abort)
                 {
+                    //the look-ahead sampler holds text back from concat_output, so check that too
+                    std::string la_stopscan = "";
+                    if(lookahead_st.active && stop_sequence.size()>0)
+                    {
+                        size_t maxstop = 0;
+                        for (const auto &matched : stop_sequence) { maxstop = std::max(maxstop, matched.size()); }
+                        la_stopscan = (concat_output.size() > maxstop ? concat_output.substr(concat_output.size() - maxstop) : concat_output);
+                        for (const auto &dt : delayed_generated_tokens) { la_stopscan += dt; }
+                    }
                     for (const auto &matched : stop_sequence)
                     {
-                        if (concat_output.find(matched) != std::string::npos)
+                        if (concat_output.find(matched) != std::string::npos || (la_stopscan!="" && la_stopscan.find(matched) != std::string::npos))
                         {
                             early_abort = true;
                             if(allow_regular_prints)
@@ -9178,6 +9980,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             }
         }
     }
+
+    lookahead_finish();
 
     //flush any remaining delayed tokens
     while(delayed_generated_tokens.size() > 0)

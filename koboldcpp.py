@@ -441,7 +441,27 @@ class generation_inputs(ctypes.Structure):
                 ("logit_biases", ctypes.POINTER(logit_bias)),
                 ("banned_tokens_len", ctypes.c_int),
                 ("banned_tokens", ctypes.POINTER(ctypes.c_char_p)),
-                ("reasoning_budget", ctypes.c_int)]
+                ("reasoning_budget", ctypes.c_int),
+                ("lookahead_retries", ctypes.c_int),
+                ("lookahead_threshold", ctypes.c_float),
+                ("lookahead_min_len", ctypes.c_int),
+                ("lookahead_max_len", ctypes.c_int),
+                ("lookahead_w_rep", ctypes.c_float),
+                ("lookahead_w_slop", ctypes.c_float),
+                ("lookahead_w_struct", ctypes.c_float),
+                ("lookahead_w_lp", ctypes.c_float),
+                ("lookahead_slop_len", ctypes.c_int),
+                ("lookahead_slop", ctypes.POINTER(ctypes.c_char_p)),
+                ("lookahead_slop_weights", ctypes.POINTER(ctypes.c_float)),
+                ("lookahead_sentences", ctypes.c_int),
+                ("lookahead_fuzzy_cutoff", ctypes.c_float),
+                ("lookahead_fuzzy_base", ctypes.c_float),
+                ("lookahead_fuzzy_boost", ctypes.c_float),
+                ("lookahead_track", ctypes.c_bool),
+                ("lookahead_track_min", ctypes.c_int),
+                ("lookahead_retry_temp", ctypes.c_float),
+                ("lookahead_allow_len", ctypes.c_int),
+                ("lookahead_allow", ctypes.POINTER(ctypes.c_char_p))]
 
 class generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -1061,6 +1081,7 @@ def init_library():
     handle.abort_generate.restype = ctypes.c_bool
     handle.token_count.restype = token_count_outputs
     handle.get_pending_output.restype = ctypes.c_char_p
+    handle.get_lookahead_standins.restype = ctypes.c_char_p
     handle.get_chat_template.restype = ctypes.c_char_p
     handle.parse_chat_tool_calls.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_bool, ctypes.c_bool]
     handle.parse_chat_tool_calls.restype = ctypes.c_char_p
@@ -1576,7 +1597,7 @@ def get_capabilities():
     has_mcp = True if (args.mcpfile and mcp_connections and len(mcp_connections) > 0) else False
     admin_type = (2 if args.admin and args.admindir and args.adminpassword else (1 if args.admin and args.admindir else 0))
     has_router = True if args.routermode else False
-    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":visionSupport,"audio":audioSupport,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "music":has_music, "musicllm":bool(musicllmmodelpath), "savedata":(savedata_obj is not None), "admin": admin_type, "router":has_router, "guidance": has_guidance, "jinja": has_jinja, "mcp":has_mcp, "parallelrequests":args.parallelrequests, "defaults_modified":bool(args.gendefaults)}
+    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":visionSupport,"audio":audioSupport,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "music":has_music, "musicllm":bool(musicllmmodelpath), "savedata":(savedata_obj is not None), "admin": admin_type, "router":has_router, "guidance": has_guidance, "jinja": has_jinja, "mcp":has_mcp, "parallelrequests":args.parallelrequests, "defaults_modified":bool(args.gendefaults), "lookahead":True}
 
 
 def scan_directory(dirpath, valid_exts, depth):
@@ -2264,6 +2285,57 @@ def coerce_ban_list(value):
             pass
     return [value]
 
+# Default look-ahead slop list, used when a request does not send its own "lookahead_slop".
+# Kobold Lite shows the same list in its Slop List editor. A capitalized single word is a name:
+# matched as a whole word, ignored once it already appears in the context, and also matched by sound.
+lookahead_default_slop_list = [
+    ["delve", 0.8], ["tapestry", 0.8], ["testament to", 0.8], ["a sense of", 0.3],
+    ["it's worth noting", 0.8], ["it is worth noting", 0.8], ["it's important to note", 0.8],
+    ["it is important to note", 0.8], ["in conclusion", 0.5], ["in summary", 0.5],
+    ["barely above a whisper", 1.0], ["shivers down", 1.0], ["shiver down", 1.0],
+    ["sends shivers", 1.0], ["sent shivers", 1.0], ["maybe, just maybe", 1.0],
+    ["ministrations", 1.0], ["palpable", 0.6], ["a mix of", 0.4], ["a mixture of", 0.4],
+    ["eyes sparkling", 0.7], ["eyes glinting", 0.7], ["with mischief", 0.7],
+    ["mischievous glint", 1.0], ["husky voice", 0.7], ["voice barely", 0.6],
+    ["can't help but", 0.6], ["couldn't help but", 0.6], ["the air was thick", 0.8],
+    ["hung heavy in the air", 1.0], ["little did", 0.6], ["unspoken", 0.4],
+    ["a dance of", 0.8], ["intricate dance", 1.0], ["symphony of", 0.8],
+    ["ever-evolving", 0.8], ["ever-changing landscape", 1.0], ["navigate the complexities", 1.0],
+    ["rich tapestry", 1.0], ["embark on", 0.6], ["journey of self", 0.8],
+    ["i hope this helps", 0.6], ["feel free to", 0.4], ["great question", 0.8],
+    ["certainly!", 0.6], ["absolutely!", 0.6], ["let's dive", 0.8], ["dive into", 0.5],
+    ["stark reminder", 0.8], ["a reminder that", 0.4], ["in a world where", 0.8],
+    ["game-changer", 0.8], ["unwavering", 0.5], ["profound", 0.3], ["resonate", 0.4],
+    ["Elara", 1.0], ["Seraphina", 1.0], ["Lyra", 1.0], ["Kael", 1.0], ["Kaelen", 1.0], ["Elowen", 1.0],
+    ["Eldoria", 1.0], ["Elysia", 1.0], ["Liora", 1.0], ["Aelira", 1.0], ["Thorne", 1.0], ["Blackwood", 1.0],
+    ["Nyx", 1.0], ["Zephyr", 1.0], ["Vex", 1.0], ["Voss", 1.0], ["Sable", 1.0], ["Aria", 1.0],
+    ["Isolde", 1.0], ["Evelyn", 1.0], ["Lysandra", 1.0], ["Caelum", 1.0], ["Orion", 1.0], ["Selene", 1.0],
+    ["Aurelia", 1.0], ["Vesper", 1.0],
+]
+
+def parse_lookahead_slop(value):
+    # accepts {"phrase": weight}, [["phrase", weight], ...], ["phrase", ...] or a JSON string of those
+    if not value:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            value = [value]
+    items = value.items() if isinstance(value, dict) else value
+    out = []
+    try:
+        for item in items:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                phrase, weight = str(item[0]), tryparsefloat(item[1], 1.0)
+            else:
+                phrase, weight = str(item), 1.0
+            if phrase and weight > 0:
+                out.append((phrase, weight))
+    except Exception as ex:
+        print(f"lookahead_slop is invalid: {ex}")
+    return out
+
 def normalize_sampler_order(value):
     if value is None or value == []:
         return []
@@ -2518,6 +2590,45 @@ def generate(genparams, stream_flag=False):
 
     inputs.reasoning_budget = reasoning_budget
 
+    # look-ahead segment sampler
+    inputs.lookahead_retries = max(0, min(16, tryparseint(genparams.get('lookahead_retries', 0),0)))
+    inputs.lookahead_threshold = tryparsefloat(genparams.get('lookahead_threshold', 0.35),0.35)
+    inputs.lookahead_sentences = max(1, min(8, tryparseint(genparams.get('lookahead_sentences', 2),2)))
+    inputs.lookahead_fuzzy_cutoff = tryparsefloat(genparams.get('lookahead_fuzzy_cutoff', 0.6),0.6)
+    inputs.lookahead_fuzzy_base = tryparsefloat(genparams.get('lookahead_fuzzy_base', 0.3),0.3)
+    inputs.lookahead_fuzzy_boost = tryparsefloat(genparams.get('lookahead_fuzzy_boost', 1.5),1.5)
+    lookahead_track = genparams.get('lookahead_track', False)
+    inputs.lookahead_track = (lookahead_track.strip().lower() in ("1","true","yes","on")) if isinstance(lookahead_track, str) else bool(lookahead_track)
+    inputs.lookahead_track_min = max(1, tryparseint(genparams.get('lookahead_track_min', 3),3))
+    inputs.lookahead_retry_temp = max(0.0, min(2.0, tryparsefloat(genparams.get('lookahead_retry_temp', 0.2),0.2)))
+    # words never penalized (e.g. established character names), on top of names that already appear
+    # at least twice in the context
+    lookahead_allow = genparams.get('lookahead_allow', None)
+    if isinstance(lookahead_allow, str):
+        lookahead_allow = [lookahead_allow]
+    if isinstance(lookahead_allow, list):
+        lookahead_allow = [str(x) for x in lookahead_allow if x][:ban_token_max]
+        inputs.lookahead_allow_len = len(lookahead_allow)
+        inputs.lookahead_allow = (ctypes.c_char_p * max(1, len(lookahead_allow)))()
+        for n, word in enumerate(lookahead_allow):
+            inputs.lookahead_allow[n] = word.encode("UTF-8")
+    else:
+        inputs.lookahead_allow_len = -1
+    inputs.lookahead_min_len = tryparseint(genparams.get('lookahead_min_len', 6),6)
+    inputs.lookahead_max_len = tryparseint(genparams.get('lookahead_max_len', 48),48)
+    inputs.lookahead_w_rep = tryparsefloat(genparams.get('lookahead_w_rep', 1.0),1.0)
+    inputs.lookahead_w_slop = tryparsefloat(genparams.get('lookahead_w_slop', 1.0),1.0)
+    inputs.lookahead_w_struct = tryparsefloat(genparams.get('lookahead_w_struct', 0.6),0.6)
+    inputs.lookahead_w_lp = tryparsefloat(genparams.get('lookahead_w_lp', 0.5),0.5)
+    lookahead_slop_raw = genparams.get('lookahead_slop', None)
+    lookahead_slop = parse_lookahead_slop(lookahead_default_slop_list if lookahead_slop_raw is None else lookahead_slop_raw)[:ban_token_max]
+    inputs.lookahead_slop_len = len(lookahead_slop)
+    inputs.lookahead_slop = (ctypes.c_char_p * inputs.lookahead_slop_len)()
+    inputs.lookahead_slop_weights = (ctypes.c_float * inputs.lookahead_slop_len)()
+    for n, (phrase, weight) in enumerate(lookahead_slop):
+        inputs.lookahead_slop[n] = phrase.encode("UTF-8")
+        inputs.lookahead_slop_weights[n] = weight
+
     currentusergenkey = genkey
     totalgens += 1
     #early exit if aborted
@@ -2569,6 +2680,9 @@ def continuous_batching_python_eligible(genparams, api_format):
         return False
     if genparams.get("grammar_retain_state") or genparams.get("banned_tokens") or genparams.get("banned_strings"):
         utfprint("Batching disabled due to retained grammar or bans",2)
+        return False
+    if tryparseint(genparams.get("lookahead_retries", 0),0) > 0:
+        utfprint("Batching disabled due to look-ahead sampler",2)
         return False
     return True
 
@@ -7262,6 +7376,7 @@ Change Mode<br>
             lastseed = handle.get_last_seed()
             lastdraftsuccess = handle.get_last_draft_success()
             lastdraftfailed = handle.get_last_draft_failed()
+            lookaheadstandins = ctypes.string_at(handle.get_lookahead_standins()).decode("UTF-8","ignore")
             t_pp = float(lastp)*float(lastic)*0.001
             t_gen = float(laste)*float(lastc)*0.001
             s_pp = float(lastic)/t_pp if t_pp>0 else 0
@@ -7282,6 +7397,7 @@ Change Mode<br>
                     "last_seed": lastseed,
                     "last_draft_success": lastdraftsuccess,
                     "last_draft_failed": lastdraftfailed,
+                    "lookahead_standins": lookaheadstandins,
                     "total_gens": totalgens,
                     "stop_reason": stopreason,
                     "total_img_gens": totalimggens,
@@ -7543,6 +7659,9 @@ Change Mode<br>
                 response_body = embedded_musicui
             else:
                 response_body = ("KoboldCpp API is running, but KCPP MusicUI is not loaded").encode()
+
+        elif clean_path.endswith('/api/extra/lookahead/defaults'):
+            response_body = (json.dumps({"slop": lookahead_default_slop_list}).encode())
 
         elif clean_path=="/v1":
             content_type = 'text/html'
