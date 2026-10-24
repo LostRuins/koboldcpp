@@ -56,15 +56,6 @@ namespace HiDreamO1 {
         }
     };
 
-    static inline std::string repeat_special_token(const std::string& token, int64_t count) {
-        std::string out;
-        out.reserve(static_cast<size_t>(count) * token.size());
-        for (int64_t i = 0; i < count; ++i) {
-            out += token;
-        }
-        return out;
-    }
-
     static inline std::pair<int, int> calculate_dimensions(int max_size, double ratio) {
         int width  = static_cast<int>(std::sqrt(max_size * max_size * ratio));
         int height = static_cast<int>(width / ratio);
@@ -405,7 +396,7 @@ namespace HiDreamO1 {
             txt = LLM::splice_image_embeds(&runner_ctx, txt, image_embeds);
 
             auto t_emb          = t_embedder1->forward(&runner_ctx, timestep);
-            int64_t txt_seq_len = input_ids->ne[0];
+            int64_t txt_seq_len = txt->ne[1];
             if (txt_seq_len > 1) {
                 auto prefix = ggml_ext_slice(compute_ctx, txt, 1, 0, txt_seq_len - 1);
                 txt         = ggml_concat(compute_ctx, prefix, ggml_reshape_3d(compute_ctx, t_emb, t_emb->ne[0], 1, 1), 1);
@@ -616,8 +607,7 @@ namespace HiDreamO1 {
                 sd::Tensor<float> vlm_image = sd::ops::interpolate(
                     resized_ref,
                     {dims.first, dims.second, resized_ref.shape()[2], resized_ref.shape()[3]});
-                vlm_image            = vlm_image * 2.0f - 1.0f;
-                int64_t image_tokens = static_cast<int64_t>(dims.first / PATCH_SIZE) * static_cast<int64_t>(dims.second / PATCH_SIZE);
+                vlm_image = vlm_image * 2.0f - 1.0f;
 
                 auto patch_img = resized_ref * 2.0f - 1.0f;
                 result.c_ref_images.push_back(std::move(patch_img));
@@ -626,8 +616,11 @@ namespace HiDreamO1 {
                     return {};
                 }
                 int64_t prompt_start = static_cast<int64_t>(prefix_tokens.size());
+                for (const auto& grid : image_grids) {
+                    prompt_start += static_cast<int64_t>(grid[1]) * grid[2] - 1;
+                }
                 prompt += "<|vision_start|>";
-                prompt += repeat_special_token("<|image_pad|>", image_tokens);
+                prompt += "<|image_pad|>";
                 prompt += "<|vision_end|>";
                 vlm_images.emplace_back(static_cast<int>(prompt_start), std::move(vlm_image));
                 image_grids.push_back({1, dims.second / PATCH_SIZE, dims.first / PATCH_SIZE});
@@ -642,6 +635,13 @@ namespace HiDreamO1 {
             }
 
             std::vector<int32_t> input_ids_pad = input_ids;
+            for (size_t i = 0; i < vlm_images.size(); ++i) {
+                const auto& grid    = image_grids[i];
+                const int64_t count = static_cast<int64_t>(grid[1]) * grid[2];
+                input_ids_pad.insert(input_ids_pad.begin() + vlm_images[i].first, count - 1, IMAGE_TOKEN_ID);
+            }
+
+            int txt_seq_len = static_cast<int>(input_ids_pad.size());
             input_ids_pad.push_back(VISION_START_TOKEN_ID);
             input_ids_pad.insert(input_ids_pad.end(), target_image_len - 1, IMAGE_TOKEN_ID);
             image_grids.push_back({1, static_cast<int32_t>(height / PATCH_SIZE), static_cast<int32_t>(width / PATCH_SIZE)});
@@ -656,8 +656,7 @@ namespace HiDreamO1 {
             }
 
             std::vector<int32_t> token_types(input_ids_pad.size(), 0);
-            int txt_seq_len = static_cast<int>(input_ids.size());
-            int bgn         = txt_seq_len - TIMESTEP_TOKEN_NUM;
+            int bgn = txt_seq_len - TIMESTEP_TOKEN_NUM;
             for (int i = bgn; i < static_cast<int>(token_types.size()); ++i) {
                 token_types[i] = 1;
             }

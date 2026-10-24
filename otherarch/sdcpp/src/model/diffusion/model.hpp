@@ -27,9 +27,25 @@ struct RefImageParams {
     int vlm_min_size                   = -1;
     int vlm_max_size                   = -1;
     bool resize_vae_to_target          = false;
+    bool resize_single_ref_to_target   = false;
+    bool vae_size_buckets              = false;
+    bool vae_center_crop               = false;
+    bool vlm_use_vae_input             = false;
 };
 
 const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
+    {"fibo2", [] {
+         RefImageParams params;
+         params.pass_to_vlm                 = true;
+         params.ref_index_mode              = Rope::RefIndexMode::INCREASE;
+         params.vlm_resize_mode             = RefImageResizeMode::LONGEST_SIDE;
+         params.vlm_max_size                = 768;
+         params.resize_single_ref_to_target = true;
+         params.vae_size_buckets            = true;
+         params.vae_center_crop             = true;
+         params.vlm_use_vae_input           = true;
+         return params;
+     }()},
     {"flux_kontext", {false, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::NONE, -1, -1}},
     {"longcat", {true, true, Rope::RefIndexMode::FIXED, false, true, -1, RefImageResizeMode::AREA, -1, -1}},
     {"flux2", {false, true, Rope::RefIndexMode::INCREASE, false, true, -1, RefImageResizeMode::NONE, -1, -1}},

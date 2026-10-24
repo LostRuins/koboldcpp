@@ -197,7 +197,11 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix, 
             replace_with_name_map(name, llm_vision_name_map);
         } else {
             replace_with_name_map(name, llm_name_map);
-            name = convert_llada2_moe_te_name(name);
+            name                              = convert_llada2_moe_te_name(name);
+            const std::string language_prefix = "llm.model.language_model.";
+            if (starts_with(name, language_prefix)) {
+                name = "llm.model." + name.substr(language_prefix.size());
+            }
         }
     } else {
         name = convert_open_clip_to_hf_clip_name(name);
@@ -1034,6 +1038,18 @@ static std::string convert_ming_image_dit_name(std::string name) {
     return name;
 }
 
+static std::string convert_fibo2_dit_name(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {".attention.q_norm.", ".attention.norm_q."},
+        {".attention.k_norm.", ".attention.norm_k."},
+        {".attention.out.", ".attention.to_out.0."},
+        {".cross_attention.to_out.weight", ".cross_attention.to_out.0.weight"},
+        {".self_attention.to_out.weight", ".self_attention.to_out.0.weight"},
+    };
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
 std::string convert_diffusers_dit_to_original_minimax_h3(std::string name) {
     static const std::vector<std::pair<std::string, std::string>> prefix_map = {
         {"transformer_blocks.", "blocks."},
@@ -1067,6 +1083,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_moss_image_dit_name(name);
     } else if (version == VERSION_MING_IMAGE) {
         name = convert_ming_image_dit_name(name);
+    } else if (version == VERSION_FIBO2) {
+        name = convert_fibo2_dit_name(name);
     } else if (sd_version_is_z_image(version) || sd_version_is_z_image_l2p(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
     } else if (sd_version_is_llada_image(version)) {
@@ -1715,7 +1733,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         }
     }
 
-    if (version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
+    if (version == VERSION_FIBO2 || version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_boogu_image(version) || sd_version_is_krea2(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
         const std::string hf_vision_prefix = "text_encoders.llm.model.visual.";
         if (starts_with(name, hf_vision_prefix)) {
             name = "text_encoders.llm.visual." + name.substr(hf_vision_prefix.size());

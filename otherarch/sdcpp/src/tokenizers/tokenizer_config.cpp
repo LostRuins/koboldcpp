@@ -1,7 +1,6 @@
 #include "tokenizer_config.h"
 
 #include <stdexcept>
-#include <utility>
 
 #include "core/util.h"
 #include "hf_tokenizer.h"
@@ -10,12 +9,7 @@ TokenizerConfig::TokenizerConfig(const char* config) {
     if (!config || !*config) {
         return;
     }
-    std::string value = config;
-    const auto first        = value.find_first_not_of(" \t\r\n");
-    if (first != std::string::npos && value[first] == '{') {
-        paths_[MAIN] = std::move(value);
-        return;
-    }
+    const std::string value = config;
     const bool assignments  = value.find('=') != std::string::npos;
     size_t begin            = 0;
     for (;;) {
@@ -57,8 +51,6 @@ std::shared_ptr<Tokenizer> TokenizerConfig::create(Slot slot, int64_t embedding_
     if (!has(slot)) {
         return nullptr;
     }
-    const auto first     = paths_[slot].find_first_not_of(" \t\r\n");
-    const bool in_memory = first != std::string::npos && paths_[slot][first] == '{';
     try {
         auto tokenizer = std::make_shared<HFTokenizer>(paths_[slot]);
         tokenizer->set_padding(padding_id, pad_left);
@@ -68,16 +60,9 @@ std::shared_ptr<Tokenizer> TokenizerConfig::create(Slot slot, int64_t embedding_
         }
         used_[slot]         = true;
         const char* names[] = {"main", "clip-l", "clip-g"};
-        if (in_memory) {
-            LOG_INFO("using in-memory tokenizer (%s)", names[slot]);
-        } else {
-            LOG_INFO("using external tokenizer (%s): %s", names[slot], paths_[slot].c_str());
-        }
+        LOG_INFO("using external tokenizer (%s): %s", names[slot], paths_[slot].c_str());
         return tokenizer;
     } catch (const std::exception& error) {
-        if (in_memory) {
-            throw std::runtime_error("failed to load in-memory tokenizer JSON: " + std::string(error.what()));
-        }
         throw std::runtime_error("failed to load tokenizer '" + paths_[slot] + "': " + error.what());
     }
 }
