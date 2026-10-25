@@ -356,8 +356,8 @@ select{
   </div>
 
   <div style="margin-top:10px">
-    <label>Instruction (optional)</label>
-    <input title="TTS Instruction" id="tts_instruction" placeholder="e.g. angry shouting loud male">
+    <label>Voice instruction (optional)</label>
+    <input title="TTS Voice Instruction" id="tts_instruction" placeholder="e.g. Male voice in his 40s. Low pitch, gravelly timbre, slow pacing, angry tone.">
   </div>
 
   <div style="margin-top:10px">

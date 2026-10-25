@@ -39,6 +39,9 @@ patches listed here. Recheck these after every run of `sync-audiocpp.ps1`.
     tokenizer override. Its fixed 3B and VAE configurations fall back to the
     compiled defaults, allowing KoboldCpp to use `--musicllm`, `--musicvae`,
     and the bundled tokenizer without upstream package sidecars.
+14. `src/framework/codecs/fish_dac_codec_runtime.cpp`: provide the same
+    portable F32 -> BF16 -> F32 compatibility lowering for Fish Audio S2's
+    remaining private `ggml_round_bf16` calls.
 
 Do not add KCPP adapter behavior to upstream-owned files. Put it in the parent
 directory so upstream refreshes remain reviewable.

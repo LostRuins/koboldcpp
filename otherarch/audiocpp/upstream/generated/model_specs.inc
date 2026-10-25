@@ -1,3 +1,514 @@
+    {"fish_audio", R"AUDIOCPP_SPEC({
+  "family": "fish_audio",
+  "display_name": "Fish Audio S2 Pro",
+  "description": "Fish Audio S2 Pro text-to-speech model for expressive speech across 80+ languages, with automatic language handling, inline prosody/emotion controls, and rapid voice cloning from short reference samples.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "80+ languages"
+  ],
+  "capabilities": {
+    "clone": [
+      "speaker_reference"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "reference_text",
+        "type": "string",
+        "description": "Reference transcript; required with inline reference audio.",
+        "required": false
+      },
+      {
+        "name": "multi_reference_cond",
+        "type": "string",
+        "description": "Fish Audio ordered JSON array of reference conditioning pairs for one generated speaker: [{\"audio\":\"ref1.wav\",\"text\":\"Transcript one.\"},{\"audio\":\"ref2.wav\",\"text\":\"Transcript two.\"}]. This is not a multi-speaker dialogue routing option.",
+        "required": false
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum Fish Audio semantic tokens to generate; default 1024. Zero selects the default token budget.",
+        "required": false,
+        "min": 0,
+        "default": 1024
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum characters per generated text chunk; default 200.",
+        "required": false,
+        "min": 1,
+        "default": 200
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework text chunking mode; default word_budget.",
+        "preset": "text_chunk_mode_full",
+        "required": false,
+        "default": "word_budget"
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Top-p sampling value in (0, 1]; default 0.8.",
+        "required": false,
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.8
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "Top-k sampling value; default 30.",
+        "required": false,
+        "min": 1,
+        "default": 30
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Semantic-token sampling temperature in (0, 2); default 0.8.",
+        "required": false,
+        "min": 0.0,
+        "max": 2.0,
+        "default": 0.8
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Sampling seed for reproducible output; omitted uses a random seed.",
+        "required": false,
+        "min": 0
+      }
+    ],
+    "session": [
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "Prepared Fish Speech adapter checkpoint; merged into slow/fast decoder and embedding weights at session creation. Codec weights are unchanged.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "Multiplier for the adapter's alpha/r scaling; default 1.",
+        "required": false,
+        "default": 1.0
+      },
+      {
+        "name": "mem_saver",
+        "type": "bool",
+        "description": "Release cached AR runtime graphs after each request; default false.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "reference_cache_slots",
+        "type": "int",
+        "description": "Prepared reference-audio cache slots; default 1.",
+        "required": false,
+        "min": 0,
+        "default": 1
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "AR matmul weight storage type; default native.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "codec_weight_type",
+        "type": "enum",
+        "description": "Codec conv/matmul weight storage type; default native.",
+        "preset": "weight_type_codec_q8",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "codec_encoder_bf16_compute",
+        "type": "bool",
+        "description": "Use BF16 reference-encoder arithmetic on CUDA with F16/BF16 codec weights; default false. Decoding is unchanged.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "ar_graph_arena_mb",
+        "type": "int",
+        "description": "AR runtime graph arena size in MiB; default 512.",
+        "required": false,
+        "min": 1,
+        "default": 512
+      },
+      {
+        "name": "ar_weight_context_mb",
+        "type": "int",
+        "description": "AR weight context size in MiB; default 32.",
+        "required": false,
+        "min": 1,
+        "default": 32
+      },
+      {
+        "name": "codec_graph_arena_mb",
+        "type": "int",
+        "description": "Codec encode/decode graph arena size in MiB; default 512.",
+        "required": false,
+        "min": 1,
+        "default": 512
+      },
+      {
+        "name": "codec_weight_context_mb",
+        "type": "int",
+        "description": "Codec weight context size in MiB; default 32.",
+        "required": false,
+        "min": 1,
+        "default": 32
+      }
+    ],
+    "load": []
+  },
+  "ui": {
+    "recommended_package": "fish_audio_s2_pro_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "fish_audio_s2_pro_q8_0",
+      "display_name": "Fish Audio S2 Pro Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Fish-Audio-S2-Pro-GGUF",
+      "files": [
+        "Fish-Audio-S2-Pro-GGUF/fish-audio-s2-pro-q8_0.gguf"
+      ],
+      "strip_prefix": "Fish-Audio-S2-Pro-GGUF"
+    },
+    {
+      "id": "fish_audio_s2_pro_bf16",
+      "display_name": "Fish Audio S2 Pro BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "Fish-Audio-S2-Pro-GGUF",
+      "files": [
+        "Fish-Audio-S2-Pro-GGUF/fish-audio-s2-pro-bf16.gguf"
+      ],
+      "strip_prefix": "Fish-Audio-S2-Pro-GGUF"
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "model_weights": {
+          "source": "weights:",
+          "prefix": "model_weights"
+        },
+        "codec_weights": {
+          "source": "weights:",
+          "prefix": "codec_weights"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "model_weights": "model:model_audio_cpp.safetensors.index.json",
+        "codec_weights": "model:codec.safetensors"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"maya1", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "maya1",
+  "display_name": "Maya1",
+  "description": "Maya Research's 3B expressive English text-to-speech model with natural-language voice design and inline emotion control.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "design"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "en"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "voice_design",
+      "emotion_control",
+      "long_form"
+    ],
+    "design": [
+      "voice_design"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "instruct",
+        "type": "string",
+        "description": "Natural-language description of the voice, accent, timbre, age, and delivery.",
+        "required": true
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated audio-token count per text chunk; default 2048.",
+        "required": false,
+        "min": 1,
+        "default": 2048
+      },
+      {
+        "name": "min_tokens",
+        "type": "int",
+        "description": "Minimum generated audio-token count before EOS may stop generation; default 28.",
+        "required": false,
+        "min": 0,
+        "default": 28
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Autoregressive sampling temperature; default 0.4. Must be > 0.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.4
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Autoregressive nucleus sampling probability; must be in (0, 1], default 0.9.",
+        "required": false,
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.9
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "description": "Autoregressive repetition penalty; default 1.1. Must be > 0.",
+        "required": false,
+        "min": 0.0,
+        "default": 1.1
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Sampling and SNAC decoder noise seed; omitted requests choose a random seed.",
+        "required": false,
+        "min": 0
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum Unicode codepoints per long-form text chunk; default 300.",
+        "required": false,
+        "min": 1,
+        "default": 300
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework long-form text chunking mode; tag_aware preserves inline emotion tags.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "required": false,
+        "default": "tag_aware"
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared AR and SNAC decoder weight storage type; default native.",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q4_0",
+          "q4_1",
+          "q5_0",
+          "q5_1",
+          "q2_k",
+          "q3_k",
+          "q4_k",
+          "q5_k",
+          "q6_k",
+          "q8_0",
+          "nvfp4"
+        ],
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "ar_weight_type",
+        "type": "enum",
+        "description": "AR backbone weight storage type; defaults to weight_type.",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q4_0",
+          "q4_1",
+          "q5_0",
+          "q5_1",
+          "q2_k",
+          "q3_k",
+          "q4_k",
+          "q5_k",
+          "q6_k",
+          "q8_0",
+          "nvfp4"
+        ],
+        "required": false
+      },
+      {
+        "name": "codec_weight_type",
+        "type": "enum",
+        "description": "SNAC decoder weight storage type; only native or f32 is supported. Inherits weight_type when omitted; set codec_weight_type=f32 explicitly when using another shared weight_type.",
+        "values": [
+          "native",
+          "f32"
+        ],
+        "required": false
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "maya1_orig",
+      "display_name": "Maya1 Original-Precision GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "Maya1-GGUF",
+      "files": [
+        "Maya1-GGUF/maya1-orig.gguf"
+      ],
+      "strip_prefix": "Maya1-GGUF"
+    },
+    {
+      "id": "maya1_q8_0",
+      "display_name": "Maya1 Q8_0 GGUF",
+      "default": false,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Maya1-GGUF",
+      "files": [
+        "Maya1-GGUF/maya1-q8_0.gguf"
+      ],
+      "strip_prefix": "Maya1-GGUF"
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "maya1_orig",
+    "tags": [
+      "TTS",
+      "Design",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/maya1.md",
+      "docs/gguf.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "tensors": {
+        "model_weights": "weights:",
+        "codec_weights": "weights:"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
     {"supertonic", R"AUDIOCPP_SPEC({
   "family": "supertonic",
   "display_name": "Supertonic 3",

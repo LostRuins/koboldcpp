@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "family": "maya1",
+  "display_name": "Maya1",
+  "description": "Maya Research's 3B expressive English text-to-speech model with natural-language voice design and inline emotion control.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "design"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "en"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "voice_design",
+      "emotion_control",
+      "long_form"
+    ],
+    "design": [
+      "voice_design"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "instruct",
+        "type": "string",
+        "description": "Natural-language description of the voice, accent, timbre, age, and delivery.",
+        "required": true
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated audio-token count per text chunk; default 2048.",
+        "required": false,
+        "min": 1,
+        "default": 2048
+      },
+      {
+        "name": "min_tokens",
+        "type": "int",
+        "description": "Minimum generated audio-token count before EOS may stop generation; default 28.",
+        "required": false,
+        "min": 0,
+        "default": 28
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Autoregressive sampling temperature; default 0.4. Must be > 0.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.4
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Autoregressive nucleus sampling probability; must be in (0, 1], default 0.9.",
+        "required": false,
+        "min": 0.0,
+        "max": 1.0,
+        "default": 0.9
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "description": "Autoregressive repetition penalty; default 1.1. Must be > 0.",
+        "required": false,
+        "min": 0.0,
+        "default": 1.1
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Sampling and SNAC decoder noise seed; omitted requests choose a random seed.",
+        "required": false,
+        "min": 0
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum Unicode codepoints per long-form text chunk; default 300.",
+        "required": false,
+        "min": 1,
+        "default": 300
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework long-form text chunking mode; tag_aware preserves inline emotion tags.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "required": false,
+        "default": "tag_aware"
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared AR and SNAC decoder weight storage type; default native.",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q4_0",
+          "q4_1",
+          "q5_0",
+          "q5_1",
+          "q2_k",
+          "q3_k",
+          "q4_k",
+          "q5_k",
+          "q6_k",
+          "q8_0",
+          "nvfp4"
+        ],
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "ar_weight_type",
+        "type": "enum",
+        "description": "AR backbone weight storage type; defaults to weight_type.",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q4_0",
+          "q4_1",
+          "q5_0",
+          "q5_1",
+          "q2_k",
+          "q3_k",
+          "q4_k",
+          "q5_k",
+          "q6_k",
+          "q8_0",
+          "nvfp4"
+        ],
+        "required": false
+      },
+      {
+        "name": "codec_weight_type",
+        "type": "enum",
+        "description": "SNAC decoder weight storage type; only native or f32 is supported. Inherits weight_type when omitted; set codec_weight_type=f32 explicitly when using another shared weight_type.",
+        "values": [
+          "native",
+          "f32"
+        ],
+        "required": false
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "maya1_orig",
+      "display_name": "Maya1 Original-Precision GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "Maya1-GGUF",
+      "files": [
+        "Maya1-GGUF/maya1-orig.gguf"
+      ],
+      "strip_prefix": "Maya1-GGUF"
+    },
+    {
+      "id": "maya1_q8_0",
+      "display_name": "Maya1 Q8_0 GGUF",
+      "default": false,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Maya1-GGUF",
+      "files": [
+        "Maya1-GGUF/maya1-q8_0.gguf"
+      ],
+      "strip_prefix": "Maya1-GGUF"
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "maya1_orig",
+    "tags": [
+      "TTS",
+      "Design",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/maya1.md",
+      "docs/gguf.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "tensors": {
+        "model_weights": "weights:",
+        "codec_weights": "weights:"
+      }
+    }
+  ]
+}

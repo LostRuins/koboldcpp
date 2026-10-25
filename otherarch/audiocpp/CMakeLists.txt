@@ -11,9 +11,10 @@ file(GLOB_RECURSE AUDIOCPP_SOURCES CONFIGURE_DEPENDS
 
 add_library(audiocpp STATIC ${AUDIOCPP_SOURCES})
 target_include_directories(audiocpp
-    PUBLIC ${AUDIOCPP_ROOT}/include
-    PRIVATE
+    PUBLIC
+        ${AUDIOCPP_ROOT}/include
         ${AUDIOCPP_ROOT}/generated
+    PRIVATE
         ${AUDIOCPP_ROOT}/external/cJSON
         ${AUDIOCPP_ROOT}/external/llama_tokenizer
 )

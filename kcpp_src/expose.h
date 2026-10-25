@@ -334,6 +334,7 @@ struct tts_generation_inputs
     const char * speaker_instruction = "";
     const char * language = "";
     const bool use_mp3 = false;
+    const char * reference_text = "";
 };
 struct tts_generation_outputs
 {

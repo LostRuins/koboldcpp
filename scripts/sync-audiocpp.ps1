@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "all")]
+    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -103,6 +103,34 @@ $supertonicFiles = @(
     "src/models/supertonic/tokenizer_text.cpp"
 )
 
+$fishAudioFiles = @(
+    "model_specs/fish_audio.json",
+    "src/framework/audio/conversion.cpp",
+    "src/framework/audio/resampling.cpp",
+    "src/framework/audio/wav_reader.cpp",
+    "src/framework/codecs/fish_dac_codec_runtime.cpp",
+    "src/framework/core/host_memory.cpp",
+    "src/framework/modules/attention/streaming_frame_attention_cache.cpp",
+    "src/framework/modules/conditioning_modules.cpp",
+    "src/models/fish_audio/ar.cpp",
+    "src/models/fish_audio/assets.cpp",
+    "src/models/fish_audio/generator.cpp",
+    "src/models/fish_audio/loader.cpp",
+    "src/models/fish_audio/prompt_builder.cpp",
+    "src/models/fish_audio/session.cpp",
+    "src/models/fish_audio/tokenizer_text.cpp"
+)
+
+$maya1Files = @(
+    "model_specs/maya1.json",
+    "src/framework/codecs/snac_decoder_runtime.cpp",
+    "src/framework/model_spec/metadata.cpp",
+    "src/models/maya1/assets.cpp",
+    "src/models/maya1/generator.cpp",
+    "src/models/maya1/session.cpp",
+    "src/models/maya1/tokenizer.cpp"
+)
+
 # YuE2 is intentionally a separate import tier. Its framework closure is larger
 # than Supertonic's, but it still avoids Audio.cpp's server, CLI, converters,
 # unrelated models, bundled GGML, sentencepiece, and YAML dependencies.
@@ -146,6 +174,8 @@ foreach ($name in $Component) {
     if ($name -eq "all") {
         [void] $selected.Add("supertonic")
         [void] $selected.Add("yue2")
+        [void] $selected.Add("fish_audio")
+        [void] $selected.Add("maya1")
     } else {
         [void] $selected.Add($name)
     }
@@ -180,6 +210,20 @@ if ($selected.Contains("yue2")) {
     }
 }
 
+if ($selected.Contains("fish_audio")) {
+    Copy-AudioCppTree "include/engine/models/fish_audio"
+    foreach ($relativePath in $fishAudioFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("maya1")) {
+    Copy-AudioCppTree "include/engine/models/maya1"
+    foreach ($relativePath in $maya1Files) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
 $generatedDirectory = Join-Path $vendorRoot "generated"
 New-Item -ItemType Directory -Force -Path $generatedDirectory | Out-Null
 $modelSpecEntries = ""
@@ -197,6 +241,46 @@ $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText(
     (Join-Path $generatedDirectory "model_specs.inc"),
     $modelSpecEntries,
+    $utf8WithoutBom)
+
+# KoboldCpp uses a small host-owned registry rather than Audio.cpp's full
+# server registry. Generate it from the model slices that are actually present
+# so tts_adapter.cpp remains family-agnostic as more selected models are added.
+$ttsLoaders = @(
+    @{
+        Family = "fish_audio"
+        Header = "engine/models/fish_audio/loader.h"
+        Factory = "engine::models::fish_audio::make_fish_audio_loader"
+    },
+    @{
+        Family = "maya1"
+        Header = "engine/models/maya1/session.h"
+        Factory = "engine::models::maya1::make_maya1_loader"
+    },
+    @{
+        Family = "supertonic"
+        Header = "engine/models/supertonic/loader.h"
+        Factory = "engine::models::supertonic::make_supertonic_loader"
+    }
+)
+$ttsRegistryHeaders = ""
+$ttsRegistryLoaders = ""
+foreach ($loader in $ttsLoaders) {
+    $headerPath = Join-Path $vendorRoot ("include/" + $loader.Header)
+    $specPath = Join-Path $vendorRoot ("model_specs/" + $loader.Family + ".json")
+    if ((Test-Path -LiteralPath $headerPath -PathType Leaf) -and
+        (Test-Path -LiteralPath $specPath -PathType Leaf)) {
+        $ttsRegistryHeaders += "#include `"$($loader.Header)`"`n"
+        $ttsRegistryLoaders += "    {`"$($loader.Family)`", $($loader.Factory)()},`n"
+    }
+}
+[System.IO.File]::WriteAllText(
+    (Join-Path $generatedDirectory "kcpp_tts_registry_headers.inc"),
+    $ttsRegistryHeaders,
+    $utf8WithoutBom)
+[System.IO.File]::WriteAllText(
+    (Join-Path $generatedDirectory "kcpp_tts_registry_loaders.inc"),
+    $ttsRegistryLoaders,
     $utf8WithoutBom)
 
 Write-Host "Synchronized Audio.cpp components [$($selected -join ', ')] into $vendorRoot"
