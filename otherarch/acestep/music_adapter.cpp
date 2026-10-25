@@ -2,6 +2,7 @@
 #include "otherarch/utils.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <cstdio>
@@ -37,6 +38,13 @@ static std::unique_ptr<engine::runtime::IVoiceTaskSession> audiocpp_music_sessio
 
 static std::string music_output_json_str = "";
 static std::string b64_music_output = "";
+
+using music_clock = std::chrono::steady_clock;
+
+static double music_elapsed_seconds(const music_clock::time_point & start)
+{
+    return std::chrono::duration<double>(music_clock::now() - start).count();
+}
 
 bool musictype_load_model(const music_load_model_inputs inputs)
 {
@@ -169,6 +177,7 @@ static music_generation_outputs musictype_generate_yue2(const music_generation_i
         return output;
     }
 
+    const auto start_time = music_clock::now();
     try {
         const std::string input_json = inputs.input_json != nullptr && inputs.input_json[0] != '\0'
             ? inputs.input_json : "{}";
@@ -230,12 +239,11 @@ static music_generation_outputs musictype_generate_yue2(const music_generation_i
             engine::io::json::Value::make_object(std::move(continuation)));
 
         if (inputs.is_planner_mode) {
+            const double elapsed = music_elapsed_seconds(start_time);
             output.status = 1;
             output.music_output_json = music_output_json_str.c_str();
             output.data = "";
-            if (!music_is_quiet) {
-                printf("\nGenerate Plan Complete.\n");
-            }
+            printf("\nYuE2 Generated plan in %.2fs.\n", elapsed);
             return output;
         }
 
@@ -276,9 +284,8 @@ static music_generation_outputs musictype_generate_yue2(const music_generation_i
         output.status = 1;
         output.music_output_json = music_output_json_str.c_str();
         output.data = b64_music_output.c_str();
-        if (!music_is_quiet) {
-            printf("\nGenerate Music Complete.\n");
-        }
+        const double elapsed = music_elapsed_seconds(start_time);
+        printf("\nYuE2 Generated audio in %.2fs.\n", elapsed);
         return output;
     } catch (const std::exception & error) {
         printf("\nAudio.cpp YuE2 Generation Error: %s\n", error.what());
@@ -306,6 +313,7 @@ music_generation_outputs musictype_generate(const music_generation_inputs inputs
         return output;
     }
 
+    const auto start_time = music_clock::now();
     if (inputs.is_planner_mode && musicgen_llm_loaded) {
         if (!music_is_quiet) {
             printf("\nMusic Gen Generating Codes...\n");
@@ -322,9 +330,11 @@ music_generation_outputs musictype_generate(const music_generation_inputs inputs
         output.status = 1;
         output.data = "";
         output.music_output_json = music_output_json_str.c_str();
+        const double elapsed = music_elapsed_seconds(start_time);
         if (!music_is_quiet) {
             printf("\nMusic Gen Codes Done:\n%s\n",music_output_json_str.c_str());
         }
+        printf("\nACE-Step Generated plan in %.2fs.\n", elapsed);
     }
     else if (!inputs.is_planner_mode && musicgen_diffusion_loaded)
     {
@@ -343,9 +353,11 @@ music_generation_outputs musictype_generate(const music_generation_inputs inputs
         output.status = 1;
         output.data = b64_music_output.c_str();
         output.music_output_json = "";
+        const double elapsed = music_elapsed_seconds(start_time);
         if (!music_is_quiet) {
             printf("\nMusic Gen Audio Done\n");
         }
+        printf("\nACE-Step Generated audio in %.2fs.\n", elapsed);
     }
     else
     {
