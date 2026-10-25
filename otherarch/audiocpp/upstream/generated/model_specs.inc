@@ -1,3 +1,507 @@
+    {"chatterbox", R"AUDIOCPP_SPEC({
+  "family": "chatterbox",
+  "display_name": "Chatterbox",
+  "description": "Open-source Chatterbox family for expressive TTS and voice conversion, with emotion exaggeration control, fast generation, zero-shot voice cloning, and an integrated multilingual TTS path.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone",
+    "vc"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "ar",
+    "da",
+    "de",
+    "el",
+    "en",
+    "es",
+    "fi",
+    "fr",
+    "hi",
+    "it",
+    "ko",
+    "ms",
+    "nl",
+    "no",
+    "pl",
+    "pt",
+    "sv",
+    "sw",
+    "tr"
+  ],
+  "options": {
+    "request": [
+      {
+        "name": "exaggeration",
+        "type": "float",
+        "description": "Emotion exaggeration. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.5
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "T3 classifier-free guidance scale. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.5
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "T3 sampling temperature. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.8
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "description": "T3 repetition penalty. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 1.2
+      },
+      {
+        "name": "min_p",
+        "type": "float",
+        "description": "Minimum sampling probability. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.05
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Nucleus sampling probability. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "flow_guidance_scale",
+        "type": "float",
+        "description": "S3Gen flow guidance scale. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.7
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated speech tokens. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "min": 1,
+        "default": 384
+      },
+      {
+        "name": "do_sample",
+        "type": "bool",
+        "description": "Enable sampling. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "stop_on_eos",
+        "type": "bool",
+        "description": "Stop token generation on EOS. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "Voice conversion flow steps; max_steps is also accepted.",
+        "required": false,
+        "min": 1,
+        "default": 10
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Sampling seed; omitted chooses a random seed. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295
+      },
+      {
+        "name": "source_audio",
+        "type": "audio_path",
+        "description": "Voice conversion source WAV path; overrides audio_input.",
+        "required": false
+      },
+      {
+        "name": "target_voice",
+        "type": "audio_path",
+        "description": "Voice conversion target WAV path; overrides the speaker reference.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Framework long-form text chunk size.",
+        "required": false,
+        "default": 128
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Weight storage type; defaults to native.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "t3_weight_type",
+        "type": "enum",
+        "description": "T3 weight storage; inherits weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "multilingual_t3",
+        "type": "enum",
+        "description": "Multilingual T3 checkpoint selection.",
+        "required": false,
+        "values": [
+          "v2",
+          "v3"
+        ],
+        "default": "v2"
+      },
+      {
+        "name": "conditionals_cache_slots",
+        "type": "int",
+        "description": "Cached speaker conditionals; zero disables reuse.",
+        "required": false,
+        "min": 0,
+        "default": 1
+      },
+      {
+        "name": "mem_saver",
+        "type": "bool",
+        "description": "Release staged runtime components.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "encoder_condition_samples",
+        "type": "int",
+        "description": "Maximum reference samples for the T3 tokenizer; the voice encoder still consumes the full 16 kHz reference.",
+        "required": false,
+        "default": 96000
+      },
+      {
+        "name": "decoder_condition_samples",
+        "type": "int",
+        "description": "S3Gen reference sample limit at 24 kHz.",
+        "required": false,
+        "default": 240000
+      },
+      {
+        "name": "t3_speech_cond_prompt_len",
+        "type": "int",
+        "description": "T3 reference speech prompt token limit.",
+        "required": false,
+        "default": 150
+      }
+    ],
+    "load": []
+  },
+  "capabilities": {
+    "clone": [
+      "speaker_reference"
+    ],
+    "vc": [
+      "speaker_reference"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "chatterbox_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "VC",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "chatterbox_q8_0",
+      "display_name": "Chatterbox Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Chatterbox-GGUF",
+      "files": [
+        "Chatterbox-GGUF/chatterbox-q8_0.gguf"
+      ],
+      "strip_prefix": "Chatterbox-GGUF"
+    },
+    {
+      "id": "chatterbox_f16",
+      "display_name": "Chatterbox F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Chatterbox-GGUF",
+      "files": [
+        "Chatterbox-GGUF/chatterbox-f16.gguf"
+      ],
+      "strip_prefix": "Chatterbox-GGUF"
+    },
+    {
+      "id": "chatterbox_safetensors",
+      "display_name": "Chatterbox Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "chatterbox",
+      "files": [
+        "ve.safetensors",
+        "t3_cfg.safetensors",
+        "s3gen.safetensors",
+        "tokenizer.json",
+        "grapheme_mtl_merged_expanded_v1.json",
+        "Cangjie5_TC.json",
+        "conds.pt",
+        "t3_mtl23ls_v2.safetensors",
+        "t3_mtl23ls_v3.safetensors"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "ResembleAI/chatterbox"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "english_tokenizer": "model:tokenizer.json",
+        "multilingual_tokenizer": "model:grapheme_mtl_merged_expanded_v1.json",
+        "cangjie_mapping": "model:Cangjie5_TC.json",
+        "builtin_conditionals": "model:conds.pt"
+      },
+      "tensors": {
+        "voice_encoder_weights": {
+          "source": "weights:",
+          "prefix": "voice_encoder"
+        },
+        "s3gen_weights": {
+          "source": "weights:",
+          "prefix": "s3gen"
+        },
+        "t3_english_weights": {
+          "source": "weights:",
+          "prefix": "t3_english"
+        },
+        "t3_multilingual_v2_weights": {
+          "source": "weights:",
+          "prefix": "t3_multilingual_v2"
+        },
+        "t3_multilingual_v3_weights": {
+          "source": "weights:",
+          "prefix": "t3_multilingual_v3"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "english_tokenizer": "model:tokenizer.json",
+        "multilingual_tokenizer": "model:grapheme_mtl_merged_expanded_v1.json",
+        "cangjie_mapping": "model:Cangjie5_TC.json",
+        "builtin_conditionals": "model:conds.pt"
+      },
+      "tensors": {
+        "voice_encoder_weights": "model:ve.safetensors",
+        "s3gen_weights": "model:s3gen.safetensors",
+        "t3_english_weights": "model:t3_cfg.safetensors",
+        "t3_multilingual_v2_weights": "model:t3_mtl23ls_v2.safetensors",
+        "t3_multilingual_v3_weights": "model:t3_mtl23ls_v3.safetensors"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"chatterbox_turbo", R"AUDIOCPP_SPEC({
+  "family": "chatterbox_turbo",
+  "display_name": "Chatterbox Turbo",
+  "description": "Resemble AI's distilled 350M Chatterbox Turbo: GPT2 T3 backbone, GPT2 BPE tokenizer, and a 2-step meanflow S3Gen decoder for fast English TTS with a built-in voice.",
+  "category": "tts",
+  "status": "testing",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "en"
+  ],
+  "capabilities": {},
+  "options": {
+    "request": [
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated tokens; legacy max_new_tokens remains accepted.",
+        "required": false,
+        "min": 0,
+        "default": 1000
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "T3 sampling temperature.",
+        "required": false,
+        "default": 0.8
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "T3 nucleus sampling cutoff.",
+        "required": false,
+        "default": 0.95
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "T3 top-k sampling limit.",
+        "required": false,
+        "min": 0,
+        "default": 1000
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "description": "T3 token repetition penalty.",
+        "required": false,
+        "default": 1.2
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Generation seed.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295,
+        "default": 0
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum characters per text chunk; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 128
+      }
+    ],
+    "session": [],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "chatterbox_turbo_q8_0",
+    "tags": [
+      "TTS",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/chatterbox_turbo.md",
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "chatterbox_turbo_q8_0",
+      "display_name": "Chatterbox Turbo Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Chatterbox-Turbo-GGUF",
+      "files": [
+        "Chatterbox-Turbo-GGUF/chatterbox-turbo-q8_0.gguf"
+      ],
+      "strip_prefix": "Chatterbox-Turbo-GGUF"
+    },
+    {
+      "id": "chatterbox_turbo_f16",
+      "display_name": "Chatterbox Turbo F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Chatterbox-Turbo-GGUF",
+      "files": [
+        "Chatterbox-Turbo-GGUF/chatterbox-turbo-f16.gguf"
+      ],
+      "strip_prefix": "Chatterbox-Turbo-GGUF"
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "tokenizer_vocab": "model:chatterbox_turbo_vocab.json",
+        "tokenizer_merges": "model:chatterbox_turbo_merges.txt",
+        "tokenizer_special_tokens": "model:chatterbox_turbo_special_tokens.json"
+      },
+      "tensors": {
+        "t3_turbo_weights": {
+          "source": "weights:",
+          "prefix": "t3"
+        },
+        "builtin_conditionals_turbo": {
+          "source": "weights:",
+          "prefix": "conds"
+        },
+        "s3gen_weights": {
+          "source": "weights:",
+          "prefix": "s3gen"
+        }
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
     {"fish_audio", R"AUDIOCPP_SPEC({
   "family": "fish_audio",
   "display_name": "Fish Audio S2 Pro",
@@ -265,6 +769,505 @@
       "tensors": {
         "model_weights": "model:model_audio_cpp.safetensors.index.json",
         "codec_weights": "model:codec.safetensors"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"kitten_tts2", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "kitten_tts2",
+  "display_name": "Kitten TTS 2",
+  "description": "Native multilingual Kitten TTS 2 Qwen3 speech generation, S3 meanflow decoder, and reference-audio voice cloning.",
+  "category": "tts",
+  "status": "experimental",
+  "tasks": [
+    "tts",
+    "clone"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "en",
+    "ar",
+    "zh",
+    "fr",
+    "de",
+    "hi",
+    "it",
+    "pt",
+    "ru",
+    "es",
+    "nl",
+    "id",
+    "ja",
+    "ko",
+    "pl",
+    "tr"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf",
+      "cpu"
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "built_in_voices",
+      "long_form"
+    ],
+    "clone": [
+      "speaker_reference"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "voice_id",
+        "type": "enum",
+        "values": [
+          "Bella",
+          "Jasper",
+          "Luna",
+          "Bruno",
+          "Rosie",
+          "Hugo",
+          "Kiki",
+          "Leo",
+          "Matthew",
+          "Elliot",
+          "Willow",
+          "Dolores",
+          "Victor",
+          "Dante",
+          "Alfred",
+          "Saoirse",
+          "Claire",
+          "Raven",
+          "Marcus",
+          "Herbert",
+          "Diana",
+          "Laurence",
+          "Maeve",
+          "Walter",
+          "Edith",
+          "Miles",
+          "Grace",
+          "Reginald",
+          "Iris",
+          "Frank",
+          "Serena",
+          "Julian",
+          "Eleanor",
+          "Otis",
+          "Vincent",
+          "Martha",
+          "Sable",
+          "Victoria",
+          "PreparedBruno",
+          "Arabic",
+          "Chinese",
+          "French",
+          "German",
+          "Hindi",
+          "Italian",
+          "Portuguese",
+          "Russian",
+          "Spanish",
+          "AirportAnnouncer",
+          "ArabicChildSchool",
+          "ArabicFalconer",
+          "ArabicMother",
+          "ArabicNews",
+          "AudiobookNarratorFemale",
+          "BoredTeenager",
+          "CalmHostageNegotiator",
+          "ChineseKidSpringFestival",
+          "ChineseLivestreamSeller",
+          "ChineseNewsCctv",
+          "ChineseXianxiaMaster",
+          "DutchBaker",
+          "DutchGrandpaStory",
+          "DutchWeatherPresenter",
+          "FairytaleNarratorWhimsical",
+          "FrenchDocumentary",
+          "FrenchGrandmereRecette",
+          "FrenchTeacher",
+          "FrenchWaiter",
+          "GermanKidBirthday",
+          "GermanKneipe",
+          "GermanProfessor",
+          "GermanTrainAnnouncement",
+          "GrandmaBedtimeStory",
+          "GriefEulogy",
+          "HindiBollywoodDrama",
+          "HindiCollegeFriends",
+          "HindiDadiKahani",
+          "HindiYogaTeacher",
+          "IndonesianNewsAnchor",
+          "IndonesianTourGuide",
+          "ItalianChildSchool",
+          "ItalianFashionDesigner",
+          "ItalianFootballFan",
+          "ItalianGondolier",
+          "ItalianNonnaKitchen",
+          "ItalianOperaTenor",
+          "JapaneseAnimeHeroine",
+          "JapaneseGrandma",
+          "JapaneseSalarymanApology",
+          "JapaneseTrainConductor",
+          "KoreanGrandpaAdvice",
+          "KoreanKdramaConfession",
+          "KoreanNewsAnchor",
+          "LittleGirlExplaining",
+          "NervousFirstDate",
+          "NewsAnchorFemale",
+          "PilotCabinAnnouncement",
+          "PolishBabciaPierogi",
+          "PolishMountainGuide",
+          "PolishNewsAnchor",
+          "PolishPoetryStudent",
+          "PortugueseBeach",
+          "PortugueseBusiness",
+          "PortugueseFado",
+          "PortugueseGrandpaFarm",
+          "PortugueseKidFutebol",
+          "PortugueseNewsAnchor",
+          "RussianBabushka",
+          "RussianFairyTale",
+          "RussianHockeyCheer",
+          "RussianLiteratureTeacher",
+          "RussianSpaceControl",
+          "RussianTaxiDriver",
+          "SarcasticCoworker",
+          "SchoolboyPresentation",
+          "SpanishAbuela",
+          "SpanishBreakupSad",
+          "SpanishChildCuento",
+          "SpanishNews",
+          "SpanishTango",
+          "TurkishFisherman",
+          "TurkishGrandmaCooking",
+          "TurkishNewsAnchor",
+          "WeatherPresenterCheerful"
+        ],
+        "required": false,
+        "default": "Bruno",
+        "description": "Prepared voice name available in the loaded package. A supplied reference clip takes precedence."
+      },
+      {
+        "name": "preset",
+        "type": "enum",
+        "values": [
+          "stable",
+          "expressive"
+        ],
+        "required": false,
+        "default": "stable",
+        "description": "Upstream sampling preset."
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "min": 0,
+        "required": false,
+        "description": "Sampling temperature; zero selects greedy decoding. Otherwise defaults to the preset."
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "min": 0,
+        "required": false,
+        "description": "Top-k sampling cutoff; defaults to the preset."
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "max": 1,
+        "required": false,
+        "description": "Nucleus sampling cutoff; defaults to the preset. Must be in (0, 1]."
+      },
+      {
+        "name": "min_p",
+        "type": "float",
+        "min": 0,
+        "max": 1,
+        "required": false,
+        "description": "Minimum relative probability; defaults to the preset."
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "min": 1,
+        "required": false,
+        "default": 1.1,
+        "description": "Penalty over the last 50 generated tokens; silence and ending tokens are exempt."
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "min": 1,
+        "max": 8192,
+        "required": false,
+        "description": "Speech-token budget per text chunk. Omitted budgets scale with text length, with a minimum of 200."
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "min": 0,
+        "required": false,
+        "description": "Seed for sampling and waveform decoding."
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "min": 32,
+        "max": 1000,
+        "required": false,
+        "default": 380,
+        "description": "Maximum Unicode codepoints per framework text chunk."
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "required": false,
+        "default": "tag_aware",
+        "description": "Framework long-form text chunking mode."
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "required": false,
+        "description": "Transcript of the reference audio; required when cloning from a 1\u201330 second clip."
+      }
+    ],
+    "load": [],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q4_0",
+          "q8_0"
+        ],
+        "required": false,
+        "default": "native",
+        "description": "Qwen projection storage. native preserves the GGUF's intended tensor types. An explicit override changes projection storage only."
+      }
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "dignome/kitten_tts2",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "kitten_tts2_bf16",
+      "display_name": "Kitten TTS 2 BF16 GGUF (Previous Checkpoint)",
+      "default": false,
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "kitten-tts2-v2",
+      "files": [
+        "kitten-tts2-bf16-multilingual.gguf",
+        "LICENSE",
+        "NOTICE",
+        "native/LICENSE",
+        "speaker/LICENSE",
+        "SHA256SUMS"
+      ]
+    },
+    {
+      "id": "kitten_tts2_q8_v2",
+      "display_name": "Kitten TTS 2 Q8 GGUF (Previous Checkpoint)",
+      "default": false,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "kitten-tts2-v2",
+      "files": [
+        "kitten-tts2-q8-v2-multilingual.gguf",
+        "LICENSE",
+        "NOTICE",
+        "native/LICENSE",
+        "speaker/LICENSE",
+        "SHA256SUMS"
+      ]
+    },
+    {
+      "id": "kitten_tts2_q4",
+      "display_name": "Kitten TTS 2 Hybrid Q4 GGUF (Previous Checkpoint, Experimental)",
+      "default": false,
+      "format": "gguf",
+      "precision": "q4_0",
+      "target_directory": "kitten-tts2-v2",
+      "files": [
+        "kitten-tts2-q4-multilingual.gguf",
+        "LICENSE",
+        "NOTICE",
+        "native/LICENSE",
+        "speaker/LICENSE",
+        "SHA256SUMS"
+      ]
+    },
+    {
+      "id": "kitten_tts2_20261021_q8_0",
+      "display_name": "Kitten TTS 2 2026-10-21 Q8 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "KittenTTS2-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      },
+      "files": [
+        "KittenTTS2-GGUF/kitten-tts2-20261021-q8_0.gguf"
+      ],
+      "strip_prefix": "KittenTTS2-GGUF"
+    },
+    {
+      "id": "kitten_tts2_20261021_q4_0",
+      "display_name": "Kitten TTS 2 2026-10-21 Q4 GGUF (BF16 Embedding)",
+      "default": false,
+      "format": "gguf",
+      "precision": "q4_0",
+      "target_directory": "KittenTTS2-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      },
+      "files": [
+        "KittenTTS2-GGUF/kitten-tts2-20261021-q4_0.gguf"
+      ],
+      "strip_prefix": "KittenTTS2-GGUF"
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "kitten_tts2_20261021_q8_0",
+    "min_vram_gb": 7,
+    "tags": [
+      "TTS",
+      "GGUF"
+    ],
+    "builtin_voices": [
+      "Bella",
+      "Jasper",
+      "Luna",
+      "Bruno",
+      "Rosie",
+      "Hugo",
+      "Kiki",
+      "Leo",
+      "Matthew",
+      "Elliot",
+      "Willow",
+      "Dolores",
+      "Victor",
+      "Dante",
+      "Alfred",
+      "Saoirse",
+      "Claire",
+      "Raven",
+      "Marcus",
+      "Herbert",
+      "Diana",
+      "Laurence",
+      "Maeve",
+      "Walter",
+      "Edith",
+      "Miles",
+      "Grace",
+      "Reginald",
+      "Iris",
+      "Frank",
+      "Serena",
+      "Julian",
+      "Eleanor",
+      "Otis",
+      "Vincent",
+      "Martha",
+      "Sable",
+      "Victoria",
+      "Arabic",
+      "Chinese",
+      "French",
+      "German",
+      "Hindi",
+      "Italian",
+      "Portuguese",
+      "Russian",
+      "Spanish"
+    ],
+    "default_voice": "Bruno",
+    "docs": [
+      "docs/models/kitten_tts2.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "lm_config": "model:lm/config.json",
+        "tokenizer_config": "model:lm/tokenizer_config.json",
+        "tokenizer_json": "model:lm/tokenizer.json",
+        "default_voices": "model:cpp/default/voices.json"
+      },
+      "tensors": {
+        "language_model": {
+          "source": "weights:",
+          "prefix": "language_model"
+        },
+        "s3gen": {
+          "source": "weights:",
+          "prefix": "s3gen"
+        },
+        "speaker": {
+          "source": "weights:",
+          "prefix": "speaker"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "lm_config": "model:lm/config.json",
+        "tokenizer_config": "model:lm/tokenizer_config.json",
+        "tokenizer_json": "model:lm/tokenizer.json",
+        "default_voices": "model:cpp/default/voices.json"
+      },
+      "tensors": {
+        "language_model": "model:lm/model.safetensors",
+        "s3gen": "model:native/s3gen_meanflow.safetensors",
+        "speaker": "model:speaker/model.safetensors"
       }
     }
   ]

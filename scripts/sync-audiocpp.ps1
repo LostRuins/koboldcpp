@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "all")]
+    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -131,6 +131,86 @@ $maya1Files = @(
     "src/models/maya1/tokenizer.cpp"
 )
 
+# Chatterbox, Chatterbox Turbo, and Kitten TTS 2 share the S3Gen decoder,
+# vocoder, reference-audio frontend, and most of the autoregressive runtime.
+# Keep that closure explicit so each family can still be refreshed separately.
+$s3genClusterFiles = @(
+    "src/framework/audio/conversion.cpp",
+    "src/framework/audio/dsp.cpp",
+    "src/framework/audio/detail/speech_fft_internal.h",
+    "src/framework/audio/fft.cpp",
+    "src/framework/audio/istft_graph.cpp",
+    "src/framework/audio/kaldi_fbank.cpp",
+    "src/framework/audio/mel_spectrogram_frontend.cpp",
+    "src/framework/audio/reference_audio_frontend.cpp",
+    "src/framework/audio/resampling.cpp",
+    "src/framework/audio/waveform_ops.cpp",
+    "src/framework/audio/wav_reader.cpp",
+    "src/framework/codecs/s3gen_runtime.cpp",
+    "src/framework/core/attention_fallback.cpp",
+    "src/framework/modules/attention/grouped_query_attention.cpp",
+    "src/framework/modules/attention/attention_internal.h",
+    "src/framework/modules/attention/positional_encoding.cpp",
+    "src/framework/modules/attention/scaled_dot_product_attention.cpp",
+    "src/framework/modules/module_internal.h",
+    "src/framework/modules/optimizations/fast_kv_modules.cpp",
+    "src/framework/modules/positional_modules.cpp",
+    "src/framework/modules/speaker_encoders/campplus_encoder.cpp",
+    "src/framework/modules/transformers/causal_decoder.cpp",
+    "src/framework/modules/transformers/causal_decoder_runtime.cpp",
+    "src/framework/modules/vocoders/hift_vocoder.cpp",
+    "src/framework/runtime/bounded_static_kv_decode.cpp",
+    "src/framework/runtime/graph_executor.cpp",
+    "src/framework/runtime/host_ops.cpp",
+    "src/framework/runtime/kv_cache.cpp",
+    "src/framework/sampling/hf_sampler.cpp",
+    "src/framework/sampling/torch_random.cpp",
+    "src/framework/tokenizers/llama_bpe.cpp",
+    "src/framework/tokenizers/qwen_bpe_bundle.cpp"
+)
+
+$chatterboxFiles = @(
+    "model_specs/chatterbox.json",
+    "src/models/chatterbox/assets.cpp",
+    "src/models/chatterbox/audio_features.cpp",
+    "src/models/chatterbox/audio_processing.cpp",
+    "src/models/chatterbox/campplus_encoder_impl.cpp",
+    "src/models/chatterbox/component_weights.cpp",
+    "src/models/chatterbox/conditionals.cpp",
+    "src/models/chatterbox/loader.cpp",
+    "src/models/chatterbox/s3_tokenizer_impl.cpp",
+    "src/models/chatterbox/session.cpp",
+    "src/models/chatterbox/t3_component.cpp",
+    "src/models/chatterbox/t3_weights.cpp",
+    "src/models/chatterbox/text_tokenizer.cpp",
+    "src/models/chatterbox/tts.cpp",
+    "src/models/chatterbox/vc.cpp",
+    "src/models/chatterbox/voice_encoder_impl.cpp",
+    "src/models/chatterbox/components/audio_processing.h",
+    "src/models/chatterbox/components/component_weights.h",
+    "src/models/chatterbox/components/t3_runtime.h"
+)
+
+$chatterboxTurboFiles = @(
+    "model_specs/chatterbox_turbo.json",
+    "src/community_models/chatterbox_turbo/assets.cpp",
+    "src/community_models/chatterbox_turbo/loader.cpp",
+    "src/community_models/chatterbox_turbo/s3gen_turbo.cpp",
+    "src/community_models/chatterbox_turbo/session.cpp",
+    "src/community_models/chatterbox_turbo/t3_turbo_component.cpp",
+    "src/community_models/chatterbox_turbo/t3_turbo_weights.cpp",
+    "src/community_models/chatterbox_turbo/text_tokenizer_turbo.cpp",
+    "src/community_models/chatterbox_turbo/tts.cpp",
+    "src/community_models/chatterbox_turbo/components/t3_turbo_runtime.h"
+)
+
+$kittenTts2Files = @(
+    "model_specs/kitten_tts2.json",
+    "src/community_models/kitten_tts2/decoder.cpp",
+    "src/community_models/kitten_tts2/session.cpp",
+    "src/community_models/kitten_tts2/speaker.cpp"
+)
+
 # YuE2 is intentionally a separate import tier. Its framework closure is larger
 # than Supertonic's, but it still avoids Audio.cpp's server, CLI, converters,
 # unrelated models, bundled GGML, sentencepiece, and YAML dependencies.
@@ -176,9 +256,18 @@ foreach ($name in $Component) {
         [void] $selected.Add("yue2")
         [void] $selected.Add("fish_audio")
         [void] $selected.Add("maya1")
+        [void] $selected.Add("chatterbox")
+        [void] $selected.Add("chatterbox_turbo")
+        [void] $selected.Add("kitten_tts2")
     } else {
         [void] $selected.Add($name)
     }
+}
+
+# Upstream Kitten TTS 2 reuses Chatterbox's S3 tokenizer, CAMPPlus encoder,
+# and reference-conditioning implementation rather than duplicating them.
+if ($selected.Contains("kitten_tts2")) {
+    [void] $selected.Add("chatterbox")
 }
 
 # Headers are inexpensive and are kept as one upstream-owned API surface. The
@@ -224,6 +313,39 @@ if ($selected.Contains("maya1")) {
     }
 }
 
+$hasS3genCluster = $selected.Contains("chatterbox") -or
+    $selected.Contains("chatterbox_turbo") -or
+    $selected.Contains("kitten_tts2")
+if ($hasS3genCluster) {
+    Copy-AudioCppFile "external/llama_tokenizer/bpe-core.cpp"
+    Copy-AudioCppFile "external/llama_tokenizer/bpe-core.h"
+    Copy-AudioCppFile "external/llama_tokenizer/unicode.h"
+    foreach ($relativePath in $s3genClusterFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("chatterbox")) {
+    Copy-AudioCppTree "include/engine/models/chatterbox"
+    foreach ($relativePath in $chatterboxFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("chatterbox_turbo")) {
+    Copy-AudioCppTree "include/engine/community_models/chatterbox_turbo"
+    foreach ($relativePath in $chatterboxTurboFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("kitten_tts2")) {
+    Copy-AudioCppTree "include/engine/community_models/kitten_tts2"
+    foreach ($relativePath in $kittenTts2Files) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
 $generatedDirectory = Join-Path $vendorRoot "generated"
 New-Item -ItemType Directory -Force -Path $generatedDirectory | Out-Null
 $modelSpecEntries = ""
@@ -248,9 +370,24 @@ $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 # so tts_adapter.cpp remains family-agnostic as more selected models are added.
 $ttsLoaders = @(
     @{
+        Family = "chatterbox"
+        Header = "engine/models/chatterbox/loader.h"
+        Factory = "engine::models::chatterbox::make_chatterbox_loader"
+    },
+    @{
+        Family = "chatterbox_turbo"
+        Header = "engine/community_models/chatterbox_turbo/loader.h"
+        Factory = "engine::community_models::chatterbox_turbo::make_chatterbox_turbo_loader"
+    },
+    @{
         Family = "fish_audio"
         Header = "engine/models/fish_audio/loader.h"
         Factory = "engine::models::fish_audio::make_fish_audio_loader"
+    },
+    @{
+        Family = "kitten_tts2"
+        Header = "engine/community_models/kitten_tts2/session.h"
+        Factory = "engine::community_models::kitten_tts2::make_kitten_tts2_loader"
     },
     @{
         Family = "maya1"

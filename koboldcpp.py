@@ -582,7 +582,8 @@ class tts_generation_inputs(ctypes.Structure):
                 ("speaker_instruction", ctypes.c_char_p),
                 ("language", ctypes.c_char_p),
                 ("use_mp3", ctypes.c_bool),
-                ("reference_text", ctypes.c_char_p)]
+                ("reference_text", ctypes.c_char_p),
+                ("audiocpp_extra_params_json", ctypes.c_char_p)]
 
 class tts_generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -3462,6 +3463,19 @@ def tts_generate(genparams):
         reference_audio = reference_audio.split(",", 1)[1]
     inputs.reference_audio = reference_audio.encode("UTF-8")
     inputs.reference_text = genparams.get("reference_text", "").encode("UTF-8")
+    audiocpp_option_names = (
+        "exaggeration", "guidance_scale", "temperature", "repetition_penalty",
+        "min_p", "top_p", "top_k", "flow_guidance_scale", "max_tokens",
+        "max_new_tokens", "do_sample", "stop_on_eos", "num_inference_steps",
+        "text_chunk_size", "text_chunk_mode", "preset", "voice_id")
+    audiocpp_options = {
+        key: genparams[key] for key in audiocpp_option_names
+        if key in genparams and isinstance(genparams[key], (str, int, float, bool))
+    }
+    # Retain the original case for Audio.cpp families with named voices while
+    # leaving the longstanding normalized field unchanged for legacy models.
+    audiocpp_options["__kcpp_voice"] = voicestr.strip()
+    inputs.audiocpp_extra_params_json = json.dumps(audiocpp_options).encode("UTF-8")
     ret = handle.tts_generate(inputs)
     outstr = ""
     if ret.status==1:

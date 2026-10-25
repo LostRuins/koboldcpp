@@ -1,0 +1,155 @@
+{
+  "family": "chatterbox_turbo",
+  "display_name": "Chatterbox Turbo",
+  "description": "Resemble AI's distilled 350M Chatterbox Turbo: GPT2 T3 backbone, GPT2 BPE tokenizer, and a 2-step meanflow S3Gen decoder for fast English TTS with a built-in voice.",
+  "category": "tts",
+  "status": "testing",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "en"
+  ],
+  "capabilities": {},
+  "options": {
+    "request": [
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated tokens; legacy max_new_tokens remains accepted.",
+        "required": false,
+        "min": 0,
+        "default": 1000
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "T3 sampling temperature.",
+        "required": false,
+        "default": 0.8
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "T3 nucleus sampling cutoff.",
+        "required": false,
+        "default": 0.95
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "T3 top-k sampling limit.",
+        "required": false,
+        "min": 0,
+        "default": 1000
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "description": "T3 token repetition penalty.",
+        "required": false,
+        "default": 1.2
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Generation seed.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295,
+        "default": 0
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum characters per text chunk; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 128
+      }
+    ],
+    "session": [],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "chatterbox_turbo_q8_0",
+    "tags": [
+      "TTS",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/chatterbox_turbo.md",
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "chatterbox_turbo_q8_0",
+      "display_name": "Chatterbox Turbo Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Chatterbox-Turbo-GGUF",
+      "files": [
+        "Chatterbox-Turbo-GGUF/chatterbox-turbo-q8_0.gguf"
+      ],
+      "strip_prefix": "Chatterbox-Turbo-GGUF"
+    },
+    {
+      "id": "chatterbox_turbo_f16",
+      "display_name": "Chatterbox Turbo F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Chatterbox-Turbo-GGUF",
+      "files": [
+        "Chatterbox-Turbo-GGUF/chatterbox-turbo-f16.gguf"
+      ],
+      "strip_prefix": "Chatterbox-Turbo-GGUF"
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "tokenizer_vocab": "model:chatterbox_turbo_vocab.json",
+        "tokenizer_merges": "model:chatterbox_turbo_merges.txt",
+        "tokenizer_special_tokens": "model:chatterbox_turbo_special_tokens.json"
+      },
+      "tensors": {
+        "t3_turbo_weights": {
+          "source": "weights:",
+          "prefix": "t3"
+        },
+        "builtin_conditionals_turbo": {
+          "source": "weights:",
+          "prefix": "conds"
+        },
+        "s3gen_weights": {
+          "source": "weights:",
+          "prefix": "s3gen"
+        }
+      }
+    }
+  ]
+}

@@ -14,6 +14,9 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component fish_audio
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component maya1
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox_turbo
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component kitten_tts2
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2 -ModelSourcesOnly
 ```
 
@@ -47,18 +50,26 @@ exact upstream commit cannot be recorded until a real checkout is supplied.
   upstream YuE2. YuE2 does not accept an input waveform.
 - `fish_audio`: Fish Audio S2 Pro offline TTS and voice cloning through the
   generic Audio.cpp path in `otherarch/tts_adapter.cpp`. Text, language, seed,
-  inline Fish prosody tags, reference audio, and its required reference
+  inline Fish prosody tags, reference audio, and an optional reference
   transcript are supported.
 - `maya1`: Maya1 offline TTS/voice design through the same generic adapter.
   KoboldCpp's `instruction` field supplies Maya1's required natural-language
   voice description.
+- `chatterbox`: multilingual Chatterbox TTS and zero-shot voice cloning. A
+  selected voice-directory WAV/MP3 supplies the mandatory speaker reference;
+  exaggeration, guidance, and sampling controls are forwarded to Audio.cpp.
+- `chatterbox_turbo`: fast English TTS using its built-in voice and distilled
+  two-step S3Gen decoder. Upstream Turbo does not support custom voice cloning.
+- `kitten_tts2`: multilingual Kitten TTS 2 with prepared built-in voices and
+  optional reference-audio cloning. Cloning requires `reference_text`.
 - Later candidates should be added only when their framework closure is small
   and measurable. Existing KoboldCpp Qwen3-TTS, MiniMax H3, ACE-Step, Kokoro,
   OuteTTS, Parler, Dia, and Orpheus implementations are not imported.
 
 The MinGW default and Vulkan DLL targets compile and link with all selected
-models. Runtime output still needs validation with real Fish Audio and Maya1
-packages; weights are intentionally not vendored here.
+models. Runtime output still needs validation with real Fish Audio, Maya1,
+Chatterbox, Chatterbox Turbo, and Kitten TTS 2 packages; weights are
+intentionally not vendored here.
 
 ## Adapter contract
 
@@ -78,13 +89,33 @@ be supplied directly as JSON arrays.
 
 Pass `fish-audio-s2-pro-q8_0.gguf` as the normal TTS model. Plain TTS requires
 no other file. For cloning, select a WAV or MP3 from KoboldCpp's voice
-directory and send `reference_text` containing its transcript.
+directory. Send `reference_text` containing its transcript when available;
+otherwise KoboldCpp supplies the adapter's neutral fallback transcript.
 
 Pass `maya1-q8_0.gguf` (or `maya1-orig.gguf`) as the normal TTS model. Supply a
 voice description with the existing `instruction` request field; when omitted,
 KoboldCpp uses a neutral expressive-voice description. KoboldCpp terminates
 unpunctuated Maya descriptions with a period because the model can otherwise
 leak the description into spoken output, particularly for short utterances.
+
+Pass `chatterbox-q8_0.gguf` as the normal TTS model and start KoboldCpp with a
+voice directory. Every Chatterbox TTS request must select a WAV/MP3 reference
+using the `voice` field. The model supports `language`, `exaggeration`,
+`guidance_scale`, `temperature`, `top_p`, `min_p`, `repetition_penalty`, and
+the common seed/output controls.
+
+Pass `chatterbox-turbo-q8_0.gguf` as the normal TTS model. Turbo uses its
+built-in English voice, so no voice directory or reference transcript is
+needed. Its sampling controls include `temperature`, `top_p`, `top_k`,
+`repetition_penalty`, `max_tokens`, and `seed`.
+
+Pass `kitten-tts2-20261021-q8_0.gguf` as the normal TTS model. `voice` selects
+a case-sensitive prepared voice such as `Bruno`, `Bella`, or a language voice.
+KoboldCpp's standard aliases map `kobo`, `cheery`, `sleepy`, `shouty`, and
+`chatty` to Kitten voices `Frank`, `Rosie`, `Willow`, `Otis`, and `Iris`,
+respectively.
+Alternatively select a WAV/MP3 from the voice directory and provide its exact
+transcript in `reference_text` for zero-shot cloning.
 
 ## Intentional compatibility changes
 
