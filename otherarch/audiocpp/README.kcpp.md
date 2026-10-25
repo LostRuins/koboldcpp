@@ -55,8 +55,10 @@ normal TTS model path. `custom_speaker_voice` accepts `M1` through `M5` and `F1`
 through `F5`; speaker seeds 1 through 10 map to the same presets when no custom
 voice is supplied.
 
-Pass the YuE2 model GGUF as `musicllm_filename`, with the VAE GGUF and sidecars
-in the package layout described by `model_specs/yue2.json`. Music request JSON
+Pass the YuE2 model GGUF as `musicllm_filename` (`--musicllm`) and its VAE GGUF
+as `musicvae_filename` (`--musicvae`). KoboldCpp supplies the Qwen tokenizer
+from `embd_res/yue2_qwen_tiktoken.embd`; no model-directory sidecars are
+required. Music request JSON
 accepts `style` (or KoboldCpp's `caption` alias), `lyrics`, `cot`, `abc`,
 `semantic_prefix`, `seed`, `guidance_scale`, `num_inference_steps`, and the
 `abc_*` / `semantic_*` sampling controls. Arrays such as `semantic_prefix` may

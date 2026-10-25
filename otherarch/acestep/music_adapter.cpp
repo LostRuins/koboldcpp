@@ -12,6 +12,7 @@
 #include <cstring>
 #include <mutex>
 #include <cinttypes>
+#include <filesystem>
 #include <memory>
 
 #include "engine/framework/io/json.h"
@@ -52,32 +53,44 @@ bool musictype_load_model(const music_load_model_inputs inputs)
     audiocpp_music_session.reset();
     audiocpp_music_model.reset();
 
-    if (!musicllm_filename.empty()) {
+    // A two-file LLM+VAE configuration is YuE2. ACE-Step continues to use its
+    // LLM plus embedding, diffusion, and VAE configuration below.
+    const bool is_yue2_configuration =
+        !musicllm_filename.empty() && !musicvae_filename.empty() &&
+        musicembedding_filename.empty() && musicdiffusion_filename.empty();
+    if (is_yue2_configuration) {
         auto loader = engine::models::yue2::make_yue2_loader();
         engine::runtime::ModelLoadRequest request;
         request.model_path = musicllm_filename;
         request.family_hint = "yue2";
-        if (loader->can_load(request)) {
-            try {
-                printf("\nLoading Audio.cpp YuE2 Model: %s\n", musicllm_filename.c_str());
-                audiocpp_music_model = loader->load(request);
-                engine::runtime::SessionOptions options;
-                options.backend.type = engine::core::BackendType::BestAvailable;
-                options.backend.device = std::max(0, inputs.kcpp_main_gpu);
-                options.backend.threads = 4;
-                audiocpp_music_session = audiocpp_music_model->create_task_session(
-                    {engine::runtime::VoiceTaskKind::AudioGeneration, engine::runtime::RunMode::Offline},
-                    options);
-                audiocpp_music_session->prepare({});
-                is_audiocpp_yue2 = true;
-                printf("\nAudio.cpp YuE2 Load Complete.\n");
-                return true;
-            } catch (const std::exception & error) {
-                printf("\nAudio.cpp YuE2 Load Error: %s\n", error.what());
-                audiocpp_music_session.reset();
-                audiocpp_music_model.reset();
-                return false;
-            }
+        const auto tokenizer_path = std::filesystem::absolute(
+            std::filesystem::u8path(inputs.executable_path != nullptr ? inputs.executable_path : "") /
+            "embd_res" / "yue2_qwen_tiktoken.embd");
+        request.options["yue2.tiktoken"] = tokenizer_path.u8string();
+        try {
+            printf("\nLoading Audio.cpp YuE2 Model: %s\n", musicllm_filename.c_str());
+            printf("Loading Audio.cpp YuE2 VAE: %s\n", musicvae_filename.c_str());
+            audiocpp_music_model = loader->load(request);
+            engine::runtime::SessionOptions options;
+            options.backend.type = engine::core::BackendType::BestAvailable;
+            options.backend.device = std::max(0, inputs.kcpp_main_gpu);
+            options.backend.threads = 4;
+            options.options["yue2.model_gguf"] = std::filesystem::absolute(
+                std::filesystem::u8path(musicllm_filename)).u8string();
+            options.options["yue2.vae_gguf"] = std::filesystem::absolute(
+                std::filesystem::u8path(musicvae_filename)).u8string();
+            audiocpp_music_session = audiocpp_music_model->create_task_session(
+                {engine::runtime::VoiceTaskKind::AudioGeneration, engine::runtime::RunMode::Offline},
+                options);
+            audiocpp_music_session->prepare({});
+            is_audiocpp_yue2 = true;
+            printf("\nAudio.cpp YuE2 Load Complete.\n");
+            return true;
+        } catch (const std::exception & error) {
+            printf("\nAudio.cpp YuE2 Load Error: %s\n", error.what());
+            audiocpp_music_session.reset();
+            audiocpp_music_model.reset();
+            return false;
         }
     }
 

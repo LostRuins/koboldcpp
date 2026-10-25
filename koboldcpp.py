@@ -10516,10 +10516,10 @@ def show_gui():
     wavtokenizer_var.trace_add("write", gui_changed_modelfile)
     makefileentry(audio_tab, "TTS Voices Dir:", "Select directory containing voices for voice cloning", tts_dir_var, 20, width=280, singlerow=True, dialog_type=2, tooltiptxt="Select directory containing voices for voice cloning")
 
-    makefileentry(audio_tab, "MusicLLM:", "Select music LLM model (e.g acestep-5Hz-lm-0.6B)", musicllm_var, 30, width=280, singlerow=True, dialog_type=0, tooltiptxt="Select music LLM model (e.g acestep-5Hz-lm)")
+    makefileentry(audio_tab, "MusicLLM:", "Select music LLM model (ACE-Step LM or YuE2 main GGUF)", musicllm_var, 30, width=280, singlerow=True, dialog_type=0, tooltiptxt="Select an ACE-Step LM or YuE2 main GGUF model")
     makefileentry(audio_tab, "MusicEmbeds:", "Select music embedding model (e.g Qwen3-Embedding-0.6B)", musicembeddings_var, 32, width=280, singlerow=True, dialog_type=0, tooltiptxt="Select music embedding model (e.g Qwen3-Embedding-0.6B)")
     makefileentry(audio_tab, "MusicDiffuser:", "Select music diffusion (DiT) model (e.g acestep-v15-turbo)", musicdiffusion_var, 34, width=280, singlerow=True, dialog_type=0, tooltiptxt="Select music diffusion (DiT) model (e.g acestep-v15-turbo)")
-    makefileentry(audio_tab, "MusicVAE:", "Select music VAE model", musicvae_var, 36, width=280, singlerow=True, dialog_type=0, tooltiptxt="Select music VAE model")
+    makefileentry(audio_tab, "MusicVAE:", "Select music VAE model (including YuE2 VAE GGUF)", musicvae_var, 36, width=280, singlerow=True, dialog_type=0, tooltiptxt="Select the music VAE; YuE2 requires its VAE GGUF")
     makecheckbox(audio_tab, "Music Low VRAM", musiclowvram_var, 38, 0,tooltiptxt="Unload music models when not in use.")
 
     agent_tab = tabcontent["Agent"]
@@ -13789,6 +13789,24 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 if not loadok:
                     exitcounter = 999
                     exit_with_error(3, "Could not load Music LLM model!")
+        elif mu_has_llm and mu_has_vae and not mu_has_embed and not mu_has_diff:
+            paths_to_check = [args.musicllm, args.musicvae]
+            if not all(os.path.exists(p) for p in paths_to_check):
+                if args.ignoremissing:
+                    print("Ignoring missing YuE2 LLM/VAE model files!")
+                    args.musicllm = None
+                    args.musicvae = None
+                else:
+                    exitcounter = 999
+                    exit_with_error(2, "Cannot find required YuE2 LLM/VAE model files!")
+            else:
+                musicllmpath = os.path.abspath(args.musicllm)
+                musicvaepath = os.path.abspath(args.musicvae)
+                loadok = music_load_model(musicllmpath, "", "", musicvaepath)
+                print("Load YuE2 Music Models OK: " + str(loadok))
+                if not loadok:
+                    exitcounter = 999
+                    exit_with_error(3, "Could not load YuE2 music models!")
         elif mu_has_diff:
             if not (mu_has_embed and mu_has_vae):
                 exitcounter = 999
@@ -14342,10 +14360,10 @@ if __name__ == '__main__':
     ttsparsergroup.add_argument("--ttsdir", metavar=('[directory]'), help="Select directory containing voices for voice cloning.", default="")
 
     musicparsergroup = parser.add_argument_group('Music Gen Commands')
-    musicparsergroup.add_argument("--musicllm", metavar=('[filename]'), help="Select music LLM model (e.g acestep-5Hz-lm-0.6B)", default="")
+    musicparsergroup.add_argument("--musicllm", metavar=('[filename]'), help="Select music LLM model (e.g. ACE-Step LM or yue2-3b-q8_0.gguf)", default="")
     musicparsergroup.add_argument("--musicembeddings", metavar=('[filename]'), help="Select music embedding model (e.g Qwen3-Embedding-0.6B)", default="")
     musicparsergroup.add_argument("--musicdiffusion", metavar=('[filename]'), help="Select music diffusion (DiT) model (e.g acestep-v15-turbo)", default="")
-    musicparsergroup.add_argument("--musicvae", metavar=('[filename]'), help="Select music VAE model", default="")
+    musicparsergroup.add_argument("--musicvae", metavar=('[filename]'), help="Select music VAE model (e.g. yue2-vae-f16.gguf)", default="")
     musicparsergroup.add_argument("--musiclowvram", help="Unload music models when not in use", action='store_true')
 
     embeddingsparsergroup = parser.add_argument_group('Embeddings Model Commands')

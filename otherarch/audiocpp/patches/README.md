@@ -35,6 +35,10 @@ patches listed here. Recheck these after every run of `sync-audiocpp.ps1`.
 12. The build reuses KoboldCpp's newer `src/unicode.cpp` implementation for the
     imported llama BPE core. Audio.cpp's duplicate unicode translation units
     are deliberately neither synchronized nor compiled.
+13. YuE2 asset/session loading accepts explicit absolute component paths and a
+    tokenizer override. Its fixed 3B and VAE configurations fall back to the
+    compiled defaults, allowing KoboldCpp to use `--musicllm`, `--musicvae`,
+    and the bundled tokenizer without upstream package sidecars.
 
 Do not add KCPP adapter behavior to upstream-owned files. Put it in the parent
 directory so upstream refreshes remain reviewable.

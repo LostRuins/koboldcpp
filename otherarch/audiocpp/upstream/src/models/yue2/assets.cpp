@@ -99,25 +99,35 @@ Yue2GenerationConfig parse_generation_config(const std::filesystem::path & path)
 
 }  // namespace
 
-std::shared_ptr<const Yue2Assets> load_yue2_assets(const std::filesystem::path & model_path) {
+std::shared_ptr<const Yue2Assets> load_yue2_assets(
+    const std::filesystem::path & model_path,
+    const std::unordered_map<std::string, std::string> & options) {
     auto assets = std::make_shared<Yue2Assets>();
     assets->model_root = assets::prepare_model_directory(model_path).model_root;
     const auto sidecars = assets->model_root / "sidecars";
     assets->tiktoken_path = sidecars / "yue2-qwen.tiktoken";
+    // kcpp: allow the bundled tokenizer resource to replace the upstream
+    // package sidecar. Relative overrides remain relative to the model root.
+    if (const auto it = options.find("yue2.tiktoken"); it != options.end() && !it->second.empty()) {
+        assets->tiktoken_path = std::filesystem::u8path(it->second);
+        if (assets->tiktoken_path.is_relative()) {
+            assets->tiktoken_path = assets->model_root / assets->tiktoken_path;
+        }
+    }
     const auto model_config = sidecars / "yue2-model-config.json";
     const auto generation_config = sidecars / "yue2-generation-config.json";
     const auto vae_config = sidecars / "yue2-vae-config.json";
-    if (!engine::io::is_existing_file(model_config)) {
-        throw std::runtime_error("missing Yue2 model config: " + model_config.string());
-    }
-    if (!engine::io::is_existing_file(vae_config)) {
-        throw std::runtime_error("missing Yue2 VAE config: " + vae_config.string());
-    }
     if (!engine::io::is_existing_file(assets->tiktoken_path)) {
         throw std::runtime_error("missing Yue2 tiktoken file: " + assets->tiktoken_path.string());
     }
-    assets->config.model = parse_model_config(model_config);
-    assets->config.vae = parse_vae_config(vae_config);
+    // kcpp: YuE2-3B and its VAE already have complete compiled defaults. Keep
+    // accepting upstream configs when present, but do not require JSON files.
+    if (engine::io::is_existing_file(model_config)) {
+        assets->config.model = parse_model_config(model_config);
+    }
+    if (engine::io::is_existing_file(vae_config)) {
+        assets->config.vae = parse_vae_config(vae_config);
+    }
     assets->config.generation = parse_generation_config(generation_config);
     return assets;
 }

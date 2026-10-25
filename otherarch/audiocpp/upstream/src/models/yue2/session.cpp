@@ -61,11 +61,9 @@ std::filesystem::path resolve_component_gguf_path(
     if (value.empty()) {
         throw std::runtime_error(std::string(option_name) + " must not be empty");
     }
-    const std::filesystem::path relative(value);
-    if (relative.is_absolute()) {
-        throw std::runtime_error(std::string(option_name) + " must be relative to the Yue2 model root");
-    }
-    const auto path = assets.model_root / relative;
+    const std::filesystem::path requested = std::filesystem::u8path(value);
+    // kcpp: --musicllm and --musicvae are independent explicit file paths.
+    const auto path = requested.is_absolute() ? requested : assets.model_root / requested;
     if (!engine::io::is_existing_file(path)) {
         throw std::runtime_error(std::string(option_name) + " file does not exist: " + path.string());
     }
@@ -142,12 +140,7 @@ const runtime::ModelMetadata & yue2_metadata() noexcept {
         kFamily,
         "Yue2",
         "Yue2 music generation with lyrics, style, and optional ABC conditioning.",
-        {
-            "sidecars/yue2-model-config.json",
-            "sidecars/yue2-generation-config.json",
-            "sidecars/yue2-qwen.tiktoken",
-            "sidecars/yue2-vae-config.json",
-        },
+        {}, // kcpp: fixed configs and bundled tokenizer; no user sidecars.
         {
             "yue2-3b-q8_0.gguf",
             "yue2-3b-q4_0.gguf",
@@ -345,7 +338,7 @@ std::shared_ptr<runtime::IVoiceModelLoader> make_yue2_loader() {
                 return false;
             }
             try {
-                (void) load_yue2_assets(request.model_path);
+                (void) load_yue2_assets(request.model_path, request.options);
                 return true;
             } catch (const std::exception &) {
                 return false;
@@ -353,7 +346,7 @@ std::shared_ptr<runtime::IVoiceModelLoader> make_yue2_loader() {
         }
 
         runtime::ModelInspection inspect(const runtime::ModelLoadRequest & request) const override {
-            auto assets = load_yue2_assets(request.model_path);
+            auto assets = load_yue2_assets(request.model_path, request.options);
             runtime::ModelInspection inspection;
             inspection.model_root = assets->model_root;
             inspection.metadata = yue2_metadata();
@@ -369,7 +362,7 @@ std::shared_ptr<runtime::IVoiceModelLoader> make_yue2_loader() {
         }
 
         std::unique_ptr<runtime::ILoadedVoiceModel> load(const runtime::ModelLoadRequest & request) const override {
-            return std::make_unique<LoadedModel>(load_yue2_assets(request.model_path));
+            return std::make_unique<LoadedModel>(load_yue2_assets(request.model_path, request.options));
         }
 
         runtime::CapabilitySet advertised_capabilities() const override {

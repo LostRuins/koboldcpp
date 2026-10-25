@@ -5,6 +5,8 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
+#include <unordered_map>
 
 namespace engine::models::yue2 {
 
@@ -16,7 +18,9 @@ struct Yue2Assets {
     Yue2Config config;
 };
 
-std::shared_ptr<const Yue2Assets> load_yue2_assets(const std::filesystem::path & model_path);
+std::shared_ptr<const Yue2Assets> load_yue2_assets(
+    const std::filesystem::path & model_path,
+    const std::unordered_map<std::string, std::string> & options = {});
 
 std::shared_ptr<const assets::TensorSource> make_yue2_lora_source(
     std::shared_ptr<const assets::TensorSource> base,
