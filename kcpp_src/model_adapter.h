@@ -143,6 +143,7 @@ int ArrFindIndexOf(const std::vector<int> targetArray, const std::vector<int> se
 FileFormat check_file_format(const std::string & fname, FileFormatExtraMeta * fileformatmeta);
 void ContextFastForward(std::vector<int> &current_context_tokens, std::vector<int> &embd_inp, int &n_past, std::vector<int> &last_n_tokens, const int nctx, std::vector<int> &smartcontext, const bool useSmartContext, const bool requireFullSubset, const int minimum_to_proceed, const int minimum_input_to_keep);
 bool gguf_tensor_exists(const std::string & filename, std::string tensor_name, bool exactmatch);
+std::string gguf_get_string(const std::string & filename, const std::string & key);
 std::string gguf_get_model_arch(const std::string & filename);
 
 size_t gpttype_calc_new_state_kv();

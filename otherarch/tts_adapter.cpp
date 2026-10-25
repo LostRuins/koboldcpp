@@ -544,6 +544,9 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     std::string modelfile_ttc = inputs.ttc_model_filename;
     std::string modelfile_cts = inputs.cts_model_filename;
     detectedarch = gguf_get_model_arch(modelfile_ttc);
+    const std::string audiocpp_family = detectedarch == "audiocpp"
+        ? gguf_get_string(modelfile_ttc, "audiocpp.model_spec.family")
+        : "";
 
     is_ttscpp_file = false;
     is_qwen3tts_file = false;
@@ -551,7 +554,8 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     audiocpp_tts_session.reset();
     audiocpp_tts_model.reset();
 
-    if (detectedarch == "supertonic") {
+    if (detectedarch == "supertonic" ||
+        (detectedarch == "audiocpp" && audiocpp_family == "supertonic")) {
         is_audiocpp_supertonic = true;
     } else if (detectedarch.empty() && !modelfile_ttc.empty()) {
         // Audio.cpp packages may be directories or safetensors bundles rather
@@ -578,6 +582,9 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
             //setup kokoro IPA
             populate_kokoro_ipa_map(tts_executable_path);
         }
+    } else if (detectedarch == "audiocpp") {
+        printf("\nUnsupported Audio.cpp TTS family: %s\n", audiocpp_family.empty() ? "<missing>" : audiocpp_family.c_str());
+        return false;
     }else{
         printf("\nLoading OuteTTS Model, OuteTTS: %s \nWavTokenizer: %s \n",modelfile_ttc.c_str(),modelfile_cts.c_str());
         if(modelfile_ttc=="" || modelfile_cts=="")
@@ -1352,7 +1359,8 @@ static tts_generation_outputs ttstype_generate_audiocpp_supertonic(const tts_gen
         }
         if (voice.empty() && inputs.speaker_seed >= 1 && inputs.speaker_seed <= 10) {
             static const char * preset_voices[] = {
-                "M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5",
+                "M1", "F2", "F3", "M5", "f5",
+                "M2", "M3", "M4", "F1", "F4", //these arent used, since koboldcpp only maps 5 presets
             };
             voice = preset_voices[inputs.speaker_seed - 1];
         }

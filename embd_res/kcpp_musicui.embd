@@ -413,8 +413,10 @@ let totalItems=0;
 let currentController=null;
 
 let currentTab = "music";
+let tabSelectionVersion = 0;
 
-function switchTab(tab){
+function switchTab(tab, userSelected = true){
+  if(userSelected) tabSelectionVersion++;
   currentTab = tab;
 
   document.getElementById("musicTab").classList.toggle("hidden", tab !== "music");
@@ -491,6 +493,9 @@ async function fetchStats(){
     if(requestId !== statsRequestId) return;
     has_llm_loaded = !!(perf && perf.llm);
     has_music_llm_loaded = !!(perf && perf.musicllm);
+    if(tabSelectionVersion === 0 && perf && !perf.music && perf.tts){
+      switchTab("tts", false);
+    }
     if(controlSelectionVersion === musicControlSelectionVersion){
       document.getElementById("music_controls").value = perf && perf.musicfamily === "yue2" ? "yue2" : "acestep";
     }
