@@ -37,7 +37,7 @@ void ResourceBundle::add_file(std::string id, const std::filesystem::path & path
     if (!engine::io::is_existing_file(path)) {
         throw std::runtime_error("asset resource file does not exist: " + path.string());
     }
-    auto [it, inserted] = files_.emplace(std::move(id), std::filesystem::weakly_canonical(path));
+    auto [it, inserted] = files_.emplace(std::move(id), engine::io::normalize_path(path));
     if (!inserted) {
         throw std::runtime_error("duplicate asset resource id: " + it->first);
     }
@@ -49,7 +49,7 @@ void ResourceBundle::add_tensor_source(std::string id, const std::filesystem::pa
     auto [it, inserted] = tensor_resources_.emplace(
         key,
         TensorResource{
-            std::filesystem::weakly_canonical(path),
+            engine::io::normalize_path(path),
             std::move(tensor_prefix),
         });
     if (!inserted) {
@@ -162,7 +162,7 @@ std::shared_ptr<const TensorSource> ResourceBundle::open_tensor_source(
     const auto path = resource == tensor_resources_.end()
         ? require_file(id)
         : resource->second.path;
-    const auto path_key = std::filesystem::weakly_canonical(path).generic_string();
+    const auto path_key = engine::io::normalize_path(path).generic_string();
     auto base = paths.find(path_key);
     if (base == paths.end()) {
         base = paths.emplace(

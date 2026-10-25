@@ -39,7 +39,7 @@ std::vector<NamedAsset> discover_named_assets(
         if (engine::io::is_existing_file(path)) {
             const auto base_id = candidate_stem_or_filename(candidate);
             const auto id = stem_counts[base_id] == 1 ? base_id : normalized_candidate_key(candidate);
-            assets.push_back({id, std::filesystem::weakly_canonical(path)});
+            assets.push_back({id, engine::io::normalize_path(path)});
         }
     }
     return assets;

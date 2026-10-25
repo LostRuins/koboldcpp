@@ -766,7 +766,7 @@ struct GgufTensorInfo {
 class GgufTensorSource final : public TensorSource {
 public:
     GgufTensorSource(std::filesystem::path path, TensorSourceOptions options)
-        : source_path_(std::filesystem::weakly_canonical(path)), synchronized_access_(options.synchronized_access) {
+        : source_path_(engine::io::normalize_path(path)), synchronized_access_(options.synchronized_access) {
         ggml_context * tensor_context = nullptr;
         gguf_context * gguf = gguf_init_from_file(
             source_path_.string().c_str(),
@@ -1015,7 +1015,7 @@ std::vector<std::filesystem::path> indexed_tensor_source_shard_paths_from_weight
         if (!engine::io::is_existing_file(path)) {
             throw std::runtime_error("missing indexed tensor shard: " + path.string());
         }
-        paths.push_back(std::filesystem::weakly_canonical(path));
+        paths.push_back(engine::io::normalize_path(path));
     }
     return paths;
 }
@@ -1868,7 +1868,7 @@ std::optional<GgufEmbeddedModelSpec> read_gguf_embedded_model_spec(const std::fi
 }
 
 std::filesystem::path materialize_gguf_sidecars(const std::filesystem::path & path) {
-    const auto canonical = std::filesystem::weakly_canonical(path);
+    const auto canonical = engine::io::normalize_path(path);
     const auto sidecars = read_gguf_embedded_sidecars(canonical, true);
     if (sidecars.empty()) {
         throw std::runtime_error("GGUF does not contain embedded model sidecars: " + canonical.string());
@@ -1937,16 +1937,16 @@ PreparedModelDirectory prepare_model_directory(const std::filesystem::path & mod
         throw std::runtime_error("model path does not exist: " + model_path.string());
     }
     if (engine::io::is_existing_file(gguf_path) && lower_ascii(gguf_path.extension().string()) == ".gguf") {
-        const auto canonical_gguf = std::filesystem::weakly_canonical(gguf_path);
+        const auto canonical_gguf = engine::io::normalize_path(gguf_path);
         if (gguf_has_embedded_sidecars(gguf_path)) {
             return {materialize_gguf_sidecars(gguf_path), canonical_gguf};
         }
         const auto external_root =
             engine::io::is_existing_directory(model_path) ? model_path : model_path.parent_path();
-        return {std::filesystem::weakly_canonical(external_root), canonical_gguf};
+        return {engine::io::normalize_path(external_root), canonical_gguf};
     }
     const auto root = engine::io::is_existing_directory(model_path) ? model_path : model_path.parent_path();
-    return {std::filesystem::weakly_canonical(root), std::nullopt};
+    return {engine::io::normalize_path(root), std::nullopt};
 }
 
 void convert_tensor_sources_to_gguf(const std::vector<TensorSourceInput> & inputs,
@@ -1974,7 +1974,7 @@ void convert_tensor_sources_to_gguf(const std::vector<TensorSourceInput> & input
             throw std::runtime_error("failed to open tensor source " + input.path.string() + ": " + error.what());
         }
     }
-    const auto sidecar_root = std::filesystem::weakly_canonical(
+    const auto sidecar_root = engine::io::normalize_path(
         requested_sidecar_root.empty() ? inputs.front().path.parent_path() : requested_sidecar_root);
     if (!engine::io::is_existing_directory(sidecar_root)) {
         throw std::runtime_error("GGUF sidecar root is not a directory: " + sidecar_root.string());

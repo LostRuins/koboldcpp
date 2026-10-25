@@ -42,6 +42,10 @@ patches listed here. Recheck these after every run of `sync-audiocpp.ps1`.
 14. `src/framework/codecs/fish_dac_codec_runtime.cpp`: provide the same
     portable F32 -> BF16 -> F32 compatibility lowering for Fish Audio S2's
     remaining private `ggml_round_bf16` calls.
+15. Framework filesystem/package sources route path normalization through
+    `engine::io::normalize_path`. On Windows this avoids MinGW's broken
+    `weakly_canonical` traversal for otherwise accessible special-folder paths;
+    other platforms retain upstream canonicalization.
 
 Do not add KCPP adapter behavior to upstream-owned files. Put it in the parent
 directory so upstream refreshes remain reviewable.

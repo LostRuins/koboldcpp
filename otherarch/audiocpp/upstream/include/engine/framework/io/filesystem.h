@@ -11,6 +11,8 @@ namespace engine::io {
 bool is_existing_directory(const std::filesystem::path & path);
 bool is_existing_file(const std::filesystem::path & path);
 
+std::filesystem::path normalize_path(const std::filesystem::path & path);
+
 std::filesystem::path require_directory(const std::filesystem::path & path, std::string_view role);
 std::filesystem::path require_file(const std::filesystem::path & path, std::string_view role);
 

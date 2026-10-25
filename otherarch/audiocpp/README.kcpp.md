@@ -82,7 +82,9 @@ directory and send `reference_text` containing its transcript.
 
 Pass `maya1-q8_0.gguf` (or `maya1-orig.gguf`) as the normal TTS model. Supply a
 voice description with the existing `instruction` request field; when omitted,
-KoboldCpp uses a neutral expressive-voice description.
+KoboldCpp uses a neutral expressive-voice description. KoboldCpp terminates
+unpunctuated Maya descriptions with a period because the model can otherwise
+leak the description into spoken output, particularly for short utterances.
 
 ## Intentional compatibility changes
 

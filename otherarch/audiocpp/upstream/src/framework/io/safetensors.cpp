@@ -1,5 +1,7 @@
 #include "engine/framework/io/safetensors.h"
 
+#include "engine/framework/io/filesystem.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -283,7 +285,7 @@ SafeTensorIndex load_safetensors_index(const std::filesystem::path & path) {
     }
 
     SafeTensorIndex index;
-    index.source_path = std::filesystem::weakly_canonical(path);
+    index.source_path = normalize_path(path);
     index.header_bytes = sizeof(header_len) + header.size();
 
     size_t pos = 0;

@@ -99,10 +99,10 @@ std::optional<std::filesystem::path> active_gguf_path() {
         return std::nullopt;
     const auto & path = *active_model_path;
     if (is_gguf_file(path)) {
-        return std::filesystem::weakly_canonical(path);
+        return engine::io::normalize_path(path);
     }
     if (const auto found = assets::find_directory_gguf(path)) {
-        return std::filesystem::weakly_canonical(*found);
+        return engine::io::normalize_path(*found);
     }
     return std::nullopt;
 }
@@ -160,7 +160,7 @@ std::optional<std::filesystem::path> discover_external_model_spec(std::string_vi
     }
     for (const auto & candidate : candidates) {
         if (external_spec_matches_family(candidate, family)) {
-            return std::filesystem::weakly_canonical(candidate);
+            return engine::io::normalize_path(candidate);
         }
     }
     return std::nullopt;
@@ -178,7 +178,7 @@ std::optional<std::filesystem::path> discover_workspace_model_spec(std::string_v
     }
     for (const auto & candidate : candidates) {
         if (external_spec_matches_family(candidate, family)) {
-            return std::filesystem::weakly_canonical(candidate);
+            return engine::io::normalize_path(candidate);
         }
     }
     return std::nullopt;
@@ -209,10 +209,10 @@ engine::io::json::Value parse_model_spec(const std::filesystem::path & spec_path
 
 std::filesystem::path resolve_model_root(const std::filesystem::path & model_path) {
     if (engine::io::is_existing_directory(model_path)) {
-        return std::filesystem::weakly_canonical(model_path);
+        return engine::io::normalize_path(model_path);
     }
     if (engine::io::is_existing_file(model_path)) {
-        return std::filesystem::weakly_canonical(model_path.parent_path());
+        return engine::io::normalize_path(model_path.parent_path());
     }
     throw std::runtime_error("model path does not exist: " + model_path.string());
 }
@@ -236,7 +236,7 @@ ResourceRoots resolve_source_roots(const std::filesystem::path & model_root, con
         if (!engine::io::is_existing_directory(root_path) && !engine::io::is_existing_file(root_path)) {
             throw std::runtime_error("missing model root: " + id + "=" + root_path.string());
         }
-        roots.emplace(id, std::filesystem::weakly_canonical(root_path));
+        roots.emplace(id, engine::io::normalize_path(root_path));
     }
     return roots;
 }
@@ -353,7 +353,7 @@ std::vector<assets::ResourceFile> resources_from_resource_map(const ResourceRoot
         std::string prefix;
         const auto path = resolve_tensor_source_ref(roots, ref, prefix);
         if (required || engine::io::is_existing_file(path)) {
-            out.push_back({id, std::filesystem::weakly_canonical(path)});
+            out.push_back({id, engine::io::normalize_path(path)});
         }
     }
     return out;
@@ -465,7 +465,7 @@ std::filesystem::path default_package_spec_path(std::string_view family) {
         if (!engine::io::is_existing_file(path)) {
             throw std::runtime_error("model spec override not found: " + path.string());
         }
-        return std::filesystem::weakly_canonical(path);
+        return engine::io::normalize_path(path);
     }
     if (const auto & embedded = embedded_model_spec(); embedded.has_value()) {
         if (embedded->family != family) {
@@ -522,7 +522,7 @@ std::optional<std::filesystem::path> find_contract_spec_path(std::string_view fa
         if (!engine::io::is_existing_file(path)) {
             throw std::runtime_error("model spec override not found: " + path.string());
         }
-        return std::filesystem::weakly_canonical(path);
+        return engine::io::normalize_path(path);
     }
     if (const auto external = discover_workspace_model_spec(family)) {
         return *external;
