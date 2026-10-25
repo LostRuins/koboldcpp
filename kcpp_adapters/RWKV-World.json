@@ -1,5 +1,5 @@
 {
-  "system_start": "",
+  "system_start": "System: ",
   "system_end": "\n\n",
   "user_start": "User: ",
   "user_end": "\n\n",

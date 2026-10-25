@@ -1,0 +1,10 @@
+{
+  "chat_start": "[gMASK]<sop>",
+  "system_start": "<|system|>\n",
+  "system_end": "",
+  "user_start": "<|user|>\n",
+  "user_end": "",
+  "assistant_start": "<|assistant|>\n<think></think>\n",
+  "assistant_gen": "<|assistant|>",
+  "assistant_end": ""
+}

@@ -1,0 +1,10 @@
+{
+  "system_start": "<role>SYSTEM</role>",
+  "system_end": "\ndetailed thinking on<|role_end|>",
+  "default_system": "<role>SYSTEM</role>detailed thinking on<|role_end|>",
+  "user_start": "<role>HUMAN</role>",
+  "user_end": "<|role_end|>",
+  "assistant_start": "<role>ASSISTANT</role>\n<think></think>",
+  "assistant_gen": "<role>ASSISTANT</role>\n<think>",
+  "assistant_end": "<|role_end|>"
+}

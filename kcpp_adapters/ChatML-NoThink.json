@@ -3,6 +3,7 @@
   "system_end": "<|im_end|>\n",
   "user_start": "<|im_start|>user\n",
   "user_end": "<|im_end|>\n",
-  "assistant_start": "<|im_start|>assistant\n<think>\n\n</think>\n",
+  "assistant_start": "<|im_start|>assistant\n",
+  "assistant_gen": "<|im_start|>assistant\n<think>\n\n</think>\n",
   "assistant_end": "<|im_end|>\n"
 }

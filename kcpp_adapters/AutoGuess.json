@@ -38,6 +38,7 @@
     "adapter": {
         "system_start": "<|im_system|>system<|im_middle|>",
         "system_end": "<|im_end|>",
+        "default_system": "<|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|>",
         "user_start": "<|im_user|>user<|im_middle|>",
         "user_end": "<|im_end|>",
         "assistant_start": "<|im_assistant|>assistant<|im_middle|>",
@@ -139,8 +140,8 @@
         "system_start": "[SYSTEM_PROMPT]",
         "system_end": "[/SYSTEM_PROMPT]",
         "user_start": "[INST]",
-        "user_end": "",
-        "assistant_start": "[/INST]",
+        "user_end": "[/INST]",
+        "assistant_start": "",
         "assistant_end": "</s>"
     }
 }, {
@@ -156,25 +157,55 @@
         "assistant_end": "</s>"
     }
 }, {
-    "search": ["[gMASK]<sop>","content.split('</think>')"],
+    "search": ["[gMASK]<sop>","Reasoning Effort"],
+    "name": "GLM-5.2/5.3",
+    "adapter": {
+        "chat_start": "[gMASK]<sop><|system|>Reasoning Effort: Max",
+        "system_start": "<|system|>",
+        "system_end": "",
+        "user_start": "<|user|>",
+        "user_end": "",
+        "assistant_start": "<|assistant|><think></think>",
+        "assistant_gen": "<|assistant|><think>",
+        "assistant_end": ""
+    }
+}, {
+    "search": ["[gMASK]<sop>","else '<think>'"],
     "name": "GLM-4.7",
     "adapter": {
+        "chat_start": "[gMASK]<sop>",
+        "system_start": "<|system|>",
+        "system_end": "",
+        "user_start": "<|user|>",
+        "user_end": "",
+        "assistant_start": "<|assistant|></think>",
+        "assistant_gen": "<|assistant|><think>",
+        "assistant_end": ""
+    }
+}, {
+    "search": ["[gMASK]<sop>","content.split('</think>')"],
+    "name": "GLM-4.5/4.6",
+    "adapter": {
+        "chat_start": "[gMASK]<sop>",
         "system_start": "<|system|>\n",
         "system_end": "",
         "user_start": "<|user|>\n",
         "user_end": "",
-        "assistant_start": "<|assistant|>\n<think>",
+        "assistant_start": "<|assistant|>\n<think></think>\n",
+        "assistant_gen": "<|assistant|>",
         "assistant_end": ""
     }
 }, {
     "search": ["[gMASK]<sop>"],
     "name": "GLM-4",
     "adapter": {
+        "chat_start": "[gMASK]<sop>",
         "system_start": "<|system|>\n",
         "system_end": "",
         "user_start": "<|user|>\n",
         "user_end": "",
         "assistant_start": "<|assistant|>\n",
+        "assistant_gen": "<|assistant|>",
         "assistant_end": ""
     }
 }, {
@@ -214,8 +245,9 @@
     "search": ["<｜start▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<|System|>", "<|User|>", "<|Bot|>", "</think>"],
     "name": "Spark X2.5",
     "adapter": {
-        "system_start": "<｜start▁of▁sentence｜><|System|>\n",
+        "system_start": "<｜start▁of▁sentence｜><|System|>\nyou are a helpful assistant.\n\n",
         "system_end": "<｜end▁of▁sentence｜>",
+        "default_system": "<｜start▁of▁sentence｜><|System|>\nyou are a helpful assistant.<｜end▁of▁sentence｜>",
         "user_start": "<｜start▁of▁sentence｜><|User|>",
         "user_end": "<｜end▁of▁sentence｜>",
         "assistant_start": "<｜start▁of▁sentence｜><|Bot|></think>",
@@ -251,6 +283,7 @@
     "adapter": {
         "system_start": "<|system|>",
         "system_end": "<|endofsystem|>",
+        "default_system": "<|system|>You are a helpful assistant.<|endofsystem|>",
         "user_start": "<|userprompt|>",
         "user_end": "<|endofuserprompt|>",
         "assistant_start": "<|response|>",
@@ -264,7 +297,8 @@
         "system_end": "\n\n<|end|>",
         "user_start": "<|start|>user<|message|>",
         "user_end": "<|end|>",
-        "assistant_start": "<|start|>assistant<|channel|>analysis<|message|>We can answer immediately.<|end|><|start|>assistant<|channel|>final<|message|>",
+        "assistant_start": "<|start|>assistant<|channel|>final<|message|>",
+        "assistant_gen": "<|start|>assistant",
         "assistant_end": "<|end|>"
     }
 }, {
@@ -282,7 +316,7 @@
     "search": ["rwkv_", "'User: '"],
     "name": "RWKV World",
     "adapter": {
-        "system_start": "",
+        "system_start": "System: ",
         "system_end": "\n\n",
         "user_start": "User: ",
         "user_end": "\n\n",
@@ -302,6 +336,18 @@
         "assistant_end": "</s>"
     }
 }, {
+    "search": ["<|im_start|>assistant", "<|mimo_audio_start|>"],
+    "name": "ChatML (MiMo)",
+    "adapter": {
+        "system_start": "<|im_start|>system\n",
+        "system_end": "<|im_end|>",
+        "user_start": "<|im_start|>user\n",
+        "user_end": "<|im_end|>",
+        "assistant_start": "<|im_start|>assistant\n<think></think>",
+        "assistant_gen": "<|im_start|>assistant\n",
+        "assistant_end": "<|im_end|>"
+    }
+}, {
     "search": ["<|im_start|>assistant", "<|im_end|>"],
     "name": "ChatML (Generic)",
     "adapter": {
@@ -316,20 +362,21 @@
     "search": ["[BEGIN FINAL RESPONSE]", "<|begin_user|>"],
     "name": "Apriel 1.6",
     "adapter": {
-        "system_start": "<|begin_system|>\n",
+        "system_start": "<|begin_system|>\nYou are a thoughtful, systematic AI assistant from ServiceNow Language Models (SLAM) lab. Analyze each question carefully, present your reasoning step-by-step, then provide the final response after the marker [BEGIN FINAL RESPONSE].\n",
         "system_end": "\n",
+        "default_system": "<|begin_system|>\nYou are a thoughtful, systematic AI assistant from ServiceNow Language Models (SLAM) lab. Analyze each question carefully, present your reasoning step-by-step, then provide the final response after the marker [BEGIN FINAL RESPONSE].\n",
         "user_start": "<|begin_user|>\n",
-        "user_end": "\n",
-        "assistant_start": "<|begin_assistant|>\n",
-        "assistant_end": "\n",
-        "assistant_gen": "<|begin_assistant|>\nWe can respond now.\n[BEGIN FINAL RESPONSE]\n"
+        "user_end": "",
+        "assistant_start": "\n<|begin_assistant|>\n",
+        "assistant_gen": "\n<|begin_assistant|>\nHere are my reasoning steps:\n",
+        "assistant_end": "\n<|end|>\n"
     }
 }, {
     "search": ["<|developer_end|>", "<|assistant_start|>","<|system_start|>"],
     "name": "Apertus",
     "adapter": {
         "system_start": "<|system_start|>",
-        "system_end": "<|system_end|>",
+        "system_end": "<|system_end|><|developer_start|>Deliberation: disabled\nTool Capabilities: disabled<|developer_end|>",
         "user_start": "<|user_start|>",
         "user_end": "<|user_end|>",
         "assistant_start": "<|assistant_start|>",
@@ -339,34 +386,50 @@
     "search": ["[e~[","]~b]user"],
     "name": "MiniMax",
     "adapter": {
-		"system_start": "]~!b[]~b]system\n",
-		"system_end": "[e~[\n",
-		"user_start": "]~b]user\n",
-		"user_end": "[e~[\n",
-		"assistant_start": "]~b]ai\n",
-		"assistant_end": "[e~[\n"
+        "system_start": "]~!b[]~b]system\n",
+        "system_end": "[e~[\n",
+        "user_start": "]~b]user\n",
+        "user_end": "[e~[\n",
+        "assistant_start": "]~b]ai\n",
+        "assistant_gen": "]~b]ai\n<think>\n",
+        "assistant_end": "[e~[\n"
     }
 }, {
     "search": ["<|start|>assistant to=","<|start|>system<|message|>"],
     "name": "Muse Glimmer",
     "adapter": {
-		"system_start": "<|start|>system<|message|>",
-		"system_end": "<|eot|>",
-		"user_start": "<|start|>user<|message|>",
-		"user_end": "<|eot|>",
-		"assistant_start": "<|start|>assistant to=user<|message|>",
-		"assistant_end": "<|eot|>"
+        "system_start": "<|start|>system<|message|>",
+        "system_end": "\n\nReasoning strength: high.\n\n# Valid recipients: \"self\", \"user\".<|eot|>",
+        "user_start": "<|start|>user<|message|>",
+        "user_end": "<|eot|>",
+        "assistant_start": "<|start|>assistant to=user<|message|>",
+        "assistant_gen": "<|start|>assistant",
+        "assistant_end": "<|eot|>"
+    }
+}, {
+    "search": ["<role>SYSTEM</role>","<|role_end|>","detailed thinking on"],
+    "name": "Ling 3.x",
+    "adapter": {
+        "system_start": "<role>SYSTEM</role>",
+        "system_end": "\ndetailed thinking on<|role_end|>",
+        "default_system": "<role>SYSTEM</role>detailed thinking on<|role_end|>",
+        "user_start": "<role>HUMAN</role>",
+        "user_end": "<|role_end|>",
+        "assistant_start": "<role>ASSISTANT</role>\n<think></think>",
+        "assistant_gen": "<role>ASSISTANT</role>\n<think>",
+        "assistant_end": "<|role_end|>"
     }
 }, {
     "search": ["<role>SYSTEM</role>","<|role_end|>"],
-    "name": "Ling 3.0 Flash",
+    "name": "Ling 2.0",
     "adapter": {
-		"system_start": "<role>SYSTEM</role>",
-		"system_end": "<|role_end|>",
-		"user_start": "<role>HUMAN</role>",
-		"user_end": "<|role_end|>",
-		"assistant_start": "<role>ASSISTANT</role>",
-		"assistant_end": "<|role_end|>"
+        "system_start": "<role>SYSTEM</role>",
+        "system_end": "\ndetailed thinking off<|role_end|>",
+        "default_system": "<role>SYSTEM</role>detailed thinking off<|role_end|>",
+        "user_start": "<role>HUMAN</role>",
+        "user_end": "<|role_end|>",
+        "assistant_start": "<role>ASSISTANT</role>",
+        "assistant_end": "<|role_end|>"
     }
 }
 ]

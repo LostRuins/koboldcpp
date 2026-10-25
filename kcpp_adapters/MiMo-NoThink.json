@@ -1,0 +1,8 @@
+{
+  "system_start": "<|im_start|>system\n",
+  "system_end": "<|im_end|>",
+  "user_start": "<|im_start|>user\n",
+  "user_end": "<|im_end|>",
+  "assistant_start": "<|im_start|>assistant\n<think></think>",
+  "assistant_end": "<|im_end|>"
+}

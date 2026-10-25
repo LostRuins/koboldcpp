@@ -1,0 +1,9 @@
+{
+  "chat_start": "[gMASK]<sop><|system|>Reasoning Effort: Max",
+  "system_start": "<|system|>",
+  "system_end": "",
+  "user_start": "<|user|>",
+  "user_end": "",
+  "assistant_start": "<|assistant|><think></think>",
+  "assistant_end": ""
+}

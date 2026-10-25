@@ -4,5 +4,6 @@
   "user_start": "]~b]user\n",
   "user_end": "[e~[\n",
   "assistant_start": "]~b]ai\n",
+  "assistant_gen": "]~b]ai\n<think>\n",
   "assistant_end": "[e~[\n"
 }

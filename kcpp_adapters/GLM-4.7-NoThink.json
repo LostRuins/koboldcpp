@@ -1,8 +1,9 @@
 {
-  "system_start": "<|system|>\n",
+  "chat_start": "[gMASK]<sop>",
+  "system_start": "<|system|>",
   "system_end": "",
-  "user_start": "<|user|>\n",
-  "user_end": "/nothink",
+  "user_start": "<|user|>",
+  "user_end": "",
   "assistant_start": "<|assistant|></think>",
   "assistant_end": ""
 }

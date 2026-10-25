@@ -1,8 +1,9 @@
 {
   "system_start": "<|start|>system<|message|>",
-  "system_end": "<|eot|>",
+  "system_end": "\n\nReasoning strength: high.\n\n# Valid recipients: \"self\", \"user\".<|eot|>",
   "user_start": "<|start|>user<|message|>",
   "user_end": "<|eot|>",
   "assistant_start": "<|start|>assistant to=user<|message|>",
+  "assistant_gen": "<|start|>assistant",
   "assistant_end": "<|eot|>"
 }
