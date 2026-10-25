@@ -81,6 +81,7 @@ Android users can [install through Termux](#compiling-on-android-termux-installa
 ### Cloud GPUs and public demo
 - **Run on Google Colab:** Use the [official KoboldCpp Colab GPU Notebook](https://colab.research.google.com/github/LostRuins/koboldcpp/blob/concedo/colab.ipynb). This is an easy way to get started without installing anything in a minute or two. Your usage must comply with Colab's terms.
 - **Run on RunPod:** Cloud rental GPUs with variable prices. Launch the [KoboldCpp RunPod image](https://koboldai.org/runpodcpp), or try [SimplePod](https://koboldai.org/simplepod) for smaller models.
+- **Run on Runcrate:** Hourly cloud GPU virtual machines. [Create an instance](https://www.runcrate.ai/auth/signup?utm_source=koboldcpp&utm_medium=directory&utm_campaign=gpu_pricing&redirect=%2Fdashboard%2Finstances%3Faction%3Dcreate%26gpu%3DA6000%26template%3Dubuntu-inference%26src%3Dkoboldcpp), download the [Linux binary](#linux) on it and start it with `--model <file.gguf> --usecuda --host 0.0.0.0 --password <your-key>`, then serve port 5001 through an [HTTPS link](https://www.runcrate.ai/docs/instances/https-links?utm_source=koboldcpp&utm_medium=directory&utm_campaign=gpu_pricing).
 - **Public demo:** Try the [KoboldCpp HuggingFace Space](https://koboldai-koboldcpp-tiefighter.hf.space/). Please be considerate of this free shared service.
 
 ### Docker
