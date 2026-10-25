@@ -4,12 +4,13 @@
 
 #include <algorithm>
 #include <atomic>
-#include <charconv>
 #include <chrono>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <locale>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -68,13 +69,12 @@ std::string timestamp_seconds_local() {
 }
 
 std::string format_scalar_double(double value) {
-    char buffer[64];
-    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::general);
-    if (result.ec == std::errc()) {
-        return std::string(buffer, result.ptr);
-    }
+    // kcpp: Floating-point std::to_chars is missing from older libstdc++
+    // versions used by some Linux CI runners. Keep trace output portable and
+    // locale-independent while retaining round-trip precision.
     std::ostringstream out;
-    out.precision(17);
+    out.imbue(std::locale::classic());
+    out.precision(std::numeric_limits<double>::max_digits10);
     out << value;
     return out.str();
 }

@@ -46,6 +46,9 @@ patches listed here. Recheck these after every run of `sync-audiocpp.ps1`.
     `engine::io::normalize_path`. On Windows this avoids MinGW's broken
     `weakly_canonical` traversal for otherwise accessible special-folder paths;
     other platforms retain upstream canonicalization.
+16. `src/framework/debug/trace.cpp`: use a locale-independent stream formatter
+    for scalar doubles because older Linux libstdc++ versions do not provide
+    the floating-point `std::to_chars` overload.
 
 Do not add KCPP adapter behavior to upstream-owned files. Put it in the parent
 directory so upstream refreshes remain reviewable.

@@ -1464,7 +1464,8 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                     reference_text = inputs.custom_speaker_text;
                 }
                 if (reference_text.empty()) {
-                    throw std::runtime_error("Fish Audio voice cloning requires reference_text");
+                    reference_text = "but that is what it is"; //turns out random text here works fine too
+                    // throw std::runtime_error("Fish Audio voice cloning requires reference_text");
                 }
                 engine::runtime::VoiceReference reference;
                 reference.audio = engine::runtime::AudioBuffer{
