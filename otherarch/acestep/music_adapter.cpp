@@ -47,6 +47,8 @@ bool musictype_load_model(const music_load_model_inputs inputs)
     std::string musicvae_filename = inputs.musicvae_filename;
     bool lowvram = inputs.lowvram;
     is_audiocpp_yue2 = false;
+    musicgen_llm_loaded = false;
+    musicgen_diffusion_loaded = false;
     audiocpp_music_session.reset();
     audiocpp_music_model.reset();
 
@@ -342,4 +344,15 @@ music_generation_outputs musictype_generate(const music_generation_inputs inputs
     }
 
     return output;
+}
+
+const char * musictype_get_family()
+{
+    if (is_audiocpp_yue2) {
+        return "yue2";
+    }
+    if (musicgen_llm_loaded || musicgen_diffusion_loaded) {
+        return "acestep";
+    }
+    return "none";
 }

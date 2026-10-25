@@ -211,11 +211,35 @@ select{
   </div>
 
   <div class="form-grid" style="margin-top:12px">
-    <div><label>BPM</label><input title="BPM" id="bpm" type="number"></div>
-    <div><label>Duration (s)</label><input title="Duration" id="duration" type="number"></div>
-    <div><label>Key</label><input title="Keyscale" id="keyscale"></div>
-    <div><label>Time Sig</label><input title="Time Signature" id="timesignature"></div>
-    <div><label>Language</label><input title="Vocal Language" id="vocal_language"></div>
+    <div>
+      <label for="music_controls">Music Model Controls</label>
+      <select id="music_controls" title="Select the controls shown for the loaded music model">
+        <option value="acestep">ACE-Step</option>
+        <option value="yue2">YuE2</option>
+      </select>
+    </div>
+    <div class="yue2-only hidden">
+      <label for="cot">YuE2 Score Mode</label>
+      <select id="cot" title="YuE2 symbolic planning mode">
+        <option value="full">Full Score</option>
+        <option value="melody">Melody / Cover</option>
+        <option value="off">Direct / No Score</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="yue2_abc_section" class="yue2-only hidden" style="margin-top:10px">
+    <label>ABC Score</label>
+    <textarea id="abc" style="min-height:150px;" placeholder="Generate, paste, or import an ABC score here."></textarea>
+    <p class="hint">Use Melody / Cover with melody-only ABC for a cover, or Full Score to retain chord annotations.</p>
+  </div>
+
+  <div class="form-grid" style="margin-top:12px">
+    <div class="acestep-only"><label>BPM</label><input title="BPM" id="bpm" type="number"></div>
+    <div class="acestep-only"><label>Duration (s)</label><input title="Duration" id="duration" type="number"></div>
+    <div class="acestep-only"><label>Key</label><input title="Keyscale" id="keyscale"></div>
+    <div class="acestep-only"><label>Time Sig</label><input title="Time Signature" id="timesignature"></div>
+    <div class="acestep-only"><label>Language</label><input title="Vocal Language" id="vocal_language"></div>
     <div>
       <label>Seed</label>
       <div style="display:flex; gap:6px;">
@@ -233,7 +257,7 @@ select{
         <option value="main_llm">Main LLM</option>
       </select>
     </div>
-    <div id="gen_codes_option" style="padding:8px 0;">
+    <div id="gen_codes_option" class="acestep-only" style="padding:8px 0;">
       <label for="gen_codes" style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
         <input title="Generate Audio Codes" id="gen_codes" type="checkbox" style="width:auto; margin:0;">
         Generate Audio Codes
@@ -247,24 +271,30 @@ select{
 
   <div id="advanced">
     <div class="compact-row" style="margin-top:10px">
-      <div><label>Temp</label><input title="Temperature" id="lm_temperature" type="number" step="0.01" value="0.9"></div>
-      <div><label>CFG</label><input title="CFG Scale" id="lm_cfg_scale" type="number" step="0.1" value="3.0"></div>
-      <div><label>Top-P</label><input title="Top-P" id="lm_top_p" type="number" step="0.01" value="0.9"></div>
-      <div><label>Top-K</label><input title="Top-K" id="lm_top_k" type="number" value="50"></div>
-      <div><label>RepPen</label><input title="Repetition Penalty" id="lm_rep_pen" type="number" value="1.03"></div>
-      <div><label>Codes Top-P</label><input title="Codes Top-P" id="codes_top_p" type="number" value="0.99"></div>
-      <div><label>Codes Top-K</label><input title="Codes Top-K" id="codes_top_k" type="number" value="1000"></div>
-      <div><label>Codes Temp</label><input title="Codes Temperature" id="codes_temperature" type="number" value="1.0"></div>
-      <div><label>Steps</label><input title="Generation Steps" id="inference_steps" type="number" value="8"></div>
-      <div><label>Guidance</label><input title="Guidance Scale" id="guidance_scale" type="number" value="1"></div>
-      <div><label>Shift</label><input title="Audio Shift" id="shift" type="number" value="3"></div>
+      <div class="acestep-only"><label>Temp</label><input title="Temperature" id="lm_temperature" type="number" step="0.01" value="0.9"></div>
+      <div class="acestep-only"><label>CFG</label><input title="CFG Scale" id="lm_cfg_scale" type="number" step="0.1" value="3.0"></div>
+      <div class="acestep-only"><label>Top-P</label><input title="Top-P" id="lm_top_p" type="number" step="0.01" value="0.9"></div>
+      <div class="acestep-only"><label>Top-K</label><input title="Top-K" id="lm_top_k" type="number" value="50"></div>
+      <div class="acestep-only"><label>RepPen</label><input title="Repetition Penalty" id="lm_rep_pen" type="number" value="1.03"></div>
+      <div><label id="codes_top_p_label">Codes Top-P</label><input title="Codes Top-P" id="codes_top_p" type="number" step="0.01" value="0.99"></div>
+      <div><label id="codes_top_k_label">Codes Top-K</label><input title="Codes Top-K" id="codes_top_k" type="number" value="1000"></div>
+      <div><label id="codes_temperature_label">Codes Temp</label><input title="Codes Temperature" id="codes_temperature" type="number" step="0.01" value="1.0"></div>
+      <div><label id="inference_steps_label">Steps</label><input title="Generation Steps" id="inference_steps" type="number" value="8"></div>
+      <div><label id="guidance_scale_label">Guidance</label><input title="Guidance Scale" id="guidance_scale" type="number" step="0.01" value="1"></div>
+      <div class="acestep-only"><label>Shift</label><input title="Audio Shift" id="shift" type="number" value="3"></div>
+      <div class="yue2-only hidden"><label>ABC Temp</label><input title="ABC Planner Temperature" id="abc_temperature" type="number" step="0.01" value="0.7"></div>
+      <div class="yue2-only hidden"><label>ABC Top-P</label><input title="ABC Planner Top-P" id="abc_top_p" type="number" step="0.01" value="0.9"></div>
+      <div class="yue2-only hidden"><label>ABC Top-K</label><input title="ABC Planner Top-K" id="abc_top_k" type="number" value="30"></div>
+      <div class="yue2-only hidden"><label>Semantic RepPen</label><input title="Semantic Repetition Penalty" id="semantic_repetition_penalty" type="number" step="0.01" value="1.2"></div>
+      <div class="yue2-only hidden"><label>Min Tokens</label><input title="Minimum Semantic Tokens (25 per second)" id="semantic_min_tokens" type="number" value="200"></div>
+      <div class="yue2-only hidden"><label>Max Tokens</label><input title="Maximum Semantic Tokens (25 per second)" id="semantic_max_tokens" type="number" value="9000"></div>
       <div><label>Save as MP3</label><input title="Save as MP3" id="use_mp3" type="checkbox"></div>
       <div><label>Stereo</label><input title="Save as Stereo" id="stereo" type="checkbox" checked></div>
     </div>
     <div>
-      <div><label>AudioCodes</label><textarea placeholder="Input or generate audio codes here" id="audio_codes"></textarea></div>
+      <div><label id="audio_codes_label">AudioCodes</label><textarea placeholder="Input or generate audio codes here" id="audio_codes"></textarea></div>
     </div>
-    <div style="margin-top:8px">
+    <div class="acestep-only" style="margin-top:8px">
       <label>Music Reference Audio (.wav / .mp3)</label>
       <div style="display:flex; gap:6px; align-items:center;">
         <input title="Upload reference audio" id="music_reference_audio" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg">
@@ -290,7 +320,7 @@ select{
   <div class="actions" id="actionContainer">
     <div id="normalActions" style="display:flex; gap:10px; flex-wrap:wrap;">
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
-      <button class="primary" onclick="planSong()">Plan Lyrics / Details</button>
+      <button id="plan_song_button" class="primary" onclick="planSong()">Plan Lyrics / Details</button>
       <button class="primary" onclick="generateSong()">Generate Music</button>
       <button class="danger" onclick="clearFields()">Clear</button>
       </div>
@@ -306,7 +336,7 @@ select{
     <input title="Import Plan" type="file" id="importFile" hidden accept="application/json" onchange="importPlan(event)">
   </div>
   <div>
-  <p style="font-size:14px">Click 'Plan Lyrics' first to generate lyrics, BPM and duration. Edit as needed.
+  <p id="music_help" style="font-size:14px">Click 'Plan Lyrics' first to generate lyrics, BPM and duration. Edit as needed.
   <br>When satisfied, click 'Generate Music' to make the music</p>
   </div>
 </div>
@@ -427,9 +457,16 @@ var has_llm_loaded = false;
 var has_music_llm_loaded = false;
 let statsRequestId = 0;
 let plannerSelectionVersion = 0;
+let musicControlSelectionVersion = 0;
+let activeMusicControls = "acestep";
+const musicControlValues = {
+  acestep: {codes_top_p:"0.99", codes_top_k:"1000", codes_temperature:"1.0", audio_codes:""},
+  yue2: {codes_top_p:"0.95", codes_top_k:"100", codes_temperature:"1.0", audio_codes:""}
+};
 async function fetchStats(){
   const requestId = ++statsRequestId;
   const selectionVersion = plannerSelectionVersion;
+  const controlSelectionVersion = musicControlSelectionVersion;
   has_llm_loaded = false;
   has_music_llm_loaded = false;
   document.getElementById("planner").value = "music_lm";
@@ -454,9 +491,13 @@ async function fetchStats(){
     if(requestId !== statsRequestId) return;
     has_llm_loaded = !!(perf && perf.llm);
     has_music_llm_loaded = !!(perf && perf.musicllm);
+    if(controlSelectionVersion === musicControlSelectionVersion){
+      document.getElementById("music_controls").value = perf && perf.musicfamily === "yue2" ? "yue2" : "acestep";
+    }
     if(selectionVersion === plannerSelectionVersion){
       document.getElementById("planner").value = has_llm_loaded ? "main_llm" : "music_lm";
     }
+    updateMusicControls();
     updatePlannerOptions();
 
   }catch(e){
@@ -589,13 +630,18 @@ function randomizeSeed(){
   const seedInput = document.getElementById("seed");
   const randomSeed = Math.floor(Math.random() * 899999 + 100000);
   seedInput.value = randomSeed;
+  if(document.getElementById("music_controls").value === "yue2") document.getElementById("audio_codes").value = "";
 }
 
 function getFormData(){
-  const ids=["caption","lyrics","bpm","duration","keyscale","timesignature",
-  "vocal_language","seed","lm_temperature","lm_cfg_scale","lm_top_p","lm_top_k","lm_rep_pen","inference_steps",
-  "codes_top_p","codes_top_k","codes_temperature","audio_cover_strength",
-  "guidance_scale","shift","audio_codes"];
+  const family=document.getElementById("music_controls").value;
+  const commonIds=["caption","lyrics","seed","inference_steps","codes_top_p","codes_top_k",
+    "codes_temperature","guidance_scale","audio_codes"];
+  const acestepIds=["bpm","duration","keyscale","timesignature","vocal_language","lm_temperature",
+    "lm_cfg_scale","lm_top_p","lm_top_k","lm_rep_pen","audio_cover_strength","shift"];
+  const yue2Ids=["abc_temperature","abc_top_p","abc_top_k","semantic_repetition_penalty",
+    "semantic_min_tokens","semantic_max_tokens"];
+  const ids=commonIds.concat(family === "yue2" ? yue2Ids : acestepIds);
   const data={};
   ids.forEach(id=>{
     const el=document.getElementById(id);
@@ -606,14 +652,61 @@ function getFormData(){
       data[id] = isText || isNaN(v) ? v : Number(v);
     }
   });
+  data["musicfamily"] = family;
   data["stereo"] = (document.getElementById("stereo").checked ? true : false);
   data["use_mp3"] = (document.getElementById("use_mp3").checked ? true : false);
-  data["gen_codes"] = (document.getElementById("gen_codes").checked ? true : false);
+  data["gen_codes"] = family === "yue2" ? true : (document.getElementById("gen_codes").checked ? true : false);
   data["rewrite_caption"] = (document.getElementById("rewrite_caption").checked ? true : false);
+  if(family === "yue2"){
+    const cot=document.getElementById("cot").value;
+    const abc=document.getElementById("abc").value.trim();
+    const semanticText=(data.audio_codes || "").trim();
+    data.cot=cot;
+    if(cot !== "off" && abc) data.abc=abc;
+    if(semanticText){
+      let semantic;
+      try{
+        semantic=JSON.parse(semanticText);
+      }catch(e){
+        throw new Error("YuE2 semantic tokens must be a JSON array.");
+      }
+      if(!Array.isArray(semantic)) throw new Error("YuE2 semantic tokens must be a JSON array.");
+      data.semantic_prefix=semantic;
+    }
+    delete data.audio_codes;
+    data.num_inference_steps=data.inference_steps;
+    data.semantic_top_p=data.codes_top_p;
+    data.semantic_top_k=data.codes_top_k;
+    data.semantic_temperature=data.codes_temperature;
+    delete data.inference_steps;
+    delete data.codes_top_p;
+    delete data.codes_top_k;
+    delete data.codes_temperature;
+  }
   return data;
 }
 
 function updateForm(data){
+  data={...data};
+  const looksYue2=data.musicfamily === "yue2" || data.abc !== undefined || data.cot !== undefined || data.semantic_prefix !== undefined;
+  if(looksYue2){
+    document.getElementById("music_controls").value="yue2";
+  }else if(data.musicfamily === "acestep"){
+    document.getElementById("music_controls").value="acestep";
+  }
+  updateMusicControls();
+  if(looksYue2){
+    if(data.style !== undefined && data.caption === undefined) data.caption=data.style;
+    if(data.abc !== undefined) document.getElementById("abc").value=data.abc || "";
+    if(data.semantic_prefix !== undefined){
+      document.getElementById("audio_codes").value=typeof data.semantic_prefix === "string"
+        ? data.semantic_prefix : JSON.stringify(data.semantic_prefix);
+    }
+    if(data.num_inference_steps !== undefined) data.inference_steps=data.num_inference_steps;
+    if(data.semantic_top_p !== undefined) data.codes_top_p=data.semantic_top_p;
+    if(data.semantic_top_k !== undefined) data.codes_top_k=data.semantic_top_k;
+    if(data.semantic_temperature !== undefined) data.codes_temperature=data.semantic_temperature;
+  }
   //let origseed = document.getElementById("seed").value;
   Object.keys(data).forEach(k=>{
     if(document.getElementById(k))
@@ -648,6 +741,7 @@ function updateForm(data){
   //{
   //  document.getElementById("seed").value = "-1";
   //}
+  updateMusicControls();
 }
 
 function deriveTitle(caption){
@@ -663,7 +757,38 @@ function deriveTitle(caption){
 
 function updatePlannerOptions(){
   const useLLM = document.getElementById("planner").value === "main_llm";
-  document.getElementById("gen_codes_option").classList.toggle("hidden", useLLM && !has_music_llm_loaded);
+  const isYue2 = document.getElementById("music_controls").value === "yue2";
+  document.getElementById("gen_codes_option").classList.toggle("hidden", isYue2 || (useLLM && !has_music_llm_loaded));
+}
+
+function updateMusicControls(){
+  const selected=document.getElementById("music_controls").value;
+  if(selected !== activeMusicControls){
+    const previous=musicControlValues[activeMusicControls];
+    ["codes_top_p","codes_top_k","codes_temperature","audio_codes"].forEach(id=>previous[id]=document.getElementById(id).value);
+    activeMusicControls=selected;
+    const next=musicControlValues[activeMusicControls];
+    ["codes_top_p","codes_top_k","codes_temperature","audio_codes"].forEach(id=>document.getElementById(id).value=next[id]);
+  }
+  const isYue2=selected === "yue2";
+  document.querySelectorAll(".acestep-only").forEach(el=>el.classList.toggle("hidden", isYue2));
+  document.querySelectorAll(".yue2-only").forEach(el=>el.classList.toggle("hidden", !isYue2));
+  const cot=document.getElementById("cot").value;
+  document.getElementById("yue2_abc_section").classList.toggle("hidden", !isYue2 || cot === "off");
+  document.getElementById("audio_codes_label").textContent=isYue2 ? "Semantic Tokens" : "AudioCodes";
+  document.getElementById("audio_codes").placeholder=isYue2
+    ? "Optional YuE2 semantic token JSON, for example [123,456,789]"
+    : "Input or generate audio codes here";
+  document.getElementById("codes_top_p_label").textContent=isYue2 ? "Semantic Top-P" : "Codes Top-P";
+  document.getElementById("codes_top_k_label").textContent=isYue2 ? "Semantic Top-K" : "Codes Top-K";
+  document.getElementById("codes_temperature_label").textContent=isYue2 ? "Semantic Temp" : "Codes Temp";
+  document.getElementById("inference_steps_label").textContent=isYue2 ? "Acoustic Steps" : "Steps";
+  document.getElementById("guidance_scale_label").textContent=isYue2 ? "Semantic Guidance" : "Guidance";
+  document.getElementById("plan_song_button").textContent=isYue2 ? "Plan Score / Semantics" : "Plan Lyrics / Details";
+  document.getElementById("music_help").innerHTML=isYue2
+    ? "Plan first to generate an ABC score and semantic tokens. Editing style, lyrics, score, seed, or semantic sampling clears the old semantic plan.<br>When satisfied, click 'Generate Music' to render the audio."
+    : "Click 'Plan Lyrics' first to generate lyrics, BPM and duration. Edit as needed.<br>When satisfied, click 'Generate Music' to make the music";
+  updatePlannerOptions();
 }
 
 async function planSong()
@@ -685,6 +810,9 @@ async function planSongNative(){
     const seedInput = document.getElementById("seed");
     if(seedInput.value === "-1" || seedInput.value === ""){
       randomizeSeed();
+    }
+    if(document.getElementById("music_controls").value === "yue2"){
+      document.getElementById("audio_codes").value = "";
     }
 
     let headers =  {"Content-Type":"application/json"};
@@ -720,7 +848,7 @@ async function planSongNative(){
 
   }catch(e){
     if(e.name!=="AbortError")
-      showMessage("⚠ Unable to connect to server.");
+      showMessage(e.message || "Unable to connect to server.");
   }finally{
     currentController=null;
     setLoading(false);
@@ -735,6 +863,9 @@ async function planSongWithLLM(){
     const seedInput = document.getElementById("seed");
     if(seedInput.value === "-1" || seedInput.value === ""){
       randomizeSeed();
+    }
+    if(document.getElementById("music_controls").value === "yue2"){
+      document.getElementById("audio_codes").value = "";
     }
 
     let origPayload = getFormData();
@@ -776,8 +907,11 @@ async function planSongWithLLM(){
       updateForm(toolres);
       if(generateCodes){
         document.getElementById("audio_codes").value = "";
-        showMessage("Song details ready. Generating audio codes...");
+        showMessage(origPayload.musicfamily === "yue2"
+          ? "Song details ready. Generating YuE2 score and semantic plan..."
+          : "Song details ready. Generating audio codes...");
         const codesPayload = {...origPayload, ...toolres, gen_codes:true, rewrite_caption:false, audio_codes:""};
+        delete codesPayload.semantic_prefix;
         try{
           const codesRes = await fetch(codesUrl, {
             method:"POST",
@@ -788,10 +922,11 @@ async function planSongWithLLM(){
           if(!codesRes.ok) throw new Error(`HTTP ${codesRes.status}`);
           const codesData = await codesRes.json();
           if(codesData.error) throw new Error(codesData.error);
-          if(typeof codesData.audio_codes !== "string" || !codesData.audio_codes.trim()){
-            throw new Error("Music planner returned no audio codes.");
-          }
-          document.getElementById("audio_codes").value = codesData.audio_codes;
+          updateForm(codesData);
+          const hasYue2Plan=codesPayload.musicfamily === "yue2" &&
+            ((typeof codesData.abc === "string" && codesData.abc.trim()) || Array.isArray(codesData.semantic_prefix));
+          const hasAceStepPlan=typeof codesData.audio_codes === "string" && codesData.audio_codes.trim();
+          if(!hasYue2Plan && !hasAceStepPlan) throw new Error("Music planner returned no usable plan.");
         }catch(e){
           if(e.name !== "AbortError") showMessage(`Song details saved, but audio code generation failed: ${e.message}`);
           return;
@@ -805,7 +940,7 @@ async function planSongWithLLM(){
 
   }catch(e){
     if(e.name!=="AbortError")
-      showMessage("⚠ Unable to connect to server.");
+      showMessage(e.message || "Unable to connect to server.");
   }finally{
     currentController=null;
     setLoading(false);
@@ -837,7 +972,7 @@ async function generateSong(){
     const payload=getFormData();
 
     const refFile=document.getElementById("music_reference_audio");
-    if(refFile && refFile.files && refFile.files.length > 0){
+    if(payload.musicfamily !== "yue2" && refFile && refFile.files && refFile.files.length > 0){
       payload.music_reference_audio_data=await fileToBase64(refFile.files[0]);
     }
 
@@ -872,7 +1007,7 @@ async function generateSong(){
 
   }catch(e){
     if(e.name!=="AbortError")
-      showMessage("⚠ Failed to generate song.");
+      showMessage(e.message || "Failed to generate song.");
   }finally{
     currentController=null;
     setLoading(false);
@@ -904,6 +1039,7 @@ function loadTrackJSON(id){
     // applying the loaded song to avoid reusing codes from another track.
     if(item.type !== "tts") {
       document.getElementById("audio_codes").value = "";
+      document.getElementById("abc").value = "";
     }
     updateForm(data);
   });
@@ -989,6 +1125,7 @@ function clearFields()
     });
     document.getElementById("caption").value = "";
     document.getElementById("lyrics").value = "";
+    document.getElementById("abc").value = "";
     document.getElementById("audio_codes").value = "";
 
     const container = document.getElementById('advanced');
@@ -1005,6 +1142,10 @@ function clearFields()
     });
 
     clearReferenceAudio();
+    document.getElementById("cot").value = "full";
+    musicControlValues.acestep.audio_codes = "";
+    musicControlValues.yue2.audio_codes = "";
+    updateMusicControls();
 }
 function exportPlan(){
   const data=getFormData();
@@ -1029,6 +1170,17 @@ function importPlan(event){
 updatePlannerOptions();
 window.addEventListener("pageshow", updatePlannerOptions);
 document.getElementById("planner").addEventListener("change", ()=>{ plannerSelectionVersion++; });
+document.getElementById("music_controls").addEventListener("change", ()=>{
+  musicControlSelectionVersion++;
+  updateMusicControls();
+});
+document.getElementById("cot").addEventListener("change", ()=>{
+  if(document.getElementById("music_controls").value === "yue2") document.getElementById("audio_codes").value = "";
+  updateMusicControls();
+});
+["caption","lyrics","abc","seed","guidance_scale","codes_top_p","codes_top_k","codes_temperature","semantic_repetition_penalty"].forEach(id=>document.getElementById(id).addEventListener("input", ()=>{
+  if(document.getElementById("music_controls").value === "yue2") document.getElementById("audio_codes").value = "";
+}));
 document.getElementById("baseUrl").addEventListener("change", fetchStats);
 document.getElementById("baseUrlKey").addEventListener("change", fetchStats);
 initDB().then(loadLibrary);

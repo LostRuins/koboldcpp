@@ -129,6 +129,7 @@ embeddings_generation_outputs embeddingstype_generate(const embeddings_generatio
 
 bool musictype_load_model(const music_load_model_inputs inputs);
 music_generation_outputs musictype_generate(const music_generation_inputs inputs);
+const char * musictype_get_family();
 
 void timer_start();
 double timer_check();
