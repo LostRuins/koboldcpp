@@ -7,10 +7,13 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <map>
+#include <memory>
 #include <regex>
 #include <string>
 #include <thread>
@@ -51,6 +54,10 @@
 #include "audio_tokenizer_decoder.cpp"
 #include "audio_tokenizer_encoder.cpp"
 #include "coreml_code_predictor_stub.cpp"
+
+// Audio.cpp selective integration. Its implementation is compiled as a
+// separate library so upstream source files remain individually syncable.
+#include "engine/models/supertonic/loader.h"
 
 enum TTS_VER
 {
@@ -512,6 +519,11 @@ static bool is_qwen3tts_file = false;
 static qwen3_tts::Qwen3TTS qwen3tts_runner;
 extern bool qwen3tts_allowgpu;
 
+//Audio.cpp Supertonic specific
+static bool is_audiocpp_supertonic = false;
+static std::unique_ptr<engine::runtime::ILoadedVoiceModel> audiocpp_tts_model;
+static std::unique_ptr<engine::runtime::IVoiceTaskSession> audiocpp_tts_session;
+
 int total_tts_gens = 0;
 static std::string tts_executable_path = "";
 
@@ -535,7 +547,25 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
 
     is_ttscpp_file = false;
     is_qwen3tts_file = false;
-    if (detectedarch=="qwen3-tts")
+    is_audiocpp_supertonic = false;
+    audiocpp_tts_session.reset();
+    audiocpp_tts_model.reset();
+
+    if (detectedarch == "supertonic") {
+        is_audiocpp_supertonic = true;
+    } else if (detectedarch.empty() && !modelfile_ttc.empty()) {
+        // Audio.cpp packages may be directories or safetensors bundles rather
+        // than llama-style GGUFs, so architecture metadata is not sufficient.
+        engine::runtime::ModelLoadRequest request;
+        request.model_path = modelfile_ttc;
+        request.family_hint = "supertonic";
+        is_audiocpp_supertonic = engine::models::supertonic::make_supertonic_loader()->can_load(request);
+    }
+
+    if (is_audiocpp_supertonic) {
+        printf("\nLoading Audio.cpp Supertonic Model: %s\n", modelfile_ttc.c_str());
+    }
+    else if (detectedarch=="qwen3-tts")
     {
         is_qwen3tts_file = true;
         printf("\nLoading Qwen3-TTS Model: %s, Arch: %s \n",modelfile_ttc.c_str(), detectedarch.c_str());
@@ -561,7 +591,27 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     tts_max_len = inputs.ttsmaxlen;
 
     // tts init
-    if (is_ttscpp_file) {
+    if (is_audiocpp_supertonic) {
+        try {
+            audiocpp_tts_model = engine::models::supertonic::load_supertonic_model(modelfile_ttc);
+            engine::runtime::SessionOptions options;
+            options.backend.type = inputs.gpulayers > 0
+                ? engine::core::BackendType::BestAvailable
+                : engine::core::BackendType::Cpu;
+            options.backend.device = std::max(0, inputs.kcpp_main_gpu);
+            options.backend.threads = std::max(1, inputs.threads);
+            audiocpp_tts_session = audiocpp_tts_model->create_task_session(
+                {engine::runtime::VoiceTaskKind::Tts, engine::runtime::RunMode::Offline},
+                options);
+            audiocpp_tts_session->prepare({});
+        } catch (const std::exception & error) {
+            printf("\nAudio.cpp Supertonic Load Error: %s\n", error.what());
+            audiocpp_tts_session.reset();
+            audiocpp_tts_model.reset();
+            return false;
+        }
+    }
+    else if (is_ttscpp_file) {
         ttscpp_config = new generation_configuration("am_echo", 25, 1.0, 1.0, true, "", 1600, 1.0);
         ttscpp_runner = runner_from_file(modelfile_ttc, inputs.threads, ttscpp_config, true);
         if (ttscpp_runner == nullptr) {
@@ -1262,9 +1312,103 @@ static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inp
     }
 }
 
+static tts_generation_outputs ttstype_generate_audiocpp_supertonic(const tts_generation_inputs inputs)
+{
+    tts_generation_outputs output;
+    auto * offline = audiocpp_tts_session
+        ? dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(audiocpp_tts_session.get())
+        : nullptr;
+    if (offline == nullptr) {
+        printf("\nWarning: Audio.cpp Supertonic is not initialized.\n");
+        output.data = "";
+        output.status = 0;
+        return output;
+    }
+
+    try {
+        std::string prompt = inputs.prompt != nullptr ? inputs.prompt : "";
+        if (tts_max_len > 0) {
+            prompt = TruncateToFirstNumberWords(prompt, tts_max_len);
+        }
+
+        engine::runtime::TaskRequest request;
+        engine::runtime::Transcript transcript;
+        transcript.text = std::move(prompt);
+        transcript.language = inputs.language != nullptr ? inputs.language : "";
+        request.text_input = std::move(transcript);
+
+        std::string voice = inputs.custom_speaker_voice != nullptr
+            ? inputs.custom_speaker_voice : "";
+        std::transform(voice.begin(), voice.end(), voice.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::toupper(ch));
+        });
+        const bool named_preset = voice.size() == 2 &&
+            (voice[0] == 'M' || voice[0] == 'F') && voice[1] >= '1' && voice[1] <= '5';
+        if (!named_preset) {
+            // The shared API also passes aliases such as "alloy" here. Those
+            // are represented by speaker_seed; Supertonic itself only accepts
+            // its ten built-in ids.
+            voice.clear();
+        }
+        if (voice.empty() && inputs.speaker_seed >= 1 && inputs.speaker_seed <= 10) {
+            static const char * preset_voices[] = {
+                "M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5",
+            };
+            voice = preset_voices[inputs.speaker_seed - 1];
+        }
+        if (!voice.empty()) {
+            engine::runtime::VoiceReference reference;
+            reference.cached_voice_id = std::move(voice);
+            engine::runtime::VoiceCondition condition;
+            condition.speaker = std::move(reference);
+            request.voice = std::move(condition);
+        }
+        int audio_seed = inputs.audio_seed;
+        if (audio_seed <= 0 || static_cast<uint32_t>(audio_seed) == UINT32_MAX) {
+            audio_seed = static_cast<int>(static_cast<uint32_t>(time(nullptr)) % 1000000U);
+        }
+        request.options["seed"] = std::to_string(static_cast<uint32_t>(audio_seed));
+
+        if (!tts_is_quiet) {
+            printf("\nTTS Generating with Audio.cpp Supertonic...");
+        }
+        timer_start();
+        auto result = offline->run(request);
+        if (!result.audio_output.has_value() || result.audio_output->samples.empty()) {
+            throw std::runtime_error("Supertonic produced no audio");
+        }
+        if (result.audio_output->channels != 1) {
+            throw std::runtime_error("Supertonic returned non-mono audio");
+        }
+
+        const double elapsed = timer_check();
+        printf("\nTTS Generated audio in %.2fs.\n", elapsed);
+        last_generated_audio = save_tts_audio_base64(
+            result.audio_output->samples,
+            result.audio_output->sample_rate,
+            inputs.use_mp3);
+        output.data = last_generated_audio.c_str();
+        output.status = 1;
+        last_generation_settings_audio_seed = audio_seed;
+        last_generation_settings_speaker_seed = inputs.speaker_seed;
+        last_generation_settings_prompt = request.text_input->text;
+        total_tts_gens += 1;
+        return output;
+    } catch (const std::exception & error) {
+        printf("\nAudio.cpp Supertonic Generation Error: %s\n", error.what());
+        output.data = "";
+        output.status = 0;
+        return output;
+    }
+}
+
 tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
 {
-    if (is_ttscpp_file)
+    if (is_audiocpp_supertonic)
+    {
+        return ttstype_generate_audiocpp_supertonic(inputs);
+    }
+    else if (is_ttscpp_file)
     {
         return ttstype_generate_ttscpp(inputs);
     }
