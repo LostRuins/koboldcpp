@@ -181,7 +181,7 @@ ifdef LLAMA_NOAVX2
 FULLCFLAGS += -mavx -msse3 -mssse3
 SIMPLECFLAGS += -mavx -msse3 -mssse3
 else
-FULLCFLAGS += -mavx2 -msse3 -mssse3 -mfma -mf16c -mavx
+FULLCFLAGS += -mno-avx2 -msse3 -mssse3 -mno-fma -mno-f16c -mavx
 SIMPLECFLAGS += -mavx -msse3 -mssse3
 endif # LLAMA_NOAVX2
 endif # LLAMA_NOAVX1
@@ -259,6 +259,7 @@ NVCCFLAGS += -Wno-deprecated-gpu-targets \
 
 else ifdef LLAMA_PORTABLE
 NVCCFLAGS += -Wno-deprecated-gpu-targets -arch=all
+	 
 
 else
 NVCCFLAGS += -arch=native
