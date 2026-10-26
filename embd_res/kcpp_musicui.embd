@@ -356,6 +356,11 @@ select{
   </div>
 
   <div style="margin-top:10px">
+    <label>Reference text (optional)</label>
+    <input title="TTS Reference Audio Transcript" id="tts_reference_text" type="text" placeholder="Exact transcript of the selected reference audio">
+  </div>
+
+  <div style="margin-top:10px">
     <label>Voice instruction (optional)</label>
     <input title="TTS Voice Instruction" id="tts_instruction" placeholder="e.g. Male voice in his 40s. Low pitch, gravelly timbre, slow pacing, angry tone.">
   </div>
@@ -538,6 +543,9 @@ async function generateTTS(){
     const instruction = document.getElementById("tts_instruction").value;
     if(instruction) payload.instruction = instruction;
 
+    const referenceText = document.getElementById("tts_reference_text").value;
+    if(referenceText) payload.reference_text = referenceText;
+
     let headers =  {"Content-Type": "application/json"};
     if(document.getElementById("tts_baseUrlKey").value!="")
     {
@@ -581,6 +589,7 @@ async function generateTTS(){
 
 function clearTTS(){
   document.getElementById("tts_input").value="";
+  document.getElementById("tts_reference_text").value="";
   document.getElementById("tts_instruction").value="";
   document.getElementById("tts_use_mp3").checked=false;
 }
@@ -738,6 +747,10 @@ function updateForm(data){
       else if(k=="instruction")
       {
         document.getElementById("tts_instruction").value=data[k]??"";
+      }
+      else if(k=="reference_text")
+      {
+        document.getElementById("tts_reference_text").value=data[k]??"";
       }
     }
 

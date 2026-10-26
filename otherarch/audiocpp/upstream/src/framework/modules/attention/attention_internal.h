@@ -402,10 +402,10 @@ inline core::TensorValue build_linear_projection_impl(
     const ggml_prec resolved_precision = use_weight_type_precision
         ? (ggml_is_quantized(weights.weight.type) ? GGML_PREC_DEFAULT : GGML_PREC_F32)
         : precision;
-    if (use_fast_cuda_projection && !use_bias && ctx.backend_type == core::BackendType::Cuda &&
-        dense_projection_weight(weights.weight.type) && out_features >= 128 && out_features % 4 == 0) {
-        return FastPackedProjection4Module({in_features, out_features, resolved_precision}).build(ctx, input, weights);
-    }
+    // kcpp: Audio.cpp's optional CUDA projection calls the private
+    // ggml_mul_mat_pack4 op. KoboldCpp keeps upstream GGML and uses the
+    // standard linear lowering on every backend instead.
+    (void)use_fast_cuda_projection;
     return LinearModule({in_features, out_features, use_bias, resolved_precision}).build(ctx, input, weights);
 }
 

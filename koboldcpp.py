@@ -3467,7 +3467,8 @@ def tts_generate(genparams):
         "exaggeration", "guidance_scale", "temperature", "repetition_penalty",
         "min_p", "top_p", "top_k", "flow_guidance_scale", "max_tokens",
         "max_new_tokens", "do_sample", "stop_on_eos", "num_inference_steps",
-        "text_chunk_size", "text_chunk_mode", "preset", "voice_id")
+        "text_chunk_size", "text_chunk_mode", "preset", "voice_id", "eos_bias",
+        "min_tokens", "template_name", "instruct")
     audiocpp_options = {
         key: genparams[key] for key in audiocpp_option_names
         if key in genparams and isinstance(genparams[key], (str, int, float, bool))

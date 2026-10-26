@@ -1,6 +1,8 @@
+    {"cosyvoice3", engine::models::cosyvoice3::make_cosyvoice3_loader()},
     {"chatterbox", engine::models::chatterbox::make_chatterbox_loader()},
     {"chatterbox_turbo", engine::community_models::chatterbox_turbo::make_chatterbox_turbo_loader()},
     {"fish_audio", engine::models::fish_audio::make_fish_audio_loader()},
     {"kitten_tts2", engine::community_models::kitten_tts2::make_kitten_tts2_loader()},
     {"maya1", engine::models::maya1::make_maya1_loader()},
+    {"soprano_tts", engine::community_models::soprano_tts::make_soprano_tts_loader()},
     {"supertonic", engine::models::supertonic::make_supertonic_loader()},

@@ -1,6 +1,8 @@
+#include "engine/models/cosyvoice3/session.h"
 #include "engine/models/chatterbox/loader.h"
 #include "engine/community_models/chatterbox_turbo/loader.h"
 #include "engine/models/fish_audio/loader.h"
 #include "engine/community_models/kitten_tts2/session.h"
 #include "engine/models/maya1/session.h"
+#include "engine/community_models/soprano_tts/session.h"
 #include "engine/models/supertonic/loader.h"

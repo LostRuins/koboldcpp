@@ -49,6 +49,9 @@ patches listed here. Recheck these after every run of `sync-audiocpp.ps1`.
 16. `src/framework/debug/trace.cpp`: use a locale-independent stream formatter
     for scalar doubles because older Linux libstdc++ versions do not provide
     the floating-point `std::to_chars` overload.
+17. `src/framework/modules/attention/attention_internal.h`: lower the optional
+    CUDA packed-four projection to the ordinary linear path because
+    `ggml_mul_mat_pack4` is private to Audio.cpp's GGML fork.
 
 Do not add KCPP adapter behavior to upstream-owned files. Put it in the parent
 directory so upstream refreshes remain reviewable.

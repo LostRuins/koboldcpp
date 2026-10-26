@@ -362,19 +362,8 @@ private:
         stack.num_attention_heads=heads; stack.num_key_value_heads=kv_heads; stack.head_dim=dim;
         stack.rms_norm_eps=json::require_f32(c,"rms_norm_eps"); stack.rope_theta=json::require_f32(c,"rope_theta");
         stack.use_qk_norm=true;
-        // kcpp: Kitten's grouped flash-attention path is validated upstream on
-        // CPU/CUDA, but produces non-finite first-token logits with ggml-vulkan.
-        // Keep the workaround model-local and use the portable F32
-        // matmul/softmax lowering for both prompt prefill and cached decoding.
-        const bool use_flash_attention =
-            execution_context().backend_type() != core::BackendType::Vulkan;
-        stack.runtime.attention.prefill_mode = use_flash_attention
-            ? modules::DecoderAttentionMode::FlashGrouped
-            : modules::DecoderAttentionMode::ManualRepeat;
-        stack.runtime.attention.static_mode = use_flash_attention
-            ? modules::DecoderAttentionMode::FlashGrouped
-            : modules::DecoderAttentionMode::ManualRepeat;
-        stack.runtime.attention.allow_flash_attention = use_flash_attention;
+        stack.runtime.attention.prefill_mode=modules::DecoderAttentionMode::FlashGrouped;
+        stack.runtime.attention.static_mode=modules::DecoderAttentionMode::FlashGrouped;
         stack.runtime.static_cache.update_mode=modules::DecoderStaticCacheUpdateMode::DirectSetRows;
         runtime_config.decoder.logits_size=head_rows;
         lm_=std::make_unique<modules::CausalDecoderRuntime>(execution_context(),runtime_config,std::move(weights));

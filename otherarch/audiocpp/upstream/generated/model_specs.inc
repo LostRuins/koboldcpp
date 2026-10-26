@@ -502,6 +502,300 @@
   ]
 }
 )AUDIOCPP_SPEC"},
+    {"cosyvoice3", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "cosyvoice3",
+  "display_name": "CosyVoice3",
+  "description": "Fun-CosyVoice3 native GGUF package for zero-shot, cross-lingual, and instruction-conditioned text-to-speech using CosyVoice3 speech-token AR generation, causal masked flow mel decoding, CAM++ speaker conditioning, and causal HiFT waveform decoding.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "zh",
+    "en",
+    "ja",
+    "ko",
+    "de",
+    "es",
+    "fr",
+    "it",
+    "ru",
+    "yue"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "dependencies": [],
+  "capabilities": {
+    "tts": [
+      "speaker_reference",
+      "style_control"
+    ],
+    "clone": [
+      "speaker_reference"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "template_name",
+        "type": "enum",
+        "description": "CosyVoice3 request template.",
+        "required": false,
+        "values": [
+          "zero_shot",
+          "cross_lingual",
+          "instruct"
+        ],
+        "default": "zero_shot"
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "description": "Transcript for the prompt audio.",
+        "required": false
+      },
+      {
+        "name": "instruct",
+        "type": "string",
+        "description": "Instruction text for instruct mode.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum Unicode codepoints per long-form text chunk; default 600.",
+        "required": false,
+        "min": 1,
+        "default": 600
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework text chunking mode.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "required": false,
+        "default": "default"
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated speech tokens; -1 (default) selects 20 times the target text token count. Explicit limits must be positive.",
+        "required": false,
+        "min": -1,
+        "default": -1
+      },
+      {
+        "name": "min_tokens",
+        "type": "int",
+        "description": "Minimum generated speech tokens before stop is accepted; -1 (default) selects twice the target text token count. Must not exceed the resolved maximum.",
+        "required": false,
+        "min": -1,
+        "default": -1
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "AR speech-token top-k sampling limit; default 25.",
+        "required": false,
+        "min": 1,
+        "default": 25
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "Flow decoder Euler steps; default 10.",
+        "required": false,
+        "min": 1,
+        "default": 10
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Generation seed.",
+        "required": false,
+        "min": 0,
+        "default": 1986
+      }
+    ],
+    "session": [
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "PEFT adapter with adapter_config.json, or native lora_weights with config.json and speech_embedding/llm_decoder sidecars. Checkpoints may use safetensors or PyTorch containers.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "Multiplier for the adapter's alpha/r scaling; default 1. Full-weight replacements are not scaled.",
+        "required": false,
+        "default": 1.0
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "CosyVoice3 matmul weight storage type; default native.",
+        "required": false,
+        "default": "native",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q8_0",
+          "q4_0",
+          "q4_k"
+        ]
+      },
+      {
+        "name": "graph_arena_mb",
+        "type": "int",
+        "description": "Reusable runtime graph arena size in MiB; default 1024.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Weight loading context size in MiB; default 2048.",
+        "required": false,
+        "min": 1,
+        "default": 2048
+      },
+      {
+        "name": "reference_cache_slots",
+        "type": "int",
+        "description": "Prepared reference-audio cache slots; set 0 to disable reuse.",
+        "required": false,
+        "min": 0,
+        "default": 4
+      },
+      {
+        "name": "mem_saver",
+        "type": "bool",
+        "description": "Release cached runtime graphs after each request to reduce peak VRAM; default false.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "exec_plan",
+        "type": "string",
+        "description": "JSON object of component execution plans. Component: flow. Each plan accepts impl, backend, artifacts, and params. impl is default/ggml/rknn. GGML keeps the session backend. RKNN requires artifacts.main, a comma-separated ladder of estimator engines compiled one per sequence length (tools/rknn/prepare_cosyvoice3_rknn_flow.py), and ENGINE_ENABLE_RKNN; omit backend. An utterance longer than the largest engine runs the CPU graph. Neither implementation takes params.",
+        "required": false,
+        "default": "{}"
+      }
+    ],
+    "load": []
+  },
+  "packages": [
+    {
+      "id": "cosyvoice3_q8_0",
+      "display_name": "CosyVoice3 Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "CosyVoice3-GGUF",
+      "files": [
+        "CosyVoice3-GGUF/cosyvoice3-q8_0.gguf"
+      ],
+      "strip_prefix": "CosyVoice3-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      }
+    },
+    {
+      "id": "cosyvoice3_f32",
+      "display_name": "CosyVoice3 F32 GGUF",
+      "default": false,
+      "format": "gguf",
+      "precision": "f32",
+      "target_directory": "CosyVoice3-GGUF",
+      "files": [
+        "CosyVoice3-GGUF/cosyvoice3-f32.gguf"
+      ],
+      "strip_prefix": "CosyVoice3-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      }
+    }
+  ],
+  "ui": {
+    "recommended_package": "cosyvoice3_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "cosyvoice3_yaml": "model:cosyvoice3.yaml",
+        "qwen_config": "model:CosyVoice-BlankEN/config.json",
+        "tokenizer_config": "model:CosyVoice-BlankEN/tokenizer_config.json",
+        "vocab_json": "model:CosyVoice-BlankEN/vocab.json",
+        "merges_txt": "model:CosyVoice-BlankEN/merges.txt"
+      },
+      "tensors": {
+        "llm_weights": {
+          "source": "weights:",
+          "prefix": "llm"
+        },
+        "flow_weights": {
+          "source": "weights:",
+          "prefix": "flow"
+        },
+        "hift_weights": {
+          "source": "weights:",
+          "prefix": "hift"
+        },
+        "campplus_weights": {
+          "source": "weights:",
+          "prefix": "campplus"
+        },
+        "speech_tokenizer_weights": {
+          "source": "weights:",
+          "prefix": "speech_tokenizer"
+        },
+        "blank_en_weights": {
+          "source": "weights:",
+          "prefix": "blank_en"
+        }
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
     {"fish_audio", R"AUDIOCPP_SPEC({
   "family": "fish_audio",
   "display_name": "Fish Audio S2 Pro",
@@ -1507,6 +1801,189 @@
       "tensors": {
         "model_weights": "weights:",
         "codec_weights": "weights:"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"soprano_tts", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "soprano_tts",
+  "display_name": "Soprano",
+  "description": "Soprano is an ultra-lightweight (~80M) English-only text-to-speech model. Syntax uses a 17-layer Qwen3-style causal LM (hidden 512, vocab 8192) that autoregressively emits per-frame 512-dimensional features; a non-iterative Vocos-style decoder (ConvNeXt backbone + single ISTFT head, n_fft 2048 / hop 512) turns those features into 32 kHz audio. No diffusion refinement is performed in the decoder.",
+  "category": "tts",
+  "status": "community",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "en"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "long_form"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated audio frames for the autoregressive LM; default 512.",
+        "required": false,
+        "min": 1,
+        "default": 512
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Autoregressive sampling temperature; must be > 0, default 0.3.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.3
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Nucleus sampling probability; default 0.95. Values >=1 disable nucleus filtering.",
+        "required": false,
+        "min": 0,
+        "default": 0.95
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "description": "Repetition penalty applied to the LM head; default 1.2. Must be positive; values below 1 are accepted.",
+        "required": false,
+        "default": 1.2
+      },
+      {
+        "name": "eos_bias",
+        "type": "float",
+        "description": "Additive bias on the EOS token logit during generation. Positive values make the model stop sooner when speech ends (mitigating runaway generations that hit max_tokens); negative values encourage longer utterances. Default 0 disables the adjustment.",
+        "required": false,
+        "default": 0.0
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Autoregressive sampling seed; omitted requests choose a random seed.",
+        "required": false,
+        "min": 0
+      }
+    ],
+    "session": [
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum codepoints per sentence chunk before the model generates and decodes separately. Smaller values keep prompts short (more reliable EOS) but increase overhead. Default 200.",
+        "required": false,
+        "min": 1,
+        "default": 200
+      },
+      {
+        "name": "backbone_weight_type",
+        "type": "enum",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "f32",
+        "description": "Storage type for the Qwen3 LM backbone weights."
+      },
+      {
+        "name": "decoder_weight_type",
+        "type": "enum",
+        "preset": "weight_type_conv",
+        "required": false,
+        "default": "f32",
+        "description": "Storage type for the Vocos decoder weights."
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "WalkingCat/Soprano-1.1-80M-GGUF",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "soprano_1_1_80m_q8_0",
+      "display_name": "Soprano-1.1-80M Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Soprano-1.1-80M-GGUF",
+      "files": [
+        "Soprano-1.1-80M-GGUF/soprano-1.1-80m-q8_0.gguf"
+      ],
+      "strip_prefix": "Soprano-1.1-80M-GGUF"
+    },
+    {
+      "id": "soprano_1_1_80m_bf16",
+      "display_name": "Soprano-1.1-80M BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "Soprano-1.1-80M-GGUF",
+      "files": [
+        "Soprano-1.1-80M-GGUF/soprano-1.1-80m-bf16.gguf"
+      ],
+      "strip_prefix": "Soprano-1.1-80M-GGUF"
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "soprano_1_1_80m_q8_0",
+    "tags": [
+      "TTS",
+      "Stream"
+    ],
+    "docs": [
+      "docs/models/soprano_tts.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "backbone": "weights:",
+        "decoder": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "backbone": "model:combined.safetensors",
+        "decoder": "model:combined.safetensors"
       }
     }
   ]

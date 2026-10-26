@@ -17,6 +17,8 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox_turbo
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component kitten_tts2
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component soprano_tts
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component cosyvoice3
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2 -ModelSourcesOnly
 ```
 
@@ -62,14 +64,18 @@ exact upstream commit cannot be recorded until a real checkout is supplied.
   two-step S3Gen decoder. Upstream Turbo does not support custom voice cloning.
 - `kitten_tts2`: multilingual Kitten TTS 2 with prepared built-in voices and
   optional reference-audio cloning. Cloning requires `reference_text`.
+- `soprano_tts`: ultra-lightweight, English-only offline TTS with a fixed
+  model voice. It has no voice cloning or instruction-following interface.
+- `cosyvoice3`: multilingual zero-shot, cross-lingual, and
+  instruction-conditioned TTS. Every request uses a reference recording;
+  zero-shot mode additionally uses its transcript.
 - Later candidates should be added only when their framework closure is small
   and measurable. Existing KoboldCpp Qwen3-TTS, MiniMax H3, ACE-Step, Kokoro,
   OuteTTS, Parler, Dia, and Orpheus implementations are not imported.
 
 The MinGW default and Vulkan DLL targets compile and link with all selected
-models. Runtime output still needs validation with real Fish Audio, Maya1,
-Chatterbox, Chatterbox Turbo, and Kitten TTS 2 packages; weights are
-intentionally not vendored here.
+models. Runtime output still needs validation with real Soprano and
+CosyVoice3 packages; weights are intentionally not vendored here.
 
 ## Adapter contract
 
@@ -117,13 +123,39 @@ respectively.
 Alternatively select a WAV/MP3 from the voice directory and provide its exact
 transcript in `reference_text` for zero-shot cloning.
 
+Pass `soprano-1.1-80m-q8_0.gguf` (or the BF16 variant) as the normal TTS
+model. The GGUF package is self-contained. Soprano produces English speech in
+one fixed voice at 32 kHz and accepts `temperature`, `top_p`,
+`repetition_penalty`, `eos_bias`, `max_tokens`, and `seed`. Voice selection,
+reference audio, language selection, and instructions do not alter its voice.
+
+Pass `cosyvoice3-q8_0.gguf` (or `cosyvoice3-f32.gguf`) as the normal TTS model
+and select a WAV/MP3 reference through KoboldCpp's `voice` field. No separate
+RKNN files or runtime are needed. `template_name` selects `zero_shot`,
+`cross_lingual`, or `instruct`. KoboldCpp selects `zero_shot` when
+`reference_text` is present and `cross_lingual` when it is absent. Explicit
+zero-shot requests require the exact reference transcript; cross-lingual mode
+infers the language from the target text. KoboldCpp's existing `instruction`
+field selects `instruct` unless an explicit template was provided. Sampling
+controls include `top_k`,
+`min_tokens`, `max_tokens`, `num_inference_steps`, and `seed`. Supported target
+languages are Chinese, English, Japanese, Korean, German, Spanish, French,
+Italian, Russian, and Cantonese.
+
 ## Intentional compatibility changes
 
-- `src/community_models/kitten_tts2/session.cpp`: KoboldCpp selects Kitten's
-  portable eager attention lowering on Vulkan. The upstream grouped
-  flash-attention path is validated on CPU/CUDA but produces non-finite
-  first-token logits with KoboldCpp's ggml-vulkan backend. CPU and CUDA retain
-  the upstream flash-attention path.
+- `otherarch/tts_adapter.cpp`: Kitten TTS 2 sessions fall back to CPU when the
+  selected KoboldCpp build exposes Vulkan. Its hybrid-Q4 language model produces
+  non-finite logits with ggml-vulkan. CUDA remains enabled, and explicit CPU
+  operation is unchanged.
+- `src/framework/modules/attention/attention_internal.h`: KoboldCpp lowers
+  Audio.cpp's optional private CUDA `ggml_mul_mat_pack4` projection to the
+  standard portable linear operation. This keeps upstream GGML unchanged.
+
+CosyVoice3's RKNN source files are present only because its loader references
+the optional execution-plan plumbing. `ENGINE_HAVE_RKNN` is not defined and
+KoboldCpp neither includes nor links Rockchip libraries; normal CPU, Vulkan,
+and CUDA operation uses the GGML flow implementation.
 
 KoboldCpp owns GGML. Audio.cpp's bundled GGML is never synchronized.
 

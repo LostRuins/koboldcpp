@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "all")]
+    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -211,6 +211,65 @@ $kittenTts2Files = @(
     "src/community_models/kitten_tts2/speaker.cpp"
 )
 
+$sopranoTtsFiles = @(
+    "model_specs/soprano_tts.json",
+    "src/framework/text/text_normalization.cpp",
+    "src/community_models/soprano_tts/assets.cpp",
+    "src/community_models/soprano_tts/generator.cpp",
+    "src/community_models/soprano_tts/session.cpp",
+    "src/community_models/soprano_tts/soprano_unidecode_table.inc",
+    "src/community_models/soprano_tts/text_normalizer.cpp",
+    "src/community_models/soprano_tts/tokenizer_text.cpp",
+    "src/community_models/soprano_tts/vocoder.cpp"
+)
+
+# CosyVoice3 shares Audio.cpp's causal decoder, CAMPPlus, HiFT, FFT, and
+# tokenizer infrastructure with the S3Gen cluster. The RKNN units below are
+# dependency-free stubs unless ENGINE_HAVE_RKNN is explicitly enabled; KCPP
+# does not enable or link Rockchip's runtime.
+$cosyVoice3Files = @(
+    "model_specs/cosyvoice3.json",
+    "src/framework/audio/conversion.cpp",
+    "src/framework/audio/dsp.cpp",
+    "src/framework/audio/detail/speech_fft_internal.h",
+    "src/framework/audio/fft.cpp",
+    "src/framework/audio/istft_graph.cpp",
+    "src/framework/audio/kaldi_fbank.cpp",
+    "src/framework/audio/resampling.cpp",
+    "src/framework/core/attention_fallback.cpp",
+    "src/framework/modules/attention/grouped_query_attention.cpp",
+    "src/framework/modules/attention/attention_internal.h",
+    "src/framework/modules/attention/positional_encoding.cpp",
+    "src/framework/modules/attention/projected_grouped_self_attention.cpp",
+    "src/framework/modules/attention/scaled_dot_product_attention.cpp",
+    "src/framework/modules/feed_forward_modules.cpp",
+    "src/framework/modules/module_internal.h",
+    "src/framework/modules/optimizations/fast_kv_modules.cpp",
+    "src/framework/modules/positional_modules.cpp",
+    "src/framework/modules/speaker_encoders/campplus_encoder.cpp",
+    "src/framework/modules/speech_encoders/s3_tokenizer.cpp",
+    "src/framework/modules/transformers/causal_decoder.cpp",
+    "src/framework/modules/transformers/causal_decoder_runtime.cpp",
+    "src/framework/modules/vocoders/hift_vocoder.cpp",
+    "src/framework/rknn/engine.cpp",
+    "src/framework/rknn/engine_resources.cpp",
+    "src/framework/runtime/bounded_static_kv_decode.cpp",
+    "src/framework/runtime/graph_executor.cpp",
+    "src/framework/runtime/host_ops.cpp",
+    "src/framework/runtime/kv_cache.cpp",
+    "src/framework/sampling/hf_sampler.cpp",
+    "src/framework/sampling/torch_random.cpp",
+    "src/framework/tokenizers/llama_bpe.cpp",
+    "src/models/cosyvoice3/ar.cpp",
+    "src/models/cosyvoice3/assets.cpp",
+    "src/models/cosyvoice3/flow.cpp",
+    "src/models/cosyvoice3/frontend.cpp",
+    "src/models/cosyvoice3/hift.cpp",
+    "src/models/cosyvoice3/rknn_flow.cpp",
+    "src/models/cosyvoice3/session.cpp",
+    "src/models/cosyvoice3/tokenizer_text.cpp"
+)
+
 # YuE2 is intentionally a separate import tier. Its framework closure is larger
 # than Supertonic's, but it still avoids Audio.cpp's server, CLI, converters,
 # unrelated models, bundled GGML, sentencepiece, and YAML dependencies.
@@ -259,6 +318,8 @@ foreach ($name in $Component) {
         [void] $selected.Add("chatterbox")
         [void] $selected.Add("chatterbox_turbo")
         [void] $selected.Add("kitten_tts2")
+        [void] $selected.Add("soprano_tts")
+        [void] $selected.Add("cosyvoice3")
     } else {
         [void] $selected.Add($name)
     }
@@ -268,6 +329,23 @@ foreach ($name in $Component) {
 # and reference-conditioning implementation rather than duplicating them.
 if ($selected.Contains("kitten_tts2")) {
     [void] $selected.Add("chatterbox")
+}
+
+if ($selected.Contains("soprano_tts")) {
+    Copy-AudioCppTree "include/engine/community_models/soprano_tts"
+    foreach ($relativePath in $sopranoTtsFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("cosyvoice3")) {
+    Copy-AudioCppTree "include/engine/models/cosyvoice3"
+    Copy-AudioCppFile "external/llama_tokenizer/bpe-core.cpp"
+    Copy-AudioCppFile "external/llama_tokenizer/bpe-core.h"
+    Copy-AudioCppFile "external/llama_tokenizer/unicode.h"
+    foreach ($relativePath in $cosyVoice3Files) {
+        Copy-AudioCppFile $relativePath
+    }
 }
 
 # Headers are inexpensive and are kept as one upstream-owned API surface. The
@@ -370,6 +448,11 @@ $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 # so tts_adapter.cpp remains family-agnostic as more selected models are added.
 $ttsLoaders = @(
     @{
+        Family = "cosyvoice3"
+        Header = "engine/models/cosyvoice3/session.h"
+        Factory = "engine::models::cosyvoice3::make_cosyvoice3_loader"
+    },
+    @{
         Family = "chatterbox"
         Header = "engine/models/chatterbox/loader.h"
         Factory = "engine::models::chatterbox::make_chatterbox_loader"
@@ -393,6 +476,11 @@ $ttsLoaders = @(
         Family = "maya1"
         Header = "engine/models/maya1/session.h"
         Factory = "engine::models::maya1::make_maya1_loader"
+    },
+    @{
+        Family = "soprano_tts"
+        Header = "engine/community_models/soprano_tts/session.h"
+        Factory = "engine::community_models::soprano_tts::make_soprano_tts_loader"
     },
     @{
         Family = "supertonic"

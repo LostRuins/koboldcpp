@@ -661,6 +661,20 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
             options.backend.type = inputs.gpulayers > 0
                 ? engine::core::BackendType::BestAvailable
                 : engine::core::BackendType::Cpu;
+            if (audiocpp_tts_family == "kitten_tts2" && inputs.gpulayers > 0) {
+                const auto devices = engine::core::list_backend_devices();
+                const bool has_vulkan = std::any_of(devices.begin(), devices.end(), [](const auto & device) {
+                    return device.backend == "Vulkan";
+                });
+                if (has_vulkan) {
+                    // kcpp: Kitten TTS 2's hybrid-Q4 language model produces
+                    // non-finite logits with ggml-vulkan. Keep this fallback at
+                    // the session boundary so every Kitten component runs on
+                    // the known-good CPU path; CUDA and CPU builds are unchanged.
+                    options.backend.type = engine::core::BackendType::Cpu;
+                    printf("Audio.cpp kitten_tts2: Vulkan is not supported; using CPU instead.\n");
+                }
+            }
             options.backend.device = std::max(0, inputs.kcpp_main_gpu);
             options.backend.threads = std::max(1, inputs.threads);
             audiocpp_tts_session = audiocpp_tts_model->create_task_session(
@@ -1401,6 +1415,7 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
         request.text_input = std::move(transcript);
 
         std::string audiocpp_requested_voice;
+        bool audiocpp_named_voice_alias = false;
         const std::string audiocpp_extra_params_json = inputs.audiocpp_extra_params_json != nullptr
             ? inputs.audiocpp_extra_params_json : "";
         if (!audiocpp_extra_params_json.empty()) {
@@ -1473,6 +1488,20 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                 }
             }
             request.options["instruct"] = std::move(instruction);
+        } else if (audiocpp_tts_family == "cosyvoice3") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                request.options["instruct"] = std::move(instruction);
+            }
+            // Natural-language instructions select the matching upstream
+            // prompt automatically unless the caller explicitly chose a
+            // zero-shot or cross-lingual template. This also covers callers
+            // that supplied `instruct` directly in the Audio.cpp options.
+            if (request.options.find("instruct") != request.options.end() &&
+                request.options.find("template_name") == request.options.end()) {
+                request.options["template_name"] = "instruct";
+            }
         } else if (audiocpp_tts_family == "kitten_tts2") {
             std::string voice = std::move(audiocpp_requested_voice);
             static const std::map<std::string, std::string> kcpp_voice_aliases = {
@@ -1491,6 +1520,10 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             if (const auto alias = kcpp_voice_aliases.find(normalized_voice);
                 alias != kcpp_voice_aliases.end()) {
                 voice = alias->second;
+                // These names also exist in KoboldCpp's embedded Qwen voice
+                // bank. For Kitten they select prepared voices, not the
+                // embedded reference clips used by cloning models.
+                audiocpp_named_voice_alias = true;
             }
             if (std::find(generic_voice_aliases.begin(), generic_voice_aliases.end(), normalized_voice) ==
                 generic_voice_aliases.end()) {
@@ -1499,10 +1532,14 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
         }
 
         const bool accepts_reference_audio = audiocpp_tts_family == "fish_audio" ||
-            audiocpp_tts_family == "chatterbox" || audiocpp_tts_family == "kitten_tts2";
+            audiocpp_tts_family == "chatterbox" || audiocpp_tts_family == "kitten_tts2" ||
+            audiocpp_tts_family == "cosyvoice3";
         if (accepts_reference_audio) {
-            const std::string encoded_audio = inputs.reference_audio != nullptr
+            std::string encoded_audio = inputs.reference_audio != nullptr
                 ? inputs.reference_audio : "";
+            if (audiocpp_tts_family == "kitten_tts2" && audiocpp_named_voice_alias) {
+                encoded_audio.clear();
+            }
             if (!encoded_audio.empty()) {
                 const auto media = kcpp_base64_decode(encoded_audio);
                 std::vector<float> samples;
@@ -1521,7 +1558,24 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                     // throw std::runtime_error("Fish Audio voice cloning requires reference_text");
                 }
                 if (audiocpp_tts_family == "kitten_tts2" && reference_text.empty()) {
-                    throw std::runtime_error("Kitten TTS 2 voice cloning requires reference_text");
+                    reference_text = "that's right, let's cheat! You see that pelican? You're running, right? And on your other shoe, you have a lemon. What are you doing? I'm squeezing lemon into your wound! Sweet baby!"; //turns out random text here works fine too
+                    // throw std::runtime_error("Kitten TTS 2 voice cloning requires reference_text");
+                }
+                if (audiocpp_tts_family == "cosyvoice3") {
+                    const auto template_option = request.options.find("template_name");
+                    if (template_option == request.options.end()) {
+                        // CosyVoice3's upstream default is zero-shot, but an
+                        // empty prompt transcript makes its AR model terminate
+                        // immediately or emit unusable tokens. Transcript-free
+                        // voice selections use the supported cross-lingual
+                        // cloning template instead.
+                        request.options["template_name"] = reference_text.empty()
+                            ? "cross_lingual" : "zero_shot";
+                    } else if (template_option->second == "zero_shot" && reference_text.empty()) {
+                        throw std::runtime_error(
+                            "CosyVoice3 zero_shot requires the reference audio transcript in reference_text; "
+                            "omit template_name or use cross_lingual for transcript-free cloning");
+                    }
                 }
                 engine::runtime::VoiceReference reference;
                 reference.audio = engine::runtime::AudioBuffer{
