@@ -119,6 +119,12 @@ transcript in `reference_text` for zero-shot cloning.
 
 ## Intentional compatibility changes
 
+- `src/community_models/kitten_tts2/session.cpp`: KoboldCpp selects Kitten's
+  portable eager attention lowering on Vulkan. The upstream grouped
+  flash-attention path is validated on CPU/CUDA but produces non-finite
+  first-token logits with KoboldCpp's ggml-vulkan backend. CPU and CUDA retain
+  the upstream flash-attention path.
+
 KoboldCpp owns GGML. Audio.cpp's bundled GGML is never synchronized.
 
 Local changes are marked `// kcpp:` and are summarized in `patches/README.md`.
