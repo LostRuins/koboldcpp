@@ -1607,12 +1607,12 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             throw std::runtime_error(audiocpp_tts_family + " returned non-mono audio");
         }
 
-        const double elapsed = timer_check();
-        printf("\nTTS Generated audio in %.2fs.\n", elapsed);
         last_generated_audio = save_tts_audio_base64(
             result.audio_output->samples,
             result.audio_output->sample_rate,
             inputs.use_mp3);
+        const double elapsed = timer_check();
+        printf("\nTTS Generated audio in %.2fs.\n", elapsed);
         output.data = last_generated_audio.c_str();
         output.status = 1;
         last_generation_settings_audio_seed = audio_seed;
