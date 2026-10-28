@@ -2554,12 +2554,14 @@ def generate(genparams, stream_flag=False):
             genparams.pop('_batch_request_id', None)
             genparams.pop('_batch_expected', None)
             genparams.pop('_batch_fallback', None)
+        stopseq_hit = None
         if trimstop:
             for trim_str in stop_sequence:
                 sindex = outstr.find(trim_str)
                 if sindex != -1 and trim_str!="":
                     outstr = outstr[:sindex]
-        return {"text":outstr,"status":ret.status,"stopreason":ret.stopreason,"prompt_tokens":ret.prompt_tokens, "completion_tokens": ret.completion_tokens}
+                    stopseq_hit = trim_str
+        return {"text":outstr,"status":ret.status,"stopreason":ret.stopreason,"stopseq_hit":stopseq_hit,"prompt_tokens":ret.prompt_tokens, "completion_tokens": ret.completion_tokens}
 
 def continuous_batching_python_eligible(genparams, api_format):
     if not args.parallelrequests or args.parallelrequests <= 1 or api_format <= 0:
@@ -5436,6 +5438,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
         return genparams
     elif api_format==9: # Anthropic Messages API
         genparams["max_length"] = genparams.get("max_tokens", args.defaultgenamt)
+        if isinstance(genparams.get("stop_sequences"), list):
+            genparams["stop"] = list(genparams["stop_sequences"])
         sys_prompt = genparams.get("system", "")
         messages = genparams.get("messages", [])
         if sys_prompt:
@@ -6305,6 +6309,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             res["output"] = output_items
             res["usage"] = {"input_tokens": prompttokens, "output_tokens": comptokens, "total_tokens": prompttokens + comptokens, "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}
         elif api_format == 9:  # Anthropic Format
+            anthropic_stopseq = None
             if tool_calls and len(tool_calls) > 0:
                 anthropic_reason = "tool_use"
                 content_blocks = []
@@ -6328,6 +6333,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                     })
             else:
                 anthropic_reason = "end_turn" if currfinishreason == "stop" else ("max_tokens" if currfinishreason == "length" else "stop_sequence")
+                if genout['stopreason'] == 2 and genout.get('stopseq_hit') in (genparams.get("stop_sequences") or []):
+                    anthropic_reason = "stop_sequence"
+                    anthropic_stopseq = genout['stopseq_hit']
                 content_blocks = []
                 if reasoningtxt and genparams.get('encapsulate_thinking', True):
                     content_blocks.append({"type": "thinking", "thinking": reasoningtxt})
@@ -6339,7 +6347,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 "model": modelNameToReturn,
                 "content": content_blocks,
                 "stop_reason": anthropic_reason,
-                "stop_sequence": None,
+                "stop_sequence": anthropic_stopseq,
                 "usage": {"input_tokens": prompttokens, "output_tokens": comptokens}
             }
         else: #kcpp format
@@ -6524,6 +6532,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         await asyncio.sleep(0.35) #anti race condition, prevent check from overtaking generate
         batch_request_id = genparams.get('_batch_request_id', -1)
         batch_final_result = None
+        stopseq_hit = None
 
         try:
             tokenReserve = "" #keeps fully formed tokens that we cannot send out yet
@@ -6599,6 +6608,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                     sindex = tokenStr.find(trim_str)
                                     if sindex != -1 and trim_str!="":
                                         tokenStr = tokenStr[:sindex]
+                                        stopseq_hit = trim_str
 
                             tokenStr, address_header_tail = split_address_header_tail(tokenStr, streamDone)
                             if address_header_tail:
@@ -6884,6 +6894,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                 if streamDone and not genparams.get("sync_toolcall_potential_triggered", False):
                                     # normal end (no tool call triggered) — close any open blocks and finish
                                     anthropic_reason = "end_turn" if currfinishreason == "stop" else ("max_tokens" if currfinishreason == "length" else "stop_sequence")
+                                    anthropic_stopseq = stopseq_hit if (sr == 2 and stopseq_hit in (genparams.get("stop_sequences") or [])) else None
+                                    if anthropic_stopseq is not None:
+                                        anthropic_reason = "stop_sequence"
                                     if anthropic_thinking_block_open:
                                         await self.send_anthropic_sse_event("content_block_stop", json.dumps({"type":"content_block_stop","index":anthropic_block_index}))
                                         anthropic_thinking_block_open = False
@@ -6892,7 +6905,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                         # edge case: stream ended with only thinking or no content at all — open a text block so we always close one
                                         await self.send_anthropic_sse_event("content_block_start", json.dumps({"type":"content_block_start","index":anthropic_block_index,"content_block":{"type":"text","text":""}}))
                                     await self.send_anthropic_sse_event("content_block_stop", json.dumps({"type":"content_block_stop","index":anthropic_block_index}))
-                                    await self.send_anthropic_sse_event("message_delta", json.dumps({"type":"message_delta","delta":{"stop_reason":anthropic_reason,"stop_sequence":None},"usage":{"input_tokens":prompttokens,"output_tokens":current_token}}))
+                                    await self.send_anthropic_sse_event("message_delta", json.dumps({"type":"message_delta","delta":{"stop_reason":anthropic_reason,"stop_sequence":anthropic_stopseq},"usage":{"input_tokens":prompttokens,"output_tokens":current_token}}))
                                     await self.send_anthropic_sse_event("message_stop", json.dumps({"type":"message_stop"}))
                             else:
                                 event_str = json.dumps({"token": tokenStr, "finish_reason":currfinishreason})
