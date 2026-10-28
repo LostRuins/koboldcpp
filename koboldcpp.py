@@ -168,6 +168,7 @@ cached_jinja_kwargs = None
 savedata_obj = None
 mcp_connections = [] #every element is linked to one mcp source, contains obj {"client":obj, "tools":[]}
 mcp_lock = threading.Lock()
+MCP_AGENT_LAUNCH_WAIT_SECONDS = 10
 multiplayer_story_data_compressed = None #stores the full compressed story of the current multiplayer session
 multiplayer_turn_major = 1 # to keep track of when a client needs to sync their stories
 multiplayer_turn_minor = 1
@@ -12530,6 +12531,23 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
         return False
 
 
+def launch_kobold_agent_after_mcp_load(
+    mcp_load_thread, base_url=None, api_key=None, same_terminal=False, load_session=None
+):
+    """Briefly wait for a complete MCP tool list, then launch regardless."""
+    if mcp_load_thread is not None:
+        if mcp_load_thread.is_alive():
+            print("Waiting for MCP servers to finish loading before launching KoboldCpp Agent...")
+        mcp_load_thread.join(timeout=MCP_AGENT_LAUNCH_WAIT_SECONDS)
+        if mcp_load_thread.is_alive():
+            print(
+                f"MCP servers are still loading after {MCP_AGENT_LAUNCH_WAIT_SECONDS} seconds; "
+                "launching KoboldCpp Agent anyway. Use /clear after loading finishes "
+                "to refresh MCP tools."
+            )
+    return launch_kobold_agent_terminal(base_url, api_key, same_terminal, load_session)
+
+
 def register_koboldcpp():
     try:
         exe_path = ""
@@ -13943,8 +13961,12 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         except Exception:
             print("Could not load TTS voices.")
 
+    mcp_load_thread = None
     if args.mcpfile and isinstance(args.mcpfile, str):
-        threading.Thread(target=load_mcp_async, args=(args,), daemon=True).start()
+        mcp_load_thread = threading.Thread(
+            target=load_mcp_async, args=(args,), daemon=True
+        )
+        mcp_load_thread.start()
         time.sleep(0.2) # short delay to allow get_capabilities to work
 
     # print enabled modules
@@ -14182,18 +14204,16 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         on_server_ready = None
         if agent_base_url:
             def on_server_ready():
+                success = launch_kobold_agent_after_mcp_load(
+                    mcp_load_thread,
+                    agent_base_url,
+                    args.password,
+                    same_terminal=args.cli,
+                    load_session=args.agentload,
+                )
                 if args.cli:
-                    if args.mcpfile:
-                        time.sleep(2)
-                    success = launch_kobold_agent_terminal(agent_base_url, args.password, same_terminal=True, load_session=args.agentload)
                     raise SystemExit(0 if success else 1)
-                if args.mcpfile:
-                    agent_timer = threading.Timer(
-                        2, launch_kobold_agent_terminal, args=(agent_base_url, args.password), kwargs={"load_session": args.agentload}
-                    )
-                    agent_timer.start()
-                    return True
-                return launch_kobold_agent_terminal(agent_base_url, args.password, load_session=args.agentload)
+                return success
         asyncio.run(RunServerMultiThreaded(args.host, args.port, KcppServerRequestHandler, on_server_ready))
     else:
         # Flush stdout for previous win32 issue so the client can see output.
