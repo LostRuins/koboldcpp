@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "all")]
+    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -380,6 +380,24 @@ $voxCpm1Files = @(
     "src/community_models/voxcpm1/tokenizer_text.cpp"
 )
 
+# OmniVoice's Higgs-derived audio tokenizer and diffusion generator are
+# self-contained model code. Their shared framework closure is already kept by
+# the selected TTS models, so do not refresh KoboldCpp-patched foundation files
+# when synchronizing this component alone.
+$omniVoiceFiles = @(
+    "model_specs/omnivoice.json",
+    "src/models/omnivoice/assets.cpp",
+    "src/models/omnivoice/audio_tokenizer.cpp",
+    "src/models/omnivoice/generator.cpp",
+    "src/models/omnivoice/generator_layerwise.inc",
+    "src/models/omnivoice/language_map.inc",
+    "src/models/omnivoice/loader.cpp",
+    "src/models/omnivoice/postprocess.cpp",
+    "src/models/omnivoice/prompt_builder.cpp",
+    "src/models/omnivoice/session.cpp",
+    "src/models/omnivoice/tokenizer_text.cpp"
+)
+
 # YuE2 is intentionally a separate import tier. Its framework closure is larger
 # than Supertonic's, but it still avoids Audio.cpp's server, CLI, converters,
 # unrelated models, bundled GGML, sentencepiece, and YAML dependencies.
@@ -434,6 +452,7 @@ foreach ($name in $Component) {
         [void] $selected.Add("vibevoice")
         [void] $selected.Add("voxcpm2")
         [void] $selected.Add("voxcpm1")
+        [void] $selected.Add("omnivoice")
     } else {
         [void] $selected.Add($name)
     }
@@ -498,6 +517,13 @@ if ($selected.Contains("voxcpm2")) {
 if ($selected.Contains("voxcpm1")) {
     Copy-AudioCppTree "include/engine/community_models/voxcpm1"
     foreach ($relativePath in $voxCpm1Files) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("omnivoice")) {
+    Copy-AudioCppTree "include/engine/models/omnivoice"
+    foreach ($relativePath in $omniVoiceFiles) {
         Copy-AudioCppFile $relativePath
     }
 }
@@ -712,6 +738,11 @@ $ttsLoaders = @(
         Family = "voxcpm1"
         Header = "engine/community_models/voxcpm1/session.h"
         Factory = "engine::community_models::voxcpm1::make_voxcpm1_loader"
+    },
+    @{
+        Family = "omnivoice"
+        Header = "engine/models/omnivoice/loader.h"
+        Factory = "engine::models::omnivoice::make_omnivoice_loader"
     }
 )
 $ttsRegistryHeaders = ""

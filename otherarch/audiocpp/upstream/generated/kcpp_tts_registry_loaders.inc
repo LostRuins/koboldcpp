@@ -10,3 +10,4 @@
     {"vibevoice", engine::models::vibevoice::make_vibevoice_loader()},
     {"voxcpm2", engine::models::voxcpm2::make_voxcpm2_loader()},
     {"voxcpm1", engine::community_models::voxcpm1::make_voxcpm1_loader()},
+    {"omnivoice", engine::models::omnivoice::make_omnivoice_loader()},

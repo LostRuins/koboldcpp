@@ -10,3 +10,4 @@
 #include "engine/models/vibevoice/loader.h"
 #include "engine/models/voxcpm2/loader.h"
 #include "engine/community_models/voxcpm1/session.h"
+#include "engine/models/omnivoice/loader.h"

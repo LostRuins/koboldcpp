@@ -1596,6 +1596,13 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                 request.options.find("template_name") == request.options.end()) {
                 request.options["template_name"] = "instruct";
             }
+        } else if (audiocpp_tts_family == "omnivoice") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+            }
         } else if (audiocpp_tts_family == "kitten_tts2") {
             std::string voice = std::move(audiocpp_requested_voice);
             static const std::map<std::string, std::string> kcpp_voice_aliases = {
@@ -1634,7 +1641,7 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             audiocpp_tts_family == "chatterbox" || audiocpp_tts_family == "kitten_tts2" ||
             audiocpp_tts_family == "cosyvoice3" || audiocpp_tts_family == "pocket_tts" ||
             audiocpp_tts_family == "vibevoice" || audiocpp_tts_family == "voxcpm2" ||
-            audiocpp_tts_family == "voxcpm1";
+            audiocpp_tts_family == "voxcpm1" || audiocpp_tts_family == "omnivoice";
         if (accepts_reference_audio) {
             std::string encoded_audio = inputs.reference_audio != nullptr
                 ? inputs.reference_audio : "";

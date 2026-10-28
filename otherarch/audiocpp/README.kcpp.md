@@ -21,6 +21,7 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component cosyvoice3
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm2
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm1
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component omnivoice
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2 -ModelSourcesOnly
 ```
 
@@ -78,6 +79,9 @@ exact upstream commit cannot be recorded until a real checkout is supplied.
 - `voxcpm1`: the legacy 0.5B multilingual VoxCPM runtime, with offline TTS
   and short-reference cloning. It remains a separate community family because
   its GGUF tensor layout and 16 kHz output differ from VoxCPM2.
+- `omnivoice`: massively multilingual offline TTS, optional short-reference
+  voice cloning, and instruction-driven voice design. Reference transcripts
+  are optional, and VoiceTut-TTS packages use the same runtime.
 - Later candidates should be added only when their framework closure is small
   and measurable. Existing KoboldCpp Qwen3-TTS, MiniMax H3, ACE-Step, Kokoro,
   OuteTTS, Parler, Dia, and Orpheus implementations are not imported.
@@ -165,6 +169,15 @@ Pass `voxcpm-0.5b-q8_0-audiovae-f16.gguf` for VoxCPM1. It supports plain
 offline TTS and reference-audio cloning; provide `reference_text` when
 available. VoxCPM1 produces 16 kHz mono output and does not support VoxCPM2
 voice-design instructions.
+
+Pass an OmniVoice GGUF package as the normal TTS model. Plain synthesis needs
+no reference. Selecting a WAV/MP3 enables 24 kHz voice cloning, with an
+optional exact transcript in `reference_text`. KoboldCpp maps its existing
+`instruction` field to OmniVoice's native `instruct` voice-design option.
+Language selection and advanced diffusion, duration, chunking, and sampling
+controls remain available through `audiocpp_extra_params_json`.
+Streaming is intentionally not exposed because upstream implements it as
+text-chunked event delivery rather than a distinct streaming model runtime.
 
 ## Intentional compatibility changes
 
