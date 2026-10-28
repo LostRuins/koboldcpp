@@ -7753,12 +7753,17 @@ Current version indicated by LITEVER below.
 						last_response_streamlog += chunk;
 					}
 					let evs = [];
-					let m;
-					while ((m = /^data: ?(.*)(\r?\n){2}/m.exec(ctrl.buf)) !== null) {
-						try{evs.push({data: JSON.parse(m[1])});} catch (e) {
-							console.log("Cannot parse a chunk: " + chunk);
+					let event_end;
+					while ((event_end = /(\r?\n){2}/.exec(ctrl.buf)) !== null) {
+						let event_data = ctrl.buf.substring(0,event_end.index).split(/\r?\n/)
+							.filter(line => line.startsWith("data:"))
+							.map(line => line.substring(5).replace(/^ /,""))
+							.join("\n");
+						ctrl.buf = ctrl.buf.substring(event_end.index + event_end[0].length);
+						if(!event_data || event_data === "[DONE]") continue;
+						try{evs.push({data: JSON.parse(event_data)});} catch (e) {
+							console.log("Cannot parse a chunk: " + event_data);
 						}
-						ctrl.buf = ctrl.buf.substring(m.index + m[0].length);
 					}
 					if (evs.length) {
 						ctrl.enqueue(evs);
@@ -23472,7 +23477,7 @@ Current version indicated by LITEVER below.
 						oai_payload.logprobs = 5;
 					}
 				}
-				if(!targetep.toLowerCase().includes("pollinations.ai") && !targetep.toLowerCase().includes("api.x.ai") && !targetep.toLowerCase().includes("api.perplexity.ai"))
+				if(!targetep.toLowerCase().includes("pollinations.ai") && !targetep.toLowerCase().includes("api.x.ai") && !targetep.toLowerCase().includes("api.perplexity.ai") && !targetep.toLowerCase().includes("api.meta.ai"))
 				{
 					//grok has no support for stop
 					let stops = get_stop_sequences().slice(0, 4); //lets try adding stop sequences, limit to first 4
@@ -34735,8 +34740,6 @@ Current version indicated by LITEVER below.
 					<div style="padding:2px;margin-left:auto;" id="model_cost"></div>
 				</div>
 				<select title="OpenAI Model Selection" style="padding:4px;display:inline;width:calc(100% - 200px)" class="form-control" id="custom_oai_model" onchange="oai_model_change(true)">
-					<option value="davinci-002">davinci-002</option>
-					<option value="gpt-3.5-turbo-instruct">gpt-3.5-turbo-instruct</option>
 					<option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
 					<option value="gpt-3.5-turbo-16k">gpt-3.5-turbo-16k</option>
 					<option value="gpt-4">gpt-4</option>
@@ -34763,6 +34766,8 @@ Current version indicated by LITEVER below.
 					<option value="o3-mini">o3-mini</option>
 					<option value="o3">o3</option>
 					<option value="o4-mini">o4-mini</option>
+					<option value="davinci-002">davinci-002</option>
+					<option value="gpt-3.5-turbo-instruct">gpt-3.5-turbo-instruct</option>
 					<option style="display:none;" class="custom_model_option" value="custom">[Custom]</option>
 				</select>
 				<select title="OpenRouter AI Model Selection" style="padding:4px;display:inline;width:calc(100% - 200px)" class="form-control hidden" id="custom_openrouter_model" onchange="oai_model_change(true)">
