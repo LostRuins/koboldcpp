@@ -1,12 +1,11 @@
 #pragma once
 
-#include "common.h"
-
 #include <atomic>
 #include <memory>
 #include <string>
 #include <thread>
 
+struct common_params;
 struct common_subproc;
 
 // spawns llama-connect, which exposes this server to a remote browser over WebRTC

@@ -1,5 +1,6 @@
 #include "server-connect.h"
 
+#include "arg.h"
 #include "server-common.h"
 #include "subproc.h"
 
