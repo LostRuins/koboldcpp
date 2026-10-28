@@ -96,7 +96,10 @@ be supplied directly as JSON arrays.
 Pass `fish-audio-s2-pro-q8_0.gguf` as the normal TTS model. Plain TTS requires
 no other file. For cloning, select a WAV or MP3 from KoboldCpp's voice
 directory. Send `reference_text` containing its transcript when available;
-otherwise KoboldCpp supplies the adapter's neutral fallback transcript.
+otherwise KoboldCpp supplies the adapter's neutral fallback transcript. The
+shared `instruction` field is prepended using Fish S2 Pro's native free-form
+bracket syntax, so `professional broadcast tone` becomes
+`[professional broadcast tone]` before the text.
 
 Pass `maya1-q8_0.gguf` (or `maya1-orig.gguf`) as the normal TTS model. Supply a
 voice description with the existing `instruction` request field; when omitted,

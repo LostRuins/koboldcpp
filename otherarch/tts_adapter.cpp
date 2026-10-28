@@ -1440,7 +1440,23 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             }
         }
 
-        if (audiocpp_tts_family == "supertonic") {
+        if (audiocpp_tts_family == "fish_audio") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            const auto first = std::find_if_not(instruction.begin(), instruction.end(),
+                [](unsigned char ch) { return std::isspace(ch); });
+            const auto last = std::find_if_not(instruction.rbegin(), instruction.rend(),
+                [](unsigned char ch) { return std::isspace(ch); }).base();
+            instruction = first < last ? std::string(first, last) : "";
+            if (!instruction.empty()) {
+                // Fish S2 Pro consumes free-form delivery instructions as
+                // leading bracket tags in the transcript itself.
+                if (instruction.front() != '[' || instruction.back() != ']') {
+                    instruction = "[" + instruction + "]";
+                }
+                request.text_input->text.insert(0, instruction + " ");
+            }
+        } else if (audiocpp_tts_family == "supertonic") {
             std::string voice = inputs.custom_speaker_voice != nullptr
                 ? inputs.custom_speaker_voice : "";
             std::transform(voice.begin(), voice.end(), voice.begin(), [](unsigned char ch) {
