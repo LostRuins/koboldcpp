@@ -13711,7 +13711,11 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     if args.password and args.password!="":
         password = args.password.strip()
 
-    print(args)
+    safe_args = argparse.Namespace(**vars(args))
+    for secret_key in ("password", "adminpassword", "hordekey", "agent_api_key"):
+        if getattr(safe_args, secret_key, None):
+            setattr(safe_args, secret_key, "***")
+    print(safe_args)
     print("==========")
 
     #if RPC Host mode is specified
