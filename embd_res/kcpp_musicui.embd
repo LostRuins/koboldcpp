@@ -356,6 +356,11 @@ select{
   </div>
 
   <div style="margin-top:10px">
+    <label>Seed (optional)</label>
+    <input title="TTS Seed" id="tts_seed" type="number" min="1" step="1" placeholder="Random">
+  </div>
+
+  <div style="margin-top:10px">
     <label>Reference text (optional)</label>
     <input title="TTS Reference Audio Transcript" id="tts_reference_text" type="text" placeholder="Exact transcript of the selected reference audio">
   </div>
@@ -546,6 +551,9 @@ async function generateTTS(){
     const referenceText = document.getElementById("tts_reference_text").value;
     if(referenceText) payload.reference_text = referenceText;
 
+    const seed = document.getElementById("tts_seed").value.trim();
+    if(seed) payload.seed = seed;
+
     let headers =  {"Content-Type": "application/json"};
     if(document.getElementById("tts_baseUrlKey").value!="")
     {
@@ -589,6 +597,7 @@ async function generateTTS(){
 
 function clearTTS(){
   document.getElementById("tts_input").value="";
+  document.getElementById("tts_seed").value="";
   document.getElementById("tts_reference_text").value="";
   document.getElementById("tts_instruction").value="";
   document.getElementById("tts_use_mp3").checked=false;
@@ -700,7 +709,7 @@ function getFormData(){
   return data;
 }
 
-function updateForm(data){
+function updateForm(data, itemType){
   data={...data};
   const looksYue2=data.musicfamily === "yue2" || data.abc !== undefined || data.cot !== undefined || data.semantic_prefix !== undefined;
   if(looksYue2){
@@ -723,7 +732,11 @@ function updateForm(data){
   }
   //let origseed = document.getElementById("seed").value;
   Object.keys(data).forEach(k=>{
-    if(document.getElementById(k))
+    if(itemType === "tts" && k === "seed")
+    {
+      document.getElementById("tts_seed").value=data[k]??"";
+    }
+    else if(document.getElementById(k))
     {
       const el = document.getElementById(k);
       if(el.type === "checkbox"){
@@ -1058,8 +1071,10 @@ function loadTrackJSON(id){
     if(item.type !== "tts") {
       document.getElementById("audio_codes").value = "";
       document.getElementById("abc").value = "";
+    } else {
+      document.getElementById("tts_seed").value = "";
     }
-    updateForm(data);
+    updateForm(data, item.type);
   });
 }
 
