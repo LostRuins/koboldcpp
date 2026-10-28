@@ -1,6 +1,25 @@
 # Add custom options to Makefile.local rather than editing this file.
 -include $(abspath $(lastword ${MAKEFILE_LIST})).local
 
+# GNU Make's ifdef considers command-line values such as FOO=0 to be enabled.
+# Accept the conventional explicit disable form before evaluating feature flags.
+ifeq ($(strip $(LLAMA_CUBLAS)),0)
+override undefine LLAMA_CUBLAS
+endif
+ifeq ($(strip $(LLAMA_HIPBLAS)),0)
+override undefine LLAMA_HIPBLAS
+endif
+# Keep cleanup available even when both flags came from the environment or
+# Makefile.local; neither backend is needed to remove their shared objects.
+ifeq ($(strip $(MAKECMDGOALS)),clean)
+override undefine LLAMA_CUBLAS
+override undefine LLAMA_HIPBLAS
+else
+ifneq ($(and $(LLAMA_CUBLAS),$(LLAMA_HIPBLAS)),)
+$(error LLAMA_CUBLAS and LLAMA_HIPBLAS share object files; enable only one and run make clean when switching backends)
+endif
+endif
+
 .PHONY: finishedmsg tinylibwebp tinylibwebp-smoke
 
 default: koboldcpp_default koboldcpp_failsafe koboldcpp_noavx2 koboldcpp_vulkan_failsafe koboldcpp_cublas koboldcpp_hipblas koboldcpp_vulkan koboldcpp_vulkan_noavx2 finishedmsg
@@ -283,33 +302,62 @@ endif # LLAMA_CUBLAS
 ifdef LLAMA_HIPBLAS
 ifeq ($(wildcard /opt/rocm),)
 ROCM_PATH   ?= /usr
-ifdef LLAMA_PORTABLE
-GPU_TARGETS ?= gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(shell $(shell which amdgpu-arch))
-else
-GPU_TARGETS ?= $(shell $(shell which amdgpu-arch))
-endif
-HCC         := $(ROCM_PATH)/bin/hipcc
-HCXX        := $(ROCM_PATH)/bin/hipcc
 else
 ROCM_PATH   ?= /opt/rocm
-ifdef LLAMA_PORTABLE
-GPU_TARGETS ?= gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(shell $(ROCM_PATH)/llvm/bin/amdgpu-arch)
-else
-GPU_TARGETS ?= $(shell $(ROCM_PATH)/llvm/bin/amdgpu-arch)
-endif
-HCC         := $(ROCM_PATH)/llvm/bin/clang
-HCXX        := $(ROCM_PATH)/llvm/bin/clang++
 endif
 
-HIPFLAGS   += -DGGML_USE_HIP -DGGML_HIP_NO_VMM -DGGML_USE_CUDA $(shell $(ROCM_PATH)/bin/hipconfig -C)
-HIPLDFLAGS    += -L$(ROCM_PATH)/lib -Wl,-rpath=$(ROCM_PATH)/lib
-HIPLDFLAGS    += -L$(ROCM_PATH)/lib64 -Wl,-rpath=$(ROCM_PATH)/lib64
-HIPLDFLAGS    += -lhipblas -lamdhip64 -lrocblas
+# Prefer the selected SDK over PATH. Legacy AMD SDKs use llvm/bin, newer
+# SDKs use lib/llvm/bin, and distro packages put hipcc/hipconfig in /usr/bin.
+ROCM_TOOL_DIRS := $(ROCM_PATH)/bin $(ROCM_PATH)/lib/llvm/bin $(ROCM_PATH)/llvm/bin
+HIPCC       ?= $(or $(firstword $(foreach dir,$(ROCM_TOOL_DIRS),$(wildcard $(dir)/hipcc))),$(shell command -v hipcc 2>/dev/null),hipcc)
+HIPCC       := $(HIPCC)
+HIPCONFIG   ?= $(or $(firstword $(wildcard $(dir $(HIPCC))hipconfig) $(foreach dir,$(ROCM_TOOL_DIRS),$(wildcard $(dir)/hipconfig))),$(shell command -v hipconfig 2>/dev/null))
+HIPCONFIG   := $(HIPCONFIG)
+HCC         ?= $(HIPCC)
+HCXX        ?= $(HIPCC)
+# LLAMA_HIPBLAS is specifically the AMD backend, even on CUDA-equipped hosts.
+export HIP_PLATFORM := amd
+ROCM_CPPFLAGS := $(if $(HIPCONFIG),$(shell HIP_PLATFORM=amd $(HIPCONFIG) --cpp_config))
+ROCM_CLANG_DIR := $(if $(HIPCONFIG),$(shell HIP_PLATFORM=amd $(HIPCONFIG) --hipclangpath))
+AMDGPU_ARCH ?= $(or $(firstword $(if $(ROCM_CLANG_DIR),$(wildcard $(ROCM_CLANG_DIR)/amdgpu-arch)) $(foreach dir,$(ROCM_TOOL_DIRS),$(wildcard $(dir)/amdgpu-arch))),$(shell command -v amdgpu-arch 2>/dev/null))
+
+# Query once, and skip detection altogether when GPU_TARGETS is supplied.
+ifeq ($(origin GPU_TARGETS),undefined)
+ROCM_DETECTED_TARGETS := $(if $(AMDGPU_ARCH),$(shell $(AMDGPU_ARCH)))
+ifdef LLAMA_PORTABLE
+GPU_TARGETS := $(sort gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(ROCM_DETECTED_TARGETS))
+else
+GPU_TARGETS := $(sort $(ROCM_DETECTED_TARGETS))
+endif
+endif
+
+ROCM_INCLUDE_PATH ?= $(ROCM_PATH)/include
+HIPFLAGS   += -DGGML_USE_HIP -DGGML_HIP_NO_VMM -DGGML_USE_CUDA -D__HIP_PLATFORM_AMD__= -I$(ROCM_INCLUDE_PATH) $(ROCM_CPPFLAGS)
+# Match the packaging search: an explicit library directory is authoritative.
+ifneq ($(strip $(ROCM_LIB_PATH)),)
+ROCM_LIB_DIRS := $(ROCM_LIB_PATH)
+else
+ROCM_LIB_DIRS := $(ROCM_PATH)/lib $(ROCM_PATH)/lib64
+ifneq ($(filter /usr /usr/,$(ROCM_PATH)),)
+ROCM_MULTIARCH := $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || $(CXX) -print-multiarch 2>/dev/null)
+ROCM_LIB_DIRS += $(addprefix /usr/lib/,$(ROCM_MULTIARCH))
+endif
+endif
+HIPLDFLAGS  += $(foreach dir,$(ROCM_LIB_DIRS),-L$(dir) -Wl,-rpath=$(dir)) -lhipblas -lamdhip64 -lrocblas
 HIP_OBJS      += ggml-cuda.o ggml_v3-cuda.o ggml_v2-cuda.o ggml_v2-cuda-legacy.o
 HIP_OBJS      += $(patsubst %.cu,%.o,$(filter-out ggml/src/ggml-cuda/ggml-cuda.cu, $(wildcard ggml/src/ggml-cuda/*.cu)))
 HIP_OBJS      += $(OBJS_CUDA_TEMP_INST)
 
 HIPFLAGS2    += $(addprefix --offload-arch=,$(GPU_TARGETS))
+
+# Order-only prerequisites run once per invocation without forcing recompiles.
+# Keep these checks out of parse-time conditionals so make clean still works.
+.PHONY: rocm-check
+rocm-check:
+	@test -n "$(strip $(GPU_TARGETS))" || { echo "Error: no AMD GPU targets detected. Set GPU_TARGETS (for example gfx1100), or set AMDGPU_ARCH to the matching LLVM amdgpu-arch tool." >&2; exit 1; }
+	@printf '#include <rocblas/rocblas.h>\n#include <hipblas/hipblas.h>\n' | $(CXX) $(CXXFLAGS) $(HIPFLAGS) -x c++ -E - >/dev/null || { echo "Error: ROCm headers are unavailable to $(CXX). Install the matching rocBLAS/hipBLAS development packages, or set ROCM_INCLUDE_PATH to the directory containing rocblas/ and hipblas/." >&2; exit 1; }
+
+$(HIP_OBJS) kcpp_backend_cublas.o: | rocm-check
 
 ggml/src/ggml-cuda/%.o: ggml/src/ggml-cuda/%.cu ggml/include/ggml.h ggml/src/ggml-common.h ggml/src/ggml-cuda/common.cuh
 	$(HCXX) $(CXXFLAGS) $(HIPFLAGS) $(HIPFLAGS2) -x hip -c -o $@ $<

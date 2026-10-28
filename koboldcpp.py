@@ -4503,6 +4503,91 @@ def normalize_openai_tools_input(tools):
             print(f"Dropped unsupported tool: {tool}")
     return normalized
 
+def normalize_responses_tools_input(tools):
+    """Convert Responses API function tools to Chat Completions format internally."""
+    normalized = []
+    if not isinstance(tools, list):
+        print(f"Dropped unsupported tools value: {tools}")
+        return normalized
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            print(f"Dropped unsupported tool: {tool}")
+            continue
+        if isinstance(tool.get("function"), dict):
+            normalized.append(tool)  # tolerate the old, non-standard workaround
+            continue
+        if not tool.get("name"):
+            print(f"Dropped unsupported tool: {tool}")
+            continue
+        function = {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+        }
+        if "strict" in tool:
+            function["strict"] = tool["strict"]
+        normalized.append({"type": "function", "function": function})
+    return normalized
+
+def convert_responses_input_items(raw_input):
+    """Convert Responses input items to the Chat Completions messages used internally."""
+    if isinstance(raw_input, str):
+        return [{"role": "user", "content": raw_input}]
+    if not isinstance(raw_input, list):
+        return []
+
+    def convert_content(content):
+        if not isinstance(content, list):
+            return content
+        parts = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type in ("input_text", "output_text", "text"):
+                parts.append({"type": "text", "text": part.get("text", "")})
+            elif part_type == "input_image":
+                img = part.get("image_url", part.get("source", {}))
+                parts.append({"type": "image_url", "image_url": {"url": img}})
+        if all(part.get("type") == "text" for part in parts):
+            return "".join(part.get("text", "") for part in parts)
+        return parts
+
+    converted = []
+    for item in raw_input:
+        if isinstance(item, str):
+            converted.append({"role": "user", "content": item})
+            continue
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type", "message")
+        if item_type == "function_call":
+            call_id = item.get("call_id", item.get("id", ""))
+            tool_call = {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", "{}"),
+                },
+            }
+            if converted and converted[-1].get("role") == "assistant" and converted[-1].get("tool_calls"):
+                converted[-1]["tool_calls"].append(tool_call)
+            else:
+                converted.append({"role": "assistant", "content": None, "tool_calls": [tool_call]})
+        elif item_type == "function_call_output":
+            converted.append({
+                "role": "tool",
+                "tool_call_id": item.get("call_id", ""),
+                "content": convert_content(item.get("output", "")),
+            })
+        elif item_type == "message":
+            converted.append({
+                "role": item.get("role", "user"),
+                "content": convert_content(item.get("content", "")),
+            })
+    return converted
+
 def filter_tools_for_tool_choice(tools, tool_choice):
     """Return the tools exposed to the model after applying an explicit tool choice."""
     choice_type = ""
@@ -4664,7 +4749,8 @@ def extract_tool_info_from_tool_array(chosen_tool, tools_array):
         if isinstance(chosen_tool, str):
             found_function = chosen_tool
         elif isinstance(chosen_tool, dict): #if we can match the tool name, we must use that tool, remove all other tools
-            found_function = chosen_tool.get('function').get('name')
+            function = chosen_tool.get('function')
+            found_function = function.get('name') if isinstance(function, dict) else chosen_tool.get('name', '')
         #if we find the function in tools, remove all other tools except the one matching the function name
         for tool in tools_array:
             if found_function and tool.get('type') == "function" and tool.get('function').get('name').lower() == found_function.lower():
@@ -5338,32 +5424,14 @@ ws ::= | " " | "\n" [ \t]{0,20}
     elif api_format==8: # OpenAI Responses API, oai-responses
         raw_input = genparams.get('input', '')
         raw_instructions = genparams.get('instructions', '')
-        if isinstance(raw_input, str):
-            genparams['messages'] = [{"role": "user", "content": raw_input}]
-        elif isinstance(raw_input, list): # Convert Responses API input items to chat messages format
-            converted = []
-            for item in raw_input:
-                if isinstance(item, dict):
-                    role = item.get("role", "user")
-                    content = item.get("content", "")
-                    # content can itself be a list of typed parts
-                    if isinstance(content, list):
-                        parts = []
-                        for part in content:
-                            if part.get("type") == "input_text":
-                                parts.append({"type": "text", "text": part.get("text", "")})
-                            elif part.get("type") == "input_image":
-                                img = part.get("image_url", part.get("source", {}))
-                                parts.append({"type": "image_url", "image_url": {"url": img}})
-                        content = parts
-                    converted.append({"role": role, "content": content})
-                elif isinstance(item, str):
-                    converted.append({"role": "user", "content": item})
-            genparams['messages'] = converted
-        else:
-            genparams['messages'] = []
+        genparams['messages'] = convert_responses_input_items(raw_input)
         if raw_instructions and isinstance(raw_instructions, str):
             genparams['messages'].insert(0, {"role": "system", "content": raw_instructions})
+        if "max_output_tokens" in genparams and "max_tokens" not in genparams:
+            genparams["max_tokens"] = genparams["max_output_tokens"]
+        if genparams.get("tools"):
+            genparams["_responses_tools"] = copy.deepcopy(genparams["tools"])
+            genparams["tools"] = normalize_responses_tools_input(genparams["tools"])
         transform_genparams(genparams, 4, use_jinja) # Delegate to the chat-completions transform by re-running as format 4
         return genparams
     elif api_format==9: # Anthropic Messages API
@@ -6046,8 +6114,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             "model": modelNameToReturn,
             "error": None,
             "metadata": {},
-            "tools": genparams.get('tools', []),
-            "tool_choice": "auto",
+            "tools": genparams.get('_responses_tools', genparams.get('tools', [])),
+            "tool_choice": genparams.get("tool_choice", "auto"),
             "background": False,
             "service_tier": "default",
             "safety_identifier": None,
@@ -6220,7 +6288,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             resp_id = f"resp-A{genparams.get('oai_uniqueid', 1)}"
             output_item_id = f"msg_0{genparams.get('oai_uniqueid', 1)}"
             output_items = []
-            if recvtxt is not None:    # Add text message if there's content
+            if recvtxt:    # Add text message if there's content
                 output_items.append({
                     "type": "message",
                     "id": output_item_id,
@@ -6293,6 +6361,70 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(f'event: {eventname}\ndata: {data}\n\n'.encode())
         self.wfile.flush()
 
+    def send_oai_responses_fake_stream(self, response):
+        """Emit a completed tool-capable Responses result as valid SSE events."""
+        sequence_number = 0
+        response_id = response.get("id", "")
+
+        def send_event(event_type, **payload):
+            nonlocal sequence_number
+            event = {"type": event_type, "sequence_number": sequence_number, **payload}
+            sequence_number += 1
+            self.wfile.write(f'event: {event_type}\ndata: {json.dumps(event)}\n\n'.encode())
+
+        created_response = copy.deepcopy(response)
+        created_response["status"] = "in_progress"
+        created_response["completed_at"] = None
+        created_response["output"] = []
+        created_response["usage"] = None
+        send_event("response.created", response=created_response)
+
+        for output_index, item in enumerate(response.get("output", [])):
+            added_item = copy.deepcopy(item)
+            added_item["status"] = "in_progress"
+            if item.get("type") == "message":
+                added_item["content"] = []
+            elif item.get("type") == "function_call":
+                added_item["arguments"] = ""
+            send_event("response.output_item.added", response_id=response_id,
+                       output_index=output_index, item=added_item)
+
+            if item.get("type") == "function_call":
+                arguments = item.get("arguments", "")
+                if arguments:
+                    send_event("response.function_call_arguments.delta", response_id=response_id,
+                               item_id=item.get("id", ""), output_index=output_index,
+                               delta=arguments)
+                send_event("response.function_call_arguments.done", response_id=response_id,
+                           item_id=item.get("id", ""), output_index=output_index,
+                           arguments=arguments)
+            elif item.get("type") == "message":
+                for content_index, part in enumerate(item.get("content", [])):
+                    if part.get("type") != "output_text":
+                        continue
+                    empty_part = copy.deepcopy(part)
+                    empty_part["text"] = ""
+                    send_event("response.content_part.added", response_id=response_id,
+                               item_id=item.get("id", ""), output_index=output_index,
+                               content_index=content_index, part=empty_part)
+                    text = part.get("text", "")
+                    if text:
+                        send_event("response.output_text.delta", response_id=response_id,
+                                   item_id=item.get("id", ""), output_index=output_index,
+                                   content_index=content_index, delta=text, logprobs=[])
+                    send_event("response.output_text.done", response_id=response_id,
+                               item_id=item.get("id", ""), output_index=output_index,
+                               content_index=content_index, text=text, logprobs=[])
+                    send_event("response.content_part.done", response_id=response_id,
+                               item_id=item.get("id", ""), output_index=output_index,
+                               content_index=content_index, part=part)
+
+            send_event("response.output_item.done", response_id=response_id,
+                       output_index=output_index, item=item)
+
+        send_event("response.completed", response=response)
+        self.wfile.flush()
+
     async def send_anthropic_sse_event(self, eventname, data):
         self.wfile.write(f'event: {eventname}\ndata: {data}\n\n'.encode())
         self.wfile.flush()
@@ -6352,6 +6484,12 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         stream_content_type = 'application/x-ndjson' if api_format == 6 or api_format == 7 else 'text/event-stream'
         self.end_headers(content_type=stream_content_type)
         genparams['_sse_stream_started'] = True
+
+        # Responses tool calls need different event types, so buffer this case and
+        # emit it through send_oai_responses_fake_stream after parsing completes.
+        if api_format == 8 and using_openai_tools:
+            genparams['sync_toolcall_stream_ineligible'] = True
+            return
 
         # if tools, do not send anything else - OAI tool calls will be handled with fakestreaming!
         # only exception is if we know the exact toolcall tag to segment!
@@ -6885,7 +7023,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             generate_task = asyncio.create_task(run_generation())
             tasks.append(generate_task)
             monitor_task = asyncio.create_task(monitor_generation())
-            if stream_flag and api_format in (4, 7, 9) and genparams.get('using_openai_tools', False):
+            if stream_flag and api_format in (4, 7, 8, 9) and genparams.get('using_openai_tools', False):
                 tool_keepalive_task = asyncio.create_task(self.send_tool_stream_keepalives(genparams, api_format))
             elif not stream_flag and self.headers.get('X-KoboldCpp-Keepalive', '').lower() == 'true':
                 def start_keepalive():
@@ -8340,6 +8478,11 @@ Change Mode<br>
                                 self.send_header('content-length', str(len(genresp)))
                                 self.end_headers(content_type='application/json')
                             self.wfile.write(genresp)
+                        elif api_format == 8 and genparams.get('using_openai_tools', False):
+                            if genparams.get('_sse_stream_finished', False):
+                                return
+                            self.send_oai_responses_fake_stream(gendat)
+                            genparams['_sse_stream_finished'] = True
                         elif (api_format == 4 or api_format == 7 or api_format == 9) and genparams.get('using_openai_tools', False): #special case, fake streaming for tool calls
                             if genparams.get('_sse_stream_finished', False):
                                 return

@@ -16,6 +16,7 @@ kcpp_mamba() {
 
 kcpp_find_rocm_data() {
 	local lib_dir
+	local multiarch
 	local -a lib_dirs
 	# Library locations need not share a prefix with the ROCm tools.
 	if [ -n "$ROCM_LIB_PATH" ]; then
@@ -23,7 +24,17 @@ kcpp_find_rocm_data() {
 	elif [ -n "$ROCM_PATH" ]; then
 		lib_dirs=("$ROCM_PATH/lib" "$ROCM_PATH/lib64")
 	else
+		# Search both SDK-style and system-style defaults. A partial /opt/rocm
+		# installation must not hide distro packages in /usr/lib64 or /usr/lib.
 		lib_dirs=(/opt/rocm/lib /opt/rocm/lib64 /usr/lib64 /usr/lib)
+	fi
+	# Use only the native multiarch directory, never a glob that can select
+	# libraries installed for a foreign CPU architecture.
+	if [ -z "$ROCM_LIB_PATH" ] && { [ -z "$ROCM_PATH" ] || [[ "$ROCM_PATH" = /usr || "$ROCM_PATH" = /usr/ ]]; }; then
+		multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || ${CXX:-c++} -print-multiarch 2>/dev/null)
+		if [ -n "$multiarch" ]; then
+			lib_dirs+=("/usr/lib/$multiarch")
+		fi
 	fi
 	KCPP_ROCBLAS_DATA=""
 	KCPP_AMD_COMGR=""
@@ -37,7 +48,7 @@ kcpp_find_rocm_data() {
 	done
 	if [ -z "$KCPP_ROCBLAS_DATA" ] || [ -z "$KCPP_AMD_COMGR" ]; then
 		printf 'Error: ROCm packaging requires rocblas/ and libamd_comgr.so. Searched: %s\n' "${lib_dirs[*]}" >&2
-		echo "Set ROCM_LIB_PATH to the library directory (for example /usr/lib64), independently of ROCM_PATH." >&2
+		echo "Set ROCM_LIB_PATH to the library directory (for example /usr/lib64 or /usr/lib/x86_64-linux-gnu), independently of ROCM_PATH." >&2
 		return 1
 	fi
 }
