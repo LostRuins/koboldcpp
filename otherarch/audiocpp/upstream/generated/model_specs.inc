@@ -1556,7 +1556,7 @@
         "lm_config": "model:lm/config.json",
         "tokenizer_config": "model:lm/tokenizer_config.json",
         "tokenizer_json": "model:lm/tokenizer.json",
-        "default_voices": "model:cpp/default/voices.json"
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(        "default_voices": "model:cpp/default/voices.json"
       },
       "tensors": {
         "language_model": "model:lm/model.safetensors",
@@ -1801,6 +1801,532 @@
       "tensors": {
         "model_weights": "weights:",
         "codec_weights": "weights:"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"pocket_tts", R"AUDIOCPP_SPEC({
+  "family": "pocket_tts",
+  "display_name": "PocketTTS",
+  "description": "Kyutai 100M-parameter CPU-friendly TTS package set for real-time local synthesis and small-footprint voice cloning in English, French, German, Italian, Portuguese, and Spanish.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "en",
+    "fr",
+    "de",
+    "it",
+    "pt",
+    "es"
+  ],
+  "options": {
+    "request": [
+      {
+        "name": "frames_after_eos",
+        "type": "int",
+        "description": "Extra frames after EOS; -1 uses the model-derived value.",
+        "required": false,
+        "min": -1,
+        "default": -1
+      },
+      {
+        "name": "max_frames",
+        "type": "int",
+        "description": "Maximum generated audio frames; zero estimates the cap from text length. Captured during session preparation.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "text_chunk_tokens",
+        "type": "int",
+        "description": "Tokenizer tokens per text chunk; must be positive, default 50. Set during preparation and overridable per request.",
+        "required": false,
+        "min": 1,
+        "default": 50
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Positive flow noise temperature; defaults to the model configuration. Captured during session preparation.",
+        "required": false
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Noise seed; omitted chooses a random seed. Captured during session preparation.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295
+      },
+      {
+        "name": "noise_clamp",
+        "type": "float",
+        "description": "Noise clamp; a negative value disables clamping. Captured during session preparation.",
+        "required": false,
+        "default": -1
+      },
+      {
+        "name": "eos_threshold",
+        "type": "float",
+        "description": "EOS detection threshold. Captured during session preparation.",
+        "required": false,
+        "default": -4
+      },
+      {
+        "name": "noise_file",
+        "type": "path",
+        "description": "Precomputed noise schedule file. Captured during session preparation.",
+        "required": false
+      },
+      {
+        "name": "voice_embedding_file",
+        "type": "path",
+        "description": "Precomputed voice-state embedding path. Captured during session preparation.",
+        "required": false
+      },
+      {
+        "name": "truncate_clone_audio",
+        "type": "bool",
+        "description": "Truncate voice clone audio. Captured during session preparation.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Optional per-request character chunk size; otherwise use sentence/token budgeting.",
+        "required": false
+      },
+      {
+        "name": "export_voice_state_file",
+        "type": "path",
+        "description": "Export the prepared voice state during session preparation.",
+        "required": false
+      }
+    ],
+    "session": [
+      {
+        "name": "voice_state_cache_slots",
+        "type": "int",
+        "description": "Cached prepared voice states; zero disables reuse.",
+        "required": false,
+        "min": 0,
+        "default": 4
+      },
+      {
+        "name": "offline_graph_capacity_mode",
+        "type": "enum",
+        "description": "Offline graph capacity policy; CPU/Metal default tiered, other backends double.",
+        "required": false,
+        "values": [
+          "fixed",
+          "double",
+          "tiered",
+          "grow"
+        ]
+      },
+      {
+        "name": "prompt_graph_capacity",
+        "type": "int",
+        "description": "Optional reserved prompt capacity.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "generation_graph_capacity",
+        "type": "int",
+        "description": "Optional reserved generation capacity.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared matmul weight storage; component matmul settings inherit it. Convolution storage remains independently native unless overridden.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "matmul_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "conv_weight_type",
+        "type": "enum",
+        "description": "Convolution weight storage.",
+        "required": false,
+        "preset": "weight_type_conv",
+        "default": "native"
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Context or graph arena size in MiB.",
+        "required": false,
+        "min": 1,
+        "default": 64
+      },
+      {
+        "name": "flow_weight_context_mb",
+        "type": "int",
+        "description": "Flow weight context in MiB; inherits pocket_tts.weight_context_mb when omitted.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "mimi_encoder_weight_context_mb",
+        "type": "int",
+        "description": "Mimi encoder weight context in MiB; inherits pocket_tts.weight_context_mb when omitted.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "mimi_decoder_weight_context_mb",
+        "type": "int",
+        "description": "Mimi decoder weight context in MiB; inherits pocket_tts.weight_context_mb when omitted.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "flow_weights_view_context_mb",
+        "type": "int",
+        "description": "Context or graph arena size in MiB.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "flow_step_graph_arena_mb",
+        "type": "int",
+        "description": "Flow-step host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "mimi_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Mimi encoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 512
+      },
+      {
+        "name": "mimi_conv_graph_arena_mb",
+        "type": "int",
+        "description": "Mimi convolution host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 32
+      },
+      {
+        "name": "mimi_transformer_graph_arena_mb",
+        "type": "int",
+        "description": "Mimi transformer host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 96
+      },
+      {
+        "name": "mimi_tail_graph_arena_mb",
+        "type": "int",
+        "description": "Mimi tail host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 512
+      },
+      {
+        "name": "mimi_full_chunk_frames",
+        "type": "int",
+        "description": "Full-sequence decoder chunk frames.",
+        "required": false,
+        "min": 1,
+        "default": 90
+      },
+      {
+        "name": "mimi_stage2_chunk_frames",
+        "type": "int",
+        "description": "Second-stage decoder chunk frames.",
+        "required": false,
+        "min": 1,
+        "default": 900
+      },
+      {
+        "name": "use_full_mimi",
+        "type": "bool",
+        "description": "Use full-sequence Mimi decoding.",
+        "required": false,
+        "default": true
+      }
+    ],
+    "load": [
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Model language selection.",
+        "required": false,
+        "default": "english"
+      }
+    ]
+  },
+  "capabilities": {
+    "clone": [
+      "speaker_reference"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "pocket_tts_english_q8_0",
+    "default_voice": "alba",
+    "builtin_voices": [
+      "alba"
+    ],
+    "tags": [
+      "TTS",
+      "Clone",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "pocket_tts_english_q8_0",
+      "display_name": "PocketTTS English Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "PocketTTS-GGUF/english",
+      "files": [
+        "PocketTTS-GGUF/english/pocket-tts-english-q8_0.gguf",
+        "PocketTTS-GGUF/english/embeddings/alba.safetensors"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/english"
+    },
+    {
+      "id": "pocket_tts_english_bf16",
+      "display_name": "PocketTTS English BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "PocketTTS-GGUF/english",
+      "files": [
+        "PocketTTS-GGUF/english/pocket-tts-english-bf16.gguf",
+        "PocketTTS-GGUF/english/embeddings/alba.safetensors"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/english"
+    },
+    {
+      "id": "pocket_tts_french_q8_0",
+      "display_name": "PocketTTS French Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "PocketTTS-GGUF/french",
+      "files": [
+        "PocketTTS-GGUF/french/pocket-tts-french-q8_0.gguf",
+        "PocketTTS-GGUF/french/embeddings/cosette.safetensors"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/french"
+    },
+    {
+      "id": "pocket_tts_french_bf16",
+      "display_name": "PocketTTS French BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "PocketTTS-GGUF/french",
+      "files": [
+        "PocketTTS-GGUF/french/pocket-tts-french-bf16.gguf",
+        "PocketTTS-GGUF/french/embeddings/cosette.safetensors"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/french"
+    },
+    {
+      "id": "pocket_tts_german_q8_0",
+      "display_name": "PocketTTS German Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "PocketTTS-GGUF/german",
+      "files": [
+        "PocketTTS-GGUF/german/pocket-tts-german-q8_0.gguf"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/german"
+    },
+    {
+      "id": "pocket_tts_german_bf16",
+      "display_name": "PocketTTS German BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "PocketTTS-GGUF/german",
+      "files": [
+        "PocketTTS-GGUF/german/pocket-tts-german-bf16.gguf"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/german"
+    },
+    {
+      "id": "pocket_tts_italian_q8_0",
+      "display_name": "PocketTTS Italian Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "PocketTTS-GGUF/italian",
+      "files": [
+        "PocketTTS-GGUF/italian/pocket-tts-italian-q8_0.gguf"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/italian"
+    },
+    {
+      "id": "pocket_tts_italian_bf16",
+      "display_name": "PocketTTS Italian BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "PocketTTS-GGUF/italian",
+      "files": [
+        "PocketTTS-GGUF/italian/pocket-tts-italian-bf16.gguf"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/italian"
+    },
+    {
+      "id": "pocket_tts_portuguese_q8_0",
+      "display_name": "PocketTTS Portuguese Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "PocketTTS-GGUF/portuguese",
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(      "files": [
+        "PocketTTS-GGUF/portuguese/pocket-tts-portuguese-q8_0.gguf"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/portuguese"
+    },
+    {
+      "id": "pocket_tts_portuguese_bf16",
+      "display_name": "PocketTTS Portuguese BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "PocketTTS-GGUF/portuguese",
+      "files": [
+        "PocketTTS-GGUF/portuguese/pocket-tts-portuguese-bf16.gguf"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/portuguese"
+    },
+    {
+      "id": "pocket_tts_spanish_q8_0",
+      "display_name": "PocketTTS Spanish Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "PocketTTS-GGUF/spanish",
+      "files": [
+        "PocketTTS-GGUF/spanish/pocket-tts-spanish-q8_0.gguf"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/spanish"
+    },
+    {
+      "id": "pocket_tts_spanish_bf16",
+      "display_name": "PocketTTS Spanish BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "PocketTTS-GGUF/spanish",
+      "files": [
+        "PocketTTS-GGUF/spanish/pocket-tts-spanish-bf16.gguf"
+      ],
+      "strip_prefix": "PocketTTS-GGUF/spanish"
+    },
+    {
+      "id": "pocket_tts_english_safetensors",
+      "display_name": "PocketTTS English Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "pocket-tts",
+      "files": [
+        "languages/english/embeddings/alba.safetensors",
+        "languages/english/embeddings/anna.safetensors",
+        "languages/english/embeddings/azelma.safetensors",
+        "languages/english/embeddings/bill_boerst.safetensors",
+        "languages/english/embeddings/caro_davy.safetensors",
+        "languages/english/embeddings/charles.safetensors",
+        "languages/english/embeddings/cosette.safetensors",
+        "languages/english/embeddings/eponine.safetensors",
+        "languages/english/embeddings/estelle.safetensors",
+        "languages/english/embeddings/eve.safetensors",
+        "languages/english/embeddings/fantine.safetensors",
+        "languages/english/embeddings/george.safetensors",
+        "languages/english/embeddings/giovanni.safetensors",
+        "languages/english/embeddings/jane.safetensors",
+        "languages/english/embeddings/javert.safetensors",
+        "languages/english/embeddings/jean.safetensors",
+        "languages/english/embeddings/juergen.safetensors",
+        "languages/english/embeddings/lola.safetensors",
+        "languages/english/embeddings/marius.safetensors",
+        "languages/english/embeddings/mary.safetensors",
+        "languages/english/embeddings/michael.safetensors",
+        "languages/english/embeddings/paul.safetensors",
+        "languages/english/embeddings/peter_yearsley.safetensors",
+        "languages/english/embeddings/rafael.safetensors",
+        "languages/english/embeddings/stuart_bell.safetensors",
+        "languages/english/embeddings/vera.safetensors",
+        "languages/english/model.safetensors",
+        "languages/english/tokenizer.model"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "kyutai/pocket-tts",
+        "gated": true
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "tokenizer": "model:tokenizer.model"
+      },
+      "optional_files": {
+        "config": "model:config.yaml"
+      },
+      "tensors": {
+        "weights": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "language": "languages/english"
+      },
+      "files": {
+        "tokenizer": "language:tokenizer.model"
+      },
+      "optional_files": {
+        "config": "language:config.yaml"
+      },
+      "tensors": {
+        "weights": "language:model.safetensors"
       }
     }
   ]
@@ -2269,6 +2795,286 @@
   ]
 }
 )AUDIOCPP_SPEC"},
+    {"vibevoice", R"AUDIOCPP_SPEC({
+  "family": "vibevoice",
+  "display_name": "VibeVoice",
+  "description": "Microsoft long-form multi-speaker TTS model for expressive conversational audio such as podcasts, supporting up to 90 minutes of speech with as many as four speakers.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "en",
+    "zh"
+  ],
+  "options": {
+    "request": [
+      {
+        "name": "voice_samples",
+        "type": "string",
+        "description": "Comma-separated reference WAV paths ordered by speaker ID; cannot be combined with voice_ref.",
+        "required": false
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "Diffusion steps; defaults to the checkpoint configuration.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "Classifier-free guidance scale.",
+        "required": false,
+        "min": 0,
+        "default": 1.3
+      },
+      {
+        "name": "max_length_times",
+        "type": "float",
+        "description": "Positive generation length multiplier.",
+        "required": false,
+        "default": 2
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated tokens; zero uses the model-derived limit.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "do_sample",
+        "type": "bool",
+        "description": "Enable sampling.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Positive sampling temperature.",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "Top-k sampling limit; zero disables filtering.",
+        "required": false,
+        "min": 0,
+        "default": 50
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Nucleus probability in (0, 1].",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Sampling seed.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295,
+        "default": 1234
+      },
+      {
+        "name": "prompt_noise_file",
+        "type": "path",
+        "description": "F32 prompt acoustic noise file.",
+        "required": false
+      },
+      {
+        "name": "diffusion_noise_file",
+        "type": "path",
+        "description": "F32 initial diffusion noise file.",
+        "required": false
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "tokenizer_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "connector_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "decoder_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "diffusion_head_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "Decoder adapter file or PEFT directory applied when creating the session; do not also supply the load option.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "Session adapter scale override; omitted uses lora_alpha / r. Must be strictly positive when an adapter is supplied.",
+        "required": false
+      }
+    ],
+    "load": [
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "Decoder adapter file or PEFT directory, merged at load time.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "LoRA scale override; omitted uses lora_alpha / r. Must be strictly positive when an adapter is supplied.",
+        "required": false
+      }
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "multi_speaker",
+      "long_form"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "vibevoice_1_5b_q8_0",
+    "tags": [
+      "TTS",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "vibevoice_1_5b_q8_0",
+      "display_name": "VibeVoice 1.5B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "VibeVoice-1.5B-GGUF",
+      "files": [
+        "VibeVoice-1.5B-GGUF/vibevoice-1.5b-q8_0.gguf"
+      ],
+      "strip_prefix": "VibeVoice-1.5B-GGUF"
+    },
+    {
+      "id": "vibevoice_1_5b_bf16",
+      "display_name": "VibeVoice 1.5B BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "VibeVoice-1.5B-GGUF",
+      "files": [
+        "VibeVoice-1.5B-GGUF/vibevoice-1.5b-bf16.gguf"
+      ],
+      "strip_prefix": "VibeVoice-1.5B-GGUF"
+    },
+    {
+      "id": "vibevoice_7b_q8_0",
+      "display_name": "VibeVoice 7B Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "VibeVoice-7B-GGUF",
+      "files": [
+        "vibevoice-7b-q8_0.gguf"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/VibeVoice-7B-GGUF",
+        "revision": "main",
+        "gated": false
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "preprocessor_config": "model:preprocessor_config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_vocab": "model:vocab.json",
+        "tokenizer_merges": "model:merges.txt"
+      },
+      "tensors": {
+        "model_weights": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "preprocessor_config": "model:preprocessor_config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_vocab": "model:vocab.json",
+        "tokenizer_merges": "model:merges.txt"
+      },
+      "tensors": {
+        "model_weights": "model:model.safetensors.index.json"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
     {"yue2", R"AUDIOCPP_SPEC({
   "schema_version": 1,
   "family": "yue2",
@@ -2686,7 +3492,7 @@
         "sidecars/yue2-qwen.tiktoken",
         "sidecars/yue2-vae-config.json",
         "yue2-3b-q8_0.gguf"
-      ]
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(      ]
     },
     {
       "id": "yue2_main_bf16",

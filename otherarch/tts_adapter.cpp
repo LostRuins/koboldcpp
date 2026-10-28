@@ -656,11 +656,53 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
             engine::runtime::ModelLoadRequest request;
             request.model_path = modelfile_ttc;
             request.family_hint = audiocpp_tts_family;
+            if (audiocpp_tts_family == "pocket_tts") {
+                // Audio.cpp's PocketTTS checkpoints are language-specific, but
+                // KoboldCpp's load ABI has no separate model-language field.
+                // Official packages carry the language in the GGUF/path name.
+                std::string normalized_path = modelfile_ttc;
+                std::transform(normalized_path.begin(), normalized_path.end(), normalized_path.begin(),
+                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                static const std::vector<std::string> pocket_languages = {
+                    "english", "french", "german", "italian", "portuguese", "spanish"};
+                const auto language = std::find_if(
+                    pocket_languages.begin(), pocket_languages.end(), [&](const std::string & candidate) {
+                        return normalized_path.find(candidate) != std::string::npos;
+                    });
+                request.options["pocket_tts.language"] = language != pocket_languages.end()
+                    ? *language : "english";
+            }
             audiocpp_tts_model = audiocpp_tts_loader->load(request);
             engine::runtime::SessionOptions options;
             options.backend.type = inputs.gpulayers > 0
                 ? engine::core::BackendType::BestAvailable
                 : engine::core::BackendType::Cpu;
+            if (audiocpp_tts_family == "vibevoice" &&
+                options.backend.type == engine::core::BackendType::BestAvailable) {
+                // VibeVoice validates the requested backend before Audio.cpp's
+                // BestAvailable path gets a chance to resolve it. Convert the
+                // loaded ggml registry name to the concrete backend it expects.
+                options.backend.type = engine::core::BackendType::Cpu;
+                const auto devices = engine::core::list_backend_devices();
+                for (const auto & device : devices) {
+                    if (device.backend == "CUDA") {
+                        options.backend.type = engine::core::BackendType::Cuda;
+                        break;
+                    }
+                    if (device.backend == "ROCm") {
+                        options.backend.type = engine::core::BackendType::Hip;
+                        break;
+                    }
+                    if (device.backend == "Vulkan") {
+                        options.backend.type = engine::core::BackendType::Vulkan;
+                        break;
+                    }
+                    if (device.backend == "MTL") {
+                        options.backend.type = engine::core::BackendType::Metal;
+                        break;
+                    }
+                }
+            }
             if (audiocpp_tts_family == "kitten_tts2" && inputs.gpulayers > 0) {
                 const auto devices = engine::core::list_backend_devices();
                 const bool has_vulkan = std::any_of(devices.begin(), devices.end(), [](const auto & device) {
@@ -854,6 +896,7 @@ static tts_generation_outputs ttstype_generate_ttscpp(const tts_generation_input
         std::vector<float> wavdat = std::vector(response_data.data, response_data.data + response_data.n_outputs);
         //audio_post_clean(wavdat);
         last_generated_audio = save_tts_audio_base64(wavdat, ttscpp_runner->sampling_rate, inputs.use_mp3);
+        printf("TTS Request complete.\n");
         output.data = last_generated_audio.c_str();
         output.status = 1;
         last_generation_settings_audio_seed = 0;
@@ -1266,10 +1309,10 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             return output;
         }
 
-        last_generated_audio = save_tts_audio_base64(audio, t_sr, inputs.use_mp3);
         ttstime = timer_check();
-
         printf("\nTTS Generated %d audio tokens in %.2fs.\n",(int) codes.size(),ttstime);
+        last_generated_audio = save_tts_audio_base64(audio, t_sr, inputs.use_mp3);
+        printf("TTS Request complete.\n");
 
         output.data = last_generated_audio.c_str();
         output.status = 1;
@@ -1378,6 +1421,7 @@ static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inp
         ttstime = timer_check();
         printf("\nTTS Generated audio in %.2fs.\n",ttstime);
         last_generated_audio = save_tts_audio_base64(result.audio, result.sample_rate, inputs.use_mp3);
+        printf("TTS Request complete.\n");
         output.data = last_generated_audio.c_str();
         output.status = 1;
         last_generation_settings_audio_seed = inputs.audio_seed;
@@ -1413,6 +1457,16 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
         transcript.text = std::move(prompt);
         transcript.language = inputs.language != nullptr ? inputs.language : "";
         request.text_input = std::move(transcript);
+
+        if (audiocpp_tts_family == "vibevoice") {
+            // VibeVoice requires speaker-labelled lines even for one speaker.
+            // Preserve explicitly labelled podcast/dialogue prompts verbatim.
+            static const std::regex speaker_line(
+                R"((^|[\r\n])Speaker\s+[0-9]+\s*:)", std::regex::icase);
+            if (!std::regex_search(request.text_input->text, speaker_line)) {
+                request.text_input->text.insert(0, "Speaker 1: ");
+            }
+        }
 
         std::string audiocpp_requested_voice;
         bool audiocpp_named_voice_alias = false;
@@ -1549,7 +1603,8 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
 
         const bool accepts_reference_audio = audiocpp_tts_family == "fish_audio" ||
             audiocpp_tts_family == "chatterbox" || audiocpp_tts_family == "kitten_tts2" ||
-            audiocpp_tts_family == "cosyvoice3";
+            audiocpp_tts_family == "cosyvoice3" || audiocpp_tts_family == "pocket_tts" ||
+            audiocpp_tts_family == "vibevoice";
         if (accepts_reference_audio) {
             std::string encoded_audio = inputs.reference_audio != nullptr
                 ? inputs.reference_audio : "";
@@ -1599,7 +1654,8 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                 engine::runtime::VoiceCondition condition;
                 condition.speaker = std::move(reference);
                 request.voice = std::move(condition);
-                if (!reference_text.empty()) {
+                if (!reference_text.empty() && audiocpp_tts_family != "pocket_tts" &&
+                    audiocpp_tts_family != "vibevoice") {
                     request.options["reference_text"] = std::move(reference_text);
                 }
             }
@@ -1623,12 +1679,13 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             throw std::runtime_error(audiocpp_tts_family + " returned non-mono audio");
         }
 
+        const double elapsed = timer_check();
+        printf("\nTTS Generated audio in %.2fs.\n", elapsed);
         last_generated_audio = save_tts_audio_base64(
             result.audio_output->samples,
             result.audio_output->sample_rate,
             inputs.use_mp3);
-        const double elapsed = timer_check();
-        printf("\nTTS Generated audio in %.2fs.\n", elapsed);
+        printf("TTS Request complete.\n");
         output.data = last_generated_audio.c_str();
         output.status = 1;
         last_generation_settings_audio_seed = audio_seed;

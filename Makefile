@@ -74,8 +74,8 @@ ifdef KCPP_SANITIZE
 CFLAGS += -fsanitize=undefined -fsanitize-undefined-trap-on-error
 CXXFLAGS += -fsanitize=undefined -fsanitize-undefined-trap-on-error
 endif
-CFLAGS   += -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./tools/mtmd -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_USE_RPC
-CXXFLAGS += -I. -I./kcpp_src -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./tools/mtmd -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/audiocpp/upstream/include -I./otherarch/audiocpp/upstream/generated -I./otherarch/audiocpp/upstream/external/cJSON -I./otherarch/audiocpp/upstream/external/llama_tokenizer -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_USE_RPC
+CFLAGS   += -I. -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./tools/mtmd -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/audiocpp/upstream/external/libyaml/include -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c11 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_USE_RPC
+CXXFLAGS += -I. -I./kcpp_src -Iggml/include -Iggml/src -Iggml/src/ggml-cpu -Iinclude -Isrc -I./common -I./vendor -I./vendor/stb -I./include -I./otherarch -I./otherarch/tools -I./tools/mtmd -I./otherarch/sdcpp -I./otherarch/ttscpp/include -I./otherarch/ttscpp/src -I./otherarch/qwen3tts -I./otherarch/audiocpp/upstream/include -I./otherarch/audiocpp/upstream/generated -I./otherarch/audiocpp/upstream/external/cJSON -I./otherarch/audiocpp/upstream/external/llama_tokenizer -I./otherarch/audiocpp/upstream/external/libyaml/include -I./otherarch/audiocpp/upstream/external/sentencepiece -I./otherarch/audiocpp/upstream/external/sentencepiece/src -I./otherarch/audiocpp/upstream/external/sentencepiece/src/builtin_pb -I./otherarch/audiocpp/upstream/external/sentencepiece/third_party -I./otherarch/audiocpp/upstream/external/sentencepiece/third_party/protobuf-lite -I./otherarch/sdcpp/thirdparty -I./include/vulkan -O3 -fno-finite-math-only -std=c++17 -fPIC -DLOG_DISABLE_LOGS -D_GNU_SOURCE -DGGML_USE_CPU -DGGML_USE_CPU_REPACK -DGGML_USE_RPC
 
 ifndef KCPP_DEBUG
 CFLAGS += -DNDEBUG -s
@@ -823,13 +823,15 @@ whispercpp_default.o: otherarch/whispercpp/whisper_adapter.cpp otherarch/whisper
 
 # Audio.cpp sources as one integration unit.
 AUDIOCPP_COMMON_BASENAMES := $(sort $(shell cd otherarch/audiocpp/upstream && find src external -type f -name '*.cpp') \
+	$(shell cd otherarch/audiocpp/upstream && find src external -type f -name '*.cc') \
 	$(shell cd otherarch/audiocpp/upstream && find src external -type f -name '*.c'))
 AUDIOCPP_HEADER_BASENAMES := $(sort $(shell cd otherarch/audiocpp/upstream && find include src external -type f -name '*.h') \
-	$(shell cd otherarch/audiocpp/upstream && find include src external -type f -name '*.hpp'))
+	$(shell cd otherarch/audiocpp/upstream && find include src external -type f -name '*.hpp') \
+	$(shell cd otherarch/audiocpp/upstream && find include src external -type f -name '*.inc'))
 
 SOURCES_AUDIOCPP := $(foreach f,$(AUDIOCPP_COMMON_BASENAMES),otherarch/audiocpp/upstream/$(f))
 HEADERS_AUDIOCPP := $(foreach f,$(AUDIOCPP_HEADER_BASENAMES),otherarch/audiocpp/upstream/$(f))
-OBJS_AUDIOCPP := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_AUDIOCPP))) $(patsubst %.c,%.o,$(filter %.c,$(SOURCES_AUDIOCPP)))
+OBJS_AUDIOCPP := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_AUDIOCPP))) $(patsubst %.cc,%.o,$(filter %.cc,$(SOURCES_AUDIOCPP))) $(patsubst %.c,%.o,$(filter %.c,$(SOURCES_AUDIOCPP)))
 
 $(OBJS_AUDIOCPP): $(HEADERS_AUDIOCPP)
 
@@ -837,9 +839,11 @@ $(OBJS_AUDIOCPP): $(HEADERS_AUDIOCPP)
 otherarch/audiocpp/upstream/external/cJSON/cJSON.o otherarch/audiocpp/upstream/src/framework/io/json.o: Makefile
 otherarch/audiocpp/upstream/src/framework/model_spec/package.o: otherarch/audiocpp/upstream/generated/model_specs.inc
 otherarch/audiocpp/upstream/%.o: otherarch/audiocpp/upstream/%.cpp
-	$(CXX) -DCJSON_HIDE_SYMBOLS $(CXXFLAGS) -c $< -o $@
+	$(CXX) -DCJSON_HIDE_SYMBOLS -D_USE_INTERNAL_STRING_VIEW -DHAVE_PTHREAD=1 -D_POSIX_C_SOURCE=200809L -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CXXFLAGS) -c $< -o $@
+otherarch/audiocpp/upstream/%.o: otherarch/audiocpp/upstream/%.cc
+	$(CXX) -DCJSON_HIDE_SYMBOLS -D_USE_INTERNAL_STRING_VIEW -DHAVE_PTHREAD=1 -D_POSIX_C_SOURCE=200809L -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CXXFLAGS) -c $< -o $@
 otherarch/audiocpp/upstream/%.o: otherarch/audiocpp/upstream/%.c
-	$(CC) -DCJSON_HIDE_SYMBOLS $(CFLAGS) -c $< -o $@
+	$(CC) -DCJSON_HIDE_SYMBOLS -D_POSIX_C_SOURCE=200809L -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CFLAGS) -c $< -o $@
 
 tts_default.o: otherarch/tts_adapter.cpp otherarch/audiocpp/upstream/generated/kcpp_tts_registry_headers.inc otherarch/audiocpp/upstream/generated/kcpp_tts_registry_loaders.inc otherarch/ttscpp/src/ttscpp.cpp otherarch/ttscpp/src/ttstokenizer.cpp otherarch/ttscpp/src/ttssampler.cpp otherarch/ttscpp/src/parler_model.cpp otherarch/ttscpp/src/dac_model.cpp otherarch/ttscpp/src/ttsutil.cpp otherarch/ttscpp/src/ttsargs.cpp otherarch/ttscpp/src/ttst5_encoder_model.cpp otherarch/ttscpp/src/phonemizer.cpp otherarch/ttscpp/src/tts_model.cpp otherarch/ttscpp/src/kokoro_model.cpp otherarch/ttscpp/src/dia_model.cpp otherarch/ttscpp/src/orpheus_model.cpp otherarch/ttscpp/src/snac_model.cpp otherarch/ttscpp/src/general_neural_audio_codec.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@

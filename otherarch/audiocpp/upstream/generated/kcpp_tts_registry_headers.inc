@@ -4,5 +4,7 @@
 #include "engine/models/fish_audio/loader.h"
 #include "engine/community_models/kitten_tts2/session.h"
 #include "engine/models/maya1/session.h"
+#include "engine/models/pocket_tts/loader.h"
 #include "engine/community_models/soprano_tts/session.h"
 #include "engine/models/supertonic/loader.h"
+#include "engine/models/vibevoice/loader.h"

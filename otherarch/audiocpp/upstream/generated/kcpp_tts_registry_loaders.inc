@@ -4,5 +4,7 @@
     {"fish_audio", engine::models::fish_audio::make_fish_audio_loader()},
     {"kitten_tts2", engine::community_models::kitten_tts2::make_kitten_tts2_loader()},
     {"maya1", engine::models::maya1::make_maya1_loader()},
+    {"pocket_tts", engine::models::pocket_tts::make_pocket_tts_loader()},
     {"soprano_tts", engine::community_models::soprano_tts::make_soprano_tts_loader()},
     {"supertonic", engine::models::supertonic::make_supertonic_loader()},
+    {"vibevoice", engine::models::vibevoice::make_vibevoice_loader()},
