@@ -19,6 +19,8 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component kitten_tts2
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component soprano_tts
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component cosyvoice3
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm2
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm1
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2 -ModelSourcesOnly
 ```
 
@@ -69,6 +71,13 @@ exact upstream commit cannot be recorded until a real checkout is supplied.
 - `cosyvoice3`: multilingual zero-shot, cross-lingual, and
   instruction-conditioned TTS. Every request uses a reference recording;
   zero-shot mode additionally uses its transcript.
+- `voxcpm2`: multilingual offline TTS, short-reference voice cloning, and
+  voice design. KoboldCpp maps its instruction field to VoxCPM2's native
+  parenthesized text prefix and supports reference transcripts for ultimate
+  cloning.
+- `voxcpm1`: the legacy 0.5B multilingual VoxCPM runtime, with offline TTS
+  and short-reference cloning. It remains a separate community family because
+  its GGUF tensor layout and 16 kHz output differ from VoxCPM2.
 - Later candidates should be added only when their framework closure is small
   and measurable. Existing KoboldCpp Qwen3-TTS, MiniMax H3, ACE-Step, Kokoro,
   OuteTTS, Parler, Dia, and Orpheus implementations are not imported.
@@ -144,6 +153,18 @@ controls include `top_k`,
 `min_tokens`, `max_tokens`, `num_inference_steps`, and `seed`. Supported target
 languages are Chinese, English, Japanese, Korean, German, Spanish, French,
 Italian, Russian, and Cantonese.
+
+Pass a VoxCPM2 GGUF such as `voxcpm2-q8_0.gguf` as the normal TTS model.
+Plain TTS needs no reference. The existing `instruction` field enables voice
+design and is wrapped in VoxCPM2's native parenthesized prefix. Selecting a
+WAV/MP3 enables voice cloning; supplying its exact `reference_text` enables
+the model's transcript-conditioned ultimate-clone path. Common generation and
+memory controls can be sent through `audiocpp_extra_params_json`.
+
+Pass `voxcpm-0.5b-q8_0-audiovae-f16.gguf` for VoxCPM1. It supports plain
+offline TTS and reference-audio cloning; provide `reference_text` when
+available. VoxCPM1 produces 16 kHz mono output and does not support VoxCPM2
+voice-design instructions.
 
 ## Intentional compatibility changes
 

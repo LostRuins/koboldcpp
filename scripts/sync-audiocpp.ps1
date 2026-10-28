@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "all")]
+    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -343,6 +343,43 @@ $vibeVoiceFiles = @(
     "src/models/vibevoice/tokenizer_text.cpp"
 )
 
+# VoxCPM2 and the legacy VoxCPM1 implementation share the MiniCPM/AudioVAE
+# shape, but remain separate upstream families and model formats.
+$voxCpmSharedFiles = @(
+    "src/framework/audio/conversion.cpp",
+    "src/framework/audio/resampling.cpp",
+    "src/framework/audio/waveform_ops.cpp",
+    "src/framework/modules/optimizations/fast_kv_modules.cpp",
+    "src/framework/runtime/kv_cache.cpp",
+    "src/framework/sampling/torch_random.cpp"
+)
+
+$voxCpm2Files = @(
+    "model_specs/voxcpm2.json",
+    "src/models/voxcpm2/assets.cpp",
+    "src/models/voxcpm2/audiovae.cpp",
+    "src/models/voxcpm2/generator.cpp",
+    "src/models/voxcpm2/loader.cpp",
+    "src/models/voxcpm2/minicpm.cpp",
+    "src/models/voxcpm2/minicpm_blocks.h",
+    "src/models/voxcpm2/session.cpp",
+    "src/models/voxcpm2/tokenizer_text.cpp"
+)
+
+$voxCpm1Files = @(
+    "model_specs/voxcpm1.json",
+    "src/framework/model_spec/metadata.cpp",
+    "src/framework/text/chinese_variant.cpp",
+    "src/framework/text/chinese_variant_data.inc",
+    "src/community_models/voxcpm1/assets.cpp",
+    "src/community_models/voxcpm1/audiovae.cpp",
+    "src/community_models/voxcpm1/generator.cpp",
+    "src/community_models/voxcpm1/minicpm.cpp",
+    "src/community_models/voxcpm1/minicpm_blocks.h",
+    "src/community_models/voxcpm1/session.cpp",
+    "src/community_models/voxcpm1/tokenizer_text.cpp"
+)
+
 # YuE2 is intentionally a separate import tier. Its framework closure is larger
 # than Supertonic's, but it still avoids Audio.cpp's server, CLI, converters,
 # unrelated models, bundled GGML, sentencepiece, and YAML dependencies.
@@ -395,6 +432,8 @@ foreach ($name in $Component) {
         [void] $selected.Add("cosyvoice3")
         [void] $selected.Add("pocket_tts")
         [void] $selected.Add("vibevoice")
+        [void] $selected.Add("voxcpm2")
+        [void] $selected.Add("voxcpm1")
     } else {
         [void] $selected.Add($name)
     }
@@ -438,6 +477,27 @@ if ($selected.Contains("pocket_tts")) {
 if ($selected.Contains("vibevoice")) {
     Copy-AudioCppTree "include/engine/models/vibevoice"
     foreach ($relativePath in $vibeVoiceFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+$hasVoxCpm = $selected.Contains("voxcpm2") -or $selected.Contains("voxcpm1")
+if ($hasVoxCpm) {
+    foreach ($relativePath in $voxCpmSharedFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("voxcpm2")) {
+    Copy-AudioCppTree "include/engine/models/voxcpm2"
+    foreach ($relativePath in $voxCpm2Files) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("voxcpm1")) {
+    Copy-AudioCppTree "include/engine/community_models/voxcpm1"
+    foreach ($relativePath in $voxCpm1Files) {
         Copy-AudioCppFile $relativePath
     }
 }
@@ -642,6 +702,16 @@ $ttsLoaders = @(
         Family = "vibevoice"
         Header = "engine/models/vibevoice/loader.h"
         Factory = "engine::models::vibevoice::make_vibevoice_loader"
+    },
+    @{
+        Family = "voxcpm2"
+        Header = "engine/models/voxcpm2/loader.h"
+        Factory = "engine::models::voxcpm2::make_voxcpm2_loader"
+    },
+    @{
+        Family = "voxcpm1"
+        Header = "engine/community_models/voxcpm1/session.h"
+        Factory = "engine::community_models::voxcpm1::make_voxcpm1_loader"
     }
 )
 $ttsRegistryHeaders = ""

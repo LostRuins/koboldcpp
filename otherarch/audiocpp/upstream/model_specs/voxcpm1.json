@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "family": "voxcpm1",
+  "display_name": "VoxCPM1",
+  "description": "OpenBMB VoxCPM 0.5B tokenizer-free TTS model supporting short-reference voice cloning and streaming output (16kHz).",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "zh",
+    "en",
+    "ja",
+    "ko"
+  ],
+  "capabilities": {
+    "clone": [
+      "speaker_reference"
+    ]
+  },
+  "dependencies": [],
+  "options": {
+    "request": [
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Text chunking mode; default tag_aware.",
+        "preset": "text_chunk_mode_full",
+        "required": false,
+        "default": "tag_aware"
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Random seed for MiniCPM and diffusion sampling.",
+        "required": false
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum MiniCPM output tokens; default 4096. Zero selects model max_length; negative counts are rejected.",
+        "required": false,
+        "default": 4096
+      },
+      {
+        "name": "min_tokens",
+        "type": "int",
+        "description": "Minimum MiniCPM output tokens before an EOS stop is honored; default 2.",
+        "required": false,
+        "default": 2
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "CFM diffusion sampling steps; default 10. Must be positive.",
+        "required": false,
+        "default": 10
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "CFM classifier-free guidance rate. Must be nonnegative.",
+        "required": false,
+        "default": 2
+      },
+      {
+        "name": "retry_badcase",
+        "type": "bool",
+        "description": "Retry when generation is detected as a bad case; defaults to true offline and false in streaming. Streaming ignores an explicit true value with a warning.",
+        "required": false
+      },
+      {
+        "name": "retry_badcase_max_times",
+        "type": "int",
+        "description": "Maximum total generation attempts when retrying bad cases, including the initial attempt; default 3. Must be positive.",
+        "required": false,
+        "default": 3
+      },
+      {
+        "name": "retry_badcase_ratio_threshold",
+        "type": "float",
+        "description": "Bad-case ratio threshold for retry decisions. Must be positive.",
+        "required": false
+      },
+      {
+        "name": "prompt_text",
+        "type": "string",
+        "description": "Text prompt for prompt-continuation voice cloning.",
+        "required": false
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "description": "Alias for prompt_text; text prompt for prompt-continuation voice cloning.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum characters per offline text chunk; must be positive. Does not control streaming chunk cadence.",
+        "required": false,
+        "min": 1,
+        "default": 2048
+      },
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Language hint for Chinese-script normalization; Cantonese/yue preserves Traditional characters. Inherits structured transcript or voice language when provided.",
+        "required": false
+      }
+    ],
+    "session": [
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "Native LoRA directory or checkpoint file with adjacent lora_config.json; merged into generator weights at session creation.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "Multiplier for the adapter's configured alpha/r scaling; default 1.",
+        "required": false,
+        "default": 1.0
+      },
+      {
+        "name": "mem_saver",
+        "type": "bool",
+        "description": "Use tighter graph workspaces and release request runtime graphs; default false.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "prompt_cache_slots",
+        "type": "int",
+        "description": "Prompt and prompt-audio embedding cache slots; default 1.",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Model weight storage type.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "audiovae_weight_type",
+        "type": "enum",
+        "description": "AudioVAE weight storage type.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Model weight graph context size in MB.",
+        "required": false
+      },
+      {
+        "name": "text_embedding_graph_arena_mb",
+        "type": "int",
+        "description": "Text embedding host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "lm_step_graph_arena_mb",
+        "type": "int",
+        "description": "LM step host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "projection_graph_arena_mb",
+        "type": "int",
+        "description": "Projection host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "local_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Local encoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "dit_graph_arena_mb",
+        "type": "int",
+        "description": "DiT estimator host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "audiovae_weight_context_mb",
+        "type": "int",
+        "description": "AudioVAE weight graph context size in MB.",
+        "required": false
+      },
+      {
+        "name": "audiovae_graph_arena_mb",
+        "type": "int",
+        "description": "AudioVAE decoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "audiovae_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "AudioVAE encoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "audiovae_latent_capacity",
+        "type": "int",
+        "description": "AudioVAE decoder latent frame capacity.",
+        "required": false
+      },
+      {
+        "name": "audiovae_encoder_sample_capacity",
+        "type": "int",
+        "description": "AudioVAE encoder sample capacity.",
+        "required": false
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "ui": {
+    "recommended_package": "voxcpm1_0_5b_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/models/voxcpm1.md",
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "voxcpm1_0_5b_q8_0",
+      "display_name": "VoxCPM 0.5B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "VoxCPM1-GGUF",
+      "files": [
+        "VoxCPM1-GGUF/voxcpm-0.5b-q8_0-audiovae-f16.gguf"
+      ],
+      "strip_prefix": "VoxCPM1-GGUF"
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "optional_files": {
+        "special_tokens_map": "model:special_tokens_map.json"
+      },
+      "tensors": {
+        "weights": {
+          "source": "weights:"
+        },
+        "audiovae_weights": {
+          "source": "weights:"
+        }
+      }
+    }
+  ]
+}
+

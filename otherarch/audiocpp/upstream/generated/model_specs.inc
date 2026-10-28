@@ -345,6 +345,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"chatterbox_turbo", R"AUDIOCPP_SPEC({
   "family": "chatterbox_turbo",
@@ -501,6 +502,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"cosyvoice3", R"AUDIOCPP_SPEC({
   "schema_version": 1,
@@ -795,6 +797,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"fish_audio", R"AUDIOCPP_SPEC({
   "family": "fish_audio",
@@ -1067,6 +1070,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"kitten_tts2", R"AUDIOCPP_SPEC({
   "schema_version": 1,
@@ -1566,6 +1570,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"maya1", R"AUDIOCPP_SPEC({
   "schema_version": 1,
@@ -1805,6 +1810,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"pocket_tts", R"AUDIOCPP_SPEC({
   "family": "pocket_tts",
@@ -2331,6 +2337,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"soprano_tts", R"AUDIOCPP_SPEC({
   "schema_version": 1,
@@ -2514,6 +2521,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"supertonic", R"AUDIOCPP_SPEC({
   "family": "supertonic",
@@ -2794,6 +2802,7 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},
     {"vibevoice", R"AUDIOCPP_SPEC({
   "family": "vibevoice",
@@ -3074,6 +3083,795 @@
     }
   ]
 }
+
+)AUDIOCPP_SPEC"},
+    {"voxcpm1", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "voxcpm1",
+  "display_name": "VoxCPM1",
+  "description": "OpenBMB VoxCPM 0.5B tokenizer-free TTS model supporting short-reference voice cloning and streaming output (16kHz).",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "zh",
+    "en",
+    "ja",
+    "ko"
+  ],
+  "capabilities": {
+    "clone": [
+      "speaker_reference"
+    ]
+  },
+  "dependencies": [],
+  "options": {
+    "request": [
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Text chunking mode; default tag_aware.",
+        "preset": "text_chunk_mode_full",
+        "required": false,
+        "default": "tag_aware"
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Random seed for MiniCPM and diffusion sampling.",
+        "required": false
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum MiniCPM output tokens; default 4096. Zero selects model max_length; negative counts are rejected.",
+        "required": false,
+        "default": 4096
+      },
+      {
+        "name": "min_tokens",
+        "type": "int",
+        "description": "Minimum MiniCPM output tokens before an EOS stop is honored; default 2.",
+        "required": false,
+        "default": 2
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "CFM diffusion sampling steps; default 10. Must be positive.",
+        "required": false,
+        "default": 10
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "CFM classifier-free guidance rate. Must be nonnegative.",
+        "required": false,
+        "default": 2
+      },
+      {
+        "name": "retry_badcase",
+        "type": "bool",
+        "description": "Retry when generation is detected as a bad case; defaults to true offline and false in streaming. Streaming ignores an explicit true value with a warning.",
+        "required": false
+      },
+      {
+        "name": "retry_badcase_max_times",
+        "type": "int",
+        "description": "Maximum total generation attempts when retrying bad cases, including the initial attempt; default 3. Must be positive.",
+        "required": false,
+        "default": 3
+      },
+      {
+        "name": "retry_badcase_ratio_threshold",
+        "type": "float",
+        "description": "Bad-case ratio threshold for retry decisions. Must be positive.",
+        "required": false
+      },
+      {
+        "name": "prompt_text",
+        "type": "string",
+        "description": "Text prompt for prompt-continuation voice cloning.",
+        "required": false
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "description": "Alias for prompt_text; text prompt for prompt-continuation voice cloning.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum characters per offline text chunk; must be positive. Does not control streaming chunk cadence.",
+        "required": false,
+        "min": 1,
+        "default": 2048
+      },
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Language hint for Chinese-script normalization; Cantonese/yue preserves Traditional characters. Inherits structured transcript or voice language when provided.",
+        "required": false
+      }
+    ],
+    "session": [
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "Native LoRA directory or checkpoint file with adjacent lora_config.json; merged into generator weights at session creation.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "Multiplier for the adapter's configured alpha/r scaling; default 1.",
+        "required": false,
+        "default": 1.0
+      },
+      {
+        "name": "mem_saver",
+        "type": "bool",
+        "description": "Use tighter graph workspaces and release request runtime graphs; default false.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "prompt_cache_slots",
+        "type": "int",
+        "description": "Prompt and prompt-audio embedding cache slots; default 1.",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Model weight storage type.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "audiovae_weight_type",
+        "type": "enum",
+        "description": "AudioVAE weight storage type.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Model weight graph context size in MB.",
+        "required": false
+      },
+      {
+        "name": "text_embedding_graph_arena_mb",
+        "type": "int",
+        "description": "Text embedding host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "lm_step_graph_arena_mb",
+        "type": "int",
+        "description": "LM step host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "projection_graph_arena_mb",
+        "type": "int",
+        "description": "Projection host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "local_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Local encoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "dit_graph_arena_mb",
+        "type": "int",
+        "description": "DiT estimator host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "audiovae_weight_context_mb",
+        "type": "int",
+        "description": "AudioVAE weight graph context size in MB.",
+        "required": false
+      },
+      {
+        "name": "audiovae_graph_arena_mb",
+        "type": "int",
+        "description": "AudioVAE decoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "audiovae_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "AudioVAE encoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false
+      },
+      {
+        "name": "audiovae_latent_capacity",
+        "type": "int",
+        "description": "AudioVAE decoder latent frame capacity.",
+        "required": false
+      },
+      {
+        "name": "audiovae_encoder_sample_capacity",
+        "type": "int",
+        "description": "AudioVAE encoder sample capacity.",
+        "required": false
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "ui": {
+    "recommended_package": "voxcpm1_0_5b_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/models/voxcpm1.md",
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "voxcpm1_0_5b_q8_0",
+      "display_name": "VoxCPM 0.5B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "VoxCPM1-GGUF",
+      "files": [
+        "VoxCPM1-GGUF/voxcpm-0.5b-q8_0-audiovae-f16.gguf"
+      ],
+      "strip_prefix": "VoxCPM1-GGUF"
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "optional_files": {
+        "special_tokens_map": "model:special_tokens_map.json"
+      },
+      "tensors": {
+        "weights": {
+          "source": "weights:"
+        },
+        "audiovae_weights": {
+          "source": "weights:"
+        }
+      }
+    }
+  ]
+}
+
+
+)AUDIOCPP_SPEC"},
+    {"voxcpm2", R"AUDIOCPP_SPEC({
+  "family": "voxcpm2",
+  "display_name": "VoxCPM2",
+  "description": "OpenBMB tokenizer-free TTS model supporting 30 languages and 9 Chinese dialects, with 48 kHz output, natural-language voice design, controllable short-reference voice cloning, and expressive style guidance.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone",
+    "design"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "ar",
+    "my",
+    "zh",
+    "zh dialects",
+    "da",
+    "nl",
+    "en",
+    "fi",
+    "fr",
+    "de",
+    "el",
+    "he",
+    "hi",
+    "id",
+    "it",
+    "ja",
+    "km",
+    "ko",
+    "lo",
+    "ms",
+    "no",
+    "pl",
+    "pt",
+    "ru",
+    "es",
+    "sw",
+    "sv",
+    "tl",
+    "th",
+    "tr",
+    "vi"
+  ],
+  "options": {
+    "request": [
+      {
+        "name": "min_tokens",
+        "type": "int",
+        "description": "Minimum generated audio tokens.",
+        "required": false,
+        "min": 0,
+        "default": 2
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated audio tokens. Zero resolves to model max_length; requires min_tokens <= resolved max_tokens <= model limit.",
+        "required": false,
+        "min": 0,
+        "default": 4096
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "Flow sampling steps. Must be positive.",
+        "required": false,
+        "default": 10
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "Classifier-free guidance scale. Must be nonnegative.",
+        "required": false,
+        "default": 2
+      },
+      {
+        "name": "retry_badcase",
+        "type": "bool",
+        "description": "Retry detected bad generations. Offline only; streaming requires false.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "retry_badcase_max_times",
+        "type": "int",
+        "description": "Total attempts including the initial attempt, not extra retries; must be positive.",
+        "required": false,
+        "default": 3
+      },
+      {
+        "name": "retry_badcase_ratio_threshold",
+        "type": "float",
+        "description": "Bad-case audio/text length ratio threshold. Must be positive.",
+        "required": false,
+        "default": 6
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Sampling seed.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295,
+        "default": 1234
+      },
+      {
+        "name": "cfm_noise_file",
+        "type": "path",
+        "description": "Precomputed flow noise file.",
+        "required": false
+      },
+      {
+        "name": "stream_chunk_policy",
+        "type": "enum",
+        "description": "Streaming decoder cadence: grow emits one patch first, then doubles toward stream_frames_per_event; fixed uses the configured size. Ignored offline.",
+        "required": false,
+        "values": [
+          "grow",
+          "fixed"
+        ],
+        "default": "grow"
+      },
+      {
+        "name": "stream_frames_per_event",
+        "type": "int",
+        "description": "Maximum generated latent patches per streaming decoder event. Set to 1 for one-patch emission. Ignored offline.",
+        "required": false,
+        "min": 1,
+        "default": 4
+      },
+      {
+        "name": "stream_left_context",
+        "type": "int",
+        "description": "Previous patches decoded as streaming left context.",
+        "required": false,
+        "min": 0,
+        "max": 8,
+        "default": 3
+      },
+      {
+        "name": "prompt_text",
+        "type": "string",
+        "description": "Transcript for continuation prompt audio, distinct from the base voice reference.",
+        "required": false
+      },
+      {
+        "name": "chunk_strategy",
+        "type": "enum",
+        "description": "Long-form continuation or independent generation per chunk. Offline only.",
+        "required": false,
+        "values": [
+          "continuation",
+          "stateless"
+        ],
+        "default": "continuation"
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Framework long-form text chunk size. Offline only.",
+        "required": false,
+        "default": 2048
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework text chunking mode. Offline only.",
+        "required": false,
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "default": "tag_aware"
+      }
+    ],
+    "session": [
+      {
+        "name": "audiovae_tile_frames",
+        "type": "int",
+        "description": "Opt-in causal AudioVAE tiling. Maximum new latent frames per tile; zero preserves full decoding.",
+        "required": false,
+        "default": 0,
+        "min": 0
+      },
+      {
+        "name": "perf_mode",
+        "type": "enum",
+        "description": "Opt-in packed attention and MLP projections. May change numerical results; off preserves standard execution.",
+        "required": false,
+        "values": [
+          "off",
+          "optimized"
+        ],
+        "default": "off"
+      },
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "Native LoRA directory or checkpoint file with adjacent lora_config.json; merged into generator weights at session creation.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "Multiplier for the adapter's configured alpha/r scaling; default 1.",
+        "required": false,
+        "default": 1.0
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Language-model weight storage; does not override AudioVAE storage.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "audiovae_weight_type",
+        "type": "enum",
+        "description": "AudioVAE weight storage; defaults independently to native, not the shared weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "prompt_cache_slots",
+        "type": "int",
+        "description": "Cached encoded prompt slots; zero disables reuse.",
+        "required": false,
+        "min": 0,
+        "default": 1
+      },
+      {
+        "name": "mem_saver",
+        "type": "bool",
+        "description": "Release staged runtime graphs.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Context or graph arena size in MiB.",
+        "required": false,
+        "min": 1,
+        "default": 3072
+      },
+      {
+        "name": "text_embedding_graph_arena_mb",
+        "type": "int",
+        "description": "Text embedding host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 64
+      },
+      {
+        "name": "lm_step_graph_arena_mb",
+        "type": "int",
+        "description": "LM step host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "projection_graph_arena_mb",
+        "type": "int",
+        "description": "Projection host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "local_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Local encoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 512
+      },
+      {
+        "name": "dit_graph_arena_mb",
+        "type": "int",
+        "description": "DiT estimator host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "audiovae_weight_context_mb",
+        "type": "int",
+        "description": "Context or graph arena size in MiB.",
+        "required": false,
+        "min": 1,
+        "default": 768
+      },
+      {
+        "name": "audiovae_graph_arena_mb",
+        "type": "int",
+        "description": "AudioVAE decoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "audiovae_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "AudioVAE encoder host graph-metadata arena size in MiB, not device workspace.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "audiovae_latent_capacity",
+        "type": "int",
+        "description": "Optional decoder graph reservation in latent frames, reused by shorter requests and doubled when exceeded; omitted builds the graph at each request's own frame count.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "exec_plan",
+        "type": "string",
+        "description": "JSON component execution plans. audiovae: impl=default/ggml; backend must match the session; no artifacts. params.threads is a nonnegative int: positive values require a CPU session and enable a dedicated AudioVAE backend with streaming decode overlap; also controls offline decoding and prompt encoding threads. Omitted/0 shares the session backend.",
+        "required": false,
+        "default": "{}"
+      },
+      {
+        "name": "audiovae_encoder_sample_capacity",
+        "type": "int",
+        "description": "Reserved encoder sample capacity.",
+        "required": false,
+        "min": 1,
+        "default": 240000
+      }
+    ],
+    "load": []
+  },
+  "capabilities": {
+    "clone": [
+      "speaker_reference"
+    ],
+    "design": [
+      "voice_design"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "ui": {
+    "recommended_package": "voxcpm2_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "Design",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md",
+      "docs/models/vocalrender.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "voxcpm2_q8_0",
+      "display_name": "VoxCPM2 Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "VoxCPM2-GGUF",
+      "files": [
+        "VoxCPM2-GGUF/voxcpm2-q8_0.gguf"
+      ],
+      "strip_prefix": "VoxCPM2-GGUF"
+    },
+    {
+      "id": "voxcpm2_bf16",
+      "display_name": "VoxCPM2 BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "VoxCPM2-GGUF",
+      "files": [
+        "VoxCPM2-GGUF/voxcpm2-bf16.gguf"
+      ],
+      "strip_prefix": "VoxCPM2-GGUF"
+    },
+    {
+      "id": "voxcpm2_orig",
+      "display_name": "VoxCPM2 Original-Dtype GGUF",
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "VoxCPM2-GGUF",
+      "files": [
+        "VoxCPM2-GGUF/voxcpm2-orig.gguf"
+      ],
+      "strip_prefix": "VoxCPM2-GGUF"
+    },
+    {
+      "id": "voxcpm2_vocalrender_pro",
+      "display_name": "VocalRender-Pro (VoxCPM2) Original-Dtype GGUF",
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "VoxCPM2-GGUF",
+      "files": [
+        "VoxCPM2-GGUF/finetune/vocalrender-pro-orig.gguf"
+      ],
+      "strip_prefix": "VoxCPM2-GGUF"
+    },
+    {
+      "id": "voxcpm2_safetensors",
+      "display_name": "VoxCPM2 Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "VoxCPM2",
+      "files": [
+        "config.json",
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "OpenBMB/VoxCPM2"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "special_tokens_map": "model:special_tokens_map.json"
+      },
+      "tensors": {
+        "weights": {
+          "source": "weights:",
+          "prefix": "weights"
+        },
+        "audiovae_weights": {
+          "source": "weights:",
+          "prefix": "audiovae_weights"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "special_tokens_map": "model:special_tokens_map.json"
+      },
+      "tensors": {
+        "weights": "model:model.safetensors",
+        "audiovae_weights": "model:audiovae.safetensors"
+      }
+    }
+  ]
+}
+
+
 )AUDIOCPP_SPEC"},
     {"yue2", R"AUDIOCPP_SPEC({
   "schema_version": 1,
@@ -3492,7 +4290,7 @@
         "sidecars/yue2-qwen.tiktoken",
         "sidecars/yue2-vae-config.json",
         "yue2-3b-q8_0.gguf"
-)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(      ]
+      ]
     },
     {
       "id": "yue2_main_bf16",
@@ -3508,7 +4306,7 @@
         "yue2-3b-bf16.gguf"
       ]
     },
-    {
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(    {
       "id": "yue2_main_q4_0",
       "display_name": "Yue2 3B Main Q4_0",
       "format": "gguf",
@@ -3590,4 +4388,5 @@
     }
   ]
 }
+
 )AUDIOCPP_SPEC"},

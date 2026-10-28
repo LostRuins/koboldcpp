@@ -1470,6 +1470,7 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
 
         std::string audiocpp_requested_voice;
         bool audiocpp_named_voice_alias = false;
+        std::string audiocpp_applied_instruction;
         const std::string audiocpp_extra_params_json = inputs.audiocpp_extra_params_json != nullptr
             ? inputs.audiocpp_extra_params_json : "";
         if (!audiocpp_extra_params_json.empty()) {
@@ -1508,7 +1509,25 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                 if (instruction.front() != '[' || instruction.back() != ']') {
                     instruction = "[" + instruction + "]";
                 }
+                audiocpp_applied_instruction = instruction;
                 request.text_input->text.insert(0, instruction + " ");
+            }
+        } else if (audiocpp_tts_family == "voxcpm2") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            const auto first = std::find_if_not(instruction.begin(), instruction.end(),
+                [](unsigned char ch) { return std::isspace(ch); });
+            const auto last = std::find_if_not(instruction.rbegin(), instruction.rend(),
+                [](unsigned char ch) { return std::isspace(ch); }).base();
+            instruction = first < last ? std::string(first, last) : "";
+            if (!instruction.empty()) {
+                // VoxCPM2's native voice-design convention is a parenthesized
+                // style description directly before the spoken transcript.
+                if (instruction.front() != '(' || instruction.back() != ')') {
+                    instruction = "(" + instruction + ")";
+                }
+                audiocpp_applied_instruction = instruction;
+                request.text_input->text.insert(0, instruction);
             }
         } else if (audiocpp_tts_family == "supertonic") {
             std::string voice = inputs.custom_speaker_voice != nullptr
@@ -1540,6 +1559,7 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
         } else if (audiocpp_tts_family == "maya1") {
             std::string instruction = inputs.speaker_instruction != nullptr
                 ? inputs.speaker_instruction : "";
+            const bool supplied_instruction = !instruction.empty();
             if (instruction.empty()) {
                 instruction = "A clear, natural, expressive voice.";
             } else {
@@ -1557,11 +1577,15 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                     instruction.push_back('.');
                 }
             }
+            if (supplied_instruction) {
+                audiocpp_applied_instruction = instruction;
+            }
             request.options["instruct"] = std::move(instruction);
         } else if (audiocpp_tts_family == "cosyvoice3") {
             std::string instruction = inputs.speaker_instruction != nullptr
                 ? inputs.speaker_instruction : "";
             if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
                 request.options["instruct"] = std::move(instruction);
             }
             // Natural-language instructions select the matching upstream
@@ -1601,10 +1625,16 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             }
         }
 
+        if (!audiocpp_applied_instruction.empty() && !tts_is_quiet) {
+            printf("\nApply VoiceDesign Instruction: %s",
+                audiocpp_applied_instruction.c_str());
+        }
+
         const bool accepts_reference_audio = audiocpp_tts_family == "fish_audio" ||
             audiocpp_tts_family == "chatterbox" || audiocpp_tts_family == "kitten_tts2" ||
             audiocpp_tts_family == "cosyvoice3" || audiocpp_tts_family == "pocket_tts" ||
-            audiocpp_tts_family == "vibevoice";
+            audiocpp_tts_family == "vibevoice" || audiocpp_tts_family == "voxcpm2" ||
+            audiocpp_tts_family == "voxcpm1";
         if (accepts_reference_audio) {
             std::string encoded_audio = inputs.reference_audio != nullptr
                 ? inputs.reference_audio : "";
@@ -1614,7 +1644,9 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             if (!encoded_audio.empty()) {
                 const auto media = kcpp_base64_decode(encoded_audio);
                 std::vector<float> samples;
-                const int reference_sample_rate = audiocpp_tts_family == "fish_audio" ? 44100 : 24000;
+                const int reference_sample_rate = audiocpp_tts_family == "fish_audio" ? 44100 :
+                    (audiocpp_tts_family == "voxcpm2" || audiocpp_tts_family == "voxcpm1"
+                        ? 16000 : 24000);
                 if (media.empty() || !kcpp_decode_audio_from_buf(
                         media.data(), media.size(), reference_sample_rate, samples) || samples.empty()) {
                     throw std::runtime_error(audiocpp_tts_family + " could not decode the reference audio");
@@ -1654,6 +1686,10 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                 engine::runtime::VoiceCondition condition;
                 condition.speaker = std::move(reference);
                 request.voice = std::move(condition);
+                if (!tts_is_quiet) {
+                    printf("\nUsing reference voice%s...",
+                        reference_text.empty() ? "" : " with transcript");
+                }
                 if (!reference_text.empty() && audiocpp_tts_family != "pocket_tts" &&
                     audiocpp_tts_family != "vibevoice") {
                     request.options["reference_text"] = std::move(reference_text);

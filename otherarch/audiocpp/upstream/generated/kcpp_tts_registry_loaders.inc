@@ -8,3 +8,5 @@
     {"soprano_tts", engine::community_models::soprano_tts::make_soprano_tts_loader()},
     {"supertonic", engine::models::supertonic::make_supertonic_loader()},
     {"vibevoice", engine::models::vibevoice::make_vibevoice_loader()},
+    {"voxcpm2", engine::models::voxcpm2::make_voxcpm2_loader()},
+    {"voxcpm1", engine::community_models::voxcpm1::make_voxcpm1_loader()},
