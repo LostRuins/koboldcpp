@@ -5596,6 +5596,10 @@ ws ::= | " " | "\n" [ \t]{0,20}
         # Normalize Anthropic-format tool definitions to OpenAI format before delegating
         if genparams.get("tools"):
             genparams["tools"] = normalize_anthropic_tools_input(genparams["tools"])
+        # Anthropic tool_choice is an object; map auto/any/none to the OpenAI strings. {"type":"tool","name":...} works as is.
+        tool_choice = genparams.get("tool_choice")
+        if isinstance(tool_choice, dict) and tool_choice.get("type") in ("auto", "any", "none"):
+            genparams["tool_choice"] = {"auto": "auto", "any": "required", "none": "none"}[tool_choice["type"]]
         transform_genparams(genparams, 4, use_jinja) # Delegate to oai chat completions
         return genparams
 
