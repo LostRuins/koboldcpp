@@ -1,3 +1,308 @@
+    {"breeze_tts", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "breeze_tts",
+  "display_name": "BreezeTTS 2",
+  "description": "BreezeTTS 2 native GGUF package for instruction-conditioned text-to-speech and prompt-audio voice cloning with T5Gemma text conditioning, Qwen-style acoustic code generation, depth codebook decoding, and Mimi waveform decoding.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone",
+    "design"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "zh",
+    "en"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "dependencies": [],
+  "capabilities": {
+    "design": [
+      "voice_design"
+    ],
+    "tts": [
+      "style_control"
+    ],
+    "clone": [
+      "speaker_reference"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "instruct",
+        "type": "string",
+        "description": "BreezeTTS generation instruction.",
+        "required": false,
+        "default": "Speak clearly and naturally."
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "description": "Transcript for prompt/reference audio; required when reference audio codes are used, for either tts or clon.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum Unicode codepoints per long-form text chunk; default 600.",
+        "required": false,
+        "min": 1,
+        "default": 600
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework text chunking mode.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "required": false,
+        "default": "default"
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated BreezeTTS acoustic frames.",
+        "required": false,
+        "min": 1,
+        "default": 1500
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "Classifier-free guidance scale.",
+        "required": false,
+        "min": 0.0,
+        "default": 1.0
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Backbone first-codebook sampling temperature. Must be > 0.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.9
+      },
+      {
+        "name": "depth_temperature",
+        "type": "float",
+        "description": "Depth decoder codebook sampling temperature. Must be > 0.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.9
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "Top-k sampling limit; 0 disables top-k filtering. Nonpositive values disable top-k filtering.",
+        "required": false,
+        "default": 50
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Positive nucleus sampling cutoff; values >=1 disable nucleus filtering.",
+        "required": false,
+        "min": 0,
+        "default": 1
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Generation seed.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "stream_frames_per_event",
+        "type": "int",
+        "description": "Maximum generated codec frames per streaming audio event; fixed size with stream_chunk_policy=fixed.",
+        "required": false,
+        "min": 1,
+        "default": 16
+      },
+      {
+        "name": "stream_lookahead_margin",
+        "type": "int",
+        "description": "Additional trailing codec frames buffered before streaming emission. The decoder is causal; zero minimizes latency.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "stream_chunk_policy",
+        "type": "enum",
+        "description": "Streaming chunk schedule: grow emits 1, 2, 4, ... frames up to stream_frames_per_event; fixed uses that size from the first event.",
+        "values": ["grow", "fixed"],
+        "required": false,
+        "default": "grow"
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "BreezeTTS matmul weight storage type; default native.",
+        "required": false,
+        "default": "native",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q8_0",
+          "q4_0",
+          "q4_k"
+        ]
+      },
+      {
+        "name": "graph_arena_mb",
+        "type": "int",
+        "description": "Reusable runtime graph arena size in MiB; default 32.",
+        "required": false,
+        "min": 1,
+        "default": 32
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Weight loading context size in MiB; default 4.",
+        "required": false,
+        "min": 1,
+        "default": 4
+      },
+      {
+        "name": "reference_cache_slots",
+        "type": "int",
+        "description": "Prepared reference-audio cache slots; set 0 to disable reuse.",
+        "required": false,
+        "min": 0,
+        "default": 1
+      },
+      {
+        "name": "attention",
+        "type": "enum",
+        "description": "Attention lowering; auto probes the backend and falls back to eager on GPUs without a flash kernel (e.g. sm70); default auto.",
+        "required": false,
+        "values": ["auto", "flash", "eager"],
+        "default": "auto"
+      },
+      {
+        "name": "bf16_activations",
+        "type": "enum",
+        "description": "Reference bf16 activation rounding as the official BreezeTTS 2 inference does it. auto = on for CUDA/HIP/Vulkan and off on Metal, where the cast cost is visible even with the fused round-to-bf16 op (~20% slower AR loop); on/off force it either way. On Metal, on also switches the KV cache to bf16 to match the reference implementation.",
+        "required": false,
+        "values": ["auto", "on", "off"],
+        "default": "auto"
+      }
+    ],
+    "load": []
+  },
+  "packages": [
+    {
+      "id": "breeze_tts_2_q4_0",
+      "display_name": "BreezeTTS 2 Q4_0 GGUF",
+      "default": false,
+      "format": "gguf",
+      "precision": "q4_0",
+      "target_directory": "Breeze-TTS-2-GGUF",
+      "files": [
+        "Breeze-TTS-2-GGUF/breeze-tts-2-q4_0.gguf"
+      ],
+      "strip_prefix": "Breeze-TTS-2-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      }
+    },
+    {
+      "id": "breeze_tts_2_q8_0",
+      "display_name": "BreezeTTS 2 Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Breeze-TTS-2-GGUF",
+      "files": [
+        "Breeze-TTS-2-GGUF/breeze-tts-2-q8_0.gguf"
+      ],
+      "strip_prefix": "Breeze-TTS-2-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      }
+    },
+    {
+      "id": "breeze_tts_2_bf16",
+      "display_name": "BreezeTTS 2 BF16 GGUF",
+      "default": false,
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "Breeze-TTS-2-GGUF",
+      "files": [
+        "Breeze-TTS-2-GGUF/breeze-tts-2-bf16.gguf"
+      ],
+      "strip_prefix": "Breeze-TTS-2-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      }
+    }
+  ],
+  "ui": {
+    "recommended_package": "breeze_tts_2_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "Design",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config_json": "model:config.json",
+        "audio_tokenizer_config_json": "model:audio_tokenizer/config.json",
+        "tokenizer_config_json": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "model_weights": {
+          "source": "weights:",
+          "prefix": "model"
+        }
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
     {"chatterbox", R"AUDIOCPP_SPEC({
   "family": "chatterbox",
   "display_name": "Chatterbox",
@@ -1801,6 +2106,609 @@
       "tensors": {
         "model_weights": "weights:",
         "codec_weights": "weights:"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"ming3_tts", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "ming3_tts",
+  "display_name": "Ming 3.0 TTS 0.5B",
+  "description": "Multilingual continuous-latent speech synthesis with a Qwen backbone, flow-matching acoustic head, CAMPPlus speaker conditioning and an audio VAE.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone",
+    "design"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "zh",
+    "en",
+    "ja",
+    "ko",
+    "de",
+    "fr",
+    "es"
+  ],
+  "capabilities": {
+    "tts": [
+      "long_form",
+      "speaker_reference",
+      "style_control",
+      "emotion_control",
+      "built_in_voices"
+    ],
+    "clone": [
+      "long_form",
+      "speaker_reference",
+      "style_control",
+      "emotion_control"
+    ],
+    "design": [
+      "voice_design"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "template_name",
+        "type": "enum",
+        "required": false,
+        "description": "Conditioning template; defaults to voice_design on that route, otherwise tts.",
+        "values": [
+          "tts",
+          "multilingual",
+          "basic",
+          "emotion",
+          "dialect",
+          "ip",
+          "voice_design",
+          "freeform"
+        ]
+      },
+      {
+        "name": "language",
+        "type": "string",
+        "required": false,
+        "description": "Target language name or code; defaults to the request's language (the server's top-level language field, the CLI's --language). Required by multilingual; ignored by dialect."
+      },
+      {
+        "name": "instruct",
+        "type": "string",
+        "required": false,
+        "description": "Voice description for voice_design; raw conditioning text for freeform or tts."
+      },
+      {
+        "name": "instruction_schema",
+        "type": "enum",
+        "required": false,
+        "description": "Structured instruction field language; defaults to en for dialect, otherwise zh.",
+        "values": [
+          "en",
+          "zh"
+        ]
+      },
+      {
+        "name": "speed",
+        "type": "enum",
+        "required": false,
+        "description": "Categorical speaking speed for the basic template, not waveform resampling.",
+        "values": [
+          "慢速",
+          "中速",
+          "快速"
+        ]
+      },
+      {
+        "name": "pitch",
+        "type": "enum",
+        "required": false,
+        "description": "Categorical pitch for the basic template.",
+        "values": [
+          "低",
+          "中",
+          "高"
+        ]
+      },
+      {
+        "name": "volume",
+        "type": "enum",
+        "required": false,
+        "description": "Categorical volume for the basic template.",
+        "values": [
+          "低",
+          "中",
+          "高"
+        ]
+      },
+      {
+        "name": "emotion",
+        "type": "string",
+        "required": false,
+        "description": "Emotion label for the emotion template."
+      },
+      {
+        "name": "dialect",
+        "type": "enum",
+        "required": false,
+        "description": "Dialect for the dialect template.",
+        "values": [
+          "chuanyu dialect",
+          "cantonese"
+        ]
+      },
+      {
+        "name": "voice_id",
+        "type": "enum",
+        "required": false,
+        "description": "Built-in English voice for the ip template.",
+        "values": [
+          "US_Emma",
+          "US_James",
+          "UK_George",
+          "UK_Charlotte"
+        ]
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "required": false,
+        "description": "Transcript accompanying voice_ref; enables the acoustic reference prefix. Without a transcript, only speaker conditioning is used."
+      },
+      {
+        "name": "speaker_embedding_file",
+        "type": "path_list",
+        "required": false,
+        "description": "CAMPPlus embedding file or list, with shape [192] or [1, 192]. Supersedes voice_ref audio; zero_speaker_embedding takes precedence."
+      },
+      {
+        "name": "use_speaker_embedding",
+        "type": "bool",
+        "required": false,
+        "default": true,
+        "description": "Condition on the reference speaker embedding."
+      },
+      {
+        "name": "zero_speaker_embedding",
+        "type": "bool",
+        "required": false,
+        "default": false,
+        "description": "Use a zero projected speaker row instead of reference audio conditioning."
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "required": false,
+        "default": 1000,
+        "min": 1,
+        "description": "Maximum generated acoustic patches per text chunk, also limited by the 512-position generation context."
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "required": false,
+        "default": 2,
+        "description": "Flow guidance: conditioned prediction plus guidance_scale times its difference from the null prediction."
+      },
+      {
+        "name": "sigma",
+        "type": "float",
+        "required": false,
+        "default": 0.25,
+        "min": 0,
+        "description": "Flow SDE noise scale."
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "required": false,
+        "default": 0,
+        "min": 0,
+        "description": "Flow sampling temperature; zero still uses seeded initial noise."
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "required": false,
+        "default": 1895,
+        "min": 0,
+        "description": "Reference-posterior and generation noise seed."
+      },
+      {
+        "name": "raw_text",
+        "type": "bool",
+        "required": false,
+        "default": false,
+        "description": "Send the text as one synthesis fragment without frontend chunking."
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "required": false,
+        "min": 1,
+        "description": "Framework long-form chunk budget in Unicode codepoints; default 50 when hanzi, kana and Hangul outnumber other letters and digits, otherwise 300 (120 for voice design and freeform, whose chunks after the first use the first generated chunk as their reference)."
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "required": false,
+        "default": "tag_aware",
+        "description": "Framework text chunking policy.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ]
+      },
+      {
+        "name": "trim_silence",
+        "type": "bool",
+        "required": false,
+        "default": true,
+        "description": "Trim trailing low-energy 100-ms frames per fragment, retaining a 300-ms tail."
+      }
+    ],
+    "session": [
+      {
+        "name": "reference_cache",
+        "type": "bool",
+        "required": false,
+        "default": true,
+        "description": "Reuse prepared conditioning for the most recently used reference waveform."
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/Ming-3.0-TTS-0.5B-GGUF",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "ming_3_0_tts_0_5b_bf16",
+      "display_name": "Ming 3.0 TTS 0.5B BF16",
+      "format": "gguf",
+      "precision": "bf16",
+      "default": true,
+      "target_directory": "Ming-3.0-TTS-0.5B-GGUF",
+      "files": [
+        "ming-3.0-tts-0.5b-bf16.gguf"
+      ]
+    },
+    {
+      "id": "ming_3_0_tts_0_5b_q8_0",
+      "display_name": "Ming 3.0 TTS 0.5B Q8_0",
+      "format": "gguf",
+      "precision": "q8_0",
+      "default": false,
+      "target_directory": "Ming-3.0-TTS-0.5B-GGUF",
+      "files": [
+        "ming-3.0-tts-0.5b-q8_0.gguf"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "ming_3_0_tts_0_5b_bf16",
+    "tags": [
+      "TTS",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/ming3_tts.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "tensors": {
+        "weights": "weights:",
+        "speaker": {
+          "source": "weights:",
+          "prefix": "speaker"
+        }
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"neutts", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "neutts",
+  "display_name": "NeuTTS",
+  "description": "NeuTTS is an English text-to-speech family from Neuphonic. The current 2E package uses a Qwen3-style autoregressive speech-token backbone, NeuCodec waveform decoding, built-in speaker prompts, and emotion-token control.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "en"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "built_in_voices",
+      "emotion_control",
+      "long_form"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "voice_id",
+        "type": "enum",
+        "description": "Built-in NeuTTS speaker prompt; default emily.",
+        "values": [
+          "dave",
+          "emily",
+          "greta",
+          "jo",
+          "juliette",
+          "mateo",
+          "paul",
+          "sophie",
+          "steven"
+        ],
+        "required": false,
+        "default": "emily"
+      },
+      {
+        "name": "emotion",
+        "type": "enum",
+        "description": "Optional emotion token inserted between reference text and target text; neutral inserts no emotion token.",
+        "values": [
+          "angry",
+          "disgusted",
+          "sad",
+          "happy",
+          "fearful",
+          "neutral",
+          "surprised"
+        ],
+        "required": false,
+        "default": "neutral"
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated speech-token count for the autoregressive generator; 0 uses the remaining model context, default 0. Total generation context is capped at min(checkpoint context, 2048).",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "min_tokens",
+        "type": "int",
+        "description": "Minimum generated speech-token count before EOS may stop generation; default 50.",
+        "required": false,
+        "min": 0,
+        "default": 50
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Autoregressive sampling temperature; must be > 0, default 1.0.",
+        "required": false,
+        "min": 0.0,
+        "default": 1.0
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "Autoregressive top-k sampling limit; default 50.",
+        "required": false,
+        "min": 1,
+        "default": 50
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Autoregressive sampling seed; omitted requests choose a random seed.",
+        "required": false,
+        "min": 0
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework text chunking mode for long-form synthesis.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "required": false,
+        "default": "default"
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum Unicode codepoints per long-form text chunk; default 600.",
+        "required": false,
+        "min": 1,
+        "default": 600
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared matmul weight storage type for the backbone and codec decoder; default native.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "generator_weight_type",
+        "type": "enum",
+        "description": "Generator weight storage; inherits explicit weight_type, otherwise F32 on CPU and native on other backends.",
+        "preset": "weight_type_full",
+        "required": false
+      },
+      {
+        "name": "codec_weight_type",
+        "type": "enum",
+        "description": "NeuCodec decoder matmul weight storage type; defaults to weight_type when set, otherwise native.",
+        "preset": "weight_type_full",
+        "required": false
+      },
+      {
+        "name": "codec_conv_weight_type",
+        "type": "enum",
+        "description": "NeuCodec convolution weight storage type; default native.",
+        "preset": "weight_type_conv",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "runtime_graph_arena_mb",
+        "type": "int",
+        "description": "Reusable ggml graph arena size in MiB for NeuTTS runtime graphs; default 1024.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "neutts_2e_orig",
+      "display_name": "NeuTTS 2E Original-Precision GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "NeuTTS-2E-GGUF",
+      "files": [
+        "NeuTTS-2E-GGUF/neutts-2e-orig.gguf"
+      ],
+      "strip_prefix": "NeuTTS-2E-GGUF"
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "neutts_2e_orig",
+    "tags": [
+      "TTS",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/models/neutts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "chat_template": "model:chat_template.jinja",
+        "codec_config": "model:neucodec_config.json",
+        "codec_preprocessor_config": "model:neucodec_preprocessor_config.json",
+        "speaker_text_dave": "model:samples/dave.txt",
+        "speaker_text_emily": "model:samples/emily.txt",
+        "speaker_text_greta": "model:samples/greta.txt",
+        "speaker_text_jo": "model:samples/jo.txt",
+        "speaker_text_juliette": "model:samples/juliette.txt",
+        "speaker_text_mateo": "model:samples/mateo.txt",
+        "speaker_text_paul": "model:samples/paul.txt",
+        "speaker_text_sophie": "model:samples/sophie.txt",
+        "speaker_text_steven": "model:samples/steven.txt"
+      },
+      "tensors": {
+        "backbone": {
+          "source": "weights:",
+          "prefix": "backbone"
+        },
+        "codec": {
+          "source": "weights:",
+          "prefix": "codec"
+        },
+        "speaker_prompts": {
+          "source": "weights:",
+          "prefix": "speaker_prompts"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": ".",
+        "codec": "../NeuCodec"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "chat_template": "model:chat_template.jinja",
+        "codec_config": "codec:config.json",
+        "codec_preprocessor_config": "codec:preprocessor_config.json",
+        "speaker_text_dave": "model:samples/dave.txt",
+        "speaker_text_emily": "model:samples/emily.txt",
+        "speaker_text_greta": "model:samples/greta.txt",
+        "speaker_text_jo": "model:samples/jo.txt",
+        "speaker_text_juliette": "model:samples/juliette.txt",
+        "speaker_text_mateo": "model:samples/mateo.txt",
+        "speaker_text_paul": "model:samples/paul.txt",
+        "speaker_text_sophie": "model:samples/sophie.txt",
+        "speaker_text_steven": "model:samples/steven.txt"
+      },
+      "tensors": {
+        "backbone": "model:model.safetensors",
+        "codec": "codec:model.safetensors",
+        "speaker_prompts": "model:samples/speaker_prompts.safetensors"
       }
     }
   ]

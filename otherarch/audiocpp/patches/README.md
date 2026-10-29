@@ -52,6 +52,9 @@ patches listed here. Recheck these after every run of `sync-audiocpp.ps1`.
 17. `src/framework/modules/attention/attention_internal.h`: lower the optional
     CUDA packed-four projection to the ordinary linear path because
     `ggml_mul_mat_pack4` is private to Audio.cpp's GGML fork.
+18. `src/framework/modules/transformers/causal_decoder_runtime.cpp`: replace
+    Audio.cpp's private BF16-round operation with portable F32 -> BF16 -> F32
+    casts. BreezeTTS uses this path to match its reference BF16 activations.
 
 Do not add KCPP adapter behavior to upstream-owned files. Put it in the parent
 directory so upstream refreshes remain reviewable.

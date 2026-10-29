@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "all")]
+    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -343,6 +343,48 @@ $vibeVoiceFiles = @(
     "src/models/vibevoice/tokenizer_text.cpp"
 )
 
+# BreezeTTS 2's framework closure is already shared by the selected TTS
+# models. Keep the model implementation intact, including its offline-only
+# use through KoboldCpp and the upstream streaming implementation.
+$breezeTtsFiles = @(
+    "model_specs/breeze_tts.json",
+    "src/framework/modules/text_encoders/t5_gemma_encoder.cpp",
+    "src/models/breeze_tts/assets.cpp",
+    "src/models/breeze_tts/generator.cpp",
+    "src/models/breeze_tts/session.cpp",
+    "src/models/breeze_tts/speech_decoder.cpp",
+    "src/models/breeze_tts/speech_encoder.cpp",
+    "src/models/breeze_tts/text_encoder.cpp",
+    "src/models/breeze_tts/tokenizer_text.cpp"
+)
+
+# Ming 3.0 TTS 0.5B adds its AudioVAE and flow decoder runtimes. CAMPPlus,
+# reference-audio preparation, the Qwen decoder, and the remaining framework
+# closure are already synchronized for other selected models.
+$ming3TtsFiles = @(
+    "model_specs/ming3_tts.json",
+    "src/framework/codecs/ming_audio_vae_runtime.cpp",
+    "src/framework/modules/speech_decoders/ming_flow_runtime.cpp",
+    "src/models/ming3_tts/assets.cpp",
+    "src/models/ming3_tts/generator.cpp",
+    "src/models/ming3_tts/prompt.cpp",
+    "src/models/ming3_tts/session.cpp"
+)
+
+# NeuTTS 2E adds a compact Qwen3-style AR model and NeuCodec decoder. The
+# decoder's reusable FSQ runtime is the only shared implementation not already
+# synchronized by the selected TTS foundation.
+$neuTtsFiles = @(
+    "model_specs/neutts.json",
+    "src/framework/codecs/fsq_audio_codec_runtime.cpp",
+    "src/models/neutts/ar.cpp",
+    "src/models/neutts/assets.cpp",
+    "src/models/neutts/backbone.cpp",
+    "src/models/neutts/codec.cpp",
+    "src/models/neutts/prompt.cpp",
+    "src/models/neutts/session.cpp"
+)
+
 # VoxCPM2 and the legacy VoxCPM1 implementation share the MiniCPM/AudioVAE
 # shape, but remain separate upstream families and model formats.
 $voxCpmSharedFiles = @(
@@ -453,6 +495,9 @@ foreach ($name in $Component) {
         [void] $selected.Add("voxcpm2")
         [void] $selected.Add("voxcpm1")
         [void] $selected.Add("omnivoice")
+        [void] $selected.Add("breeze_tts")
+        [void] $selected.Add("ming3_tts")
+        [void] $selected.Add("neutts")
     } else {
         [void] $selected.Add($name)
     }
@@ -524,6 +569,27 @@ if ($selected.Contains("voxcpm1")) {
 if ($selected.Contains("omnivoice")) {
     Copy-AudioCppTree "include/engine/models/omnivoice"
     foreach ($relativePath in $omniVoiceFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("breeze_tts")) {
+    Copy-AudioCppTree "include/engine/models/breeze_tts"
+    foreach ($relativePath in $breezeTtsFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("ming3_tts")) {
+    Copy-AudioCppTree "include/engine/models/ming3_tts"
+    foreach ($relativePath in $ming3TtsFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("neutts")) {
+    Copy-AudioCppTree "include/engine/models/neutts"
+    foreach ($relativePath in $neuTtsFiles) {
         Copy-AudioCppFile $relativePath
     }
 }
@@ -743,6 +809,21 @@ $ttsLoaders = @(
         Family = "omnivoice"
         Header = "engine/models/omnivoice/loader.h"
         Factory = "engine::models::omnivoice::make_omnivoice_loader"
+    },
+    @{
+        Family = "breeze_tts"
+        Header = "engine/models/breeze_tts/session.h"
+        Factory = "engine::models::breeze_tts::make_breeze_tts_loader"
+    },
+    @{
+        Family = "ming3_tts"
+        Header = "engine/models/ming3_tts/session.h"
+        Factory = "engine::models::ming3_tts::make_ming3_tts_loader"
+    },
+    @{
+        Family = "neutts"
+        Header = "engine/models/neutts/session.h"
+        Factory = "engine::models::neutts::make_neutts_loader"
     }
 )
 $ttsRegistryHeaders = ""

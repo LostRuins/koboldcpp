@@ -1596,12 +1596,55 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                 request.options.find("template_name") == request.options.end()) {
                 request.options["template_name"] = "instruct";
             }
+        } else if (audiocpp_tts_family == "breeze_tts") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+            }
+        } else if (audiocpp_tts_family == "ming3_tts") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+                // The shared instruction field means unrestricted delivery
+                // control for Ming. Preserve an explicit template override so
+                // callers can still select voice_design or structured modes.
+                if (request.options.find("template_name") == request.options.end()) {
+                    request.options["template_name"] = "freeform";
+                }
+            }
         } else if (audiocpp_tts_family == "omnivoice") {
             std::string instruction = inputs.speaker_instruction != nullptr
                 ? inputs.speaker_instruction : "";
             if (!instruction.empty()) {
                 audiocpp_applied_instruction = instruction;
                 request.options["instruct"] = std::move(instruction);
+            }
+        } else if (audiocpp_tts_family == "neutts") {
+            std::string voice = std::move(audiocpp_requested_voice);
+            std::transform(voice.begin(), voice.end(), voice.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            static const std::map<std::string, std::string> kcpp_voice_aliases = {
+                {"kobo", "paul"},
+                {"cheery", "emily"},
+                {"sleepy", "sophie"},
+                {"shouty", "steven"},
+                {"chatty", "jo"},
+            };
+            static const std::vector<std::string> built_in_voices = {
+                "dave", "emily", "greta", "jo", "juliette",
+                "mateo", "paul", "sophie", "steven",
+            };
+            if (const auto alias = kcpp_voice_aliases.find(voice);
+                alias != kcpp_voice_aliases.end()) {
+                voice = alias->second;
+            }
+            if (std::find(built_in_voices.begin(), built_in_voices.end(), voice) !=
+                built_in_voices.end()) {
+                request.options["voice_id"] = std::move(voice);
             }
         } else if (audiocpp_tts_family == "kitten_tts2") {
             std::string voice = std::move(audiocpp_requested_voice);
@@ -1641,7 +1684,8 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             audiocpp_tts_family == "chatterbox" || audiocpp_tts_family == "kitten_tts2" ||
             audiocpp_tts_family == "cosyvoice3" || audiocpp_tts_family == "pocket_tts" ||
             audiocpp_tts_family == "vibevoice" || audiocpp_tts_family == "voxcpm2" ||
-            audiocpp_tts_family == "voxcpm1" || audiocpp_tts_family == "omnivoice";
+            audiocpp_tts_family == "voxcpm1" || audiocpp_tts_family == "omnivoice" ||
+            audiocpp_tts_family == "breeze_tts" || audiocpp_tts_family == "ming3_tts";
         if (accepts_reference_audio) {
             std::string encoded_audio = inputs.reference_audio != nullptr
                 ? inputs.reference_audio : "";
@@ -1651,7 +1695,8 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             if (!encoded_audio.empty()) {
                 const auto media = kcpp_base64_decode(encoded_audio);
                 std::vector<float> samples;
-                const int reference_sample_rate = audiocpp_tts_family == "fish_audio" ? 44100 :
+                const int reference_sample_rate =
+                    (audiocpp_tts_family == "fish_audio" || audiocpp_tts_family == "ming3_tts") ? 44100 :
                     (audiocpp_tts_family == "voxcpm2" || audiocpp_tts_family == "voxcpm1"
                         ? 16000 : 24000);
                 if (media.empty() || !kcpp_decode_audio_from_buf(
@@ -1662,6 +1707,10 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                     ? inputs.reference_text : "";
                 if (reference_text.empty() && inputs.custom_speaker_text != nullptr) {
                     reference_text = inputs.custom_speaker_text;
+                }
+                if (audiocpp_tts_family == "breeze_tts" && reference_text.empty()) {
+                    throw std::runtime_error(
+                        "BreezeTTS 2 voice cloning requires the exact reference transcript in reference_text");
                 }
                 if (audiocpp_tts_family == "fish_audio" && reference_text.empty()) {
                     reference_text = "but that is what it is"; //turns out random text here works fine too

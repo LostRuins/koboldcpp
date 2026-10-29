@@ -3437,10 +3437,15 @@ def tts_generate(genparams):
         voice = simple_lcg_hash(voicestr.strip()) if voicestr else 1
     inputs = tts_generation_inputs()
     inputs.custom_speaker_voice = normalized_voice.encode("UTF-8")
-    ttsinstruction = genparams.get("instruction", "")
+    # OpenAI's /v1/audio/speech schema calls this field `instructions`.
+    # Keep KoboldCpp's historical singular spelling as a compatibility alias.
+    ttsinstruction = genparams.get("instructions", "")
+    if not isinstance(ttsinstruction, str) or not ttsinstruction:
+        legacy_instruction = genparams.get("instruction", "")
+        ttsinstruction = legacy_instruction if isinstance(legacy_instruction, str) else ""
     ttslang = genparams.get("language", "en")
     # if no instruction provided, extract from text
-    if not genparams.get("instruction", ""):
+    if not ttsinstruction:
         prompt, ttsinstruction = tts_extract_instruction(prompt)
     inputs.speaker_instruction = ttsinstruction.encode("UTF-8")
     inputs.language = ttslang.encode("UTF-8")
@@ -3471,7 +3476,7 @@ def tts_generate(genparams):
         "min_p", "top_p", "top_k", "flow_guidance_scale", "max_tokens",
         "max_new_tokens", "do_sample", "stop_on_eos", "num_inference_steps",
         "text_chunk_size", "text_chunk_mode", "preset", "voice_id", "eos_bias",
-        "min_tokens", "template_name", "instruct")
+        "min_tokens", "template_name", "instruct", "emotion")
     audiocpp_options = {
         key: genparams[key] for key in audiocpp_option_names
         if key in genparams and isinstance(genparams[key], (str, int, float, bool))

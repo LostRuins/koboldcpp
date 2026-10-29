@@ -22,6 +22,9 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm2
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm1
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component omnivoice
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component breeze_tts
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component ming3_tts
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component neutts
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2 -ModelSourcesOnly
 ```
 
@@ -82,13 +85,25 @@ exact upstream commit cannot be recorded until a real checkout is supplied.
 - `omnivoice`: massively multilingual offline TTS, optional short-reference
   voice cloning, and instruction-driven voice design. Reference transcripts
   are optional, and VoiceTut-TTS packages use the same runtime.
+- `breeze_tts`: English and Chinese BreezeTTS 2 offline generation, free-form
+  delivery instructions, voice design, and reference-audio cloning. Cloning
+  requires the exact reference transcript. Upstream streaming code remains in
+  the synchronized model but is not exposed through KoboldCpp's offline API.
+- `ming3_tts`: Ming 3.0 TTS 0.5B multilingual offline generation, free-form
+  delivery instructions, voice design, and reference-audio cloning. A
+  reference without a transcript uses CAMPPlus speaker-only conditioning;
+  adding the exact transcript also enables the acoustic latent prompt.
+- `neutts`: NeuTTS 2E English offline generation with nine built-in voices
+  and seven fixed emotion tokens. It does not support reference-audio cloning
+  or free-form delivery instructions. Upstream streaming remains synchronized
+  but is not exposed through KoboldCpp's offline API.
 - Later candidates should be added only when their framework closure is small
   and measurable. Existing KoboldCpp Qwen3-TTS, MiniMax H3, ACE-Step, Kokoro,
   OuteTTS, Parler, Dia, and Orpheus implementations are not imported.
 
 The MinGW default and Vulkan DLL targets compile and link with all selected
-models. Runtime output still needs validation with real Soprano and
-CosyVoice3 packages; weights are intentionally not vendored here.
+models. Runtime output for newly imported families still needs validation
+with real packages; weights are intentionally not vendored here.
 
 ## Adapter contract
 
@@ -178,6 +193,31 @@ Language selection and advanced diffusion, duration, chunking, and sampling
 controls remain available through `audiocpp_extra_params_json`.
 Streaming is intentionally not exposed because upstream implements it as
 text-chunked event delivery rather than a distinct streaming model runtime.
+
+Pass `neutts-2e-orig.gguf` as the normal TTS model. `voice` or `voice_id`
+selects `dave`, `emily`, `greta`, `jo`, `juliette`, `mateo`, `paul`, `sophie`,
+or `steven`; the default is `emily`. The `emotion` request option accepts
+`angry`, `disgusted`, `sad`, `happy`, `fearful`, `neutral`, or `surprised`.
+KoboldCpp aliases `kobo`, `cheery`, `sleepy`, `shouty`, and `chatty` to `paul`,
+`emily`, `sophie`, `steven`, and `jo`, respectively. Emotion remains an
+independent request option. NeuTTS is English-only and does not consume
+reference audio or instructions.
+
+Pass a BreezeTTS 2 GGUF package such as `breeze-tts-2-q8_0.gguf` as the
+normal TTS model. KoboldCpp maps its existing `instruction` field to Breeze's
+free-form `instruct` option. Selecting a WAV/MP3 enables cloning and requires
+its exact transcript in `reference_text`. Plain instruction-conditioned voice
+design needs no reference. Breeze produces 24 kHz mono English or Chinese
+audio; sampling and memory controls remain available through
+`audiocpp_extra_params_json`.
+
+Pass a Ming 3.0 TTS 0.5B GGUF package such as
+`ming-3.0-tts-0.5b-q8_0.gguf` as the normal TTS model. Selecting a WAV/MP3
+without `reference_text` uses its transcript-free CAMPPlus speaker embedding;
+adding the exact transcript also supplies Ming's acoustic latent prefix.
+KoboldCpp maps its existing `instruction` field to Ming's `freeform` template
+unless `template_name` is supplied explicitly. Ming produces 44.1 kHz mono
+audio in Chinese, English, Japanese, Korean, German, French, or Spanish.
 
 ## Intentional compatibility changes
 

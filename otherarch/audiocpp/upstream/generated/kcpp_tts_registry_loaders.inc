@@ -11,3 +11,6 @@
     {"voxcpm2", engine::models::voxcpm2::make_voxcpm2_loader()},
     {"voxcpm1", engine::community_models::voxcpm1::make_voxcpm1_loader()},
     {"omnivoice", engine::models::omnivoice::make_omnivoice_loader()},
+    {"breeze_tts", engine::models::breeze_tts::make_breeze_tts_loader()},
+    {"ming3_tts", engine::models::ming3_tts::make_ming3_tts_loader()},
+    {"neutts", engine::models::neutts::make_neutts_loader()},

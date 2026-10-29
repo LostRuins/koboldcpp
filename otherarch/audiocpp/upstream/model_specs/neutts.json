@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "family": "neutts",
+  "display_name": "NeuTTS",
+  "description": "NeuTTS is an English text-to-speech family from Neuphonic. The current 2E package uses a Qwen3-style autoregressive speech-token backbone, NeuCodec waveform decoding, built-in speaker prompts, and emotion-token control.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "en"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "built_in_voices",
+      "emotion_control",
+      "long_form"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "voice_id",
+        "type": "enum",
+        "description": "Built-in NeuTTS speaker prompt; default emily.",
+        "values": [
+          "dave",
+          "emily",
+          "greta",
+          "jo",
+          "juliette",
+          "mateo",
+          "paul",
+          "sophie",
+          "steven"
+        ],
+        "required": false,
+        "default": "emily"
+      },
+      {
+        "name": "emotion",
+        "type": "enum",
+        "description": "Optional emotion token inserted between reference text and target text; neutral inserts no emotion token.",
+        "values": [
+          "angry",
+          "disgusted",
+          "sad",
+          "happy",
+          "fearful",
+          "neutral",
+          "surprised"
+        ],
+        "required": false,
+        "default": "neutral"
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated speech-token count for the autoregressive generator; 0 uses the remaining model context, default 0. Total generation context is capped at min(checkpoint context, 2048).",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "min_tokens",
+        "type": "int",
+        "description": "Minimum generated speech-token count before EOS may stop generation; default 50.",
+        "required": false,
+        "min": 0,
+        "default": 50
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Autoregressive sampling temperature; must be > 0, default 1.0.",
+        "required": false,
+        "min": 0.0,
+        "default": 1.0
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "Autoregressive top-k sampling limit; default 50.",
+        "required": false,
+        "min": 1,
+        "default": 50
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Autoregressive sampling seed; omitted requests choose a random seed.",
+        "required": false,
+        "min": 0
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework text chunking mode for long-form synthesis.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "required": false,
+        "default": "default"
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum Unicode codepoints per long-form text chunk; default 600.",
+        "required": false,
+        "min": 1,
+        "default": 600
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared matmul weight storage type for the backbone and codec decoder; default native.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "generator_weight_type",
+        "type": "enum",
+        "description": "Generator weight storage; inherits explicit weight_type, otherwise F32 on CPU and native on other backends.",
+        "preset": "weight_type_full",
+        "required": false
+      },
+      {
+        "name": "codec_weight_type",
+        "type": "enum",
+        "description": "NeuCodec decoder matmul weight storage type; defaults to weight_type when set, otherwise native.",
+        "preset": "weight_type_full",
+        "required": false
+      },
+      {
+        "name": "codec_conv_weight_type",
+        "type": "enum",
+        "description": "NeuCodec convolution weight storage type; default native.",
+        "preset": "weight_type_conv",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "runtime_graph_arena_mb",
+        "type": "int",
+        "description": "Reusable ggml graph arena size in MiB for NeuTTS runtime graphs; default 1024.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "neutts_2e_orig",
+      "display_name": "NeuTTS 2E Original-Precision GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "NeuTTS-2E-GGUF",
+      "files": [
+        "NeuTTS-2E-GGUF/neutts-2e-orig.gguf"
+      ],
+      "strip_prefix": "NeuTTS-2E-GGUF"
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "neutts_2e_orig",
+    "tags": [
+      "TTS",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/models/neutts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "chat_template": "model:chat_template.jinja",
+        "codec_config": "model:neucodec_config.json",
+        "codec_preprocessor_config": "model:neucodec_preprocessor_config.json",
+        "speaker_text_dave": "model:samples/dave.txt",
+        "speaker_text_emily": "model:samples/emily.txt",
+        "speaker_text_greta": "model:samples/greta.txt",
+        "speaker_text_jo": "model:samples/jo.txt",
+        "speaker_text_juliette": "model:samples/juliette.txt",
+        "speaker_text_mateo": "model:samples/mateo.txt",
+        "speaker_text_paul": "model:samples/paul.txt",
+        "speaker_text_sophie": "model:samples/sophie.txt",
+        "speaker_text_steven": "model:samples/steven.txt"
+      },
+      "tensors": {
+        "backbone": {
+          "source": "weights:",
+          "prefix": "backbone"
+        },
+        "codec": {
+          "source": "weights:",
+          "prefix": "codec"
+        },
+        "speaker_prompts": {
+          "source": "weights:",
+          "prefix": "speaker_prompts"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": ".",
+        "codec": "../NeuCodec"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "chat_template": "model:chat_template.jinja",
+        "codec_config": "codec:config.json",
+        "codec_preprocessor_config": "codec:preprocessor_config.json",
+        "speaker_text_dave": "model:samples/dave.txt",
+        "speaker_text_emily": "model:samples/emily.txt",
+        "speaker_text_greta": "model:samples/greta.txt",
+        "speaker_text_jo": "model:samples/jo.txt",
+        "speaker_text_juliette": "model:samples/juliette.txt",
+        "speaker_text_mateo": "model:samples/mateo.txt",
+        "speaker_text_paul": "model:samples/paul.txt",
+        "speaker_text_sophie": "model:samples/sophie.txt",
+        "speaker_text_steven": "model:samples/steven.txt"
+      },
+      "tensors": {
+        "backbone": "model:model.safetensors",
+        "codec": "codec:model.safetensors",
+        "speaker_prompts": "model:samples/speaker_prompts.safetensors"
+      }
+    }
+  ]
+}

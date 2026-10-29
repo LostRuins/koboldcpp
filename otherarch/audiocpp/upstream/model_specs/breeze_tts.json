@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "family": "breeze_tts",
+  "display_name": "BreezeTTS 2",
+  "description": "BreezeTTS 2 native GGUF package for instruction-conditioned text-to-speech and prompt-audio voice cloning with T5Gemma text conditioning, Qwen-style acoustic code generation, depth codebook decoding, and Mimi waveform decoding.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone",
+    "design"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "zh",
+    "en"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "dependencies": [],
+  "capabilities": {
+    "design": [
+      "voice_design"
+    ],
+    "tts": [
+      "style_control"
+    ],
+    "clone": [
+      "speaker_reference"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "instruct",
+        "type": "string",
+        "description": "BreezeTTS generation instruction.",
+        "required": false,
+        "default": "Speak clearly and naturally."
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "description": "Transcript for prompt/reference audio; required when reference audio codes are used, for either tts or clon.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum Unicode codepoints per long-form text chunk; default 600.",
+        "required": false,
+        "min": 1,
+        "default": 600
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Framework text chunking mode.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "required": false,
+        "default": "default"
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated BreezeTTS acoustic frames.",
+        "required": false,
+        "min": 1,
+        "default": 1500
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "Classifier-free guidance scale.",
+        "required": false,
+        "min": 0.0,
+        "default": 1.0
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Backbone first-codebook sampling temperature. Must be > 0.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.9
+      },
+      {
+        "name": "depth_temperature",
+        "type": "float",
+        "description": "Depth decoder codebook sampling temperature. Must be > 0.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.9
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "Top-k sampling limit; 0 disables top-k filtering. Nonpositive values disable top-k filtering.",
+        "required": false,
+        "default": 50
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Positive nucleus sampling cutoff; values >=1 disable nucleus filtering.",
+        "required": false,
+        "min": 0,
+        "default": 1
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Generation seed.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "stream_frames_per_event",
+        "type": "int",
+        "description": "Maximum generated codec frames per streaming audio event; fixed size with stream_chunk_policy=fixed.",
+        "required": false,
+        "min": 1,
+        "default": 16
+      },
+      {
+        "name": "stream_lookahead_margin",
+        "type": "int",
+        "description": "Additional trailing codec frames buffered before streaming emission. The decoder is causal; zero minimizes latency.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "stream_chunk_policy",
+        "type": "enum",
+        "description": "Streaming chunk schedule: grow emits 1, 2, 4, ... frames up to stream_frames_per_event; fixed uses that size from the first event.",
+        "values": ["grow", "fixed"],
+        "required": false,
+        "default": "grow"
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "BreezeTTS matmul weight storage type; default native.",
+        "required": false,
+        "default": "native",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q8_0",
+          "q4_0",
+          "q4_k"
+        ]
+      },
+      {
+        "name": "graph_arena_mb",
+        "type": "int",
+        "description": "Reusable runtime graph arena size in MiB; default 32.",
+        "required": false,
+        "min": 1,
+        "default": 32
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Weight loading context size in MiB; default 4.",
+        "required": false,
+        "min": 1,
+        "default": 4
+      },
+      {
+        "name": "reference_cache_slots",
+        "type": "int",
+        "description": "Prepared reference-audio cache slots; set 0 to disable reuse.",
+        "required": false,
+        "min": 0,
+        "default": 1
+      },
+      {
+        "name": "attention",
+        "type": "enum",
+        "description": "Attention lowering; auto probes the backend and falls back to eager on GPUs without a flash kernel (e.g. sm70); default auto.",
+        "required": false,
+        "values": ["auto", "flash", "eager"],
+        "default": "auto"
+      },
+      {
+        "name": "bf16_activations",
+        "type": "enum",
+        "description": "Reference bf16 activation rounding as the official BreezeTTS 2 inference does it. auto = on for CUDA/HIP/Vulkan and off on Metal, where the cast cost is visible even with the fused round-to-bf16 op (~20% slower AR loop); on/off force it either way. On Metal, on also switches the KV cache to bf16 to match the reference implementation.",
+        "required": false,
+        "values": ["auto", "on", "off"],
+        "default": "auto"
+      }
+    ],
+    "load": []
+  },
+  "packages": [
+    {
+      "id": "breeze_tts_2_q4_0",
+      "display_name": "BreezeTTS 2 Q4_0 GGUF",
+      "default": false,
+      "format": "gguf",
+      "precision": "q4_0",
+      "target_directory": "Breeze-TTS-2-GGUF",
+      "files": [
+        "Breeze-TTS-2-GGUF/breeze-tts-2-q4_0.gguf"
+      ],
+      "strip_prefix": "Breeze-TTS-2-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      }
+    },
+    {
+      "id": "breeze_tts_2_q8_0",
+      "display_name": "BreezeTTS 2 Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Breeze-TTS-2-GGUF",
+      "files": [
+        "Breeze-TTS-2-GGUF/breeze-tts-2-q8_0.gguf"
+      ],
+      "strip_prefix": "Breeze-TTS-2-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      }
+    },
+    {
+      "id": "breeze_tts_2_bf16",
+      "display_name": "BreezeTTS 2 BF16 GGUF",
+      "default": false,
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "Breeze-TTS-2-GGUF",
+      "files": [
+        "Breeze-TTS-2-GGUF/breeze-tts-2-bf16.gguf"
+      ],
+      "strip_prefix": "Breeze-TTS-2-GGUF",
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/audio.cpp-gguf",
+        "revision": "main",
+        "gated": false
+      }
+    }
+  ],
+  "ui": {
+    "recommended_package": "breeze_tts_2_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "Design",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config_json": "model:config.json",
+        "audio_tokenizer_config_json": "model:audio_tokenizer/config.json",
+        "tokenizer_config_json": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "model_weights": {
+          "source": "weights:",
+          "prefix": "model"
+        }
+      }
+    }
+  ]
+}
