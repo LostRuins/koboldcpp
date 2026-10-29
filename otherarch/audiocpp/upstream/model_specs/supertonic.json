@@ -1,0 +1,279 @@
+{
+  "family": "supertonic",
+  "display_name": "Supertonic 3",
+  "description": "Supertone on-device TTS model designed for fast local speech synthesis across 31 languages, with preset voices and compact deployment for browser, mobile, and desktop applications.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "en",
+    "ko",
+    "ja",
+    "ar",
+    "bg",
+    "cs",
+    "da",
+    "de",
+    "el",
+    "es",
+    "et",
+    "fi",
+    "fr",
+    "hi",
+    "hr",
+    "hu",
+    "id",
+    "it",
+    "lt",
+    "lv",
+    "nl",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "sv",
+    "tr",
+    "uk",
+    "vi"
+  ],
+  "capabilities": {
+    "tts": [
+      "built_in_voices",
+      "long_form"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "voice_id",
+        "type": "enum",
+        "values": [
+          "M1",
+          "M2",
+          "M3",
+          "M4",
+          "M5",
+          "F1",
+          "F2",
+          "F3",
+          "F4",
+          "F5"
+        ],
+        "default": "M1",
+        "description": "Built-in voice preset; --voice-id takes precedence.",
+        "required": false
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "min": 1,
+        "default": 8,
+        "description": "Flow denoising steps.",
+        "required": false
+      },
+      {
+        "name": "speed",
+        "type": "float",
+        "min": 0,
+        "default": 1.05,
+        "description": "Positive speech speed multiplier; voice.style.speaking_rate takes precedence.",
+        "required": false
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "min": 0,
+        "max": 4294967295,
+        "default": 1234,
+        "description": "Noise seed.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Framework text chunk size; defaults to 120 for Korean/Japanese, otherwise 300.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ],
+        "default": "default",
+        "description": "Framework text chunking mode.",
+        "required": false
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "preset": "weight_type_full",
+        "default": "native",
+        "description": "Weight storage type.",
+        "required": false
+      },
+      {
+        "name": "style_cache_slots",
+        "type": "int",
+        "min": 0,
+        "default": 4,
+        "description": "Cached preset style slots; zero disables reuse.",
+        "required": false
+      }
+    ],
+    "load": []
+  },
+  "ui": {
+    "recommended_package": "supertonic_3_orig",
+    "tags": [
+      "TTS",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "supertonic_3_q8_0",
+      "display_name": "Supertonic 3 Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Supertonic-3-GGUF",
+      "files": [
+        "Supertonic-3-GGUF/supertonic-3-q8_0.gguf"
+      ],
+      "strip_prefix": "Supertonic-3-GGUF"
+    },
+    {
+      "id": "supertonic_3_f16",
+      "display_name": "Supertonic 3 F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Supertonic-3-GGUF",
+      "files": [
+        "Supertonic-3-GGUF/supertonic-3-f16.gguf"
+      ],
+      "strip_prefix": "Supertonic-3-GGUF"
+    },
+    {
+      "id": "supertonic_3_orig",
+      "display_name": "Supertonic 3 Original-Dtype GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "Supertonic-3-GGUF",
+      "files": [
+        "Supertonic-3-GGUF/supertonic-3-orig.gguf"
+      ],
+      "strip_prefix": "Supertonic-3-GGUF"
+    },
+    {
+      "id": "supertonic_3_safetensors",
+      "display_name": "Supertonic 3 Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "supertonic-3",
+      "files": [
+        "config/tts.json",
+        "config/unicode_indexer.json",
+        "ggml/supertonic.safetensors",
+        "voice_styles/F1.json",
+        "voice_styles/F2.json",
+        "voice_styles/F3.json",
+        "voice_styles/F4.json",
+        "voice_styles/F5.json",
+        "voice_styles/M1.json",
+        "voice_styles/M2.json",
+        "voice_styles/M3.json",
+        "voice_styles/M4.json",
+        "voice_styles/M5.json"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "mlx-community/supertonic-3-mlx"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "tts_config": "model:config/tts.json",
+        "unicode_indexer": "model:config/unicode_indexer.json",
+        "voice_style_F1": "model:voice_styles/F1.json",
+        "voice_style_F2": "model:voice_styles/F2.json",
+        "voice_style_F3": "model:voice_styles/F3.json",
+        "voice_style_F4": "model:voice_styles/F4.json",
+        "voice_style_F5": "model:voice_styles/F5.json",
+        "voice_style_M1": "model:voice_styles/M1.json",
+        "voice_style_M2": "model:voice_styles/M2.json",
+        "voice_style_M3": "model:voice_styles/M3.json",
+        "voice_style_M4": "model:voice_styles/M4.json",
+        "voice_style_M5": "model:voice_styles/M5.json"
+      },
+      "tensors": {
+        "weights": {
+          "source": "weights:",
+          "prefix": "weights"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "tts_config": "model:config/tts.json",
+        "unicode_indexer": "model:config/unicode_indexer.json",
+        "voice_style_F1": "model:voice_styles/F1.json",
+        "voice_style_F2": "model:voice_styles/F2.json",
+        "voice_style_F3": "model:voice_styles/F3.json",
+        "voice_style_F4": "model:voice_styles/F4.json",
+        "voice_style_F5": "model:voice_styles/F5.json",
+        "voice_style_M1": "model:voice_styles/M1.json",
+        "voice_style_M2": "model:voice_styles/M2.json",
+        "voice_style_M3": "model:voice_styles/M3.json",
+        "voice_style_M4": "model:voice_styles/M4.json",
+        "voice_style_M5": "model:voice_styles/M5.json"
+      },
+      "tensors": {
+        "weights": "model:ggml/supertonic.safetensors"
+      }
+    }
+  ]
+}

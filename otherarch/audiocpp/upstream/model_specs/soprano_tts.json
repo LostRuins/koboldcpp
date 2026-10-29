@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "family": "soprano_tts",
+  "display_name": "Soprano",
+  "description": "Soprano is an ultra-lightweight (~80M) English-only text-to-speech model. Syntax uses a 17-layer Qwen3-style causal LM (hidden 512, vocab 8192) that autoregressively emits per-frame 512-dimensional features; a non-iterative Vocos-style decoder (ConvNeXt backbone + single ISTFT head, n_fft 2048 / hop 512) turns those features into 32 kHz audio. No diffusion refinement is performed in the decoder.",
+  "category": "tts",
+  "status": "community",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "en"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "long_form"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated audio frames for the autoregressive LM; default 512.",
+        "required": false,
+        "min": 1,
+        "default": 512
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Autoregressive sampling temperature; must be > 0, default 0.3.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.3
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Nucleus sampling probability; default 0.95. Values >=1 disable nucleus filtering.",
+        "required": false,
+        "min": 0,
+        "default": 0.95
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "description": "Repetition penalty applied to the LM head; default 1.2. Must be positive; values below 1 are accepted.",
+        "required": false,
+        "default": 1.2
+      },
+      {
+        "name": "eos_bias",
+        "type": "float",
+        "description": "Additive bias on the EOS token logit during generation. Positive values make the model stop sooner when speech ends (mitigating runaway generations that hit max_tokens); negative values encourage longer utterances. Default 0 disables the adjustment.",
+        "required": false,
+        "default": 0.0
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Autoregressive sampling seed; omitted requests choose a random seed.",
+        "required": false,
+        "min": 0
+      }
+    ],
+    "session": [
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Maximum codepoints per sentence chunk before the model generates and decodes separately. Smaller values keep prompts short (more reliable EOS) but increase overhead. Default 200.",
+        "required": false,
+        "min": 1,
+        "default": 200
+      },
+      {
+        "name": "backbone_weight_type",
+        "type": "enum",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "f32",
+        "description": "Storage type for the Qwen3 LM backbone weights."
+      },
+      {
+        "name": "decoder_weight_type",
+        "type": "enum",
+        "preset": "weight_type_conv",
+        "required": false,
+        "default": "f32",
+        "description": "Storage type for the Vocos decoder weights."
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "WalkingCat/Soprano-1.1-80M-GGUF",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "soprano_1_1_80m_q8_0",
+      "display_name": "Soprano-1.1-80M Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Soprano-1.1-80M-GGUF",
+      "files": [
+        "Soprano-1.1-80M-GGUF/soprano-1.1-80m-q8_0.gguf"
+      ],
+      "strip_prefix": "Soprano-1.1-80M-GGUF"
+    },
+    {
+      "id": "soprano_1_1_80m_bf16",
+      "display_name": "Soprano-1.1-80M BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "Soprano-1.1-80M-GGUF",
+      "files": [
+        "Soprano-1.1-80M-GGUF/soprano-1.1-80m-bf16.gguf"
+      ],
+      "strip_prefix": "Soprano-1.1-80M-GGUF"
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "soprano_1_1_80m_q8_0",
+    "tags": [
+      "TTS",
+      "Stream"
+    ],
+    "docs": [
+      "docs/models/soprano_tts.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "backbone": "weights:",
+        "decoder": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "backbone": "model:combined.safetensors",
+        "decoder": "model:combined.safetensors"
+      }
+    }
+  ]
+}

@@ -266,6 +266,10 @@ extern "C"
     {
         return musictype_generate(inputs);
     }
+    const char * music_get_family()
+    {
+        return musictype_get_family();
+    }
 
     const char * new_token(int idx) {
         return gpttype_new_token(idx);

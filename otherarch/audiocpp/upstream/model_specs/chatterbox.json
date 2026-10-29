@@ -1,0 +1,347 @@
+{
+  "family": "chatterbox",
+  "display_name": "Chatterbox",
+  "description": "Open-source Chatterbox family for expressive TTS and voice conversion, with emotion exaggeration control, fast generation, zero-shot voice cloning, and an integrated multilingual TTS path.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone",
+    "vc"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "ar",
+    "da",
+    "de",
+    "el",
+    "en",
+    "es",
+    "fi",
+    "fr",
+    "hi",
+    "it",
+    "ko",
+    "ms",
+    "nl",
+    "no",
+    "pl",
+    "pt",
+    "sv",
+    "sw",
+    "tr"
+  ],
+  "options": {
+    "request": [
+      {
+        "name": "exaggeration",
+        "type": "float",
+        "description": "Emotion exaggeration. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.5
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "T3 classifier-free guidance scale. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.5
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "T3 sampling temperature. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.8
+      },
+      {
+        "name": "repetition_penalty",
+        "type": "float",
+        "description": "T3 repetition penalty. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 1.2
+      },
+      {
+        "name": "min_p",
+        "type": "float",
+        "description": "Minimum sampling probability. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.05
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Nucleus sampling probability. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "flow_guidance_scale",
+        "type": "float",
+        "description": "S3Gen flow guidance scale. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": 0.7
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated speech tokens. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "min": 1,
+        "default": 384
+      },
+      {
+        "name": "do_sample",
+        "type": "bool",
+        "description": "Enable sampling. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "stop_on_eos",
+        "type": "bool",
+        "description": "Stop token generation on EOS. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "Voice conversion flow steps; max_steps is also accepted.",
+        "required": false,
+        "min": 1,
+        "default": 10
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Sampling seed; omitted chooses a random seed. Captured during clone preparation; changing it on the same prepared session is rejected.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295
+      },
+      {
+        "name": "source_audio",
+        "type": "audio_path",
+        "description": "Voice conversion source WAV path; overrides audio_input.",
+        "required": false
+      },
+      {
+        "name": "target_voice",
+        "type": "audio_path",
+        "description": "Voice conversion target WAV path; overrides the speaker reference.",
+        "required": false
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Framework long-form text chunk size.",
+        "required": false,
+        "default": 128
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Weight storage type; defaults to native.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "t3_weight_type",
+        "type": "enum",
+        "description": "T3 weight storage; inherits weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "multilingual_t3",
+        "type": "enum",
+        "description": "Multilingual T3 checkpoint selection.",
+        "required": false,
+        "values": [
+          "v2",
+          "v3"
+        ],
+        "default": "v2"
+      },
+      {
+        "name": "conditionals_cache_slots",
+        "type": "int",
+        "description": "Cached speaker conditionals; zero disables reuse.",
+        "required": false,
+        "min": 0,
+        "default": 1
+      },
+      {
+        "name": "mem_saver",
+        "type": "bool",
+        "description": "Release staged runtime components.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "encoder_condition_samples",
+        "type": "int",
+        "description": "Maximum reference samples for the T3 tokenizer; the voice encoder still consumes the full 16 kHz reference.",
+        "required": false,
+        "default": 96000
+      },
+      {
+        "name": "decoder_condition_samples",
+        "type": "int",
+        "description": "S3Gen reference sample limit at 24 kHz.",
+        "required": false,
+        "default": 240000
+      },
+      {
+        "name": "t3_speech_cond_prompt_len",
+        "type": "int",
+        "description": "T3 reference speech prompt token limit.",
+        "required": false,
+        "default": 150
+      }
+    ],
+    "load": []
+  },
+  "capabilities": {
+    "clone": [
+      "speaker_reference"
+    ],
+    "vc": [
+      "speaker_reference"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "chatterbox_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "VC",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "chatterbox_q8_0",
+      "display_name": "Chatterbox Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Chatterbox-GGUF",
+      "files": [
+        "Chatterbox-GGUF/chatterbox-q8_0.gguf"
+      ],
+      "strip_prefix": "Chatterbox-GGUF"
+    },
+    {
+      "id": "chatterbox_f16",
+      "display_name": "Chatterbox F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Chatterbox-GGUF",
+      "files": [
+        "Chatterbox-GGUF/chatterbox-f16.gguf"
+      ],
+      "strip_prefix": "Chatterbox-GGUF"
+    },
+    {
+      "id": "chatterbox_safetensors",
+      "display_name": "Chatterbox Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "chatterbox",
+      "files": [
+        "ve.safetensors",
+        "t3_cfg.safetensors",
+        "s3gen.safetensors",
+        "tokenizer.json",
+        "grapheme_mtl_merged_expanded_v1.json",
+        "Cangjie5_TC.json",
+        "conds.pt",
+        "t3_mtl23ls_v2.safetensors",
+        "t3_mtl23ls_v3.safetensors"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "ResembleAI/chatterbox"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "english_tokenizer": "model:tokenizer.json",
+        "multilingual_tokenizer": "model:grapheme_mtl_merged_expanded_v1.json",
+        "cangjie_mapping": "model:Cangjie5_TC.json",
+        "builtin_conditionals": "model:conds.pt"
+      },
+      "tensors": {
+        "voice_encoder_weights": {
+          "source": "weights:",
+          "prefix": "voice_encoder"
+        },
+        "s3gen_weights": {
+          "source": "weights:",
+          "prefix": "s3gen"
+        },
+        "t3_english_weights": {
+          "source": "weights:",
+          "prefix": "t3_english"
+        },
+        "t3_multilingual_v2_weights": {
+          "source": "weights:",
+          "prefix": "t3_multilingual_v2"
+        },
+        "t3_multilingual_v3_weights": {
+          "source": "weights:",
+          "prefix": "t3_multilingual_v3"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "english_tokenizer": "model:tokenizer.json",
+        "multilingual_tokenizer": "model:grapheme_mtl_merged_expanded_v1.json",
+        "cangjie_mapping": "model:Cangjie5_TC.json",
+        "builtin_conditionals": "model:conds.pt"
+      },
+      "tensors": {
+        "voice_encoder_weights": "model:ve.safetensors",
+        "s3gen_weights": "model:s3gen.safetensors",
+        "t3_english_weights": "model:t3_cfg.safetensors",
+        "t3_multilingual_v2_weights": "model:t3_mtl23ls_v2.safetensors",
+        "t3_multilingual_v3_weights": "model:t3_mtl23ls_v3.safetensors"
+      }
+    }
+  ]
+}

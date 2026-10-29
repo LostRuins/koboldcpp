@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "family": "ming3_tts",
+  "display_name": "Ming 3.0 TTS 0.5B",
+  "description": "Multilingual continuous-latent speech synthesis with a Qwen backbone, flow-matching acoustic head, CAMPPlus speaker conditioning and an audio VAE.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone",
+    "design"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "zh",
+    "en",
+    "ja",
+    "ko",
+    "de",
+    "fr",
+    "es"
+  ],
+  "capabilities": {
+    "tts": [
+      "long_form",
+      "speaker_reference",
+      "style_control",
+      "emotion_control",
+      "built_in_voices"
+    ],
+    "clone": [
+      "long_form",
+      "speaker_reference",
+      "style_control",
+      "emotion_control"
+    ],
+    "design": [
+      "voice_design"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "template_name",
+        "type": "enum",
+        "required": false,
+        "description": "Conditioning template; defaults to voice_design on that route, otherwise tts.",
+        "values": [
+          "tts",
+          "multilingual",
+          "basic",
+          "emotion",
+          "dialect",
+          "ip",
+          "voice_design",
+          "freeform"
+        ]
+      },
+      {
+        "name": "language",
+        "type": "string",
+        "required": false,
+        "description": "Target language name or code; defaults to the request's language (the server's top-level language field, the CLI's --language). Required by multilingual; ignored by dialect."
+      },
+      {
+        "name": "instruct",
+        "type": "string",
+        "required": false,
+        "description": "Voice description for voice_design; raw conditioning text for freeform or tts."
+      },
+      {
+        "name": "instruction_schema",
+        "type": "enum",
+        "required": false,
+        "description": "Structured instruction field language; defaults to en for dialect, otherwise zh.",
+        "values": [
+          "en",
+          "zh"
+        ]
+      },
+      {
+        "name": "speed",
+        "type": "enum",
+        "required": false,
+        "description": "Categorical speaking speed for the basic template, not waveform resampling.",
+        "values": [
+          "慢速",
+          "中速",
+          "快速"
+        ]
+      },
+      {
+        "name": "pitch",
+        "type": "enum",
+        "required": false,
+        "description": "Categorical pitch for the basic template.",
+        "values": [
+          "低",
+          "中",
+          "高"
+        ]
+      },
+      {
+        "name": "volume",
+        "type": "enum",
+        "required": false,
+        "description": "Categorical volume for the basic template.",
+        "values": [
+          "低",
+          "中",
+          "高"
+        ]
+      },
+      {
+        "name": "emotion",
+        "type": "string",
+        "required": false,
+        "description": "Emotion label for the emotion template."
+      },
+      {
+        "name": "dialect",
+        "type": "enum",
+        "required": false,
+        "description": "Dialect for the dialect template.",
+        "values": [
+          "chuanyu dialect",
+          "cantonese"
+        ]
+      },
+      {
+        "name": "voice_id",
+        "type": "enum",
+        "required": false,
+        "description": "Built-in English voice for the ip template.",
+        "values": [
+          "US_Emma",
+          "US_James",
+          "UK_George",
+          "UK_Charlotte"
+        ]
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "required": false,
+        "description": "Transcript accompanying voice_ref; enables the acoustic reference prefix. Without a transcript, only speaker conditioning is used."
+      },
+      {
+        "name": "speaker_embedding_file",
+        "type": "path_list",
+        "required": false,
+        "description": "CAMPPlus embedding file or list, with shape [192] or [1, 192]. Supersedes voice_ref audio; zero_speaker_embedding takes precedence."
+      },
+      {
+        "name": "use_speaker_embedding",
+        "type": "bool",
+        "required": false,
+        "default": true,
+        "description": "Condition on the reference speaker embedding."
+      },
+      {
+        "name": "zero_speaker_embedding",
+        "type": "bool",
+        "required": false,
+        "default": false,
+        "description": "Use a zero projected speaker row instead of reference audio conditioning."
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "required": false,
+        "default": 1000,
+        "min": 1,
+        "description": "Maximum generated acoustic patches per text chunk, also limited by the 512-position generation context."
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "required": false,
+        "default": 2,
+        "description": "Flow guidance: conditioned prediction plus guidance_scale times its difference from the null prediction."
+      },
+      {
+        "name": "sigma",
+        "type": "float",
+        "required": false,
+        "default": 0.25,
+        "min": 0,
+        "description": "Flow SDE noise scale."
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "required": false,
+        "default": 0,
+        "min": 0,
+        "description": "Flow sampling temperature; zero still uses seeded initial noise."
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "required": false,
+        "default": 1895,
+        "min": 0,
+        "description": "Reference-posterior and generation noise seed."
+      },
+      {
+        "name": "raw_text",
+        "type": "bool",
+        "required": false,
+        "default": false,
+        "description": "Send the text as one synthesis fragment without frontend chunking."
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "required": false,
+        "min": 1,
+        "description": "Framework long-form chunk budget in Unicode codepoints; default 50 when hanzi, kana and Hangul outnumber other letters and digits, otherwise 300 (120 for voice design and freeform, whose chunks after the first use the first generated chunk as their reference)."
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "required": false,
+        "default": "tag_aware",
+        "description": "Framework text chunking policy.",
+        "values": [
+          "default",
+          "tag_aware",
+          "japanese",
+          "endline"
+        ]
+      },
+      {
+        "name": "trim_silence",
+        "type": "bool",
+        "required": false,
+        "default": true,
+        "description": "Trim trailing low-energy 100-ms frames per fragment, retaining a 300-ms tail."
+      }
+    ],
+    "session": [
+      {
+        "name": "reference_cache",
+        "type": "bool",
+        "required": false,
+        "default": true,
+        "description": "Reuse prepared conditioning for the most recently used reference waveform."
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/Ming-3.0-TTS-0.5B-GGUF",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "ming_3_0_tts_0_5b_bf16",
+      "display_name": "Ming 3.0 TTS 0.5B BF16",
+      "format": "gguf",
+      "precision": "bf16",
+      "default": true,
+      "target_directory": "Ming-3.0-TTS-0.5B-GGUF",
+      "files": [
+        "ming-3.0-tts-0.5b-bf16.gguf"
+      ]
+    },
+    {
+      "id": "ming_3_0_tts_0_5b_q8_0",
+      "display_name": "Ming 3.0 TTS 0.5B Q8_0",
+      "format": "gguf",
+      "precision": "q8_0",
+      "default": false,
+      "target_directory": "Ming-3.0-TTS-0.5B-GGUF",
+      "files": [
+        "ming-3.0-tts-0.5b-q8_0.gguf"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "ming_3_0_tts_0_5b_bf16",
+    "tags": [
+      "TTS",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/ming3_tts.md"
+    ]
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "tensors": {
+        "weights": "weights:",
+        "speaker": {
+          "source": "weights:",
+          "prefix": "speaker"
+        }
+      }
+    }
+  ]
+}

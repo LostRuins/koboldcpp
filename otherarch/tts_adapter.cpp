@@ -7,10 +7,13 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <map>
+#include <memory>
 #include <regex>
 #include <string>
 #include <thread>
@@ -51,6 +54,13 @@
 #include "audio_tokenizer_decoder.cpp"
 #include "audio_tokenizer_encoder.cpp"
 #include "coreml_code_predictor_stub.cpp"
+
+#include "engine/framework/io/json.h"
+
+// Audio.cpp selective integration. The sync script generates this include
+// list from the model slices present in the vendored tree; the adapter below
+// remains family-agnostic as support expands.
+#include "kcpp_tts_registry_headers.inc"
 
 enum TTS_VER
 {
@@ -512,6 +522,52 @@ static bool is_qwen3tts_file = false;
 static qwen3_tts::Qwen3TTS qwen3tts_runner;
 extern bool qwen3tts_allowgpu;
 
+// Audio.cpp selective TTS integration
+struct audiocpp_tts_loader_entry {
+    const char * family;
+    std::shared_ptr<engine::runtime::IVoiceModelLoader> loader;
+};
+
+static const std::vector<audiocpp_tts_loader_entry> & audiocpp_tts_loaders()
+{
+    static const std::vector<audiocpp_tts_loader_entry> loaders = {
+#include "kcpp_tts_registry_loaders.inc"
+    };
+    return loaders;
+}
+
+static const audiocpp_tts_loader_entry * audiocpp_find_tts_loader(const std::string & family)
+{
+    for (const auto & entry : audiocpp_tts_loaders()) {
+        if (entry.family == family || entry.loader->family() == family) {
+            return &entry;
+        }
+        const auto aliases = entry.loader->family_aliases();
+        if (std::find(aliases.begin(), aliases.end(), family) != aliases.end()) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+static const audiocpp_tts_loader_entry * audiocpp_probe_tts_loader(const std::string & model_path)
+{
+    engine::runtime::ModelLoadRequest request;
+    request.model_path = model_path;
+    for (const auto & entry : audiocpp_tts_loaders()) {
+        if (entry.loader->can_load(request)) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+static bool is_audiocpp_tts = false;
+static std::string audiocpp_tts_family;
+static std::shared_ptr<engine::runtime::IVoiceModelLoader> audiocpp_tts_loader;
+static std::unique_ptr<engine::runtime::ILoadedVoiceModel> audiocpp_tts_model;
+static std::unique_ptr<engine::runtime::IVoiceTaskSession> audiocpp_tts_session;
+
 int total_tts_gens = 0;
 static std::string tts_executable_path = "";
 
@@ -532,10 +588,40 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     std::string modelfile_ttc = inputs.ttc_model_filename;
     std::string modelfile_cts = inputs.cts_model_filename;
     detectedarch = gguf_get_model_arch(modelfile_ttc);
+    const std::string embedded_audiocpp_family = detectedarch == "audiocpp"
+        ? gguf_get_string(modelfile_ttc, "audiocpp.model_spec.family")
+        : "";
 
     is_ttscpp_file = false;
     is_qwen3tts_file = false;
-    if (detectedarch=="qwen3-tts")
+    is_audiocpp_tts = false;
+    audiocpp_tts_family.clear();
+    audiocpp_tts_loader.reset();
+    audiocpp_tts_session.reset();
+    audiocpp_tts_model.reset();
+
+    const audiocpp_tts_loader_entry * selected_audiocpp_loader = nullptr;
+    if (detectedarch == "audiocpp") {
+        selected_audiocpp_loader = audiocpp_find_tts_loader(embedded_audiocpp_family);
+    } else if (!detectedarch.empty()) {
+        // Some early Audio.cpp GGUFs used the family directly as the GGUF
+        // architecture rather than the generic audiocpp marker.
+        selected_audiocpp_loader = audiocpp_find_tts_loader(detectedarch);
+    } else if (!modelfile_ttc.empty()) {
+        // Audio.cpp packages may be directories or safetensors bundles rather
+        // than llama-style GGUFs, so architecture metadata is not sufficient.
+        selected_audiocpp_loader = audiocpp_probe_tts_loader(modelfile_ttc);
+    }
+    if (selected_audiocpp_loader != nullptr) {
+        is_audiocpp_tts = true;
+        audiocpp_tts_family = selected_audiocpp_loader->family;
+        audiocpp_tts_loader = selected_audiocpp_loader->loader;
+    }
+
+    if (is_audiocpp_tts) {
+        printf("\nLoading Audio.cpp %s Model: %s\n", audiocpp_tts_family.c_str(), modelfile_ttc.c_str());
+    }
+    else if (detectedarch=="qwen3-tts")
     {
         is_qwen3tts_file = true;
         printf("\nLoading Qwen3-TTS Model: %s, Arch: %s \n",modelfile_ttc.c_str(), detectedarch.c_str());
@@ -548,6 +634,10 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
             //setup kokoro IPA
             populate_kokoro_ipa_map(tts_executable_path);
         }
+    } else if (detectedarch == "audiocpp") {
+        printf("\nUnsupported Audio.cpp TTS family: %s\n",
+            embedded_audiocpp_family.empty() ? "<missing>" : embedded_audiocpp_family.c_str());
+        return false;
     }else{
         printf("\nLoading OuteTTS Model, OuteTTS: %s \nWavTokenizer: %s \n",modelfile_ttc.c_str(),modelfile_cts.c_str());
         if(modelfile_ttc=="" || modelfile_cts=="")
@@ -561,7 +651,89 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     tts_max_len = inputs.ttsmaxlen;
 
     // tts init
-    if (is_ttscpp_file) {
+    if (is_audiocpp_tts) {
+        try {
+            engine::runtime::ModelLoadRequest request;
+            request.model_path = modelfile_ttc;
+            request.family_hint = audiocpp_tts_family;
+            if (audiocpp_tts_family == "pocket_tts") {
+                // Audio.cpp's PocketTTS checkpoints are language-specific, but
+                // KoboldCpp's load ABI has no separate model-language field.
+                // Official packages carry the language in the GGUF/path name.
+                std::string normalized_path = modelfile_ttc;
+                std::transform(normalized_path.begin(), normalized_path.end(), normalized_path.begin(),
+                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                static const std::vector<std::string> pocket_languages = {
+                    "english", "french", "german", "italian", "portuguese", "spanish"};
+                const auto language = std::find_if(
+                    pocket_languages.begin(), pocket_languages.end(), [&](const std::string & candidate) {
+                        return normalized_path.find(candidate) != std::string::npos;
+                    });
+                request.options["pocket_tts.language"] = language != pocket_languages.end()
+                    ? *language : "english";
+            }
+            audiocpp_tts_model = audiocpp_tts_loader->load(request);
+            engine::runtime::SessionOptions options;
+            options.backend.type = inputs.gpulayers > 0
+                ? engine::core::BackendType::BestAvailable
+                : engine::core::BackendType::Cpu;
+            if (audiocpp_tts_family == "vibevoice" &&
+                options.backend.type == engine::core::BackendType::BestAvailable) {
+                // VibeVoice validates the requested backend before Audio.cpp's
+                // BestAvailable path gets a chance to resolve it. Convert the
+                // loaded ggml registry name to the concrete backend it expects.
+                options.backend.type = engine::core::BackendType::Cpu;
+                const auto devices = engine::core::list_backend_devices();
+                for (const auto & device : devices) {
+                    if (device.backend == "CUDA") {
+                        options.backend.type = engine::core::BackendType::Cuda;
+                        break;
+                    }
+                    if (device.backend == "ROCm") {
+                        options.backend.type = engine::core::BackendType::Hip;
+                        break;
+                    }
+                    if (device.backend == "Vulkan") {
+                        options.backend.type = engine::core::BackendType::Vulkan;
+                        break;
+                    }
+                    if (device.backend == "MTL") {
+                        options.backend.type = engine::core::BackendType::Metal;
+                        break;
+                    }
+                }
+            }
+            if (audiocpp_tts_family == "kitten_tts2" && inputs.gpulayers > 0) {
+                const auto devices = engine::core::list_backend_devices();
+                const bool has_vulkan = std::any_of(devices.begin(), devices.end(), [](const auto & device) {
+                    return device.backend == "Vulkan";
+                });
+                if (has_vulkan) {
+                    // kcpp: Kitten TTS 2's hybrid-Q4 language model produces
+                    // non-finite logits with ggml-vulkan. Keep this fallback at
+                    // the session boundary so every Kitten component runs on
+                    // the known-good CPU path; CUDA and CPU builds are unchanged.
+                    options.backend.type = engine::core::BackendType::Cpu;
+                    printf("Audio.cpp kitten_tts2: Vulkan is not supported; using CPU instead.\n");
+                }
+            }
+            options.backend.device = std::max(0, inputs.kcpp_main_gpu);
+            options.backend.threads = std::max(1, inputs.threads);
+            if (audiocpp_tts_family == "qwen3_tts" && inputs.flash_attention) {
+                options.options["qwen3_tts.perf_mode"] = "flash_attention";
+            }
+            audiocpp_tts_session = audiocpp_tts_model->create_task_session(
+                {engine::runtime::VoiceTaskKind::Tts, engine::runtime::RunMode::Offline},
+                options);
+        } catch (const std::exception & error) {
+            printf("\nAudio.cpp %s Load Error: %s\n", audiocpp_tts_family.c_str(), error.what());
+            audiocpp_tts_session.reset();
+            audiocpp_tts_model.reset();
+            audiocpp_tts_loader.reset();
+            return false;
+        }
+    }
+    else if (is_ttscpp_file) {
         ttscpp_config = new generation_configuration("am_echo", 25, 1.0, 1.0, true, "", 1600, 1.0);
         ttscpp_runner = runner_from_file(modelfile_ttc, inputs.threads, ttscpp_config, true);
         if (ttscpp_runner == nullptr) {
@@ -727,6 +899,7 @@ static tts_generation_outputs ttstype_generate_ttscpp(const tts_generation_input
         std::vector<float> wavdat = std::vector(response_data.data, response_data.data + response_data.n_outputs);
         //audio_post_clean(wavdat);
         last_generated_audio = save_tts_audio_base64(wavdat, ttscpp_runner->sampling_rate, inputs.use_mp3);
+        printf("TTS Request complete.\n");
         output.data = last_generated_audio.c_str();
         output.status = 1;
         last_generation_settings_audio_seed = 0;
@@ -1139,10 +1312,10 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
             return output;
         }
 
-        last_generated_audio = save_tts_audio_base64(audio, t_sr, inputs.use_mp3);
         ttstime = timer_check();
-
         printf("\nTTS Generated %d audio tokens in %.2fs.\n",(int) codes.size(),ttstime);
+        last_generated_audio = save_tts_audio_base64(audio, t_sr, inputs.use_mp3);
+        printf("TTS Request complete.\n");
 
         output.data = last_generated_audio.c_str();
         output.status = 1;
@@ -1251,6 +1424,7 @@ static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inp
         ttstime = timer_check();
         printf("\nTTS Generated audio in %.2fs.\n",ttstime);
         last_generated_audio = save_tts_audio_base64(result.audio, result.sample_rate, inputs.use_mp3);
+        printf("TTS Request complete.\n");
         output.data = last_generated_audio.c_str();
         output.status = 1;
         last_generation_settings_audio_seed = inputs.audio_seed;
@@ -1262,9 +1436,412 @@ static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inp
     }
 }
 
+static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inputs inputs)
+{
+    tts_generation_outputs output;
+    auto * offline = audiocpp_tts_session
+        ? dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(audiocpp_tts_session.get())
+        : nullptr;
+    if (offline == nullptr) {
+        printf("\nWarning: Audio.cpp %s is not initialized.\n", audiocpp_tts_family.c_str());
+        output.data = "";
+        output.status = 0;
+        return output;
+    }
+
+    try {
+        std::string prompt = inputs.prompt != nullptr ? inputs.prompt : "";
+        if (tts_max_len > 0) {
+            prompt = TruncateToFirstNumberWords(prompt, tts_max_len);
+        }
+
+        engine::runtime::TaskRequest request;
+        engine::runtime::Transcript transcript;
+        transcript.text = std::move(prompt);
+        transcript.language = inputs.language != nullptr ? inputs.language : "";
+        request.text_input = std::move(transcript);
+
+        if (audiocpp_tts_family == "vibevoice") {
+            // VibeVoice requires speaker-labelled lines even for one speaker.
+            // Preserve explicitly labelled podcast/dialogue prompts verbatim.
+            static const std::regex speaker_line(
+                R"((^|[\r\n])Speaker\s+[0-9]+\s*:)", std::regex::icase);
+            if (!std::regex_search(request.text_input->text, speaker_line)) {
+                request.text_input->text.insert(0, "Speaker 1: ");
+            }
+        }
+
+        std::string audiocpp_requested_voice;
+        bool audiocpp_named_voice_alias = false;
+        std::string audiocpp_applied_instruction;
+        const std::string audiocpp_extra_params_json = inputs.audiocpp_extra_params_json != nullptr
+            ? inputs.audiocpp_extra_params_json : "";
+        if (!audiocpp_extra_params_json.empty()) {
+            const auto options = engine::io::json::parse(audiocpp_extra_params_json);
+            if (!options.is_object()) {
+                throw std::runtime_error("Audio.cpp request options must be a JSON object");
+            }
+            for (const auto & [key, value] : options.as_object()) {
+                if (key == "__kcpp_voice") {
+                    if (value.is_string()) {
+                        audiocpp_requested_voice = value.as_string();
+                    }
+                    continue;
+                }
+                if (value.is_string()) {
+                    request.options[key] = value.as_string();
+                } else if (value.is_number()) {
+                    request.options[key] = engine::io::json::stringify_number(value.as_number());
+                } else if (value.is_bool()) {
+                    request.options[key] = value.as_bool() ? "true" : "false";
+                }
+            }
+        }
+
+        if (audiocpp_tts_family == "fish_audio") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            const auto first = std::find_if_not(instruction.begin(), instruction.end(),
+                [](unsigned char ch) { return std::isspace(ch); });
+            const auto last = std::find_if_not(instruction.rbegin(), instruction.rend(),
+                [](unsigned char ch) { return std::isspace(ch); }).base();
+            instruction = first < last ? std::string(first, last) : "";
+            if (!instruction.empty()) {
+                // Fish S2 Pro consumes free-form delivery instructions as
+                // leading bracket tags in the transcript itself.
+                if (instruction.front() != '[' || instruction.back() != ']') {
+                    instruction = "[" + instruction + "]";
+                }
+                audiocpp_applied_instruction = instruction;
+                request.text_input->text.insert(0, instruction + " ");
+            }
+        } else if (audiocpp_tts_family == "voxcpm2") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            const auto first = std::find_if_not(instruction.begin(), instruction.end(),
+                [](unsigned char ch) { return std::isspace(ch); });
+            const auto last = std::find_if_not(instruction.rbegin(), instruction.rend(),
+                [](unsigned char ch) { return std::isspace(ch); }).base();
+            instruction = first < last ? std::string(first, last) : "";
+            if (!instruction.empty()) {
+                // VoxCPM2's native voice-design convention is a parenthesized
+                // style description directly before the spoken transcript.
+                if (instruction.front() != '(' || instruction.back() != ')') {
+                    instruction = "(" + instruction + ")";
+                }
+                audiocpp_applied_instruction = instruction;
+                request.text_input->text.insert(0, instruction);
+            }
+        } else if (audiocpp_tts_family == "supertonic") {
+            std::string voice = inputs.custom_speaker_voice != nullptr
+                ? inputs.custom_speaker_voice : "";
+            std::transform(voice.begin(), voice.end(), voice.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::toupper(ch));
+            });
+            const bool named_preset = voice.size() == 2 &&
+                (voice[0] == 'M' || voice[0] == 'F') && voice[1] >= '1' && voice[1] <= '5';
+            if (!named_preset) {
+                // The shared API also passes aliases such as "alloy" here.
+                // Supertonic itself only accepts its ten built-in ids.
+                voice.clear();
+            }
+            if (voice.empty() && inputs.speaker_seed >= 1 && inputs.speaker_seed <= 10) {
+                static const char * preset_voices[] = {
+                    "M1", "F2", "F3", "M5", "F5",
+                    "M2", "M3", "M4", "F1", "F4",
+                };
+                voice = preset_voices[inputs.speaker_seed - 1];
+            }
+            engine::runtime::VoiceReference reference;
+            if (!voice.empty()) {
+                reference.cached_voice_id = std::move(voice);
+                engine::runtime::VoiceCondition condition;
+                condition.speaker = std::move(reference);
+                request.voice = std::move(condition);
+            }
+        } else if (audiocpp_tts_family == "maya1") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            const bool supplied_instruction = !instruction.empty();
+            if (instruction.empty()) {
+                instruction = "A clear, natural, expressive voice.";
+            } else {
+                // Maya1's description and utterance share one token stream.
+                // Unterminated descriptions can leak into the spoken content,
+                // especially for short utterances. Keep the XML-like wrapper
+                // intact and give the description an explicit sentence end.
+                while (!instruction.empty() && std::isspace(
+                        static_cast<unsigned char>(instruction.back()))) {
+                    instruction.pop_back();
+                }
+                std::replace(instruction.begin(), instruction.end(), '"', '\'');
+                if (!instruction.empty() && instruction.back() != '.' &&
+                    instruction.back() != '!' && instruction.back() != '?') {
+                    instruction.push_back('.');
+                }
+            }
+            if (supplied_instruction) {
+                audiocpp_applied_instruction = instruction;
+            }
+            request.options["instruct"] = std::move(instruction);
+        } else if (audiocpp_tts_family == "cosyvoice3") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+            }
+            // Natural-language instructions select the matching upstream
+            // prompt automatically unless the caller explicitly chose a
+            // zero-shot or cross-lingual template. This also covers callers
+            // that supplied `instruct` directly in the Audio.cpp options.
+            if (request.options.find("instruct") != request.options.end() &&
+                request.options.find("template_name") == request.options.end()) {
+                request.options["template_name"] = "instruct";
+            }
+        } else if (audiocpp_tts_family == "breeze_tts") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+            }
+        } else if (audiocpp_tts_family == "ming3_tts") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+                // The shared instruction field means unrestricted delivery
+                // control for Ming. Preserve an explicit template override so
+                // callers can still select voice_design or structured modes.
+                if (request.options.find("template_name") == request.options.end()) {
+                    request.options["template_name"] = "freeform";
+                }
+            }
+        } else if (audiocpp_tts_family == "omnivoice") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+            }
+        } else if (audiocpp_tts_family == "qwen3_tts") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+            }
+
+            // CustomVoice checkpoints use one of nine packaged speakers. Base
+            // and VoiceDesign checkpoints safely ignore this option, so the
+            // embedded model variant remains the sole mode selector.
+            if (request.options.find("voice_id") == request.options.end()) {
+                std::string voice = std::move(audiocpp_requested_voice);
+                std::transform(voice.begin(), voice.end(), voice.begin(),
+                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                if (voice.size() > 4 && voice.substr(voice.size() - 4) == ".wav") {
+                    voice.resize(voice.size() - 4);
+                }
+                static const std::vector<std::string> qwen3_custom_voices = {
+                    "aiden", "serena", "ono_anna", "ryan", "sohee",
+                    "eric", "dylan", "vivian", "uncle_fu",
+                };
+                const auto named_voice = std::find(
+                    qwen3_custom_voices.begin(), qwen3_custom_voices.end(), voice);
+                if (named_voice != qwen3_custom_voices.end()) {
+                    request.options["voice_id"] = *named_voice;
+                } else if (inputs.speaker_seed >= 1 &&
+                           inputs.speaker_seed <= static_cast<int>(qwen3_custom_voices.size())) {
+                    request.options["voice_id"] = qwen3_custom_voices[inputs.speaker_seed - 1];
+                }
+            }
+        } else if (audiocpp_tts_family == "neutts") {
+            std::string voice = std::move(audiocpp_requested_voice);
+            std::transform(voice.begin(), voice.end(), voice.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            static const std::map<std::string, std::string> kcpp_voice_aliases = {
+                {"kobo", "paul"},
+                {"cheery", "emily"},
+                {"sleepy", "sophie"},
+                {"shouty", "steven"},
+                {"chatty", "jo"},
+            };
+            static const std::vector<std::string> built_in_voices = {
+                "dave", "emily", "greta", "jo", "juliette",
+                "mateo", "paul", "sophie", "steven",
+            };
+            if (const auto alias = kcpp_voice_aliases.find(voice);
+                alias != kcpp_voice_aliases.end()) {
+                voice = alias->second;
+            }
+            if (std::find(built_in_voices.begin(), built_in_voices.end(), voice) !=
+                built_in_voices.end()) {
+                request.options["voice_id"] = std::move(voice);
+            }
+        } else if (audiocpp_tts_family == "kitten_tts2") {
+            std::string voice = std::move(audiocpp_requested_voice);
+            static const std::map<std::string, std::string> kcpp_voice_aliases = {
+                {"kobo", "Frank"},
+                {"cheery", "Rosie"},
+                {"sleepy", "Willow"},
+                {"shouty", "Otis"},
+                {"chatty", "Iris"},
+            };
+            static const std::vector<std::string> generic_voice_aliases = {
+                "", "alloy", "onyx", "echo", "nova", "shimmer", "random", "instruct",
+            };
+            std::string normalized_voice = voice;
+            std::transform(normalized_voice.begin(), normalized_voice.end(), normalized_voice.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (const auto alias = kcpp_voice_aliases.find(normalized_voice);
+                alias != kcpp_voice_aliases.end()) {
+                voice = alias->second;
+                // These names also exist in KoboldCpp's embedded Qwen voice
+                // bank. For Kitten they select prepared voices, not the
+                // embedded reference clips used by cloning models.
+                audiocpp_named_voice_alias = true;
+            }
+            if (std::find(generic_voice_aliases.begin(), generic_voice_aliases.end(), normalized_voice) ==
+                generic_voice_aliases.end()) {
+                request.options["voice_id"] = std::move(voice);
+            }
+        }
+
+        if (!audiocpp_applied_instruction.empty() && !tts_is_quiet) {
+            printf("\nApply VoiceDesign Instruction: %s",
+                audiocpp_applied_instruction.c_str());
+        }
+
+        const bool accepts_reference_audio = audiocpp_tts_family == "fish_audio" ||
+            audiocpp_tts_family == "chatterbox" || audiocpp_tts_family == "kitten_tts2" ||
+            audiocpp_tts_family == "cosyvoice3" || audiocpp_tts_family == "pocket_tts" ||
+            audiocpp_tts_family == "vibevoice" || audiocpp_tts_family == "voxcpm2" ||
+            audiocpp_tts_family == "voxcpm1" || audiocpp_tts_family == "omnivoice" ||
+            audiocpp_tts_family == "breeze_tts" || audiocpp_tts_family == "ming3_tts" ||
+            audiocpp_tts_family == "qwen3_tts";
+        if (accepts_reference_audio) {
+            std::string encoded_audio = inputs.reference_audio != nullptr
+                ? inputs.reference_audio : "";
+            if (audiocpp_tts_family == "kitten_tts2" && audiocpp_named_voice_alias) {
+                encoded_audio.clear();
+            }
+            if (!encoded_audio.empty()) {
+                const auto media = kcpp_base64_decode(encoded_audio);
+                std::vector<float> samples;
+                const int reference_sample_rate =
+                    (audiocpp_tts_family == "fish_audio" || audiocpp_tts_family == "ming3_tts") ? 44100 :
+                    (audiocpp_tts_family == "voxcpm2" || audiocpp_tts_family == "voxcpm1"
+                        ? 16000 : 24000);
+                if (media.empty() || !kcpp_decode_audio_from_buf(
+                        media.data(), media.size(), reference_sample_rate, samples) || samples.empty()) {
+                    throw std::runtime_error(audiocpp_tts_family + " could not decode the reference audio");
+                }
+                std::string reference_text = inputs.reference_text != nullptr
+                    ? inputs.reference_text : "";
+                if (reference_text.empty() && inputs.custom_speaker_text != nullptr) {
+                    reference_text = inputs.custom_speaker_text;
+                }
+                if (audiocpp_tts_family == "breeze_tts" && reference_text.empty()) {
+                    throw std::runtime_error(
+                        "BreezeTTS 2 voice cloning requires the exact reference transcript in reference_text");
+                }
+                if (audiocpp_tts_family == "fish_audio" && reference_text.empty()) {
+                    reference_text = "but that is what it is"; //turns out random text here works fine too
+                    // throw std::runtime_error("Fish Audio voice cloning requires reference_text");
+                }
+                if (audiocpp_tts_family == "kitten_tts2" && reference_text.empty()) {
+                    reference_text = "that's right, let's cheat! You see that pelican? You're running, right? And on your other shoe, you have a lemon. What are you doing? I'm squeezing lemon into your wound! Sweet baby!"; //turns out random text here works fine too
+                    // throw std::runtime_error("Kitten TTS 2 voice cloning requires reference_text");
+                }
+                if (audiocpp_tts_family == "cosyvoice3") {
+                    const auto template_option = request.options.find("template_name");
+                    if (template_option == request.options.end()) {
+                        // CosyVoice3's upstream default is zero-shot, but an
+                        // empty prompt transcript makes its AR model terminate
+                        // immediately or emit unusable tokens. Transcript-free
+                        // voice selections use the supported cross-lingual
+                        // cloning template instead.
+                        request.options["template_name"] = reference_text.empty()
+                            ? "cross_lingual" : "zero_shot";
+                    } else if (template_option->second == "zero_shot" && reference_text.empty()) {
+                        throw std::runtime_error(
+                            "CosyVoice3 zero_shot requires the reference audio transcript in reference_text; "
+                            "omit template_name or use cross_lingual for transcript-free cloning");
+                    }
+                }
+                if (audiocpp_tts_family == "qwen3_tts" && reference_text.empty() &&
+                    request.options.find("x_vector_only_mode") == request.options.end()) {
+                    // Base checkpoints normally use ICL audio codes plus the
+                    // exact transcript. Audio.cpp's supported speaker-vector
+                    // path is the intended transcript-free fallback.
+                    request.options["x_vector_only_mode"] = "true";
+                }
+                engine::runtime::VoiceReference reference;
+                reference.audio = engine::runtime::AudioBuffer{
+                    reference_sample_rate, 1, std::move(samples)};
+                engine::runtime::VoiceCondition condition;
+                condition.speaker = std::move(reference);
+                request.voice = std::move(condition);
+                if (!tts_is_quiet) {
+                    printf("\nUsing reference voice%s...",
+                        reference_text.empty() ? "" : " with transcript");
+                }
+                if (!reference_text.empty() && audiocpp_tts_family != "pocket_tts" &&
+                    audiocpp_tts_family != "vibevoice") {
+                    request.options["reference_text"] = std::move(reference_text);
+                }
+            }
+        }
+        int audio_seed = inputs.audio_seed;
+        if (audio_seed <= 0 || static_cast<uint32_t>(audio_seed) == UINT32_MAX) {
+            audio_seed = static_cast<int>(static_cast<uint32_t>(time(nullptr)) % 1000000U);
+        }
+        request.options["seed"] = std::to_string(static_cast<uint32_t>(audio_seed));
+
+        if (!tts_is_quiet) {
+            printf("\nTTS Generating with Audio.cpp %s...", audiocpp_tts_family.c_str());
+        }
+        timer_start();
+        audiocpp_tts_session->prepare(engine::runtime::build_preparation_request(request));
+        auto result = offline->run(request);
+        if (!result.audio_output.has_value() || result.audio_output->samples.empty()) {
+            throw std::runtime_error(audiocpp_tts_family + " produced no audio");
+        }
+        if (result.audio_output->channels != 1) {
+            throw std::runtime_error(audiocpp_tts_family + " returned non-mono audio");
+        }
+
+        const double elapsed = timer_check();
+        printf("\nTTS Generated audio in %.2fs.\n", elapsed);
+        last_generated_audio = save_tts_audio_base64(
+            result.audio_output->samples,
+            result.audio_output->sample_rate,
+            inputs.use_mp3);
+        printf("TTS Request complete.\n");
+        output.data = last_generated_audio.c_str();
+        output.status = 1;
+        last_generation_settings_audio_seed = audio_seed;
+        last_generation_settings_speaker_seed = inputs.speaker_seed;
+        last_generation_settings_prompt = request.text_input->text;
+        total_tts_gens += 1;
+        return output;
+    } catch (const std::exception & error) {
+        printf("\nAudio.cpp %s Generation Error: %s\n", audiocpp_tts_family.c_str(), error.what());
+        output.data = "";
+        output.status = 0;
+        return output;
+    }
+}
+
 tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
 {
-    if (is_ttscpp_file)
+    if (is_audiocpp_tts)
+    {
+        return ttstype_generate_audiocpp(inputs);
+    }
+    else if (is_ttscpp_file)
     {
         return ttstype_generate_ttscpp(inputs);
     }

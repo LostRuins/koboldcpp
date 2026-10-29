@@ -283,7 +283,7 @@ def read_paste_input() -> str | None:
         # Readline may return a bracketed multiline paste in one chunk, while
         # basic consoles return one line per input() call.
         for line in chunk.split("\n"):
-            if line == "/end":
+            if line == "/end" or line == "/paste":
                 return "\n".join(lines)
             lines.append(line)
 

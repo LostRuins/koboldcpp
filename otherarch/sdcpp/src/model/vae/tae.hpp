@@ -758,8 +758,96 @@ public:
     }
 };
 
+//kcpp: addon code
+// TAEQI2.1-Tinier replaces only the wider, low-resolution TAE blocks with
+// cheaper ConvNeXt-style depthwise residual blocks.
+class KCPPTAESuperBlock : public UnaryBlock {
+public:
+    KCPPTAESuperBlock(int channels, int expansion = 2) {
+        blocks["conv.0"] = std::shared_ptr<GGMLBlock>(new Conv2d_grouped(channels,
+                                                                          channels,
+                                                                          channels,
+                                                                          {7, 7},
+                                                                          {1, 1},
+                                                                          {3, 3},
+                                                                          {1, 1},
+                                                                          false));
+        blocks["conv.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels * expansion, {1, 1}));
+        blocks["conv.3"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels * expansion,
+                                                                  channels,
+                                                                  {1, 1},
+                                                                  {1, 1},
+                                                                  {0, 0},
+                                                                  {1, 1},
+                                                                  false));
+    }
+
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
+        auto conv_0 = std::dynamic_pointer_cast<Conv2d_grouped>(blocks["conv.0"]);
+        auto conv_1 = std::dynamic_pointer_cast<Conv2d>(blocks["conv.1"]);
+        auto conv_3 = std::dynamic_pointer_cast<Conv2d>(blocks["conv.3"]);
+
+        auto h = conv_0->forward(ctx, x);
+        h      = conv_1->forward(ctx, h);
+        h      = ggml_relu_inplace(ctx->ggml_ctx, h);
+        h      = conv_3->forward(ctx, h);
+        return ggml_add(ctx->ggml_ctx, h, x);
+    }
+};
+
+class KCPPTinyF16TinierEncoder : public TinyEncoder {
+public:
+    KCPPTinyF16TinierEncoder(int z_channels)
+        : TinyEncoder(z_channels, false, true) {
+        for (int i = 9; i <= 11; i++) {
+            blocks[std::to_string(i)] = std::shared_ptr<GGMLBlock>(new KCPPTAESuperBlock(128));
+        }
+        for (int i = 13; i <= 15; i++) {
+            blocks[std::to_string(i)] = std::shared_ptr<GGMLBlock>(new KCPPTAESuperBlock(256));
+        }
+    }
+};
+
+class KCPPTinyF16TinierDecoder : public TinyDecoder {
+public:
+    KCPPTinyF16TinierDecoder(int z_channels)
+        : TinyDecoder(z_channels, false, true) {
+        for (int i = 2; i <= 4; i++) {
+            blocks[std::to_string(i)] = std::shared_ptr<GGMLBlock>(new KCPPTAESuperBlock(256));
+        }
+        for (int i = 7; i <= 9; i++) {
+            blocks[std::to_string(i)] = std::shared_ptr<GGMLBlock>(new KCPPTAESuperBlock(128));
+        }
+    }
+};
+
+static bool kcpp_is_f16_tinier_tae(const String2TensorStorage& tensor_storage_map) {
+    return tensor_storage_map.find("tae.decoder.layers.2.conv.1.weight") != tensor_storage_map.end() ||
+           tensor_storage_map.find("tae.encoder.layers.9.conv.1.weight") != tensor_storage_map.end();
+}
+
+class KCPPTAESDVariant : public TAESD {
+    bool qwen_image_2_1;
+
+public:
+    KCPPTAESDVariant(bool decode_only, SDVersion version)
+        : TAESD(decode_only, version),
+          qwen_image_2_1(version == VERSION_QWEN_IMAGE_2_1) {}
+
+    void init(ggml_context* ctx, const String2TensorStorage& tensor_storage_map, std::string prefix) {
+        if (qwen_image_2_1 && kcpp_is_f16_tinier_tae(tensor_storage_map)) {
+            blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new KCPPTinyF16TinierDecoder(z_channels));
+            if (!decode_only) {
+                blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new KCPPTinyF16TinierEncoder(z_channels));
+            }
+        }
+        TAESD::init(ctx, tensor_storage_map, std::move(prefix));
+    }
+};
+//kcpp: end addon code
+
 struct TinyImageAutoEncoder : public VAE {
-    TAESD taesd;
+    KCPPTAESDVariant taesd;
     bool decode_only = false;
 
     TinyImageAutoEncoder(ggml_backend_t backend,

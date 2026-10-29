@@ -16,6 +16,7 @@ int kcpp_active_swa_size = 0;
 
 llama_kv_cache_iswa::llama_kv_cache_iswa(
         const llama_model & model,
+                     bool   no_alloc,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
@@ -25,18 +26,18 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
-                 uint32_t   n_pad,
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share) :
-    llama_kv_cache_iswa(model, model.hparams, type_k, type_v, v_trans, offload, swa_full, unified,
-            kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share) {
+    llama_kv_cache_iswa(model, no_alloc, model.hparams, type_k, type_v, v_trans, offload, swa_full, unified,
+            kv_size, n_seq_max, n_ubatch, mem_other, filter, reuse, share) {
 }
 
 llama_kv_cache_iswa::llama_kv_cache_iswa(
         const llama_model & model,
-        const llama_hparams & hparams,
+                     bool   no_alloc,
+      const llama_hparams & hparams,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
@@ -46,7 +47,6 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
-                 uint32_t   n_pad,
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
@@ -78,7 +78,6 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
     //kcpp: pad the swa kv cache as well, similar to extra_context_handle_fragmentation
     size_swa += 128;
     size_swa += kcpp_extra_swa_padding;
-    size_swa = GGML_PAD(size_swa, n_pad);
     if (size_swa > size_base) {
         size_swa = size_base;
     }
@@ -106,15 +105,15 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
     }
 
     kv_base = std::make_unique<llama_kv_cache>(
-            model, hparams, type_k, type_v,
-            v_trans, offload, unified, size_base, n_seq_max, n_pad,
+            model, no_alloc, hparams, type_k, type_v,
+            v_trans, offload, unified, size_base, n_seq_max,
             0, LLAMA_SWA_TYPE_NONE, mem_other_base, filter_base, reuse, share);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache>(
-            model, hparams, type_k, type_v,
-            v_trans, offload, unified, size_swa, n_seq_max, n_pad,
+            model, no_alloc, hparams, type_k, type_v,
+            v_trans, offload, unified, size_swa, n_seq_max,
             hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share);
 }
 

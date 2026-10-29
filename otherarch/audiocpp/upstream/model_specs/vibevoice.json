@@ -1,0 +1,279 @@
+{
+  "family": "vibevoice",
+  "display_name": "VibeVoice",
+  "description": "Microsoft long-form multi-speaker TTS model for expressive conversational audio such as podcasts, supporting up to 90 minutes of speech with as many as four speakers.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "en",
+    "zh"
+  ],
+  "options": {
+    "request": [
+      {
+        "name": "voice_samples",
+        "type": "string",
+        "description": "Comma-separated reference WAV paths ordered by speaker ID; cannot be combined with voice_ref.",
+        "required": false
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "Diffusion steps; defaults to the checkpoint configuration.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "Classifier-free guidance scale.",
+        "required": false,
+        "min": 0,
+        "default": 1.3
+      },
+      {
+        "name": "max_length_times",
+        "type": "float",
+        "description": "Positive generation length multiplier.",
+        "required": false,
+        "default": 2
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated tokens; zero uses the model-derived limit.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "do_sample",
+        "type": "bool",
+        "description": "Enable sampling.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "description": "Positive sampling temperature.",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "top_k",
+        "type": "int",
+        "description": "Top-k sampling limit; zero disables filtering.",
+        "required": false,
+        "min": 0,
+        "default": 50
+      },
+      {
+        "name": "top_p",
+        "type": "float",
+        "description": "Nucleus probability in (0, 1].",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Sampling seed.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295,
+        "default": 1234
+      },
+      {
+        "name": "prompt_noise_file",
+        "type": "path",
+        "description": "F32 prompt acoustic noise file.",
+        "required": false
+      },
+      {
+        "name": "diffusion_noise_file",
+        "type": "path",
+        "description": "F32 initial diffusion noise file.",
+        "required": false
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "tokenizer_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "connector_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "decoder_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "diffusion_head_weight_type",
+        "type": "enum",
+        "description": "Weight storage type; component-specific settings inherit weight_type.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "Decoder adapter file or PEFT directory applied when creating the session; do not also supply the load option.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "Session adapter scale override; omitted uses lora_alpha / r. Must be strictly positive when an adapter is supplied.",
+        "required": false
+      }
+    ],
+    "load": [
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "Decoder adapter file or PEFT directory, merged at load time.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "LoRA scale override; omitted uses lora_alpha / r. Must be strictly positive when an adapter is supplied.",
+        "required": false
+      }
+    ]
+  },
+  "capabilities": {
+    "tts": [
+      "multi_speaker",
+      "long_form"
+    ]
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "vibevoice_1_5b_q8_0",
+    "tags": [
+      "TTS",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "vibevoice_1_5b_q8_0",
+      "display_name": "VibeVoice 1.5B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "VibeVoice-1.5B-GGUF",
+      "files": [
+        "VibeVoice-1.5B-GGUF/vibevoice-1.5b-q8_0.gguf"
+      ],
+      "strip_prefix": "VibeVoice-1.5B-GGUF"
+    },
+    {
+      "id": "vibevoice_1_5b_bf16",
+      "display_name": "VibeVoice 1.5B BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "VibeVoice-1.5B-GGUF",
+      "files": [
+        "VibeVoice-1.5B-GGUF/vibevoice-1.5b-bf16.gguf"
+      ],
+      "strip_prefix": "VibeVoice-1.5B-GGUF"
+    },
+    {
+      "id": "vibevoice_7b_q8_0",
+      "display_name": "VibeVoice 7B Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "VibeVoice-7B-GGUF",
+      "files": [
+        "vibevoice-7b-q8_0.gguf"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "audio-cpp/VibeVoice-7B-GGUF",
+        "revision": "main",
+        "gated": false
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "preprocessor_config": "model:preprocessor_config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_vocab": "model:vocab.json",
+        "tokenizer_merges": "model:merges.txt"
+      },
+      "tensors": {
+        "model_weights": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "preprocessor_config": "model:preprocessor_config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_vocab": "model:vocab.json",
+        "tokenizer_merges": "model:merges.txt"
+      },
+      "tensors": {
+        "model_weights": "model:model.safetensors.index.json"
+      }
+    }
+  ]
+}

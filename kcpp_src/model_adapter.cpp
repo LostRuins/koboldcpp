@@ -116,18 +116,26 @@ bool gguf_tensor_exists(const std::string & gguf_filename, std::string tensor_na
     return found;
 }
 
-std::string gguf_get_model_arch(const std::string & gguf_filename)
+std::string gguf_get_string(const std::string & gguf_filename, const std::string & key)
 {
     struct gguf_init_params ggufparams;
     ggufparams.no_alloc = true;
     ggufparams.ctx = NULL;
     struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), ggufparams);
     if (!ctx) return "";
-    auto keyidx = gguf_find_key(ctx, "general.architecture");
-    std::string modelarch = "";
-    if (keyidx != -1) { modelarch = gguf_get_val_str(ctx, keyidx); }
+
+    const int64_t keyidx = gguf_find_key(ctx, key.c_str());
+    std::string value;
+    if (keyidx >= 0 && gguf_get_kv_type(ctx, keyidx) == GGUF_TYPE_STRING) {
+        value = gguf_get_val_str(ctx, keyidx);
+    }
     gguf_free(ctx);
-    return modelarch;
+    return value;
+}
+
+std::string gguf_get_model_arch(const std::string & gguf_filename)
+{
+    return gguf_get_string(gguf_filename, "general.architecture");
 }
 
 //return val: 0=fail, 1=(original ggml, alpaca), 2=(ggmf), 3=(ggjt)

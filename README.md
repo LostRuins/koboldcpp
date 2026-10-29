@@ -29,7 +29,7 @@ One executable file, no installation required. Ready-to-run downloads are availa
 - **Fully Portable** - Single standalone executable for Windows, Linux or macOS, with no installation required and no external dependencies. Runs on CPU or GPU, with full or partial offloading. Can also run on Colab, Docker, also supports other platforms if self-compiled (like Android via Termux and Raspberry PI).
 
 ## Phishing Scam Alert ⚠️
-- Phishing SCAM Warning: `koboldcpp.com` is a malicious fake site and is not affiliated with this project. You should **ONLY** trust official downloads from the release binaries on the official github at https://github.com/LostRuins/koboldcpp/releases/latest and https://koboldcpp.net
+- Phishing SCAM Warning: `koboldcpp.com` is a malicious fake site and is not affiliated with this project. You should **ONLY** trust official downloads from the release binaries on the official github at https://github.com/LostRuins/koboldcpp/releases/latest and the official website at https://koboldcpp.net
 
 ## Quick start
 1. **Download KoboldCpp** for your operating system from the [latest KoboldCpp release](https://github.com/LostRuins/koboldcpp/releases/latest). See the [platform instructions](#download-and-run) below for help choosing a file.
@@ -288,7 +288,7 @@ These unofficial community projects may be outdated or unmaintained. Contact the
 
 
 ## License
-KoboldCpp and KoboldAI Lite are licensed under the **GNU AGPL v3.0**, unless a file states otherwise. Bundled components retain their respective licenses, including the [MIT license for GGML, llama.cpp, and stable-diffusion.cpp](MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md).
+KoboldCpp and KoboldAI Lite are licensed under the **GNU AGPL v3.0**, unless a file states otherwise. Bundled components retain their respective licenses, including the MIT license for GGML, llama.cpp, stable-diffusion.cpp, Qwen3-TTS.cpp, acestep.cpp and the Apache 2.0 license for audio.cpp.
 
 KoboldCpp builds on the work of these projects:
 - [GGML](https://github.com/ggml-org/ggml) and [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT)
@@ -296,6 +296,7 @@ KoboldCpp builds on the work of these projects:
 - [TTS.cpp](https://github.com/mmwillet/TTS.cpp) (MIT)
 - [Qwen3-TTS.cpp](https://github.com/predict-woo/qwen3-tts.cpp) (MIT)
 - [acestep.cpp](https://github.com/ServeurpersoCom/acestep.cpp) (MIT)
+- [audio.cpp](https://github.com/0xShug0/audio.cpp) (Apache 2.0)
 - [KoboldAI Lite](https://github.com/LostRuins/lite.koboldai.net) (AGPL)
 
 For enquiries, contact **@concedo** on discord, message **u/HadesThrowaway** on reddit, or find **LostRuins** on github.

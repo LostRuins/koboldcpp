@@ -273,7 +273,7 @@ struct sd_generation_inputs
     const int clip_skip = -1;
     const int vid_req_frames = 1;
     const int vid_fps = 16;
-    const int video_output_type = 0; //0=gif, 1=avi, 2=both
+    const int video_output_type = 0; // 0=GIF, 1=AVI, 2=GIF+AVI, 3=animated WebP, 4=animated WebP+AVI
     const bool remove_limits = false;
     const bool circular_x = false;
     const bool circular_y = false;
@@ -354,6 +354,8 @@ struct tts_generation_inputs
     const char * speaker_instruction = "";
     const char * language = "";
     const bool use_mp3 = false;
+    const char * reference_text = "";
+    const char * audiocpp_extra_params_json = "";
 };
 struct tts_generation_outputs
 {

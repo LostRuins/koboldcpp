@@ -7,7 +7,13 @@ pyinstaller --noconfirm --onefile --clean --console --collect-all customtkinter 
 --add-data "./kcpp_agent.py:." \
 --add-data "./kcpp_src/json_to_gbnf.py:." \
 --add-data "./LICENSE.md:."  \
---add-data "./MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:." \
+--add-data './ggml/src/GGML_LICENSE:./vendor_licenses'  \
+--add-data './otherarch/acestep/ACESTEP_LICENSE:./vendor_licenses'  \
+--add-data './otherarch/audiocpp/upstream/AUDIOCPP_LICENSE:./vendor_licenses'  \
+--add-data './otherarch/qwen3tts/QWEN3TTS_LICENSE:./vendor_licenses'  \
+--add-data './otherarch/sdcpp/SDCPP_LICENSE:./vendor_licenses'  \
+--add-data './otherarch/ttscpp/TTSCPP_LICENSE:./vendor_licenses'  \
+--add-data './src/LLAMACPP_LICENSE:./vendor_licenses'  \
 --add-data "./embd_res:./embd_res" \
 --add-data "./koboldcpp_default.so:." \
 --add-data "./koboldcpp_failsafe.so:." \

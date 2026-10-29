@@ -292,6 +292,10 @@ if (output MATCHES "dyld-1015\.7")
     add_compile_definitions(HAVE_BUGGY_APPLE_LINKER)
 endif()
 
+# Configure the scalar-only WebP target before the architecture block below
+# adds AVX/NEON/native flags to the main KoboldCpp targets.
+add_subdirectory(vendor/tinylibwebp)
+
 # Architecture specific
 # TODO: probably these flags need to be tweaked on some architectures
 #       feel free to update the Makefile for your architecture and send a pull request or issue
@@ -539,6 +543,7 @@ endif()
 set_source_files_properties(vendor/hash/sha256/sha256.c PROPERTIES COMPILE_OPTIONS ${KCPP_HASH_NO_WARN_FLAG})
 
 add_library(sdtype_adapter
+            kcpp_src/sdcpp_gguf_tokenizer.cpp
             otherarch/sdcpp/sdtype_adapter.cpp
             otherarch/sdcpp/src/conditioning/wan_audio.cpp
             otherarch/sdcpp/src/core/compute_workspace.cpp
@@ -620,7 +625,7 @@ add_library(sdtype_adapter
 target_include_directories(sdtype_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/include ./otherarch/sdcpp/src ./otherarch/sdcpp/examples ./otherarch/sdcpp/thirdparty/oniguruma ./otherarch/sdcpp/thirdparty/utf8proc ./tools ./common)
 target_compile_definitions(sdtype_adapter PRIVATE ONIG_STATIC UTF8PROC_STATIC SD_USE_UPSTREAM_GGML)
 target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
-target_link_libraries(sdtype_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
+target_link_libraries(sdtype_adapter PRIVATE common2 ggml tinylibwebp ${LLAMA_EXTRA_LIBS})
 set_target_properties(sdtype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(whisper_adapter
@@ -630,18 +635,20 @@ target_compile_features(whisper_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(whisper_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(whisper_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_subdirectory(otherarch/audiocpp)
+
 add_library(music_adapter
             otherarch/acestep/music_adapter.cpp)
 target_include_directories(music_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/acestep ./tools ./common)
 target_compile_features(music_adapter PUBLIC cxx_std_17) # don't bump
-target_link_libraries(music_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
+target_link_libraries(music_adapter PRIVATE common2 ggml audiocpp ${LLAMA_EXTRA_LIBS})
 set_target_properties(music_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(tts_adapter
             otherarch/tts_adapter.cpp)
 target_include_directories(tts_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/ttscpp/include ./otherarch/ttscpp/src ./otherarch/qwen3tts ./tools ./common)
 target_compile_features(tts_adapter PUBLIC cxx_std_17) # don't bump
-target_link_libraries(tts_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
+target_link_libraries(tts_adapter PRIVATE common2 ggml audiocpp ${LLAMA_EXTRA_LIBS})
 set_target_properties(tts_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(embeddings_adapter

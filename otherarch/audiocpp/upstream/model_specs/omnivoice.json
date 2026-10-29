@@ -1,0 +1,412 @@
+{
+  "family": "omnivoice",
+  "display_name": "OmniVoice",
+  "description": "Massively multilingual zero-shot TTS model from k2-fsa for 600+ languages, supporting short-reference voice cloning, attribute-based voice design, pronunciation controls, and nonverbal tags.",
+  "category": "tts",
+  "status": "supported",
+  "tasks": [
+    "tts",
+    "clone",
+    "design"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "600+ languages"
+  ],
+  "capabilities": {
+    "clone": [
+      "speaker_reference"
+    ],
+    "design": [
+      "voice_design"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Synthesis language code or label; omitted uses automatic language selection.",
+        "required": false
+      },
+      {
+        "name": "reference_text",
+        "type": "string",
+        "description": "Transcript for speaker reference audio used in voice cloning.",
+        "required": false
+      },
+      {
+        "name": "instruct",
+        "type": "string",
+        "description": "Voice-design instruction such as speaker attributes, accent, style, or delivery.",
+        "required": false
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "description": "Generation seed for reproducible output; omitted value keeps the session RNG state.",
+        "required": false,
+        "min": 0,
+        "max": 4294967295
+      },
+      {
+        "name": "num_inference_steps",
+        "type": "int",
+        "description": "Diffusion language-model inference steps; default 32.",
+        "required": false,
+        "min": 1,
+        "default": 32
+      },
+      {
+        "name": "guidance_scale",
+        "type": "float",
+        "description": "Classifier-free guidance scale; default 2.0.",
+        "required": false,
+        "default": 2
+      },
+      {
+        "name": "speed",
+        "type": "float",
+        "description": "Speech speed multiplier used for target-length estimation; default 1.0.",
+        "required": false,
+        "default": 1
+      },
+      {
+        "name": "duration_sec",
+        "type": "float",
+        "description": "Target output duration in seconds; omitted uses the model's estimated duration.",
+        "required": false,
+        "min": 0
+      },
+      {
+        "name": "shift",
+        "type": "float",
+        "description": "Diffusion timestep schedule shift; default 0.1.",
+        "required": false,
+        "default": 0.1
+      },
+      {
+        "name": "denoise",
+        "type": "bool",
+        "description": "Add the denoise control token when reference audio is present; default true.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "preprocess_prompt",
+        "type": "bool",
+        "description": "Preprocess speaker reference audio before tokenization; default true.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "postprocess_output",
+        "type": "bool",
+        "description": "Apply output postprocessing and trimming; default true.",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "layer_penalty_factor",
+        "type": "float",
+        "description": "Layer-order penalty used while selecting masked audio-codebook positions; default 5.0.",
+        "required": false,
+        "default": 5
+      },
+      {
+        "name": "position_temperature",
+        "type": "float",
+        "description": "Gumbel temperature for masked-position selection; default 5.0.",
+        "required": false,
+        "default": 5
+      },
+      {
+        "name": "class_temperature",
+        "type": "float",
+        "description": "Audio-token class sampling temperature; default 0 for greedy class selection.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "audio_chunk_duration_sec",
+        "type": "float",
+        "description": "Target chunk duration for automatic long-form splitting; default 15 seconds.",
+        "required": false,
+        "min": 0,
+        "default": 15
+      },
+      {
+        "name": "audio_chunk_threshold_sec",
+        "type": "float",
+        "description": "Estimated duration above which long-form generation is split into chunks; default 30 seconds.",
+        "required": false,
+        "min": 0,
+        "default": 30
+      },
+      {
+        "name": "text_chunk_size",
+        "type": "int",
+        "description": "Explicit long-form text chunk size in Unicode codepoints. Omitted value uses duration-based automatic chunking.",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "text_chunk_mode",
+        "type": "enum",
+        "description": "Text chunking mode; default tag_aware.",
+        "preset": "text_chunk_mode_full",
+        "required": false,
+        "default": "tag_aware"
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared generator weight storage type; default native.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "generator_weight_type",
+        "type": "enum",
+        "description": "Generator weight storage type; defaults to weight_type, which defaults to native.",
+        "preset": "weight_type_full",
+        "required": false
+      },
+      {
+        "name": "audio_tokenizer_weight_type",
+        "type": "enum",
+        "description": "Audio tokenizer weight storage type; default native.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "audio_tokenizer_graph_arena_mb",
+        "type": "int",
+        "description": "Audio tokenizer graph arena size in MiB; default 128.",
+        "required": false,
+        "min": 1,
+        "default": 128
+      },
+      {
+        "name": "generator_prefill_graph_arena_mb",
+        "type": "int",
+        "description": "Generator prefill graph arena size in MiB; default 256.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "generator_decode_graph_arena_mb",
+        "type": "int",
+        "description": "Generator decode graph arena size in MiB; default 256.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "audio_tokenizer_weight_context_mb",
+        "type": "int",
+        "description": "Audio tokenizer weight context size in MiB; default 128.",
+        "required": false,
+        "min": 1,
+        "default": 128
+      },
+      {
+        "name": "generator_weight_context_mb",
+        "type": "int",
+        "description": "Generator weight context size in MiB; default 256.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "mem_saver",
+        "type": "bool",
+        "description": "Release staged runtime graphs after request phases; default false. Cannot be combined with perf_mode=flash_attention.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "perf_mode",
+        "type": "enum",
+        "description": "Generator performance mode; default off keeps the exact-safe attention path. flash_attention requires mem_saver=false.",
+        "preset": "perf_mode_flash_attention",
+        "required": false,
+        "default": "off"
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "ui": {
+    "recommended_package": "omnivoice_q8_0",
+    "tags": [
+      "TTS",
+      "Clone",
+      "Design",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/models/omnivoice.md",
+      "docs/tts.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "omnivoice_q8_0",
+      "display_name": "OmniVoice Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "OmniVoice-GGUF",
+      "files": [
+        "OmniVoice-GGUF/omnivoice-q8_0.gguf"
+      ],
+      "strip_prefix": "OmniVoice-GGUF"
+    },
+    {
+      "id": "omnivoice_bf16",
+      "display_name": "OmniVoice BF16 GGUF",
+      "format": "gguf",
+      "precision": "bf16",
+      "target_directory": "OmniVoice-GGUF",
+      "files": [
+        "OmniVoice-GGUF/omnivoice-bf16.gguf"
+      ],
+      "strip_prefix": "OmniVoice-GGUF"
+    },
+    {
+      "id": "omnivoice_f16",
+      "display_name": "OmniVoice F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "OmniVoice-GGUF",
+      "files": [
+        "OmniVoice-GGUF/omnivoice-f16.gguf"
+      ],
+      "strip_prefix": "OmniVoice-GGUF"
+    },
+    {
+      "id": "omnivoice_safetensors",
+      "display_name": "OmniVoice Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "OmniVoice",
+      "files": [
+        "config.json",
+        "model.safetensors",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "audio_tokenizer/config.json",
+        "audio_tokenizer/preprocessor_config.json",
+        "audio_tokenizer/model.safetensors"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "k2-fsa/OmniVoice"
+      }
+    },
+    {
+      "id": "voicetut_tts_q8_0",
+      "display_name": "VoiceTut-TTS Egyptian Arabic Q8_0 GGUF",
+      "description": "Egyptian Arabic and Arabic-English code-switching fine-tune of OmniVoice from mohammedaly22/VoiceTut-TTS (same architecture and audio tokenizer as OmniVoice). Use language=arz.",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "VoiceTut-TTS-GGUF",
+      "files": [
+        "voicetut-tts-q8_0.gguf"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "mohammedaly22/VoiceTut-TTS-GGUF"
+      }
+    },
+    {
+      "id": "voicetut_tts_f16",
+      "display_name": "VoiceTut-TTS Egyptian Arabic F16 GGUF",
+      "description": "Egyptian Arabic and Arabic-English code-switching fine-tune of OmniVoice from mohammedaly22/VoiceTut-TTS (same architecture and audio tokenizer as OmniVoice). Use language=arz.",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "VoiceTut-TTS-GGUF",
+      "files": [
+        "voicetut-tts-f16.gguf"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "mohammedaly22/VoiceTut-TTS-GGUF"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "audio_tokenizer_config": "model:audio_tokenizer/config.json",
+        "audio_tokenizer_preprocessor": "model:audio_tokenizer/preprocessor_config.json"
+      },
+      "optional_files": {
+        "chat_template": "model:chat_template.jinja"
+      },
+      "tensors": {
+        "weights": {
+          "source": "weights:",
+          "prefix": "weights"
+        },
+        "audio_tokenizer_weights": {
+          "source": "weights:",
+          "prefix": "audio_tokenizer_weights"
+        }
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "tokenizer_json": "model:tokenizer.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "audio_tokenizer_config": "model:audio_tokenizer/config.json",
+        "audio_tokenizer_preprocessor": "model:audio_tokenizer/preprocessor_config.json"
+      },
+      "optional_files": {
+        "chat_template": "model:chat_template.jinja"
+      },
+      "tensors": {
+        "weights": "model:model.safetensors",
+        "audio_tokenizer_weights": "model:audio_tokenizer/model.safetensors"
+      }
+    }
+  ]
+}
