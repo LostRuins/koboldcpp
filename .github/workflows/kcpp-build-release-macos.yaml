@@ -10,10 +10,11 @@ on:
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
   osx:
-    runs-on: macos-14
+    runs-on: macos-15
     permissions: write-all
     steps:
       - name: Show runner hardware
