@@ -11757,9 +11757,9 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
             if messages_url:
                 with urllib.request.urlopen(messages_url, timeout=10) as response:
                     source = gzip.GzipFile(fileobj=response) if response.headers.get('Content-Encoding', '').lower() == 'gzip' else response
-                    body = source.read(32 * 1024 * 1024 + 1)
-                if len(body) > 32 * 1024 * 1024:
-                    raise ValueError("messages exceed the 32 MiB limit")
+                    body = source.read(36 * 1024 * 1024 + 1)
+                if len(body) > 36 * 1024 * 1024:
+                    raise ValueError("messages exceed the 36 MiB limit")
                 payload["messages"] = json.loads(body)
                 if not isinstance(payload["messages"], list):
                     raise ValueError("messages_url did not contain a messages array")
