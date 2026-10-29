@@ -8853,6 +8853,32 @@ Change Mode<br>
                 elif is_transcribe:
                     try:
                         global fullwhispermodelpath, has_audio_support
+                        voice_name = genparams.get("voice", "")
+                        if not genparams.get("audio_data", "") and voice_name:
+                            voice_name = voice_name.strip() if isinstance(voice_name, str) else ""
+                            voice_ext = os.path.splitext(voice_name)[1].lower()
+                            voice_audio = voicebank.get(voice_name, "") if voice_name else ""
+                            if voice_ext not in (".wav", ".mp3") or not voice_audio:
+                                genresp = json.dumps({"detail": {
+                                    "msg": "The selected voice is not a WAV/MP3 file loaded from the TTS voices directory.",
+                                    "type": "bad_input",
+                                }}).encode()
+                                self.send_response(400)
+                                self.send_header('content-length', str(len(genresp)))
+                                self.end_headers(content_type='application/json')
+                                self.wfile.write(genresp)
+                                return
+                            if fullwhispermodelpath == "":
+                                genresp = json.dumps({"detail": {
+                                    "msg": "A Whisper model is not currently available to transcribe the selected voice.",
+                                    "type": "model_unavailable",
+                                }}).encode()
+                                self.send_response(503)
+                                self.send_header('content-length', str(len(genresp)))
+                                self.end_headers(content_type='application/json')
+                                self.wfile.write(genresp)
+                                return
+                            genparams["audio_data"] = voice_audio
                         gendat = None
                         if genparams.get("audio_data","") and fullwhispermodelpath=="" and has_audio_support: #if we have no whisper model but an audio-capable projector, use that instead
                             adapter_obj = {} if chatcompl_adapter is None else chatcompl_adapter
@@ -13016,7 +13042,7 @@ def main(launch_args, default_args):
 
     if not args.admin: #run in single process mode
         if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
-            setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel) else False)
+            setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel) else False)
         kcpp_main_process(args,global_memory,using_gui_launcher)
         if global_memory["input_to_exit"]:
             print("===")
@@ -13028,7 +13054,7 @@ def main(launch_args, default_args):
             global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":initial_model, "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False})
 
             if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
-                setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel) else False)
+                setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel) else False)
 
             # invoke the main koboldcpp process
             original_args = copy.deepcopy(args)
@@ -14086,7 +14112,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         with open(os.path.join(embddir, "kcpp_musicui.embd"), mode='rb') as f:
             embedded_musicui = f.read()
             embedded_musicui_gz = gzip.compress(embedded_musicui)
-            if args.musicllm or args.musicdiffusion or args.ttsmodel:
+            if args.musicllm or args.musicdiffusion or args.ttsmodel or args.whispermodel:
                 print("Embedded MusicUI loaded.")
     except Exception:
         print("Could not find Embedded MusicUI.")
@@ -14197,7 +14223,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             print(f"Starting llama.cpp secondary WebUI at {endpoint_url}/lcpp/")
             if args.sdmodel:
                 print(f"StableUI is available at {endpoint_url}/sdui/")
-            if args.musicdiffusion or args.musicllm or args.ttsmodel:
+            if args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel:
                 print(f"MusicUI is available at {endpoint_url}/musicui/")
         elif global_memory:
             val = global_memory["tunnel_url"]
@@ -14209,7 +14235,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 print(f"Starting llama.cpp secondary WebUI at {endpoint_url}/lcpp/")
                 if args.sdmodel:
                     print(f"StableUI is available at {endpoint_url}/sdui/")
-                if args.musicdiffusion or args.musicllm or args.ttsmodel:
+                if args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel:
                     print(f"MusicUI is available at {endpoint_url}/musicui/")
             global_memory["load_complete"] = True
         if args.launch:
