@@ -134,7 +134,10 @@ core::TensorValue ensure_f32(
 
 ggml_tensor * round_to_bf16_f32(ggml_context * ctx, ggml_tensor * value) {
     // kcpp: portable replacement for Audio.cpp's unofficial GGML BF16-round op.
-    return ggml_cast(ctx, ggml_cast(ctx, value, GGML_TYPE_BF16), GGML_TYPE_F32);
+    auto * round_input = value->type == GGML_TYPE_F32
+        ? value
+        : ggml_cast(ctx, value, GGML_TYPE_F32);
+    return ggml_cast(ctx, ggml_cast(ctx, round_input, GGML_TYPE_BF16), GGML_TYPE_F32);
 }
 
 core::TensorValue regular_conv_weight(

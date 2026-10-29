@@ -126,8 +126,11 @@ core::TensorValue apply_readback_rounding(
     }
     if (*config.readback_round_type == GGML_TYPE_BF16 && backend_type != core::BackendType::Metal) {
         // kcpp: portable replacement for Audio.cpp's private BF16-round op.
+        auto * round_input = input.tensor->type == GGML_TYPE_F32
+            ? input.tensor
+            : ggml_cast(ctx.ggml, input.tensor, GGML_TYPE_F32);
         return core::wrap_tensor(
-            ggml_cast(ctx.ggml, ggml_cast(ctx.ggml, input.tensor, GGML_TYPE_BF16), GGML_TYPE_F32),
+            ggml_cast(ctx.ggml, ggml_cast(ctx.ggml, round_input, GGML_TYPE_BF16), GGML_TYPE_F32),
             input.shape,
             GGML_TYPE_F32);
     }

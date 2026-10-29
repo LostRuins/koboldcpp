@@ -48,7 +48,10 @@ namespace binding = engine::modules::binding;
 // its numerical behavior with the portable cast round-trip used elsewhere in
 // the selective integration instead of extending KoboldCpp's GGML ABI.
 ggml_tensor * ggml_round_bf16(ggml_context * ctx, ggml_tensor * input) {
-    return ggml_cast(ctx, ggml_cast(ctx, input, GGML_TYPE_BF16), GGML_TYPE_F32);
+    auto * round_input = input->type == GGML_TYPE_F32
+        ? input
+        : ggml_cast(ctx, input, GGML_TYPE_F32);
+    return ggml_cast(ctx, ggml_cast(ctx, round_input, GGML_TYPE_BF16), GGML_TYPE_F32);
 }
 
 constexpr int64_t kCodecDim = 1024;

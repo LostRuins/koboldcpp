@@ -284,12 +284,18 @@ core::TensorValue activation_cast(
         // below (bf16 input is already rounded, so rounding is a widening no-op),
         // but avoids the intermediate bf16 tensor and one kernel launch.
         // kcpp: portable replacement for Audio.cpp's private BF16-round op.
+        auto * round_input = input.tensor->type == GGML_TYPE_F32
+            ? input.tensor
+            : ggml_cast(ctx.ggml, input.tensor, GGML_TYPE_F32);
         return core::wrap_tensor(
-            ggml_cast(ctx.ggml, ggml_cast(ctx.ggml, input.tensor, GGML_TYPE_BF16), GGML_TYPE_F32),
+            ggml_cast(ctx.ggml, ggml_cast(ctx.ggml, round_input, GGML_TYPE_BF16), GGML_TYPE_F32),
             input.shape,
             GGML_TYPE_F32);
     }
-    auto rounded = core::wrap_tensor(ggml_cast(ctx.ggml, input.tensor, policy.type), input.shape, policy.type);
+    auto * cast_input = policy.type == GGML_TYPE_BF16 && input.tensor->type != GGML_TYPE_F32
+        ? ggml_cast(ctx.ggml, input.tensor, GGML_TYPE_F32)
+        : input.tensor;
+    auto rounded = core::wrap_tensor(ggml_cast(ctx.ggml, cast_input, policy.type), input.shape, policy.type);
     return core::wrap_tensor(ggml_cast(ctx.ggml, rounded.tensor, GGML_TYPE_F32), input.shape, GGML_TYPE_F32);
 }
 

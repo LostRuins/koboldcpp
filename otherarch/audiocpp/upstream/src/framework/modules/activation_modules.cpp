@@ -446,7 +446,13 @@ core::TensorValue Bf16RoundModule::build(core::ModuleBuildContext & ctx, const c
     // kcpp: Audio.cpp carries ggml_round_bf16 as an unofficial GGML op.
     // KoboldCpp keeps its GGML syncable, so express the same graph with the
     // standard casts already supported by every KCPP backend.
-    auto * rounded_bf16 = ggml_cast(ctx.ggml, input.tensor, GGML_TYPE_BF16);
+    // Vulkan has F16->F32 and F32->BF16 copy kernels, but no direct
+    // F16->BF16 kernel. Normalize first so this remains portable when a
+    // preceding operation (notably Breeze's decoder) produces F16.
+    auto * round_input = input.tensor->type == GGML_TYPE_F32
+        ? input.tensor
+        : ggml_cast(ctx.ggml, input.tensor, GGML_TYPE_F32);
+    auto * rounded_bf16 = ggml_cast(ctx.ggml, round_input, GGML_TYPE_BF16);
     auto * rounded_f32 = ggml_cast(ctx.ggml, rounded_bf16, GGML_TYPE_F32);
     return core::wrap_tensor(rounded_f32, input.shape, GGML_TYPE_F32);
 }
