@@ -14,3 +14,4 @@
 #include "engine/models/breeze_tts/session.h"
 #include "engine/models/ming3_tts/session.h"
 #include "engine/models/neutts/session.h"
+#include "engine/models/qwen3_tts/loader.h"

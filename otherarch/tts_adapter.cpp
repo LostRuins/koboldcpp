@@ -719,6 +719,9 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
             }
             options.backend.device = std::max(0, inputs.kcpp_main_gpu);
             options.backend.threads = std::max(1, inputs.threads);
+            if (audiocpp_tts_family == "qwen3_tts" && inputs.flash_attention) {
+                options.options["qwen3_tts.perf_mode"] = "flash_attention";
+            }
             audiocpp_tts_session = audiocpp_tts_model->create_task_session(
                 {engine::runtime::VoiceTaskKind::Tts, engine::runtime::RunMode::Offline},
                 options);
@@ -1623,6 +1626,37 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                 audiocpp_applied_instruction = instruction;
                 request.options["instruct"] = std::move(instruction);
             }
+        } else if (audiocpp_tts_family == "qwen3_tts") {
+            std::string instruction = inputs.speaker_instruction != nullptr
+                ? inputs.speaker_instruction : "";
+            if (!instruction.empty()) {
+                audiocpp_applied_instruction = instruction;
+                request.options["instruct"] = std::move(instruction);
+            }
+
+            // CustomVoice checkpoints use one of nine packaged speakers. Base
+            // and VoiceDesign checkpoints safely ignore this option, so the
+            // embedded model variant remains the sole mode selector.
+            if (request.options.find("voice_id") == request.options.end()) {
+                std::string voice = std::move(audiocpp_requested_voice);
+                std::transform(voice.begin(), voice.end(), voice.begin(),
+                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                if (voice.size() > 4 && voice.substr(voice.size() - 4) == ".wav") {
+                    voice.resize(voice.size() - 4);
+                }
+                static const std::vector<std::string> qwen3_custom_voices = {
+                    "aiden", "serena", "ono_anna", "ryan", "sohee",
+                    "eric", "dylan", "vivian", "uncle_fu",
+                };
+                const auto named_voice = std::find(
+                    qwen3_custom_voices.begin(), qwen3_custom_voices.end(), voice);
+                if (named_voice != qwen3_custom_voices.end()) {
+                    request.options["voice_id"] = *named_voice;
+                } else if (inputs.speaker_seed >= 1 &&
+                           inputs.speaker_seed <= static_cast<int>(qwen3_custom_voices.size())) {
+                    request.options["voice_id"] = qwen3_custom_voices[inputs.speaker_seed - 1];
+                }
+            }
         } else if (audiocpp_tts_family == "neutts") {
             std::string voice = std::move(audiocpp_requested_voice);
             std::transform(voice.begin(), voice.end(), voice.begin(),
@@ -1685,7 +1719,8 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             audiocpp_tts_family == "cosyvoice3" || audiocpp_tts_family == "pocket_tts" ||
             audiocpp_tts_family == "vibevoice" || audiocpp_tts_family == "voxcpm2" ||
             audiocpp_tts_family == "voxcpm1" || audiocpp_tts_family == "omnivoice" ||
-            audiocpp_tts_family == "breeze_tts" || audiocpp_tts_family == "ming3_tts";
+            audiocpp_tts_family == "breeze_tts" || audiocpp_tts_family == "ming3_tts" ||
+            audiocpp_tts_family == "qwen3_tts";
         if (accepts_reference_audio) {
             std::string encoded_audio = inputs.reference_audio != nullptr
                 ? inputs.reference_audio : "";
@@ -1735,6 +1770,13 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                             "CosyVoice3 zero_shot requires the reference audio transcript in reference_text; "
                             "omit template_name or use cross_lingual for transcript-free cloning");
                     }
+                }
+                if (audiocpp_tts_family == "qwen3_tts" && reference_text.empty() &&
+                    request.options.find("x_vector_only_mode") == request.options.end()) {
+                    // Base checkpoints normally use ICL audio codes plus the
+                    // exact transcript. Audio.cpp's supported speaker-vector
+                    // path is the intended transcript-free fallback.
+                    request.options["x_vector_only_mode"] = "true";
                 }
                 engine::runtime::VoiceReference reference;
                 reference.audio = engine::runtime::AudioBuffer{

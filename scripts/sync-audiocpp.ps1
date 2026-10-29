@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "all")]
+    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "qwen3_tts", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -385,6 +385,26 @@ $neuTtsFiles = @(
     "src/models/neutts/session.cpp"
 )
 
+# Qwen3-TTS uses the causal decoder, attention, audio frontend, sampling, and
+# tokenizer infrastructure already synchronized by the selected TTS models.
+# One loader handles Base, CustomVoice, and VoiceDesign packages by reading the
+# checkpoint's embedded tts_model_type.
+$qwen3TtsFiles = @(
+    "model_specs/qwen3_tts.json",
+    "src/models/qwen3_tts/assets.cpp",
+    "src/models/qwen3_tts/tokenizer_text.cpp",
+    "src/models/qwen3_tts/tokenizer_speech_encoder.cpp",
+    "src/models/qwen3_tts/tokenizer_speech_decoder.cpp",
+    "src/models/qwen3_tts/rknn_speech_decoder.cpp",
+    "src/models/qwen3_tts/speaker_encoder.cpp",
+    "src/models/qwen3_tts/talker.cpp",
+    "src/models/qwen3_tts/prompt_tts_voice_clone.cpp",
+    "src/models/qwen3_tts/prompt_tts_voice_design.cpp",
+    "src/models/qwen3_tts/prompt_tts_custom_voice.cpp",
+    "src/models/qwen3_tts/session.cpp",
+    "src/models/qwen3_tts/loader.cpp"
+)
+
 # VoxCPM2 and the legacy VoxCPM1 implementation share the MiniCPM/AudioVAE
 # shape, but remain separate upstream families and model formats.
 $voxCpmSharedFiles = @(
@@ -498,6 +518,7 @@ foreach ($name in $Component) {
         [void] $selected.Add("breeze_tts")
         [void] $selected.Add("ming3_tts")
         [void] $selected.Add("neutts")
+        [void] $selected.Add("qwen3_tts")
     } else {
         [void] $selected.Add($name)
     }
@@ -590,6 +611,13 @@ if ($selected.Contains("ming3_tts")) {
 if ($selected.Contains("neutts")) {
     Copy-AudioCppTree "include/engine/models/neutts"
     foreach ($relativePath in $neuTtsFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("qwen3_tts")) {
+    Copy-AudioCppTree "include/engine/models/qwen3_tts"
+    foreach ($relativePath in $qwen3TtsFiles) {
         Copy-AudioCppFile $relativePath
     }
 }
@@ -824,6 +852,11 @@ $ttsLoaders = @(
         Family = "neutts"
         Header = "engine/models/neutts/session.h"
         Factory = "engine::models::neutts::make_neutts_loader"
+    },
+    @{
+        Family = "qwen3_tts"
+        Header = "engine/models/qwen3_tts/loader.h"
+        Factory = "engine::models::qwen3_tts::make_qwen3_tts_loader"
     }
 )
 $ttsRegistryHeaders = ""

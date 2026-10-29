@@ -3476,7 +3476,10 @@ def tts_generate(genparams):
         "min_p", "top_p", "top_k", "flow_guidance_scale", "max_tokens",
         "max_new_tokens", "do_sample", "stop_on_eos", "num_inference_steps",
         "text_chunk_size", "text_chunk_mode", "preset", "voice_id", "eos_bias",
-        "min_tokens", "template_name", "instruct", "emotion")
+        "min_tokens", "template_name", "instruct", "emotion",
+        "x_vector_only_mode", "subtalker_do_sample", "subtalker_temperature",
+        "subtalker_top_k", "subtalker_top_p", "stream_chunk_policy",
+        "stream_frames_per_event")
     audiocpp_options = {
         key: genparams[key] for key in audiocpp_option_names
         if key in genparams and isinstance(genparams[key], (str, int, float, bool))

@@ -14,3 +14,4 @@
     {"breeze_tts", engine::models::breeze_tts::make_breeze_tts_loader()},
     {"ming3_tts", engine::models::ming3_tts::make_ming3_tts_loader()},
     {"neutts", engine::models::neutts::make_neutts_loader()},
+    {"qwen3_tts", engine::models::qwen3_tts::make_qwen3_tts_loader()},

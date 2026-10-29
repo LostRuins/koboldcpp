@@ -25,6 +25,7 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component breeze_tts
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component ming3_tts
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component neutts
+./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component qwen3_tts
 ./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2 -ModelSourcesOnly
 ```
 
@@ -97,9 +98,14 @@ exact upstream commit cannot be recorded until a real checkout is supplied.
   and seven fixed emotion tokens. It does not support reference-audio cloning
   or free-form delivery instructions. Upstream streaming remains synchronized
   but is not exposed through KoboldCpp's offline API.
+- `qwen3_tts`: Audio.cpp's single-GGUF Qwen3-TTS runtime alongside the legacy
+  split-file implementation. The embedded checkpoint selects Base voice
+  cloning, CustomVoice packaged speakers, or VoiceDesign instructions. Base
+  cloning automatically uses speaker-embedding-only mode when no reference
+  transcript is supplied.
 - Later candidates should be added only when their framework closure is small
-  and measurable. Existing KoboldCpp Qwen3-TTS, MiniMax H3, ACE-Step, Kokoro,
-  OuteTTS, Parler, Dia, and Orpheus implementations are not imported.
+  and measurable. Existing KoboldCpp MiniMax H3, ACE-Step, Kokoro, OuteTTS,
+  Parler, Dia, and Orpheus implementations are not imported.
 
 The MinGW default and Vulkan DLL targets compile and link with all selected
 models. Runtime output for newly imported families still needs validation
@@ -202,6 +208,16 @@ KoboldCpp aliases `kobo`, `cheery`, `sleepy`, `shouty`, and `chatty` to `paul`,
 `emily`, `sophie`, `steven`, and `jo`, respectively. Emotion remains an
 independent request option. NeuTTS is English-only and does not consume
 reference audio or instructions.
+
+Pass an Audio.cpp Qwen3-TTS GGUF as the normal TTS model. Base checkpoints use
+a selected WAV/MP3 reference and its optional exact `reference_text`; when the
+transcript is absent KoboldCpp enables Audio.cpp's `x_vector_only_mode` speaker
+embedding path. CustomVoice checkpoints accept `aiden`, `serena`, `ono_anna`,
+`ryan`, `sohee`, `eric`, `dylan`, `vivian`, or `uncle_fu` through `voice` or
+`voice_id`, plus the existing instruction field for style control. VoiceDesign
+checkpoints consume that instruction without a reference. All variants produce
+24 kHz mono audio and retain Audio.cpp's sampling controls. The legacy
+`qwen3-tts` architecture and split-file loader remain available unchanged.
 
 Pass a BreezeTTS 2 GGUF package such as `breeze-tts-2-q8_0.gguf` as the
 normal TTS model. KoboldCpp maps its existing `instruction` field to Breeze's
