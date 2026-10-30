@@ -1114,10 +1114,34 @@ def init_library():
     handle.last_logprobs.restype = last_logprobs_outputs
     handle.detokenize.argtypes = [detokenize_inputs]
     handle.detokenize.restype = ctypes.c_char_p
-    handle.launch_rpc_server.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    handle.launch_rpc_server.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
     handle.launch_rpc_server.restype = ctypes.c_bool
     handle.set_environment_variable.restype = ctypes.c_int
     handle.set_environment_variable.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+
+def get_rpc_cache_dir(rpccache):
+    if not rpccache:
+        return ""
+    cachedir = rpccache
+    if rpccache=="default":
+        if os.environ.get("LLAMA_CACHE"):
+            basedir = os.environ["LLAMA_CACHE"]
+        elif os.name == 'nt':
+            basedir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "koboldcpp")
+        elif sys.platform == "darwin":
+            basedir = os.path.join(os.path.expanduser("~"), "Library", "Caches", "koboldcpp")
+        else:
+            basedir = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.join(os.path.expanduser("~"), ".cache")), "koboldcpp")
+        cachedir = os.path.join(basedir, "rpc")
+    cachedir = os.path.abspath(cachedir)
+    try:
+        os.makedirs(cachedir, exist_ok=True)
+    except Exception as e:
+        print(f"Could not create RPC cache directory {cachedir}: {e}. RPC cache disabled.")
+        return ""
+    print(f"RPC tensor cache directory: {cachedir}")
+    print("Warning: RPC tensor cache is enabled. Cached tensors are never deleted, so this\ndirectory grows by roughly the offloaded size of each new model clients load.\nAny client that connects can write to the cache and could poison it for other\nclients, so only enable it if you trust every client that can reach this server.")
+    return cachedir
 
 def set_backend_props(inputs):
     # we must force an explicit tensor split
@@ -12234,7 +12258,7 @@ def reload_from_new_args(newargs):
     try:
         args.istemplate = False
         newargs = convert_invalid_args(newargs)
-        protected_args = ["remotetunnel","showgui","port","host","port_param","admin","adminpassword","password","adminunloadtimeout","routermode","admindir","ssl","nocertify","benchmark","prompt","config","baseconfig","downloaddir","rpcmode","rpchost","rpcport","rpcdevice","allow_config_onready"]
+        protected_args = ["remotetunnel","showgui","port","host","port_param","admin","adminpassword","password","adminunloadtimeout","routermode","admindir","ssl","nocertify","benchmark","prompt","config","baseconfig","downloaddir","rpcmode","rpchost","rpcport","rpcdevice","rpccache","allow_config_onready"]
         for key, value in newargs.items(): #do not overwrite certain values
             if key == "onready" and getattr(args, "allow_config_onready", False):
                 setattr(args, key, value)
@@ -13780,8 +13804,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     if args.rpcmode=="host":
         rpc_endpt = f"{args.rpchost}:{args.rpcport}"
         rpc_devices = args.rpcdevice
+        rpc_cache_dir = get_rpc_cache_dir(args.rpccache)
         print(f"Initialize RPC server as host mode at {rpc_endpt}.")
-        handle.launch_rpc_server(rpc_endpt.encode("UTF-8"),rpc_devices.encode("UTF-8"))
+        handle.launch_rpc_server(rpc_endpt.encode("UTF-8"),rpc_devices.encode("UTF-8"),rpc_cache_dir.encode("UTF-8"))
         time.sleep(1)
         return
 
@@ -14619,6 +14644,7 @@ if __name__ == '__main__':
     rpcgroupA.add_argument("--rpcport", metavar=('[portnumber]'), help=f"RPC host mode only. Port for RPC server to listen on (default: {default_rpc_port}).", default=default_rpc_port, type=int)
     rpcgroup.add_argument("--rpchost", metavar=('[IP address]'), help="RPC host mode only. IP address for RPC server to listen on. Use 0.0.0.0 for all interfaces, 127.0.0.1 for localhost only.", default="0.0.0.0", type=str)
     rpcgroup.add_argument("--rpcdevice", metavar=('<dev1,dev2,..>'), help="RPC host mode only. Set specific devices to use for RPC server. Comma separated. Overrides normal RPC device choices.", default="")
+    rpcgroup.add_argument("--rpccache", metavar=('[directory]'), help="RPC host mode only. Cache large weight tensors received from clients on disk, so reloading the same model skips sending them over the network. Uses a default cache directory if no directory is given. Cache files are never deleted, and any connected client can write to the cache, so only use with trusted clients.", nargs='?', const="default", type=str, default="")
     rpcgroupA.add_argument("--rpctargets", metavar=('[remotehost1:port1,remotehost2:port2]'), help="RPC connect mode only. Specify a comma separated list of remote RPC endpoints to connect to e.g. 127.0.0.1:5551,127.0.0.1:5552", default="", type=str)
 
     admingroup = parser.add_argument_group('Administration Commands')

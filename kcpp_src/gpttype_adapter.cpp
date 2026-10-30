@@ -3042,7 +3042,7 @@ static float CalcGradientAIRopeFreqBase(float original_rope_base, int n_ctx_trai
     }
 }
 
-bool host_rpc_server(std::string endpoint, std::string devices_str)
+bool host_rpc_server(std::string endpoint, std::string devices_str, std::string cache_dir)
 {
     llama_backend_init();
     int num_backends = ggml_backend_reg_count();
@@ -3108,7 +3108,8 @@ bool host_rpc_server(std::string endpoint, std::string devices_str)
 
     printf("\nNote: It's not advised to expose RPC server to the open internet.\n=====\nStarting RPC server on %s, clients may now connect\n=====\n",endpoint.c_str());
 
-    start_server_fn(endpoint.c_str(), nullptr, 4, devices.size(), devices.data());
+    //cache lets the client skip re-sending large weight tensors the server already has on disk
+    start_server_fn(endpoint.c_str(), (cache_dir!=""?cache_dir.c_str():nullptr), 4, devices.size(), devices.data());
     return true;
 }
 

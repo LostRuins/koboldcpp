@@ -197,9 +197,9 @@ extern "C"
         }
     }
 
-    bool launch_rpc_server(const char * endpoint, const char * devices)
+    bool launch_rpc_server(const char * endpoint, const char * devices, const char * cache_dir)
     {
-        return host_rpc_server(endpoint,devices);
+        return host_rpc_server(endpoint,devices,cache_dir);
     }
 
     bool sd_load_model(const sd_load_model_inputs inputs)
