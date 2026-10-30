@@ -4231,6 +4231,7 @@ vk_device ggml_vk_get_device(size_t idx) {
         // see https://github.com/ggml-org/llama.cpp/issues/17302.
         device->support_async = (device->vendor_id != VK_VENDOR_ID_INTEL ||
                                  std::string(device->properties.deviceName.data()).find("(DG1)") == std::string::npos) &&
+                                !(device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eAmdProprietary && device->architecture == AMD_GCN) && // kcpp: #2574
                                 getenv("GGML_VK_DISABLE_ASYNC") == nullptr;
 
         if (!device->support_async) {
