@@ -1119,29 +1119,18 @@ def init_library():
     handle.set_environment_variable.restype = ctypes.c_int
     handle.set_environment_variable.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
 
-def get_rpc_cache_dir(rpccache):
-    if not rpccache:
+def prepare_rpc_cache_dir(cache_dir):
+    if not cache_dir:
         return ""
-    cachedir = rpccache
-    if rpccache=="default":
-        if os.environ.get("LLAMA_CACHE"):
-            basedir = os.environ["LLAMA_CACHE"]
-        elif os.name == 'nt':
-            basedir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "koboldcpp")
-        elif sys.platform == "darwin":
-            basedir = os.path.join(os.path.expanduser("~"), "Library", "Caches", "koboldcpp")
-        else:
-            basedir = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.join(os.path.expanduser("~"), ".cache")), "koboldcpp")
-        cachedir = os.path.join(basedir, "rpc")
-    cachedir = os.path.abspath(cachedir)
+    cache_dir = os.path.abspath(cache_dir)
     try:
-        os.makedirs(cachedir, exist_ok=True)
-    except Exception as e:
-        print(f"Could not create RPC cache directory {cachedir}: {e}. RPC cache disabled.")
+        os.makedirs(cache_dir, exist_ok=True)
+    except OSError as e:
+        print(f"Could not create RPC cache directory {cache_dir}: {e}. RPC cache disabled.")
         return ""
-    print(f"RPC tensor cache directory: {cachedir}")
+    print(f"RPC tensor cache directory: {cache_dir}")
     print("Warning: RPC tensor cache is enabled. Cached tensors are never deleted, so this\ndirectory grows by roughly the offloaded size of each new model clients load.\nAny client that connects can write to the cache and could poison it for other\nclients, so only enable it if you trust every client that can reach this server.")
-    return cachedir
+    return cache_dir
 
 def set_backend_props(inputs):
     # we must force an explicit tensor split
@@ -9662,6 +9651,7 @@ def show_gui():
     rpc_host_var = ctk.StringVar(value="0.0.0.0")
     rpc_port_var = ctk.StringVar(value=str(default_rpc_port))
     rpc_device_var = ctk.StringVar()
+    rpc_cache_dir_var = ctk.StringVar()
 
     sd_model_var = ctk.StringVar()
     sd_lora_var = ctk.StringVar()
@@ -10609,37 +10599,21 @@ def show_gui():
     toggle_parallel_total_context()
 
 
+    def set_rpc_widgets_visible(widgets, visible):
+        for widget in widgets:
+            widget.grid() if visible else widget.grid_remove()
+
     def togglerpcmode(a,b,c):
-        if rpcmode_var.get()=="connect":
-            rpcepbox.grid()
-            rpceplbl.grid()
-            rpchostbox.grid_remove()
-            rpchostlbl.grid_remove()
-            rpcportbox.grid_remove()
-            rpcportlbl.grid_remove()
-            rpcdevicebox.grid_remove()
-            rpcdevicelbl.grid_remove()
-            rpcdesc.configure(text="Connect to one or more remote RPC endpoints (ip:port), comma seperated")
-        elif rpcmode_var.get()=="host":
-            rpcepbox.grid_remove()
-            rpceplbl.grid_remove()
-            rpchostbox.grid()
-            rpchostlbl.grid()
-            rpcportbox.grid()
-            rpcportlbl.grid()
-            rpcdevicebox.grid()
-            rpcdevicelbl.grid()
-            rpcdesc.configure(text="Run a RPC server that others can connect to. Disables local models and API.")
-        else:
-            rpcepbox.grid_remove()
-            rpceplbl.grid_remove()
-            rpchostbox.grid_remove()
-            rpchostlbl.grid_remove()
-            rpcportbox.grid_remove()
-            rpcportlbl.grid_remove()
-            rpcdevicebox.grid_remove()
-            rpcdevicelbl.grid_remove()
-            rpcdesc.configure(text="RPC is disabled and will not be used")
+        mode = rpcmode_var.get()
+        set_rpc_widgets_visible((rpcepbox, rpceplbl), mode=="connect")
+        set_rpc_widgets_visible((rpchostbox, rpchostlbl, rpcportbox, rpcportlbl,
+                                 rpcdevicebox, rpcdevicelbl, rpccachelabel,
+                                 rpccachebox, rpccachebutton), mode=="host")
+        descriptions = {
+            "connect": "Connect to one or more remote RPC endpoints (ip:port), comma separated",
+            "host": "Run an RPC server that others can connect to. Disables local models and API.",
+        }
+        rpcdesc.configure(text=descriptions.get(mode, "RPC is disabled and will not be used"))
         update_runmode_gui()
     makelabelcombobox(network_tab, "RPC Mode:", rpcmode_var, row=40, padx=(100), width=90, command=togglerpcmode, tooltiptxt="RPC functionality to connect to remote RPC instances or host one, allowing GPUs to be shared over a network.", values=["disabled","connect","host"])
     rpcdesc = makelabel(network_tab, "RPC is disabled and will not be used", row=42)
@@ -10647,6 +10621,7 @@ def show_gui():
     rpchostbox, rpchostlbl = makelabelentry(network_tab, "RPC Host IP: ", rpc_host_var, row=46, width=150, padx=(100), singleline=True,tooltip="IP address for RPC server to listen on. Use 0.0.0.0 for all interfaces, 127.0.0.1 for localhost only.")
     rpcportbox, rpcportlbl = makelabelentry(network_tab, "RPC Host Port: ", rpc_port_var, row=46, width=100, padx=(360), singleline=True,tooltip=f"Port for RPC server to listen on. (default:{default_rpc_port})",labelpadx=260)
     rpcdevicebox, rpcdevicelbl = makelabelentry(network_tab, "RPC Devices: ", rpc_device_var, row=48, padx=(100), width=200, singleline=True,tooltip="Set specific devices to use for RPC server. Comma separated. Overrides normal RPC device choices.")
+    rpccachelabel, rpccachebox, rpccachebutton = makefileentry(network_tab, "RPC Cache:", "Select RPC tensor cache directory", rpc_cache_dir_var, row=50, width=240, singlerow=True, dialog_type=2, tooltiptxt="Optional directory for caching large weight tensors received from RPC clients. Leave blank to disable caching. Cache files are never deleted; only use this with trusted clients.")
 
 
     # Horde Tab
@@ -11084,6 +11059,7 @@ def show_gui():
         args.rpcport = int(rpc_port_var.get()) if (args.rpcmode=="host" and rpc_port_var.get()) else default_rpc_port
         args.rpctargets = rpcendpoints_var.get() if (args.rpcmode=="connect" and rpcendpoints_var.get()) else ""
         args.rpcdevice = rpc_device_var.get() if (args.rpcmode=="host" and rpc_device_var.get()) else ""
+        args.rpccache = rpc_cache_dir_var.get() if args.rpcmode=="host" else ""
 
         if usehorde_var.get() != 0:
             args.hordemodelname = horde_name_var.get()
@@ -11413,6 +11389,7 @@ def show_gui():
         rpc_port_var.set(mydict["rpcport"] if ("rpcport" in mydict and mydict["rpcport"]) else str(default_rpc_port))
         rpcendpoints_var.set(mydict["rpctargets"] if ("rpctargets" in mydict and mydict["rpctargets"]) else "")
         rpc_device_var.set(mydict["rpcdevice"] if ("rpcdevice" in mydict and mydict["rpcdevice"]) else "")
+        rpc_cache_dir_var.set(mydict["rpccache"] if ("rpccache" in mydict and mydict["rpccache"]) else "")
 
         sd_model_var.set(mydict["sdmodel"] if ("sdmodel" in mydict and mydict["sdmodel"]) else "")
         sd_clamped_var.set(int(mydict["sdclamped"]) if ("sdclamped" in mydict and mydict["sdclamped"]) else 0)
@@ -13804,7 +13781,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     if args.rpcmode=="host":
         rpc_endpt = f"{args.rpchost}:{args.rpcport}"
         rpc_devices = args.rpcdevice
-        rpc_cache_dir = get_rpc_cache_dir(args.rpccache)
+        rpc_cache_dir = prepare_rpc_cache_dir(args.rpccache)
         print(f"Initialize RPC server as host mode at {rpc_endpt}.")
         handle.launch_rpc_server(rpc_endpt.encode("UTF-8"),rpc_devices.encode("UTF-8"),rpc_cache_dir.encode("UTF-8"))
         time.sleep(1)
@@ -14644,7 +14621,7 @@ if __name__ == '__main__':
     rpcgroupA.add_argument("--rpcport", metavar=('[portnumber]'), help=f"RPC host mode only. Port for RPC server to listen on (default: {default_rpc_port}).", default=default_rpc_port, type=int)
     rpcgroup.add_argument("--rpchost", metavar=('[IP address]'), help="RPC host mode only. IP address for RPC server to listen on. Use 0.0.0.0 for all interfaces, 127.0.0.1 for localhost only.", default="0.0.0.0", type=str)
     rpcgroup.add_argument("--rpcdevice", metavar=('<dev1,dev2,..>'), help="RPC host mode only. Set specific devices to use for RPC server. Comma separated. Overrides normal RPC device choices.", default="")
-    rpcgroup.add_argument("--rpccache", metavar=('[directory]'), help="RPC host mode only. Cache large weight tensors received from clients on disk, so reloading the same model skips sending them over the network. Uses a default cache directory if no directory is given. Cache files are never deleted, and any connected client can write to the cache, so only use with trusted clients.", nargs='?', const="default", type=str, default="")
+    rpcgroup.add_argument("--rpccache", metavar="<directory>", help="RPC host mode only. Cache large weight tensors received from clients in the explicitly provided directory, so reloading the same model skips sending them over the network. Cache files are never deleted, and any connected client can write to the cache, so only use with trusted clients.", default="")
     rpcgroupA.add_argument("--rpctargets", metavar=('[remotehost1:port1,remotehost2:port2]'), help="RPC connect mode only. Specify a comma separated list of remote RPC endpoints to connect to e.g. 127.0.0.1:5551,127.0.0.1:5552", default="", type=str)
 
     admingroup = parser.add_argument_group('Administration Commands')
