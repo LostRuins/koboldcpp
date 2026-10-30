@@ -705,6 +705,13 @@ SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
     return sd_version_supports_video_generation(sd_ctx->sd->version);
 }
 
+SD_API bool sd_ctx_supports_ref_image_conditioning(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return false;
+    }
+    return sd_version_supports_ref_image_conditioning(sd_ctx->sd->version);
+}
+
 SD_API bool sd_ctx_load_control_net(sd_ctx_t* sd_ctx, const char* path) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || path == nullptr) {
         return false;
@@ -838,7 +845,7 @@ namespace kcpp_sd {
         res.is_ltx = sd_version_is_ltxav(loadedsdver);
         res.is_minimaxh3 = sd_version_is_minimax_h3(loadedsdver);
         res.is_boogu = sd_version_is_boogu_image(loadedsdver);
-        res.supports_ref_image = sd_version_supports_ref_latent_img_cfg(loadedsdver) || sd_version_is_pid(loadedsdver) || res.is_qwenimg;
+        res.supports_ref_image = sd_version_supports_ref_image_conditioning(loadedsdver);
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
         res.spatial_multiple = get_spatial_multiple(ctx);
         return res;

@@ -65,7 +65,7 @@ namespace sd::pipeline {
             return LCM_SCHEDULER;
         } else if (sample_method == DDIM_TRAILING_SAMPLE_METHOD) {
             return SIMPLE_SCHEDULER;
-        } else if (sd != nullptr && (sd_version_is_flux(sd->version) || sd->version == VERSION_QWEN_IMAGE_2_1)) {
+        } else if (sd != nullptr && (sd_version_is_flux(sd->version) || sd->version == VERSION_QWEN_IMAGE_2_1 || sd->version == VERSION_FIBO2)) {
             return FLUX_SCHEDULER;
         } else if (sd != nullptr && sd_version_is_flux2(sd->version)) {
             return FLUX2_SCHEDULER;
@@ -320,6 +320,11 @@ namespace sd::pipeline {
     }
 
     void GenerationRequest::resolve(StableDiffusionGGML* sd) {
+        if (sd_version_is_minit2i(sd->version) && (width != 512 || height != 512)) {
+            width  = 512;
+            height = 512;
+            LOG_WARN("align to fixed size 512x512 for MiniT2I");
+        }
         align_generation_request_size();
         resolve_hires();
         seed = resolve_seed(seed);

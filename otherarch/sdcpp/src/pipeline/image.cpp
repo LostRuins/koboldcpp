@@ -284,26 +284,34 @@ namespace sd::pipeline {
                 LOG_VERBOSE("auto resize ref images");
                 double vae_width;
                 double vae_height;
-                if (ref_image_params.resize_vae_to_target) {
+                int factor = sd_version_is_qwen_image(sd->version) ? 32 : 16;
+                if (ref_image_params.resize_vae_to_target || (ref_image_params.resize_single_ref_to_target && ref_images.size() == 1)) {
                     vae_width  = request->width;
                     vae_height = request->height;
                 } else {
                     int default_pixels = sd->version == VERSION_QWEN_IMAGE_2_1 ? request->width * request->height : 1024 * 1024;
                     int target_pixels  = ref_image_params.vae_input_max_pixels > 0 ? ref_image_params.vae_input_max_pixels : default_pixels;
-                    int vae_image_size = std::min(target_pixels, request->width * request->height);
-                    vae_width          = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
-                    vae_height         = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
+                    if (ref_image_params.vae_size_buckets) {
+                        auto size  = sd::select_image_size_bucket(static_cast<int>(ref_images[i].shape()[0]), static_cast<int>(ref_images[i].shape()[1]), target_pixels, factor, request->width, request->height);
+                        vae_width  = size.first;
+                        vae_height = size.second;
+                    } else {
+                        int vae_image_size = std::min(target_pixels, request->width * request->height);
+                        vae_width          = sqrt(vae_image_size * ref_images[i].shape()[0] / ref_images[i].shape()[1]);
+                        vae_height         = vae_width * ref_images[i].shape()[1] / ref_images[i].shape()[0];
+                    }
                 }
 
-                int factor = sd_version_is_qwen_image(sd->version) ? 32 : 16;
                 vae_height = round(vae_height / factor) * factor;
                 vae_width  = round(vae_width / factor) * factor;
 
-                auto resized_ref_img = sd::ops::interpolate(ref_images[i],
-                                                            {static_cast<int>(vae_width),
-                                                             static_cast<int>(vae_height),
-                                                             ref_images[i].shape()[2],
-                                                             ref_images[i].shape()[3]});
+                auto resized_ref_img = ref_image_params.vae_center_crop
+                                           ? sd::resize_and_center_crop(ref_images[i], static_cast<int>(vae_width), static_cast<int>(vae_height))
+                                           : sd::ops::interpolate(ref_images[i],
+                                                                  {static_cast<int>(vae_width),
+                                                                   static_cast<int>(vae_height),
+                                                                   ref_images[i].shape()[2],
+                                                                   ref_images[i].shape()[3]});
 
                 LOG_VERBOSE("resize vae ref image %d from %" PRId64 "x%" PRId64 " to %" PRId64 "x%" PRId64,
                             static_cast<int>(i),
@@ -313,7 +321,7 @@ namespace sd::pipeline {
                             resized_ref_img.shape()[0]);
 
                 ref_latent = sd->encode_first_stage(resized_ref_img);
-                if (sd->version == VERSION_QWEN_IMAGE_2_1) {
+                if (ref_image_params.vlm_use_vae_input) {
                     ref_images[i] = std::move(resized_ref_img);
                 }
             } else {
@@ -482,8 +490,8 @@ namespace sd::pipeline {
                 }
                 condition_params.text            = request->negative_prompt;
                 condition_params.zero_out_masked = zero_out_masked;
-                if (sd_version_is_llada_image(sd->version)) {
-                    // LLaDA-Image CFG keeps the source latent but drops its SigVQ features.
+                if (sd_version_is_llada_image(sd->version) || sd->version == VERSION_FIBO2) {
+                    // Keep source latents in CFG, but omit source images from the text encoder.
                     condition_params.ref_images = nullptr;
                 }
                 uncond = sd->get_learned_condition(condition_params);

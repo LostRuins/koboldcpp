@@ -3,12 +3,16 @@
 
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/tensor.hpp"
 #include "stable-diffusion.h"
 
 namespace sd {
+
+    std::pair<int, int> select_image_size_bucket(int source_width, int source_height, int area, int factor, int fallback_width, int fallback_height);
+    Tensor<float> resize_and_center_crop(const Tensor<float>& image, int width, int height, ops::InterpolateMode filter = ops::InterpolateMode::Lanczos);
 
     enum class ImageTarget {
         Init,
