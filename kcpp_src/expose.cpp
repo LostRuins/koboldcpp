@@ -389,6 +389,12 @@ extern "C"
        return gpttype_get_pending_output().c_str();
     }
 
+    static std::string lookahead_standins_str = "";
+    const char* get_lookahead_standins() {
+        lookahead_standins_str = gpttype_get_lookahead_standins();
+        return lookahead_standins_str.c_str();
+    }
+
     bool abort_generate() {
         return gpttype_generate_abort();
     }
