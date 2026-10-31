@@ -76,6 +76,7 @@ private:
         ggml_backend_t compute_backend  = nullptr;
         ggml_backend_t transfer_backend = nullptr;
         ggml_backend_event_t event      = nullptr;
+        bool submitted                  = false;
         std::vector<std::unique_ptr<ComputeStagingBlock>> staging_blocks;
     };
 
@@ -292,6 +293,10 @@ public:
     WeightPrefetchResult prefetch_params(
         uintptr_t owner_id,
         const std::vector<ggml_tensor*>& tensors) override;
+    WeightPrefetchResult prepare_prefetch_params(
+        uintptr_t owner_id,
+        const std::vector<ggml_tensor*>& tensors) override;
+    void submit_prefetched_params(uintptr_t owner_id) override;
     bool activate_prefetched_params(uintptr_t owner_id,
                                     const std::vector<ggml_tensor*>& tensors) override;
     void clear_prefetched_params(uintptr_t owner_id) override;

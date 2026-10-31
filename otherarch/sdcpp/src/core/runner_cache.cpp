@@ -24,15 +24,7 @@ namespace sd {
         ggml_free(context);
     }
 
-    std::unique_ptr<CachedTensor> CachedTensor::copy(ggml_backend_t backend,
-                                                     const std::string& name,
-                                                     ggml_tensor* source,
-                                                     ggml_status& status) {
-        status = GGML_STATUS_FAILED;
-        if (ggml_graph_cut::tensor_buffer(source) == nullptr) {
-            return nullptr;
-        }
-        status         = GGML_STATUS_ALLOC_FAILED;
+    std::unique_ptr<CachedTensor> CachedTensor::allocate(ggml_backend_t backend, const std::string& name, ggml_tensor* source) {
         auto entry     = std::make_unique<CachedTensor>();
         entry->context = ggml_init({2 * ggml_tensor_overhead(), nullptr, true});
         if (entry->context == nullptr) {
@@ -44,6 +36,22 @@ namespace sd {
         ggml_set_name(entry->tensor, name.c_str());
         entry->buffer = ggml_backend_alloc_ctx_tensors(entry->context, backend);
         if (entry->buffer == nullptr) {
+            return nullptr;
+        }
+        return entry;
+    }
+
+    std::unique_ptr<CachedTensor> CachedTensor::copy(ggml_backend_t backend,
+                                                     const std::string& name,
+                                                     ggml_tensor* source,
+                                                     ggml_status& status) {
+        status = GGML_STATUS_FAILED;
+        if (ggml_graph_cut::tensor_buffer(source) == nullptr) {
+            return nullptr;
+        }
+        status     = GGML_STATUS_ALLOC_FAILED;
+        auto entry = allocate(backend, name, source);
+        if (entry == nullptr) {
             return nullptr;
         }
         if (source->view_src != nullptr || !ggml_is_contiguous(source) || source->buffer == nullptr) {
@@ -155,6 +163,26 @@ namespace sd {
         return sd::resident_bytes(tensors_, device);
     }
 
+    bool GraphCutTensorCache::can_bind_output(ggml_backend_t backend, const ggml_tensor* tensor) {
+        return tensor != nullptr && tensor->view_src == nullptr && tensor->op != GGML_OP_NONE &&
+               ggml_is_contiguous(tensor) && ggml_backend_supports_op(backend, tensor);
+    }
+
+    bool GraphCutTensorCache::bind_outputs(const std::unordered_set<const ggml_tensor*>& outputs) {
+        for (const ggml_tensor* output : outputs) {
+            auto tensor = const_cast<ggml_tensor*>(output);
+            auto entry  = CachedTensor::allocate(backend_, tensor->name, tensor);
+            if (entry == nullptr) {
+                return false;
+            }
+            tensor->buffer         = entry->tensor->buffer;
+            tensor->data           = entry->tensor->data;
+            tensor->extra          = entry->tensor->extra;
+            tensors_[tensor->name] = std::move(entry);
+        }
+        return true;
+    }
+
     size_t GraphCutTensorCache::estimate_output_bytes(
         ggml_cgraph* graph,
         const ggml_graph_cut::Segment& segment) const {
@@ -169,6 +197,10 @@ namespace sd {
             ggml_tensor* output = ggml_graph_cut::output_tensor(graph, segment, output_idx);
             if (output == nullptr || !ggml_graph_cut::is_graph_cut_tensor(output) ||
                 !segment.future_cut_names.count(output->name)) {
+                continue;
+            }
+            const ggml_tensor* cached = get(output->name);
+            if (cached != nullptr && output->buffer == cached->buffer && output->data == cached->data) {
                 continue;
             }
             ggml_tensor* source      = ggml_graph_cut::cache_source_tensor(output);
@@ -194,6 +226,10 @@ namespace sd {
             auto output = ggml_graph_node(graph, index);
             if (!ggml_graph_cut::is_graph_cut_tensor(output) ||
                 !segment.future_cut_names.count(output->name)) {
+                continue;
+            }
+            const ggml_tensor* cached = get(output->name);
+            if (cached != nullptr && output->buffer == cached->buffer && output->data == cached->data) {
                 continue;
             }
             ggml_status status;

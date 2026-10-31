@@ -56,6 +56,7 @@ namespace sd {
         // Prefetch is best effort; segment_start falls back to synchronous loading.
         void enqueue_next(size_t segment_index,
                           const DeviceMemoryRequest& request);
+        void submit_next();
     };
 }
 
