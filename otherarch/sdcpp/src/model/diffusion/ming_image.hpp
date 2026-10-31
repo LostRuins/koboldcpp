@@ -109,7 +109,7 @@ namespace MingImage {
                 const int64_t n_txt = context->ne[1] + direct->ne[1];
                 const int64_t n_img = ((x->ne[0] + config.patch_size - 1) / config.patch_size) *
                                       ((x->ne[1] + config.patch_size - 1) / config.patch_size);
-                auto padded = finish_rope_pe(Rope::gen_z_image_pe(
+                auto padded         = finish_rope_pe(Rope::gen_z_image_pe(
                     static_cast<int>(x->ne[1]), static_cast<int>(x->ne[0]), config.patch_size, 1,
                     static_cast<int>(n_txt), ZImage::SEQ_MULTI_OF, {}, Rope::RefIndexMode::FIXED,
                     config.theta, config.axes_dim));

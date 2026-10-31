@@ -644,7 +644,7 @@ namespace Pid {
 
             int64_t effective_down_factor = config.lq_latent_down_factor / unpatchify_factor;
             float z_to_patch_ratio        = static_cast<float>(config.lq_sr_scale * effective_down_factor) /
-                                     static_cast<float>(config.patch_size);
+                                            static_cast<float>(config.patch_size);
             GGML_ASSERT(z_to_patch_ratio >= 1.0f);
             if (lq_latent->ne[0] != target_pW || lq_latent->ne[1] != target_pH) {
                 lq_latent = ggml_interpolate(ctx->ggml_ctx,

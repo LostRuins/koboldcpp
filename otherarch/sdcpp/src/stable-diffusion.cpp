@@ -1,4 +1,5 @@
 #include "stable-diffusion.h"
+#include "generation_info.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -171,10 +172,13 @@ const char* prediction_to_str[] = {
     "sefi_flow",
     "minit2i_flow",
     "sensenova_u1_flow",
+    "flux3_flow",
+    "h3_av_flow",
+    "ming_image_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
-    if (prediction < PREDICTION_COUNT) {
+    if (prediction >= EPS_PRED && prediction < PREDICTION_COUNT) {
         return prediction_to_str[prediction];
     }
     return NONE_STR;
@@ -634,6 +638,7 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->hires.custom_sigmas_count             = 0;
     sd_vid_gen_params->circular_x                            = false;
     sd_vid_gen_params->circular_y                            = false;
+    sd_vid_gen_params->ref_image_args                        = "";
     sd_cache_params_init(&sd_vid_gen_params->cache);
 }
 
@@ -705,13 +710,6 @@ SD_API bool sd_ctx_supports_video_generation(const sd_ctx_t* sd_ctx) {
     return sd_version_supports_video_generation(sd_ctx->sd->version);
 }
 
-SD_API bool sd_ctx_supports_ref_image_conditioning(const sd_ctx_t* sd_ctx) {
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
-        return false;
-    }
-    return sd_version_supports_ref_image_conditioning(sd_ctx->sd->version);
-}
-
 SD_API bool sd_ctx_load_control_net(sd_ctx_t* sd_ctx, const char* path) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || path == nullptr) {
         return false;
@@ -730,14 +728,20 @@ SD_API bool sd_ctx_has_control_net(const sd_ctx_t* sd_ctx) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
         return false;
     }
-    return sd_ctx->sd->control_net != nullptr;
+    if (sd_ctx->sd->control_net != nullptr) {
+        return true;
+    }
+    // z-image keeps control net weights inside the diffusion runner, registered
+    // under ModelComponent::ControlNet instead of a separate control_net runner.
+    return sd_ctx->sd->model_manager != nullptr &&
+           sd_ctx->sd->model_manager->registered_params_size({ModelComponent::ControlNet}) > 0;
 }
 
 const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_ctx->sd->version >= VERSION_COUNT) {
         return "Unknown";
     }
-    return model_version_to_str[sd_ctx->sd->version];
+    return sd_version_name(sd_ctx->sd->version);
 }
 
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
@@ -750,43 +754,62 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
 
 SD_API bool generate_image(sd_ctx_t* sd_ctx,
                            const sd_img_gen_params_t* params,
-                           sd_image_t** images_out,
-                           int* num_images_out) {
-    if (images_out != nullptr)
-        *images_out = nullptr;
-    if (num_images_out != nullptr)
-        *num_images_out = 0;
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || params == nullptr) {
+                           sd_image_generation_result_t** result_out) {
+    if (result_out)
+        *result_out = nullptr;
+    if (!result_out || !sd_ctx || !sd_ctx->sd || !params)
+        return false;
+    StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
+    if (!execution.ready)
+        return false;
+    sd_image_t* images = nullptr;
+    int count          = 0;
+    std::vector<nlohmann::json> infos;
+    try {
+        if (!sd::pipeline::generate_image(sd_ctx->sd, params, &images, &count, &infos)) {
+            free_sd_images(images, count);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("image generation failed: %s", e.what());
+        free_sd_images(images, count);
         return false;
     }
-    StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
-    return execution.ready && sd::pipeline::generate_image(sd_ctx->sd, params, images_out, num_images_out);
+    return sd::make_image_generation_result(images, count, infos, result_out);
 }
 
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
-                           const sd_vid_gen_params_t* sd_vid_gen_params,
-                           sd_image_t** frames_out,
-                           int* num_frames_out,
-                           sd_audio_t** audio_out,
-                           int* fps_out) {
-    if (frames_out != nullptr)
-        *frames_out = nullptr;
-    if (audio_out != nullptr)
-        *audio_out = nullptr;
-    if (num_frames_out != nullptr)
-        *num_frames_out = 0;
-    if (fps_out != nullptr)
-        *fps_out = 0;
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
+                           const sd_vid_gen_params_t* params,
+                           sd_video_generation_result_t** result_out) {
+    if (result_out)
+        *result_out = nullptr;
+    if (!result_out || !sd_ctx || !sd_ctx->sd || !params)
         return false;
-    }
-
     StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
-    if (!execution.ready) {
+    if (!execution.ready)
+        return false;
+    auto* result = static_cast<sd_video_generation_result_t*>(calloc(1, sizeof(sd_video_generation_result_t)));
+    if (!result)
+        return false;
+    try {
+        nlohmann::json info;
+        if (!sd::pipeline::generate_video(sd_ctx->sd, params, &result->frames, &result->frame_count,
+                                          &result->audio, &result->fps, &info)) {
+            free_sd_video_generation_result(result);
+            return false;
+        }
+        result->generation_info = sd::copy_generation_info(info);
+        if (!result->generation_info) {
+            free_sd_video_generation_result(result);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("video generation failed: %s", e.what());
+        free_sd_video_generation_result(result);
         return false;
     }
-
-    return sd::pipeline::generate_video(sd_ctx->sd, sd_vid_gen_params, frames_out, num_frames_out, audio_out, fps_out);
+    *result_out = result;
+    return true;
 }
 
 SD_API void free_sd_images(sd_image_t* result_images, int num_images) {
@@ -809,10 +832,6 @@ SD_API void free_sd_images(sd_image_t* result_images, int num_images) {
 
 namespace kcpp_sd {
 
-    int get_loaded_sd_version(sd_ctx_t* ctx) {
-        return ctx->sd->version;
-    }
-
     bool loaded_model_is_chroma(sd_ctx_t* ctx) {
         if (ctx != nullptr && ctx->sd != nullptr) {
             auto maybe_flux = std::dynamic_pointer_cast<Flux::FluxRunner>(ctx->sd->diffusion_model);
@@ -823,31 +842,14 @@ namespace kcpp_sd {
         return false;
     }
 
-    int get_spatial_multiple(sd_ctx_t* ctx) {
-        return ctx->sd->get_vae_scale_factor() * ctx->sd->get_diffusion_model_down_factor();
-    }
-
-    model_info get_model_info(sd_ctx_t* ctx)
+    sd_model_info sd_get_model_info(sd_ctx_t* ctx)
     {
-        model_info res = {};
-        SDVersion loadedsdver = (SDVersion)get_loaded_sd_version(ctx);
-        res.is_wan = (loadedsdver == SDVersion::VERSION_WAN2 || loadedsdver == SDVersion::VERSION_WAN2_2_I2V || loadedsdver == SDVersion::VERSION_WAN2_2_TI2V);
-        res.is_qwenimg = sd_version_is_qwen_image(loadedsdver);
+        sd_model_info res = {};
+        res.version = ctx->sd->version;
         res.is_chroma = loaded_model_is_chroma(ctx);
-        res.is_kontext = (loadedsdver==SDVersion::VERSION_FLUX && !res.is_chroma);
-        res.is_flux2 = (loadedsdver == SDVersion::VERSION_FLUX2 || loadedsdver == SDVersion::VERSION_FLUX2_KLEIN);
-        res.is_flux1 = (loadedsdver == SDVersion::VERSION_FLUX);
-        res.is_zimage = (loadedsdver == SDVersion::VERSION_Z_IMAGE);
-        res.is_sdxs = (loadedsdver == SDVersion::VERSION_SDXS_512_DS || loadedsdver == SDVersion::VERSION_SDXS_09);
-        res.is_sd1 = (loadedsdver == SDVersion::VERSION_SD1);
-        res.is_sd2 = (loadedsdver == SDVersion::VERSION_SD2);
-        res.is_sdxl = sd_version_is_sdxl(loadedsdver);
-        res.is_ltx = sd_version_is_ltxav(loadedsdver);
-        res.is_minimaxh3 = sd_version_is_minimax_h3(loadedsdver);
-        res.is_boogu = sd_version_is_boogu_image(loadedsdver);
-        res.supports_ref_image = sd_version_supports_ref_image_conditioning(loadedsdver);
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
-        res.spatial_multiple = get_spatial_multiple(ctx);
+        int diffusion_model_down_factor = ctx->sd->get_diffusion_model_down_factor();
+        res.spatial_multiple = res.vae_scale_factor * diffusion_model_down_factor;
         return res;
     }
 

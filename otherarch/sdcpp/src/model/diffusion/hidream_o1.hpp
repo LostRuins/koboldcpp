@@ -238,10 +238,10 @@ namespace HiDreamO1 {
             blocks["language_model"] = std::make_shared<LLM::TextModel>(this->config.llm);
             blocks["t_embedder1"]    = std::make_shared<TimestepEmbedder>(this->config.llm.hidden_size);
             blocks["x_embedder"]     = std::make_shared<BottleneckPatchEmbed>(this->config.patch_size * this->config.patch_size * 3,
-                                                                          this->config.llm.hidden_size / 4,
-                                                                          this->config.llm.hidden_size);
+                                                                              this->config.llm.hidden_size / 4,
+                                                                              this->config.llm.hidden_size);
             blocks["final_layer2"]   = std::make_shared<FinalLayer>(this->config.llm.hidden_size,
-                                                                  this->config.patch_size * this->config.patch_size * 3);
+                                                                    this->config.patch_size * this->config.patch_size * 3);
         }
 
         std::shared_ptr<LLM::TextModel> text_model() {

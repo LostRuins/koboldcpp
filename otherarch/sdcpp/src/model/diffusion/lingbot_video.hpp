@@ -442,10 +442,10 @@ namespace LingBotVideo {
             : hidden_size(config.hidden_size) {
             blocks["norm1"]          = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             blocks["attn"]           = std::make_shared<LingBotVideoAttention>(config.hidden_size,
-                                                                     config.num_attention_heads,
-                                                                     config.qkv_bias,
-                                                                     config.out_bias,
-                                                                     config.norm_eps);
+                                                                               config.num_attention_heads,
+                                                                               config.qkv_bias,
+                                                                               config.out_bias,
+                                                                               config.norm_eps);
             blocks["norm_post_attn"] = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             blocks["norm2"]          = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             if (sparse) {
@@ -509,14 +509,14 @@ namespace LingBotVideo {
             int64_t patch_dim           = config.patch_t * config.patch_h * config.patch_w * config.in_channels;
             blocks["patch_embedder"]    = std::make_shared<Linear>(patch_dim, config.hidden_size, config.patch_embed_bias);
             blocks["time_embedder"]     = std::make_shared<Qwen::TimestepEmbedding>(config.freq_dim,
-                                                                                config.hidden_size,
-                                                                                config.hidden_size,
-                                                                                0,
-                                                                                config.timestep_mlp_bias);
+                                                                                    config.hidden_size,
+                                                                                    config.hidden_size,
+                                                                                    0,
+                                                                                    config.timestep_mlp_bias);
             blocks["time_modulation.1"] = std::make_shared<Linear>(config.hidden_size, 6 * config.hidden_size, true);
             blocks["text_embedder"]     = std::make_shared<LingBotVideoTextEmbedder>(config.text_dim,
-                                                                                 config.hidden_size,
-                                                                                 config.norm_eps);
+                                                                                     config.hidden_size,
+                                                                                     config.norm_eps);
             for (int i = 0; i < config.depth; i++) {
                 bool sparse                           = config.sparse_layers.find(i) != config.sparse_layers.end();
                 blocks["blocks." + std::to_string(i)] = std::make_shared<LingBotVideoBlock>(config, sparse);
@@ -524,8 +524,8 @@ namespace LingBotVideo {
             blocks["norm_out"]              = std::make_shared<LayerNorm>(config.hidden_size, config.norm_eps, false);
             blocks["norm_out_modulation.1"] = std::make_shared<Linear>(config.hidden_size, 2 * config.hidden_size, true);
             blocks["proj_out"]              = std::make_shared<Linear>(config.hidden_size,
-                                                          config.patch_t * config.patch_h * config.patch_w * config.out_channels,
-                                                          true);
+                                                                       config.patch_t * config.patch_h * config.patch_w * config.out_channels,
+                                                                       true);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,

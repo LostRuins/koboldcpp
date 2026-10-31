@@ -69,7 +69,8 @@ struct LoraModel : public GGMLRunner {
         metadata_alpha      = -1.f;
         const auto metadata = model_manager->loader().file_metadata(source_file);
         const auto alpha    = metadata.find("alpha");
-        if (alpha != metadata.end()) {
+        // Converters that write "baked_scale" have already folded alpha / rank into lora_up.
+        if (alpha != metadata.end() && metadata.find("baked_scale") == metadata.end()) {
             try {
                 size_t parsed  = 0;
                 metadata_alpha = std::stof(alpha->second, &parsed);

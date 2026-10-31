@@ -1,5 +1,7 @@
 #include "media_io.h"
+#include "generation_metadata.h"
 #include "log.h"
+#include "media_metadata.h"
 #include "resource_owners.hpp"
 
 #include <algorithm>
@@ -330,23 +332,22 @@ uint8_t* decode_webp_image_to_buffer(const uint8_t* data,
     return output.release();
 }
 
-std::string build_webp_xmp_packet(const std::string& parameters) {
-    if (parameters.empty()) {
-        return "";
-    }
-
-    const std::string escaped_parameters = xml_escape(parameters);
-    return "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
-           "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
-           "  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
-           "    <rdf:Description xmlns:sdcpp=\"https://github.com/leejet/stable-diffusion.cpp/ns/1.0/\">\n"
-           "      <sdcpp:parameters>" +
-           escaped_parameters +
-           "</sdcpp:parameters>\n"
-           "    </rdf:Description>\n"
-           "  </rdf:RDF>\n"
-           "</x:xmpmeta>\n"
-           "<?xpacket end=\"w\"?>";
+static bool embed_webp_metadata(std::vector<uint8_t>& image, const std::string& parameters) {
+    if (parameters.empty())
+        return true;
+    WebPData data{image.data(), image.size()};
+    WebPMuxPtr mux(WebPMuxCreate(&data, 1));
+    if (!mux)
+        return false;
+    const auto xmp = generation_xmp(parameters);
+    WebPData xmp_data{reinterpret_cast<const uint8_t*>(xmp.data()), xmp.size()};
+    if (WebPMuxSetChunk(mux.get(), "XMP ", &xmp_data, 1) != WEBP_MUX_OK)
+        return false;
+    WebPDataGuard assembled;
+    if (WebPMuxAssemble(mux.get(), &assembled.data) != WEBP_MUX_OK)
+        return false;
+    image.assign(assembled.data.bytes, assembled.data.bytes + assembled.data.size);
+    return true;
 }
 
 bool encode_webp_image_to_vector(const uint8_t* image,
@@ -390,37 +391,7 @@ bool encode_webp_image_to_vector(const uint8_t* image,
 
     out.assign(encoded.get(), encoded.get() + encoded_size);
 
-    if (parameters.empty()) {
-        return true;
-    }
-
-    WebPData image_data;
-    WebPDataInit(&image_data);
-    WebPDataGuard assembled_data;
-
-    image_data.bytes = out.data();
-    image_data.size  = out.size();
-
-    WebPMuxPtr mux(WebPMuxNew());
-    if (mux == nullptr) {
-        return false;
-    }
-
-    const std::string xmp_packet = build_webp_xmp_packet(parameters);
-    WebPData xmp_data;
-    WebPDataInit(&xmp_data);
-    xmp_data.bytes = reinterpret_cast<const uint8_t*>(xmp_packet.data());
-    xmp_data.size  = xmp_packet.size();
-
-    const bool ok = WebPMuxSetImage(mux.get(), &image_data, 1) == WEBP_MUX_OK &&
-                    WebPMuxSetChunk(mux.get(), "XMP ", &xmp_data, 1) == WEBP_MUX_OK &&
-                    WebPMuxAssemble(mux.get(), &assembled_data.data) == WEBP_MUX_OK;
-
-    if (ok) {
-        out.assign(assembled_data.data.bytes, assembled_data.data.bytes + assembled_data.data.size);
-    }
-
-    return ok;
+    return embed_webp_metadata(out, generation_info_to_image_metadata(parameters));
 }
 
 #ifdef SD_USE_WEBM
@@ -753,6 +724,7 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
                                             const std::string& parameters,
                                             int quality) {
     std::vector<uint8_t> buffer;
+    const auto metadata = format == EncodedImageFormat::WEBP ? std::string() : generation_info_to_image_metadata(parameters);
 
     auto write_func = [&buffer](void* context, void* data, int size) {
         (void)context;
@@ -775,7 +747,7 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
             result = stbi_write_jpg_to_func(c_func, &ctx, width, height, channels, image, quality);
             break;
         case EncodedImageFormat::PNG:
-            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, parameters.empty() ? nullptr : parameters.c_str());
+            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, metadata.empty() ? nullptr : metadata.c_str());
             break;
         case EncodedImageFormat::WEBP:
 #ifdef SD_USE_WEBP
@@ -793,9 +765,12 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
             break;
     }
 
-    if (!result) {
-        buffer.clear();
+    if (result && format == EncodedImageFormat::JPEG && !embed_jpeg_metadata(buffer, metadata)) {
+        LOG_ERROR("generation metadata exceeds the container capacity or the encoded image is invalid");
+        result = 0;
     }
+    if (!result)
+        buffer.clear();
     return buffer;
 }
 
@@ -808,18 +783,8 @@ bool write_image_to_file(const std::string& path,
                          int quality) {
     const EncodedImageFormat format = encoded_image_format_from_path(path);
 
-    switch (format) {
-        case EncodedImageFormat::JPEG:
-            return stbi_write_jpg(path.c_str(), width, height, channels, image, quality, parameters.empty() ? nullptr : parameters.c_str()) != 0;
-        case EncodedImageFormat::PNG:
-            return stbi_write_png(path.c_str(), width, height, channels, image, 0, parameters.empty() ? nullptr : parameters.c_str()) != 0;
-        case EncodedImageFormat::WEBP: {
-            const std::vector<uint8_t> encoded = encode_image_to_vector(format, image, width, height, channels, parameters, quality);
-            return !encoded.empty() && write_binary_file_bytes(path, encoded);
-        }
-        default:
-            return false;
-    }
+    const auto encoded = encode_image_to_vector(format, image, width, height, channels, parameters, quality);
+    return !encoded.empty() && write_binary_file_bytes(path, encoded);
 }
 
 uint8_t* load_image_from_file(const char* image_path,
@@ -1398,7 +1363,10 @@ std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& ou
 
 #ifdef SD_USE_WEBP
     if (format == "webp") {
-        return create_animated_webp_from_sd_images_to_vector(images, num_images, fps, quality);
+        auto data = create_animated_webp_from_sd_images_to_vector(images, num_images, fps, quality);
+        if (!data.empty() && !embed_webp_metadata(data, parameters))
+            return {};
+        return data;
     }
 #endif
 

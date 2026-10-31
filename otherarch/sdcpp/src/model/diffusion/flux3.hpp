@@ -243,7 +243,7 @@ namespace Flux3 {
                 set_backend_tensor_data(pe, pe_values.data());
                 auto runner_ctx = get_context();
                 auto out        = model.forward(&runner_ctx, x, text, references, make_input(*params.timesteps), make_input(zero),
-                                         config.flow_map ? make_input(*extra->target_timestep) : nullptr, pe);
+                                                config.flow_map ? make_input(*extra->target_timestep) : nullptr, pe);
                 ggml_build_forward_expand(gf, out);
                 return gf;
             };
