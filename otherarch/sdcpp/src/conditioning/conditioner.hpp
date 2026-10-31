@@ -1833,11 +1833,11 @@ struct AnimaConditioner : public Conditioner {
                      std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
                      const TokenizerConfig& tokenizers                   = {}) {
         llm            = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::QWEN3,
-                                               backend,
-                                               tensor_storage_map,
-                                               "text_encoders.llm",
-                                               false,
-                                               weight_manager);
+                                                          backend,
+                                                          tensor_storage_map,
+                                                          "text_encoders.llm",
+                                                          false,
+                                                          weight_manager);
         qwen_tokenizer = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, 151643);
         if (!qwen_tokenizer) {
             qwen_tokenizer = std::make_shared<Qwen2Tokenizer>();
@@ -2026,11 +2026,11 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::QWEN3_5;
         }
         llm        = std::make_shared<LLM::LLMRunner>(arch,
-                                               backend,
-                                               tensor_storage_map,
-                                               "text_encoders.llm",
-                                               enable_vision,
-                                               weight_manager);
+                                                      backend,
+                                                      tensor_storage_map,
+                                                      "text_encoders.llm",
+                                                      enable_vision,
+                                                      weight_manager);
         int pad_id = 151643;
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {
             pad_id = 11;
@@ -3312,7 +3312,7 @@ struct LLMEmbedder : public Conditioner {
             for (const auto& [index, image_embed] : image_embeds) {
                 int64_t begin = std::max<int64_t>(0, index - 1);
                 int64_t end   = std::min<int64_t>(static_cast<int64_t>(tags.size()),
-                                                index + image_embed.shape()[1] + 1);
+                                                  index + image_embed.shape()[1] + 1);
                 std::fill(tags.begin() + begin, tags.begin() + end, 0);
             }
             int64_t tag_count    = static_cast<int64_t>(tags.size());
@@ -3492,9 +3492,9 @@ struct LLaDAImageEmbedder : public Conditioner {
         // <|endoftext|> doubles as the pad token in LLaDA2's tokenizer.json.
         tokenizer       = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, 156892);
         query_former    = std::make_shared<LLaDAImageTE::QueryFormerRunner>(backend,
-                                                                         tensor_storage_map,
-                                                                         query_former_prefix,
-                                                                         weight_manager);
+                                                                            tensor_storage_map,
+                                                                            query_former_prefix,
+                                                                            weight_manager);
         text_projection = std::make_shared<LLaDAImageTE::TextProjectionRunner>(backend,
                                                                                tensor_storage_map,
                                                                                text_projection_prefix,
@@ -3696,20 +3696,20 @@ struct LTXAVEmbedder : public Conditioner {
         LLM::LLMArch arch = detect_gemma_arch(tensor_storage_map, llm_prefix);
         LOG_INFO("ltxav text encoder: %s", arch == LLM::LLMArch::GEMMA4_12B ? "gemma 4" : "gemma 3");
         llm       = std::make_shared<LLM::LLMRunner>(arch,
-                                               backend,
-                                               tensor_storage_map,
-                                               llm_prefix,
-                                               false,
-                                               weight_manager);
+                                                     backend,
+                                                     tensor_storage_map,
+                                                     llm_prefix,
+                                                     false,
+                                                     weight_manager);
         tokenizer = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, 0, true);
         if (!tokenizer) {
             tokenizer = std::make_shared<GemmaTokenizer>();
         }
         dual_projection = tensor_storage_map.find(projector_prefix + ".video_aggregate_embed.weight") != tensor_storage_map.end();
         projector       = std::make_shared<LTXAVTextProjectionRunner>(backend,
-                                                                tensor_storage_map,
-                                                                projector_prefix,
-                                                                weight_manager);
+                                                                      tensor_storage_map,
+                                                                      projector_prefix,
+                                                                      weight_manager);
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {

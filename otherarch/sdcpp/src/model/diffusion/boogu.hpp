@@ -543,18 +543,18 @@ namespace Boogu {
             blocks["x_embedder"]               = std::make_shared<Linear>(this->config.patch_size * this->config.patch_size * this->config.in_channels, this->config.hidden_size, true);
             blocks["ref_image_patch_embedder"] = std::make_shared<Linear>(this->config.patch_size * this->config.patch_size * this->config.in_channels, this->config.hidden_size, true);
             blocks["time_caption_embed"]       = std::make_shared<LuminaCombinedTimestepCaptionEmbedding>(this->config.hidden_size,
-                                                                                                    this->config.instruction_feat_dim,
-                                                                                                    256,
-                                                                                                    this->config.norm_eps,
-                                                                                                    this->config.timestep_scale);
+                                                                                                          this->config.instruction_feat_dim,
+                                                                                                          256,
+                                                                                                          this->config.norm_eps,
+                                                                                                          this->config.timestep_scale);
 
             for (int i = 0; i < this->config.num_refiner_layers; i++) {
                 blocks["noise_refiner." + std::to_string(i)]     = std::make_shared<BooguImageTransformerBlock>(this->config.hidden_size,
-                                                                                                            this->config.num_attention_heads,
-                                                                                                            this->config.num_kv_heads,
-                                                                                                            this->config.multiple_of,
-                                                                                                            this->config.norm_eps,
-                                                                                                            true);
+                                                                                                                this->config.num_attention_heads,
+                                                                                                                this->config.num_kv_heads,
+                                                                                                                this->config.multiple_of,
+                                                                                                                this->config.norm_eps,
+                                                                                                                true);
                 blocks["ref_image_refiner." + std::to_string(i)] = std::make_shared<BooguImageTransformerBlock>(this->config.hidden_size,
                                                                                                                 this->config.num_attention_heads,
                                                                                                                 this->config.num_kv_heads,
@@ -562,11 +562,11 @@ namespace Boogu {
                                                                                                                 this->config.norm_eps,
                                                                                                                 true);
                 blocks["context_refiner." + std::to_string(i)]   = std::make_shared<BooguImageTransformerBlock>(this->config.hidden_size,
-                                                                                                              this->config.num_attention_heads,
-                                                                                                              this->config.num_kv_heads,
-                                                                                                              this->config.multiple_of,
-                                                                                                              this->config.norm_eps,
-                                                                                                              false);
+                                                                                                                this->config.num_attention_heads,
+                                                                                                                this->config.num_kv_heads,
+                                                                                                                this->config.multiple_of,
+                                                                                                                this->config.norm_eps,
+                                                                                                                false);
             }
 
             for (int i = 0; i < this->config.num_double_stream_layers; i++) {

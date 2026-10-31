@@ -10,9 +10,9 @@ static bool build_sensenova_u1(const sd::model_builders::Context& ctx, const Tok
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<SenseNovaU1Conditioner>();
     result.diffusion               = std::make_shared<SenseNovaU1::SenseNovaU1Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                        tensor_storage_map,
-                                                                        "",
-                                                                        weight_manager);
+                                                                                      tensor_storage_map,
+                                                                                      "",
+                                                                                      weight_manager);
     return true;
 }
 

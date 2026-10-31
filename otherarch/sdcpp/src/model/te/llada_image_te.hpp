@@ -347,8 +347,8 @@ namespace LLaDAImageTE {
                 blocks["visual.blocks." + std::to_string(i)] = std::make_shared<SigVQBlock>(config);
             }
             blocks["vqmodel.quant_conv"]         = std::make_shared<Conv2d>(config.hidden_size,
-                                                                    config.codebook_embed_dim,
-                                                                    std::make_pair(1, 1));
+                                                                            config.codebook_embed_dim,
+                                                                            std::make_pair(1, 1));
             blocks["prior_projector.net.0.proj"] = std::make_shared<Linear>(config.semantic_embed_dim, config.semantic_embed_dim, true);
             blocks["prior_projector.net.2"]      = std::make_shared<Linear>(config.semantic_embed_dim, config.semantic_embed_dim, true);
         }

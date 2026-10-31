@@ -1194,7 +1194,7 @@ ArgOptions SDGenerationParams::get_options() {
          &extra_sample_args},
         {"",
          "--extra-tiling-args",
-         "extra VAE tiling args, key=value list. Supported video VAEs accept temporal_tile_frames/temporal_tile_size (default: 4), temporal_tile_overlap (default: 1)",
+         "extra VAE tiling args, key=value list. Supported video VAEs accept temporal_tile_frames/temporal_tile_size (default: 4), temporal_tile_overlap (default: 1); Wan2.2 TI2V 5B accepts temporal_decode_frames (default: 1)",
          (int)',',
          &extra_tiling_args},
         {"",

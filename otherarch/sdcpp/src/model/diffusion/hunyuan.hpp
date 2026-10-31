@@ -302,9 +302,9 @@ namespace Hunyuan {
             int64_t head_dim  = this->config.hidden_size / this->config.num_heads;
             blocks["txt_in"]  = std::make_shared<TokenRefiner>(this->config.context_in_dim, this->config.num_heads, head_dim, 2);
             blocks["img_in"]  = std::make_shared<PatchEmbed>(static_cast<int64_t>(224) /*Not used*/,
-                                                            this->config.patch_size,
-                                                            this->config.in_channels,
-                                                            this->config.hidden_size);
+                                                             this->config.patch_size,
+                                                             this->config.in_channels,
+                                                             this->config.hidden_size);
             blocks["time_in"] = std::make_shared<Flux::MLPEmbedder>(256, this->config.hidden_size);
             if (this->config.vec_in_dim > 0) {
                 blocks["vector_in"] = std::make_shared<Flux::MLPEmbedder>(this->config.vec_in_dim, this->config.hidden_size);

@@ -23,10 +23,10 @@ static bool build_lingbot_video(const sd::model_builders::Context& ctx, const To
                                                        weight_manager,
                                                        tokenizers);
     result.diffusion   = std::make_shared<LingBotVideo::LingBotVideoRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                          tensor_storage_map,
-                                                                          "model.diffusion_model",
-                                                                          weight_manager,
-                                                                          sd_ctx_params->model_args);
+                                                                            tensor_storage_map,
+                                                                            "model.diffusion_model",
+                                                                            weight_manager,
+                                                                            sd_ctx_params->model_args);
     return true;
 }
 

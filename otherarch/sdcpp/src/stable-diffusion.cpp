@@ -727,7 +727,13 @@ SD_API bool sd_ctx_has_control_net(const sd_ctx_t* sd_ctx) {
     if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
         return false;
     }
-    return sd_ctx->sd->control_net != nullptr;
+    if (sd_ctx->sd->control_net != nullptr) {
+        return true;
+    }
+    // z-image keeps control net weights inside the diffusion runner, registered
+    // under ModelComponent::ControlNet instead of a separate control_net runner.
+    return sd_ctx->sd->model_manager != nullptr &&
+           sd_ctx->sd->model_manager->registered_params_size({ModelComponent::ControlNet}) > 0;
 }
 
 const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx) {

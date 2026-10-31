@@ -117,6 +117,32 @@ namespace sd::pipeline {
                    channels);
     }
 
+    static sd::Tensor<float> encode_z_image_control_latent(StableDiffusionGGML* sd, const sd::Tensor<float>& control_rgb) {
+        sd::Tensor<float> vae_output = sd->first_stage_model->encode(sd->n_threads,
+                                                                     control_rgb,
+                                                                     sd->vae_tiling_params,
+                                                                     sd->circular_x,
+                                                                     sd->circular_y);
+        if (vae_output.empty()) {
+            LOG_ERROR("failed to encode control image");
+            return {};
+        }
+        // TAE encode already returns the latent; KL/Flux VAE returns a mean/logvar pair.
+        sd::Tensor<float> ctrl_latent = sd->first_stage_model->get_desc() == "taesd"
+                                             ? vae_output
+                                             : sd::ops::chunk(vae_output, 2, 2)[0];
+        ctrl_latent = sd->first_stage_model->vae_to_diffusion_latents(ctrl_latent);
+        if (ctrl_latent.empty() || ctrl_latent.dim() != 4 || ctrl_latent.shape()[2] > 33) {
+            LOG_ERROR("failed to encode control image");
+            return {};
+        }
+        std::vector<int64_t> padded_shape = ctrl_latent.shape();
+        padded_shape[2]                    = 33;
+        sd::Tensor<float> padded(padded_shape);
+        sd::ops::slice_assign(&padded, 2, 0, ctrl_latent.shape()[2], ctrl_latent);
+        return padded;
+    }
+
     static std::optional<ImageGenerationLatents> prepare_image_generation_latents(StableDiffusionGGML* sd,
                                                                                   const sd_img_gen_params_t* sd_img_gen_params,
                                                                                   GenerationRequest* request,
@@ -250,10 +276,22 @@ namespace sd::pipeline {
         }
 
         if (!control_image_tensor.empty()) {
-            control_latent = sd->encode_first_stage(control_image_tensor);
-            if (control_latent.empty()) {
-                LOG_ERROR("failed to encode control image");
-                return std::nullopt;
+            const bool z_image_control = sd_version_is_z_image(sd->version) &&
+                                         sd->model_manager->registered_params_size({ModelComponent::ControlNet}) > 0;
+            if (z_image_control) {
+                control_image_tensor = encode_z_image_control_latent(sd, control_image_tensor);
+                if (control_image_tensor.empty()) {
+                    return std::nullopt;
+                }
+            } else if (sd_version_is_z_image(sd->version)) {
+                LOG_WARN("control image provided but the z-image model has no control net; ignoring");
+                control_image_tensor = {};
+            } else {
+                control_latent = sd->encode_first_stage(control_image_tensor);
+                if (control_latent.empty()) {
+                    LOG_ERROR("failed to encode control image");
+                    return std::nullopt;
+                }
             }
         }
 
@@ -939,10 +977,10 @@ namespace sd::pipeline {
                 }
                 LOG_INFO("hires fix: loading model upscaler from '%s'", request.hires.model_path);
                 hires_upscaler                    = std::make_unique<UpscalerGGML>(sd->n_threads,
-                                                                false,
-                                                                request.hires.upscale_tile_size,
-                                                                sd->backend_spec,
-                                                                sd->params_backend_spec);
+                                                                                   false,
+                                                                                   request.hires.upscale_tile_size,
+                                                                                   sd->backend_spec,
+                                                                                   sd->params_backend_spec);
                 const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
                 hires_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
                 if (!hires_upscaler->load_from_file(request.hires.model_path,
@@ -969,6 +1007,29 @@ namespace sd::pipeline {
 
             std::vector<sd::Tensor<float>> hires_final_latents;
             int64_t hires_denoise_start = ggml_time_ms();
+            sd::Tensor<float> hires_control_image;
+            if (!latents.control_image.empty() &&
+                sd_version_is_z_image(sd->version) &&
+                sd->model_manager->registered_params_size({ModelComponent::ControlNet}) > 0) {
+                const int64_t hires_latent_w = request.hires.target_width / request.vae_scale_factor;
+                const int64_t hires_latent_h = request.hires.target_height / request.vae_scale_factor;
+                if (latents.control_image.shape()[0] != hires_latent_w ||
+                    latents.control_image.shape()[1] != hires_latent_h) {
+                    LOG_INFO("hires fix: re-encoding control latent for %dx%d", request.hires.target_width, request.hires.target_height);
+                    hires_control_image = encode_z_image_control_latent(sd,
+                                                                        sd_image_to_tensor(sd_img_gen_params->control_image,
+                                                                                           request.hires.target_width,
+                                                                                           request.hires.target_height));
+                    if (hires_control_image.empty()) {
+                        std::vector<int64_t> ctrl_shape = latents.control_image.shape();
+                        ctrl_shape[0]                   = hires_latent_w;
+                        ctrl_shape[1]                   = hires_latent_h;
+                        hires_control_image = sd::ops::interpolate(latents.control_image, ctrl_shape, sd::ops::InterpolateMode::Bicubic);
+                    }
+                } else {
+                    hires_control_image = latents.control_image;
+                }
+            }
             for (int b = 0; b < (int)final_latents.size(); b++) {
                 if (sd->get_cancel_flag() == SD_CANCEL_ALL) {
                     LOG_ERROR("cancelling generation during hires fix");
@@ -1006,7 +1067,7 @@ namespace sd::pipeline {
                                                         embeds.cond,
                                                         embeds.uncond,
                                                         embeds.img_uncond,
-                                                        latents.control_image,
+                                                        !hires_control_image.empty() ? hires_control_image : latents.control_image,
                                                         request.control_strength,
                                                         request.guidance,
                                                         plan.eta,

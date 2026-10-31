@@ -597,9 +597,9 @@ namespace LTXV {
             : embedding_dim(embedding_dim), embedding_coefficient(embedding_coefficient) {
             blocks["emb.timestep_embedder"] = std::make_shared<TimestepEmbedder>(embedding_dim);
             blocks["linear"]                = std::make_shared<Linear>(embedding_dim,
-                                                        embedding_coefficient * embedding_dim,
-                                                        true,
-                                                        true);
+                                                                       embedding_coefficient * embedding_dim,
+                                                                       true,
+                                                                       true);
         }
 
         std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
@@ -1257,7 +1257,7 @@ namespace LTXV {
                                                      v_context,
                                                      attn2.get(),
                                                      v_table,
-                                                    cross_attention_adaln ? params["prompt_scale_shift_table"] : nullptr,
+                                                     cross_attention_adaln ? params["prompt_scale_shift_table"] : nullptr,
                                                      v_timestep,
                                                      v_prompt_timestep,
                                                      v_dim,
@@ -1275,7 +1275,7 @@ namespace LTXV {
                                                          a_context,
                                                          audio_attn2.get(),
                                                          a_table,
-                                                        cross_attention_adaln ? params["audio_prompt_scale_shift_table"] : nullptr,
+                                                         cross_attention_adaln ? params["audio_prompt_scale_shift_table"] : nullptr,
                                                          a_timestep,
                                                          a_prompt_timestep,
                                                          a_dim,

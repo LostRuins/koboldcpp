@@ -154,12 +154,12 @@ struct PhotoMakerExtension : public GenerationExtension {
 
         PMVersion pm_version = std::strstr(model_path.c_str(), "v2") != nullptr ? PM_VERSION_2 : PM_VERSION_1;
         pmid_model           = std::make_shared<PhotoMakerIDEncoder>(ctx.backend_for(SDBackendModule::PHOTOMAKER),
-                                                           ctx.tensor_storage_map,
-                                                           "pmid",
-                                                           ctx.version,
-                                                           pm_version,
-                                                           20.f,
-                                                           ctx.model_manager);
+                                                                     ctx.tensor_storage_map,
+                                                                     "pmid",
+                                                                     ctx.version,
+                                                                     pm_version,
+                                                                     20.f,
+                                                                     ctx.model_manager);
         pmid_model->set_scale_overrides(ctx.params->linear_scale, ctx.params->attn_scale);
         if (pm_version == PM_VERSION_2) {
             LOG_INFO("using PhotoMaker Version 2");
