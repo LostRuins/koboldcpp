@@ -8,7 +8,6 @@ namespace kcpp_sd {
 
     struct sd_model_info {
         int version;
-        bool is_chroma;
         int vae_scale_factor;
         int spatial_multiple;
     };
