@@ -832,21 +832,10 @@ SD_API void free_sd_images(sd_image_t* result_images, int num_images) {
 
 namespace kcpp_sd {
 
-    bool loaded_model_is_chroma(sd_ctx_t* ctx) {
-        if (ctx != nullptr && ctx->sd != nullptr) {
-            auto maybe_flux = std::dynamic_pointer_cast<Flux::FluxRunner>(ctx->sd->diffusion_model);
-            if (maybe_flux != nullptr) {
-                return maybe_flux->config.is_chroma;
-            }
-        }
-        return false;
-    }
-
     sd_model_info sd_get_model_info(sd_ctx_t* ctx)
     {
         sd_model_info res = {};
         res.version = ctx->sd->version;
-        res.is_chroma = loaded_model_is_chroma(ctx);
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
         int diffusion_model_down_factor = ctx->sd->get_diffusion_model_down_factor();
         res.spatial_multiple = res.vae_scale_factor * diffusion_model_down_factor;

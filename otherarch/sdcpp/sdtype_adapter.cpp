@@ -540,7 +540,6 @@ static void progress_callback(int step, int steps, float time, void* data)
 struct model_info: public sd_model_info {
     /* from base class:
         int version;
-        bool is_chroma;
         int vae_scale_factor;
         int spatial_multiple;
     */
@@ -572,7 +571,7 @@ static model_info get_model_info(sd_ctx_t* ctx)
     SDVersion loadedsdver = (SDVersion)res.version;
     res.is_wan = (loadedsdver == SDVersion::VERSION_WAN2 || loadedsdver == SDVersion::VERSION_WAN2_2_I2V || loadedsdver == SDVersion::VERSION_WAN2_2_TI2V);
     res.is_qwenimg = sd_version_is_qwen_image(loadedsdver);
-    res.is_kontext = (loadedsdver==SDVersion::VERSION_FLUX && !res.is_chroma);
+    res.is_kontext = (loadedsdver == SDVersion::VERSION_FLUX);
     res.is_flux2 = (loadedsdver == SDVersion::VERSION_FLUX2 || loadedsdver == SDVersion::VERSION_FLUX2_KLEIN);
     res.is_flux1 = (loadedsdver == SDVersion::VERSION_FLUX);
     res.is_zimage = (loadedsdver == SDVersion::VERSION_Z_IMAGE);
@@ -1872,8 +1871,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     if (!remove_limits && info.is_flux1)
     {
-        if (!info.is_chroma && sd_params->cfg_scale != 1.0f) {
-            //non chroma clamp cfg scale
+        if (!sd_params->cfg_scale != 1.0f) {
+            // clamp cfg scale
             if (!sd_is_quiet && sddebugmode) {
                 printf("Flux: clamping CFG Scale to 1\n");
             }
