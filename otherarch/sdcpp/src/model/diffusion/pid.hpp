@@ -253,8 +253,8 @@ namespace Pid {
             auto w1 = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
-            auto h  = ggml_silu_inplace(ctx->ggml_ctx, w1->forward(ctx, x));
-            h       = ggml_mul_inplace(ctx->ggml_ctx, h, w3->forward(ctx, x));
+            auto h  = w1->forward(ctx, x);
+            h       = ggml_swiglu_split(ctx->ggml_ctx, h, w3->forward(ctx, x));
             return w2->forward(ctx, h);
         }
     };

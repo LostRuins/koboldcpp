@@ -207,9 +207,9 @@ namespace MiniT2I {
             auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w3   = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
             auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
-            auto gate = ggml_silu(ctx->ggml_ctx, w1->forward(ctx, x));
+            auto gate = w1->forward(ctx, x);
             auto up   = w3->forward(ctx, x);
-            return w2->forward(ctx, ggml_mul(ctx->ggml_ctx, gate, up));
+            return w2->forward(ctx, ggml_swiglu_split(ctx->ggml_ctx, gate, up));
         }
     };
 

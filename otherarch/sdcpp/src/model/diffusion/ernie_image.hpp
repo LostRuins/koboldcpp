@@ -204,9 +204,8 @@ namespace ErnieImage {
             auto linear_fc2 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc2"]);
 
             auto gate = gate_proj->forward(ctx, x);
-            gate      = ggml_ext_gelu(ctx->ggml_ctx, gate);
             x         = up_proj->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, x, gate);
+            x         = ggml_geglu_split(ctx->ggml_ctx, gate, x);
             x         = linear_fc2->forward(ctx, x);
             return x;
         }

@@ -19,6 +19,8 @@ namespace sd {
         ggml_backend_sched_t scheduler_ = nullptr;
         size_t scheduler_capacity_      = 0;
         bool active_                    = false;
+        std::vector<uint8_t> measurement_key_;
+        std::vector<BackendBufferSize> measured_buffers_;
 
         ggml_backend_sched_t make_scheduler(size_t graph_size);
 
@@ -41,7 +43,8 @@ namespace sd {
         Measurement measure(
             ggml_cgraph* graph,
             const std::function<ggml_backend_t(const ggml_tensor*)>& external_backend,
-            const AssignNodes& assign_nodes);
+            const AssignNodes& assign_nodes,
+            bool cache_measurement = false);
         void synchronize() const;
         bool segment_end() noexcept;
         bool release();

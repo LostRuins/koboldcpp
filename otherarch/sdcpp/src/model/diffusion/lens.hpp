@@ -104,9 +104,9 @@ namespace Lens {
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
 
-            auto gate = ggml_silu(ctx->ggml_ctx, w1->forward(ctx, x));
+            auto gate = w1->forward(ctx, x);
             auto up   = w3->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, gate, up);
+            x         = ggml_swiglu_split(ctx->ggml_ctx, gate, up);
             return w2->forward(ctx, x);
         }
     };

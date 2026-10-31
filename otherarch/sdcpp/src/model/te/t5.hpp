@@ -156,9 +156,9 @@ public:
         auto wi_1 = std::dynamic_pointer_cast<Linear>(blocks["wi_1"]);
         auto wo   = std::dynamic_pointer_cast<Linear>(blocks["wo"]);
 
-        auto hidden_gelu   = ggml_ext_gelu(ctx->ggml_ctx, wi_0->forward(ctx, x), true);
+        auto hidden_gate   = wi_0->forward(ctx, x);
         auto hidden_linear = wi_1->forward(ctx, x);
-        x                  = ggml_mul_inplace(ctx->ggml_ctx, hidden_gelu, hidden_linear);
+        x                  = ggml_geglu_split(ctx->ggml_ctx, hidden_gate, hidden_linear);
         x                  = wo->forward(ctx, x);
         return x;
     }

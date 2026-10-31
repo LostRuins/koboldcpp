@@ -134,8 +134,8 @@ namespace MiniMaxH3 {
             auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             x         = norm->forward(ctx, x);
-            auto gate = ggml_ext_gelu(ctx->ggml_ctx, w0->forward(ctx, x), true);
-            return w2->forward(ctx, ggml_mul(ctx->ggml_ctx, gate, w1->forward(ctx, x)));
+            auto gate = w0->forward(ctx, x);
+            return w2->forward(ctx, ggml_geglu_split(ctx->ggml_ctx, gate, w1->forward(ctx, x)));
         }
     };
 

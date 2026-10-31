@@ -735,7 +735,7 @@ ComputeWorkspace::Measurement GGMLRunner::measure(ggml_cgraph* graph, const std:
     auto assign_nodes = [&](ggml_backend_sched_t scheduler, ggml_cgraph* copy) {
         pin_multi_device_nodes(scheduler, copy, graph);
     };
-    return workspace_.measure(graph, external_backend, assign_nodes);
+    return workspace_.measure(graph, external_backend, assign_nodes, !is_multi_device());
 }
 
 std::vector<DeviceMemoryRequest> GGMLRunner::memory_requests(
