@@ -615,6 +615,32 @@ bool sd_backend_cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
     return false;
 }
 
+void sd_backend_set_buffer_cache_enabled(ggml_backend_t backend, bool enabled) {
+    auto dev = backend != nullptr ? ggml_backend_get_device(backend) : nullptr;
+    if (dev == nullptr) {
+        return;
+    }
+    auto reg                    = ggml_backend_dev_backend_reg(dev);
+    using SetBufferCacheEnabled = void (*)(ggml_backend_t, bool);
+    auto fn                     = reinterpret_cast<SetBufferCacheEnabled>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_buffer_cache_enabled"));
+    if (fn != nullptr) {
+        fn(backend, enabled);
+    }
+}
+
+void sd_backend_clear_buffer_cache(ggml_backend_t backend) {
+    auto dev = backend != nullptr ? ggml_backend_get_device(backend) : nullptr;
+    if (dev == nullptr) {
+        return;
+    }
+    auto reg               = ggml_backend_dev_backend_reg(dev);
+    using ClearBufferCache = void (*)(ggml_backend_t);
+    auto fn                = reinterpret_cast<ClearBufferCache>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_clear_buffer_cache"));
+    if (fn != nullptr) {
+        fn(backend);
+    }
+}
+
 static ggml_cgraph sd_ggml_graph_view(ggml_cgraph* cgraph0, int i0, int i1) {
     ggml_cgraph cgraph = {
         /*.size             =*/0,

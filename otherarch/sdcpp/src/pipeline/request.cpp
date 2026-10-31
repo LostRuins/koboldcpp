@@ -519,14 +519,10 @@ namespace sd::pipeline {
                                                              scheduler,
                                                              sd->version,
                                                              sample_params.extra_sample_args);
-        size_t t_enc              = static_cast<size_t>(effective_steps - 1);
-        if (t_enc >= static_cast<size_t>(scheduler_steps)) {
-            t_enc = static_cast<size_t>(scheduler_steps) - 1;
-        }
         if (scheduler_steps_out != nullptr) {
             *scheduler_steps_out = scheduler_steps;
         }
-        return std::vector<float>(sigmas.begin() + scheduler_steps - static_cast<int>(t_enc) - 1,
+        return std::vector<float>(sigmas.begin() + std::max(0, scheduler_steps - effective_steps),
                                   sigmas.end());
     }
 

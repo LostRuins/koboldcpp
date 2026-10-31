@@ -1767,10 +1767,16 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
     auto add             = [](size_t a, size_t b) { return b > SIZE_MAX - a ? SIZE_MAX : a + b; };
     const size_t missing = compute_backend_alloc_size(states, true);
     // Backend scratch buffers and pipelines are not included in graph measurements.
-    constexpr size_t safety_margin = 512ULL * 1024ULL * 1024ULL;
-    result.required_device_bytes   = add(add(request.pending_allocation_bytes, missing), safety_margin);
-    result.required_budget_bytes   = add(request.runtime_peak_bytes(), missing);
-    auto available_device_bytes    = [&](ggml_backend_t backend) {
+    size_t safety_margin = 512ULL * 1024ULL * 1024ULL;
+#ifdef _WIN32
+    if (sd_backend_is(request.compute_backend, "CUDA")) {
+        // Avoid WDDM allocation churn when transient buffers compete with reusable staging buffers.
+        safety_margin = 1024ULL * 1024ULL * 1024ULL;
+    }
+#endif
+    result.required_device_bytes = add(add(request.pending_allocation_bytes, missing), safety_margin);
+    result.required_budget_bytes = add(request.runtime_peak_bytes(), missing);
+    auto available_device_bytes  = [&](ggml_backend_t backend) {
         auto device = ggml_backend_get_device(backend);
         if (device == nullptr) {
             return SIZE_MAX;
