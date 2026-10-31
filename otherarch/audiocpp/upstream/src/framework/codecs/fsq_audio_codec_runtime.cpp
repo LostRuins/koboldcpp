@@ -657,7 +657,8 @@ public:
             audio::STFTFamily::Kokoro,
         };
         const auto & window = audio::get_cached_stft_window(stft_config);
-        if (execution_->backend_type() == core::BackendType::Cuda) {
+        if (execution_->backend_type() == core::BackendType::Cuda &&
+            audio::cuda_log_magnitude_phase_istft_available()) {
             if (cuda_istft_ == nullptr || cuda_istft_frames_ != head.frames) {
                 cuda_istft_ = std::make_unique<audio::CudaLogMagnitudePhaseISTFT>(
                     audio::CudaLogMagnitudePhaseISTFTConfig{

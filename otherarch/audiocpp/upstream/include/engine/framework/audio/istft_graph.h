@@ -53,6 +53,8 @@ struct CudaLogMagnitudePhaseISTFTResult {
     CudaLogMagnitudePhaseISTFTTiming timing;
 };
 
+bool cuda_log_magnitude_phase_istft_available() noexcept;
+
 class HostLogMagnitudePhaseISTFT {
 public:
     explicit HostLogMagnitudePhaseISTFT(const HostLogMagnitudePhaseISTFTConfig & config);

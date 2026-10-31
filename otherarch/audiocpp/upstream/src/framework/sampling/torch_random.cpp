@@ -411,7 +411,15 @@ TorchCudaSamplingPolicy resolve_torch_cuda_sampling_policy(
 
     policy.multiprocessor_count = multiprocessor_count;
     policy.max_threads_per_multiprocessor = max_threads_per_multiprocessor;
+#ifdef ENGINE_HAS_CUDA_TORCH_RANDOM
     policy.cuda_fast_path = true;
+#else
+    // A dynamically loaded ggml CUDA backend does not imply that audio.cpp's
+    // optional CUDA RNG runtime was compiled into this binary. Retain the
+    // probed device layout for Torch-compatible host generation, but do not
+    // select CUDA-only sampling helpers that are unavailable in this build.
+    policy.cuda_fast_path = false;
+#endif
     policy.cuda_device_index = device_index;
     return policy;
 }
