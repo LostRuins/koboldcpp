@@ -16,8 +16,8 @@ SHA-256:
 - Only portable C implementations are compiled.
 - SSE, SSE4, AVX, NEON, MIPS and MSA source files are omitted.
 - CPU-specific flags inherited from KoboldCpp are filtered from these objects.
-- Internal libwebp threading is disabled; KoboldCpp can parallelize above the
-  encoder if desired.
+- Internal libwebp threading is enabled using libwebp's portable worker
+  implementation. SIMD remains disabled for CPU portability.
 - The source objects are collected into a generated static archive. No archive
   or other binary is checked in, and unused WebP code is omitted at final link.
 - Demux-only APIs, tools, examples, tests and upstream build generators are
