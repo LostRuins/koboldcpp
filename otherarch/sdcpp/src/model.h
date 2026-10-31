@@ -69,6 +69,7 @@ enum SDVersion {
     VERSION_FLUX3,
     VERSION_MOSS_IMAGE,
     VERSION_FIBO2,
+    VERSION_CHROMA,
     VERSION_COUNT,
 };
 
@@ -139,6 +140,7 @@ static inline bool sd_version_is_flux(SDVersion version) {
         version == VERSION_FLUX_CONTROLS ||
         version == VERSION_FLEX_2 ||
         version == VERSION_OVIS_IMAGE ||
+        version == VERSION_CHROMA ||
         version == VERSION_CHROMA_RADIANCE) {
         return true;
     }

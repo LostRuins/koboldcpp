@@ -519,7 +519,7 @@ namespace sd::pipeline {
                                                              scheduler,
                                                              sd->version,
                                                              sample_params.extra_sample_args);
-        size_t t_enc              = static_cast<size_t>(scheduler_steps * hires.denoising_strength);
+        size_t t_enc              = static_cast<size_t>(effective_steps - 1);
         if (t_enc >= static_cast<size_t>(scheduler_steps)) {
             t_enc = static_cast<size_t>(scheduler_steps) - 1;
         }

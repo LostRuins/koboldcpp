@@ -141,7 +141,7 @@ private:
     size_t logged_segment_count_     = 0;
     ggml_status last_compute_status_ = GGML_STATUS_SUCCESS;
 
-    sd::ComputeWorkspace::Measurement measure(ggml_cgraph* graph, size_t direct_bytes);
+    sd::ComputeWorkspace::Measurement measure(ggml_cgraph* graph);
     std::vector<DeviceMemoryRequest> memory_requests(const std::vector<sd::BackendBufferSize>& sizes,
                                                      size_t pending_cache_bytes) const;
     bool fits(const std::vector<DeviceMemoryRequest>& requests,
@@ -161,6 +161,7 @@ protected:
     sd::GraphCutTensorCache cut_cache_;
     sd::ComputeWorkspace workspace_;
     ggml_context* compute_ctx = nullptr;
+    std::unique_ptr<std::max_align_t[]> compute_ctx_buffer_;
     bool runner_started_      = false;
     bool graph_active_        = false;
 
@@ -169,7 +170,6 @@ protected:
     std::vector<size_t> graph_cut_layer_split_backend_vram_limits_;
 
     std::vector<ggml_backend_t> extra_runtime_backends;  // borrowed (SDBackendManager-owned)
-    bool multi_device_eval_callback_warned = false;
 
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
     std::weak_ptr<DeviceResidencyManager> residency_manager;
