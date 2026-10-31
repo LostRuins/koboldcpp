@@ -497,12 +497,12 @@ namespace LTXVAE {
             GGML_ASSERT(out_channels % factor == 0);
 
             blocks["conv"]            = std::make_shared<CausalConv3d>(in_channels,
-                                                            out_channels / factor,
-                                                            3,
-                                                            std::tuple<int, int, int>{1, 1, 1},
-                                                            1,
-                                                            true,
-                                                            force_conv_prec_f32);
+                                                                       out_channels / factor,
+                                                                       3,
+                                                                       std::tuple<int, int, int>{1, 1, 1},
+                                                                       1,
+                                                                       true,
+                                                                       force_conv_prec_f32);
             blocks["skip_downsample"] = std::make_shared<WAN::AvgDown3D>(in_channels, out_channels, factor_t, factor_s);
             blocks["conv_downsample"] = std::make_shared<WAN::AvgDown3D>(out_channels / factor, out_channels, factor_t, factor_s);
         }
@@ -1077,11 +1077,11 @@ namespace LTXVAE {
                                                               patch_size);
             }
             blocks["decoder"]                = std::make_shared<Decoder>(version,
-                                                          tensor_storage_map,
-                                                          prefix,
-                                                          patch_size,
-                                                          false,
-                                                          timestep_conditioning);
+                                                                         tensor_storage_map,
+                                                                         prefix,
+                                                                         patch_size,
+                                                                         false,
+                                                                         timestep_conditioning);
             blocks["per_channel_statistics"] = std::make_shared<PerChannelStatistics>();
         }
 

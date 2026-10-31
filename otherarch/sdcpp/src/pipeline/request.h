@@ -1,6 +1,7 @@
 #ifndef __SD_PIPELINE_REQUEST_H__
 #define __SD_PIPELINE_REQUEST_H__
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,8 @@ namespace sd::pipeline {
 
     enum scheduler_t default_scheduler(const StableDiffusionGGML* sd, enum sample_method_t sample_method);
 
+    int64_t resolve_seed(int64_t seed);
+
     float resolve_eta(StableDiffusionGGML* sd,
                       float eta,
                       enum sample_method_t sample_method);
@@ -23,37 +26,46 @@ namespace sd::pipeline {
     struct GenerationRequest {
         std::string prompt;
         std::string negative_prompt;
-        int width                                = -1;
-        int height                               = -1;
-        int clip_skip                            = -1;
-        int vae_scale_factor                     = -1;
-        int diffusion_model_down_factor          = -1;
-        int64_t seed                             = -1;
-        bool use_uncond                          = false;
-        bool use_img_uncond                      = false;
-        bool use_high_noise_uncond               = false;
-        bool use_high_noise_img_uncond           = false;
-        bool has_ref_images                      = false;
-        const sd_cache_params_t* cache_params    = nullptr;
-        int batch_count                          = 1;
-        int qwen_image_layers                    = 3;
-        int shifted_timestep                     = 0;
-        float strength                           = 1.f;
-        float control_strength                   = 0.f;
-        float eta                                = 0.f;
-        sd_guidance_params_t guidance            = {};
-        sd_guidance_params_t high_noise_guidance = {};
-        sd_pm_params_t pm_params                 = {};
-        sd_pulid_params_t pulid_params           = {};
-        sd_hires_params_t hires                  = {};
-        int frames                               = -1;
-        int requested_frames                     = -1;
-        int fps                                  = 16;
-        float vace_strength                      = 1.f;
+        std::map<std::string, std::string> models;
+        int width                                   = -1;
+        int height                                  = -1;
+        int clip_skip                               = -1;
+        int vae_scale_factor                        = -1;
+        int diffusion_model_down_factor             = -1;
+        int64_t seed                                = -1;
+        bool use_uncond                             = false;
+        bool use_img_uncond                         = false;
+        bool use_high_noise_uncond                  = false;
+        bool use_high_noise_img_uncond              = false;
+        bool has_ref_images                         = false;
+        bool is_layered_image                       = false;
+        bool use_high_noise                         = false;
+        bool use_vace                               = false;
+        const sd_cache_params_t* cache_params       = nullptr;
+        int batch_count                             = 1;
+        int qwen_image_layers                       = 3;
+        int shifted_timestep                        = 0;
+        float strength                              = 1.f;
+        float control_strength                      = 0.f;
+        float eta                                   = 0.f;
+        sd_sample_params_t sample_params            = {};
+        sd_sample_params_t high_noise_sample_params = {};
+        sd_guidance_params_t guidance               = {};
+        sd_guidance_params_t high_noise_guidance    = {};
+        sd_pm_params_t pm_params                    = {};
+        sd_pulid_params_t pulid_params              = {};
+        sd_hires_params_t hires                     = {};
+        sd_tiling_params_t vae_tiling_params        = {};
+        int frames                                  = -1;
+        int requested_frames                        = -1;
+        int fps                                     = 16;
+        float vace_strength                         = 1.f;
 
         GenerationRequest(StableDiffusionGGML* sd, const sd_img_gen_params_t* sd_img_gen_params);
 
         GenerationRequest(StableDiffusionGGML* sd, const sd_vid_gen_params_t* sd_vid_gen_params);
+
+        int64_t seed_for_batch(int index) const;
 
         void align_generation_request_size();
 
@@ -81,6 +93,7 @@ namespace sd::pipeline {
         int sample_steps                              = 0;
         int high_noise_sample_steps                   = 0;
         int total_steps                               = 0;
+        scheduler_t scheduler                         = SCHEDULER_COUNT;
         float moe_boundary                            = 0.f;
         std::vector<float> sigmas;
 

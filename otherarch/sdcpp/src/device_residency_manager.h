@@ -64,7 +64,13 @@ struct DeviceResidencyManager {
         const std::vector<ggml_tensor*>& protected_params) = 0;
     virtual WeightPrefetchResult prefetch_params(
         uintptr_t owner_id,
-        const std::vector<ggml_tensor*>& tensors)                                     = 0;
+        const std::vector<ggml_tensor*>& tensors) = 0;
+    virtual WeightPrefetchResult prepare_prefetch_params(
+        uintptr_t owner_id,
+        const std::vector<ggml_tensor*>& tensors) {
+        return prefetch_params(owner_id, tensors);
+    }
+    virtual void submit_prefetched_params(uintptr_t owner_id) {}
     virtual bool activate_prefetched_params(uintptr_t owner_id,
                                             const std::vector<ggml_tensor*>& tensors) = 0;
     virtual void clear_prefetched_params(uintptr_t owner_id)                          = 0;

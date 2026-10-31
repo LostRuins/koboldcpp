@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_FLUX3_HPP__
 #define __SD_MODEL_DIFFUSION_FLUX3_HPP__
 
+#include "core/pe_cache.h"
 #include "model/diffusion/flux.hpp"
 
 namespace Flux3 {
@@ -170,12 +171,17 @@ namespace Flux3 {
                 const std::string base = mode == "txt" ? "txt_mode_blocks." : "content_mode_blocks." + mode + ".";
                 for (int i = 0; i < config.depth; ++i) {
                     h = std::dynamic_pointer_cast<Block>(blocks[base + std::to_string(i)])->forward(ctx, h, mode_pe, {early}, {lengths.back()});
+                    if (i + 1 < config.depth) {
+                        sd::ggml_graph_cut::mark_graph_cut(h, "flux3." + base + std::to_string(i), "h");
+                    }
                 }
                 joint = joint ? ggml_concat(gc, joint, h, 1) : h;
+                sd::ggml_graph_cut::mark_graph_cut(joint, "flux3." + base + "joint", "joint");
                 offset += lengths.back();
             }
             for (int i = 0; i < config.single_depth; ++i) {
                 joint = std::dynamic_pointer_cast<Block>(blocks["single_blocks." + std::to_string(i)])->forward(ctx, joint, pe, single_mods, lengths);
+                sd::ggml_graph_cut::mark_graph_cut(joint, "flux3.single_blocks." + std::to_string(i), "joint");
             }
             auto out = std::dynamic_pointer_cast<Flux::LastLayer>(blocks["final_layer.image"])->forward(ctx, token_slice(gc, joint, 0, lengths[0]), image_vec);
             return DiT::unpatchify(gc, out, height, width, 1, 1);
@@ -183,9 +189,9 @@ namespace Flux3 {
     };
 
     struct Flux3Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         Flux3Config config;
         Model model;
-        std::vector<float> pe_values;
         sd::Tensor<float> zero = sd::Tensor<float>::zeros({1});
 
         Flux3Runner(ggml_backend_t backend, const String2TensorStorage& tensors, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
@@ -213,37 +219,44 @@ namespace Flux3 {
                 auto x    = make_input(*params.x);
                 auto text = make_input(*params.context);
                 GGML_ASSERT(x->ne[3] == 1 && text->ne[2] == 1);
-                Rope::Embedding embedding;
-                auto append_image = [&](int64_t w, int64_t h, float index) {
-                    embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w), 1, 0.5f, 0.5f);
-                    for (int64_t y = 0; y < h; ++y) {
-                        for (int64_t x = 0; x < w; ++x) {
-                            embedding.ids.push_back({0.f, y * 0.5f, x * 0.5f, index});
-                        }
-                    }
-                };
-                append_image(x->ne[0], x->ne[1], 0.f);
+                std::vector<ggml_tensor*> refs;
                 ggml_tensor* references = nullptr;
                 if (params.ref_latents && params.ref_image_params.pass_to_dit) {
-                    int index = 0;
                     for (const auto& ref : *params.ref_latents) {
                         auto r = make_input(ref);
-                        append_image(r->ne[0], r->ne[1], -float(++index));
+                        refs.push_back(r);
                         r          = DiT::patchify(compute_ctx, r, 1, 1);
                         references = references ? ggml_concat(compute_ctx, references, r, 1) : r;
                     }
                 }
-                for (int64_t i = 0; i < text->ne[1]; ++i) {
-                    embedding.ids.push_back({0.f, 0.f, 0.f, static_cast<float>(i)});
-                }
-                embedding.positions.append_tokens(text->ne[1]);
-                embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, {32, 32, 32, 32}, embedding.layout, &embedding.frequencies);
-                pe_values        = finish_rope_pe(std::move(embedding));
-                auto pe          = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, 64, pe_values.size() / 256);
-                set_backend_tensor_data(pe, pe_values.data());
+                sd::PECacheKey pe_key("flux3.pe");
+                pe_key.add_shape(x).add_shape(text).add_shapes(refs).add(circular_x_enabled).add(circular_y_enabled);
+                auto pe         = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                    Rope::Embedding embedding;
+                    auto append_image = [&](int64_t w, int64_t h, float index) {
+                        embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w), 1, 0.5f, 0.5f);
+                        for (int64_t y = 0; y < h; ++y) {
+                            for (int64_t x = 0; x < w; ++x) {
+                                embedding.ids.push_back({0.f, y * 0.5f, x * 0.5f, index});
+                            }
+                        }
+                    };
+                    append_image(x->ne[0], x->ne[1], 0.f);
+                    for (size_t i = 0; i < refs.size(); ++i) {
+                        append_image(refs[i]->ne[0], refs[i]->ne[1], -float(i + 1));
+                    }
+                    for (int64_t i = 0; i < text->ne[1]; ++i) {
+                        embedding.ids.push_back({0.f, 0.f, 0.f, static_cast<float>(i)});
+                    }
+                    embedding.positions.append_tokens(text->ne[1]);
+                    embedding.values     = Rope::embed_nd(embedding.ids, 1, 10000.f, {32, 32, 32, 32}, embedding.layout, &embedding.frequencies);
+                    auto values          = finish_rope_pe(std::move(embedding));
+                    const int64_t tokens = static_cast<int64_t>(values.size() / 256);
+                    return sd::Tensor<float>({2, 2, 64, tokens}, std::move(values));
+                }));
                 auto runner_ctx = get_context();
                 auto out        = model.forward(&runner_ctx, x, text, references, make_input(*params.timesteps), make_input(zero),
-                                         config.flow_map ? make_input(*extra->target_timestep) : nullptr, pe);
+                                                config.flow_map ? make_input(*extra->target_timestep) : nullptr, pe);
                 ggml_build_forward_expand(gf, out);
                 return gf;
             };

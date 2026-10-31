@@ -6,27 +6,13 @@
 
 namespace kcpp_sd {
 
-    struct model_info {
-        bool is_chroma;
-        bool is_flux1;
-        bool is_flux2;
-        bool is_kontext;
-        bool is_qwenimg;
-        bool is_sd1;
-        bool is_sd2;
-        bool is_sdxs;
-        bool is_sdxl;
-        bool is_wan;
-        bool is_zimage;
-        bool is_ltx;
-        bool is_minimaxh3;
-        bool is_boogu;
-        bool supports_ref_image;
+    struct sd_model_info {
+        int version;
         int vae_scale_factor;
         int spatial_multiple;
     };
 
-    model_info get_model_info(sd_ctx_t* ctx);
+    sd_model_info sd_get_model_info(sd_ctx_t* ctx);
 
     void set_lora_cache(sd_ctx_t *ctx, bool enable);
 

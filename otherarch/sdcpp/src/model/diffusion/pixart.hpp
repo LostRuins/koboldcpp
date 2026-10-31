@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_runner.h"
@@ -224,9 +225,9 @@ namespace PixArt {
         PixArtModel(const PixArtConfig& config)
             : config(config) {
             blocks["x_embedder.proj"]       = std::make_shared<Conv2d>(config.in_channels,
-                                                                 config.hidden_size,
-                                                                 std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)},
-                                                                 std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)});
+                                                                       config.hidden_size,
+                                                                       std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)},
+                                                                       std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)});
             blocks["t_embedder"]            = std::make_shared<PixArtTimestepEmbedding>(ADALN_EMBED_DIM, config.hidden_size);
             blocks["t_block.1"]             = std::make_shared<Linear>(config.hidden_size, 6 * config.hidden_size);
             blocks["y_embedder.y_proj.fc1"] = std::make_shared<Linear>(config.caption_channels, config.hidden_size);
@@ -237,7 +238,7 @@ namespace PixArt {
             }
             blocks["final_layer.norm_final"] = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
             blocks["final_layer.linear"]     = std::make_shared<Linear>(config.hidden_size,
-                                                                    config.patch_size * config.patch_size * config.out_channels);
+                                                                        config.patch_size * config.patch_size * config.out_channels);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -295,9 +296,9 @@ namespace PixArt {
     };
 
     struct PixArtRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         PixArtConfig config;
         PixArtModel model;
-        std::vector<float> pos_vec;
 
         PixArtRunner(ggml_backend_t backend,
                      const String2TensorStorage& tensor_storage_map      = {},
@@ -357,10 +358,13 @@ namespace PixArt {
             int64_t wp = W / config.patch_size;
             int64_t hp = H / config.patch_size;
 
-            pos_vec  = gen_2d_sincos_pos_embed(config.hidden_size, hp, wp,
-                                               config.pos_embed_base_size, config.interpolation_scale);
-            auto pos = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.hidden_size, wp * hp, 1);
-            set_backend_tensor_data(pos, pos_vec.data());
+            sd::PECacheKey pos_key("pixart.pos");
+            pos_key.add(hp).add(wp).add(config.hidden_size).add(config.pos_embed_base_size).add(config.interpolation_scale);
+            auto pos = make_input(pe_cache_.get_or_create(pos_key, [&]() {
+                auto pos_vec = gen_2d_sincos_pos_embed(config.hidden_size, hp, wp,
+                                                       config.pos_embed_base_size, config.interpolation_scale);
+                return sd::Tensor<float>({config.hidden_size, wp * hp, 1}, std::move(pos_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pos, context_mask);

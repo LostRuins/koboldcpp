@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_MING_IMAGE_HPP__
 #define __SD_MODEL_DIFFUSION_MING_IMAGE_HPP__
 
+#include "core/pe_cache.h"
 #include "z_image.hpp"
 
 namespace MingImage {
@@ -72,9 +73,9 @@ namespace MingImage {
     };
 
     struct MingImageRunner : DiffusionModelRunner {
+        sd::PECache pe_cache_;
         MingImageConfig config;
         MingImageModel model;
-        std::vector<float> pe_values;
 
         MingImageRunner(ggml_backend_t backend, const String2TensorStorage& tensors, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
@@ -109,19 +110,23 @@ namespace MingImage {
                 const int64_t n_txt = context->ne[1] + direct->ne[1];
                 const int64_t n_img = ((x->ne[0] + config.patch_size - 1) / config.patch_size) *
                                       ((x->ne[1] + config.patch_size - 1) / config.patch_size);
-                auto padded = finish_rope_pe(Rope::gen_z_image_pe(
-                    static_cast<int>(x->ne[1]), static_cast<int>(x->ne[0]), config.patch_size, 1,
-                    static_cast<int>(n_txt), ZImage::SEQ_MULTI_OF, {}, Rope::RefIndexMode::FIXED,
-                    config.theta, config.axes_dim));
-                // Zero-masked alignment tokens cannot affect valid queries. Omit them while
-                // retaining the padded caption length used to position image tokens.
-                const size_t stride      = config.axes_dim_sum * 2;
-                const int64_t padded_txt = n_txt + Rope::bound_mod(static_cast<int>(n_txt), ZImage::SEQ_MULTI_OF);
-                pe_values.assign(padded.begin(), padded.begin() + n_txt * stride);
-                pe_values.insert(pe_values.end(), padded.begin() + padded_txt * stride,
-                                 padded.begin() + (padded_txt + n_img) * stride);
-                auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, n_txt + n_img);
-                set_backend_tensor_data(pe, pe_values.data());
+                sd::PECacheKey pe_key("ming_image.pe");
+                pe_key.add_shape(x).add(n_txt).add(config.patch_size).add(config.theta).add(config.axes_dim);
+                pe_key.add(config.axes_dim_sum).add(circular_x_enabled).add(circular_y_enabled);
+                auto pe  = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                    auto padded = finish_rope_pe(Rope::gen_z_image_pe(
+                        static_cast<int>(x->ne[1]), static_cast<int>(x->ne[0]), config.patch_size, 1,
+                        static_cast<int>(n_txt), ZImage::SEQ_MULTI_OF, {}, Rope::RefIndexMode::FIXED,
+                        config.theta, config.axes_dim));
+                    // Zero-masked alignment tokens cannot affect valid queries. Omit them while
+                    // retaining the padded caption length used to position image tokens.
+                    const size_t stride      = config.axes_dim_sum * 2;
+                    const int64_t padded_txt = n_txt + Rope::bound_mod(static_cast<int>(n_txt), ZImage::SEQ_MULTI_OF);
+                    std::vector<float> pe_values(padded.begin(), padded.begin() + n_txt * stride);
+                    pe_values.insert(pe_values.end(), padded.begin() + padded_txt * stride,
+                                     padded.begin() + (padded_txt + n_img) * stride);
+                    return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, n_txt + n_img}, std::move(pe_values));
+                }));
                 auto ctx = get_context();
                 auto out = model.forward(&ctx, x, t, context, direct, pe);
                 ggml_build_forward_expand(gf, out);

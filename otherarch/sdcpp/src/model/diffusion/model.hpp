@@ -16,6 +16,11 @@ enum class RefImageResizeMode {
     AREA,
 };
 
+enum class RefImageSizeMode {
+    MATCH,
+    MAX,
+};
+
 struct RefImageParams {
     bool pass_to_vlm                   = false;
     bool pass_to_dit                   = true;
@@ -31,6 +36,7 @@ struct RefImageParams {
     bool vae_size_buckets              = false;
     bool vae_center_crop               = false;
     bool vlm_use_vae_input             = false;
+    RefImageSizeMode ref_image_size    = RefImageSizeMode::MATCH;
 };
 
 const std::unordered_map<std::string, RefImageParams> REF_IMAGE_PRESETS = {
@@ -165,6 +171,11 @@ struct MingImageDiffusionExtra {
     const sd::Tensor<float>* direct_context = nullptr;
 };
 
+struct ZImageDiffusionExtra {
+    const sd::Tensor<float>* control_latent = nullptr;
+    float strength                          = 1.f;
+};
+
 using DiffusionExtraParams = std::variant<std::monostate,
                                           UNetDiffusionExtra,
                                           SkipLayerDiffusionExtra,
@@ -180,7 +191,8 @@ using DiffusionExtraParams = std::variant<std::monostate,
                                           SenseNovaU1DiffusionExtra,
                                           HunyuanVideoDiffusionExtra,
                                           LLaDAImageDiffusionExtra,
-                                          MingImageDiffusionExtra>;
+                                          MingImageDiffusionExtra,
+                                          ZImageDiffusionExtra>;
 
 struct DiffusionParams {
     const sd::Tensor<float>* x                        = nullptr;

@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/util.h"
 #include "model/common/rope.hpp"
@@ -442,10 +443,10 @@ namespace LingBotVideo {
             : hidden_size(config.hidden_size) {
             blocks["norm1"]          = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             blocks["attn"]           = std::make_shared<LingBotVideoAttention>(config.hidden_size,
-                                                                     config.num_attention_heads,
-                                                                     config.qkv_bias,
-                                                                     config.out_bias,
-                                                                     config.norm_eps);
+                                                                               config.num_attention_heads,
+                                                                               config.qkv_bias,
+                                                                               config.out_bias,
+                                                                               config.norm_eps);
             blocks["norm_post_attn"] = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             blocks["norm2"]          = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             if (sparse) {
@@ -509,14 +510,14 @@ namespace LingBotVideo {
             int64_t patch_dim           = config.patch_t * config.patch_h * config.patch_w * config.in_channels;
             blocks["patch_embedder"]    = std::make_shared<Linear>(patch_dim, config.hidden_size, config.patch_embed_bias);
             blocks["time_embedder"]     = std::make_shared<Qwen::TimestepEmbedding>(config.freq_dim,
-                                                                                config.hidden_size,
-                                                                                config.hidden_size,
-                                                                                0,
-                                                                                config.timestep_mlp_bias);
+                                                                                    config.hidden_size,
+                                                                                    config.hidden_size,
+                                                                                    0,
+                                                                                    config.timestep_mlp_bias);
             blocks["time_modulation.1"] = std::make_shared<Linear>(config.hidden_size, 6 * config.hidden_size, true);
             blocks["text_embedder"]     = std::make_shared<LingBotVideoTextEmbedder>(config.text_dim,
-                                                                                 config.hidden_size,
-                                                                                 config.norm_eps);
+                                                                                     config.hidden_size,
+                                                                                     config.norm_eps);
             for (int i = 0; i < config.depth; i++) {
                 bool sparse                           = config.sparse_layers.find(i) != config.sparse_layers.end();
                 blocks["blocks." + std::to_string(i)] = std::make_shared<LingBotVideoBlock>(config, sparse);
@@ -524,8 +525,8 @@ namespace LingBotVideo {
             blocks["norm_out"]              = std::make_shared<LayerNorm>(config.hidden_size, config.norm_eps, false);
             blocks["norm_out_modulation.1"] = std::make_shared<Linear>(config.hidden_size, 2 * config.hidden_size, true);
             blocks["proj_out"]              = std::make_shared<Linear>(config.hidden_size,
-                                                          config.patch_t * config.patch_h * config.patch_w * config.out_channels,
-                                                          true);
+                                                                       config.patch_t * config.patch_h * config.patch_w * config.out_channels,
+                                                                       true);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -606,9 +607,9 @@ namespace LingBotVideo {
     };
 
     struct LingBotVideoRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         LingBotVideoConfig config;
         LingBotVideoModel lingbot_video;
-        std::vector<float> pe_vec;
 
         LingBotVideoRunner(ggml_backend_t backend,
                            const String2TensorStorage& tensor_storage_map      = {},
@@ -647,19 +648,23 @@ namespace LingBotVideo {
             int64_t T = x->ne[2];
             int64_t N = x_tensor.shape()[4];
             GGML_ASSERT(N == 1);
-            pe_vec      = Rope::gen_lingbot_video_pe(static_cast<int>(T),
-                                                     static_cast<int>(H),
-                                                     static_cast<int>(W),
-                                                     config.patch_t,
-                                                     config.patch_h,
-                                                     config.patch_w,
-                                                     static_cast<int>(N),
-                                                     static_cast<int>(context->ne[1]),
-                                                     config.rope_theta,
-                                                     config.axes_dim);
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("lingbot_video.pe");
+            pe_key.add(T).add(H).add(W).add(N).add_shape(context).add(config.patch_t).add(config.patch_h).add(config.patch_w);
+            pe_key.add(config.rope_theta).add(config.axes_dim).add(config.axes_dim_sum);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = Rope::gen_lingbot_video_pe(static_cast<int>(T),
+                                                         static_cast<int>(H),
+                                                         static_cast<int>(W),
+                                                         config.patch_t,
+                                                         config.patch_h,
+                                                         config.patch_w,
+                                                         static_cast<int>(N),
+                                                         static_cast<int>(context->ne[1]),
+                                                         config.rope_theta,
+                                                         config.axes_dim);
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = lingbot_video.forward(&runner_ctx, x, timesteps, context, pe);

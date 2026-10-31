@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_graph_cut.h"
@@ -73,9 +74,9 @@ namespace Krea2 {
             int64_t dim_head = head_dim();
             int64_t unit     = dim_head / 16;
             axes_dim         = {
-                        static_cast<int>(dim_head - 12 * unit),
-                        static_cast<int>(6 * unit),
-                        static_cast<int>(6 * unit),
+                static_cast<int>(dim_head - 12 * unit),
+                static_cast<int>(6 * unit),
+                static_cast<int>(6 * unit),
             };
             axes_dim_sum = axes_dim[0] + axes_dim[1] + axes_dim[2];
         }
@@ -387,10 +388,10 @@ namespace Krea2 {
                                                                                                         this->config.mlp_multiplier,
                                                                                                         this->config.norm_eps);
                 blocks["refiner_blocks." + std::to_string(i)]   = std::make_shared<KreaTextFusionBlock>(this->config.text_dim,
-                                                                                                      this->config.text_heads,
-                                                                                                      this->config.text_kv_heads,
-                                                                                                      this->config.mlp_multiplier,
-                                                                                                      this->config.norm_eps);
+                                                                                                        this->config.text_heads,
+                                                                                                        this->config.text_kv_heads,
+                                                                                                        this->config.mlp_multiplier,
+                                                                                                        this->config.norm_eps);
             }
             blocks["projector"] = std::make_shared<Linear>(this->config.text_layers, 1, false);
         }
@@ -613,8 +614,8 @@ namespace Krea2 {
         explicit Krea2Model(Krea2Config config)
             : config(std::move(config)) {
             blocks["first"]     = std::make_shared<Linear>(this->config.patch_size * this->config.patch_size * this->config.in_channels,
-                                                       this->config.features,
-                                                       true);
+                                                           this->config.features,
+                                                           true);
             blocks["tmlp"]      = std::make_shared<KreaTimeMLP>(this->config);
             blocks["txtfusion"] = std::make_shared<KreaTextFusionTransformer>(this->config);
             blocks["txtmlp"]    = std::make_shared<KreaTextMLP>(this->config);
@@ -714,9 +715,9 @@ namespace Krea2 {
     }
 
     struct Krea2Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         Krea2Config config;
         Krea2Model model;
-        std::vector<float> pe_vec;
 
         Krea2Runner(ggml_backend_t backend,
                     const String2TensorStorage& tensor_storage_map      = {},
@@ -754,18 +755,23 @@ namespace Krea2 {
                 ref_latents.push_back(make_input(ref_latent_tensor));
             }
 
-            pe_vec      = finish_rope_pe(gen_krea2_pe(static_cast<int>(x->ne[1]),
-                                                      static_cast<int>(x->ne[0]),
-                                                      config.patch_size,
-                                                      static_cast<int>(x->ne[3]),
-                                                      static_cast<int>(context->ne[1]),
-                                                      config.theta,
-                                                      config.axes_dim,
-                                                      ref_latents,
-                                                      ref_image_params.ref_index_mode));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("krea2.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size).add_shapes(ref_latents);
+            pe_key.add(ref_image_params.ref_index_mode);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(gen_krea2_pe(static_cast<int>(x->ne[1]),
+                                                          static_cast<int>(x->ne[0]),
+                                                          config.patch_size,
+                                                          static_cast<int>(x->ne[3]),
+                                                          static_cast<int>(context->ne[1]),
+                                                          config.theta,
+                                                          config.axes_dim,
+                                                          ref_latents,
+                                                          ref_image_params.ref_index_mode));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents, ref_image_params.force_ref_timestep_zero);

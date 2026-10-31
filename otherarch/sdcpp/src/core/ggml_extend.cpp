@@ -554,9 +554,9 @@ std::vector<ggml_tensor*> split_image_qkv(ggml_context* ctx,
     qkv         = ggml_cont(ctx, ggml_ext_torch_permute(ctx, qkv, 0, 1, 3, 2));  // [3, N, C, H*W]
 
     int64_t offset = qkv->nb[2] * qkv->ne[2];
-    auto q         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[3], offset * 0);  // [N, C, H, W]
-    auto k         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[3], offset * 1);  // [N, C, H, W]
-    auto v         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[3], offset * 2);  // [N, C, H, W]
+    auto q         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[2], offset * 0);  // [N, C, H, W]
+    auto k         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[2], offset * 1);  // [N, C, H, W]
+    auto v         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[2], offset * 2);  // [N, C, H, W]
     return {q, k, v};
 }
 
@@ -678,21 +678,23 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
             // CUDA FA MMA starts at 64 channels; keep the original head's attention scale.
             q_in = ggml_pad(ctx, q_in, static_cast<int>(64 - d_head), 0, 0, 0);
             k_in = ggml_pad(ctx, k_in, static_cast<int>(64 - d_head), 0, 0, 0);
+            v_in = ggml_pad(ctx, v_in, static_cast<int>(64 - d_head), 0, 0, 0);
         }
         if (kv_scale != 1.0f) {
             k_in = ggml_ext_scale(ctx, k_in, kv_scale);
         }
         k_in = ggml_cast(ctx, k_in, GGML_TYPE_F16);
 
-        v_in = ggml_ext_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
-        v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
-        if (pad_head) {
-            v_in = ggml_pad(ctx, v_in, static_cast<int>(64 - d_head), 0, 0, 0);
-        }
         if (kv_scale != 1.0f) {
             v_in = ggml_ext_scale(ctx, v_in, kv_scale);
         }
-        v_in = ggml_cast(ctx, v_in, GGML_TYPE_F16);
+        v_in       = ggml_permute(ctx, v_in, 0, 2, 1, 3);
+        auto v_f16 = ggml_cast(ctx, v_in, GGML_TYPE_F16);
+        if (!ggml_backend_supports_op(backend, v_f16)) {
+            v_f16 = ggml_cast(ctx, ggml_ext_cont(ctx, v_in), GGML_TYPE_F16);
+        }
+        v_in = v_f16;
+        v_in = ggml_reshape_3d(ctx, v_in, v_in->ne[0], L_k, n_kv_head * N);
 
         if (mask_in != nullptr) {
             // ggml_flash_attn_ext expects the mask as a contiguous F16 tensor shaped

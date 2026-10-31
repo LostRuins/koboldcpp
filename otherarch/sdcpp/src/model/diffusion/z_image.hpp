@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
@@ -23,9 +24,10 @@
 #endif
 
 namespace ZImage {
-    constexpr int Z_IMAGE_GRAPH_SIZE = 20480;
-    constexpr int ADALN_EMBED_DIM    = 256;
-    constexpr int SEQ_MULTI_OF       = 32;
+    constexpr int Z_IMAGE_GRAPH_SIZE  = 24576;
+    constexpr int ADALN_EMBED_DIM     = 256;
+    constexpr int SEQ_MULTI_OF        = 32;
+    constexpr int CONTROL_IN_CHANNELS = 33;
 
     struct ZImageConfig {
         int patch_size             = 2;
@@ -391,6 +393,135 @@ namespace ZImage {
         }
     };
 
+    struct ZImageControlTransformerBlock : public GGMLBlock {
+    protected:
+        int block_id;
+        bool has_before_proj;
+        int64_t hidden_size;
+        int64_t head_dim;
+        int64_t num_heads;
+        int64_t num_kv_heads;
+        bool qk_norm;
+
+    public:
+        ZImageControlTransformerBlock(int block_id,
+                                      int64_t hidden_size,
+                                      int64_t head_dim,
+                                      int64_t num_heads,
+                                      int64_t num_kv_heads,
+                                      int64_t multiple_of,
+                                      float ffn_dim_multiplier,
+                                      float norm_eps,
+                                      bool qk_norm,
+                                      bool with_before_proj        = false,
+                                      bool norm_elementwise_affine = true,
+                                      float qk_norm_eps            = 1e-6f)
+            : block_id(block_id),
+              has_before_proj(with_before_proj),
+              hidden_size(hidden_size),
+              head_dim(head_dim),
+              num_heads(num_heads),
+              num_kv_heads(num_kv_heads),
+              qk_norm(qk_norm) {
+            blocks["attention.to_q"]     = std::make_shared<Linear>(hidden_size, num_heads * head_dim, false);
+            blocks["attention.to_k"]     = std::make_shared<Linear>(hidden_size, num_kv_heads * head_dim, false);
+            blocks["attention.to_v"]     = std::make_shared<Linear>(hidden_size, num_kv_heads * head_dim, false);
+            blocks["attention.to_out.0"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false);
+            if (qk_norm) {
+                blocks["attention.norm_q"] = std::make_shared<RMSNorm>(head_dim, qk_norm_eps, norm_elementwise_affine);
+                blocks["attention.norm_k"] = std::make_shared<RMSNorm>(head_dim, qk_norm_eps, norm_elementwise_affine);
+            }
+            blocks["attention_norm1"]    = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["ffn_norm1"]          = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["attention_norm2"]    = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["ffn_norm2"]          = std::make_shared<RMSNorm>(hidden_size, norm_eps, norm_elementwise_affine);
+            blocks["feed_forward"]       = std::make_shared<FeedForward>(hidden_size, hidden_size, multiple_of, ffn_dim_multiplier);
+            blocks["adaLN_modulation.0"] = std::make_shared<Linear>(MIN(hidden_size, ADALN_EMBED_DIM), 4 * hidden_size);
+            if (with_before_proj) {
+                blocks["before_proj"] = std::make_shared<Linear>(hidden_size, hidden_size);
+            }
+            blocks["after_proj"] = std::make_shared<Linear>(hidden_size, hidden_size);
+        }
+
+        ggml_tensor* forward_attention(GGMLRunnerContext* ctx,
+                                       ggml_tensor* c,
+                                       ggml_tensor* pe) {
+            auto to_q     = std::dynamic_pointer_cast<Linear>(blocks["attention.to_q"]);
+            auto to_k     = std::dynamic_pointer_cast<Linear>(blocks["attention.to_k"]);
+            auto to_v     = std::dynamic_pointer_cast<Linear>(blocks["attention.to_v"]);
+            auto out_proj = std::dynamic_pointer_cast<Linear>(blocks["attention.to_out.0"]);
+
+            if (out_proj->has_quantized_weight()) {
+                out_proj->set_scale(1.f / 16.f);
+            }
+
+            int64_t n_token = c->ne[1];
+            int64_t N       = c->ne[2];
+
+            if (sd_backend_is(ctx->backend, "ROCm")) {
+                out_proj->set_force_prec_f32(true);
+                to_q->set_force_prec_f32(true);
+                to_k->set_force_prec_f32(true);
+                to_v->set_force_prec_f32(true);
+            }
+
+            auto q = ggml_reshape_4d(ctx->ggml_ctx, to_q->forward(ctx, c), head_dim, num_heads, n_token, N);
+            auto k = ggml_reshape_4d(ctx->ggml_ctx, to_k->forward(ctx, c), head_dim, num_kv_heads, n_token, N);
+            auto v = ggml_reshape_4d(ctx->ggml_ctx, to_v->forward(ctx, c), head_dim, num_kv_heads, n_token, N);
+
+            if (qk_norm) {
+                q = std::dynamic_pointer_cast<RMSNorm>(blocks["attention.norm_q"])->forward(ctx, q);
+                k = std::dynamic_pointer_cast<RMSNorm>(blocks["attention.norm_k"])->forward(ctx, k);
+            }
+
+            auto out = Rope::attention(ctx, q, k, v, pe, nullptr, 1.f / 128.f);
+            return out_proj->forward(ctx, out);
+        }
+
+        std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
+                                                      ggml_tensor* c,
+                                                      ggml_tensor* pe,
+                                                      ggml_tensor* skip,
+                                                      ggml_tensor* t_emb) {
+            auto attention_norm1    = std::dynamic_pointer_cast<RMSNorm>(blocks["attention_norm1"]);
+            auto ffn_norm1          = std::dynamic_pointer_cast<RMSNorm>(blocks["ffn_norm1"]);
+            auto attention_norm2    = std::dynamic_pointer_cast<RMSNorm>(blocks["attention_norm2"]);
+            auto ffn_norm2          = std::dynamic_pointer_cast<RMSNorm>(blocks["ffn_norm2"]);
+            auto feed_forward       = std::dynamic_pointer_cast<FeedForward>(blocks["feed_forward"]);
+            auto adaLN_modulation_0 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.0"]);
+            auto after_proj         = std::dynamic_pointer_cast<Linear>(blocks["after_proj"]);
+
+            if (block_id == 0 && has_before_proj) {
+                GGML_ASSERT(skip != nullptr);
+                auto before_proj = std::dynamic_pointer_cast<Linear>(blocks["before_proj"]);
+                c                = ggml_add(ctx->ggml_ctx, before_proj->forward(ctx, c), skip);
+            }
+
+            auto m         = adaLN_modulation_0->forward(ctx, t_emb);
+            auto mods      = ggml_ext_chunk(ctx->ggml_ctx, m, 4, 0);
+            auto scale_msa = mods[0];
+            auto gate_msa  = mods[1];
+            auto scale_mlp = mods[2];
+            auto gate_mlp  = mods[3];
+
+            auto residual = c;
+            c             = modulate(ctx->ggml_ctx, attention_norm1->forward(ctx, c), scale_msa);
+            c             = forward_attention(ctx, c, pe);
+            c             = attention_norm2->forward(ctx, c);
+            c             = ggml_mul(ctx->ggml_ctx, c, ggml_tanh(ctx->ggml_ctx, gate_msa));
+            c             = ggml_add(ctx->ggml_ctx, c, residual);
+
+            residual = c;
+            c        = modulate(ctx->ggml_ctx, ffn_norm1->forward(ctx, c), scale_mlp);
+            c        = feed_forward->forward(ctx, c);
+            c        = ffn_norm2->forward(ctx, c);
+            c        = ggml_mul(ctx->ggml_ctx, c, ggml_tanh(ctx->ggml_ctx, gate_mlp));
+            c        = ggml_add(ctx->ggml_ctx, c, residual);
+
+            return {after_proj->forward(ctx, c), c};
+        }
+    };
+
     struct FinalLayer : public GGMLBlock {
     public:
         FinalLayer(int64_t hidden_size,
@@ -423,15 +554,24 @@ namespace ZImage {
     class ZImageModel : public GGMLBlock {
     protected:
         ZImageConfig config;
+        GGMLBlockMap control_blocks;
+        int control_num_layers         = 0;
+        int control_num_refiner_layers = 0;
 
         void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             params["cap_pad_token"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.hidden_size);
             params["x_pad_token"]   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, config.hidden_size);
+
+            for (auto& [name, block] : control_blocks) {
+                block->init(ctx, tensor_storage_map, name);
+            }
         }
 
     public:
+        bool control_enabled = false;
+
         ZImageModel() = default;
-        ZImageModel(ZImageConfig config)
+        ZImageModel(ZImageConfig config, const String2TensorStorage& tensor_storage_map = {})
             : config(config) {
             blocks["x_embedder"]     = std::make_shared<Linear>(config.patch_size * config.patch_size * config.in_channels, config.hidden_size);
             blocks["t_embedder"]     = std::make_shared<TimestepEmbedder>(MIN(config.hidden_size, 1024), 256, 256);
@@ -484,13 +624,154 @@ namespace ZImage {
             }
 
             blocks["final_layer"] = std::make_shared<FinalLayer>(config.hidden_size, config.patch_size, config.out_channels);
+
+            if (tensor_storage_map.find("control_all_x_embedder.2-1.weight") != tensor_storage_map.end()) {
+                control_enabled = true;
+
+                for (const auto& pair : tensor_storage_map) {
+                    if (starts_with(pair.first, "control_layers.")) {
+                        auto items = split_string(pair.first, '.');
+                        if (items.size() > 1) {
+                            control_num_layers = std::max(control_num_layers, atoi(items[1].c_str()) + 1);
+                        }
+                    } else if (starts_with(pair.first, "control_noise_refiner.")) {
+                        auto items = split_string(pair.first, '.');
+                        if (items.size() > 1) {
+                            control_num_refiner_layers = std::max(control_num_refiner_layers, atoi(items[1].c_str()) + 1);
+                        }
+                    }
+                }
+
+                GGML_ASSERT(control_num_layers > 0);
+                GGML_ASSERT(control_num_refiner_layers == config.num_refiner_layers);
+
+                control_blocks["control_all_x_embedder.2-1"] = std::make_shared<Linear>(config.patch_size * config.patch_size * CONTROL_IN_CHANNELS, config.hidden_size);
+
+                for (int i = 0; i < control_num_refiner_layers; i++) {
+                    std::string name = "control_noise_refiner." + std::to_string(i);
+                    auto block       = std::make_shared<ZImageControlTransformerBlock>(i,
+                                                                                       config.hidden_size,
+                                                                                       config.head_dim,
+                                                                                       config.num_heads,
+                                                                                       config.num_kv_heads,
+                                                                                       config.multiple_of,
+                                                                                       config.ffn_dim_multiplier,
+                                                                                       config.norm_eps,
+                                                                                       config.qk_norm,
+                                                                                       tensor_storage_map.find(name + ".before_proj.weight") != tensor_storage_map.end());
+
+                    control_blocks[name] = block;
+                }
+
+                for (int i = 0; i < control_num_layers; i++) {
+                    std::string name = "control_layers." + std::to_string(i);
+                    auto block       = std::make_shared<ZImageControlTransformerBlock>(i,
+                                                                                       config.hidden_size,
+                                                                                       config.head_dim,
+                                                                                       config.num_heads,
+                                                                                       config.num_kv_heads,
+                                                                                       config.multiple_of,
+                                                                                       config.ffn_dim_multiplier,
+                                                                                       config.norm_eps,
+                                                                                       config.qk_norm,
+                                                                                       tensor_storage_map.find(name + ".before_proj.weight") != tensor_storage_map.end());
+
+                    control_blocks[name] = block;
+                }
+            }
+        }
+
+        void get_control_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
+            for (auto& [name, block] : control_blocks) {
+                block->get_param_tensors(tensors, name);
+            }
+        }
+
+        ggml_tensor* forward_control_refiner(GGMLRunnerContext* ctx,
+                                             ggml_tensor* control,
+                                             ggml_tensor* img,
+                                             ggml_tensor* img_pe,
+                                             ggml_tensor* t_emb,
+                                             float strength,
+                                             std::vector<ggml_tensor*>& ref_hints) {
+            auto all_x_embedder = std::dynamic_pointer_cast<Linear>(control_blocks["control_all_x_embedder.2-1"]);
+
+            auto c = all_x_embedder->forward(ctx, control);
+            sd::ggml_graph_cut::mark_graph_cut(c, "z_image.control.prelude", "control");
+
+            int64_t N       = c->ne[2];
+            int64_t n_token = c->ne[1];
+
+            int64_t n_pad_token = Rope::bound_mod(static_cast<int>(n_token), SEQ_MULTI_OF);
+            if (n_pad_token > 0) {
+                auto img_pad_token   = params["x_pad_token"];
+                auto ctrl_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, img_pad_token, img_pad_token->ne[0], n_pad_token, N, 1);
+                c                    = ggml_concat(ctx->ggml_ctx, c, ctrl_pad_tokens, 1);
+            }
+
+            for (int i = 0; i < control_num_refiner_layers; i++) {
+                auto block = std::dynamic_pointer_cast<ZImageControlTransformerBlock>(control_blocks["control_noise_refiner." + std::to_string(i)]);
+
+                auto out = block->forward(ctx, c, img_pe, img, t_emb);
+                c        = out.second;
+                ref_hints.push_back(ggml_ext_scale(ctx->ggml_ctx, out.first, strength));
+                sd::ggml_graph_cut::mark_graph_cut(c, "z_image.control.noise_refiner." + std::to_string(i), "control");
+            }
+
+            return c;
+        }
+
+        ggml_tensor* forward_noise_refiner_hinted(GGMLRunnerContext* ctx,
+                                                  ggml_tensor* img,
+                                                  ggml_tensor* img_pe,
+                                                  ggml_tensor* t_emb,
+                                                  const std::vector<ggml_tensor*>& ref_hints) {
+            GGML_ASSERT(ref_hints.size() == static_cast<size_t>(config.num_refiner_layers));
+
+            auto c = img;
+            for (int i = 0; i < config.num_refiner_layers; i++) {
+                auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["noise_refiner." + std::to_string(i)]);
+
+                c = block->forward(ctx, c, img_pe, nullptr, t_emb);
+                c = ggml_add(ctx->ggml_ctx, c, ref_hints[i]);
+                sd::ggml_graph_cut::mark_graph_cut(c, "z_image.noise_refiner_hinted." + std::to_string(i), "img");
+            }
+
+            return c;
+        }
+
+        std::vector<ggml_tensor*> forward_control_main(GGMLRunnerContext* ctx,
+                                                       ggml_tensor* control_ctx,
+                                                       ggml_tensor* img_c,
+                                                       ggml_tensor* txt,
+                                                       ggml_tensor* pe,
+                                                       ggml_tensor* t_emb,
+                                                       float strength) {
+            auto unified_c    = ggml_concat(ctx->ggml_ctx, txt, img_c, 1);
+            auto ctrl_unified = ggml_concat(ctx->ggml_ctx, txt, control_ctx, 1);
+
+            std::vector<ggml_tensor*> main_hints;
+            main_hints.reserve(control_num_layers);
+
+            for (int i = 0; i < control_num_layers; i++) {
+                auto block = std::dynamic_pointer_cast<ZImageControlTransformerBlock>(control_blocks["control_layers." + std::to_string(i)]);
+
+                auto out     = block->forward(ctx, ctrl_unified, pe, unified_c, t_emb);
+                ctrl_unified = out.second;
+                main_hints.push_back(ggml_ext_scale(ctx->ggml_ctx, out.first, strength));
+                sd::ggml_graph_cut::mark_graph_cut(ctrl_unified, "z_image.control.layers." + std::to_string(i), "control");
+            }
+
+            return main_hints;
         }
 
         ggml_tensor* forward_core(GGMLRunnerContext* ctx,
                                   ggml_tensor* x,
                                   ggml_tensor* timestep,
                                   ggml_tensor* context,
-                                  ggml_tensor* pe) {
+                                  ggml_tensor* pe,
+                                  ggml_tensor* control = nullptr,
+                                  float strength       = 0.f) {
             auto x_embedder     = std::dynamic_pointer_cast<Linear>(blocks["x_embedder"]);
             auto t_embedder     = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
             auto cap_embedder_0 = std::dynamic_pointer_cast<RMSNorm>(blocks["cap_embedder.0"]);
@@ -530,6 +811,14 @@ namespace ZImage {
             auto txt_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, 0, txt->ne[1]);
             auto img_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt->ne[1], pe->ne[3]);
 
+            std::vector<ggml_tensor*> ref_hints;
+            ggml_tensor* control_ctx = nullptr;
+            if (control != nullptr) {
+                control_ctx = forward_control_refiner(ctx, control, img, img_pe, t_emb, strength, ref_hints);
+            }
+
+            ggml_tensor* img_pre_refiner = img;
+
             for (int i = 0; i < config.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["context_refiner." + std::to_string(i)]);
 
@@ -544,13 +833,27 @@ namespace ZImage {
                 sd::ggml_graph_cut::mark_graph_cut(img, "z_image.noise_refiner." + std::to_string(i), "img");
             }
 
+            ggml_tensor* img_c = nullptr;
+            if (control_ctx != nullptr) {
+                img_c = forward_noise_refiner_hinted(ctx, img_pre_refiner, img_pe, t_emb, ref_hints);
+            }
+
             auto txt_img = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, hidden_size]
             sd::ggml_graph_cut::mark_graph_cut(txt_img, "z_image.prelude", "txt_img");
+
+            std::vector<ggml_tensor*> main_hints;
+            if (control_ctx != nullptr) {
+                main_hints = forward_control_main(ctx, control_ctx, img_c, txt, pe, t_emb, strength);
+            }
+            GGML_ASSERT(main_hints.empty() || main_hints.size() == static_cast<size_t>(control_num_layers));
 
             for (int i = 0; i < config.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["layers." + std::to_string(i)]);
 
                 txt_img = block->forward(ctx, txt_img, pe, nullptr, t_emb);
+                if (i % 2 == 0 && (i / 2) < static_cast<int>(main_hints.size())) {
+                    txt_img = ggml_add(ctx->ggml_ctx, txt_img, main_hints[i / 2]);
+                }
                 sd::ggml_graph_cut::mark_graph_cut(txt_img, "z_image.layers." + std::to_string(i), "txt_img");
             }
 
@@ -566,7 +869,9 @@ namespace ZImage {
                              ggml_tensor* timestep,
                              ggml_tensor* context,
                              ggml_tensor* pe,
-                             std::vector<ggml_tensor*> ref_latents = {}) {
+                             std::vector<ggml_tensor*> ref_latents = {},
+                             ggml_tensor* control_latent           = nullptr,
+                             float control_strength                = 0.f) {
             // Forward pass of DiT.
             // x: [N, C, H, W]
             // timestep: [N,]
@@ -591,7 +896,16 @@ namespace ZImage {
                 }
             }
 
-            auto out = forward_core(ctx, img, timestep, context, pe);
+            ggml_tensor* control = nullptr;
+            if (control_latent != nullptr) {
+                GGML_ASSERT(control_enabled);
+                GGML_ASSERT(control_latent->ne[2] == CONTROL_IN_CHANNELS);
+                GGML_ASSERT(control_latent->ne[0] == W && control_latent->ne[1] == H && control_latent->ne[3] == N);
+                GGML_ASSERT(ref_latents.empty());
+                control = DiT::pad_and_patchify(ctx, control_latent, patch_size, patch_size, false);
+            }
+
+            auto out = forward_core(ctx, img, timestep, context, pe, control, control_strength);
 
             out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, n_img_token);                              // [N, n_img_token, ph*pw*C]
             out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, patch_size, patch_size, false);  // [N, C, H, W]
@@ -603,10 +917,11 @@ namespace ZImage {
     };
 
     struct ZImageRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     public:
         ZImageConfig config;
         ZImageModel z_image;
-        std::vector<float> pe_vec;
         std::vector<float> timestep_vec;
         SDVersion version;
 
@@ -617,7 +932,7 @@ namespace ZImage {
                      std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(ZImageConfig::detect_from_weights(tensor_storage_map, prefix)) {
-            z_image = ZImageModel(config);
+            z_image = ZImageModel(config, tensor_storage_map);
             z_image.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -629,11 +944,21 @@ namespace ZImage {
             z_image.get_param_tensors(tensors, prefix);
         }
 
+        bool control_enabled() const {
+            return z_image.control_enabled;
+        }
+
+        void get_control_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
+            z_image.get_control_param_tensors(tensors);
+        }
+
         ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
                                  const sd::Tensor<float>& timesteps_tensor,
                                  const sd::Tensor<float>& context_tensor,
                                  const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
-                                 Rope::RefIndexMode ref_index_mode                        = Rope::RefIndexMode::FIXED) {
+                                 Rope::RefIndexMode ref_index_mode                        = Rope::RefIndexMode::FIXED,
+                                 const sd::Tensor<float>& control_latent_tensor           = {},
+                                 float control_strength                                   = 0.f) {
             ggml_cgraph* gf        = new_graph_custom(Z_IMAGE_GRAPH_SIZE);
             ggml_tensor* x         = make_input(x_tensor);
             ggml_tensor* timesteps = make_input(timesteps_tensor);
@@ -646,23 +971,26 @@ namespace ZImage {
                 ref_latents.push_back(make_input(ref_latent_tensor));
             }
 
-            pe_vec      = finish_rope_pe(Rope::gen_z_image_pe(static_cast<int>(x->ne[1]),
-                                                              static_cast<int>(x->ne[0]),
-                                                              config.patch_size,
-                                                              static_cast<int>(x->ne[3]),
-                                                              static_cast<int>(context->ne[1]),
-                                                              SEQ_MULTI_OF,
-                                                              ref_latents,
-                                                              ref_index_mode,
-                                                              config.theta,
-                                                              config.axes_dim));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_VERBOSE("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            // pe->data = pe_vec.data();
-            // print_ggml_tensor(pe, true, "pe");
-            // pe->data = nullptr;
-            set_backend_tensor_data(pe, pe_vec.data());
+            ggml_tensor* control_latent = make_optional_input(control_latent_tensor);
+
+            sd::PECacheKey pe_key("z_image.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size).add_shapes(ref_latents);
+            pe_key.add(ref_index_mode);
+            auto pe         = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(Rope::gen_z_image_pe(static_cast<int>(x->ne[1]),
+                                                                  static_cast<int>(x->ne[0]),
+                                                                  config.patch_size,
+                                                                  static_cast<int>(x->ne[3]),
+                                                                  static_cast<int>(context->ne[1]),
+                                                                  SEQ_MULTI_OF,
+                                                                  ref_latents,
+                                                                  ref_index_mode,
+                                                                  config.theta,
+                                                                  config.axes_dim));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
             auto runner_ctx = get_context();
 
             ggml_tensor* out = z_image.forward(&runner_ctx,
@@ -670,7 +998,9 @@ namespace ZImage {
                                                timesteps,
                                                context,
                                                pe,
-                                               ref_latents);
+                                               ref_latents,
+                                               control_latent,
+                                               control_strength);
 
             ggml_build_forward_expand(gf, out);
 
@@ -682,12 +1012,14 @@ namespace ZImage {
                                   const sd::Tensor<float>& timesteps,
                                   const sd::Tensor<float>& context,
                                   const std::vector<sd::Tensor<float>>& ref_latents = {},
-                                  Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED) {
+                                  Rope::RefIndexMode ref_index_mode                 = Rope::RefIndexMode::FIXED,
+                                  const sd::Tensor<float>& control_latent           = {},
+                                  float control_strength                            = 0.f) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
             auto get_graph = [&]() -> ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
+                return build_graph(x, timesteps, context, ref_latents, ref_index_mode, control_latent, control_strength);
             };
 
             return restore_trailing_singleton_dims(GGMLRunner::compute(get_graph, n_threads, false), x.dim());
@@ -698,12 +1030,21 @@ namespace ZImage {
             GGML_ASSERT(diffusion_params.x != nullptr);
             GGML_ASSERT(diffusion_params.timesteps != nullptr);
             static const std::vector<sd::Tensor<float>> empty_ref_latents;
+            static const sd::Tensor<float> empty_control_latent;
+
+            const auto* z_image_extra               = std::get_if<ZImageDiffusionExtra>(&diffusion_params.extra);
+            const sd::Tensor<float>& control_latent = (z_image_extra != nullptr && z_image_extra->control_latent != nullptr) ? *z_image_extra->control_latent
+                                                                                                                             : empty_control_latent;
+            float control_strength                  = z_image_extra != nullptr ? z_image_extra->strength : 0.f;
+
             return compute(n_threads,
                            *diffusion_params.x,
                            *diffusion_params.timesteps,
                            tensor_or_empty(diffusion_params.context),
                            diffusion_params.ref_latents && diffusion_params.ref_image_params.pass_to_dit ? *diffusion_params.ref_latents : empty_ref_latents,
-                           diffusion_params.ref_image_params.ref_index_mode);
+                           diffusion_params.ref_image_params.ref_index_mode,
+                           control_latent,
+                           control_strength);
         }
 
         void test() {

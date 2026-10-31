@@ -1,5 +1,7 @@
 #include "media_io.h"
+#include "generation_metadata.h"
 #include "log.h"
+#include "media_metadata.h"
 #include "resource_owners.hpp"
 
 #include <algorithm>
@@ -330,23 +332,22 @@ uint8_t* decode_webp_image_to_buffer(const uint8_t* data,
     return output.release();
 }
 
-std::string build_webp_xmp_packet(const std::string& parameters) {
-    if (parameters.empty()) {
-        return "";
-    }
-
-    const std::string escaped_parameters = xml_escape(parameters);
-    return "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
-           "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
-           "  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
-           "    <rdf:Description xmlns:sdcpp=\"https://github.com/leejet/stable-diffusion.cpp/ns/1.0/\">\n"
-           "      <sdcpp:parameters>" +
-           escaped_parameters +
-           "</sdcpp:parameters>\n"
-           "    </rdf:Description>\n"
-           "  </rdf:RDF>\n"
-           "</x:xmpmeta>\n"
-           "<?xpacket end=\"w\"?>";
+static bool embed_webp_metadata(std::vector<uint8_t>& image, const std::string& parameters) {
+    if (parameters.empty())
+        return true;
+    WebPData data{image.data(), image.size()};
+    WebPMuxPtr mux(WebPMuxCreate(&data, 1));
+    if (!mux)
+        return false;
+    const auto xmp = generation_xmp(parameters);
+    WebPData xmp_data{reinterpret_cast<const uint8_t*>(xmp.data()), xmp.size()};
+    if (WebPMuxSetChunk(mux.get(), "XMP ", &xmp_data, 1) != WEBP_MUX_OK)
+        return false;
+    WebPDataGuard assembled;
+    if (WebPMuxAssemble(mux.get(), &assembled.data) != WEBP_MUX_OK)
+        return false;
+    image.assign(assembled.data.bytes, assembled.data.bytes + assembled.data.size);
+    return true;
 }
 
 bool encode_webp_image_to_vector(const uint8_t* image,
@@ -390,37 +391,7 @@ bool encode_webp_image_to_vector(const uint8_t* image,
 
     out.assign(encoded.get(), encoded.get() + encoded_size);
 
-    if (parameters.empty()) {
-        return true;
-    }
-
-    WebPData image_data;
-    WebPDataInit(&image_data);
-    WebPDataGuard assembled_data;
-
-    image_data.bytes = out.data();
-    image_data.size  = out.size();
-
-    WebPMuxPtr mux(WebPMuxNew());
-    if (mux == nullptr) {
-        return false;
-    }
-
-    const std::string xmp_packet = build_webp_xmp_packet(parameters);
-    WebPData xmp_data;
-    WebPDataInit(&xmp_data);
-    xmp_data.bytes = reinterpret_cast<const uint8_t*>(xmp_packet.data());
-    xmp_data.size  = xmp_packet.size();
-
-    const bool ok = WebPMuxSetImage(mux.get(), &image_data, 1) == WEBP_MUX_OK &&
-                    WebPMuxSetChunk(mux.get(), "XMP ", &xmp_data, 1) == WEBP_MUX_OK &&
-                    WebPMuxAssemble(mux.get(), &assembled_data.data) == WEBP_MUX_OK;
-
-    if (ok) {
-        out.assign(assembled_data.data.bytes, assembled_data.data.bytes + assembled_data.data.size);
-    }
-
-    return ok;
+    return embed_webp_metadata(out, generation_info_to_image_metadata(parameters));
 }
 
 #ifdef SD_USE_WEBM
@@ -753,6 +724,7 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
                                             const std::string& parameters,
                                             int quality) {
     std::vector<uint8_t> buffer;
+    const auto metadata = format == EncodedImageFormat::WEBP ? std::string() : generation_info_to_image_metadata(parameters);
 
     auto write_func = [&buffer](void* context, void* data, int size) {
         (void)context;
@@ -775,7 +747,7 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
             result = stbi_write_jpg_to_func(c_func, &ctx, width, height, channels, image, quality);
             break;
         case EncodedImageFormat::PNG:
-            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, parameters.empty() ? nullptr : parameters.c_str());
+            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, metadata.empty() ? nullptr : metadata.c_str());
             break;
         case EncodedImageFormat::WEBP:
 #ifdef SD_USE_WEBP
@@ -793,9 +765,12 @@ std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
             break;
     }
 
-    if (!result) {
-        buffer.clear();
+    if (result && format == EncodedImageFormat::JPEG && !embed_jpeg_metadata(buffer, metadata)) {
+        LOG_ERROR("generation metadata exceeds the container capacity or the encoded image is invalid");
+        result = 0;
     }
+    if (!result)
+        buffer.clear();
     return buffer;
 }
 
@@ -808,18 +783,8 @@ bool write_image_to_file(const std::string& path,
                          int quality) {
     const EncodedImageFormat format = encoded_image_format_from_path(path);
 
-    switch (format) {
-        case EncodedImageFormat::JPEG:
-            return stbi_write_jpg(path.c_str(), width, height, channels, image, quality, parameters.empty() ? nullptr : parameters.c_str()) != 0;
-        case EncodedImageFormat::PNG:
-            return stbi_write_png(path.c_str(), width, height, channels, image, 0, parameters.empty() ? nullptr : parameters.c_str()) != 0;
-        case EncodedImageFormat::WEBP: {
-            const std::vector<uint8_t> encoded = encode_image_to_vector(format, image, width, height, channels, parameters, quality);
-            return !encoded.empty() && write_binary_file_bytes(path, encoded);
-        }
-        default:
-            return false;
-    }
+    const auto encoded = encode_image_to_vector(format, image, width, height, channels, parameters, quality);
+    return !encoded.empty() && write_binary_file_bytes(path, encoded);
 }
 
 uint8_t* load_image_from_file(const char* image_path,
@@ -1398,7 +1363,10 @@ std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& ou
 
 #ifdef SD_USE_WEBP
     if (format == "webp") {
-        return create_animated_webp_from_sd_images_to_vector(images, num_images, fps, quality);
+        auto data = create_animated_webp_from_sd_images_to_vector(images, num_images, fps, quality);
+        if (!data.empty() && !embed_webp_metadata(data, parameters))
+            return {};
+        return data;
     }
 #endif
 
@@ -1584,70 +1552,94 @@ static uint32_t read_le32(const uint8_t* data) {
            (static_cast<uint32_t>(data[3]) << 24);
 }
 
+/** Loads a WAV file from disk and delegates decoding to load_wav_from_memory(). */
 bool load_wav_from_file(const std::string& path,
                         std::vector<float>& interleaved_samples,
                         uint32_t& sample_rate,
                         uint32_t& channels) {
+    std::ifstream file(fs::u8path(path), std::ios::binary);
+    if (!file) {
+        interleaved_samples.clear();
+        sample_rate = 0;
+        channels    = 0;
+        return false;
+    }
+    file.seekg(0, std::ios::end);
+    const std::streamoff file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    if (file_size < 0) {
+        interleaved_samples.clear();
+        sample_rate = 0;
+        channels    = 0;
+        return false;
+    }
+    std::vector<uint8_t> buffer(static_cast<size_t>(file_size));
+    if (file_size > 0 && !file.read(reinterpret_cast<char*>(buffer.data()), file_size)) {
+        interleaved_samples.clear();
+        sample_rate = 0;
+        channels    = 0;
+        return false;
+    }
+    return load_wav_from_memory(buffer.data(), buffer.size(), interleaved_samples, sample_rate, channels);
+}
+
+/** Parses a RIFF/WAVE buffer in place; compares chunk sizes against the remaining
+ * bytes so payload-controlled sizes cannot wrap size_t on 32-bit builds. */
+bool load_wav_from_memory(const uint8_t* data,
+                          size_t size,
+                          std::vector<float>& interleaved_samples,
+                          uint32_t& sample_rate,
+                          uint32_t& channels) {
     interleaved_samples.clear();
     sample_rate = 0;
     channels    = 0;
 
-    std::ifstream file(fs::u8path(path), std::ios::binary);
-    uint8_t riff_header[12];
-    if (!file.read(reinterpret_cast<char*>(riff_header), sizeof(riff_header)) ||
-        std::memcmp(riff_header, "RIFF", 4) != 0 ||
-        std::memcmp(riff_header + 8, "WAVE", 4) != 0) {
+    if (data == nullptr ||
+        size < 12 ||
+        std::memcmp(data, "RIFF", 4) != 0 ||
+        std::memcmp(data + 8, "WAVE", 4) != 0) {
         return false;
     }
 
     uint16_t audio_format    = 0;
     uint16_t bits_per_sample = 0;
     uint16_t block_align     = 0;
-    std::streampos data_pos  = std::streampos(-1);
+    size_t data_pos          = SIZE_MAX;
     uint32_t data_size       = 0;
 
-    while (file.good()) {
-        uint8_t chunk_header[8];
-        if (!file.read(reinterpret_cast<char*>(chunk_header), sizeof(chunk_header))) {
-            break;
-        }
-        uint32_t chunk_size           = read_le32(chunk_header + 4);
-        std::streampos chunk_data_pos = file.tellg();
+    size_t pos = 12;
+    while (pos + 8 <= size) {
+        uint32_t chunk_size    = read_le32(data + pos + 4);
+        size_t chunk_data_pos  = pos + 8;
+        const size_t remaining = size - chunk_data_pos;  // safe: chunk_data_pos <= size
+        // Chunk sizes come from the payload, so compare against the remaining bytes
+        // instead of adding them to offsets (avoids size_t wrap on 32-bit builds).
+        const bool data_fits = static_cast<size_t>(chunk_size) <= remaining;
 
-        if (std::memcmp(chunk_header, "fmt ", 4) == 0) {
-            if (chunk_size < 16) {
+        if (std::memcmp(data + pos, "fmt ", 4) == 0) {
+            if (chunk_size < 16 || !data_fits) {
                 return false;
             }
-            std::vector<uint8_t> fmt(chunk_size);
-            if (!file.read(reinterpret_cast<char*>(fmt.data()), chunk_size)) {
-                return false;
-            }
-            audio_format    = read_le16(fmt.data());
-            channels        = read_le16(fmt.data() + 2);
-            sample_rate     = read_le32(fmt.data() + 4);
-            block_align     = read_le16(fmt.data() + 12);
-            bits_per_sample = read_le16(fmt.data() + 14);
+            audio_format    = read_le16(data + chunk_data_pos);
+            channels        = read_le16(data + chunk_data_pos + 2);
+            sample_rate     = read_le32(data + chunk_data_pos + 4);
+            block_align     = read_le16(data + chunk_data_pos + 12);
+            bits_per_sample = read_le16(data + chunk_data_pos + 14);
             if (audio_format == 0xfffe && chunk_size >= 40) {
-                audio_format = read_le16(fmt.data() + 24);
+                audio_format = read_le16(data + chunk_data_pos + 24);
             }
-        } else if (std::memcmp(chunk_header, "data", 4) == 0) {
+        } else if (std::memcmp(data + pos, "data", 4) == 0) {
             data_pos  = chunk_data_pos;
             data_size = chunk_size;
-            file.seekg(chunk_size, std::ios::cur);
-        } else {
-            file.seekg(chunk_size, std::ios::cur);
         }
-
-        if (!file.good()) {
-            break;
-        }
-        if ((chunk_size & 1) != 0) {
-            file.seekg(1, std::ios::cur);
-        }
+        // Only advance past a chunk whose size and pad byte fully fit (keeps the sum
+        // overflow-free); a chunk truncated at the buffer end terminates the walk.
+        const bool chunk_fits = data_fits && ((chunk_size & 1) == 0 || static_cast<size_t>(chunk_size) < remaining);
+        pos                   = chunk_fits ? chunk_data_pos + static_cast<size_t>(chunk_size) + (chunk_size & 1) : size;
     }
 
     const uint32_t bytes_per_sample = (bits_per_sample + 7) / 8;
-    if (data_pos == std::streampos(-1) || data_size == 0 || channels == 0 || sample_rate == 0 ||
+    if (data_pos == SIZE_MAX || data_size == 0 || channels == 0 || sample_rate == 0 ||
         block_align == 0 || bytes_per_sample == 0 || block_align < channels * bytes_per_sample ||
         (audio_format != 1 && audio_format != 3)) {
         return false;
@@ -1657,16 +1649,14 @@ bool load_wav_from_file(const std::string& path,
     if (frame_count == 0 || frame_count > SIZE_MAX / channels) {
         return false;
     }
-    std::vector<uint8_t> pcm(data_size);
-    file.clear();
-    file.seekg(data_pos);
-    if (!file.read(reinterpret_cast<char*>(pcm.data()), data_size)) {
+    if (static_cast<size_t>(data_size) > size - data_pos) {
         return false;
     }
+    const uint8_t* pcm = data + data_pos;
 
     interleaved_samples.resize(static_cast<size_t>(frame_count * channels));
     for (uint64_t frame = 0; frame < frame_count; ++frame) {
-        const uint8_t* frame_data = pcm.data() + frame * block_align;
+        const uint8_t* frame_data = pcm + frame * block_align;
         for (uint32_t channel = 0; channel < channels; ++channel) {
             const uint8_t* sample_data = frame_data + channel * bytes_per_sample;
             float sample               = 0.0f;

@@ -1,4 +1,6 @@
 #include "detailer.h"
+#include "generation_info.h"
+#include "pipeline/request.h"
 
 #include <algorithm>
 #include <cctype>
@@ -915,14 +917,11 @@ bool adetail_image(adetailer_ctx_t* context,
                    sd_image_t input_image,
                    const sd_adetailer_params_t* public_params,
                    const sd_img_gen_params_t* inpaint_params,
-                   sd_image_t** images_out,
-                   int* num_images_out) {
-    if (images_out != nullptr) {
-        *images_out = nullptr;
-    }
-    if (num_images_out != nullptr) {
-        *num_images_out = 0;
-    }
+                   sd_image_generation_result_t** result_out) try {
+    if (result_out)
+        *result_out = nullptr;
+    if (!result_out)
+        return false;
     if (context == nullptr || context->detailer == nullptr || sd_ctx == nullptr || public_params == nullptr ||
         inpaint_params == nullptr || input_image.data == nullptr) {
         return false;
@@ -933,7 +932,10 @@ bool adetail_image(adetailer_ctx_t* context,
         return false;
     }
 
-    auto detections = context->detailer->predict(input_image, params);
+    auto resolved_inpaint = *inpaint_params;
+    resolved_inpaint.seed = sd::pipeline::resolve_seed(resolved_inpaint.seed);
+    const auto info       = sd::adetailer_generation_info(*public_params, resolved_inpaint);
+    auto detections       = context->detailer->predict(input_image, params);
     filter_and_sort_detections(&detections, input_image.width, input_image.height, params);
     auto masks = make_masks(detections, input_image.width, input_image.height, params);
 
@@ -942,6 +944,7 @@ bool adetail_image(adetailer_ctx_t* context,
         return false;
     }
 
+    std::unique_ptr<uint8_t, decltype(&free)> current_owner(current.data, &free);
     int applied = 0;
     for (size_t i = 0; i < masks.size(); ++i) {
         std::string prompt          = resolve_prompt(params.prompt, inpaint_params->prompt, static_cast<int>(i));
@@ -968,11 +971,10 @@ bool adetail_image(adetailer_ctx_t* context,
         if (local_image.data == nullptr || local_mask.data == nullptr) {
             free(local_image.data);
             free(local_mask.data);
-            free(current.data);
             return false;
         }
 
-        sd_img_gen_params_t generation = *inpaint_params;
+        sd_img_gen_params_t generation = resolved_inpaint;
         generation.prompt              = prompt.c_str();
         generation.negative_prompt     = negative_prompt.c_str();
         generation.init_image          = local_image;
@@ -980,7 +982,7 @@ bool adetail_image(adetailer_ctx_t* context,
         generation.width               = params.inpaint_width;
         generation.height              = params.inpaint_height;
         generation.strength            = params.denoising_strength;
-        generation.seed                = inpaint_params->seed + static_cast<int64_t>(i);
+        generation.seed                = static_cast<int64_t>((static_cast<uint64_t>(resolved_inpaint.seed) + i) & INT64_MAX);
         generation.batch_count         = 1;
         generation.ref_images          = nullptr;
         generation.ref_images_count    = 0;
@@ -1004,37 +1006,32 @@ bool adetail_image(adetailer_ctx_t* context,
             generation.sample_params.scheduler = params.scheduler;
         }
 
-        sd_image_t* generated = nullptr;
-        int generated_count   = 0;
-        bool success          = generate_image(sd_ctx, &generation, &generated, &generated_count);
+        sd_image_generation_result_t* generated = nullptr;
+        bool success                            = generate_image(sd_ctx, &generation, &generated);
         free(local_image.data);
         free(local_mask.data);
-        if (!success || generated_count <= 0 || generated == nullptr || generated[0].data == nullptr) {
-            free_sd_images(generated, generated_count);
-            free(current.data);
+        if (!success || generated == nullptr || generated->count <= 0 || generated->items[0].image.data == nullptr) {
+            free_sd_image_generation_result(generated);
             return false;
         }
 
+        std::unique_ptr<sd_image_generation_result_t, decltype(&free_sd_image_generation_result)> generated_owner(generated, &free_sd_image_generation_result);
         Mask feather = gaussian_blur_mask(masks[i], params.mask_blur);
-        composite_crop(&current, generated[0], feather, crop);
-        free_sd_images(generated, generated_count);
+        composite_crop(&current, generated->items[0].image, feather, crop);
         ++applied;
     }
 
+    const std::vector<nlohmann::json> infos{info};
     auto* outputs = static_cast<sd_image_t*>(calloc(1, sizeof(sd_image_t)));
-    if (outputs == nullptr) {
-        free(current.data);
+    if (!outputs)
         return false;
-    }
     outputs[0] = current;
-    if (images_out != nullptr) {
-        *images_out = outputs;
-    } else {
-        free_sd_images(outputs, 1);
-    }
-    if (num_images_out != nullptr) {
-        *num_images_out = 1;
-    }
+    current_owner.release();
+    if (!sd::make_image_generation_result(outputs, 1, infos, result_out))
+        return false;
     LOG_INFO("ADetailer applied %d mask(s)", applied);
     return true;
+} catch (const std::exception& e) {
+    LOG_ERROR("ADetailer failed: %s", e.what());
+    return false;
 }

@@ -6,6 +6,7 @@
 #include <vector>
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_tensor_utils.h"
+#include "core/pe_cache.h"
 
 #include "core/util.h"
 #include "model/adapter/pulid.hpp"
@@ -76,7 +77,10 @@ namespace Flux {
                 config.in_channels = 128;
             } else if (version == VERSION_FLEX_2) {
                 config.in_channels = 196;
+            } else if (version == VERSION_CHROMA) {
+                config.is_chroma = true;
             } else if (version == VERSION_CHROMA_RADIANCE) {
+                config.is_chroma   = true;
                 config.in_channels = 3;
                 config.patch_size  = 16;
             } else if (version == VERSION_OVIS_IMAGE) {
@@ -136,9 +140,6 @@ namespace Flux {
                 if (name.find("img_in_patch.weight") != std::string::npos) {
                     actual_radiance_patch_size = tensor_storage.ne[0];
                     LOG_VERBOSE("actual radiance patch size: %" PRId64, actual_radiance_patch_size);
-                }
-                if (name.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
-                    config.is_chroma = true;
                 }
                 size_t db = name.find("double_blocks.");
                 if (db != std::string::npos) {
@@ -1398,10 +1399,11 @@ namespace Flux {
     };
 
     struct FluxRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     public:
         FluxConfig config;
         Flux flux;
-        std::vector<float> pe_vec;
         std::vector<float> mod_index_arange_vec;
         std::vector<float> dct_vec;
         sd::Tensor<float> guidance_tensor;
@@ -1548,25 +1550,26 @@ namespace Flux {
             } else if (version == VERSION_OVIS_IMAGE) {
                 txt_arange_dims = {1, 2};
             }
-            pe_vec      = finish_rope_pe(Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
-                                                           static_cast<int>(x->ne[0]),
-                                                           config.patch_size,
-                                                           static_cast<int>(x->ne[3]),
-                                                           static_cast<int>(context->ne[1]),
-                                                           txt_arange_dims,
-                                                           ref_latents,
-                                                           ref_index_mode,
-                                                           config.ref_index_scale,
-                                                           config.theta,
-                                                           config.axes_dim,
-                                                           sd_version_is_longcat(version)));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_VERBOSE("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            // pe->data = pe_vec.data();
-            // print_ggml_tensor(pe);
-            // pe->data = nullptr;
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("flux.pe");
+            pe_key.add(version).add_shape(x).add_shape(context).add(config.patch_size).add(txt_arange_dims);
+            pe_key.add_shapes(ref_latents).add(ref_index_mode).add(config.ref_index_scale).add(config.theta).add(config.axes_dim);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec     = finish_rope_pe(Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
+                                                                   static_cast<int>(x->ne[0]),
+                                                                   config.patch_size,
+                                                                   static_cast<int>(x->ne[3]),
+                                                                   static_cast<int>(context->ne[1]),
+                                                                   txt_arange_dims,
+                                                                   ref_latents,
+                                                                   ref_index_mode,
+                                                                   config.ref_index_scale,
+                                                                   config.theta,
+                                                                   config.axes_dim,
+                                                                   sd_version_is_longcat(version)));
+                int64_t pos_len = static_cast<int64_t>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             if (version == VERSION_CHROMA_RADIANCE) {
                 int patch_size     = config.patch_size;

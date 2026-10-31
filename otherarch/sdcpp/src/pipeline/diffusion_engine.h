@@ -34,10 +34,9 @@ namespace Wav2Vec2 {
     class Wav2Vec2ModelRunner;
 }
 
-extern const char* model_version_to_str[];
-
 static inline bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
     return version == VERSION_FLUX ||
+           version == VERSION_CHROMA ||
            sd_version_is_flux2(version) ||
            (sd_version_is_qwen_image(version) && version != VERSION_QWEN_IMAGE_2_1) ||
            sd_version_is_mage_flow(version) ||
@@ -129,6 +128,7 @@ public:
         sd_ctx_params_t params{};
         std::list<std::string> strings;
         std::vector<sd_embedding_t> embeddings;
+        std::map<std::string, std::string> models;
         ModelLoader::FileId control_net_file = 0;
         bool use_tae                         = false;
         bool use_audio_vae                   = false;
@@ -170,13 +170,24 @@ public:
             use_audio_vae               = other.use_audio_vae;
             photomaker_source_available = other.photomaker_source_available;
             animatediff_loaded          = other.animatediff_loaded;
+            models                      = other.models;
         }
         ModelConfig& operator=(const ModelConfig&) = delete;
+
+        void record_model(const std::string& name, const std::string& path) {
+            if (path.empty()) {
+                models.erase(name);
+                return;
+            }
+            const auto separator = path.find_last_of("/\\");
+            models[name]         = separator == std::string::npos ? path : path.substr(separator + 1);
+        }
 
         void set_control_net(ModelLoader::FileId id, const std::string& path) {
             control_net_file = id;
             strings.push_back(path);
             params.control_net_path = strings.back().c_str();
+            record_model("control_net", path);
         }
     };
 
