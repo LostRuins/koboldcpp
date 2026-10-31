@@ -1959,6 +1959,7 @@ static bool parse_image_json_field(const json& parent,
     return decode_base64_image(parent.at(key).get<std::string>(), channels, 0, 0, out_image);
 }
 
+/** Parses a JSON array of base64 image strings into owned images. */
 static bool parse_image_array_json_field(const json& parent,
                                          const char* key,
                                          int channels,
@@ -1984,6 +1985,84 @@ static bool parse_image_array_json_field(const json& parent,
             return false;
         }
         out_images.push_back(std::move(image));
+    }
+    return true;
+}
+
+/** Parses a JSON array of base64 WAV strings into owned audio clips. */
+static bool parse_audio_array_json_field(const json& parent,
+                                         const char* key,
+                                         std::vector<SDAudioOwner>& out_audios) {
+    if (!parent.contains(key)) {
+        return true;
+    }
+    if (parent.at(key).is_null()) {
+        out_audios.clear();
+        return true;
+    }
+    if (!parent.at(key).is_array()) {
+        return false;
+    }
+
+    out_audios.clear();
+    for (const auto& item : parent.at(key)) {
+        if (!item.is_string()) {
+            return false;
+        }
+        std::string encoded = item.get<std::string>();
+        auto comma_pos      = encoded.find(',');
+        if (comma_pos != std::string::npos) {
+            encoded = encoded.substr(comma_pos + 1);
+        }
+        std::vector<uint8_t> audio_bytes = decode_base64_bytes(encoded);
+        if (audio_bytes.empty()) {
+            return false;
+        }
+        std::vector<float> samples;
+        uint32_t sample_rate = 0;
+        uint32_t channels    = 0;
+        if (!load_wav_from_memory(audio_bytes.data(), audio_bytes.size(), samples, sample_rate, channels)) {
+            return false;
+        }
+        SDAudioOwner audio;
+        audio.reset(std::move(samples), sample_rate, channels);
+        out_audios.push_back(std::move(audio));
+    }
+    return true;
+}
+
+/** Parses a JSON array of per-video base64 frame arrays into owned videos. */
+static bool parse_video_array_json_field(const json& parent,
+                                         const char* key,
+                                         std::vector<std::vector<SDImageOwner>>& out_videos) {
+    if (!parent.contains(key)) {
+        return true;
+    }
+    if (parent.at(key).is_null()) {
+        out_videos.clear();
+        return true;
+    }
+    if (!parent.at(key).is_array()) {
+        return false;
+    }
+
+    out_videos.clear();
+    for (const auto& video : parent.at(key)) {
+        if (!video.is_array() || video.empty()) {
+            return false;
+        }
+        std::vector<SDImageOwner> frames;
+        for (const auto& frame : video) {
+            if (!frame.is_string()) {
+                return false;
+            }
+            SDImageOwner image;
+            if (!decode_base64_image(frame.get<std::string>(), 0, 0, 0, image)) {
+                return false;
+            }
+            frames.push_back(std::move(image));
+        }
+        out_videos.push_back(std::move(frames));
     }
     return true;
 }
@@ -2102,6 +2181,7 @@ bool SDGenerationParams::parse_image_preprocess_json(const std::string& json_str
     return true;
 }
 
+/** Populates generation params from a JSON payload (server APIs); returns false on any malformed field. */
 bool SDGenerationParams::from_json_str(
     const std::string& json_str,
     const std::function<std::string(const std::string&)>& lora_path_resolver) {
@@ -2330,8 +2410,11 @@ bool SDGenerationParams::from_json_str(
         return false;
     }
     if (!parse_image_array_json_field(j, "ref_images", 0, ref_images) ||
-        !parse_image_array_json_field(j, "control_frames", 3, control_frames)) {
-        LOG_ERROR("invalid input image array");
+        !parse_image_array_json_field(j, "control_frames", 3, control_frames) ||
+        !parse_audio_array_json_field(j, "ref_audios", ref_audios) ||
+        !parse_audio_array_json_field(j, "ref_video_audios", ref_video_audios) ||
+        !parse_video_array_json_field(j, "ref_videos", ref_videos)) {
+        LOG_ERROR("invalid input image/audio/video array");
         return false;
     }
 
@@ -2583,6 +2666,7 @@ bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::s
     return true;
 }
 
+/** Validates params for a generation mode; enforces mode-specific input rules. */
 bool SDGenerationParams::validate(SDMode mode) {
     if (!image_preprocess.empty() && mode != IMG_GEN && mode != VID_GEN) {
         LOG_ERROR("--image-preprocess requires img_gen or vid_gen mode");
@@ -2636,12 +2720,13 @@ bool SDGenerationParams::validate(SDMode mode) {
         return false;
     }
 
-    if (ref_video_audio_paths.size() > ref_video_paths.size()) {
+    if (ref_video_audio_paths.size() + ref_video_audios.size() > ref_video_paths.size() + ref_videos.size()) {
         LOG_ERROR("error: each --ref-video-audio needs a corresponding --ref-video");
         return false;
     }
 
-    if (mode != VID_GEN && (!ref_video_paths.empty() || !ref_video_audio_paths.empty() || !ref_audio_paths.empty())) {
+    if (mode != VID_GEN && (!ref_video_paths.empty() || !ref_video_audio_paths.empty() || !ref_audio_paths.empty() ||
+                            !ref_videos.empty() || !ref_video_audios.empty() || !ref_audios.empty())) {
         LOG_ERROR("error: reference video and audio inputs require vid_gen mode");
         return false;
     }

@@ -4,6 +4,7 @@
 #include <memory>
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_tensor_utils.h"
+#include "core/pe_cache.h"
 
 #include "core/util.h"
 #include "model/common/block.hpp"
@@ -561,10 +562,11 @@ namespace Qwen {
     };
 
     struct QwenImageRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     public:
         QwenImageConfig config;
         QwenImageModel qwen_image;
-        std::vector<float> pe_vec;
         std::vector<float> modulate_index_vec;
         std::vector<int32_t> additional_t_cond_vec;
         SDVersion version;
@@ -635,23 +637,24 @@ namespace Qwen {
                 ref_index_mode = Rope::RefIndexMode::DECREASE;
             }
 
-            pe_vec      = finish_rope_pe(Rope::gen_qwen_image_pe(time_len,
-                                                                 static_cast<int>(x->ne[1]),
-                                                                 static_cast<int>(x->ne[0]),
-                                                                 config.patch_size,
-                                                                 batch_size,
-                                                                 static_cast<int>(context->ne[1]),
-                                                                 ref_latents,
-                                                                 ref_index_mode,
-                                                                 config.theta,
-                                                                 config.axes_dim));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_VERBOSE("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            // pe->data = pe_vec.data();
-            // print_ggml_tensor(pe, true, "pe");
-            // pe->data = nullptr;
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("qwen_image.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(time_len).add(batch_size).add(config.patch_size);
+            pe_key.add_shapes(ref_latents).add(ref_index_mode);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(Rope::gen_qwen_image_pe(time_len,
+                                                                     static_cast<int>(x->ne[1]),
+                                                                     static_cast<int>(x->ne[0]),
+                                                                     config.patch_size,
+                                                                     batch_size,
+                                                                     static_cast<int>(context->ne[1]),
+                                                                     ref_latents,
+                                                                     ref_index_mode,
+                                                                     config.theta,
+                                                                     config.axes_dim));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             ggml_tensor* modulate_index = nullptr;
             if (config.zero_cond_t) {

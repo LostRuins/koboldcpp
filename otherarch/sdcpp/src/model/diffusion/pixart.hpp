@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_runner.h"
@@ -295,9 +296,9 @@ namespace PixArt {
     };
 
     struct PixArtRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         PixArtConfig config;
         PixArtModel model;
-        std::vector<float> pos_vec;
 
         PixArtRunner(ggml_backend_t backend,
                      const String2TensorStorage& tensor_storage_map      = {},
@@ -357,10 +358,13 @@ namespace PixArt {
             int64_t wp = W / config.patch_size;
             int64_t hp = H / config.patch_size;
 
-            pos_vec  = gen_2d_sincos_pos_embed(config.hidden_size, hp, wp,
-                                               config.pos_embed_base_size, config.interpolation_scale);
-            auto pos = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.hidden_size, wp * hp, 1);
-            set_backend_tensor_data(pos, pos_vec.data());
+            sd::PECacheKey pos_key("pixart.pos");
+            pos_key.add(hp).add(wp).add(config.hidden_size).add(config.pos_embed_base_size).add(config.interpolation_scale);
+            auto pos = make_input(pe_cache_.get_or_create(pos_key, [&]() {
+                auto pos_vec = gen_2d_sincos_pos_embed(config.hidden_size, hp, wp,
+                                                       config.pos_embed_base_size, config.interpolation_scale);
+                return sd::Tensor<float>({config.hidden_size, wp * hp, 1}, std::move(pos_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pos, context_mask);

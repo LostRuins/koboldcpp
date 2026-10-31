@@ -708,6 +708,24 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
     return name;
 }
 
+static std::string convert_diffusers_dit_to_original_flux3(std::string name) {
+    static const std::vector<std::pair<std::string, std::string>> prefix_map = {
+        {"single_transformer_blocks.", "single_blocks."},
+        {"mode_blocks.", "content_mode_blocks."},
+    };
+    static const std::vector<std::pair<std::string, std::string>> name_map = {
+        {".attn.to_q.", ".q_proj."},
+        {".attn.to_k.", ".k_proj."},
+        {".attn.to_v.", ".v_proj."},
+        {".attn.to_out.0.", ".attn_out."},
+        {".ff.linear_in.", ".mlp_in."},
+        {".ff.linear_out.", ".mlp_out."},
+    };
+    replace_with_prefix_map(name, prefix_map);
+    replace_with_name_map(name, name_map);
+    return name;
+}
+
 std::string convert_hunyuan_video_to_original_flux(std::string name) {
     int num_layers        = 54;
     int num_single_layers = 0;
@@ -1077,6 +1095,8 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_dit_to_original_sd3(name);
     } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version) || sd_version_is_sefi_image(version)) {
         name = convert_diffusers_dit_to_original_flux(name);
+    } else if (sd_version_is_flux3(version)) {
+        name = convert_diffusers_dit_to_original_flux3(name);
     } else if (sd_version_is_hunyuan_video(version)) {
         name = convert_hunyuan_video_to_original_flux(name);
     } else if (version == VERSION_MOSS_IMAGE) {

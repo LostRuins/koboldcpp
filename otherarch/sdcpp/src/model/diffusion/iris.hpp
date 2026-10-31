@@ -3,6 +3,7 @@
 
 #include <array>
 #include <stdexcept>
+#include "core/pe_cache.h"
 #include "model/diffusion/pid.hpp"
 
 namespace Iris {
@@ -382,11 +383,9 @@ namespace Iris {
     }
 
     struct IrisRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         IrisConfig config;
         IrisModel model;
-        std::vector<float> joint_pe_data;
-        std::vector<float> pixel_pe_data;
-        std::vector<float> pixel_pos_data;
         std::vector<float> text_mask_data;
 
         IrisRunner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
@@ -418,24 +417,35 @@ namespace Iris {
                 GGML_ASSERT(h % config.patch_size == 0 && w % config.patch_size == 0);
                 GGML_ASSERT(text->ne[0] == config.text_dim * config.text_layers && text->ne[1] == nt);
                 GGML_ASSERT(inputs.y->numel() == nt && x->ne[3] == 1);
-                joint_pe_data = Pid::make_rope_1d(nt, static_cast<int>(config.head_dim), 10000.f);
-                auto img      = image_rope(h / config.patch_size, w / config.patch_size, config.head_dim);
-                joint_pe_data.insert(joint_pe_data.end(), img.begin(), img.end());
-                pixel_pe_data  = image_rope(h / config.patch_size, w / config.patch_size, config.pixel_attn_dim / config.pixel_heads);
-                pixel_pos_data = Pid::make_pixel_abs_pos(h, w, static_cast<int>(config.pixel_dim));
+                sd::PECacheKey joint_key("iris.joint_pe");
+                joint_key.add(h).add(w).add(nt).add(config.patch_size).add(config.head_dim);
+                auto pe = make_input(pe_cache_.get_or_create(joint_key, [&]() {
+                    auto values = Pid::make_rope_1d(nt, static_cast<int>(config.head_dim), 10000.f);
+                    auto img    = image_rope(h / config.patch_size, w / config.patch_size, config.head_dim);
+                    values.insert(values.end(), img.begin(), img.end());
+                    const int64_t tokens = nt + static_cast<int64_t>(img.size() / (2 * config.head_dim));
+                    return sd::Tensor<float>({2, 2, config.head_dim / 2, tokens}, std::move(values));
+                }));
+                sd::PECacheKey pixel_key("iris.pixel_pe");
+                pixel_key.add(h).add(w).add(config.patch_size).add(config.pixel_attn_dim).add(config.pixel_heads);
+                auto pp = make_input(pe_cache_.get_or_create(pixel_key, [&]() {
+                    return sd::Tensor<float>({2, 2, config.pixel_attn_dim / config.pixel_heads / 2,
+                                              (h / config.patch_size) * (w / config.patch_size)},
+                                             image_rope(h / config.patch_size, w / config.patch_size, config.pixel_attn_dim / config.pixel_heads));
+                }));
+                sd::PECacheKey pos_key("iris.pixel_pos");
+                pos_key.add(h).add(w).add(config.pixel_dim);
+                auto pos = make_input(pe_cache_.get_or_create(pos_key, [&]() {
+                    return sd::Tensor<float>({config.pixel_dim, h * w, 1},
+                                             Pid::make_pixel_abs_pos(h, w, static_cast<int>(config.pixel_dim)));
+                }));
                 text_mask_data.resize(nt * nt);
                 for (int q = 0; q < nt; ++q) {
                     for (int k = 0; k < nt; ++k) {
                         text_mask_data[q * nt + k] = inputs.y->values()[k] != 0.f || q == k ? 0.f : -INFINITY;
                     }
                 }
-                auto pe   = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, nt + img.size() / (2 * config.head_dim));
-                auto pp   = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.pixel_attn_dim / config.pixel_heads / 2, (h / config.patch_size) * (w / config.patch_size));
-                auto pos  = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.pixel_dim, h * w, 1);
                 auto mask = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, nt, nt);
-                set_backend_tensor_data(pe, joint_pe_data.data());
-                set_backend_tensor_data(pp, pixel_pe_data.data());
-                set_backend_tensor_data(pos, pixel_pos_data.data());
                 set_backend_tensor_data(mask, text_mask_data.data());
                 auto ctx = get_context();
                 auto out = model.forward(&ctx, x, t, text, mask, pe, pp, pos);

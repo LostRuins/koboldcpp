@@ -6,6 +6,7 @@
 #include <cmath>
 #include <tuple>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_runner.h"
@@ -759,9 +760,9 @@ namespace Boogu {
     }
 
     struct BooguImageRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         BooguConfig config;
         BooguImageModel boogu;
-        std::vector<float> pe_vec;
 
         BooguImageRunner(ggml_backend_t backend,
                          const String2TensorStorage& tensor_storage_map      = {},
@@ -799,17 +800,21 @@ namespace Boogu {
                 ref_latents.push_back(make_input(ref_latent_tensor));
             }
 
-            pe_vec      = finish_rope_pe(gen_boogu_pe(static_cast<int>(x->ne[1]),
-                                                      static_cast<int>(x->ne[0]),
-                                                      config.patch_size,
-                                                      static_cast<int>(x->ne[3]),
-                                                      static_cast<int>(context->ne[1]),
-                                                      ref_latents,
-                                                      config.theta,
-                                                      config.axes_dim));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("boogu.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size).add_shapes(ref_latents);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(gen_boogu_pe(static_cast<int>(x->ne[1]),
+                                                          static_cast<int>(x->ne[0]),
+                                                          config.patch_size,
+                                                          static_cast<int>(x->ne[3]),
+                                                          static_cast<int>(context->ne[1]),
+                                                          ref_latents,
+                                                          config.theta,
+                                                          config.axes_dim));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = boogu.forward(&runner_ctx, x, timesteps, context, pe, ref_latents);
