@@ -6,6 +6,7 @@
 #include <ctime>
 
 #include "diffusion_engine.h"
+#include "model_definition.h"
 #include "runtime/denoiser.hpp"
 
 namespace sd::pipeline {
@@ -43,15 +44,8 @@ namespace sd::pipeline {
     }
 
     enum sample_method_t default_sample_method(const StableDiffusionGGML* sd) {
-        if (sd != nullptr) {
-            if (sd_version_is_pid(sd->version)) {
-                return LCM_SAMPLE_METHOD;
-            }
-            if (sd_version_is_dit(sd->version)) {
-                return EULER_SAMPLE_METHOD;
-            }
-        }
-        return EULER_A_SAMPLE_METHOD;
+        const auto* definition = sd ? find_model_definition(sd->version) : nullptr;
+        return definition ? definition->sampling.default_sample_method : EULER_A_SAMPLE_METHOD;
     }
 
     enum scheduler_t default_scheduler(const StableDiffusionGGML* sd, enum sample_method_t sample_method) {
@@ -65,16 +59,9 @@ namespace sd::pipeline {
             return LCM_SCHEDULER;
         } else if (sample_method == DDIM_TRAILING_SAMPLE_METHOD) {
             return SIMPLE_SCHEDULER;
-        } else if (sd != nullptr && (sd_version_is_flux(sd->version) || sd->version == VERSION_QWEN_IMAGE_2_1 || sd->version == VERSION_FIBO2)) {
-            return FLUX_SCHEDULER;
-        } else if (sd != nullptr && sd_version_is_flux2(sd->version)) {
-            return FLUX2_SCHEDULER;
-        } else if (sd != nullptr && sd_version_is_ltxav(sd->version)) {
-            return LTX2_SCHEDULER;
-        } else if (sd != nullptr && sd_version_is_ideogram4(sd->version)) {
-            return LOGIT_NORMAL_SCHEDULER;
-        } else if (sd != nullptr && sd_version_is_llada_image(sd->version)) {
-            return LLADA_IMAGE_SCHEDULER;
+        }
+        if (const auto* definition = sd ? find_model_definition(sd->version) : nullptr) {
+            return definition->sampling.default_scheduler;
         }
         return DISCRETE_SCHEDULER;
     }
@@ -184,7 +171,7 @@ namespace sd::pipeline {
             LOG_WARN("align video frames from %d to %d for %s",
                      requested_frames,
                      frames,
-                     model_version_to_str[sd->version]);
+                     sd_version_name(sd->version));
         }
     }
 

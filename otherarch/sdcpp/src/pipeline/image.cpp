@@ -804,7 +804,7 @@ namespace sd::pipeline {
 
         if (!sd_version_supports_image_generation(sd->version)) {
             LOG_ERROR("%s cannot be run with generate_image(); use generate_video() or --mode vid_gen in the CLI",
-                      model_version_to_str[sd->version]);
+                      sd_version_name(sd->version));
             return false;
         }
 

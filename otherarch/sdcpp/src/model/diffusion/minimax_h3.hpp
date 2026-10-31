@@ -12,6 +12,7 @@
 #include "core/ggml_tensor_utils.h"
 
 #include "core/ggml_graph_cut.h"
+#include "model/common/block.hpp"
 #include "model/diffusion/dit.hpp"
 #include "model/diffusion/model.hpp"
 

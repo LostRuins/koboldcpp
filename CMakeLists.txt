@@ -542,86 +542,36 @@ else()
 endif()
 set_source_files_properties(vendor/hash/sha256/sha256.c PROPERTIES COMPILE_OPTIONS ${KCPP_HASH_NO_WARN_FLAG})
 
+# sdcpp sources are discovered at configure time, so new files under
+# otherarch/sdcpp/src are picked up without editing this file (re-run the
+# cmake configure after syncing the library). The target is a library, so the
+# linker takes care of pulling in the symbols it needs from this set.
+# thirdparty is listed explicitly: some of its .c files (utf8proc_data.c and
+# the oniguruma unicode_*_data.c) are #included by other sources and must not
+# be compiled directly.
+file(GLOB_RECURSE SDCPP_SOURCES "otherarch/sdcpp/src/*.c" "otherarch/sdcpp/src/*.cpp")
+set(SDCPP_THIRDPARTY_SOURCES
+    otherarch/sdcpp/thirdparty/oniguruma/ascii.c
+    otherarch/sdcpp/thirdparty/oniguruma/regcomp.c
+    otherarch/sdcpp/thirdparty/oniguruma/regenc.c
+    otherarch/sdcpp/thirdparty/oniguruma/regerror.c
+    otherarch/sdcpp/thirdparty/oniguruma/regexec.c
+    otherarch/sdcpp/thirdparty/oniguruma/regparse.c
+    otherarch/sdcpp/thirdparty/oniguruma/st.c
+    otherarch/sdcpp/thirdparty/oniguruma/unicode.c
+    otherarch/sdcpp/thirdparty/oniguruma/unicode_fold1_key.c
+    otherarch/sdcpp/thirdparty/oniguruma/unicode_fold2_key.c
+    otherarch/sdcpp/thirdparty/oniguruma/unicode_fold3_key.c
+    otherarch/sdcpp/thirdparty/oniguruma/unicode_unfold_key.c
+    otherarch/sdcpp/thirdparty/oniguruma/utf8.c
+    otherarch/sdcpp/thirdparty/utf8proc/utf8proc.c
+    otherarch/sdcpp/thirdparty/zip.c)
+
 add_library(sdtype_adapter
             kcpp_src/sdcpp_gguf_tokenizer.cpp
             otherarch/sdcpp/sdtype_adapter.cpp
-            otherarch/sdcpp/src/conditioning/wan_audio.cpp
-            otherarch/sdcpp/src/core/compute_workspace.cpp
-            otherarch/sdcpp/src/core/ggml_extend.cpp
-            otherarch/sdcpp/src/core/ggml_runner.cpp
-            otherarch/sdcpp/src/core/ggml_graph_cut.cpp
-            otherarch/sdcpp/src/core/ggml_graph_cut.h
-            otherarch/sdcpp/src/core/parallel.cpp
-            otherarch/sdcpp/src/core/probe/backend_probe.cpp
-            otherarch/sdcpp/src/core/probe/conv_direct.cpp
-            otherarch/sdcpp/src/core/probe/flash_attn.cpp
-            otherarch/sdcpp/src/core/regex.cpp
-            otherarch/sdcpp/src/core/ggml_tensor_utils.cpp
-            otherarch/sdcpp/src/core/runner_cache.cpp
-            otherarch/sdcpp/src/core/segment_graph_bindings.cpp
-            otherarch/sdcpp/src/core/segment_weight_pipeline.cpp
-            otherarch/sdcpp/examples/cli/image_metadata.cpp
-            otherarch/sdcpp/src/detailer.cpp
-            otherarch/sdcpp/src/model_manager.cpp
-            otherarch/sdcpp/src/model_manager_files.cpp
-            otherarch/sdcpp/src/model_manager.h
-            otherarch/sdcpp/src/model_manager_prefetch.cpp
-            otherarch/sdcpp/src/extensions/pulid_extension.cpp
-            otherarch/sdcpp/src/model_loader.cpp
-            otherarch/sdcpp/src/model_loader_files.cpp
-            otherarch/sdcpp/src/model/adapter/lora_ops.cpp
-            otherarch/sdcpp/src/extensions/photomaker_extension.cpp
-            otherarch/sdcpp/src/runtime/sample-cache.cpp
-            otherarch/sdcpp/src/runtime/tiling.cpp
-            otherarch/sdcpp/src/runtime/audio_processing.cpp
-            otherarch/sdcpp/src/runtime/image_preprocess.cpp
-            otherarch/sdcpp/src/core/util.cpp
-            otherarch/sdcpp/src/name_conversion.cpp
-            otherarch/sdcpp/src/upscaler.cpp
-            otherarch/sdcpp/src/runtime/guidance.cpp
-            otherarch/sdcpp/src/runtime/guidance.h
-            otherarch/sdcpp/src/runtime/imatrix.cpp
-            otherarch/sdcpp/src/runtime/imatrix.h
-            otherarch/sdcpp/src/pipeline/diffusion_engine.cpp
-            otherarch/sdcpp/src/pipeline/image.cpp
-            otherarch/sdcpp/src/pipeline/model_builders.cpp
-            otherarch/sdcpp/src/pipeline/request.cpp
-            otherarch/sdcpp/src/pipeline/video.cpp
-            otherarch/sdcpp/src/stable-diffusion.cpp
-            otherarch/sdcpp/thirdparty/zip.c
-            otherarch/sdcpp/src/model_io/gguf_io.cpp
-            otherarch/sdcpp/src/model_io/pickle_io.cpp
-            otherarch/sdcpp/src/model_io/safetensors_io.cpp
-            otherarch/sdcpp/src/model_io/torch_legacy_io.cpp
-            otherarch/sdcpp/src/model_io/torch_zip_io.cpp
-            otherarch/sdcpp/src/tokenizers/bpe_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/clip_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/mistral_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/qwen2_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/sensenova_u1_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/t5_unigram_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/gemma_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/hf_tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/tokenizer.cpp
-            otherarch/sdcpp/src/tokenizers/tokenizer_config.cpp
-            otherarch/sdcpp/src/tokenizers/tokenize_util.cpp
-            otherarch/sdcpp/thirdparty/oniguruma/ascii.c
-            otherarch/sdcpp/thirdparty/oniguruma/regcomp.c
-            otherarch/sdcpp/thirdparty/oniguruma/regenc.c
-            otherarch/sdcpp/thirdparty/oniguruma/regerror.c
-            otherarch/sdcpp/thirdparty/oniguruma/regexec.c
-            otherarch/sdcpp/thirdparty/oniguruma/regparse.c
-            otherarch/sdcpp/thirdparty/oniguruma/st.c
-            otherarch/sdcpp/thirdparty/oniguruma/unicode.c
-            otherarch/sdcpp/thirdparty/oniguruma/unicode_fold1_key.c
-            otherarch/sdcpp/thirdparty/oniguruma/unicode_fold2_key.c
-            otherarch/sdcpp/thirdparty/oniguruma/unicode_fold3_key.c
-            otherarch/sdcpp/thirdparty/oniguruma/unicode_unfold_key.c
-            otherarch/sdcpp/thirdparty/oniguruma/utf8.c
-            otherarch/sdcpp/thirdparty/utf8proc/utf8proc.c
-            otherarch/sdcpp/src/core/backend_fit.cpp
-            otherarch/sdcpp/src/core/layer_split_partition.cpp
-            otherarch/sdcpp/src/core/ggml_extend_backend.cpp)
+            ${SDCPP_SOURCES}
+            ${SDCPP_THIRDPARTY_SOURCES})
 target_include_directories(sdtype_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/include ./otherarch/sdcpp/src ./otherarch/sdcpp/examples ./otherarch/sdcpp/thirdparty/oniguruma ./otherarch/sdcpp/thirdparty/utf8proc ./tools ./common)
 target_compile_definitions(sdtype_adapter PRIVATE ONIG_STATIC UTF8PROC_STATIC SD_USE_UPSTREAM_GGML)
 target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump

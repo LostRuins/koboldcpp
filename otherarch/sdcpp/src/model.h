@@ -72,6 +72,30 @@ enum SDVersion {
     VERSION_COUNT,
 };
 
+enum class ModelVAEKind { KL,
+                          FLUX,
+                          FLUX2,
+                          WAN,
+                          HUNYUAN,
+                          LTXAV,
+                          MINIMAX_H3,
+                          MAGE };
+
+struct ModelTraits {
+    bool is_dit                    = false;
+    bool supports_video_generation = false;
+    bool is_inpaint                = false;
+    bool is_unet_edit              = false;
+    bool is_control                = false;
+    ModelVAEKind vae_kind          = ModelVAEKind::KL;
+    bool video_tae                 = false;
+    bool fake_vae                  = false;
+    bool vae_format_override       = false;
+};
+
+const ModelTraits* find_model_traits(SDVersion version);
+const char* sd_version_name(SDVersion version);
+
 static inline bool sd_version_is_sd1(SDVersion version) {
     if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT || version == VERSION_SD1_PIX2PIX || version == VERSION_SD1_TINY_UNET || version == VERSION_SDXS_512_DS) {
         return true;
@@ -272,7 +296,8 @@ static inline bool sd_version_is_pixart(SDVersion version) {
 }
 
 static inline bool sd_version_supports_video_generation(SDVersion version) {
-    return version == VERSION_SVD || sd_version_is_wan(version) || sd_version_is_hunyuan_video(version) || sd_version_is_lingbot_video(version) || sd_version_is_ltxav(version) || sd_version_is_minimax_h3(version);
+    const auto* traits = find_model_traits(version);
+    return traits && traits->supports_video_generation;
 }
 
 static inline bool sd_version_supports_image_generation(SDVersion version) {
@@ -280,116 +305,43 @@ static inline bool sd_version_supports_image_generation(SDVersion version) {
 }
 
 static inline bool sd_version_uses_flux_vae(SDVersion version) {
-    if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_boogu_image(version) || sd_version_is_longcat(version)) {
-        return true;
-    }
-    return false;
+    const auto* traits = find_model_traits(version);
+    return traits && traits->vae_kind == ModelVAEKind::FLUX;
 }
 
 static inline bool sd_version_uses_flux2_vae(SDVersion version) {
-    if (sd_version_is_flux2(version) ||
-        sd_version_is_flux3(version) ||
-        sd_version_is_ernie_image(version) ||
-        sd_version_is_lens(version) ||
-        sd_version_is_ideogram4(version) ||
-        sd_version_is_sefi_image(version) ||
-        sd_version_is_llada_image(version) ||
-        version == VERSION_MOSS_IMAGE ||
-        version == VERSION_FIBO2) {
-        return true;
-    }
-    return false;
+    const auto* traits = find_model_traits(version);
+    return traits && traits->vae_kind == ModelVAEKind::FLUX2;
 }
 
 static inline bool sd_version_uses_wan_vae(SDVersion version) {
-    if (sd_version_is_wan(version) || sd_version_is_lingbot_video(version) || sd_version_is_qwen_image(version) || sd_version_is_krea2(version) || sd_version_is_anima(version) || version == VERSION_MING_IMAGE) {
-        return true;
-    }
-    return false;
+    const auto* traits = find_model_traits(version);
+    return traits && traits->vae_kind == ModelVAEKind::WAN;
 }
 
 static inline bool sd_version_uses_hunyuan_video_vae(SDVersion version) {
-    return sd_version_is_hunyuan_video(version);
+    const auto* traits = find_model_traits(version);
+    return traits && traits->vae_kind == ModelVAEKind::HUNYUAN;
 }
 
 static inline bool sd_version_is_inpaint(SDVersion version) {
-    if (version == VERSION_SD1_INPAINT ||
-        version == VERSION_SD2_INPAINT ||
-        version == VERSION_SDXL_INPAINT ||
-        version == VERSION_FLUX_FILL ||
-        version == VERSION_FLEX_2) {
-        return true;
-    }
-    return false;
+    const auto* traits = find_model_traits(version);
+    return traits && traits->is_inpaint;
 }
 
 static inline bool sd_version_is_dit(SDVersion version) {
-    if (sd_version_is_flux(version) ||
-        sd_version_is_flux2(version) ||
-        sd_version_is_flux3(version) ||
-        sd_version_is_ltxav(version) ||
-        sd_version_is_minimax_h3(version) ||
-        sd_version_is_sd3(version) ||
-        sd_version_is_wan(version) ||
-        sd_version_is_lingbot_video(version) ||
-        sd_version_is_qwen_image(version) ||
-        sd_version_is_hunyuan_video(version) ||
-        version == VERSION_HIDREAM_O1 ||
-        sd_version_is_anima(version) ||
-        sd_version_is_z_image(version) ||
-        sd_version_is_z_image_l2p(version) ||
-        version == VERSION_MING_IMAGE ||
-        sd_version_is_llada_image(version) ||
-        sd_version_is_boogu_image(version) ||
-        sd_version_is_ernie_image(version) ||
-        sd_version_is_lens(version) ||
-        sd_version_is_minit2i(version) ||
-        sd_version_is_longcat(version) ||
-        sd_version_is_pid(version) ||
-        sd_version_is_ideogram4(version) ||
-        sd_version_is_sefi_image(version) ||
-        sd_version_is_krea2(version) ||
-        sd_version_is_mage_flow(version) ||
-        sd_version_is_sensenova_u1(version) ||
-        sd_version_is_pixart(version) ||
-        version == VERSION_IRIS ||
-        version == VERSION_MOSS_IMAGE ||
-        version == VERSION_FIBO2) {
-        return true;
-    }
-    return false;
+    const auto* traits = find_model_traits(version);
+    return traits && traits->is_dit;
 }
 
 static inline bool sd_version_is_unet_edit(SDVersion version) {
-    return version == VERSION_SD1_PIX2PIX || version == VERSION_SDXL_PIX2PIX;
+    const auto* traits = find_model_traits(version);
+    return traits && traits->is_unet_edit;
 }
 
 static inline bool sd_version_is_control(SDVersion version) {
-    return version == VERSION_FLUX_CONTROLS || version == VERSION_FLEX_2;
-}
-
-// These model families consume uploaded reference images as generation
-// conditioning. Inpaint and control variants keep their init-image semantics.
-static inline bool sd_version_supports_ref_image_conditioning(SDVersion version) {
-    if (sd_version_is_inpaint(version) || sd_version_is_control(version) || version == VERSION_CHROMA_RADIANCE) {
-        return false;
-    }
-
-    return sd_version_is_unet_edit(version) ||
-           sd_version_is_flux(version) ||
-           sd_version_is_flux3(version) ||
-           sd_version_is_flux2(version) ||
-           sd_version_is_qwen_image(version) ||
-           sd_version_is_longcat(version) ||
-           sd_version_is_z_image(version) ||
-           sd_version_is_boogu_image(version) ||
-           sd_version_is_llada_image(version) ||
-           sd_version_is_krea2(version) ||
-           sd_version_is_mage_flow(version) ||
-           sd_version_is_anima(version) ||
-           sd_version_is_sefi_image(version) ||
-           sd_version_is_pid(version) ||
-           version == VERSION_FIBO2;
+    const auto* traits = find_model_traits(version);
+    return traits && traits->is_control;
 }
 
 static bool sd_version_is_inpaint_or_unet_edit(SDVersion version) {
