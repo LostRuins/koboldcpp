@@ -3,6 +3,7 @@
 
 #include <cinttypes>
 #include <memory>
+#include "core/pe_cache.h"
 
 #include "model/common/block.hpp"
 #include "model/diffusion/flux.hpp"
@@ -540,10 +541,11 @@ namespace Hunyuan {
     };
 
     struct HunyuanVideoRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     public:
         HunyuanVideoConfig config;
         HunyuanVideoModel hunyuan_video;
-        std::vector<float> pe_vec;
         SDVersion version;
 
         HunyuanVideoRunner(ggml_backend_t backend,
@@ -605,23 +607,24 @@ namespace Hunyuan {
             if (vision != nullptr) {
                 text_len += static_cast<int>(vision->ne[1]);
             }
-            pe_vec          = Rope::gen_hunyuan_video_pe(static_cast<int>(x->ne[2]),
-                                                         static_cast<int>(x->ne[1]),
-                                                         static_cast<int>(x->ne[0]),
-                                                         std::get<0>(config.patch_size),
-                                                         std::get<1>(config.patch_size),
-                                                         std::get<2>(config.patch_size),
-                                                         1,
-                                                         text_len,
-                                                         config.theta,
-                                                         config.axes_dim);
-            int64_t pos_len = static_cast<int64_t>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_VERBOSE("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            // pe->data = pe_vec.data();
-            // print_ggml_tensor(pe, true, "pe");
-            // pe->data = nullptr;
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("hunyuan.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(std::get<0>(config.patch_size));
+            pe_key.add(std::get<1>(config.patch_size)).add(std::get<2>(config.patch_size)).add(text_len);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec     = Rope::gen_hunyuan_video_pe(static_cast<int>(x->ne[2]),
+                                                             static_cast<int>(x->ne[1]),
+                                                             static_cast<int>(x->ne[0]),
+                                                             std::get<0>(config.patch_size),
+                                                             std::get<1>(config.patch_size),
+                                                             std::get<2>(config.patch_size),
+                                                             1,
+                                                             text_len,
+                                                             config.theta,
+                                                             config.axes_dim);
+                int64_t pos_len = static_cast<int64_t>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             auto runner_ctx = get_context();
 

@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <memory>
+#include "core/pe_cache.h"
 
 #include "model/diffusion/qwen_image.hpp"
 
@@ -57,11 +58,12 @@ namespace MageFlow {
     };
 
     struct MageFlowRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     public:
         Qwen::QwenImageConfig config;
         Qwen::QwenImageModel mage_flow;
         std::shared_ptr<MageFlowTimestepProjEmbeddings> time_text_embed;
-        std::vector<float> pe_vec;
 
         MageFlowRunner(ggml_backend_t backend,
                        const String2TensorStorage& tensor_storage_map      = {},
@@ -110,16 +112,20 @@ namespace MageFlow {
             }
 
             int batch_size = static_cast<int>(x->ne[3]);
-            pe_vec         = finish_rope_pe(Rope::gen_mage_flow_pe(static_cast<int>(x->ne[1]),
-                                                                   static_cast<int>(x->ne[0]),
-                                                                   batch_size,
-                                                                   static_cast<int>(context->ne[1]),
-                                                                   ref_latents,
-                                                                   config.theta,
-                                                                   config.axes_dim));
-            int pos_len    = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe        = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("mage_flow.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(batch_size).add_shapes(ref_latents);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(Rope::gen_mage_flow_pe(static_cast<int>(x->ne[1]),
+                                                                    static_cast<int>(x->ne[0]),
+                                                                    batch_size,
+                                                                    static_cast<int>(context->ne[1]),
+                                                                    ref_latents,
+                                                                    config.theta,
+                                                                    config.axes_dim));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             time_text_embed->prepare(timesteps_tensor);
             auto runner_ctx = get_context();
