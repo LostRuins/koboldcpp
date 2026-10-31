@@ -4052,12 +4052,27 @@ vk_device ggml_vk_get_device(size_t idx) {
         const std::vector<vk::ExtensionProperties> ext_props = device->physical_device.enumerateDeviceExtensionProperties();
 
         device->architecture = get_device_architecture(device->physical_device);
-
+		
+		GGML_LOG_DEBUG(
+			"ggml_vulkan: detected architecture enum=%u "
+			"(0=OTHER, 1=AMD_GCN, 2=AMD_RDNA1, 3=AMD_RDNA2, "
+			"4=AMD_RDNA3, 5=AMD_RDNA4)\n",
+			static_cast<unsigned int>(device->architecture)
+		);
+		
+		if (device->physical_device.getProperties().vendorID == VK_VENDOR_ID_AMD &&
+			getenv("GGML_VK_FORCE_AMD_GCN") != nullptr) {
+			device->architecture = vk_device_architecture::AMD_GCN;
+			GGML_LOG_DEBUG(
+				"ggml_vulkan: forcing AMD_GCN dispatch for diagnostic test\n"
+			);
+		}
+		
         const char* GGML_VK_PREFER_HOST_MEMORY = getenv("GGML_VK_PREFER_HOST_MEMORY");
         device->prefer_host_memory = GGML_VK_PREFER_HOST_MEMORY != nullptr;
 
         const char* GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM = getenv("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM");
-        //device->disable_host_visible_vidmem = GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM != nullptr;
+        device->disable_host_visible_vidmem = GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM != nullptr;
         vk::PhysicalDeviceProperties tmpprops = device->physical_device.getProperties();
         if(tmpprops.vendorID == VK_VENDOR_ID_NVIDIA)
         {
@@ -4974,6 +4989,9 @@ vk_device ggml_vk_get_device(size_t idx) {
         } else if (getenv("GGML_VK_FORCE_MMVQ")) {
             device->mmvq_mode = 1;
         }
+		else if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture == AMD_GCN) {
+            device->mmvq_mode = -1;
+         }
 
         // publish the device only when it is fully built
         vk_instance.devices[idx] = device;
@@ -13342,7 +13360,7 @@ ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type() {
             /* .alloc_buffer        = */ ggml_backend_vk_host_buffer_type_alloc_buffer,
             /* .alloc_buffer_n      = */ nullptr,
             /* .get_alignment       = */ ggml_backend_vk_host_buffer_type_get_alignment,
-            /* .get_max_size        = */ NULL, // kcpp: defaults to SIZE_MAX,
+            /* .get_max_size        = */ ggml_backend_vk_host_buffer_type_get_max_size, // kcpp: defaults to SIZE_MAX,
             /* .get_alloc_size      = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .get_alloc_size_n    = */ NULL,
             /* .is_host             = */ ggml_backend_cpu_buffer_type()->iface.is_host,
@@ -15375,9 +15393,11 @@ ggml_backend_t ggml_backend_vk_init(size_t dev_num) {
         /* .context = */ ctx,
     };
 
-    if (!ctx->device->support_async) {
-        vk_backend->iface.get_tensor_async = nullptr;
-    }
+	//On legacy AMD devices the tensor synchronization is critical for uncorrupted output
+    if (!ctx->device->support_async ||
+		getenv("GGML_VK_DISABLE_GET_TENSOR_ASYNC") != nullptr) {
+		vk_backend->iface.get_tensor_async = nullptr;
+	}
 
     return vk_backend;
 }
