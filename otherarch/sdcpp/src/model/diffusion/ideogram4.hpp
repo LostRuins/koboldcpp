@@ -244,9 +244,9 @@ namespace Ideogram4 {
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
 
-            auto x1 = ggml_silu(ctx->ggml_ctx, w1->forward(ctx, x));
+            auto x1 = w1->forward(ctx, x);
             auto x3 = w3->forward(ctx, x);
-            x       = ggml_mul(ctx->ggml_ctx, x1, x3);
+            x       = ggml_swiglu_split(ctx->ggml_ctx, x1, x3);
             x       = w2->forward(ctx, x);
             return x;
         }
