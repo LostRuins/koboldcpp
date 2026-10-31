@@ -517,13 +517,13 @@ namespace LLM {
             auto up_proj   = std::dynamic_pointer_cast<Linear>(blocks["up_proj"]);
             auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
 
-            auto h = gate_proj->forward(ctx, x);
+            auto h  = gate_proj->forward(ctx, x);
+            auto up = up_proj->forward(ctx, x);
             if (activation == MLPActivation::GELU_TANH) {
-                h = ggml_ext_gelu(ctx->ggml_ctx, h, true);
+                h = ggml_geglu_split(ctx->ggml_ctx, h, up);
             } else {
-                h = ggml_silu_inplace(ctx->ggml_ctx, h);
+                h = ggml_swiglu_split(ctx->ggml_ctx, h, up);
             }
-            h = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
             h = down_proj->forward(ctx, h);
             return h;
         }
@@ -1027,8 +1027,7 @@ namespace LLM {
                 auto up_proj   = std::dynamic_pointer_cast<Linear>(blocks["up_proj"]);
                 auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
                 auto h         = gate_proj->forward(ctx, x);
-                h              = ggml_silu_inplace(ctx->ggml_ctx, h);
-                h              = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
+                h              = ggml_swiglu_split(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
                 x              = down_proj->forward(ctx, h);
             }
             return x;
@@ -1520,7 +1519,7 @@ namespace LLM {
             out        = ggml_view_3d(c, out, head_dim, value_heads, n, head_dim * sizeof(float), head_dim * value_heads * sizeof(float), 0);
             out        = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["norm"])->forward(ctx, out);
             auto z     = ggml_reshape_3d(c, linear("in_proj_z"), head_dim, value_heads, n);
-            out        = ggml_mul(c, out, ggml_silu(c, z));
+            out        = ggml_swiglu_split(c, z, out);
             out        = ggml_reshape_3d(c, out, head_dim * value_heads, n, 1);
             return std::dynamic_pointer_cast<Linear>(blocks["out_proj"])->forward(ctx, out);
         }

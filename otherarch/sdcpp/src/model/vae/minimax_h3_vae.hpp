@@ -316,11 +316,8 @@ namespace MiniMaxH3VAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
-            auto gate = ggml_ext_chunk(ctx->ggml_ctx, w1->forward(ctx, x), 2, 0);
-            return w2->forward(ctx,
-                               ggml_mul(ctx->ggml_ctx,
-                                        ggml_silu(ctx->ggml_ctx, gate[0]),
-                                        gate[1]));
+            auto gate = ggml_swiglu(ctx->ggml_ctx, w1->forward(ctx, x));
+            return w2->forward(ctx, gate);
         }
     };
 

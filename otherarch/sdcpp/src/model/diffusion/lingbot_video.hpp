@@ -231,9 +231,8 @@ namespace LingBotVideo {
             auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
 
             auto gate = gate_proj->forward(ctx, x);
-            gate      = ggml_silu_inplace(ctx->ggml_ctx, gate);
             auto up   = up_proj->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, gate, up);
+            x         = ggml_swiglu_split(ctx->ggml_ctx, gate, up);
             x         = down_proj->forward(ctx, x);
             return x;
         }
@@ -406,9 +405,8 @@ namespace LingBotVideo {
 
             x         = ggml_reshape_3d(ctx->ggml_ctx, x, hidden_size, 1, n_token_total);
             auto gate = expert_linear(ctx, "experts.w1", x, selected_experts);
-            gate      = ggml_silu_inplace(ctx->ggml_ctx, gate);
             auto up   = expert_linear(ctx, "experts.w3", x, selected_experts);
-            auto act  = ggml_mul(ctx->ggml_ctx, gate, up);
+            auto act  = ggml_swiglu_split(ctx->ggml_ctx, gate, up);
             auto out  = expert_linear(ctx, "experts.w2", act, selected_experts);
             out       = ggml_mul(ctx->ggml_ctx, out, weights);
 

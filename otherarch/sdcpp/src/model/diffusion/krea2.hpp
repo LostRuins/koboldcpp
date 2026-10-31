@@ -208,9 +208,9 @@ namespace Krea2 {
             auto up   = std::dynamic_pointer_cast<Linear>(blocks["up"]);
             auto down = std::dynamic_pointer_cast<Linear>(blocks["down"]);
 
-            auto gated = ggml_silu(ctx->ggml_ctx, gate->forward(ctx, x));
-            auto up_x  = up->forward(ctx, x);
-            x          = ggml_mul(ctx->ggml_ctx, gated, up_x);
+            auto gate_x = gate->forward(ctx, x);
+            auto up_x   = up->forward(ctx, x);
+            x           = ggml_swiglu_split(ctx->ggml_ctx, gate_x, up_x);
             return down->forward(ctx, x);
         }
     };
