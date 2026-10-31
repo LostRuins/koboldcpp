@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_graph_cut.h"
@@ -422,6 +423,8 @@ namespace Ideogram4 {
     };
 
     class Ideogram4Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     protected:
         bool should_use_uncond_model(const DiffusionParams& diffusion_params) const {
             return has_uncond_model &&
@@ -436,7 +439,6 @@ namespace Ideogram4 {
         Ideogram4Transformer uncond_model;
         bool has_uncond_model = false;
         std::string uncond_prefix;
-        std::vector<float> pe_vec;
         std::vector<int32_t> image_indicator_vec;
 
         Ideogram4Runner(ggml_backend_t backend,
@@ -496,15 +498,19 @@ namespace Ideogram4 {
             int64_t head_dim = config.emb_dim / config.num_heads;
 
             auto runner_ctx = get_context();
-            pe_vec          = finish_rope_pe(gen_ideogram4_pe(static_cast<int>(grid_h),
+            sd::PECacheKey pe_key("ideogram4.pe");
+            pe_key.add(grid_h).add(grid_w).add(x->ne[3]).add(context_len).add(head_dim).add(pos_len).add(config.rope_theta);
+            pe_key.add(config.mrope_section).add(circular_x_enabled).add(circular_y_enabled);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(gen_ideogram4_pe(static_cast<int>(grid_h),
                                                               static_cast<int>(grid_w),
                                                               static_cast<int>(x->ne[3]),
                                                               static_cast<int>(context_len),
                                                               static_cast<int>(head_dim),
                                                               static_cast<int>(config.rope_theta),
                                                               config.mrope_section));
-            auto pe         = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+                return sd::Tensor<float>({2, 2, head_dim / 2, pos_len}, std::move(pe_vec));
+            }));
 
             image_indicator_vec.assign(static_cast<size_t>(pos_len), 1);
             for (int64_t i = 0; i < context_len; ++i) {

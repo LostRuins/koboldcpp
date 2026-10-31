@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_FIBO2_HPP__
 #define __SD_MODEL_DIFFUSION_FIBO2_HPP__
 
+#include "core/pe_cache.h"
 #include "model/diffusion/z_image.hpp"
 
 // https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/transformer_bria_fibo2.py
@@ -333,9 +334,9 @@ namespace Fibo2 {
     };
 
     struct Fibo2Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         Fibo2Config config;
         Fibo2Model model;
-        std::vector<float> pe_values;
 
         Fibo2Runner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
@@ -360,28 +361,35 @@ namespace Fibo2 {
                 auto x     = make_input(*p.x);
                 GGML_ASSERT(x->ne[3] == 1 && x->ne[2] == config.channels);
                 int count = config.gist_count(static_cast<int>(p.context->shape()[1]));
-                Rope::Embedding embedding;
-                for (int i = 0; i < count; ++i) {
-                    embedding.ids.push_back({static_cast<float>(i + 1), 0.f, 0.f});
-                }
-                embedding.positions.append_tokens(count);
-                auto append_image = [&](ggml_tensor* image, int plane) {
-                    auto ids = Rope::gen_flux_img_ids(static_cast<int>(image->ne[1]), static_cast<int>(image->ne[0]),
-                                                      1, 1, 3, plane, 0, 0, false, &embedding.positions);
-                    embedding.ids.insert(embedding.ids.end(), ids.begin(), ids.end());
-                };
-                append_image(x, static_cast<int>(config.max_gist + 1));
                 std::vector<ggml_tensor*> refs;
                 if (p.ref_latents && p.ref_image_params.pass_to_dit) {
                     for (const auto& ref : *p.ref_latents) {
                         refs.push_back(make_input(ref));
-                        append_image(refs.back(), static_cast<int>(config.max_gist + 1 + refs.size()));
                     }
                 }
-                embedding.values = Rope::embed_nd(embedding.ids, 1, 256.f, {32, 48, 48}, embedding.layout, &embedding.frequencies);
-                pe_values        = finish_rope_pe(std::move(embedding));
-                auto pe          = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, 64, static_cast<int64_t>(pe_values.size() / 256));
-                set_backend_tensor_data(pe, pe_values.data());
+                sd::PECacheKey pe_key("fibo2.pe");
+                pe_key.add_shape(x).add(count).add(config.max_gist).add_shapes(refs).add(circular_x_enabled);
+                pe_key.add(circular_y_enabled);
+                auto pe  = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                    Rope::Embedding embedding;
+                    for (int i = 0; i < count; ++i) {
+                        embedding.ids.push_back({static_cast<float>(i + 1), 0.f, 0.f});
+                    }
+                    embedding.positions.append_tokens(count);
+                    auto append_image = [&](ggml_tensor* image, int plane) {
+                        auto ids = Rope::gen_flux_img_ids(static_cast<int>(image->ne[1]), static_cast<int>(image->ne[0]),
+                                                          1, 1, 3, plane, 0, 0, false, &embedding.positions);
+                        embedding.ids.insert(embedding.ids.end(), ids.begin(), ids.end());
+                    };
+                    append_image(x, static_cast<int>(config.max_gist + 1));
+                    for (size_t i = 0; i < refs.size(); ++i) {
+                        append_image(refs[i], static_cast<int>(config.max_gist + 2 + i));
+                    }
+                    embedding.values     = Rope::embed_nd(embedding.ids, 1, 256.f, {32, 48, 48}, embedding.layout, &embedding.frequencies);
+                    auto values          = finish_rope_pe(std::move(embedding));
+                    const int64_t tokens = static_cast<int64_t>(values.size() / 256);
+                    return sd::Tensor<float>({2, 2, 64, tokens}, std::move(values));
+                }));
                 auto ctx = get_context();
                 auto out = model.forward(&ctx, x, make_input(*p.timesteps), make_input(*p.context), pe, count, refs);
                 ggml_build_forward_expand(graph, out);

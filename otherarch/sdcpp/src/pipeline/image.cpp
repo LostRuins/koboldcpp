@@ -130,15 +130,15 @@ namespace sd::pipeline {
         }
         // TAE encode already returns the latent; KL/Flux VAE returns a mean/logvar pair.
         sd::Tensor<float> ctrl_latent = sd->first_stage_model->get_desc() == "taesd"
-                                             ? vae_output
-                                             : sd::ops::chunk(vae_output, 2, 2)[0];
-        ctrl_latent = sd->first_stage_model->vae_to_diffusion_latents(ctrl_latent);
+                                            ? vae_output
+                                            : sd::ops::chunk(vae_output, 2, 2)[0];
+        ctrl_latent                   = sd->first_stage_model->vae_to_diffusion_latents(ctrl_latent);
         if (ctrl_latent.empty() || ctrl_latent.dim() != 4 || ctrl_latent.shape()[2] > 33) {
             LOG_ERROR("failed to encode control image");
             return {};
         }
         std::vector<int64_t> padded_shape = ctrl_latent.shape();
-        padded_shape[2]                    = 33;
+        padded_shape[2]                   = 33;
         sd::Tensor<float> padded(padded_shape);
         sd::ops::slice_assign(&padded, 2, 0, ctrl_latent.shape()[2], ctrl_latent);
         return padded;
@@ -313,9 +313,13 @@ namespace sd::pipeline {
             LOG_INFO("EDIT mode");
         }
 
+        bool skip_vae_encoding = (sd->version == VERSION_HIDREAM_O1) || !(
+                                                                            ref_image_params.pass_to_dit || ref_image_params.vlm_use_vae_input ||
+                                                                            sd_version_is_unet_edit(sd->version) || sd_version_is_pid(sd->version));
+
         std::vector<sd::Tensor<float>> ref_latents;
         for (size_t i = 0; i < ref_images.size(); i++) {
-            if (sd->version == VERSION_HIDREAM_O1) {
+            if (skip_vae_encoding) {
                 continue;
             }
             sd::Tensor<float> ref_latent;
@@ -1028,7 +1032,7 @@ namespace sd::pipeline {
                         std::vector<int64_t> ctrl_shape = latents.control_image.shape();
                         ctrl_shape[0]                   = hires_latent_w;
                         ctrl_shape[1]                   = hires_latent_h;
-                        hires_control_image = sd::ops::interpolate(latents.control_image, ctrl_shape, sd::ops::InterpolateMode::Bicubic);
+                        hires_control_image             = sd::ops::interpolate(latents.control_image, ctrl_shape, sd::ops::InterpolateMode::Bicubic);
                     }
                 } else {
                     hires_control_image = latents.control_image;

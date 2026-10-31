@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_QWEN_IMAGE_2_1_H__
 #define __SD_MODEL_DIFFUSION_QWEN_IMAGE_2_1_H__
 
+#include "core/pe_cache.h"
 #include "model/diffusion/qwen_image.hpp"
 
 namespace Qwen {
@@ -370,9 +371,9 @@ namespace Qwen {
     };
 
     struct QwenImage21Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         QwenImage21Config config;
         QwenImage21Model model;
-        std::vector<float> pe_data;
         std::vector<sd::Tensor<float>> mask_data;
         ggml_type prefix_cache_type = GGML_TYPE_COUNT;
         bool prefix_cache_enabled   = true;
@@ -504,20 +505,7 @@ namespace Qwen {
                 if (prefix_cache_type == GGML_TYPE_COUNT && active_cache.type == GGML_TYPE_F16) {
                     checked_cache.flash_attn_used = &flash_attn_used;
                 }
-                const bool cached         = active_cache.mode == QwenImage21PrefixCache::Mode::REUSE;
-                const auto first_position = layout.positions.begin() + (cached ? layout.prefix_length : 0);
-                Rope::Embedding embedding;
-                embedding.ids.assign(first_position, layout.positions.end());
-                const size_t offset             = cached ? static_cast<size_t>(layout.prefix_length) : 0;
-                embedding.positions.token_count = embedding.ids.size();
-                for (auto region : layout.rope_layout.images) {
-                    if (region.begin >= offset) {
-                        region.begin -= offset;
-                        embedding.positions.images.push_back(region);
-                    }
-                }
-                embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, config.axes_dim, embedding.layout, &embedding.frequencies);
-                pe_data          = finish_rope_pe(std::move(embedding));
+                const bool cached = active_cache.mode == QwenImage21PrefixCache::Mode::REUSE;
                 mask_data.clear();
                 if (!cached) {
                     for (const auto& segment : layout.segments) {
@@ -535,9 +523,30 @@ namespace Qwen {
                 }
                 auto build = [&]() {
                     auto graph = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE * 2);
-                    auto pe    = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2,
-                                                    layout.positions.size() - (cached ? layout.prefix_length : 0));
-                    set_backend_tensor_data(pe, pe_data.data());
+                    sd::PECacheKey pe_key("qwen_image_2_1.pe");
+                    pe_key.add(layout.positions).add(cached).add(layout.prefix_length).add(config.axes_dim).add(config.head_dim);
+                    pe_key.add(circular_x_enabled).add(circular_y_enabled);
+                    for (const auto& region : layout.rope_layout.images) {
+                        pe_key.add(region.begin).add(region.count).add(region.height_period).add(region.width_period);
+                        pe_key.add(region.height_axis).add(region.width_axis);
+                    }
+                    auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                        const auto first_position = layout.positions.begin() + (cached ? layout.prefix_length : 0);
+                        Rope::Embedding embedding;
+                        embedding.ids.assign(first_position, layout.positions.end());
+                        const size_t offset             = cached ? static_cast<size_t>(layout.prefix_length) : 0;
+                        embedding.positions.token_count = embedding.ids.size();
+                        for (auto region : layout.rope_layout.images) {
+                            if (region.begin >= offset) {
+                                region.begin -= offset;
+                                embedding.positions.images.push_back(region);
+                            }
+                        }
+                        embedding.values     = Rope::embed_nd(embedding.ids, 1, 10000.f, config.axes_dim, embedding.layout, &embedding.frequencies);
+                        auto values          = finish_rope_pe(std::move(embedding));
+                        const int64_t tokens = static_cast<int64_t>(layout.positions.size()) - (cached ? layout.prefix_length : 0);
+                        return sd::Tensor<float>({2, 2, config.head_dim / 2, tokens}, std::move(values));
+                    }));
                     std::vector<ggml_tensor*> masks, ref_inputs;
                     for (const auto& mask : mask_data) {
                         masks.push_back(mask.empty() ? nullptr : make_input(mask));
