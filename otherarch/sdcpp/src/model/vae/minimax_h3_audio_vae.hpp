@@ -76,10 +76,10 @@ namespace MiniMaxH3 {
             blocks["block.2"]   = std::make_shared<AudioEncoderResidualUnit>(in_channels, 9);
             blocks["block.3"]   = std::make_shared<AudioSnake1D>(in_channels);
             blocks["block.4"]   = std::make_shared<LTXV::Conv1D>(in_channels,
-                                                               out_channels,
-                                                               2 * stride,
-                                                               stride,
-                                                               static_cast<int>(std::ceil(stride / 2.f)));
+                                                                 out_channels,
+                                                                 2 * stride,
+                                                                 stride,
+                                                                 static_cast<int>(std::ceil(stride / 2.f)));
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -300,12 +300,12 @@ namespace MiniMaxH3 {
             }
             blocks["activation_post"] = std::make_shared<LTXV::Activation1D>(channels);
             blocks["conv_post"]       = std::make_shared<LTXV::Conv1D>(channels,
-                                                                 1,
-                                                                 7,
-                                                                 1,
-                                                                 3,
-                                                                 1,
-                                                                 false);
+                                                                       1,
+                                                                       7,
+                                                                       1,
+                                                                       3,
+                                                                       1,
+                                                                       false);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {

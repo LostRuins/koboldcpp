@@ -235,9 +235,9 @@ namespace MiniMaxH3 {
             blocks["norm1"] = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             blocks["norm2"] = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             blocks["attn"]  = std::make_shared<Attention>(config.hidden_size,
-                                                         config.num_attention_heads,
-                                                         config.attention_head_dim,
-                                                         config.qk_norm_eps);
+                                                          config.num_attention_heads,
+                                                          config.attention_head_dim,
+                                                          config.qk_norm_eps);
             blocks["mlp"]   = std::make_shared<MLP>(config.hidden_size, config.ffn_hidden_size);
         }
 
@@ -392,11 +392,11 @@ namespace MiniMaxH3 {
             blocks["norm1"]      = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             blocks["norm2"]      = std::make_shared<RMSNorm>(config.hidden_size, config.norm_eps);
             blocks["attn"]       = std::make_shared<Attention>(config.hidden_size,
-                                                         config.num_attention_heads,
-                                                         config.attention_head_dim,
-                                                         config.qk_norm_eps);
+                                                               config.num_attention_heads,
+                                                               config.attention_head_dim,
+                                                               config.qk_norm_eps);
             blocks["mlp"]        = std::make_shared<MLP>(config.hidden_size,
-                                                  config.ffn_hidden_size);
+                                                         config.ffn_hidden_size);
             blocks["adaln_proj"] = std::make_shared<AdaLayerNormModulation>(config.time_embed_dim,
                                                                             config.hidden_size,
                                                                             6,
@@ -483,8 +483,8 @@ namespace MiniMaxH3 {
                 auto row   = modulation_row(ctx->ggml_ctx, mods, config.hidden_size, 2, 1, segment.modulation_row);
                 auto value = norm->forward(ctx, ggml_ext_slice(ctx->ggml_ctx, x, 1, segment.start, segment.end));
                 return ggml_add(ctx->ggml_ctx,
-                                    ggml_add(ctx->ggml_ctx, value, ggml_mul(ctx->ggml_ctx, value, row[1])),
-                                    row[0]);
+                                ggml_add(ctx->ggml_ctx, value, ggml_mul(ctx->ggml_ctx, value, row[1])),
+                                row[0]);
             };
             return {video_out->forward(ctx, apply(video)),
                     audio_out->forward(ctx, apply(audio))};
@@ -847,10 +847,10 @@ namespace MiniMaxH3 {
                 const auto& condition = condition_videos[index];
                 auto axes             = condition_spatial_axes(condition);
                 int64_t count         = condition.shape()[2] *
-                                static_cast<int64_t>(axes.first.size() * axes.second.size());
-                bool is_first    = keyframe_indices.empty() || keyframe_indices[static_cast<int64_t>(index)] == 0;
-                float keyframe_t = is_first ? static_cast<float>(text_len)
-                                            : static_cast<float>(text_len) + video_duration - FRAME_RESCALE;
+                                        static_cast<int64_t>(axes.first.size() * axes.second.size());
+                bool is_first         = keyframe_indices.empty() || keyframe_indices[static_cast<int64_t>(index)] == 0;
+                float keyframe_t      = is_first ? static_cast<float>(text_len)
+                                                 : static_cast<float>(text_len) + video_duration - FRAME_RESCALE;
                 for (int64_t t = 0; t < condition.shape()[2]; ++t) {
                     for (float h : axes.first) {
                         for (float w : axes.second) {
@@ -904,9 +904,9 @@ namespace MiniMaxH3 {
 
                 if (block.kind != MiniMaxH3ReferenceKind::AUDIO) {
                     GGML_ASSERT(ref_video != nullptr);
-                    auto axes     = condition_spatial_axes(*ref_video);
-                    int64_t count = ref_video->shape()[2] *
-                                    static_cast<int64_t>(axes.first.size() * axes.second.size());
+                    auto axes       = condition_spatial_axes(*ref_video);
+                    int64_t count   = ref_video->shape()[2] *
+                                      static_cast<int64_t>(axes.first.size() * axes.second.size());
                     float video_end = append_video_positions(*ref_video, cursor);
                     layout.sequence_segments.push_back({row,
                                                         row + count,

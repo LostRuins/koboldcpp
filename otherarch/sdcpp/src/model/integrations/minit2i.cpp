@@ -9,12 +9,12 @@ static bool build_minit2i(const sd::model_builders::Context& ctx, const Tokenize
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<MiniT2IConditioner>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                              tensor_storage_map,
-                                                              weight_manager);
+                                                                          tensor_storage_map,
+                                                                          weight_manager);
     result.diffusion               = std::make_shared<MiniT2I::MiniT2IRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                tensor_storage_map,
-                                                                "model.diffusion_model.model.net",
-                                                                weight_manager);
+                                                                              tensor_storage_map,
+                                                                              "model.diffusion_model.model.net",
+                                                                              weight_manager);
     return true;
 }
 

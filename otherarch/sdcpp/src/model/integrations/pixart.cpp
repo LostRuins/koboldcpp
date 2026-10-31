@@ -31,17 +31,17 @@ static bool build_pixart(const sd::model_builders::Context& ctx, const Tokenizer
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<T5CLIPEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                          tensor_storage_map,
-                                                          true,
-                                                          0,
-                                                          false,
-                                                          weight_manager,
-                                                          sd_ctx_params->model_args);
+                                                                      tensor_storage_map,
+                                                                      true,
+                                                                      0,
+                                                                      false,
+                                                                      weight_manager,
+                                                                      sd_ctx_params->model_args);
     result.diffusion               = std::make_shared<PixArt::PixArtRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                              tensor_storage_map,
-                                                              "model.diffusion_model",
-                                                              weight_manager,
-                                                              sd_ctx_params->model_args);
+                                                                            tensor_storage_map,
+                                                                            "model.diffusion_model",
+                                                                            weight_manager,
+                                                                            sd_ctx_params->model_args);
     return true;
 }
 

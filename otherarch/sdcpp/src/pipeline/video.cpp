@@ -774,8 +774,8 @@ namespace sd::pipeline {
                         int source_index = std::min(reference.frame_count - 1,
                                                     static_cast<int>(std::floor(frame * source_fps / 24.0)));
                         auto source      = ensure_image_tensor_channels(
-                                 sd_image_to_tensor(reference.frames[source_index]),
-                                 3);
+                            sd_image_to_tensor(reference.frames[source_index]),
+                            3);
                         if (source.empty()) {
                             LOG_ERROR("invalid frame %d in MiniMax-H3 reference video %d",
                                       source_index + 1,
@@ -943,7 +943,7 @@ namespace sd::pipeline {
                                                                keyframes.shape()[2],
                                                                1,
                                                                1},
-                                                         conditioned_mask);
+                                                              conditioned_mask);
                     latents.denoise_mask    = sd::ops::concat(latents.denoise_mask, keyframe_mask, 2);
                     latents.video_positions = build_ltxv_video_positions(latents.init_latent.shape()[0],
                                                                          latents.init_latent.shape()[1],
@@ -1231,10 +1231,10 @@ namespace sd::pipeline {
                                               inactive.shape()[1],
                                               inactive.shape()[2]});   // [t, h/vae_scale_factor, vae_scale_factor, w/vae_scale_factor, vae_scale_factor]
             mask_context      = mask_context.permute({1, 3, 4, 0, 2})  // [vae_scale_factor, vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
-                               .reshape({inactive.shape()[0],
-                                         inactive.shape()[1],
-                                         inactive.shape()[2],
-                                         request->vae_scale_factor * request->vae_scale_factor});  // [vae_scale_factor*vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
+                                    .reshape({inactive.shape()[0],
+                                              inactive.shape()[1],
+                                              inactive.shape()[2],
+                                              request->vae_scale_factor * request->vae_scale_factor});  // [vae_scale_factor*vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
 
             if (!ref_image_latent.empty()) {
                 vace_context  = sd::ops::concat(ref_image_latent, vace_context, 2);  // [b, 2*c, t+1, h/vae_scale_factor, w/vae_scale_factor]
@@ -1519,9 +1519,9 @@ namespace sd::pipeline {
 
         auto& upsampler                   = scope.runner;
         upsampler                         = std::make_unique<LTXVUpsampler::LatentUpsamplerRunner>(sd->backend_for(SDBackendModule::UPSCALER),
-                                                                           model_manager->loader().get_tensor_storage_map(),
-                                                                           prefix,
-                                                                           model_manager);
+                                                                                                   model_manager->loader().get_tensor_storage_map(),
+                                                                                                   prefix,
+                                                                                                   model_manager);
         const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
         upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
         if (upsampler->model == nullptr) {
@@ -2019,7 +2019,7 @@ namespace sd::pipeline {
                                         x_t,
                                         std::move(noise),
                                         embeds.cond,
-                                      hires_request.use_uncond ? embeds.uncond : SDCondition(),
+                                        hires_request.use_uncond ? embeds.uncond : SDCondition(),
                                         embeds.img_uncond,
                                         sd::Tensor<float>(),
                                         0.f,

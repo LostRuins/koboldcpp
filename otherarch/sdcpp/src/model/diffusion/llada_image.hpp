@@ -463,7 +463,7 @@ namespace LLaDAImage {
                                                                        static_cast<int>(x->ne[0]),
                                                                        config.patch_size,
                                                                        static_cast<int>(context->ne[1]),
-                                                                  semantic != nullptr ? static_cast<int>(semantic->ne[1]) : 0,
+                                                                       semantic != nullptr ? static_cast<int>(semantic->ne[1]) : 0,
                                                                        ZImage::SEQ_MULTI_OF,
                                                                        config.theta,
                                                                        config.axes_dim));

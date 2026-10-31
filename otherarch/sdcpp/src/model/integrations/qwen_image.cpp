@@ -11,12 +11,12 @@ static bool build_qwen_image(const sd::model_builders::Context& ctx, const Token
     const auto& weight_manager     = ctx.weight_manager;
     bool enable_vision             = version != VERSION_QWEN_IMAGE_LAYERED;
     result.conditioner             = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                       tensor_storage_map,
-                                                       version,
-                                                       "",
-                                                       enable_vision,
-                                                       weight_manager,
-                                                       tokenizers);
+                                                                   tensor_storage_map,
+                                                                   version,
+                                                                   "",
+                                                                   enable_vision,
+                                                                   weight_manager,
+                                                                   tokenizers);
     if (version == VERSION_QWEN_IMAGE_2_1) {
         result.diffusion = std::make_shared<Qwen::QwenImage21Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                      tensor_storage_map,

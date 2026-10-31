@@ -164,8 +164,8 @@ namespace sd::guidance {
             if (has_tensor(input.pred_img_uncond)) {
                 const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
                 output.pred                              = pred_img_uncond +
-                              image_guidance_scale_ * (pred_uncond - pred_img_uncond) +
-                              guidance_scale * (pred_cond - pred_uncond);
+                                                           image_guidance_scale_ * (pred_uncond - pred_img_uncond) +
+                                                           guidance_scale * (pred_cond - pred_uncond);
 
             } else {
                 output.pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond);
@@ -224,8 +224,8 @@ namespace sd::guidance {
             if (has_tensor(input.pred_img_uncond)) {
                 const sd::Tensor<float>& pred_img_uncond = *input.pred_img_uncond;
                 output.pred                              = pred_img_uncond +
-                              image_guidance_scale_ * (pred_uncond - pred_img_uncond) +
-                              guidance_scale * (pred_cond - pred_uncond);
+                                                           image_guidance_scale_ * (pred_uncond - pred_img_uncond) +
+                                                           guidance_scale * (pred_cond - pred_uncond);
             } else {
                 output.pred = pred_uncond + guidance_scale * (pred_cond - pred_uncond);
             }

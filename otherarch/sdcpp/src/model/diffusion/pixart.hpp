@@ -224,9 +224,9 @@ namespace PixArt {
         PixArtModel(const PixArtConfig& config)
             : config(config) {
             blocks["x_embedder.proj"]       = std::make_shared<Conv2d>(config.in_channels,
-                                                                 config.hidden_size,
-                                                                 std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)},
-                                                                 std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)});
+                                                                       config.hidden_size,
+                                                                       std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)},
+                                                                       std::pair<int, int>{static_cast<int>(config.patch_size), static_cast<int>(config.patch_size)});
             blocks["t_embedder"]            = std::make_shared<PixArtTimestepEmbedding>(ADALN_EMBED_DIM, config.hidden_size);
             blocks["t_block.1"]             = std::make_shared<Linear>(config.hidden_size, 6 * config.hidden_size);
             blocks["y_embedder.y_proj.fc1"] = std::make_shared<Linear>(config.caption_channels, config.hidden_size);
@@ -237,7 +237,7 @@ namespace PixArt {
             }
             blocks["final_layer.norm_final"] = std::make_shared<LayerNorm>(config.hidden_size, 1e-6f, false);
             blocks["final_layer.linear"]     = std::make_shared<Linear>(config.hidden_size,
-                                                                    config.patch_size * config.patch_size * config.out_channels);
+                                                                        config.patch_size * config.patch_size * config.out_channels);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,

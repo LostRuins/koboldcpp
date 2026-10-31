@@ -34,10 +34,10 @@ static bool build_sd(const sd::model_builders::Context& ctx, const TokenizerConf
                                                                              weight_manager,
                                                                              tokenizers);
     result.diffusion   = std::make_shared<UNetModelRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                         tensor_storage_map,
-                                                         "model.diffusion_model",
-                                                         version,
-                                                         weight_manager);
+                                                           tensor_storage_map,
+                                                           "model.diffusion_model",
+                                                           version,
+                                                           weight_manager);
     return true;
 }
 static prediction_t detect_sdxl_prediction(const String2TensorStorage& weights) {

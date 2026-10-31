@@ -10,16 +10,16 @@ static bool build_wan(const sd::model_builders::Context& ctx, const TokenizerCon
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<T5CLIPEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                          tensor_storage_map,
-                                                          true,
-                                                          0,
-                                                          true,
-                                                          weight_manager);
+                                                                      tensor_storage_map,
+                                                                      true,
+                                                                      0,
+                                                                      true,
+                                                                      weight_manager);
     result.diffusion               = std::make_shared<WAN::WanRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                        tensor_storage_map,
-                                                        "model.diffusion_model",
-                                                        version,
-                                                        weight_manager);
+                                                                      tensor_storage_map,
+                                                                      "model.diffusion_model",
+                                                                      version,
+                                                                      weight_manager);
     if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
         result.high_noise_diffusion = std::make_shared<WAN::WanRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                        tensor_storage_map,

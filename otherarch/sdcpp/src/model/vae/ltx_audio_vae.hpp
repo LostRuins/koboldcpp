@@ -1350,9 +1350,9 @@ namespace LTXV {
 
             auto& tensor_storage_map = model_loader.get_tensor_storage_map();
             auto ltx_audio_vae       = std::make_shared<LTXAudioVAERunner>(backend,
-                                                                     tensor_storage_map,
-                                                                     prefix,
-                                                                     model_manager);
+                                                                           tensor_storage_map,
+                                                                           prefix,
+                                                                           model_manager);
 
             if (!model_manager->set_loader(std::move(model_loader)) ||
                 !model_manager->register_runner_params(ModelComponent::AudioVAE,

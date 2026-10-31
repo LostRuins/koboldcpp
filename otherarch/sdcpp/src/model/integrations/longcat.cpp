@@ -9,18 +9,18 @@ static bool build_longcat(const sd::model_builders::Context& ctx, const Tokenize
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                       tensor_storage_map,
-                                                       version,
-                                                       "",
-                                                       true,
-                                                       weight_manager,
-                                                       tokenizers);
+                                                                   tensor_storage_map,
+                                                                   version,
+                                                                   "",
+                                                                   true,
+                                                                   weight_manager,
+                                                                   tokenizers);
     result.diffusion               = std::make_shared<Flux::FluxRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                          tensor_storage_map,
-                                                          "model.diffusion_model",
-                                                          version,
-                                                          weight_manager,
-                                                          sd_ctx_params->model_args);
+                                                                        tensor_storage_map,
+                                                                        "model.diffusion_model",
+                                                                        version,
+                                                                        weight_manager,
+                                                                        sd_ctx_params->model_args);
     return true;
 }
 

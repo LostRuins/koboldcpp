@@ -184,12 +184,12 @@ namespace sd::model_builders {
                                                            weight_manager);
             } else {
                 auto model             = std::make_shared<AutoEncoderKL>(ctx.backends.runtime_backend(SDBackendModule::VAE),
-                                                             tensor_storage_map,
-                                                             "first_stage_model",
-                                                             false,
-                                                             false,
-                                                             vae_version,
-                                                             weight_manager);
+                                                                         tensor_storage_map,
+                                                                         "first_stage_model",
+                                                                         false,
+                                                                         false,
+                                                                         vae_version,
+                                                                         weight_manager);
                 const auto* definition = find_model_definition(version);
                 if (definition && definition->configure_vae) {
                     definition->configure_vae(ctx, options, *model);
@@ -247,6 +247,9 @@ namespace sd::model_builders {
         const auto& tensor_storage_map = ctx.tensor_storage_map;
         const auto version             = ctx.version;
         const auto& weight_manager     = ctx.weight_manager;
+        if (sd_version_is_z_image(version)) {
+            return true;
+        }
         if (!ensure_backend_pair(ctx.backends, SDBackendModule::CONTROL_NET)) {
             return false;
         }

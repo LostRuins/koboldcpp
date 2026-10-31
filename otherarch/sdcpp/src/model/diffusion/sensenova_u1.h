@@ -563,7 +563,7 @@ namespace SenseNovaU1 {
             blocks["language_model.model"]                       = std::make_shared<TextModel>(config);
             blocks["fm_modules.vision_model_mot_gen.embeddings"] = std::make_shared<VisionEmbeddings>(config);
             blocks["fm_modules.timestep_embedder"]               = std::make_shared<TimestepEmbedder>(config.hidden_size,
-                                                                                        config.timestep_embedding_size);
+                                                                                                      config.timestep_embedding_size);
             if (config.add_noise_scale_embedding) {
                 blocks["fm_modules.noise_scale_embedder"] = std::make_shared<TimestepEmbedder>(config.hidden_size,
                                                                                                config.timestep_embedding_size);

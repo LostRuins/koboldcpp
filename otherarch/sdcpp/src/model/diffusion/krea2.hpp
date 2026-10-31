@@ -73,9 +73,9 @@ namespace Krea2 {
             int64_t dim_head = head_dim();
             int64_t unit     = dim_head / 16;
             axes_dim         = {
-                        static_cast<int>(dim_head - 12 * unit),
-                        static_cast<int>(6 * unit),
-                        static_cast<int>(6 * unit),
+                static_cast<int>(dim_head - 12 * unit),
+                static_cast<int>(6 * unit),
+                static_cast<int>(6 * unit),
             };
             axes_dim_sum = axes_dim[0] + axes_dim[1] + axes_dim[2];
         }
@@ -387,10 +387,10 @@ namespace Krea2 {
                                                                                                         this->config.mlp_multiplier,
                                                                                                         this->config.norm_eps);
                 blocks["refiner_blocks." + std::to_string(i)]   = std::make_shared<KreaTextFusionBlock>(this->config.text_dim,
-                                                                                                      this->config.text_heads,
-                                                                                                      this->config.text_kv_heads,
-                                                                                                      this->config.mlp_multiplier,
-                                                                                                      this->config.norm_eps);
+                                                                                                        this->config.text_heads,
+                                                                                                        this->config.text_kv_heads,
+                                                                                                        this->config.mlp_multiplier,
+                                                                                                        this->config.norm_eps);
             }
             blocks["projector"] = std::make_shared<Linear>(this->config.text_layers, 1, false);
         }
@@ -613,8 +613,8 @@ namespace Krea2 {
         explicit Krea2Model(Krea2Config config)
             : config(std::move(config)) {
             blocks["first"]     = std::make_shared<Linear>(this->config.patch_size * this->config.patch_size * this->config.in_channels,
-                                                       this->config.features,
-                                                       true);
+                                                           this->config.features,
+                                                           true);
             blocks["tmlp"]      = std::make_shared<KreaTimeMLP>(this->config);
             blocks["txtfusion"] = std::make_shared<KreaTextFusionTransformer>(this->config);
             blocks["txtmlp"]    = std::make_shared<KreaTextMLP>(this->config);

@@ -9,17 +9,17 @@ static bool build_hunyuan_video(const sd::model_builders::Context& ctx, const To
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                       tensor_storage_map,
-                                                       version,
-                                                       "",
-                                                       false,
-                                                       weight_manager,
-                                                       tokenizers);
+                                                                   tensor_storage_map,
+                                                                   version,
+                                                                   "",
+                                                                   false,
+                                                                   weight_manager,
+                                                                   tokenizers);
     result.diffusion               = std::make_shared<Hunyuan::HunyuanVideoRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                     tensor_storage_map,
-                                                                     "model.diffusion_model",
-                                                                     version,
-                                                                     weight_manager);
+                                                                                   tensor_storage_map,
+                                                                                   "model.diffusion_model",
+                                                                                   version,
+                                                                                   weight_manager);
     return true;
 }
 

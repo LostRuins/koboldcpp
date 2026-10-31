@@ -9,9 +9,9 @@ static bool build_ming_image(const sd::model_builders::Context& ctx, const Token
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<MingImageEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                             tensor_storage_map, weight_manager, tokenizers);
+                                                                         tensor_storage_map, weight_manager, tokenizers);
     result.diffusion               = std::make_shared<MingImage::MingImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                    tensor_storage_map, "model.diffusion_model", weight_manager);
+                                                                                  tensor_storage_map, "model.diffusion_model", weight_manager);
     return true;
 }
 

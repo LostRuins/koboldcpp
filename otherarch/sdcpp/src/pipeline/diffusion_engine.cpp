@@ -42,6 +42,7 @@
 #include "model/diffusion/animatediff.hpp"
 #include "model/diffusion/control.hpp"
 #include "model/diffusion/model.hpp"
+#include "model/diffusion/z_image.hpp"
 #include "model/vae/audio_vae.hpp"
 #include "model/vae/ltx_vae.hpp"
 #include "model/vae/vae.hpp"
@@ -234,6 +235,15 @@ bool StableDiffusionGGML::apply_model_update(ModelLoader candidate,
             }
         }
     }
+    if (sd_version_is_z_image(version) && sd_version_is_z_image(next_version)) {
+        if (groups.count(RunnerGroup::ControlNet) > 0) {
+            groups.insert(RunnerGroup::Core);
+        }
+        if (groups.count(RunnerGroup::Core) > 0 &&
+            model_manager->registered_params_size({ModelComponent::ControlNet}) > 0) {
+            groups.insert(RunnerGroup::ControlNet);
+        }
+    }
     runner_state_.ready = false;
     if (!reset_runners(groups)) {
         return false;
@@ -407,7 +417,7 @@ bool StableDiffusionGGML::register_row_split_runner_params(ModelComponent compon
         size_t free_bytes = 0, total_bytes = 0;
         ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
         int64_t usable_bytes    = std::max<int64_t>((int64_t)free_bytes - compute_headroom_bytes,
-                                                 (int64_t)free_bytes / 8);
+                                                    (int64_t)free_bytes / 8);
         tensor_split[reg_index] = usable_bytes > 0 ? (float)((double)usable_bytes / (1024.0 * 1024.0)) : 1.0f;
     }
 
@@ -511,8 +521,8 @@ bool StableDiffusionGGML::register_layer_split_runner_params(ModelComponent comp
     model->set_runtime_backends(module_backends);
     model->set_graph_cut_layer_split_backend_vram_limits(layer_split_vram_limits_for_backends(module_backends));
     model->set_graph_cut_layer_split_enabled(true);
-    const bool params_follow_runtime = backend_manager.params_backend_follows_runtime(module) ||
-                                       backend_manager.params_backend_is_disk(module);
+    const bool params_follow_runtime      = backend_manager.params_backend_follows_runtime(module) ||
+                                            backend_manager.params_backend_is_disk(module);
     ggml_backend_t initial_params_backend = params_follow_runtime ? module_backends[0] : params_backend_for(module);
     if (initial_params_backend == nullptr) {
         return false;
@@ -1116,6 +1126,27 @@ bool StableDiffusionGGML::build_control_net_runner() {
     if (config_->control_net_file == 0) {
         return true;
     }
+    if (sd_version_is_z_image(version)) {
+        auto z_image = std::dynamic_pointer_cast<ZImage::ZImageRunner>(diffusion_model);
+        if (z_image == nullptr || !z_image->control_enabled()) {
+            LOG_WARN("z-image control net file present but the diffusion model has no control weights; ignoring");
+            return true;
+        }
+        std::map<std::string, ggml_tensor*> control_tensors;
+        z_image->get_control_param_tensors(control_tensors);
+        if (control_tensors.empty()) {
+            LOG_ERROR("z-image control net has no param tensors to register");
+            return false;
+        }
+        ModelManager::ResidencyMode residency_mode = backend_manager.params_backend_is_disk(SDBackendModule::DIFFUSION)
+                                                          ? ModelManager::ResidencyMode::Disk
+                                                          : ModelManager::ResidencyMode::ParamBackend;
+        return model_manager->register_param_tensors(ModelComponent::ControlNet,
+                                                     std::move(control_tensors),
+                                                     residency_mode,
+                                                     backend_for(SDBackendModule::DIFFUSION),
+                                                     params_backend_for(SDBackendModule::DIFFUSION));
+    }
     if (!sd::model_builders::build_control_net_runner(model_build_context(), control_net)) {
         return false;
     }
@@ -1604,8 +1635,8 @@ std::shared_ptr<LoraModel> StableDiffusionGGML::load_lora_model(const ModelManag
                                                  ? ModelManager::ResidencyMode::Disk
                                                  : ModelManager::ResidencyMode::ParamBackend;
     auto lora                              = std::make_shared<LoraModel>(lora_log_id(lora_spec), backend_for(module), params_backend_for(module),
-                                            model_manager, lora_spec.file_id, version, mode,
-                                            backend_manager.params_backend_follows_runtime(module));
+                                                                         model_manager, lora_spec.file_id, version, mode,
+                                                                         backend_manager.params_backend_follows_runtime(module));
     LoraModel::filter_t lora_tensor_filter = module_filter;
     if (!lora_spec.tensor_name_prefix_filter.empty()) {
         lora_tensor_filter = [module_filter, prefix = lora_spec.tensor_name_prefix_filter](const std::string& tensor_name) {
@@ -2026,11 +2057,11 @@ void StableDiffusionGGML::preview_image(int step,
                                                : sd::ops::slice(latents, 2, 0, channels)
                                     : latents;
     if (preview_mode == PREVIEW_PROJ) {
-        int patch_sz                     = 1;
-        const float(*latent_rgb_proj)[3] = nullptr;
-        float* latent_rgb_bias           = nullptr;
-        const float* latent_alpha_proj   = nullptr;
-        float latent_alpha_bias          = 1.f;
+        int patch_sz                      = 1;
+        const float (*latent_rgb_proj)[3] = nullptr;
+        float* latent_rgb_bias            = nullptr;
+        const float* latent_alpha_proj    = nullptr;
+        float latent_alpha_bias           = 1.f;
 
         if (channels == 128) {
             if (sd_version_uses_flux2_vae(version)) {
@@ -2312,8 +2343,8 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
     const bool cache_qwen_prefix = version == VERSION_QWEN_IMAGE_2_1 &&
                                    std::none_of(generation_extensions.begin(), generation_extensions.end(),
                                                 [](const auto& extension) { return extension->is_enabled(); });
-    using QwenPrefixInputs = std::tuple<const sd::Tensor<float>*, const sd::Tensor<int32_t>*,
-                                        const std::vector<sd::Tensor<float>>*>;
+    using QwenPrefixInputs       = std::tuple<const sd::Tensor<float>*, const sd::Tensor<int32_t>*,
+                                              const std::vector<sd::Tensor<float>>*>;
     std::vector<QwenPrefixInputs> qwen_prefix_inputs;
 
     RunnerEndOnExit sample_control_runner_end{!control_image.empty() && control_net != nullptr ? control_net.get() : nullptr};
@@ -2586,6 +2617,10 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
             } else if (sd_version_is_sensenova_u1(version)) {
                 diffusion_params.extra = SenseNovaU1DiffusionExtra{
                     condition.c_input_ids.empty() ? nullptr : &condition.c_input_ids};
+            } else if (sd_version_is_z_image(version)) {
+                if (!control_image.empty()) {
+                    diffusion_params.extra = ZImageDiffusionExtra{&control_image, control_strength};
+                }
             } else {
                 diffusion_params.extra = std::monostate{};
             }
@@ -2614,7 +2649,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                 auto* extra = std::get_if<QwenImage21DiffusionExtra>(&diffusion_params.extra);
                 if (extra != nullptr) {
                     auto key         = std::make_tuple(diffusion_params.context, extra->image_slots,
-                                               diffusion_params.ref_image_params.pass_to_dit ? diffusion_params.ref_latents : nullptr);
+                                                       diffusion_params.ref_image_params.pass_to_dit ? diffusion_params.ref_latents : nullptr);
                     auto entry       = std::find(qwen_prefix_inputs.begin(), qwen_prefix_inputs.end(), key);
                     extra->prefix_id = static_cast<uint64_t>(entry - qwen_prefix_inputs.begin()) + 1;
                     if (entry == qwen_prefix_inputs.end()) {
