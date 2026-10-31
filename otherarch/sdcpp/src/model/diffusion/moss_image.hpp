@@ -2,7 +2,9 @@
 #define __SD_MODEL_DIFFUSION_MOSS_IMAGE_HPP__
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
+#include "core/pe_cache.h"
 
 #include "model/common/ggml_block.hpp"
 #include "model/common/rope.hpp"
@@ -113,16 +115,17 @@ namespace MOSSImage {
             blocks["proj.ffn_down"]    = std::make_shared<Linear>(config.ffn_dim, config.dim, false);
         }
 
-        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, ggml_tensor* mod) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe, const std::array<ggml_tensor*, 6>& mod) {
             auto c      = ctx->ggml_ctx;
             auto linear = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
             auto norm   = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h); };
-            auto part   = [&](int i) { return ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim); };
+            auto part   = [&](int i) { return mod[i]; };
             auto y      = norm("norm1", x);
             y           = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(1))), part(0));
             auto qkv    = linear("proj.qkv", y);
             auto split  = [&](int i) {
-                return ggml_reshape_4d(c, ggml_ext_slice(c, qkv, 0, i * config.dim, (i + 1) * config.dim), config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2]);
+                return ggml_view_4d(c, qkv, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2],
+                                    config.head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * config.dim * qkv->nb[0]);
             };
             auto q       = norm("q_norm", split(0));
             auto k       = norm("k_norm", split(1));
@@ -175,10 +178,17 @@ namespace MOSSImage {
             time      = linear("time_embedding.2", ggml_silu(c, linear("time_embedding.0", time)));
             auto mod  = linear("shared_block_modulation", time);
             auto head = linear("video_head_modulation", time);
-            x         = ggml_concat(c, x, text, 1);
+            std::array<ggml_tensor*, 6> parts;
+            for (int i = 0; i < 6; ++i) {
+                parts[i] = ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim);
+                if (ctx->graph != nullptr) {
+                    ggml_build_forward_expand(ctx->graph, parts[i]);
+                }
+            }
+            x = ggml_concat(c, x, text, 1);
             for (int64_t i = 0; i < config.depth; ++i) {
                 if (std::find(skip.begin(), skip.end(), i) == skip.end()) {
-                    x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, mod);
+                    x = std::dynamic_pointer_cast<Block>(blocks["layers." + std::to_string(i)])->forward(ctx, x, pe, parts);
                     sd::ggml_graph_cut::mark_graph_cut(x, "moss_image.layers." + std::to_string(i), "x");
                 }
             }
@@ -193,9 +203,10 @@ namespace MOSSImage {
     };
 
     struct MOSSImageRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         MOSSImageConfig config;
         Model model;
-        std::vector<float> pe_data, time_data;
+        std::vector<float> time_data;
 
         MOSSImageRunner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager), config(MOSSImageConfig::detect_from_weights(weights, prefix)), model(config) {
@@ -224,33 +235,36 @@ namespace MOSSImage {
                 auto text = make_input(*inputs.context);
                 GGML_ASSERT(x->ne[3] == 1 && x->ne[2] == config.channels && text->ne[0] == config.text_dim);
                 int64_t h = x->ne[1], w = x->ne[0], nt = text->ne[1];
-                Rope::Embedding embedding;
-                embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w));
-                embedding.positions.images.back().height_axis = 2;
-                embedding.positions.images.back().width_axis  = 3;
-                embedding.positions.append_tokens(nt);
-                for (int64_t token = 0; token < h * w + nt; ++token) {
-                    float pos[4] = {0.f, float(token - h * w), 0.f, 0.f};
-                    if (token < h * w) {
-                        pos[1] = float(nt);
-                        pos[2] = float(token / w) - float(h - 1) / 2.f;
-                        pos[3] = float(token % w) - float(w - 1) / 2.f;
+                sd::PECacheKey pe_key("moss_image.pe");
+                pe_key.add(h).add(w).add(nt).add(config.head_dim).add(circular_x_enabled).add(circular_y_enabled);
+                auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                    Rope::Embedding embedding;
+                    embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w));
+                    embedding.positions.images.back().height_axis = 2;
+                    embedding.positions.images.back().width_axis  = 3;
+                    embedding.positions.append_tokens(nt);
+                    for (int64_t token = 0; token < h * w + nt; ++token) {
+                        float pos[4] = {0.f, float(token - h * w), 0.f, 0.f};
+                        if (token < h * w) {
+                            pos[1] = float(nt);
+                            pos[2] = float(token / w) - float(h - 1) / 2.f;
+                            pos[3] = float(token % w) - float(w - 1) / 2.f;
+                        }
+                        embedding.ids.push_back({pos[0], pos[1], pos[2], pos[3]});
                     }
-                    embedding.ids.push_back({pos[0], pos[1], pos[2], pos[3]});
-                }
-                embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, std::vector<int>(4, static_cast<int>(config.head_dim / 4)), embedding.layout, &embedding.frequencies);
-                pe_data          = finish_rope_pe(std::move(embedding));
+                    embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, std::vector<int>(4, static_cast<int>(config.head_dim / 4)), embedding.layout, &embedding.frequencies);
+                    auto values      = finish_rope_pe(std::move(embedding));
+                    return sd::Tensor<float>({2, 2, config.head_dim / 2, h * w + nt}, std::move(values));
+                }));
                 time_data.resize(config.freq_dim);
                 for (int64_t i = 0; i < config.freq_dim / 2; ++i) {
                     double angle                       = inputs.timesteps->values()[0] * std::pow(10000.0, -double(i) / double(config.freq_dim / 2));
                     time_data[i]                       = float(std::cos(angle));
                     time_data[i + config.freq_dim / 2] = float(std::sin(angle));
                 }
-                auto pe   = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, h * w + nt);
                 auto time = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.freq_dim, 1, 1);
-                set_backend_tensor_data(pe, pe_data.data());
                 set_backend_tensor_data(time, time_data.data());
-                auto ctx = get_context();
+                auto ctx = get_context(gf);
                 ggml_build_forward_expand(gf, model.forward(&ctx, x, time, text, pe, skip));
                 return gf;
             };

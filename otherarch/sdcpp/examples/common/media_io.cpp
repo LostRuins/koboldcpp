@@ -1552,70 +1552,94 @@ static uint32_t read_le32(const uint8_t* data) {
            (static_cast<uint32_t>(data[3]) << 24);
 }
 
+/** Loads a WAV file from disk and delegates decoding to load_wav_from_memory(). */
 bool load_wav_from_file(const std::string& path,
                         std::vector<float>& interleaved_samples,
                         uint32_t& sample_rate,
                         uint32_t& channels) {
+    std::ifstream file(fs::u8path(path), std::ios::binary);
+    if (!file) {
+        interleaved_samples.clear();
+        sample_rate = 0;
+        channels    = 0;
+        return false;
+    }
+    file.seekg(0, std::ios::end);
+    const std::streamoff file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    if (file_size < 0) {
+        interleaved_samples.clear();
+        sample_rate = 0;
+        channels    = 0;
+        return false;
+    }
+    std::vector<uint8_t> buffer(static_cast<size_t>(file_size));
+    if (file_size > 0 && !file.read(reinterpret_cast<char*>(buffer.data()), file_size)) {
+        interleaved_samples.clear();
+        sample_rate = 0;
+        channels    = 0;
+        return false;
+    }
+    return load_wav_from_memory(buffer.data(), buffer.size(), interleaved_samples, sample_rate, channels);
+}
+
+/** Parses a RIFF/WAVE buffer in place; compares chunk sizes against the remaining
+ * bytes so payload-controlled sizes cannot wrap size_t on 32-bit builds. */
+bool load_wav_from_memory(const uint8_t* data,
+                          size_t size,
+                          std::vector<float>& interleaved_samples,
+                          uint32_t& sample_rate,
+                          uint32_t& channels) {
     interleaved_samples.clear();
     sample_rate = 0;
     channels    = 0;
 
-    std::ifstream file(fs::u8path(path), std::ios::binary);
-    uint8_t riff_header[12];
-    if (!file.read(reinterpret_cast<char*>(riff_header), sizeof(riff_header)) ||
-        std::memcmp(riff_header, "RIFF", 4) != 0 ||
-        std::memcmp(riff_header + 8, "WAVE", 4) != 0) {
+    if (data == nullptr ||
+        size < 12 ||
+        std::memcmp(data, "RIFF", 4) != 0 ||
+        std::memcmp(data + 8, "WAVE", 4) != 0) {
         return false;
     }
 
     uint16_t audio_format    = 0;
     uint16_t bits_per_sample = 0;
     uint16_t block_align     = 0;
-    std::streampos data_pos  = std::streampos(-1);
+    size_t data_pos          = SIZE_MAX;
     uint32_t data_size       = 0;
 
-    while (file.good()) {
-        uint8_t chunk_header[8];
-        if (!file.read(reinterpret_cast<char*>(chunk_header), sizeof(chunk_header))) {
-            break;
-        }
-        uint32_t chunk_size           = read_le32(chunk_header + 4);
-        std::streampos chunk_data_pos = file.tellg();
+    size_t pos = 12;
+    while (pos + 8 <= size) {
+        uint32_t chunk_size    = read_le32(data + pos + 4);
+        size_t chunk_data_pos  = pos + 8;
+        const size_t remaining = size - chunk_data_pos;  // safe: chunk_data_pos <= size
+        // Chunk sizes come from the payload, so compare against the remaining bytes
+        // instead of adding them to offsets (avoids size_t wrap on 32-bit builds).
+        const bool data_fits = static_cast<size_t>(chunk_size) <= remaining;
 
-        if (std::memcmp(chunk_header, "fmt ", 4) == 0) {
-            if (chunk_size < 16) {
+        if (std::memcmp(data + pos, "fmt ", 4) == 0) {
+            if (chunk_size < 16 || !data_fits) {
                 return false;
             }
-            std::vector<uint8_t> fmt(chunk_size);
-            if (!file.read(reinterpret_cast<char*>(fmt.data()), chunk_size)) {
-                return false;
-            }
-            audio_format    = read_le16(fmt.data());
-            channels        = read_le16(fmt.data() + 2);
-            sample_rate     = read_le32(fmt.data() + 4);
-            block_align     = read_le16(fmt.data() + 12);
-            bits_per_sample = read_le16(fmt.data() + 14);
+            audio_format    = read_le16(data + chunk_data_pos);
+            channels        = read_le16(data + chunk_data_pos + 2);
+            sample_rate     = read_le32(data + chunk_data_pos + 4);
+            block_align     = read_le16(data + chunk_data_pos + 12);
+            bits_per_sample = read_le16(data + chunk_data_pos + 14);
             if (audio_format == 0xfffe && chunk_size >= 40) {
-                audio_format = read_le16(fmt.data() + 24);
+                audio_format = read_le16(data + chunk_data_pos + 24);
             }
-        } else if (std::memcmp(chunk_header, "data", 4) == 0) {
+        } else if (std::memcmp(data + pos, "data", 4) == 0) {
             data_pos  = chunk_data_pos;
             data_size = chunk_size;
-            file.seekg(chunk_size, std::ios::cur);
-        } else {
-            file.seekg(chunk_size, std::ios::cur);
         }
-
-        if (!file.good()) {
-            break;
-        }
-        if ((chunk_size & 1) != 0) {
-            file.seekg(1, std::ios::cur);
-        }
+        // Only advance past a chunk whose size and pad byte fully fit (keeps the sum
+        // overflow-free); a chunk truncated at the buffer end terminates the walk.
+        const bool chunk_fits = data_fits && ((chunk_size & 1) == 0 || static_cast<size_t>(chunk_size) < remaining);
+        pos                   = chunk_fits ? chunk_data_pos + static_cast<size_t>(chunk_size) + (chunk_size & 1) : size;
     }
 
     const uint32_t bytes_per_sample = (bits_per_sample + 7) / 8;
-    if (data_pos == std::streampos(-1) || data_size == 0 || channels == 0 || sample_rate == 0 ||
+    if (data_pos == SIZE_MAX || data_size == 0 || channels == 0 || sample_rate == 0 ||
         block_align == 0 || bytes_per_sample == 0 || block_align < channels * bytes_per_sample ||
         (audio_format != 1 && audio_format != 3)) {
         return false;
@@ -1625,16 +1649,14 @@ bool load_wav_from_file(const std::string& path,
     if (frame_count == 0 || frame_count > SIZE_MAX / channels) {
         return false;
     }
-    std::vector<uint8_t> pcm(data_size);
-    file.clear();
-    file.seekg(data_pos);
-    if (!file.read(reinterpret_cast<char*>(pcm.data()), data_size)) {
+    if (static_cast<size_t>(data_size) > size - data_pos) {
         return false;
     }
+    const uint8_t* pcm = data + data_pos;
 
     interleaved_samples.resize(static_cast<size_t>(frame_count * channels));
     for (uint64_t frame = 0; frame < frame_count; ++frame) {
-        const uint8_t* frame_data = pcm.data() + frame * block_align;
+        const uint8_t* frame_data = pcm + frame * block_align;
         for (uint32_t channel = 0; channel < channels; ++channel) {
             const uint8_t* sample_data = frame_data + channel * bytes_per_sample;
             float sample               = 0.0f;

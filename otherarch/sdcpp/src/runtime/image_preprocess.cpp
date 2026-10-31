@@ -379,8 +379,13 @@ namespace sd {
         if (target == ImageTarget::Mask && has_init_transform_) {
             auto options = resolve_options(target, index);
             if (image.width != init_transform_.source_width || image.height != init_transform_.source_height) {
-                fail("mask and init source dimensions must match");
-                return {};
+                ImagePreprocessor alignment;
+                tensor = alignment.apply_geometry(tensor, target, index, init_transform_.source_width, init_transform_.source_height,
+                                                  ImageResizeMode::CropResize, ops::InterpolateMode::NearestExact);
+                if (tensor.empty()) {
+                    fail("could not align mask to init source dimensions");
+                    return {};
+                }
             }
             bool geometry_override = options.count("width") || options.count("anchor") ||
                                      (options.count("mode") && options.at("mode") != "auto");

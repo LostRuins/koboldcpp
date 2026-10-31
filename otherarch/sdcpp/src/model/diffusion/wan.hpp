@@ -8,6 +8,7 @@
 #include <utility>
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_tensor_utils.h"
+#include "core/pe_cache.h"
 
 #include "model/common/block.hpp"
 #include "model/common/rope.hpp"
@@ -885,11 +886,12 @@ namespace WAN {
     };
 
     struct WanRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     public:
         std::string desc = "wan";
         WanConfig config;
         Wan wan;
-        std::vector<float> pe_vec;
         SDVersion version;
 
         WanRunner(ggml_backend_t backend,
@@ -1000,37 +1002,36 @@ namespace WAN {
             ggml_tensor* audio_embed     = make_optional_input(audio_embed_tensor);
             ggml_tensor* ref_latent      = make_optional_input(ref_latent_tensor);
 
-            pe_vec = Rope::gen_wan_pe(static_cast<int>(x->ne[2]),
-                                      static_cast<int>(x->ne[1]),
-                                      static_cast<int>(x->ne[0]),
-                                      std::get<0>(config.patch_size),
-                                      std::get<1>(config.patch_size),
-                                      std::get<2>(config.patch_size),
-                                      1,
-                                      config.theta,
-                                      config.axes_dim);
-            if (ref_latent != nullptr) {
-                // Match S2V's reference-frame temporal offset.
-                int t_start = std::max(30, static_cast<int>(x->ne[2]) + 9);
-                auto ref_pe = Rope::gen_wan_pe(static_cast<int>(ref_latent->ne[2]),
-                                               static_cast<int>(ref_latent->ne[1]),
-                                               static_cast<int>(ref_latent->ne[0]),
+            sd::PECacheKey pe_key("wan.pe");
+            pe_key.add_shape(x).add_shape(ref_latent).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(std::get<0>(config.patch_size)).add(std::get<1>(config.patch_size)).add(std::get<2>(config.patch_size));
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = Rope::gen_wan_pe(static_cast<int>(x->ne[2]),
+                                               static_cast<int>(x->ne[1]),
+                                               static_cast<int>(x->ne[0]),
                                                std::get<0>(config.patch_size),
                                                std::get<1>(config.patch_size),
                                                std::get<2>(config.patch_size),
                                                1,
                                                config.theta,
-                                               config.axes_dim,
-                                               t_start);
-                pe_vec.insert(pe_vec.end(), ref_pe.begin(), ref_pe.end());
-            }
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_VERBOSE("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            // pe->data = pe_vec.data();
-            // print_ggml_tensor(pe);
-            // pe->data = nullptr;
-            set_backend_tensor_data(pe, pe_vec.data());
+                                               config.axes_dim);
+                if (ref_latent != nullptr) {
+                    int t_start = std::max(30, static_cast<int>(x->ne[2]) + 9);
+                    auto ref_pe = Rope::gen_wan_pe(static_cast<int>(ref_latent->ne[2]),
+                                                   static_cast<int>(ref_latent->ne[1]),
+                                                   static_cast<int>(ref_latent->ne[0]),
+                                                   std::get<0>(config.patch_size),
+                                                   std::get<1>(config.patch_size),
+                                                   std::get<2>(config.patch_size),
+                                                   1,
+                                                   config.theta,
+                                                   config.axes_dim,
+                                                   t_start);
+                    pe_vec.insert(pe_vec.end(), ref_pe.begin(), ref_pe.end());
+                }
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             if (c_concat != nullptr) {
                 x = ggml_concat(compute_ctx, x, c_concat, 3);
