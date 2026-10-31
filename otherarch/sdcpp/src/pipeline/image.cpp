@@ -1,4 +1,5 @@
 #include "generation.h"
+#include "generation_info.h"
 
 #include <algorithm>
 #include <cmath>
@@ -668,7 +669,7 @@ namespace sd::pipeline {
 
         int64_t t4 = ggml_time_ms();
         LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t0) * 1.0f / 1000);
-        if (decoded_images.empty()) {
+        if (decoded_images.empty() || cancelled) {
             LOG_ERROR(cancelled ? "cancelled before any latent images were decoded" : "no decoded images");
             return nullptr;
         }
@@ -829,7 +830,10 @@ namespace sd::pipeline {
     bool generate_image(StableDiffusionGGML* sd,
                         const sd_img_gen_params_t* sd_img_gen_params,
                         sd_image_t** images_out,
-                        int* num_images_out) {
+                        int* num_images_out,
+                        std::vector<nlohmann::json>* infos_out) {
+        if (infos_out)
+            infos_out->clear();
         if (images_out != nullptr) {
             *images_out = nullptr;
         }
@@ -851,6 +855,7 @@ namespace sd::pipeline {
         int64_t t0            = ggml_time_ms();
         sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
         GenerationRequest request(sd, sd_img_gen_params);
+        const auto info = sd::generation_info(request, *sd_img_gen_params);
         sd::ImagePreprocessor preprocessing(sd_img_gen_params->image_preprocess.rules);
         sd_img_gen_params_t processed_params = *sd_img_gen_params;
         if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
@@ -891,7 +896,6 @@ namespace sd::pipeline {
             return false;
         }
         ImageGenerationEmbeds embeds = std::move(*embeds_opt);
-
         std::vector<sd::Tensor<float>> final_latents;
         int64_t denoise_start = ggml_time_ms();
         for (int b = 0; b < request.batch_count; b++) {
@@ -908,7 +912,7 @@ namespace sd::pipeline {
             }
 
             int64_t sampling_start = ggml_time_ms();
-            int64_t cur_seed       = request.seed + b;
+            int64_t cur_seed       = request.seed_for_batch(b);
             LOG_INFO("generating image: %i/%i - seed %" PRId64, b + 1, request.batch_count, cur_seed);
 
             sd->rng->manual_seed(cur_seed);
@@ -994,7 +998,7 @@ namespace sd::pipeline {
             std::vector<float> hires_sigma_sched =
                 make_hires_sigma_schedule(sd,
                                           request.hires,
-                                          sd_img_gen_params->sample_params,
+                                          request.sample_params,
                                           plan.sample_method,
                                           plan.sample_steps,
                                           sd->get_image_seq_len(request.hires.target_height, request.hires.target_width),
@@ -1035,7 +1039,7 @@ namespace sd::pipeline {
                     LOG_ERROR("cancelling generation during hires fix");
                     return false;
                 }
-                int64_t cur_seed = request.seed + b;
+                int64_t cur_seed = request.seed_for_batch(b);
                 sd->rng->manual_seed(cur_seed);
                 sd->sampler_rng->manual_seed(cur_seed);
 
@@ -1113,6 +1117,19 @@ namespace sd::pipeline {
             return false;
         }
 
+        if (infos_out) {
+            try {
+                infos_out->assign(num_images, info);
+                // Layers and frames decoded from the same latent share its seed.
+                const int images_per_latent = num_images / static_cast<int>(final_latents.size());
+                for (int i = 0; i < num_images; ++i) {
+                    (*infos_out)[i]["seed"] = std::to_string(request.seed_for_batch(i / images_per_latent));
+                }
+            } catch (...) {
+                free_sd_images(result, num_images);
+                throw;
+            }
+        }
         sd->lora_stat();
 
         int64_t t1 = ggml_time_ms();

@@ -141,6 +141,7 @@ struct ConditionerParams {
 };
 
 struct Conditioner {
+    virtual int resolve_clip_skip(int) const { return 0; }
     virtual ~Conditioner() = default;
 
 public:
@@ -172,6 +173,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::vector<uint8_t> token_embed_custom;
     std::vector<uint8_t> token_embed_custom2;
     std::map<std::string, std::pair<int, int>> embedding_pos_map;
+
+    int resolve_clip_skip(int value) const override {
+        return value > 0 ? value : ((sd_version_is_sd2(version) || sd_version_is_sdxl(version)) ? 2 : 1);
+    }
 
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
                                       const String2TensorStorage& tensor_storage_map,
@@ -456,10 +461,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         sd::Tensor<float> hidden_states;  // [n_token, hidden_size] or [n_token, hidden_size + hidden_size2]
         sd::Tensor<float> pooled;
 
-        if (clip_skip <= 0) {
-            clip_skip = (sd_version_is_sd2(version) || sd_version_is_sdxl(version)) ? 2 : 1;
-        }
-
         size_t chunk_len   = 77;
         size_t chunk_count = tokens.size() / chunk_len;
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
@@ -650,6 +651,8 @@ struct SD3CLIPEmbedder : public Conditioner {
     std::shared_ptr<CLIPTextModelRunner> clip_l;
     std::shared_ptr<CLIPTextModelRunner> clip_g;
     std::shared_ptr<T5Runner> t5;
+
+    int resolve_clip_skip(int value) const override { return value > 0 ? value : 2; }
 
     SD3CLIPEmbedder(ggml_backend_t backend,
                     const String2TensorStorage& tensor_storage_map      = {},
@@ -898,10 +901,6 @@ struct SD3CLIPEmbedder : public Conditioner {
         auto& t5_tokens      = token_and_weights[2].first;
         auto& t5_weights     = token_and_weights[2].second;
 
-        if (clip_skip <= 0) {
-            clip_skip = 2;
-        }
-
         size_t chunk_len = 77;
         int64_t t0       = ggml_time_ms();
         sd::Tensor<float> hidden_states;
@@ -1096,6 +1095,8 @@ struct FluxCLIPEmbedder : public Conditioner {
     std::shared_ptr<CLIPTextModelRunner> clip_l;
     std::shared_ptr<T5Runner> t5;
     size_t chunk_len = 256;
+
+    int resolve_clip_skip(int value) const override { return value > 0 ? value : 2; }
 
     FluxCLIPEmbedder(ggml_backend_t backend,
                      const String2TensorStorage& tensor_storage_map      = {},
@@ -1292,10 +1293,6 @@ struct FluxCLIPEmbedder : public Conditioner {
         auto& clip_l_weights = token_and_weights[0].second;
         auto& t5_tokens      = token_and_weights[1].first;
         auto& t5_weights     = token_and_weights[1].second;
-
-        if (clip_skip <= 0) {
-            clip_skip = 2;
-        }
 
         int64_t t0 = ggml_time_ms();
         sd::Tensor<float> hidden_states;  // [N, n_token, 4096]

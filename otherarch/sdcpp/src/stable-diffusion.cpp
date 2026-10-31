@@ -1,4 +1,5 @@
 #include "stable-diffusion.h"
+#include "generation_info.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -753,43 +754,62 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
 
 SD_API bool generate_image(sd_ctx_t* sd_ctx,
                            const sd_img_gen_params_t* params,
-                           sd_image_t** images_out,
-                           int* num_images_out) {
-    if (images_out != nullptr)
-        *images_out = nullptr;
-    if (num_images_out != nullptr)
-        *num_images_out = 0;
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || params == nullptr) {
+                           sd_image_generation_result_t** result_out) {
+    if (result_out)
+        *result_out = nullptr;
+    if (!result_out || !sd_ctx || !sd_ctx->sd || !params)
+        return false;
+    StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
+    if (!execution.ready)
+        return false;
+    sd_image_t* images = nullptr;
+    int count          = 0;
+    std::vector<nlohmann::json> infos;
+    try {
+        if (!sd::pipeline::generate_image(sd_ctx->sd, params, &images, &count, &infos)) {
+            free_sd_images(images, count);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("image generation failed: %s", e.what());
+        free_sd_images(images, count);
         return false;
     }
-    StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
-    return execution.ready && sd::pipeline::generate_image(sd_ctx->sd, params, images_out, num_images_out);
+    return sd::make_image_generation_result(images, count, infos, result_out);
 }
 
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
-                           const sd_vid_gen_params_t* sd_vid_gen_params,
-                           sd_image_t** frames_out,
-                           int* num_frames_out,
-                           sd_audio_t** audio_out,
-                           int* fps_out) {
-    if (frames_out != nullptr)
-        *frames_out = nullptr;
-    if (audio_out != nullptr)
-        *audio_out = nullptr;
-    if (num_frames_out != nullptr)
-        *num_frames_out = 0;
-    if (fps_out != nullptr)
-        *fps_out = 0;
-    if (sd_ctx == nullptr || sd_ctx->sd == nullptr || sd_vid_gen_params == nullptr) {
+                           const sd_vid_gen_params_t* params,
+                           sd_video_generation_result_t** result_out) {
+    if (result_out)
+        *result_out = nullptr;
+    if (!result_out || !sd_ctx || !sd_ctx->sd || !params)
         return false;
-    }
-
     StableDiffusionGGML::ExecutionScope execution(*sd_ctx->sd);
-    if (!execution.ready) {
+    if (!execution.ready)
+        return false;
+    auto* result = static_cast<sd_video_generation_result_t*>(calloc(1, sizeof(sd_video_generation_result_t)));
+    if (!result)
+        return false;
+    try {
+        nlohmann::json info;
+        if (!sd::pipeline::generate_video(sd_ctx->sd, params, &result->frames, &result->frame_count,
+                                          &result->audio, &result->fps, &info)) {
+            free_sd_video_generation_result(result);
+            return false;
+        }
+        result->generation_info = sd::copy_generation_info(info);
+        if (!result->generation_info) {
+            free_sd_video_generation_result(result);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("video generation failed: %s", e.what());
+        free_sd_video_generation_result(result);
         return false;
     }
-
-    return sd::pipeline::generate_video(sd_ctx->sd, sd_vid_gen_params, frames_out, num_frames_out, audio_out, fps_out);
+    *result_out = result;
+    return true;
 }
 
 SD_API void free_sd_images(sd_image_t* result_images, int num_images) {

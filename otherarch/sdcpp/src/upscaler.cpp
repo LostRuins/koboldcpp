@@ -1,6 +1,7 @@
 #include "upscaler.h"
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
+#include "generation_info.h"
 #include "model_loader.h"
 #include "runtime/tiling.h"
 #include "stable-diffusion.h"
@@ -259,14 +260,11 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
 bool upscale(upscaler_ctx_t* upscaler_ctx,
              sd_image_t input_image,
              uint32_t upscale_factor,
-             sd_image_t** images_out,
-             int* num_images_out) {
-    if (images_out != nullptr) {
-        *images_out = nullptr;
-    }
-    if (num_images_out != nullptr) {
-        *num_images_out = 0;
-    }
+             sd_image_generation_result_t** result_out) try {
+    if (result_out)
+        *result_out = nullptr;
+    if (!result_out)
+        return false;
     if (upscaler_ctx == nullptr || upscaler_ctx->upscaler == nullptr) {
         return false;
     }
@@ -276,21 +274,17 @@ bool upscale(upscaler_ctx_t* upscaler_ctx,
         return false;
     }
 
+    auto release_images = [](sd_image_t* images) { free_sd_images(images, 1); };
+    std::unique_ptr<sd_image_t, decltype(release_images)> image_owner(result_images, release_images);
+    const std::vector<nlohmann::json> infos{sd::upscale_generation_info(upscale_factor)};
     result_images[0] = upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
-    if (result_images[0].data == nullptr) {
-        free(result_images);
+    if (!result_images[0].data)
         return false;
-    }
 
-    if (num_images_out != nullptr) {
-        *num_images_out = 1;
-    }
-    if (images_out != nullptr) {
-        *images_out = result_images;
-    } else {
-        free_sd_images(result_images, 1);
-    }
-    return true;
+    return sd::make_image_generation_result(image_owner.release(), 1, infos, result_out);
+} catch (const std::exception& e) {
+    LOG_ERROR("upscale failed: %s", e.what());
+    return false;
 }
 
 int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {
@@ -329,6 +323,8 @@ int get_upscaler_model_scale(const char* model_path) {
 }
 
 void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx) {
+    if (!upscaler_ctx)
+        return;
     if (upscaler_ctx->upscaler != nullptr) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = nullptr;
