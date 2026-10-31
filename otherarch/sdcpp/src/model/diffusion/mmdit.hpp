@@ -14,6 +14,7 @@
 #include "core/util.h"
 #include "model/common/block.hpp"
 #include "model/common/ggml_block.hpp"
+#include "model/diffusion/dit.hpp"
 #include "model/diffusion/model.hpp"
 #include "model_loader.h"
 

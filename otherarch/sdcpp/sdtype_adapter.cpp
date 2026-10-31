@@ -25,6 +25,7 @@
 #include "sdcpp_gguf_tokenizer.h"
 #include "src/core/util.h"
 #include "src/model.h"
+#include "src/model_definition.h"
 #include "src/model_loader.h"
 #include "src/model_io/gguf_io.h"
 #include "src/model_io/safetensors_io.h"
@@ -536,9 +537,68 @@ static void progress_callback(int step, int steps, float time, void* data)
     fflush(stdout);
 }
 
-static bool is_video_model(kcpp_sd::model_info info)
+struct model_info: public sd_model_info {
+    /* from base class:
+        int version;
+        bool is_chroma;
+        int vae_scale_factor;
+        int spatial_multiple;
+    */
+
+    bool is_flux1;
+    bool is_flux2;
+    bool is_kontext;
+    bool is_qwenimg;
+    bool is_sd1;
+    bool is_sd2;
+    bool is_sdxs;
+    bool is_sdxl;
+    bool is_wan;
+    bool is_zimage;
+    bool is_ltx;
+    bool is_minimaxh3;
+    bool is_boogu;
+    bool supports_ref_image;
+    bool is_video_model;
+};
+
+
+static model_info get_model_info(sd_ctx_t* ctx)
 {
-    return info.is_wan || info.is_ltx || info.is_minimaxh3;
+    auto base = sd_get_model_info(ctx);
+    model_info res = {};
+    *static_cast<sd_model_info*>(&res) = base;
+
+    SDVersion loadedsdver = (SDVersion)res.version;
+    res.is_wan = (loadedsdver == SDVersion::VERSION_WAN2 || loadedsdver == SDVersion::VERSION_WAN2_2_I2V || loadedsdver == SDVersion::VERSION_WAN2_2_TI2V);
+    res.is_qwenimg = sd_version_is_qwen_image(loadedsdver);
+    res.is_kontext = (loadedsdver==SDVersion::VERSION_FLUX && !res.is_chroma);
+    res.is_flux2 = (loadedsdver == SDVersion::VERSION_FLUX2 || loadedsdver == SDVersion::VERSION_FLUX2_KLEIN);
+    res.is_flux1 = (loadedsdver == SDVersion::VERSION_FLUX);
+    res.is_zimage = (loadedsdver == SDVersion::VERSION_Z_IMAGE);
+    res.is_sdxs = (loadedsdver == SDVersion::VERSION_SDXS_512_DS || loadedsdver == SDVersion::VERSION_SDXS_09);
+    res.is_sd1 = (loadedsdver == SDVersion::VERSION_SD1);
+    res.is_sd2 = (loadedsdver == SDVersion::VERSION_SD2);
+    res.is_sdxl = sd_version_is_sdxl(loadedsdver);
+    res.is_ltx = sd_version_is_ltxav(loadedsdver);
+    res.is_minimaxh3 = sd_version_is_minimax_h3(loadedsdver);
+    res.is_boogu = sd_version_is_boogu_image(loadedsdver);
+
+    const auto* model_def = find_model_definition(loadedsdver);
+
+    if (!model_def
+        || loadedsdver == VERSION_CHROMA_RADIANCE
+        || model_def->traits.is_inpaint
+        || model_def->traits.is_control)
+        res.supports_ref_image = false;
+    else if (model_def->traits.is_unet_edit || loadedsdver == VERSION_PID)
+        res.supports_ref_image = true;
+    else
+        res.supports_ref_image = (std::string(model_def->ref_image_preset) != "default");
+
+    res.is_video_model = model_def && model_def->traits.supports_video_generation;
+
+    return res;
 }
 
 // this is a class only to access a protected member
@@ -1219,7 +1279,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     auto info = get_model_info(sd_ctx);
 
-    if (is_video_model(info))
+    if (info.is_video_model)
     {
         printf("\nSetting to Video Generation Mode!\n");
         is_vid_model = true;
@@ -1684,9 +1744,9 @@ static sd_audio_t load_audio_from_b64(const std::string& b64audio) {
     return audio;
 }
 
-static bool supports_reference_images(kcpp_sd::model_info info)
+static bool supports_reference_images(model_info info)
 {
-    bool supported = (is_video_model(info) || info.supports_ref_image || info.is_kontext || photomaker_enabled) && !info.is_zimage;
+    bool supported = (info.is_video_model || info.supports_ref_image || info.is_kontext || photomaker_enabled);
     return supported;
 }
 
@@ -1866,7 +1926,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    if (is_video_model(info) && video_start_frame_data.empty() && is_img2img && img2img_mask=="")
+    if (info.is_video_model && video_start_frame_data.empty() && is_img2img && img2img_mask=="")
     {
         video_start_frame_data = img2img_data;
     }
@@ -1985,7 +2045,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     };
 
-    if (is_video_model(info))
+    if (info.is_video_model)
     {
         video_start_image = load_extra_image(video_start_frame_data, true);
         video_end_image = load_extra_image(video_end_frame_data, true);
@@ -1999,7 +2059,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             int desiredchannels = 3;
             if(supports_reference_images(info)||force_image_edit)
             {
-                if(is_video_model(info))
+                if(info.is_video_model)
                 {
                     if(info.is_minimaxh3 && (extra_image_data[i] == video_start_frame_data || extra_image_data[i] == video_end_frame_data))
                     {
