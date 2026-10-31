@@ -99,6 +99,8 @@ using_gui_launcher = False
 cli_arg_overrides = set()
 
 handle = None
+common_backend_handle = None
+dll_directory_handles = []
 friendlymodelname = "inactive"
 friendlysdmodelname = "inactive"
 friendlyembeddingsmodelname = "inactive"
@@ -953,6 +955,7 @@ lib_cublas = pick_existant_file("koboldcpp_cublas.dll","koboldcpp_cublas.so")
 lib_hipblas = pick_existant_file("koboldcpp_hipblas.dll","koboldcpp_hipblas.so")
 lib_vulkan = pick_existant_file("koboldcpp_vulkan.dll","koboldcpp_vulkan.so")
 lib_vulkan_noavx2 = pick_existant_file("koboldcpp_vulkan_noavx2.dll","koboldcpp_vulkan_noavx2.so")
+lib_common = pick_existant_file("koboldcpp_common.dll","koboldcpp_common.so")
 libname = ""
 lib_option_pairs = [
     (lib_default, "Use CPU"),
@@ -967,7 +970,7 @@ default_option, cublas_option, hipblas_option, vulkan_option, noavx2_option, vul
 runopts = [opt for lib, opt in lib_option_pairs if file_exists(lib)]
 
 def init_library():
-    global handle, args, libname
+    global handle, args, libname, common_backend_handle, dll_directory_handles
     global lib_default,lib_failsafe,lib_noavx2,lib_vulkan_failsafe,lib_cublas,lib_hipblas,lib_vulkan,lib_vulkan_noavx2
 
     libname = lib_default
@@ -1008,19 +1011,49 @@ def init_library():
 
     #add all potential paths
     if os.name=='nt':
-        os.add_dll_directory(dir_path)
-        os.add_dll_directory(abs_path)
-        os.add_dll_directory(os.getcwd())
+        dll_directory_handles.append(os.add_dll_directory(dir_path))
+        dll_directory_handles.append(os.add_dll_directory(abs_path))
+        dll_directory_handles.append(os.add_dll_directory(os.getcwd()))
         if libname == lib_cublas and "CUDA_PATH" in os.environ:
             newpath = os.path.join(os.environ["CUDA_PATH"], "bin")
             if os.path.exists(newpath):
-                os.add_dll_directory(newpath)
+                dll_directory_handles.append(os.add_dll_directory(newpath))
         if libname == lib_hipblas and "HIP_PATH" in os.environ:
             newpath = os.path.join(os.environ["HIP_PATH"], "bin")
             if os.path.exists(newpath):
-                os.add_dll_directory(newpath)
+                dll_directory_handles.append(os.add_dll_directory(newpath))
 
-    handle = ctypes.CDLL(os.path.join(dir_path, libname))
+    # GNU/MinGW variants contain only the ISA/backend-specific runtime.  The
+    # public API and all portable model code live in koboldcpp_common.  CUDA and
+    # HIP remain monolithic for now, as do older/pre-commonized distributions.
+    use_common_library = (
+        file_exists(lib_common)
+        and libname not in (lib_cublas, lib_hipblas)
+    )
+
+    if use_common_library:
+        backend_path = os.path.join(dir_path, libname)
+        common_path = os.path.join(dir_path, lib_common)
+        if os.name == 'nt':
+            # Each backend directory contains a tiny, fixed-name PE forwarder.
+            # It routes common's imports to the selected, descriptively named
+            # backend DLL without creating or renaming anything at runtime.
+            backend_stem = os.path.splitext(os.path.basename(libname))[0]
+            route_dir = os.path.join(dir_path, "backend_routes", backend_stem)
+            route_path = os.path.join(route_dir, "koboldcpp_backend.dll")
+            if not os.path.isfile(route_path):
+                raise FileNotFoundError("Missing backend route DLL: " + route_path)
+            dll_directory_handles.append(os.add_dll_directory(route_dir))
+            common_backend_handle = ctypes.CDLL(route_path)
+            handle = ctypes.CDLL(common_path)
+        else:
+            # Every variant has the common koboldcpp_backend.so SONAME. Loading
+            # the selected file globally satisfies koboldcpp_common's dependency.
+            common_backend_handle = ctypes.CDLL(backend_path, mode=ctypes.RTLD_GLOBAL)
+            handle = ctypes.CDLL(common_path)
+        print("Loaded shared common library: " + lib_common)
+    else:
+        handle = ctypes.CDLL(os.path.join(dir_path, libname))
 
     handle.load_model.argtypes = [load_model_inputs]
     handle.load_model.restype = ctypes.c_bool

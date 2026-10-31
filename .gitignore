@@ -137,6 +137,7 @@ tests/test-tokenizer-1-bpe
 /koboldcpp_cublas.so
 /koboldcpp_vulkan.so
 /koboldcpp_vulkan_noavx2.so
+/koboldcpp_common.so
 /koboldcpp_default.dll
 /koboldcpp_failsafe.dll
 /koboldcpp_noavx2.dll
@@ -144,6 +145,11 @@ tests/test-tokenizer-1-bpe
 /koboldcpp_vulkan_failsafe.dll
 /koboldcpp_cublas.dll
 /koboldcpp_vulkan.dll
+/koboldcpp_common.dll
+/koboldcpp_backend.def
+/koboldcpp_backend.dll.a
+/koboldcpp_default.dll.a
+/backend_routes/
 /cublas64_11.dll
 /cublasLt64_11.dll
 /cublas64_12.dll

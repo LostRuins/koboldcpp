@@ -20,7 +20,7 @@ $(error LLAMA_CUBLAS and LLAMA_HIPBLAS share object files; enable only one and r
 endif
 endif
 
-.PHONY: finishedmsg tinylibwebp tinylibwebp-smoke
+.PHONY: finishedmsg tinylibwebp tinylibwebp-smoke koboldcpp_default_backend koboldcpp_common
 
 default: koboldcpp_default koboldcpp_failsafe koboldcpp_noavx2 koboldcpp_vulkan_failsafe koboldcpp_cublas koboldcpp_hipblas koboldcpp_vulkan koboldcpp_vulkan_noavx2 finishedmsg
 tools: quantize_gpt2 quantize_gptj quantize_gguf quantize_neox quantize_mpt ttsmain whispermain sdmain gguf-split
@@ -871,7 +871,8 @@ kcpp_backend_vulkan_noavx2.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) $(FAILSAFE_FLAGS) $(VULKAN_FLAGS) -c $< -o $@
 
 clean:
-	rm -vf *.o main ttsmain sdmain sdmain-vulkan whispermain quantize_gguf quantize_gpt2 quantize_gptj quantize_neox quantize_mpt vulkan-shaders-gen vulkan-shaders-gen-noext gguf-split mtmd-cli mainvk fitparams embedding embeddingvk qwen3tts rpcserver llamaserver llamaservervk rpcserver.exe llamaserver.exe llamaservervk.exe qwen3tts.exe embeddingvk.exe embedding.exe fitparams.exe mainvk.exe mtmd-cli.exe gguf-split.exe vulkan-shaders-gen.exe vulkan-shaders-gen-noext.exe main.exe ttsmain.exe sdmain.exe sdmain-vulkan.exe whispermain.exe quantize_gguf.exe quantize_gptj.exe quantize_gpt2.exe quantize_neox.exe quantize_mpt.exe koboldcpp_default.dll koboldcpp_failsafe.dll koboldcpp_noavx2.dll koboldcpp_vulkan_failsafe.dll koboldcpp_cublas.dll koboldcpp_hipblas.dll koboldcpp_vulkan.dll koboldcpp_vulkan_noavx2.dll koboldcpp_default.so koboldcpp_failsafe.so koboldcpp_macos_failsafe.so koboldcpp_noavx2.so koboldcpp_vulkan_failsafe.so koboldcpp_cublas.so koboldcpp_hipblas.so koboldcpp_vulkan.so koboldcpp_vulkan_noavx2.so ggml/src/ggml-vulkan-shaders.cpp ggml/src/ggml-vulkan-shaders.hpp ggml/src/ggml-vulkan-shaders-noext.cpp ggml/src/ggml-vulkan-shaders-noext.hpp
+	rm -vf *.o main ttsmain sdmain sdmain-vulkan whispermain quantize_gguf quantize_gpt2 quantize_gptj quantize_neox quantize_mpt vulkan-shaders-gen vulkan-shaders-gen-noext gguf-split mtmd-cli mainvk fitparams embedding embeddingvk qwen3tts rpcserver llamaserver llamaservervk rpcserver.exe llamaserver.exe llamaservervk.exe qwen3tts.exe embeddingvk.exe embedding.exe fitparams.exe mainvk.exe mtmd-cli.exe gguf-split.exe vulkan-shaders-gen.exe vulkan-shaders-gen-noext.exe main.exe ttsmain.exe sdmain.exe sdmain-vulkan.exe whispermain.exe quantize_gguf.exe quantize_gptj.exe quantize_gpt2.exe quantize_neox.exe quantize_mpt.exe koboldcpp_common.dll koboldcpp_backend.def koboldcpp_backend.dll.a koboldcpp_default.dll.a koboldcpp_default.dll koboldcpp_failsafe.dll koboldcpp_noavx2.dll koboldcpp_vulkan_failsafe.dll koboldcpp_cublas.dll koboldcpp_hipblas.dll koboldcpp_vulkan.dll koboldcpp_vulkan_noavx2.dll koboldcpp_common.so koboldcpp_default.so koboldcpp_failsafe.so koboldcpp_macos_failsafe.so koboldcpp_noavx2.so koboldcpp_vulkan_failsafe.so koboldcpp_cublas.so koboldcpp_hipblas.so koboldcpp_vulkan.so koboldcpp_vulkan_noavx2.so ggml/src/ggml-vulkan-shaders.cpp ggml/src/ggml-vulkan-shaders.hpp ggml/src/ggml-vulkan-shaders-noext.cpp ggml/src/ggml-vulkan-shaders-noext.hpp
+	rm -vrf backend_routes
 	rm -vf $(OBJS_TINYLIBWEBP) $(LIB_TINYLIBWEBP) vendor/tinylibwebp/tests/anim_smoke.exe
 	rm -vrf ggml/src/ggml-cuda/*.o
 	rm -vrf ggml/src/ggml-cuda/template-instances/*.o
@@ -1009,10 +1010,173 @@ else
 	@echo 'Vulkan Shaders (no extensions) Rebuilt for Linux...'
 endif
 
-# common object files for all libraries
-KOBOLDCPP_COMMON_OBJS = gpttype_adapter_default.o whispercpp_default.o clip_default.o expose.o chat.o ggml-binops.o ggml-tiled.o ggml-tiled-kernel.o ggml-unops.o ggml-backend.o ggml-backend-meta.o ggml-repack.o llama.o llama-model.o embeddings_default.o music_default.o tts_default.o $(OBJS_AUDIOCPP) mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o $(OBJS) $(OBJS_SDTYPE)
+# High-level objects are identical for every MinGW/Linux variant.  Keep these in
+# one shared library; the selected low-level variant supplies the GGML, CPU ISA,
+# legacy GGML and GPU symbols used by this code.
+KOBOLDCPP_ENGINE_HIGHLEVEL_OBJS = gpttype_adapter_default.o whispercpp_default.o clip_default.o expose.o chat.o llama.o llama-model.o embeddings_default.o music_default.o tts_default.o $(OBJS_AUDIOCPP) mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o $(OBJS_SDTYPE)
+
+# This is the invariant subset that used to be repeated verbatim in OBJS_FULL,
+# OBJS_SIMPLE, OBJS_SIMPLER and OBJS_FAILSAFE.
+KOBOLDCPP_PORTABLE_SUPPORT_OBJS = unicode.o unicode-common.o unicode-data.o common.o common-json.o speculative.o llama-impl.o sampling.o budget.o kcpputils.o kcppllmutils.o mtmdaudio.o hash.o
+KOBOLDCPP_HIGHLEVEL_OBJS = $(KOBOLDCPP_ENGINE_HIGHLEVEL_OBJS) $(KOBOLDCPP_PORTABLE_SUPPORT_OBJS) $(filter llguidance.o,$(OBJS_FULL))
+
+# These objects form the invariant part of each low-level runtime.  They remain
+# beside the ISA/backend-specific objects so the variants preserve exactly the
+# same compile flags and code paths as the former monolithic libraries.
+KOBOLDCPP_LOWLEVEL_COMMON_OBJS = ggml-binops.o ggml-tiled.o ggml-tiled-kernel.o ggml-unops.o ggml-backend.o ggml-backend-meta.o ggml-repack.o ggml-alloc.o ggml-cpu-traits.o ggml-cpu-quants.o ggml-threading.o ggml-cpu-cpp.o gguf.o ggml-rpc.o transport.o $(OBJS)
+KOBOLDCPP_MONOLITH_COMMON_OBJS = $(KOBOLDCPP_ENGINE_HIGHLEVEL_OBJS) ggml-binops.o ggml-tiled.o ggml-tiled-kernel.o ggml-unops.o ggml-backend.o ggml-backend-meta.o ggml-repack.o $(OBJS)
+
+KOBOLDCPP_DEFAULT_ISA_OBJS = ggml-quants.o kcpp-quantmapper.o kcpp-repackmapper.o sgemm.o
+KOBOLDCPP_FAILSAFE_ISA_OBJS = ggml-quants_failsafe.o kcpp-quantmapper_failsafe.o kcpp-repackmapper_failsafe.o sgemm_failsafe.o
+KOBOLDCPP_NOAVX2_ISA_OBJS = ggml-quants_noavx2.o kcpp-quantmapper_noavx2.o kcpp-repackmapper_noavx2.o sgemm_noavx2.o
+KOBOLDCPP_NOAVX1_ISA_OBJS = ggml-quants_noavx1.o kcpp-quantmapper_noavx1.o kcpp-repackmapper_noavx1.o sgemm_noavx1.o
+
+KOBOLDCPP_DEFAULT_VARIANT_OBJS = ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml_v3.o ggml_v2.o ggml_v1.o kcpp_backend_default.o ggml-backend-reg_default.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_DEFAULT_ISA_OBJS)
+KOBOLDCPP_FAILSAFE_VARIANT_OBJS = ggml_v4_failsafe.o ggml-cpu_v4_failsafe.o ggml-ops-failsafe.o ggml-vec-failsafe.o ggml_v3_failsafe.o ggml_v2_failsafe.o ggml_v1_failsafe.o kcpp_backend_failsafe.o ggml-backend-reg_default.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_FAILSAFE_ISA_OBJS)
+KOBOLDCPP_NOAVX2_VARIANT_OBJS = ggml_v4_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o kcpp_backend_failsafe.o ggml-backend-reg_default.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_NOAVX2_ISA_OBJS)
+KOBOLDCPP_VULKAN_VARIANT_OBJS = ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml_v3.o ggml_v2.o ggml_v1.o kcpp_backend_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_DEFAULT_ISA_OBJS)
+KOBOLDCPP_VULKAN_NOAVX2_VARIANT_OBJS = ggml_v4_vulkan_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o kcpp_backend_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_NOAVX2_ISA_OBJS)
+KOBOLDCPP_VULKAN_FAILSAFE_VARIANT_OBJS = ggml_v4_vulkan_failsafe.o ggml-cpu_v4_failsafe.o ggml-ops-failsafe.o ggml-vec-failsafe.o ggml_v3_failsafe.o ggml_v2_failsafe.o ggml_v1_failsafe.o kcpp_backend_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_NOAVX1_ISA_OBJS)
+
+# Commonization currently targets the GNU/MinGW release builds.  Keep other
+# platforms on their existing monolithic layout until their loaders/package
+# formats are migrated explicitly.
+KCPP_COMMONIZE =
+ifeq ($(OS),Windows_NT)
+KCPP_COMMONIZE = 1
+endif
+ifeq ($(UNAME_S),Linux)
+KCPP_COMMONIZE = 1
+endif
 
 #generated libraries
+ifeq ($(KCPP_COMMONIZE),1)
+
+ifeq ($(OS),Windows_NT)
+KCPP_VARIANT_EXPORT_FLAGS = -Wl,--exclude-libs,ALL
+KCPP_BACKEND_IMPORT_LIB = koboldcpp_backend.dll.a
+KCPP_DEFAULT_IMPORT_LIB = koboldcpp_default.dll.a
+KCPP_BACKEND_DEF = koboldcpp_backend.def
+KCPP_BACKEND_ROUTE_ROOT = backend_routes
+KCPP_BACKEND_ROUTE_DLL = koboldcpp_backend.dll
+KCPP_FORWARDER_AWK = kcpp_src/packaging/backend_forwarder.awk
+NM ?= nm
+DLLTOOL ?= dlltool
+
+# Build a route DLL containing only PE forwarder exports.  The real backend
+# keeps its descriptive filename; koboldcpp_common imports this fixed filename
+# from the selected backend-specific directory.
+define KCPP_BUILD_BACKEND_FORWARDER
+	mkdir -p $(KCPP_BACKEND_ROUTE_ROOT)/$(1)
+	$(NM) -g --defined-only $(KCPP_DEFAULT_IMPORT_LIB) | awk -v mode=forward -v target=$(1) -f $(KCPP_FORWARDER_AWK) > $(KCPP_BACKEND_ROUTE_ROOT)/$(1)/koboldcpp_backend.def
+	$(CXX) -shared -s $(KCPP_BACKEND_ROUTE_ROOT)/$(1)/koboldcpp_backend.def -o $(KCPP_BACKEND_ROUTE_ROOT)/$(1)/$(KCPP_BACKEND_ROUTE_DLL)
+	rm -f $(KCPP_BACKEND_ROUTE_ROOT)/$(1)/koboldcpp_backend.def
+endef
+
+koboldcpp_default_backend: $(KOBOLDCPP_DEFAULT_VARIANT_OBJS)
+	$(CXX) $(CXXFLAGS) $(KOBOLDCPP_DEFAULT_VARIANT_OBJS) -shared $(KCPP_VARIANT_EXPORT_FLAGS) -Wl,--out-implib,$(KCPP_DEFAULT_IMPORT_LIB) -o koboldcpp_default.dll $(LDFLAGS)
+	$(NM) -g --defined-only $(KCPP_DEFAULT_IMPORT_LIB) | awk -v mode=import -f $(KCPP_FORWARDER_AWK) > $(KCPP_BACKEND_DEF)
+	$(DLLTOOL) -d $(KCPP_BACKEND_DEF) -D $(KCPP_BACKEND_ROUTE_DLL) -l $(KCPP_BACKEND_IMPORT_LIB)
+	rm -f $(KCPP_BACKEND_DEF)
+
+koboldcpp_common: koboldcpp_default_backend $(KOBOLDCPP_HIGHLEVEL_OBJS)
+	$(CXX) $(CXXFLAGS) $(KOBOLDCPP_HIGHLEVEL_OBJS) $(KCPP_BACKEND_IMPORT_LIB) -shared -o koboldcpp_common.dll $(LDFLAGS)
+
+KCPP_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ -shared $(KCPP_VARIANT_EXPORT_FLAGS) -o $@.dll $(LDFLAGS)
+KCPP_VULKAN_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ $(VULKAN_LIB) -shared $(KCPP_VARIANT_EXPORT_FLAGS) -o $@.dll $(LDFLAGS)
+else
+KCPP_VARIANT_SONAME = koboldcpp_backend.so
+koboldcpp_default_backend: $(KOBOLDCPP_DEFAULT_VARIANT_OBJS)
+	$(CXX) $(CXXFLAGS) $(KOBOLDCPP_DEFAULT_VARIANT_OBJS) -shared -Wl,-soname,$(KCPP_VARIANT_SONAME) -o koboldcpp_default.so $(LDFLAGS)
+
+koboldcpp_common: koboldcpp_default_backend $(KOBOLDCPP_HIGHLEVEL_OBJS)
+	$(CXX) $(CXXFLAGS) $(KOBOLDCPP_HIGHLEVEL_OBJS) ./koboldcpp_default.so -shared -Wl,-rpath,'$$ORIGIN' -o koboldcpp_common.so $(LDFLAGS)
+
+KCPP_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ -shared -Wl,-soname,$(KCPP_VARIANT_SONAME) -o $@.so $(LDFLAGS)
+KCPP_VULKAN_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ $(VULKAN_LIB) -shared -Wl,-soname,$(KCPP_VARIANT_SONAME) -o $@.so $(LDFLAGS)
+endif
+
+koboldcpp_default: koboldcpp_common
+ifeq ($(OS),Windows_NT)
+	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_default)
+endif
+
+koboldcpp_macos_failsafe: koboldcpp_common
+
+ifdef FAILSAFE_BUILD
+koboldcpp_failsafe: $(KOBOLDCPP_FAILSAFE_VARIANT_OBJS) | koboldcpp_common
+	$(KCPP_VARIANT_BUILD)
+ifeq ($(OS),Windows_NT)
+	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_failsafe)
+endif
+else
+koboldcpp_failsafe:
+	$(DONOTHING)
+endif
+
+ifdef NOAVX2_BUILD
+koboldcpp_noavx2: $(KOBOLDCPP_NOAVX2_VARIANT_OBJS) | koboldcpp_common
+	$(KCPP_VARIANT_BUILD)
+ifeq ($(OS),Windows_NT)
+	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_noavx2)
+endif
+else
+koboldcpp_noavx2:
+	$(DONOTHING)
+endif
+
+ifdef CUBLAS_BUILD
+koboldcpp_cublas: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o kcpp_backend_cublas.o ggml-backend-reg_cublas.o $(CUBLAS_OBJS) $(KOBOLDCPP_MONOLITH_COMMON_OBJS) $(OBJS_FULL)
+	$(CUBLAS_BUILD)
+else
+koboldcpp_cublas:
+	$(DONOTHING)
+endif
+
+ifdef HIPBLAS_BUILD
+koboldcpp_hipblas: ggml_v4_cublas.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml_v3_cublas.o ggml_v2_cublas.o ggml_v1.o kcpp_backend_cublas.o ggml-backend-reg_cublas.o $(HIP_OBJS) $(KOBOLDCPP_MONOLITH_COMMON_OBJS) $(OBJS_FULL)
+	$(HIPBLAS_BUILD)
+else
+koboldcpp_hipblas:
+	$(DONOTHING)
+endif
+
+ifdef VULKAN_BUILD
+koboldcpp_vulkan: $(KOBOLDCPP_VULKAN_VARIANT_OBJS) | koboldcpp_common
+	$(KCPP_VULKAN_VARIANT_BUILD)
+ifeq ($(OS),Windows_NT)
+	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_vulkan)
+endif
+ifdef NOAVX2_BUILD
+koboldcpp_vulkan_noavx2: $(KOBOLDCPP_VULKAN_NOAVX2_VARIANT_OBJS) | koboldcpp_common
+	$(KCPP_VULKAN_VARIANT_BUILD)
+ifeq ($(OS),Windows_NT)
+	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_vulkan_noavx2)
+endif
+koboldcpp_vulkan_failsafe: $(KOBOLDCPP_VULKAN_FAILSAFE_VARIANT_OBJS) | koboldcpp_common
+	$(KCPP_VULKAN_VARIANT_BUILD)
+ifeq ($(OS),Windows_NT)
+	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_vulkan_failsafe)
+endif
+else
+koboldcpp_vulkan_noavx2:
+	$(DONOTHING)
+koboldcpp_vulkan_failsafe:
+	$(DONOTHING)
+endif
+else
+koboldcpp_vulkan:
+	$(DONOTHING)
+koboldcpp_vulkan_noavx2:
+	$(DONOTHING)
+koboldcpp_vulkan_failsafe:
+	$(DONOTHING)
+endif
+
+else
+
+KOBOLDCPP_COMMON_OBJS = $(KOBOLDCPP_MONOLITH_COMMON_OBJS)
+
 koboldcpp_default: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml_v3.o ggml_v2.o ggml_v1.o kcpp_backend_default.o ggml-backend-reg_default.o $(KOBOLDCPP_COMMON_OBJS) $(OBJS_FULL)
 	$(DEFAULT_BUILD)
 
@@ -1073,6 +1237,8 @@ koboldcpp_vulkan_noavx2:
 koboldcpp_vulkan_failsafe:
 	$(DONOTHING)
 endif
+
+endif # KCPP_COMMONIZE
 
 # tools
 quantize_gguf: tools/quantize/main.cpp tools/quantize/quantize.cpp common/imatrix-loader.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-tiled.o ggml-tiled-kernel.o ggml-unops.o llama.o chat.o llama-model.o clip_default.o mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)

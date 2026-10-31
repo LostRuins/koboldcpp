@@ -190,6 +190,9 @@ if [ -n "$KCPP_PORTABLE" ]; then
 	fi
 fi
 
+COMMON_SO="--add-data ./koboldcpp_common.so:."
+PORTABLE_SO="$COMMON_SO $PORTABLE_SO"
+
 if [ "$KCPP_CUDA" = "rocm" ]; then
 	kcpp_mamba run make -C "$KCPP_REPO_DIR" -j$(nproc) LLAMA_VULKAN=1 LLAMA_HIPBLAS=1 LLAMA_USE_BUNDLED_GLSLC=1 LLAMA_ADD_CONDA_PATHS=1 $LLAMA_PORTABLE_FLAG $LLAMA_NOAVX1_FLAG $LLAMA_NOAVX2_FLAG $ARCHES_FLAG
 else

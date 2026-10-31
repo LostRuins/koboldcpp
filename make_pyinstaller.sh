@@ -15,6 +15,7 @@ pyinstaller --noconfirm --onefile --clean --console --collect-all customtkinter 
 --add-data './otherarch/ttscpp/TTSCPP_LICENSE:./vendor_licenses'  \
 --add-data './src/LLAMACPP_LICENSE:./vendor_licenses'  \
 --add-data "./embd_res:./embd_res" \
+--add-data "./koboldcpp_common.so:." \
 --add-data "./koboldcpp_default.so:." \
 --add-data "./koboldcpp_failsafe.so:." \
 --add-data "./koboldcpp_noavx2.so:." \
