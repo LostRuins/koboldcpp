@@ -8465,6 +8465,10 @@ Change Mode<br>
                         }}).encode())
                         return
 
+                # Embedded Horde chat jobs mandate jinja
+                if genparams.get("is_chat_job") is True:
+                    use_jinja = True
+
                 gendefaults = gendefaults_parse_meta_field(args.gendefaults or '')
                 gen_new_keys = {k: v for k, v in gendefaults.items() if k not in genparams}
                 #special handling for some params that should be overwritten if equal to literal string default
@@ -11931,7 +11935,7 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
     session_starttime = datetime.now()
     sleepy_counter = 0 #if this exceeds a value, worker becomes sleepy (slower)
     exitcounter = 0
-    print(f"===\nEmbedded Horde Worker '{worker_name}' Starting...\n(To use your own Horde Bridge/Scribe worker instead, don't set your API key)\n")
+    print(f"\n===\nEmbedded Horde Worker '{worker_name}' Starting...\n(To use your own Horde Bridge/Scribe worker instead, don't set your API key)\n")
     BRIDGE_AGENT = "KoboldCppEmbedWorker:2:https://github.com/LostRuins/koboldcpp"
     cluster = "https://aihorde.net"
     while exitcounter < 10:
@@ -12028,6 +12032,7 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
                 current_payload['genkey'] = f"HORDEREQ_{current_id}" if is_chat_job else f"HORDEREQ_{random.randint(100, 999)}"
                 genurl = f'{epurl}/v1/chat/completions' if is_chat_job else f'{epurl}/api/v1/generate'
                 if is_chat_job:
+                    current_payload['is_chat_job'] = True
                     submit_dict = horde_chat_job(genurl, current_payload, current_id)
                     break # A failed chat job is faulted, never regenerated after publishing partial text.
                 current_generation = make_url_request_horde(genurl, current_payload, method='POST',addmykey=True)
