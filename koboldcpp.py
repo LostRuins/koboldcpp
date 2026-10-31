@@ -10899,7 +10899,7 @@ def show_gui():
         args.nofastforward = fastforward_var.get()==0
         args.noswa = swa_var.get()==0
         args.swapadding = int(swa_padding_var.get()) if swa_padding_var.get()!="" else swa_padding_default
-        args.smartcache = (0 if smartcache_var.get()!=1 else int(smartcacheslots_var.get()))
+        args.smartcache = (0 if smartcache_var.get()!=1 else tryparseint(smartcacheslots_var.get(), savestate_limit_default))
         args.remotetunnel = remotetunnel_var.get()==1
         args.foreground = keepforeground.get()==1
         args.cli = terminalonly.get()==1
@@ -10973,11 +10973,11 @@ def show_gui():
         args.contextsize = int(contextsize_text[context_var.get()])
         if customrope_var.get()==1:
             if manualrope_var.get()==1:
-                args.ropeconfig = [float(customrope_scale.get()),float(customrope_base.get())]
+                args.ropeconfig = [tryparsefloat(customrope_scale.get(), 1.0), tryparsefloat(customrope_base.get(), 10000.0)]
                 args.overridenativecontext = 0
             else:
                 args.ropeconfig = [0.0, 10000.0]
-                args.overridenativecontext = int(customrope_nativectx.get())
+                args.overridenativecontext = tryparseint(customrope_nativectx.get(), default_native_ctx)
         else:
             args.ropeconfig = [0.0, 10000.0]
             args.overridenativecontext = 0
@@ -11063,8 +11063,8 @@ def show_gui():
 
         if usehorde_var.get() != 0:
             args.hordemodelname = horde_name_var.get()
-            args.hordegenlen = int(horde_gen_var.get())
-            args.hordemaxctx = int(horde_context_var.get())
+            args.hordegenlen = tryparseint(horde_gen_var.get(), maxhordelen)
+            args.hordemaxctx = tryparseint(horde_context_var.get(), maxhordectx)
             if horde_apikey_var.get()!="" and horde_workername_var.get()!="":
                 args.hordekey = horde_apikey_var.get()
                 args.hordeworkername = horde_workername_var.get()
@@ -11076,8 +11076,8 @@ def show_gui():
         args.sdclipdevice = sd_resolve_device(sd_clip_device_var.get())
         args.sdthreads = (0 if sd_threads_var.get()=="" else int(sd_threads_var.get()))
         args.sdvramlimit = (0 if sd_vram_limit_var.get()=="" else int(sd_vram_limit_var.get()))
-        args.sdclamped = (0 if int(sd_clamped_var.get())<=0 else int(sd_clamped_var.get()))
-        args.sdclampedsoft = (0 if int(sd_clamped_soft_var.get())<=0 else int(sd_clamped_soft_var.get()))
+        args.sdclamped = max(0, tryparseint(sd_clamped_var.get(), 0))
+        args.sdclampedsoft = max(0, tryparseint(sd_clamped_soft_var.get(), 0))
         args.sdtiledvae = (default_vae_tile_threshold if sd_tiled_vae_var.get()=="" else int(sd_tiled_vae_var.get()))
         if sd_vaeauto_var.get()==1:
             args.sdvaeauto = True
