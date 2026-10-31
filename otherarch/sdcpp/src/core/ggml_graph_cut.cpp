@@ -753,6 +753,14 @@ namespace sd::ggml_graph_cut {
         for (int node_idx : segment.internal_node_indices) {
             ggml_graph_add_node(segment_graph, ggml_graph_node(gf, node_idx));
         }
+        // Fusion checks need the original use counts, including consumers outside this segment.
+        for (ggml_tensor* tensor : represented) {
+            const size_t source_index = ggml_hash_find(&gf->visited_hash_set, tensor);
+            if (source_index != GGML_HASHSET_FULL && ggml_bitset_get(gf->visited_hash_set.used, source_index)) {
+                const size_t index               = ggml_hash_insert(&segment_graph->visited_hash_set, tensor);
+                segment_graph->use_counts[index] = gf->use_counts[source_index];
+            }
+        }
         *graph_ctx_out = graph_ctx;
         return segment_graph;
     }
