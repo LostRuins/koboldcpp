@@ -1,16 +1,13 @@
 #include "core/compute_workspace.h"
 
 #include <algorithm>
-#include <cstring>
 #include <exception>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "core/ggml_extend_backend.h"
-#include "core/ggml_graph_cut.h"
 #include "core/util.h"
-#include "ggml-cpu.h"
 #include "ggml-impl.h"
 
 namespace sd {
@@ -26,18 +23,6 @@ namespace sd {
             release();
             extra_backends_ = backends;
         }
-    }
-
-    bool ComputeWorkspace::needs_scheduler(ggml_cgraph* graph) const {
-        if (!extra_backends_.empty()) {
-            return true;
-        }
-        for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
-            if (!ggml_backend_supports_op(backend_, ggml_graph_node(graph, i))) {
-                return true;
-            }
-        }
-        return false;
     }
 
     ggml_backend_sched_t ComputeWorkspace::make_scheduler(size_t graph_size) {
@@ -63,10 +48,6 @@ namespace sd {
                                       graph_size, false, false);
     }
 
-    bool ComputeWorkspace::measurement_matches(ggml_cgraph* graph, const Measurement& measurement) const {
-        return measurement.scheduler == needs_scheduler(graph);
-    }
-
     bool ComputeWorkspace::prepare(const Measurement& measurement) {
         GGML_ASSERT(!active_);
         if (measurement.buffers.empty()) {
@@ -74,7 +55,7 @@ namespace sd {
         }
         const bool grows = std::any_of(measurement.buffers.begin(), measurement.buffers.end(),
                                        [&](const BackendBufferSize& size) { return size.bytes > bytes(size.backend); });
-        if (measurement.scheduler != (scheduler_ != nullptr) || grows) {
+        if (grows) {
             release();
         }
         return true;
@@ -88,47 +69,21 @@ namespace sd {
 
     bool ComputeWorkspace::allocate(ggml_cgraph* graph, const AssignNodes& assign_nodes) {
         GGML_ASSERT(!active_);
-        const bool use_scheduler = needs_scheduler(graph);
-        if (use_scheduler) {
-            if (allocator_ != nullptr) {
-                release();
-            }
-            const size_t capacity = static_cast<size_t>(graph->n_nodes + graph->n_leafs) + 8;
-            if (scheduler_ == nullptr || capacity > scheduler_capacity_) {
-                release();
-                scheduler_          = make_scheduler(capacity);
-                scheduler_capacity_ = capacity;
-            }
-            if (scheduler_ == nullptr) {
-                return false;
-            }
-            ggml_backend_sched_reset(scheduler_);
-            assign_nodes(scheduler_, graph);
-            // Scheduler allocation rewrites sources. Split the execution graph only once.
-            if (!ggml_backend_sched_alloc_graph(scheduler_, graph)) {
-                release();
-                return false;
-            }
-        } else {
-            if (scheduler_ != nullptr) {
-                release();
-            }
-            if (allocator_ == nullptr) {
-                allocator_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
-            }
-            auto signature = ggml_graph_cut::graph_layout(graph, true);
-            if (signature != reservation_) {
-                if (!ggml_gallocr_reserve(allocator_, graph)) {
-                    release();
-                    return false;
-                }
-                reservation_ = std::move(signature);
-                ++reservations_;
-            }
-            if (!ggml_gallocr_alloc_graph(allocator_, graph)) {
-                release();
-                return false;
-            }
+        const size_t capacity = static_cast<size_t>(graph->n_nodes + graph->n_leafs) + 8;
+        if (scheduler_ == nullptr || capacity > scheduler_capacity_) {
+            release();
+            scheduler_          = make_scheduler(capacity);
+            scheduler_capacity_ = capacity;
+        }
+        if (scheduler_ == nullptr) {
+            return false;
+        }
+        ggml_backend_sched_reset(scheduler_);
+        assign_nodes(scheduler_, graph);
+        // Scheduler allocation rewrites sources. Split the execution graph only once.
+        if (!ggml_backend_sched_alloc_graph(scheduler_, graph)) {
+            release();
+            return false;
         }
         active_ = true;
         return true;
@@ -136,12 +91,8 @@ namespace sd {
 
     ComputeWorkspace::Measurement ComputeWorkspace::measure(
         ggml_cgraph* graph,
-        size_t direct_bytes,
         const std::function<ggml_backend_t(const ggml_tensor*)>& external_backend,
         const AssignNodes& assign_nodes) {
-        if (!needs_scheduler(graph)) {
-            return {{{backend_, direct_bytes}}, false};
-        }
         std::vector<const ggml_tensor*> tensors;
         std::unordered_set<const ggml_tensor*> seen;
         auto visit = [&](const ggml_tensor* tensor) {
@@ -202,9 +153,17 @@ namespace sd {
         for (int i = 0; i < graph->n_leafs; ++i) {
             copy_graph->leafs[i] = copies.at(graph->leafs[i]);
         }
+        copy_graph->order = graph->order;
+        // Preserve fusion metadata, including uses outside a graph view, without rebuilding its node order.
+        for (const auto& entry : copies) {
+            const size_t source_index = ggml_hash_find(&graph->visited_hash_set, entry.first);
+            if (source_index != GGML_HASHSET_FULL && ggml_bitset_get(graph->visited_hash_set.used, source_index)) {
+                const size_t copy_index = ggml_hash_insert(&copy_graph->visited_hash_set, entry.second);
+                copy_graph->use_counts[copy_index] = graph->use_counts[source_index];
+            }
+        }
         Measurement result;
-        result.scheduler = true;
-        auto scheduler   = make_scheduler(graph_size);
+        auto scheduler = make_scheduler(graph_size);
         if (scheduler != nullptr) {
             assign_nodes(scheduler, copy_graph);
             std::vector<size_t> sizes(extra_backends_.size() + 2);
@@ -253,12 +212,9 @@ namespace sd {
         if (active_) {
             return false;
         }
-        ggml_gallocr_free(allocator_);
-        allocator_ = nullptr;
         ggml_backend_sched_free(scheduler_);
         scheduler_          = nullptr;
         scheduler_capacity_ = 0;
-        reservation_.clear();
         return true;
     }
 
@@ -266,6 +222,6 @@ namespace sd {
         if (scheduler_ != nullptr) {
             return ggml_backend_sched_get_buffer_size(scheduler_, backend);
         }
-        return allocator_ != nullptr && backend == backend_ ? ggml_gallocr_get_buffer_size(allocator_, 0) : 0;
+        return 0;
     }
 }

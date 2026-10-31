@@ -171,12 +171,17 @@ namespace Flux3 {
                 const std::string base = mode == "txt" ? "txt_mode_blocks." : "content_mode_blocks." + mode + ".";
                 for (int i = 0; i < config.depth; ++i) {
                     h = std::dynamic_pointer_cast<Block>(blocks[base + std::to_string(i)])->forward(ctx, h, mode_pe, {early}, {lengths.back()});
+                    if (i + 1 < config.depth) {
+                        sd::ggml_graph_cut::mark_graph_cut(h, "flux3." + base + std::to_string(i), "h");
+                    }
                 }
                 joint = joint ? ggml_concat(gc, joint, h, 1) : h;
+                sd::ggml_graph_cut::mark_graph_cut(joint, "flux3." + base + "joint", "joint");
                 offset += lengths.back();
             }
             for (int i = 0; i < config.single_depth; ++i) {
                 joint = std::dynamic_pointer_cast<Block>(blocks["single_blocks." + std::to_string(i)])->forward(ctx, joint, pe, single_mods, lengths);
+                sd::ggml_graph_cut::mark_graph_cut(joint, "flux3.single_blocks." + std::to_string(i), "joint");
             }
             auto out = std::dynamic_pointer_cast<Flux::LastLayer>(blocks["final_layer.image"])->forward(ctx, token_slice(gc, joint, 0, lengths[0]), image_vec);
             return DiT::unpatchify(gc, out, height, width, 1, 1);

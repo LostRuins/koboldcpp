@@ -36,6 +36,7 @@ namespace Wav2Vec2 {
 
 static inline bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
     return version == VERSION_FLUX ||
+           version == VERSION_CHROMA ||
            sd_version_is_flux2(version) ||
            (sd_version_is_qwen_image(version) && version != VERSION_QWEN_IMAGE_2_1) ||
            sd_version_is_mage_flow(version) ||
