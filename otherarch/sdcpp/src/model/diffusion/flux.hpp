@@ -77,7 +77,10 @@ namespace Flux {
                 config.in_channels = 128;
             } else if (version == VERSION_FLEX_2) {
                 config.in_channels = 196;
+            } else if (version == VERSION_CHROMA) {
+                config.is_chroma = true;
             } else if (version == VERSION_CHROMA_RADIANCE) {
+                config.is_chroma   = true;
                 config.in_channels = 3;
                 config.patch_size  = 16;
             } else if (version == VERSION_OVIS_IMAGE) {
@@ -137,9 +140,6 @@ namespace Flux {
                 if (name.find("img_in_patch.weight") != std::string::npos) {
                     actual_radiance_patch_size = tensor_storage.ne[0];
                     LOG_VERBOSE("actual radiance patch size: %" PRId64, actual_radiance_patch_size);
-                }
-                if (name.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
-                    config.is_chroma = true;
                 }
                 size_t db = name.find("double_blocks.");
                 if (db != std::string::npos) {

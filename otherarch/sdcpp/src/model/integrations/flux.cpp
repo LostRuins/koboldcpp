@@ -9,14 +9,7 @@ static bool build_flux(const sd::model_builders::Context& ctx, const TokenizerCo
     const auto& tensor_storage_map = ctx.tensor_storage_map;
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
-    bool is_chroma                 = false;
-    for (auto pair : tensor_storage_map) {
-        if (pair.first.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
-            is_chroma = true;
-            break;
-        }
-    }
-    if (is_chroma) {
+    if (version == VERSION_CHROMA || version == VERSION_CHROMA_RADIANCE) {
         result.conditioner = std::make_shared<T5CLIPEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
                                                               tensor_storage_map,
                                                               false,
@@ -123,6 +116,21 @@ const std::vector<ModelDefinition>& flux_definitions() {
             definition.traits.is_dit                    = true;
             definition.traits.vae_kind                  = ModelVAEKind::FLUX;
             definition.traits.fake_vae                  = true;
+            definition.sampling                         = {FLUX_FLOW_PRED, 1.0f};
+            definition.sampling.default_sample_method   = EULER_SAMPLE_METHOD;
+            definition.sampling.default_scheduler       = FLUX_SCHEDULER;
+            definition.build                            = build_flux;
+            definition.sampling.flow_shift_from_weights = flux_guidance_flow_shift;
+            result.push_back(std::move(definition));
+        }
+        {
+            ModelDefinition definition;
+            definition.version                          = VERSION_CHROMA;
+            definition.geometry                         = {1, 16, 3};
+            definition.ref_image_preset                 = "flux_kontext";
+            definition.name                             = "Chroma";
+            definition.traits.is_dit                    = true;
+            definition.traits.vae_kind                  = ModelVAEKind::FLUX;
             definition.sampling                         = {FLUX_FLOW_PRED, 1.0f};
             definition.sampling.default_sample_method   = EULER_SAMPLE_METHOD;
             definition.sampling.default_scheduler       = FLUX_SCHEDULER;
