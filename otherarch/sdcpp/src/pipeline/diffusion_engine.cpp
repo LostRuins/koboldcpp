@@ -675,87 +675,93 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
     const auto* sd_ctx_params = &configuration.params;
     auto& use_tae             = configuration.use_tae;
     auto& use_audio_vae       = configuration.use_audio_vae;
+    const auto load_model     = [&](const char* name, const char* path, const std::string& prefix = "") {
+        if (!model_loader.init_from_file(path, prefix))
+            return false;
+        configuration.record_model(name, path);
+        return true;
+    };
     if (strlen(SAFE_STR(sd_ctx_params->model_path)) > 0) {
         LOG_INFO("loading model from '%s'", sd_ctx_params->model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->model_path)) {
+        if (!load_model("model", sd_ctx_params->model_path)) {
             LOG_ERROR("init model loader from file failed: '%s'", sd_ctx_params->model_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->diffusion_model_path)) > 0) {
         LOG_INFO("loading diffusion model from '%s'", sd_ctx_params->diffusion_model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->diffusion_model_path, "model.diffusion_model.")) {
+        if (!load_model("diffusion_model", sd_ctx_params->diffusion_model_path, "model.diffusion_model.")) {
             LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->diffusion_model_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
         LOG_INFO("loading high noise diffusion model from '%s'", sd_ctx_params->high_noise_diffusion_model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->high_noise_diffusion_model_path, "model.high_noise_diffusion_model.")) {
+        if (!load_model("high_noise_diffusion_model", sd_ctx_params->high_noise_diffusion_model_path, "model.high_noise_diffusion_model.")) {
             LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->high_noise_diffusion_model_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->uncond_diffusion_model_path)) > 0) {
         LOG_INFO("loading unconditional diffusion model from '%s'", sd_ctx_params->uncond_diffusion_model_path);
-        if (!model_loader.init_from_file(sd_ctx_params->uncond_diffusion_model_path, "model.diffusion_model.uncond.")) {
+        if (!load_model("uncond_diffusion_model", sd_ctx_params->uncond_diffusion_model_path, "model.diffusion_model.uncond.")) {
             LOG_WARN("loading unconditional diffusion model from '%s' failed", sd_ctx_params->uncond_diffusion_model_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->clip_l_path)) > 0) {
         LOG_INFO("loading clip_l from '%s'", sd_ctx_params->clip_l_path);
-        if (!model_loader.init_from_file(sd_ctx_params->clip_l_path, "clip_l.")) {
+        if (!load_model("clip_l", sd_ctx_params->clip_l_path, "clip_l.")) {
             LOG_WARN("loading clip_l from '%s' failed", sd_ctx_params->clip_l_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->clip_g_path)) > 0) {
         LOG_INFO("loading clip_g from '%s'", sd_ctx_params->clip_g_path);
-        if (!model_loader.init_from_file(sd_ctx_params->clip_g_path, "clip_g.")) {
+        if (!load_model("clip_g", sd_ctx_params->clip_g_path, "clip_g.")) {
             LOG_WARN("loading clip_g from '%s' failed", sd_ctx_params->clip_g_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->clip_vision_path)) > 0) {
         LOG_INFO("loading clip_vision from '%s'", sd_ctx_params->clip_vision_path);
-        if (!model_loader.init_from_file(sd_ctx_params->clip_vision_path, "clip_vision.")) {
+        if (!load_model("clip_vision", sd_ctx_params->clip_vision_path, "clip_vision.")) {
             LOG_WARN("loading clip_vision from '%s' failed", sd_ctx_params->clip_vision_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->t5xxl_path)) > 0) {
         LOG_INFO("loading t5xxl from '%s'", sd_ctx_params->t5xxl_path);
-        if (!model_loader.init_from_file(sd_ctx_params->t5xxl_path, "text_encoders.t5xxl.transformer.")) {
+        if (!load_model("t5xxl", sd_ctx_params->t5xxl_path, "text_encoders.t5xxl.transformer.")) {
             LOG_WARN("loading t5xxl from '%s' failed", sd_ctx_params->t5xxl_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->pulid_weights_path)) > 0) {
         LOG_INFO("loading PuLID weights from '%s'", sd_ctx_params->pulid_weights_path);
-        if (!model_loader.init_from_file(sd_ctx_params->pulid_weights_path,
-                                         "model.diffusion_model.")) {
+        if (!load_model("pulid_weights", sd_ctx_params->pulid_weights_path,
+                        "model.diffusion_model.")) {
             LOG_WARN("loading PuLID weights from '%s' failed", sd_ctx_params->pulid_weights_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->llm_path)) > 0) {
         LOG_INFO("loading llm from '%s'", sd_ctx_params->llm_path);
-        if (!model_loader.init_from_file(sd_ctx_params->llm_path, "text_encoders.llm.")) {
+        if (!load_model("llm", sd_ctx_params->llm_path, "text_encoders.llm.")) {
             LOG_WARN("loading llm from '%s' failed", sd_ctx_params->llm_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->llm_vision_path)) > 0) {
         LOG_INFO("loading llm vision from '%s'", sd_ctx_params->llm_vision_path);
-        if (!model_loader.init_from_file(sd_ctx_params->llm_vision_path, "text_encoders.llm.visual.")) {
+        if (!load_model("llm_vision", sd_ctx_params->llm_vision_path, "text_encoders.llm.visual.")) {
             LOG_WARN("loading llm vision from '%s' failed", sd_ctx_params->llm_vision_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->vae_path)) > 0) {
         LOG_INFO("loading vae from '%s'", sd_ctx_params->vae_path);
-        if (!model_loader.init_from_file(sd_ctx_params->vae_path, "vae.")) {
+        if (!load_model("vae", sd_ctx_params->vae_path, "vae.")) {
             LOG_WARN("loading vae from '%s' failed", sd_ctx_params->vae_path);
             external_vae_is_invalid = true;
         }
@@ -763,7 +769,7 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 
     if (strlen(SAFE_STR(sd_ctx_params->taesd_path)) > 0) {
         LOG_INFO("loading tae from '%s'", sd_ctx_params->taesd_path);
-        if (!model_loader.init_from_file(sd_ctx_params->taesd_path, "tae.")) {
+        if (!load_model("taesd", sd_ctx_params->taesd_path, "tae.")) {
             LOG_WARN("loading tae from '%s' failed", sd_ctx_params->taesd_path);
         } else {
             use_tae = true;
@@ -772,14 +778,14 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 
     if (strlen(SAFE_STR(sd_ctx_params->embeddings_connectors_path)) > 0) {
         LOG_INFO("loading embeddings connectors from '%s'", sd_ctx_params->embeddings_connectors_path);
-        if (!model_loader.init_from_file(sd_ctx_params->embeddings_connectors_path)) {
+        if (!load_model("embeddings_connectors", sd_ctx_params->embeddings_connectors_path)) {
             LOG_WARN("loading embeddings connectors from '%s' failed", sd_ctx_params->embeddings_connectors_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->audio_vae_path)) > 0) {
         LOG_INFO("loading audio VAE from '%s'", sd_ctx_params->audio_vae_path);
-        if (!model_loader.init_from_file(sd_ctx_params->audio_vae_path)) {
+        if (!load_model("audio_vae", sd_ctx_params->audio_vae_path)) {
             LOG_WARN("loading audio VAE weights from '%s' failed", sd_ctx_params->audio_vae_path);
         } else {
             use_audio_vae = true;
@@ -788,15 +794,15 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 
     if (strlen(SAFE_STR(sd_ctx_params->audio_encoder_path)) > 0) {
         LOG_INFO("loading audio encoder (wav2vec2) from '%s'", sd_ctx_params->audio_encoder_path);
-        if (!model_loader.init_from_file(sd_ctx_params->audio_encoder_path, "wav2vec2.")) {
+        if (!load_model("audio_encoder", sd_ctx_params->audio_encoder_path, "wav2vec2.")) {
             LOG_WARN("loading audio encoder weights from '%s' failed", sd_ctx_params->audio_encoder_path);
         }
     }
 
     if (strlen(SAFE_STR(sd_ctx_params->motion_module_path)) > 0) {
         LOG_INFO("loading motion module (AnimateDiff) from '%s'", sd_ctx_params->motion_module_path);
-        if (!model_loader.init_from_file(sd_ctx_params->motion_module_path,
-                                         "model.diffusion_model.motion_module.")) {
+        if (!load_model("motion_module", sd_ctx_params->motion_module_path,
+                        "model.diffusion_model.motion_module.")) {
             LOG_WARN("loading motion module from '%s' failed", sd_ctx_params->motion_module_path);
         } else {
             configuration.animatediff_loaded = true;
@@ -810,8 +816,11 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
         }
     }
 
+    if (configuration.control_net_file)
+        configuration.record_model("control_net", sd_ctx_params->control_net_path);
+
     if (strlen(SAFE_STR(sd_ctx_params->ip_adapter_path)) > 0) {
-        if (!model_loader.init_from_file(sd_ctx_params->ip_adapter_path)) {
+        if (!load_model("ip_adapter", sd_ctx_params->ip_adapter_path)) {
             LOG_ERROR("init ip-adapter model loader from file failed: '%s'", sd_ctx_params->ip_adapter_path);
             return false;
         }
@@ -819,6 +828,8 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 
     if (strlen(SAFE_STR(sd_ctx_params->photo_maker_path)) > 0) {
         configuration.photomaker_source_available = model_loader.add_file(sd_ctx_params->photo_maker_path, "pmid.");
+        if (configuration.photomaker_source_available)
+            configuration.record_model("photo_maker", sd_ctx_params->photo_maker_path);
         if (!configuration.photomaker_source_available) {
             LOG_WARN("loading stacked ID embedding from '%s' failed", sd_ctx_params->photo_maker_path);
         }

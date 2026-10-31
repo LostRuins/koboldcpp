@@ -16,6 +16,7 @@ enum class EncodedImageFormat {
 
 EncodedImageFormat encoded_image_format_from_path(const std::string& path);
 
+// parameters is the core sdcpp.generation/v1 JSON; empty disables both metadata formats.
 std::vector<uint8_t> encode_image_to_vector(EncodedImageFormat format,
                                             const uint8_t* image,
                                             int width,
