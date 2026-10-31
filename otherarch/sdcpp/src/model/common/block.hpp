@@ -197,16 +197,12 @@ public:
         // return: [ne3, ne2, ne1, dim_out]
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
-        x          = proj->forward(ctx, x);  // [ne3, ne2, ne1, dim_out*2]
-        auto x_vec = ggml_ext_chunk(ctx->ggml_ctx, x, 2, 0, false);
-        x          = x_vec[0];  // [ne3, ne2, ne1, dim_out]
-        auto gate  = x_vec[1];  // [ne3, ne2, ne1, dim_out]
+        x = proj->forward(ctx, x);  // [ne3, ne2, ne1, dim_out*2]
 
-        gate = ggml_cont(ctx->ggml_ctx, gate);
-
-        gate = ggml_ext_gelu(ctx->ggml_ctx, gate, true);
-
-        x = ggml_mul(ctx->ggml_ctx, x, gate);  // [ne3, ne2, ne1, dim_out]
+        if (!ggml_is_contiguous_1(x)) {
+            x = ggml_cont(ctx->ggml_ctx, x);
+        }
+        x = ggml_geglu_swapped(ctx->ggml_ctx, x);  // [ne3, ne2, ne1, dim_out]
 
         return x;
     }

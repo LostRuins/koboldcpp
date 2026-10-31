@@ -141,12 +141,12 @@ private:
     size_t logged_segment_count_     = 0;
     ggml_status last_compute_status_ = GGML_STATUS_SUCCESS;
 
-    sd::ComputeWorkspace::Measurement measure(ggml_cgraph* graph);
+    sd::ComputeWorkspace::Measurement measure(ggml_cgraph* graph, const std::unordered_set<const ggml_tensor*>* external_outputs = nullptr);
     std::vector<DeviceMemoryRequest> memory_requests(const std::vector<sd::BackendBufferSize>& sizes,
                                                      size_t pending_cache_bytes) const;
     bool fits(const std::vector<DeviceMemoryRequest>& requests,
               const std::vector<ggml_tensor*>& params) const;
-    bool execute_segment(ggml_cgraph* graph, int n_threads);
+    bool execute_segment(ggml_cgraph* graph, int n_threads, const std::function<void()>& on_before_compute);
     std::optional<sd::Tensor<float>> execute_graph(ggml_cgraph* graph, int n_threads, bool no_return, const std::function<bool()>& read_outputs);
 
 protected:
@@ -162,8 +162,8 @@ protected:
     sd::ComputeWorkspace workspace_;
     ggml_context* compute_ctx = nullptr;
     std::unique_ptr<std::max_align_t[]> compute_ctx_buffer_;
-    bool runner_started_      = false;
-    bool graph_active_        = false;
+    bool runner_started_ = false;
+    bool graph_active_   = false;
 
     size_t max_graph_vram_bytes        = 0;
     bool graph_cut_layer_split_enabled = false;

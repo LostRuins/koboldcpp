@@ -158,7 +158,7 @@ namespace sd {
         for (const auto& entry : copies) {
             const size_t source_index = ggml_hash_find(&graph->visited_hash_set, entry.first);
             if (source_index != GGML_HASHSET_FULL && ggml_bitset_get(graph->visited_hash_set.used, source_index)) {
-                const size_t copy_index = ggml_hash_insert(&copy_graph->visited_hash_set, entry.second);
+                const size_t copy_index            = ggml_hash_insert(&copy_graph->visited_hash_set, entry.second);
                 copy_graph->use_counts[copy_index] = graph->use_counts[source_index];
             }
         }
