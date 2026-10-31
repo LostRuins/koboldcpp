@@ -20,7 +20,7 @@ $(error LLAMA_CUBLAS and LLAMA_HIPBLAS share object files; enable only one and r
 endif
 endif
 
-.PHONY: finishedmsg tinylibwebp tinylibwebp-smoke koboldcpp_default_backend koboldcpp_common
+.PHONY: finishedmsg tinylibwebp tinylibwebp-smoke koboldcpp_default_backend koboldcpp_common koboldcpp_vulkan_shaders koboldcpp_vulkan_noext_shaders
 
 default: koboldcpp_default koboldcpp_failsafe koboldcpp_noavx2 koboldcpp_vulkan_failsafe koboldcpp_cublas koboldcpp_hipblas koboldcpp_vulkan koboldcpp_vulkan_noavx2 finishedmsg
 tools: quantize_gpt2 quantize_gptj quantize_gguf quantize_neox quantize_mpt ttsmain whispermain sdmain gguf-split
@@ -871,7 +871,7 @@ kcpp_backend_vulkan_noavx2.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) $(FAILSAFE_FLAGS) $(VULKAN_FLAGS) -c $< -o $@
 
 clean:
-	rm -vf *.o main ttsmain sdmain sdmain-vulkan whispermain quantize_gguf quantize_gpt2 quantize_gptj quantize_neox quantize_mpt vulkan-shaders-gen vulkan-shaders-gen-noext gguf-split mtmd-cli mainvk fitparams embedding embeddingvk qwen3tts rpcserver llamaserver llamaservervk rpcserver.exe llamaserver.exe llamaservervk.exe qwen3tts.exe embeddingvk.exe embedding.exe fitparams.exe mainvk.exe mtmd-cli.exe gguf-split.exe vulkan-shaders-gen.exe vulkan-shaders-gen-noext.exe main.exe ttsmain.exe sdmain.exe sdmain-vulkan.exe whispermain.exe quantize_gguf.exe quantize_gptj.exe quantize_gpt2.exe quantize_neox.exe quantize_mpt.exe koboldcpp_common.dll koboldcpp_backend.def koboldcpp_backend.dll.a koboldcpp_default.dll.a koboldcpp_default.dll koboldcpp_failsafe.dll koboldcpp_noavx2.dll koboldcpp_vulkan_failsafe.dll koboldcpp_cublas.dll koboldcpp_hipblas.dll koboldcpp_vulkan.dll koboldcpp_vulkan_noavx2.dll koboldcpp_common.so koboldcpp_default.so koboldcpp_failsafe.so koboldcpp_macos_failsafe.so koboldcpp_noavx2.so koboldcpp_vulkan_failsafe.so koboldcpp_cublas.so koboldcpp_hipblas.so koboldcpp_vulkan.so koboldcpp_vulkan_noavx2.so ggml/src/ggml-vulkan-shaders.cpp ggml/src/ggml-vulkan-shaders.hpp ggml/src/ggml-vulkan-shaders-noext.cpp ggml/src/ggml-vulkan-shaders-noext.hpp
+	rm -vf *.o main ttsmain sdmain sdmain-vulkan whispermain quantize_gguf quantize_gpt2 quantize_gptj quantize_neox quantize_mpt vulkan-shaders-gen vulkan-shaders-gen-noext gguf-split mtmd-cli mainvk fitparams embedding embeddingvk qwen3tts rpcserver llamaserver llamaservervk rpcserver.exe llamaserver.exe llamaservervk.exe qwen3tts.exe embeddingvk.exe embedding.exe fitparams.exe mainvk.exe mtmd-cli.exe gguf-split.exe vulkan-shaders-gen.exe vulkan-shaders-gen-noext.exe main.exe ttsmain.exe sdmain.exe sdmain-vulkan.exe whispermain.exe quantize_gguf.exe quantize_gptj.exe quantize_gpt2.exe quantize_neox.exe quantize_mpt.exe koboldcpp_common.dll koboldcpp_backend.def koboldcpp_backend.dll.a koboldcpp_default.dll.a koboldcpp_vulkan_shaders.dll.a koboldcpp_vulkan_noext_shaders.dll.a koboldcpp_default.dll koboldcpp_failsafe.dll koboldcpp_noavx2.dll koboldcpp_vulkan_failsafe.dll koboldcpp_cublas.dll koboldcpp_hipblas.dll koboldcpp_vulkan.dll koboldcpp_vulkan_noavx2.dll koboldcpp_vulkan_shaders.dll koboldcpp_vulkan_noext_shaders.dll koboldcpp_common.so koboldcpp_default.so koboldcpp_failsafe.so koboldcpp_macos_failsafe.so koboldcpp_noavx2.so koboldcpp_vulkan_failsafe.so koboldcpp_cublas.so koboldcpp_hipblas.so koboldcpp_vulkan.so koboldcpp_vulkan_noavx2.so koboldcpp_vulkan_shaders.so koboldcpp_vulkan_noext_shaders.so ggml/src/ggml-vulkan-shaders.cpp ggml/src/ggml-vulkan-shaders.hpp ggml/src/ggml-vulkan-shaders-noext.cpp ggml/src/ggml-vulkan-shaders-noext.hpp
 	rm -vrf backend_routes
 	rm -vf $(OBJS_TINYLIBWEBP) $(LIB_TINYLIBWEBP) vendor/tinylibwebp/tests/anim_smoke.exe
 	rm -vrf ggml/src/ggml-cuda/*.o
@@ -1034,9 +1034,11 @@ KOBOLDCPP_NOAVX1_ISA_OBJS = ggml-quants_noavx1.o kcpp-quantmapper_noavx1.o kcpp-
 KOBOLDCPP_DEFAULT_VARIANT_OBJS = ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml_v3.o ggml_v2.o ggml_v1.o kcpp_backend_default.o ggml-backend-reg_default.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_DEFAULT_ISA_OBJS)
 KOBOLDCPP_FAILSAFE_VARIANT_OBJS = ggml_v4_failsafe.o ggml-cpu_v4_failsafe.o ggml-ops-failsafe.o ggml-vec-failsafe.o ggml_v3_failsafe.o ggml_v2_failsafe.o ggml_v1_failsafe.o kcpp_backend_failsafe.o ggml-backend-reg_default.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_FAILSAFE_ISA_OBJS)
 KOBOLDCPP_NOAVX2_VARIANT_OBJS = ggml_v4_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o kcpp_backend_failsafe.o ggml-backend-reg_default.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_NOAVX2_ISA_OBJS)
-KOBOLDCPP_VULKAN_VARIANT_OBJS = ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml_v3.o ggml_v2.o ggml_v1.o kcpp_backend_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_DEFAULT_ISA_OBJS)
-KOBOLDCPP_VULKAN_NOAVX2_VARIANT_OBJS = ggml_v4_vulkan_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o kcpp_backend_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_NOAVX2_ISA_OBJS)
-KOBOLDCPP_VULKAN_FAILSAFE_VARIANT_OBJS = ggml_v4_vulkan_failsafe.o ggml-cpu_v4_failsafe.o ggml-ops-failsafe.o ggml-vec-failsafe.o ggml_v3_failsafe.o ggml_v2_failsafe.o ggml_v1_failsafe.o kcpp_backend_vulkan_noavx2.o ggml-vulkan-noext.o ggml-vulkan-shaders-noext.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_NOAVX1_ISA_OBJS)
+# Keep the generated shader arrays outside the Vulkan variants.  The standard
+# and no-extension banks differ, but both old-CPU variants can share the latter.
+KOBOLDCPP_VULKAN_VARIANT_OBJS = ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml_v3.o ggml_v2.o ggml_v1.o kcpp_backend_vulkan.o ggml-vulkan.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_DEFAULT_ISA_OBJS)
+KOBOLDCPP_VULKAN_NOAVX2_VARIANT_OBJS = ggml_v4_vulkan_noavx2.o ggml-cpu_v4_noavx2.o ggml-ops-noavx2.o ggml-vec-noavx2.o ggml_v3_noavx2.o ggml_v2_noavx2.o ggml_v1_failsafe.o kcpp_backend_vulkan_noavx2.o ggml-vulkan-noext.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_NOAVX2_ISA_OBJS)
+KOBOLDCPP_VULKAN_FAILSAFE_VARIANT_OBJS = ggml_v4_vulkan_failsafe.o ggml-cpu_v4_failsafe.o ggml-ops-failsafe.o ggml-vec-failsafe.o ggml_v3_failsafe.o ggml_v2_failsafe.o ggml_v1_failsafe.o kcpp_backend_vulkan_noavx2.o ggml-vulkan-noext.o ggml-backend-reg_vulkan.o $(KOBOLDCPP_LOWLEVEL_COMMON_OBJS) $(KOBOLDCPP_NOAVX1_ISA_OBJS)
 
 # Commonization currently targets the GNU/MinGW release builds.  Keep other
 # platforms on their existing monolithic layout until their loaders/package
@@ -1060,6 +1062,8 @@ KCPP_BACKEND_DEF = koboldcpp_backend.def
 KCPP_BACKEND_ROUTE_ROOT = backend_routes
 KCPP_BACKEND_ROUTE_DLL = koboldcpp_backend.dll
 KCPP_FORWARDER_AWK = kcpp_src/packaging/backend_forwarder.awk
+KCPP_VULKAN_SHADER_LINK = koboldcpp_vulkan_shaders.dll.a
+KCPP_VULKAN_NOEXT_SHADER_LINK = koboldcpp_vulkan_noext_shaders.dll.a
 NM ?= nm
 DLLTOOL ?= dlltool
 
@@ -1083,9 +1087,18 @@ koboldcpp_common: koboldcpp_default_backend $(KOBOLDCPP_HIGHLEVEL_OBJS)
 	$(CXX) $(CXXFLAGS) $(KOBOLDCPP_HIGHLEVEL_OBJS) $(KCPP_BACKEND_IMPORT_LIB) -shared -o koboldcpp_common.dll $(LDFLAGS)
 
 KCPP_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ -shared $(KCPP_VARIANT_EXPORT_FLAGS) -o $@.dll $(LDFLAGS)
-KCPP_VULKAN_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ $(VULKAN_LIB) -shared $(KCPP_VARIANT_EXPORT_FLAGS) -o $@.dll $(LDFLAGS)
+KCPP_VULKAN_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ $(KCPP_VULKAN_SHADER_LINK) $(VULKAN_LIB) -shared $(KCPP_VARIANT_EXPORT_FLAGS) -o $@.dll $(LDFLAGS)
+KCPP_VULKAN_NOEXT_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ $(KCPP_VULKAN_NOEXT_SHADER_LINK) $(VULKAN_LIB) -shared $(KCPP_VARIANT_EXPORT_FLAGS) -o $@.dll $(LDFLAGS)
+
+koboldcpp_vulkan_shaders: ggml-vulkan-shaders.o
+	$(CXX) $^ -shared -s -Wl,--out-implib,$(KCPP_VULKAN_SHADER_LINK) -o koboldcpp_vulkan_shaders.dll
+
+koboldcpp_vulkan_noext_shaders: ggml-vulkan-shaders-noext.o
+	$(CXX) $^ -shared -s -Wl,--out-implib,$(KCPP_VULKAN_NOEXT_SHADER_LINK) -o koboldcpp_vulkan_noext_shaders.dll
 else
 KCPP_VARIANT_SONAME = koboldcpp_backend.so
+KCPP_VULKAN_SHADER_LINK = ./koboldcpp_vulkan_shaders.so
+KCPP_VULKAN_NOEXT_SHADER_LINK = ./koboldcpp_vulkan_noext_shaders.so
 koboldcpp_default_backend: $(KOBOLDCPP_DEFAULT_VARIANT_OBJS)
 	$(CXX) $(CXXFLAGS) $(KOBOLDCPP_DEFAULT_VARIANT_OBJS) -shared -Wl,-soname,$(KCPP_VARIANT_SONAME) -o koboldcpp_default.so $(LDFLAGS)
 
@@ -1093,7 +1106,14 @@ koboldcpp_common: koboldcpp_default_backend $(KOBOLDCPP_HIGHLEVEL_OBJS)
 	$(CXX) $(CXXFLAGS) $(KOBOLDCPP_HIGHLEVEL_OBJS) ./koboldcpp_default.so -shared -Wl,-rpath,'$$ORIGIN' -o koboldcpp_common.so $(LDFLAGS)
 
 KCPP_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ -shared -Wl,-soname,$(KCPP_VARIANT_SONAME) -o $@.so $(LDFLAGS)
-KCPP_VULKAN_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ $(VULKAN_LIB) -shared -Wl,-soname,$(KCPP_VARIANT_SONAME) -o $@.so $(LDFLAGS)
+KCPP_VULKAN_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ $(KCPP_VULKAN_SHADER_LINK) $(VULKAN_LIB) -shared -Wl,-soname,$(KCPP_VARIANT_SONAME) -Wl,-rpath,'$$ORIGIN' -o $@.so $(LDFLAGS)
+KCPP_VULKAN_NOEXT_VARIANT_BUILD = $(CXX) $(CXXFLAGS) $^ $(KCPP_VULKAN_NOEXT_SHADER_LINK) $(VULKAN_LIB) -shared -Wl,-soname,$(KCPP_VARIANT_SONAME) -Wl,-rpath,'$$ORIGIN' -o $@.so $(LDFLAGS)
+
+koboldcpp_vulkan_shaders: ggml-vulkan-shaders.o
+	$(CXX) $^ -shared -s -Wl,-soname,koboldcpp_vulkan_shaders.so -o koboldcpp_vulkan_shaders.so
+
+koboldcpp_vulkan_noext_shaders: ggml-vulkan-shaders-noext.o
+	$(CXX) $^ -shared -s -Wl,-soname,koboldcpp_vulkan_noext_shaders.so -o koboldcpp_vulkan_noext_shaders.so
 endif
 
 koboldcpp_default: koboldcpp_common
@@ -1142,19 +1162,19 @@ koboldcpp_hipblas:
 endif
 
 ifdef VULKAN_BUILD
-koboldcpp_vulkan: $(KOBOLDCPP_VULKAN_VARIANT_OBJS) | koboldcpp_common
+koboldcpp_vulkan: $(KOBOLDCPP_VULKAN_VARIANT_OBJS) | koboldcpp_common koboldcpp_vulkan_shaders
 	$(KCPP_VULKAN_VARIANT_BUILD)
 ifeq ($(OS),Windows_NT)
 	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_vulkan)
 endif
 ifdef NOAVX2_BUILD
-koboldcpp_vulkan_noavx2: $(KOBOLDCPP_VULKAN_NOAVX2_VARIANT_OBJS) | koboldcpp_common
-	$(KCPP_VULKAN_VARIANT_BUILD)
+koboldcpp_vulkan_noavx2: $(KOBOLDCPP_VULKAN_NOAVX2_VARIANT_OBJS) | koboldcpp_common koboldcpp_vulkan_noext_shaders
+	$(KCPP_VULKAN_NOEXT_VARIANT_BUILD)
 ifeq ($(OS),Windows_NT)
 	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_vulkan_noavx2)
 endif
-koboldcpp_vulkan_failsafe: $(KOBOLDCPP_VULKAN_FAILSAFE_VARIANT_OBJS) | koboldcpp_common
-	$(KCPP_VULKAN_VARIANT_BUILD)
+koboldcpp_vulkan_failsafe: $(KOBOLDCPP_VULKAN_FAILSAFE_VARIANT_OBJS) | koboldcpp_common koboldcpp_vulkan_noext_shaders
+	$(KCPP_VULKAN_NOEXT_VARIANT_BUILD)
 ifeq ($(OS),Windows_NT)
 	$(call KCPP_BUILD_BACKEND_FORWARDER,koboldcpp_vulkan_failsafe)
 endif

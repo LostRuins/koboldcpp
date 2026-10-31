@@ -145,11 +145,15 @@ tests/test-tokenizer-1-bpe
 /koboldcpp_vulkan_failsafe.dll
 /koboldcpp_cublas.dll
 /koboldcpp_vulkan.dll
+/koboldcpp_vulkan_shaders.dll
+/koboldcpp_vulkan_noext_shaders.dll
 /koboldcpp_common.dll
 /koboldcpp_backend.def
 /koboldcpp_backend.dll.a
 /koboldcpp_default.dll.a
 /backend_routes/
+/koboldcpp_vulkan_shaders.so
+/koboldcpp_vulkan_noext_shaders.so
 /cublas64_11.dll
 /cublasLt64_11.dll
 /cublas64_12.dll
