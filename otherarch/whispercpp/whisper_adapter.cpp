@@ -3,8 +3,15 @@
 
 #include "whisper.cpp"
 
+#include "engine/framework/runtime/model.h"
+#include "engine/models/sheetsage/session.h"
+
+#include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
+#include <memory>
 #include <cstdio>
 #include <regex>
 #include <string>
@@ -15,6 +22,7 @@
 #include <cinttypes>
 
 #define COMMON_SAMPLE_RATE 16000
+#define SHEETSAGE_SAMPLE_RATE 24000
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -24,15 +32,18 @@ static int whisperdebugmode = 0;
 static bool whisper_is_quiet = false;
 static whisper_context * whisper_ctx = nullptr;
 static std::string whisper_output_text = "";
+static bool is_audiocpp_sheetsage2 = false;
+static std::unique_ptr<engine::runtime::ILoadedVoiceModel> sheetsage2_model;
+static std::unique_ptr<engine::runtime::IVoiceTaskSession> sheetsage2_session;
 
 int total_transcribe_gens = 0;
 
 
-static bool read_audio(const std::string & b64data, std::vector<float>& pcmf32)
+static bool read_audio(const std::string & b64data, int sample_rate, std::vector<float>& pcmf32)
 {
     std::vector<uint8_t> media_data_buffer = kcpp_base64_decode(b64data);
 
-    bool ok = kcpp_decode_audio_from_buf(media_data_buffer.data(), media_data_buffer.size(), COMMON_SAMPLE_RATE, pcmf32);
+    bool ok = kcpp_decode_audio_from_buf(media_data_buffer.data(), media_data_buffer.size(), sample_rate, pcmf32);
     if (!ok) {
         printf("\nError: Cannot read input audio file.");
         return false;
@@ -64,6 +75,48 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
     whisper_is_quiet = inputs.quiet;
 
     std::string modelfile = inputs.model_filename;
+    std::string extension = std::filesystem::u8path(modelfile).extension().u8string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    const std::string architecture = extension == ".gguf" ? gguf_get_model_arch(modelfile) : "";
+    const std::string audiocpp_family = architecture == "audiocpp"
+        ? gguf_get_string(modelfile, "audiocpp.model_spec.family")
+        : architecture;
+    is_audiocpp_sheetsage2 = audiocpp_family == "sheetsage2";
+    sheetsage2_session.reset();
+    sheetsage2_model.reset();
+
+    if (is_audiocpp_sheetsage2) {
+        printf("\nLoading Audio.cpp SheetSage2 Model: %s", modelfile.c_str());
+        try {
+            auto loader = engine::models::sheetsage::make_sheetsage2_loader();
+            engine::runtime::ModelLoadRequest request;
+            request.model_path = modelfile;
+            request.family_hint = "sheetsage2";
+            sheetsage2_model = loader->load(request);
+
+            engine::runtime::SessionOptions options;
+            options.backend.type = engine::core::BackendType::BestAvailable;
+            options.backend.device = std::max(0, inputs.kcpp_main_gpu);
+            options.backend.threads = 4;
+            // A 300-second untiled attention score can exceed 3 GiB. Keep an
+            // individual score allocation below roughly 512 MiB by default.
+            options.options["sheetsage2.attention_tile_rows"] = "1024";
+            sheetsage2_session = sheetsage2_model->create_task_session(
+                {engine::runtime::VoiceTaskKind::Midi, engine::runtime::RunMode::Offline},
+                options);
+            sheetsage2_session->prepare({});
+            printf("\nAudio.cpp SheetSage2 Load Complete.\n");
+            return true;
+        } catch (const std::exception & error) {
+            printf("\nAudio.cpp SheetSage2 Load Error: %s\n", error.what());
+            sheetsage2_session.reset();
+            sheetsage2_model.reset();
+            is_audiocpp_sheetsage2 = false;
+            return false;
+        }
+    }
+
     printf("\nLoading Whisper Model: %s",modelfile.c_str());
 
     whisperdebugmode = inputs.debugmode;
@@ -92,6 +145,50 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
 {
     whisper_generation_outputs output;
 
+    if (is_audiocpp_sheetsage2) {
+        auto * offline = sheetsage2_session
+            ? dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(sheetsage2_session.get())
+            : nullptr;
+        if (offline == nullptr) {
+            printf("\nWarning: Audio.cpp SheetSage2 is not initialized.\n");
+            output.text = "";
+            output.status = 0;
+            return output;
+        }
+        if (!whisper_is_quiet) {
+            printf("\nAudio.cpp SheetSage2 Transcribing Music to ABC...");
+        }
+        try {
+            std::vector<float> pcmf32;
+            if (!::read_audio(std::string(inputs.audio_data), SHEETSAGE_SAMPLE_RATE, pcmf32)) {
+                throw std::runtime_error("failed to decode input audio");
+            }
+            engine::runtime::TaskRequest request;
+            request.audio_input = engine::runtime::AudioBuffer{
+                SHEETSAGE_SAMPLE_RATE, 1, std::move(pcmf32)};
+            auto result = offline->run(request);
+            if (!result.text_output.has_value() || result.text_output->text.empty()) {
+                throw std::runtime_error("model produced no ABC score");
+            }
+            whisper_output_text = std::move(result.text_output->text);
+            const std::string ts = get_timestamp_str();
+            if (whisper_is_quiet) {
+                printf("\n[%s] SheetSage2 Music Transcription Done.", ts.c_str());
+            } else {
+                printf("\n[%s] SheetSage2 ABC Output:\n%s", ts.c_str(), whisper_output_text.c_str());
+            }
+            output.text = whisper_output_text.c_str();
+            output.status = 1;
+            total_transcribe_gens += 1;
+            return output;
+        } catch (const std::exception & error) {
+            printf("\nAudio.cpp SheetSage2 Generation Error: %s\n", error.what());
+            output.text = "";
+            output.status = 0;
+            return output;
+        }
+    }
+
     if(whisper_ctx==nullptr)
     {
         printf("\nWarning: KCPP whisper not initialized!\n");
@@ -111,7 +208,7 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
 
     std::vector<float> pcmf32;               // mono-channel F32 PCM
 
-    if (!::read_audio(b64data, pcmf32)) {
+    if (!::read_audio(b64data, COMMON_SAMPLE_RATE, pcmf32)) {
         printf("\nWhisper: Failed to read input wav data!\n");
         output.text = "";
         output.status = 0;

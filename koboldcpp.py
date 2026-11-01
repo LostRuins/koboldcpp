@@ -5821,7 +5821,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
         is_chat_completions_path = (clean_path.endswith('/v1/chat/completions') or clean_path=='/chat/completions')
 
         #any requests to the following endpoints is capable of waking the server
-        wake_requests = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/extra/transcribe","/v1/audio/transcriptions","/api/extra/tts","/v1/audio/speech","/api/extra/embeddings","/v1/embeddings","/api/embed","/api/extra/music/prepare","/api/extra/music/generate","/images/generations","/v1/images/generations","/images/edits","/v1/images/edits","/sdapi/v1/txt2img","/sdapi/v1/img2img","/sdapi/v1/upscale","/api/generate", "/api/chat", "/v1/messages", "/messages"]
+        wake_requests = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/extra/transcribe","/api/extra/music/transcribe","/v1/audio/transcriptions","/api/extra/tts","/v1/audio/speech","/api/extra/embeddings","/v1/embeddings","/api/embed","/api/extra/music/prepare","/api/extra/music/generate","/images/generations","/v1/images/generations","/images/edits","/v1/images/edits","/sdapi/v1/txt2img","/sdapi/v1/img2img","/sdapi/v1/upscale","/api/generate", "/api/chat", "/v1/messages", "/messages"]
         is_wake_request = clean_path in wake_requests
 
         autoswapEnabled = global_memory["autoswapmode"] is not None and global_memory["autoswapmode"]
@@ -5871,7 +5871,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                         time.sleep(0.1)
             if autoswapEnabled and not model_switch_pass:
                 textReqs = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/generate", "/api/chat", "/v1/messages", "/messages"]
-                sttReqs = ["/api/extra/transcribe","/v1/audio/transcriptions"]
+                sttReqs = ["/api/extra/transcribe","/api/extra/music/transcribe","/v1/audio/transcriptions"]
                 ttsReqs = ["/api/extra/tts", "/v1/audio/speech"]
                 embedReqs = ["/api/extra/embeddings", "/v1/embeddings", "/api/embed"]
                 musicReqs = ["/api/extra/music/prepare","/api/extra/music/generate"]
@@ -8421,7 +8421,7 @@ Change Mode<br>
                 elif clean_path.endswith('/v1/images/edits') or clean_path=="/images/edits":
                     is_oai_imggen = True
                     is_oai_imgedit = True
-            elif clean_path.endswith('/api/extra/transcribe') or clean_path.endswith('/v1/audio/transcriptions') or clean_path=="/audio/transcriptions":
+            elif clean_path.endswith('/api/extra/transcribe') or clean_path.endswith('/api/extra/music/transcribe') or clean_path.endswith('/v1/audio/transcriptions') or clean_path=="/audio/transcriptions":
                 is_transcribe = True
             elif clean_path.endswith('/api/extra/tts') or clean_path.endswith('/v1/audio/speech') or clean_path=="/audio/speech" or clean_path.endswith('/tts_to_audio'):
                 is_tts = True
@@ -8941,7 +8941,7 @@ Change Mode<br>
                                 return
                             if fullwhispermodelpath == "":
                                 genresp = json.dumps({"detail": {
-                                    "msg": "A Whisper model is not currently available to transcribe the selected voice.",
+                                    "msg": "An audio transcription model is not currently available to transcribe the selected voice.",
                                     "type": "model_unavailable",
                                 }}).encode()
                                 self.send_response(503)
@@ -8971,7 +8971,10 @@ Change Mode<br>
                             gendat = temp_poll_result['text']
                         else:
                             gendat = whisper_generate(genparams)
-                        genresp = (json.dumps({"text":gendat}).encode())
+                        transcribe_response = {"text":gendat}
+                        if clean_path.endswith('/api/extra/music/transcribe'):
+                            transcribe_response["abc"] = gendat
+                        genresp = json.dumps(transcribe_response).encode()
                         self.send_response(200)
                         self.send_header('content-length', str(len(genresp)))
                         self.end_headers(content_type='application/json')
@@ -10767,7 +10770,7 @@ def show_gui():
 
     # audio tab
     audio_tab = tabcontent["Audio"]
-    makefileentry(audio_tab, "Whisper Model (Speech-To-Text):", "Select Whisper .bin Model File", whisper_model_var, 1, width=280, filetypes=[("*.bin","*.bin")], tooltiptxt="Select a Whisper .bin model file on disk to be loaded for Voice Recognition.")
+    makefileentry(audio_tab, "Audio Transcription:", "Select Whisper or SheetSage2 Model File", whisper_model_var, 1, width=280, filetypes=[("*.bin *.gguf","*.bin *.gguf")], tooltiptxt="Select a Whisper .bin for speech-to-text, or a SheetSage2 .gguf for music-to-ABC transcription.")
     whisper_model_var.trace_add("write", gui_changed_modelfile)
     makefileentry(audio_tab, "TTS Model (Text-To-Speech):", "Select TTS GGUF Model File", tts_model_var, 3, width=280, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a TTS GGUF model file on disk to be loaded for Narration.")
     tts_model_var.trace_add("write", gui_changed_modelfile)
@@ -14008,10 +14011,10 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             whispermodel = os.path.abspath(whispermodel)
             fullwhispermodelpath = whispermodel
             loadok = whisper_load_model(whispermodel)
-            print("Load Whisper Model OK: " + str(loadok))
+            print("Load Audio Transcription Model OK: " + str(loadok))
             if not loadok:
                 exitcounter = 999
-                exit_with_error(3,"Could not load whisper model: " + whispermodel)
+                exit_with_error(3,"Could not load audio transcription model: " + whispermodel)
 
     #handle tts model
     if args.ttsmodel and args.ttsmodel!="":
@@ -14639,7 +14642,7 @@ if __name__ == '__main__':
     sdparsergroup.add_argument("--sdvramlimit", metavar=('[limit MB]'), help="If set, prevent VRAM usage from image gen from using more than this many MB.", type=int, default=0)
 
     whisperparsergroup = parser.add_argument_group('Whisper Transcription Commands')
-    whisperparsergroup.add_argument("--whispermodel", metavar=('[filename]'), help="Specify a Whisper .bin model to enable Speech-To-Text transcription.", default="")
+    whisperparsergroup.add_argument("--whispermodel", metavar=('[filename]'), help="Specify a Whisper .bin for speech-to-text or SheetSage2 .gguf for music-to-ABC transcription.", default="")
 
     ttsparsergroup = parser.add_argument_group('TTS Narration Commands')
     ttsparsergroup.add_argument("--ttsmodel", metavar=('[filename]'), help="Specify the TTS Text-To-Speech GGUF model.", default="")

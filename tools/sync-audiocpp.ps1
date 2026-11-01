@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "qwen3_tts", "all")]
+    [ValidateSet("supertonic", "yue2", "sheetsage2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "qwen3_tts", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -498,11 +498,24 @@ $yue2Files = @(
     "src/models/yue2/types.cpp"
 )
 
+# SheetSage2 is Audio.cpp's audio-to-symbolic companion to YuE2. Its model
+# implementation is self-contained on top of framework audio/DSP, attention,
+# KV-cache, and graph modules already synchronized by the selected TTS and
+# YuE2 families.
+$sheetSage2Files = @(
+    "model_specs/sheetsage2.json",
+    "src/models/sheetsage/audio_frontend.cpp",
+    "src/models/sheetsage/processing.cpp",
+    "src/models/sheetsage/runtime.cpp",
+    "src/models/sheetsage/session.cpp"
+)
+
 $selected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($name in $Component) {
     if ($name -eq "all") {
         [void] $selected.Add("supertonic")
         [void] $selected.Add("yue2")
+        [void] $selected.Add("sheetsage2")
         [void] $selected.Add("fish_audio")
         [void] $selected.Add("maya1")
         [void] $selected.Add("chatterbox")
@@ -664,6 +677,13 @@ if ($selected.Contains("yue2")) {
     Copy-AudioCppFile "external/llama_tokenizer/bpe-core.h"
     Copy-AudioCppFile "external/llama_tokenizer/unicode.h"
     foreach ($relativePath in $yue2Files) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("sheetsage2")) {
+    Copy-AudioCppTree "include/engine/models/sheetsage"
+    foreach ($relativePath in $sheetSage2Files) {
         Copy-AudioCppFile $relativePath
     }
 }

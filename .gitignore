@@ -150,6 +150,8 @@ tests/test-tokenizer-1-bpe
 /koboldcpp_common.dll
 /koboldcpp_backend.def
 /koboldcpp_backend.dll.a
+/koboldcpp_backend_dll_a_h.s
+/koboldcpp_backend_dll_a_t.s
 /koboldcpp_default.dll.a
 /backend_routes/
 /koboldcpp_vulkan_shaders.so

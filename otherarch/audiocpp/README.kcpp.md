@@ -12,6 +12,7 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ```powershell
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component supertonic
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component sheetsage2
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component fish_audio
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component maya1
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox
@@ -234,6 +235,18 @@ adding the exact transcript also supplies Ming's acoustic latent prefix.
 KoboldCpp maps its existing `instruction` field to Ming's `freeform` template
 unless `template_name` is supplied explicitly. Ming produces 44.1 kHz mono
 audio in Chinese, English, Japanese, Korean, German, French, or Spanish.
+
+Pass `sheetsage2-orig.gguf` through the existing `--whispermodel` slot to use
+music-to-ABC transcription instead of Whisper speech-to-text. Both
+`/api/extra/transcribe` and `/v1/audio/transcriptions` return the generated ABC
+in their normal `text` field. The convenience `/api/extra/music/transcribe`
+alias returns the same score as both `text` and `abc`. That ABC can be passed unchanged to
+`/api/extra/music/prepare` for YuE2; `cot=full` retains SheetSage's melody and
+harmonic conditioning, while `cot=melody` requests the melody-only path.
+SheetSage2 decodes input at 24 kHz and defaults to 1024-row attention tiling to
+avoid the model's multi-gigabyte untiled attention allocation. This compatibility
+bridge occupies the transcription slot, so Whisper and SheetSage2 cannot both be
+resident there at once.
 
 ## Intentional compatibility changes
 

@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "family": "sheetsage2",
+  "display_name": "SheetSage2",
+  "description": "SheetSage2 audio-to-symbolic transcription. This native path consumes an input recording from a self-contained GGUF and emits an ABC score artifact.",
+  "category": "audio_tools",
+  "status": "supported",
+  "tasks": [
+    "midi"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "music"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf",
+      "cuda"
+    ]
+  },
+  "capabilities": {
+    "midi": [
+      "midi_artifact"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum total decoder sequence length; default follows the embedded model context. Omitted uses checkpoint max_output_seq_len.",
+        "required": false,
+        "min": 1
+      }
+    ],
+    "session": [
+      {
+        "name": "attention_tile_rows",
+        "type": "int",
+        "description": "Query rows per encoder attention tile on any backend; 0 disables tiling. Use 1024 to bound each score tensor below 512 MiB for the 300-second window.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Encoder and decoder weight storage override.",
+        "required": false,
+        "default": "native",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q4_0",
+          "q4_k"
+        ]
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Weight context arena size in MiB; default 1024.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "decoder_graph_arena_mb",
+        "type": "int",
+        "description": "Encoder/decoder graph arena size in MiB; default 1536.",
+        "required": false,
+        "min": 1,
+        "default": 1536
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/SheetSage2-GGUF",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "sheetsage2_orig",
+      "display_name": "SheetSage2 Original-Dtype GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "SheetSage2-GGUF",
+      "files": [
+        "sheetsage2-orig.gguf"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "sheetsage2_orig",
+    "tags": [
+      "Music",
+      "MIDI",
+      "GGUF"
+    ],
+    "docs": []
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json"
+      },
+      "tensors": {
+        "weights": "weights:"
+      }
+    }
+  ]
+}
