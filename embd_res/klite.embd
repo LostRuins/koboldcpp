@@ -14954,6 +14954,26 @@ Current version indicated by LITEVER below.
 		document.getElementById("apikey").value = tmpkey;
 	}
 
+	function get_horde_chat_completion_model_names()
+	{
+		let chat_models = new Set();
+		if(cached_worker_list)
+		{
+			for(let i=0; i<cached_worker_list.length; ++i)
+			{
+				let worker = cached_worker_list[i];
+				if(worker.accepts_chat_jobs && Array.isArray(worker.models))
+				{
+					for(let j=0; j<worker.models.length; ++j)
+					{
+						chat_models.add(worker.models[j]);
+					}
+				}
+			}
+		}
+		return chat_models;
+	}
+
 	function toggle_horde_chat_completions()
 	{
 		let pickedmodel = document.getElementById("pickedmodel");
@@ -14971,11 +14991,14 @@ Current version indicated by LITEVER below.
 				document.getElementById("apikey").value = tmpkey;
 				return;
 			}
+			model_quick_search();
 			let selected_options = Array.from(pickedmodel.selectedOptions);
 			for(let i=1; i<selected_options.length; ++i)
 			{
 				selected_options[i].selected = false;
 			}
+		}else{
+			model_quick_search();
 		}
 		pickedmodel.multiple = !use_chat_completions;
 	}
@@ -17474,9 +17497,20 @@ Current version indicated by LITEVER below.
 		let pickedparent = document.getElementById("pickedmodel");
 		let pickedentries = pickedparent.children;
 		let searchstr = document.getElementById("modelquicksearch").value.trim().toLowerCase();
+		let use_chat_completions = document.getElementById("horde_use_chat_completions").checked;
+		let chat_models = (use_chat_completions ? get_horde_chat_completion_model_names() : null);
 		for(let i=0; i<pickedentries.length; i++){
 			let schild = pickedentries[i];
-			if(searchstr=="" || schild.text.trim().toLowerCase().includes(searchstr))
+			let model = models_data[parseInt(schild.value)];
+			let supports_chat_completions = (!use_chat_completions || (model && chat_models.has(model.name)));
+			schild.disabled = !supports_chat_completions;
+			if(!supports_chat_completions)
+			{
+				schild.selected = false;
+			}
+			let show_model = (supports_chat_completions && (searchstr=="" || schild.text.trim().toLowerCase().includes(searchstr)));
+			schild.hidden = !show_model;
+			if(show_model)
 			{
 				schild.style.display = "block";
 			}else{
@@ -17505,10 +17539,14 @@ Current version indicated by LITEVER below.
 
 		let manualworker = (!use_chat_completions && document.getElementById("manualworker").checked ? true : false);
 
-		if (selected_idx_arr.length == 0) { //select everything
+		if (selected_idx_arr.length == 0) { //select everything (or every chat-capable model)
 			manualworker = false;
+			let chat_models = (use_chat_completions ? get_horde_chat_completion_model_names() : null);
 			for (let i = 0; i < models_data.length; ++i) {
-				prep_sel_models.push(models_data[i]);
+				if(!use_chat_completions || chat_models.has(models_data[i].name))
+				{
+					prep_sel_models.push(models_data[i]);
+				}
 			}
 		}
 		else
@@ -21833,7 +21871,7 @@ Current version indicated by LITEVER below.
 							playDecodedAllTalkData(decodedData);
 						})
 						.catch((error) => {
-							console.log("AllTalk v2 Speak Error:", data);
+							console.log("AllTalk v2 Speak Error:", error);
 							tts_is_playing = false;
 							tts_is_processing = false;
 							update_submit_button(false);
@@ -21870,7 +21908,7 @@ Current version indicated by LITEVER below.
 								return response.json().then(data => {
 									if (data && data.output_file_url && data.status === "generate-success")
 									{
-										const audioUrl = `${localsettings.saved_alltalk_url}${data.output_file_url}`;
+										const audioUrl = new URL(data.output_file_url, `${localsettings.saved_alltalk_url}/`).href;
 										fetch(audioUrl)
 										.then(response => response.arrayBuffer())
 										.then(data => {
@@ -21889,7 +21927,7 @@ Current version indicated by LITEVER below.
 											playDecodedAllTalkData(decodedData);
 										})
 										.catch((error) => {
-											console.log("AllTalk v2 Speak Error:", data);
+											console.log("AllTalk v2 Speak Error:", error);
 											tts_is_playing = false;
 											tts_is_processing = false;
 											update_submit_button(false);
