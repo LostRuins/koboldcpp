@@ -9085,7 +9085,7 @@ Change Mode<br>
         self.end_headers(content_type='text/html')
 
     def end_headers(self, content_type=None):
-        origin = self.headers.get('Origin')
+        origin = getattr(self, 'headers', {}).get('Origin')
         if origin:
             self.send_header('access-control-allow-origin', origin)
             self.send_header('access-control-allow-credentials', 'true')

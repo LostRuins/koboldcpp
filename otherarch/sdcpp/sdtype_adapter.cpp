@@ -18,6 +18,7 @@
 #include <filesystem>
 
 #include "otherarch/utils.h"
+#include "otherarch/webp_image.h"
 #include "model_adapter.h"
 
 #include "stable-diffusion.h"
@@ -1491,6 +1492,10 @@ uint8_t* load_image_from_b64(const std::string & b64str, int& width, int& height
     std::vector<uint8_t> decoded_buf = kcpp_base64_decode(b64str);
     int c = 0;
     uint8_t* image_buffer = (uint8_t*)stbi_load_from_memory(decoded_buf.data(), decoded_buf.size(), &width, &height, &c, expected_channel);
+    if (image_buffer == nullptr) {
+        image_buffer = kcpp_decode_webp_from_memory(
+            decoded_buf.data(), decoded_buf.size(), &width, &height, &c, expected_channel);
+    }
 
     if (image_buffer == NULL) {
         fprintf(stderr, "load_image_from_b64 failed\n");
