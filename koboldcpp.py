@@ -178,8 +178,6 @@ multiplayer_dataformat = "" # used to tell what is the data payload in saved sto
 multiplayer_lastactive = {} # timestamp of last activity for each unique player
 websearch_lastquery = ""
 websearch_lastresponse = []
-websearch_cache_until = 0.0
-websearch_cache_lock = threading.Lock()
 preloaded_story = None
 chatcompl_adapter = None
 chatcompl_adapter_list = None #if using autoguess, will populate this will potential adapters
@@ -3708,7 +3706,7 @@ def _websearch_url(url):
         urllib.parse.quote(parts.query, safe="%/:?@!$&'()*+,;=-._~"), ""))
 
 
-def _websearch_fetch(url):
+def _websearch_fetch(url, random_agent=False):
     """Fetch bounded HTML/plain text, honoring the server's encoding."""
     class PublicRedirectHandler(urllib.request.HTTPRedirectHandler):
         max_redirections = 5
@@ -3720,30 +3718,44 @@ def _websearch_fetch(url):
         url = _websearch_url(url)
         if not os.environ.get('SSL_CERT_DIR') and not nocertify and os.name != 'nt':
             os.environ['SSL_CERT_DIR'] = '/etc/ssl/certs'
-        request = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-            "Accept": "text/html, application/xhtml+xml, text/plain;q=0.9",
-            "Accept-Encoding": "identity",
-        })
+        user_agent = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+        if random_agent:
+            user_agent = random.choice([
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2) Gecko/20100101 Firefox/114.0",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.1823.79 Safari/537.36 Edg/114.0.1823.79",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.132 Safari/537.36",
+            ])
+        user_agents = [user_agent,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"]
         opener = urllib.request.build_opener(PublicRedirectHandler())
-        with opener.open(request, timeout=20) as response:
-            content_type = response.headers.get_content_type().lower()
-            if content_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
-                raise ValueError(f"unsupported content type: {content_type}")
-            limit = 4 * 1024 * 1024
-            body = response.read(limit + 1)
-            if len(body) > limit:
-                raise ValueError(f"page exceeds {limit} bytes")
-            charset = response.headers.get_content_charset()
-            if not charset and content_type != "text/plain":
-                # Older pages sometimes declare the encoding only in a meta tag.
-                match = re.search(br'<meta\b[^>]*\bcharset\s*=\s*[\x22\x27\s]*([\w-]+)', body[:4096], re.I)
-                charset = match.group(1).decode('ascii') if match else None
+        for attempt, current_agent in enumerate(user_agents):
+            request = urllib.request.Request(url, headers={
+                "User-Agent": current_agent,
+            })
             try:
-                text = body.decode(charset or 'utf-8-sig', errors='replace')
-            except LookupError:
-                text = body.decode('utf-8-sig', errors='replace')
-            return text, content_type
+                with opener.open(request, timeout=20) as response:
+                    content_type = response.headers.get_content_type().lower()
+                    if content_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
+                        raise ValueError(f"unsupported content type: {content_type}")
+                    limit = 4 * 1024 * 1024
+                    body = response.read(limit + 1)
+                    if len(body) > limit:
+                        raise ValueError(f"page exceeds {limit} bytes")
+                    charset = response.headers.get_content_charset()
+                    if not charset and content_type != "text/plain":
+                        # Older pages sometimes declare the encoding only in a meta tag.
+                        match = re.search(br'<meta\b[^>]*\bcharset\s*=\s*[\x22\x27\s]*([\w-]+)', body[:4096], re.I)
+                        charset = match.group(1).decode('ascii') if match else None
+                    try:
+                        text = body.decode(charset or 'utf-8-sig', errors='replace')
+                    except LookupError:
+                        text = body.decode('utf-8-sig', errors='replace')
+                    return text, content_type
+            except urllib.error.HTTPError:
+                if attempt + 1 == len(user_agents):
+                    raise
     except Exception as e:
         utfprint(f"WebSearch fetch failed for {url}: {e}", 1)
         return "", ""
@@ -3945,19 +3957,18 @@ def _websearch_excerpt(text, query, title, desc, max_chars=2800):
 
 # Performs a web search using DuckDuckGo and extracts relevant passages from the top results.
 def websearch(query):
-    global websearch_lastquery, websearch_lastresponse, websearch_cache_until
+    global websearch_lastquery, websearch_lastresponse
     query = ' '.join(query.split())
     query = query.encode('utf-8', errors='ignore')[:500].decode('utf-8', errors='ignore').strip()
     if not query:
         return []
-    with websearch_cache_lock:
-        if query == websearch_lastquery and time.monotonic() < websearch_cache_until:
-            print("\nReturning cached websearch...")
-            return websearch_lastresponse
+    if query == websearch_lastquery:
+        print("\nReturning cached websearch...")
+        return websearch_lastresponse
     utfprint("\nPerforming new websearch...", 1)
     search_url = 'https://html.duckduckgo.com/html/?q=' + urllib.parse.quote_plus(query)
     try:
-        search_html, _ = _websearch_fetch(search_url)
+        search_html, _ = _websearch_fetch(search_url, random_agent=True)
         results = _websearch_parse_results(search_html, search_url)[:6]
         if not results:
             utfprint("WebSearch returned no results (the search engine may be unavailable or blocking requests).", 1)
@@ -3986,11 +3997,8 @@ def websearch(query):
     except Exception as e:
         utfprint(f"WebSearch failed: {e}", 1)
         return []
-    with websearch_cache_lock:
-        websearch_lastquery = query
-        websearch_lastresponse = results
-        # Retry partial results soon; even complete searches should not stay stale forever.
-        websearch_cache_until = time.monotonic() + (300 if all(r['content'] for r in results) else 30)
+    websearch_lastquery = query
+    websearch_lastresponse = results
     return results
 
 def is_port_in_use(portNum):
