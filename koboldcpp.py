@@ -1955,11 +1955,11 @@ def autoset_gpu_layers(ctxsize, sdquanted, bbs, musiclowvram): #shitty algo to d
             if modelfile_extracted_meta[8] > 1024*1024*10: #embeddings model tax
                 calulated_gpu_overhead += max(350*1024*1024, modelfile_extracted_meta[8] * 1.5)
             if modelfile_extracted_meta[9] > 1024*1024*10: #music llm tax
-                musicoh1 = modelfile_extracted_meta[9] * 1.05 + (300*1024*1024)
+                musicoh1 = modelfile_extracted_meta[9] * 1.1 + (400*1024*1024)
             if modelfile_extracted_meta[10] > 1024*1024*10: #music dit tax
-                musicoh2 = modelfile_extracted_meta[10] * 1.05 + (300*1024*1024)
+                musicoh2 = modelfile_extracted_meta[10] * 1.1 + (400*1024*1024)
             if modelfile_extracted_meta[11] > 1024*1024*10: #music vae tax
-                musicoh3 = modelfile_extracted_meta[11] * 1.05
+                musicoh3 = modelfile_extracted_meta[11] * 1.1
             if musiclowvram:
                 calulated_gpu_overhead += max(musicoh1,musicoh2,musicoh3)
             else:
