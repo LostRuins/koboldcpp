@@ -679,6 +679,9 @@ struct Yue2NARRuntime::Impl {
         auto state = noise;
         const auto & config = assets->config.model;
         const int64_t frames = static_cast<int64_t>(state.size()) / config.latent_dim;
+        // The last chunk's graph can be hundreds of MiB. Release it before a
+        // differently-sized final chunk allocates its replacement.
+        graph.reset();
         graph = std::make_unique<Graph>(*this, frames, ar_state);
         auto & chunk_graph = *graph;
         const float dt = 1.0F / static_cast<float>(ode_steps);

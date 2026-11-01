@@ -474,6 +474,7 @@ let currentController=null;
 
 let currentTab = "music";
 let tabSelectionVersion = 0;
+let transcribeAvailable = null;
 
 function switchTab(tab, userSelected = true){
   if(userSelected) tabSelectionVersion++;
@@ -645,6 +646,8 @@ async function autoTranscribeReference(){
 async function fetchTranscribeCapability(){
   const status=document.getElementById("transcribe_status");
   const button=document.getElementById("transcribe_button");
+  transcribeAvailable=null;
+  button.disabled=false;
   try{
     const base=document.getElementById("transcribe_baseUrl").value.trim();
     const url=(base ? base.replace(/\/$/,"") : "") + "/api/extra/version";
@@ -655,17 +658,25 @@ async function fetchTranscribeCapability(){
     if(!res.ok) throw new Error();
     const data=await res.json();
     const available=!!data.transcribe;
+    transcribeAvailable=available;
     status.textContent=available
       ? "Whisper transcription is available."
       : "No Whisper transcription model is currently available on this server.";
-    button.disabled=!available;
+    button.title=available
+      ? "Transcribe the selected audio file"
+      : "No Whisper transcription model is available";
   }catch(e){
+    transcribeAvailable=null;
     status.textContent="Could not check Whisper availability; you can still try the endpoint.";
-    button.disabled=false;
+    button.title="Transcribe the selected audio file";
   }
 }
 
 async function transcribeAudio(){
+  if(transcribeAvailable === false){
+    showMessage("No Whisper transcription model is currently available on this server.",5000);
+    return;
+  }
   const file=document.getElementById("transcribe_file").files[0];
   if(!file){
     showMessage("Select an audio file to transcribe.");

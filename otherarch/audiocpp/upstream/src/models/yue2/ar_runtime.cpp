@@ -951,6 +951,25 @@ struct Yue2ARRuntime::Impl {
         engine::debug::timing_log_scalar("yue2.ar.ensure_generation_ms", engine::debug::elapsed_ms(total_start));
     }
 
+    void release_generation_resources() {
+        // NAR still needs the token embedding and transformer stack to build
+        // its prefix state, but it never uses the AR generation runtimes,
+        // final norm, or LM head. Drop those before allocating NAR weights and
+        // its graph so both phases do not occupy VRAM at the same time.
+        runtime.reset();
+        negative_runtime.reset();
+        abc_runtime.reset();
+        abc_negative_runtime.reset();
+        semantic_runtime.reset();
+        semantic_negative_runtime.reset();
+        abc_runtime_weights = {};
+        semantic_runtime_weights = {};
+        runtime_weights.final_norm = {};
+        runtime_weights.lm_head.reset();
+        generation_view_ctx.reset();
+        generation_store.reset();
+    }
+
     core::ExecutionContext & execution;
     std::shared_ptr<const Yue2Assets> assets;
     std::shared_ptr<core::BackendWeightStore> store;
@@ -1035,6 +1054,10 @@ void Yue2ARRuntime::release_runtime_graphs() {
     if (impl_->semantic_negative_runtime) {
         impl_->semantic_negative_runtime->release_runtime_graphs();
     }
+}
+
+void Yue2ARRuntime::release_generation_resources() {
+    impl_->release_generation_resources();
 }
 
 }  // namespace engine::models::yue2

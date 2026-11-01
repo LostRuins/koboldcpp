@@ -1480,6 +1480,11 @@ void Mert2EncoderRuntime::release_runtime_graphs() {
     impl_->encoder_graph.reset();
 }
 
+void Mert2EncoderRuntime::release_runtime_resources() {
+    impl_->encoder_graph.reset();
+    impl_->encoder_weights.reset();
+}
+
 SheetSage2DecoderRuntime::SheetSage2DecoderRuntime(
     std::shared_ptr<const assets::TensorSource> source,
     core::ExecutionContext & execution,
@@ -1569,6 +1574,12 @@ std::vector<float> SheetSage2DecoderRuntime::prefill_cached_decode(const std::ve
 void SheetSage2DecoderRuntime::release_runtime_graphs() {
     impl_->graph.reset();
     impl_->cached_graph.reset();
+}
+
+void SheetSage2DecoderRuntime::release_runtime_resources() {
+    impl_->graph.reset();
+    impl_->cached_graph.reset();
+    impl_->weights.reset();
 }
 
 }  // namespace engine::models::sheetsage

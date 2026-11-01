@@ -213,8 +213,11 @@ public:
         if (codec.empty()) {
             throw std::runtime_error("Yue2 semantic generation produced no codec tokens");
         }
-        ensure_nar();
+        // Semantic generation is complete. Keep only the AR backbone needed
+        // for NAR prefix-state prefill and free its generation-only VRAM first.
         ensure_ar();
+        ar->release_generation_resources();
+        ensure_nar();
         return nar->synthesize(
             semantic.plan.prefix,
             codec,

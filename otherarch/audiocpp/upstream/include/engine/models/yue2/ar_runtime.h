@@ -60,6 +60,7 @@ public:
     Yue2ARDevicePrefixState prefill_device_state(const std::vector<int32_t> & tokens);
 
     void release_runtime_graphs();
+    void release_generation_resources();
 
 private:
     struct Impl;

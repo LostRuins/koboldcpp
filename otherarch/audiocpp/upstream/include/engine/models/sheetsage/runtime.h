@@ -28,6 +28,7 @@ public:
         int64_t mel_frames);
     void prepare(int64_t batch, int64_t mel_frames);
     void release_runtime_graphs();
+    void release_runtime_resources();
 
 private:
     struct Impl;
@@ -61,6 +62,7 @@ public:
 
     void prepare(int64_t batch, int64_t memory_steps, int64_t decoder_steps);
     void release_runtime_graphs();
+    void release_runtime_resources();
 
 private:
     struct Impl;

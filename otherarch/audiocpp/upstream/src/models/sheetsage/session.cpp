@@ -961,6 +961,15 @@ runtime::TaskResult SheetSage2Session::run(const runtime::TaskRequest & request)
     if (!request.audio_input.has_value()) {
         throw std::runtime_error("SheetSage2 run() requires audio_input");
     }
+    struct RuntimeResourceGuard {
+        Mert2EncoderRuntime & encoder;
+        SheetSage2DecoderRuntime & decoder;
+
+        ~RuntimeResourceGuard() {
+            decoder.release_runtime_resources();
+            encoder.release_runtime_resources();
+        }
+    } runtime_resource_guard{encoder_, decoder_};
     const auto total_start = Clock::now();
     const int64_t max_tokens = runtime::parse_positive_i64_option(
         request.options,
@@ -1057,9 +1066,6 @@ runtime::TaskResult SheetSage2Session::run(const runtime::TaskRequest & request)
         engine::debug::trace_log_scalar("sheetsage2.window.prefix_tokens", static_cast<int64_t>(prefix_tokens.size()));
         engine::debug::trace_log_scalar("sheetsage2.window.tokens", static_cast<int64_t>(last_ids.size()));
     }
-    encoder_.release_runtime_graphs();
-    decoder_.release_runtime_graphs();
-
     std::sort(stitched_events.begin(), stitched_events.end(), [](const auto & a, const auto & b) {
         if (a.time != b.time) {
             return a.time < b.time;
