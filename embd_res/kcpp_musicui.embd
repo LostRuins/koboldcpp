@@ -410,6 +410,11 @@ select{
   </div>
 
   <div style="margin-top:10px">
+    <label>Language (optional)</label>
+    <input title="Transcription Language" id="transcribe_language" placeholder="e.g. en (leave blank to auto-detect)">
+  </div>
+
+  <div style="margin-top:10px">
     <label>Transcription</label>
     <textarea id="transcribe_output" style="min-height:180px;" placeholder="The transcription will appear here."></textarea>
     <button type="button" class="secondary" style="margin-top:6px" onclick="copyTranscription()">Copy</button>
@@ -677,6 +682,8 @@ async function transcribeAudio(){
     if(apiKey) headers["Authorization"]=`Bearer ${apiKey}`;
     const formData=new FormData();
     formData.append("file",file,file.name);
+    const language=document.getElementById("transcribe_language").value.trim();
+    if(language) formData.append("language",language);
 
     const res=await fetch(url,{
       method:"POST",
@@ -700,6 +707,7 @@ async function transcribeAudio(){
 
 function clearTranscription(){
   document.getElementById("transcribe_file").value="";
+  document.getElementById("transcribe_language").value="";
   document.getElementById("transcribe_output").value="";
 }
 
