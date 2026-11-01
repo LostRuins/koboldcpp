@@ -811,7 +811,7 @@ otherarch/sdcpp/thirdparty/utf8proc/%.o: otherarch/sdcpp/thirdparty/utf8proc/%.c
 otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
 
-otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp otherarch/sdcpp/include/stable-diffusion.h otherarch/sdcpp/src/kcpp_sd_extensions.h kcpp_src/model_adapter.h otherarch/utils.h vendor/tinylibwebp/src/webp/encode.h vendor/tinylibwebp/src/webp/mux.h
+otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp otherarch/sdcpp/include/stable-diffusion.h otherarch/sdcpp/src/kcpp_sd_extensions.h kcpp_src/model_adapter.h otherarch/utils.h otherarch/webp_image.h vendor/tinylibwebp/src/webp/decode.h vendor/tinylibwebp/src/webp/encode.h vendor/tinylibwebp/src/webp/mux.h
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./vendor/tinylibwebp/src $(CXXFLAGS) -c $< -o $@
 
 kcpp_sdcpp_tokenizer.o: kcpp_src/sdcpp_gguf_tokenizer.cpp kcpp_src/sdcpp_gguf_tokenizer.h
@@ -820,7 +820,7 @@ kcpp_sdcpp_tokenizer.o: kcpp_src/sdcpp_gguf_tokenizer.cpp kcpp_src/sdcpp_gguf_to
 otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-OBJS_SDTYPE := otherarch/sdcpp/sdtype_adapter.o kcpp_sdcpp_tokenizer.o $(OBJS_SDCOMMON) $(LIB_TINYLIBWEBP)
+OBJS_SDTYPE := otherarch/sdcpp/sdtype_adapter.o kcpp_sdcpp_tokenizer.o $(OBJS_SDCOMMON)
 LDFLAGS += -lm
 
 LLAMASERVER_SRCS := tools/server/main.cpp tools/server/server.cpp tools/server/server-schema.cpp tools/server/server-chat.cpp tools/server/server-common.cpp tools/server/server-context.cpp tools/server/server-connect.cpp tools/server/server-realtime.cpp tools/server/server-models-sched.cpp tools/server/server-http.cpp tools/server/server-models.cpp tools/server/server-queue.cpp tools/server/server-task.cpp tools/server/server-tools.cpp tools/server/server-mcp.cpp tools/server/server-decision.cpp tools/server/ui.cpp tools/server/server-stream.cpp common/subproc.cpp
@@ -868,8 +868,8 @@ music_default.o: otherarch/acestep/music_adapter.cpp
 
 # idiotic "for easier compilation"
 GPTTYPE_ADAPTER = kcpp_src/gpttype_adapter.cpp kcpp_src/kcpp_backend.h kcpp_src/model_adapter.h otherarch/otherarch.h include/llama.h otherarch/llama_v2.cpp otherarch/llama_v3.cpp otherarch/gptj_v1.cpp otherarch/gptj_v2.cpp otherarch/gptj_v3.cpp otherarch/gpt2_v1.cpp otherarch/gpt2_v2.cpp otherarch/gpt2_v3.cpp otherarch/rwkv_v2.cpp otherarch/rwkv_v3.cpp otherarch/neox_v2.cpp otherarch/neox_v3.cpp otherarch/mpt_v3.cpp
-gpttype_adapter_default.o: $(GPTTYPE_ADAPTER) common/fit.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+gpttype_adapter_default.o: $(GPTTYPE_ADAPTER) common/fit.h otherarch/webp_image.h vendor/tinylibwebp/src/webp/decode.h
+	$(CXX) -I./vendor/tinylibwebp/src $(CXXFLAGS) -c $< -o $@
 
 kcpp_backend_failsafe.o: kcpp_src/kcpp_backend.cpp kcpp_src/kcpp_backend.h
 	$(CXX) $(CXXFLAGS) $(FAILSAFE_FLAGS) -c $< -o $@
@@ -1025,7 +1025,7 @@ endif
 # High-level objects are identical for every MinGW/Linux variant.  Keep these in
 # one shared library; the selected low-level variant supplies the GGML, CPU ISA,
 # legacy GGML and GPU symbols used by this code.
-KOBOLDCPP_ENGINE_HIGHLEVEL_OBJS = gpttype_adapter_default.o whispercpp_default.o clip_default.o expose.o chat.o llama.o llama-model.o embeddings_default.o music_default.o tts_default.o $(OBJS_AUDIOCPP) mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o $(OBJS_SDTYPE)
+KOBOLDCPP_ENGINE_HIGHLEVEL_OBJS = gpttype_adapter_default.o whispercpp_default.o clip_default.o expose.o chat.o llama.o llama-model.o embeddings_default.o music_default.o tts_default.o $(OBJS_AUDIOCPP) mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o $(OBJS_SDTYPE) $(LIB_TINYLIBWEBP)
 
 # This is the invariant subset that used to be repeated verbatim in OBJS_FULL,
 # OBJS_SIMPLE, OBJS_SIMPLER and OBJS_FAILSAFE.

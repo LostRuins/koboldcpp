@@ -955,7 +955,8 @@ public:
             throw std::runtime_error("failed to allocate HiFT backend graph");
         }
         if (weights.config.source_mode == HiftVocoderSourceMode::SineGen2 &&
-            weights.execution_context->backend_type() == core::BackendType::Cuda) {
+            weights.execution_context->backend_type() == core::BackendType::Cuda &&
+            audio::cuda_log_magnitude_phase_istft_available()) {
             cuda_istft_ = std::make_unique<audio::CudaLogMagnitudePhaseISTFT>(
                 audio::CudaLogMagnitudePhaseISTFTConfig{stft_frames, weights.config.istft_n_fft,
                     weights.config.istft_hop, kHiftStftChannels, weights.execution_context->config().device});

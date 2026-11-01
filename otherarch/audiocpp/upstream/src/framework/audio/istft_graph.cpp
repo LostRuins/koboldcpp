@@ -14,6 +14,15 @@
 #include <utility>
 
 namespace engine::audio {
+
+bool cuda_log_magnitude_phase_istft_available() noexcept {
+#ifdef ENGINE_HAS_CUDA_ISTFT
+    return true;
+#else
+    return false;
+#endif
+}
+
 namespace {
 
 using Clock = std::chrono::steady_clock;

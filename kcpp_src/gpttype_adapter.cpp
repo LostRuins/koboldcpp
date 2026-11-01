@@ -33,6 +33,7 @@
 #include <thread>
 
 #include "utils.h"
+#include "webp_image.h"
 #include "llmutils.h"
 #include "kcpp_src/kcpp_backend.h"
 
@@ -6610,6 +6611,10 @@ static mtmd_bitmap * kcpp_mtmd_bitmap_init_image_from_buf(const unsigned char * 
     int ny = 0;
     int nc = 0;
     uint8_t * data = stbi_load_from_memory(buf, (int)len, &nx, &ny, &nc, 3);
+    if(data == nullptr)
+    {
+        data = kcpp_decode_webp_from_memory(buf, len, &nx, &ny, &nc, 3);
+    }
     if(data == nullptr)
     {
         printf("\nError: MTMD image failed to decode bytes.");

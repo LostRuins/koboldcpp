@@ -38,7 +38,7 @@ struct Yue2VAEConfig {
     int64_t latent_dim = 64;
     int64_t encoder_latent_dim = 128;
     int64_t downsampling_ratio = 1920;
-    int64_t decode_core_frames = 1024;
+    int64_t decode_core_frames = 512;
     int64_t decode_halo_frames = 16;
 };
 

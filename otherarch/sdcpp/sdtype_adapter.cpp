@@ -18,6 +18,7 @@
 #include <filesystem>
 
 #include "otherarch/utils.h"
+#include "otherarch/webp_image.h"
 #include "model_adapter.h"
 
 #include "stable-diffusion.h"
@@ -79,12 +80,12 @@ static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
         return -1;
     }
 
-    // Favor compact output over encode speed. Mixed mode lets the animation
-    // encoder choose lossless coding for frames where it is actually smaller.
-    anim_options.minimize_size = 1;
+    // Avoid exhaustively encoding every compression/disposal candidate. Mixed
+    // mode still uses heuristics to choose lossless coding when appropriate.
+    anim_options.minimize_size = 0;
     anim_options.allow_mixed   = 1;
-    config.method              = 4;
-    config.thread_level        = 0;  // The vendored scalar build has no workers.
+    config.method              = 3;
+    config.thread_level        = 1;
     if (!WebPValidateConfig(&config)) {
         fprintf(stderr, "Invalid animated WebP encoder configuration.\n");
         return -1;
@@ -1551,6 +1552,10 @@ uint8_t* load_image_from_b64(const std::string & b64str, int& width, int& height
     std::vector<uint8_t> decoded_buf = kcpp_base64_decode(b64str);
     int c = 0;
     uint8_t* image_buffer = (uint8_t*)stbi_load_from_memory(decoded_buf.data(), decoded_buf.size(), &width, &height, &c, expected_channel);
+    if (image_buffer == nullptr) {
+        image_buffer = kcpp_decode_webp_from_memory(
+            decoded_buf.data(), decoded_buf.size(), &width, &height, &c, expected_channel);
+    }
 
     if (image_buffer == NULL) {
         fprintf(stderr, "load_image_from_b64 failed\n");

@@ -13,7 +13,7 @@ Current version indicated by LITEVER below.
 <head>
 	<script id="init-config">
 	/* split: src/config/init-config.js */
-	const LITEVER = 352;
+	const LITEVER = 353;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -1907,6 +1907,36 @@ Current version indicated by LITEVER below.
 	}
 	.workerTable>tbody>tr>td{
 		padding: min(0.4vw, 5px);
+	}
+	#workercontainer .workerDetails {
+		display: none;
+	}
+	@media (max-width: 768px) {
+		#workercontainer .workerTableDiv {
+			overflow-x: auto;
+			-webkit-overflow-scrolling: touch;
+		}
+		#workercontainer .workerTable th,
+		#workercontainer .workerTable td {
+			overflow-wrap: anywhere;
+		}
+		#workercontainer .workerTable .workerJobs {
+			white-space: nowrap;
+		}
+	}
+	@media (max-width: 480px) {
+		#workercontainer .workerTable {
+			font-size: 12px;
+		}
+		#workercontainer .workerCapabilities,
+		#workercontainer .workerJobs,
+		#workercontainer .workerUptime,
+		#workercontainer .workerKudos {
+			display: none;
+		}
+		#workercontainer .workerDetails {
+			display: table-cell;
+		}
 	}
 
 	/* split: src/generation/logprobs.css */
@@ -5569,15 +5599,82 @@ Current version indicated by LITEVER below.
 			};
 		}
 
+		//polyfill for object.fromEntries
+		if (!Object.fromEntries)
+		{
+			Object.fromEntries = function(iterable) {
+				if (iterable == null) throw new TypeError("Object.fromEntries requires an iterable");
+				var result = {};
+				var addEntry = function(entry) {
+					if (entry == null || (typeof entry !== "object" && typeof entry !== "function")) {
+						throw new TypeError("Iterator value " + entry + " is not an entry object");
+					}
+					Object.defineProperty(result, entry[0], {
+						value: entry[1],
+						writable: true,
+						enumerable: true,
+						configurable: true
+					});
+				};
+
+				var iteratorMethod = typeof Symbol !== "undefined" && Symbol.iterator && iterable[Symbol.iterator];
+				if (typeof iteratorMethod === "function") {
+					var iterator = iteratorMethod.call(iterable);
+					var step;
+					while (!(step = iterator.next()).done) addEntry(step.value);
+				}
+				else {
+					for (var i = 0; i < iterable.length; ++i) addEntry(iterable[i]);
+				}
+				return result;
+			};
+		}
+
+		//polyfills for array.flat and array.flatMap
+		if (!Array.prototype.flat) {
+			Array.prototype.flat = function(depth) {
+				var flattened = [];
+				var maxDepth = depth === undefined ? 1 : Number(depth);
+				if (isNaN(maxDepth) || maxDepth < 0) maxDepth = 0;
+				else maxDepth = Math.floor(maxDepth);
+				var flatten = function(array, currentDepth) {
+					for (var i = 0; i < array.length; ++i) {
+						if (!(i in array)) continue;
+						var value = array[i];
+						if (Array.isArray(value) && currentDepth > 0) flatten(value, currentDepth - 1);
+						else flattened.push(value);
+					}
+				};
+				flatten(this, maxDepth);
+				return flattened;
+			};
+		}
+
+		if (!Array.prototype.flatMap) {
+			Array.prototype.flatMap = function(callback, thisArg) {
+				if (typeof callback !== "function") throw new TypeError("flatMap callback must be a function");
+				return Array.prototype.map.call(this, callback, thisArg).flat();
+			};
+		}
+
 		//inplace polyfill for replaceall
 		if (!String.prototype.replaceAll) {
 			String.prototype.replaceAll = function(str, newStr){
 				// If a regex pattern
 				if (Object.prototype.toString.call(str).toLowerCase() === '[object regexp]') {
-					return this.replace(str, newStr);
+					if (!str.global) throw new TypeError("replaceAll requires a global RegExp");
+					return String(this).replace(str, newStr);
 				}
-				// If a string
-				return this.replace(new RegExp(str, 'g'), newStr);
+				// Escape string patterns so they retain native replaceAll's literal matching behavior.
+				var escaped = String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				return String(this).replace(new RegExp(escaped, 'g'), newStr);
+			};
+		}
+
+		//polyfill for trimstart
+		if (!String.prototype.trimStart) {
+			String.prototype.trimStart = function() {
+				return String(this).replace(/^[\s\uFEFF\xA0]+/, "");
 			};
 		}
 
@@ -14102,6 +14199,7 @@ Current version indicated by LITEVER below.
 					tokenspersec = 0;
 				}
 				worker_data_showonly[i].tokenspersec = parseFloat(tokenspersec);
+				worker_data_showonly[i].jobtypes = (elem.accepts_chat_jobs ? 2 : 0) + (elem.accepts_prompt_jobs ? 1 : 0);
 				if(elem.models.length>0)
 				{
 					worker_data_showonly[i].defaultmodel = elem.models[0];
@@ -14188,11 +14286,49 @@ Current version indicated by LITEVER below.
 		show_workers();
 	}
 
+	function show_worker_details(workerIndex) {
+		let elem = worker_data_showonly[workerIndex];
+		if (!elem) { return; }
+
+		let tokenspersec = elem.performance.replace(" tokens per second", "");
+		if (tokenspersec.toLowerCase()=="no requests fulfilled yet")
+		{
+			tokenspersec = 0;
+		}
+
+		let acceptedJobs = [];
+		if (elem.accepts_chat_jobs) { acceptedJobs.push("Chat"); }
+		if (elem.accepts_prompt_jobs) { acceptedJobs.push("Prompt"); }
+		if (acceptedJobs.length==0) { acceptedJobs.push("None"); }
+
+		let kudosRate = "";
+		if(first_seen_workers.hasOwnProperty(elem.id))
+		{
+			let firstseen = first_seen_workers[elem.id];
+			let kudosdiff = elem.kudos_rewards - firstseen.startkudos;
+			if(kudosdiff>0)
+			{
+				let hrspassed = ((performance.now() - firstseen.timestamp) / 1000)/3600.0;
+				kudosRate = ` (${(kudosdiff/hrspassed).toFixed(0)}/hr)`;
+			}
+		}
+
+		let details =
+			`<b>Capabilities:</b> ${escape_html(String(elem.max_length))} / ${escape_html(String(elem.max_context_length))} (${escape_html(String(tokenspersec))} T/s)<br><br>` +
+			`<b>Jobs:</b> ${escape_html(acceptedJobs.join(", "))}<br><br>` +
+			`<b>Uptime:</b> ${escape_html(String(format_uptime(elem.uptime)))} (${escape_html(String(elem.requests_fulfilled))} jobs)<br><br>` +
+			`<b>Kudos:</b> ${escape_html(elem.kudos_rewards.toFixed(0) + kudosRate)}`;
+
+		msgbox(details, `Worker Details - ${elem.name.substring(0, 40)}`, true, false, hide_msgbox);
+	}
+
 	function show_workers() {
 		document.getElementById("workercontainer").classList.remove("hidden");
 
 		let str = "";
 		let timenow = performance.now();
+		const chatJobIndicator = '<span role="img" aria-label="Accepts chat jobs" title="Accepts chat jobs">💬</span>';
+		const promptJobIndicator = '<span role="img" aria-label="Accepts prompt jobs" title="Accepts prompt jobs">📝</span>';
 		for (var i = 0; i < worker_data_showonly.length; ++i) {
 			let elem = worker_data_showonly[i];
 			let tokenspersec = elem.performance.replace(" tokens per second", "");
@@ -14212,17 +14348,21 @@ Current version indicated by LITEVER below.
 			}
 			if(elem.threads>1)
 			{
-				clickinfo += (clickinfo==""?"":"<br><br>") + "Threads: " + elem.threads;
+				clickinfo += `${clickinfo==""?"":"<br><br>"}Threads: ${elem.threads}`;
 			}
 			if(clickinfo!="")
 			{
-				workerNameHtml = "<a class=\"color_blueurl\" href=\"#\" onclick=\"msgbox(\'"+clickinfo+"\','Worker Info',false,false,hide_msgbox)\">"+workerNameHtml+"</a>";
+				workerNameHtml = `<a class="color_blueurl" href="#" onclick="msgbox('${clickinfo}','Worker Info',false,false,hide_msgbox)">${workerNameHtml}</a>`;
 			}
 			let allmdls = "";
 			for (let n = 0; n < elem.models.length; ++n) {
 				if (n > 0) { allmdls += "<br>"; }
 				allmdls += escape_html(elem.models[n].substring(0, 40));
 			}
+			let jobCapabilities = "";
+			if (elem.accepts_chat_jobs) { jobCapabilities = chatJobIndicator; }
+			if (elem.accepts_prompt_jobs) { jobCapabilities += `${jobCapabilities ? " " : ""}${promptJobIndicator}`; }
+			if (!jobCapabilities) { jobCapabilities = "&mdash;"; }
 			let kudos_per_hr = "";
 			if(first_seen_workers.hasOwnProperty(elem.id))
 			{
@@ -14231,13 +14371,13 @@ Current version indicated by LITEVER below.
 				if(kudosdiff>0)
 				{
 					var hrspassed = ((timenow - firstseen.timestamp) / 1000)/3600.0; //time passed in sec
-					kudos_per_hr = "(" + (kudosdiff/hrspassed).toFixed(0) + "/hr)";
+					kudos_per_hr = `(${(kudosdiff/hrspassed).toFixed(0)}/hr)`;
 				}
 			}
-			str += "<tr id='workertablerow_"+i+"'><td>" + workerNameHtml + "</td><td>" + allmdls + "</td><td>" + elem.max_length + " / " + elem.max_context_length + "<br>(" + tokenspersec + " T/s)</td><td "+brokenstyle+">" + format_uptime(elem.uptime) + "<br>(" + elem.requests_fulfilled + " jobs)</td><td "+style+">" + elem.kudos_rewards.toFixed(0) + "<br><span style='color:gray'>"+kudos_per_hr+"</span></td></tr>";
+			str += `<tr id="workertablerow_${i}"><td>${workerNameHtml}</td><td>${allmdls}</td><td class="workerCapabilities"><a class="color_blueurl" href="#" onclick="show_worker_details(${i}); return false;">${elem.max_length} / ${elem.max_context_length}<br>(${tokenspersec} T/s)</a></td><td class="workerJobs">${jobCapabilities}</td><td class="workerUptime" ${brokenstyle}>${format_uptime(elem.uptime)}<br>(${elem.requests_fulfilled} jobs)</td><td class="workerKudos" ${style}>${elem.kudos_rewards.toFixed(0)}<br><span style="color:gray">${kudos_per_hr}</span></td><td class="workerDetails"><a class="color_blueurl" href="#" onclick="show_worker_details(${i}); return false;">${elem.max_length} / ${elem.max_context_length}<br>(${tokenspersec} T/s)</a></td></tr>`;
 		}
 		document.getElementById("workertable").innerHTML = str;
-		document.getElementById("worktitlecount").innerText = "Worker List - Total " + worker_data_showonly.length;
+		document.getElementById("worktitlecount").innerText = `Worker List - Total ${worker_data_showonly.length}`;
 	}
 
 	function show_my_own_workers()
@@ -14814,6 +14954,26 @@ Current version indicated by LITEVER below.
 		document.getElementById("apikey").value = tmpkey;
 	}
 
+	function get_horde_chat_completion_model_names()
+	{
+		let chat_models = new Set();
+		if(cached_worker_list)
+		{
+			for(let i=0; i<cached_worker_list.length; ++i)
+			{
+				let worker = cached_worker_list[i];
+				if(worker.accepts_chat_jobs && Array.isArray(worker.models))
+				{
+					for(let j=0; j<worker.models.length; ++j)
+					{
+						chat_models.add(worker.models[j]);
+					}
+				}
+			}
+		}
+		return chat_models;
+	}
+
 	function toggle_horde_chat_completions()
 	{
 		let pickedmodel = document.getElementById("pickedmodel");
@@ -14831,11 +14991,14 @@ Current version indicated by LITEVER below.
 				document.getElementById("apikey").value = tmpkey;
 				return;
 			}
+			model_quick_search();
 			let selected_options = Array.from(pickedmodel.selectedOptions);
 			for(let i=1; i<selected_options.length; ++i)
 			{
 				selected_options[i].selected = false;
 			}
+		}else{
+			model_quick_search();
 		}
 		pickedmodel.multiple = !use_chat_completions;
 	}
@@ -15969,6 +16132,7 @@ Current version indicated by LITEVER below.
 									koboldcpp_has_txt2img = (data.txt2img?true:false);
 									let no_txt_model = (mdlname=="inactive");
 									update_mini_action_toggles_visibility();
+									update_genimg_button_visiblility();
 
 									//also check against kcpp's max true context length
 									fetch(apply_proxy_url(desiredkoboldendpoint + koboldcpp_truemaxctxlen_endpoint),
@@ -17333,9 +17497,20 @@ Current version indicated by LITEVER below.
 		let pickedparent = document.getElementById("pickedmodel");
 		let pickedentries = pickedparent.children;
 		let searchstr = document.getElementById("modelquicksearch").value.trim().toLowerCase();
+		let use_chat_completions = document.getElementById("horde_use_chat_completions").checked;
+		let chat_models = (use_chat_completions ? get_horde_chat_completion_model_names() : null);
 		for(let i=0; i<pickedentries.length; i++){
 			let schild = pickedentries[i];
-			if(searchstr=="" || schild.text.trim().toLowerCase().includes(searchstr))
+			let model = models_data[parseInt(schild.value)];
+			let supports_chat_completions = (!use_chat_completions || (model && chat_models.has(model.name)));
+			schild.disabled = !supports_chat_completions;
+			if(!supports_chat_completions)
+			{
+				schild.selected = false;
+			}
+			let show_model = (supports_chat_completions && (searchstr=="" || schild.text.trim().toLowerCase().includes(searchstr)));
+			schild.hidden = !show_model;
+			if(show_model)
 			{
 				schild.style.display = "block";
 			}else{
@@ -17364,10 +17539,14 @@ Current version indicated by LITEVER below.
 
 		let manualworker = (!use_chat_completions && document.getElementById("manualworker").checked ? true : false);
 
-		if (selected_idx_arr.length == 0) { //select everything
+		if (selected_idx_arr.length == 0) { //select everything (or every chat-capable model)
 			manualworker = false;
+			let chat_models = (use_chat_completions ? get_horde_chat_completion_model_names() : null);
 			for (let i = 0; i < models_data.length; ++i) {
-				prep_sel_models.push(models_data[i]);
+				if(!use_chat_completions || chat_models.has(models_data[i].name))
+				{
+					prep_sel_models.push(models_data[i]);
+				}
 			}
 		}
 		else
@@ -19438,6 +19617,25 @@ Current version indicated by LITEVER below.
 
 	/* split: src/websearch/websearch.js */
 	var websearch_request_controller = null;
+	function create_websearch_request_controller()
+	{
+		let native_controller = null;
+		if(typeof AbortController !== "undefined")
+		{
+			try { native_controller = new AbortController(); }
+			catch(error) { console.log("AbortController Not Supported: " + error); }
+		}
+		return {
+			aborted: false,
+			signal: native_controller ? native_controller.signal : null,
+			abort: function()
+			{
+				this.aborted = true;
+				if(native_controller) native_controller.abort();
+			}
+		};
+	}
+
 	function cancel_websearch()
 	{
 		if(websearch_request_controller)
@@ -19458,8 +19656,10 @@ Current version indicated by LITEVER below.
 		{
 			thinking_tags.push([localsettings.start_thinking_tag, localsettings.stop_thinking_tag]);
 		}
-		for(let [start, end] of thinking_tags)
+		for(let i = 0; i < thinking_tags.length; ++i)
 		{
+			let start = thinking_tags[i][0];
+			let end = thinking_tags[i][1];
 			let pos;
 			while((pos = text.indexOf(start)) !== -1)
 			{
@@ -19482,81 +19682,105 @@ Current version indicated by LITEVER below.
 		return text.replace(/\s+/g, " ");
 	}
 
-	async function generate_websearch_prompt(recentCtx, search_query, onDoneFn, signal)
+	function generate_websearch_prompt(recentCtx, search_query, onDoneFn, request_controller)
 	{
 		let query = search_query.trim();
-		let result = query;
-		if(query && custom_kobold_endpoint)
+		let finish = function(result)
 		{
-			try
+			if(request_controller && request_controller.aborted) return;
+			if(onDoneFn) onDoneFn(result);
+			return result;
+		};
+		if(!query || !custom_kobold_endpoint) return Promise.resolve(finish(query));
+
+		let use_chat;
+		let endpoint;
+		let payload;
+		try
+		{
+			let template = localsettings.websearch_template || default_websearch_template;
+			// split/join performs a literal replacement even when the query contains "$&".
+			let instruction = template.split('{{QUERY}}').join(query);
+			// Reserve room for the instructions, model formatting, and the 256-token reply.
+			let max_chars = Math.max(0, Math.floor((localsettings.max_context_length - 256) * 3) - 512);
+			if(instruction.length + 80 > max_chars) throw new Error("Search request exceeds rewrite context budget");
+			let context = replace_search_placeholders(recentCtx);
+			let context_budget = Math.max(0, Math.min(6000, max_chars - instruction.length - 80));
+			context = context_budget ? substring_to_boundary(context, context_budget) : "";
+			let task = "Recent conversation (reference only):\n" + (context || "(none)") + "\n\n" + instruction;
+			use_chat = is_using_kcpp_with_jinja();
+			payload = {
+				max_context_length: localsettings.max_context_length,
+				max_length: 256,
+				temperature: 0.2,
+				top_p: 1,
+				top_k: 0,
+				rep_pen: 1,
+				use_default_badwordsids: false,
+				bypass_eos: false
+			};
+			lastcheckgenkey = "WEBSEARCH" + Date.now();
+			payload.genkey = lastcheckgenkey;
+			endpoint = kobold_custom_gen_endpoint;
+			if(use_chat)
 			{
-				let template = localsettings.websearch_template || default_websearch_template;
-				let instruction = template.replaceAll('{{QUERY}}', () => query);
-				// Reserve room for the instructions, model formatting, and the 256-token reply.
-				let max_chars = Math.max(0, Math.floor((localsettings.max_context_length - 256) * 3) - 512);
-				if(instruction.length + 80 > max_chars) throw new Error("Search request exceeds rewrite context budget");
-				let context = replace_search_placeholders(recentCtx);
-				let context_budget = Math.max(0, Math.min(6000, max_chars - instruction.length - 80));
-				context = context_budget ? substring_to_boundary(context, context_budget) : "";
-				let task = "Recent conversation (reference only):\n" + (context || "(none)") + "\n\n" + instruction;
-				let use_chat = is_using_kcpp_with_jinja();
-				let payload = {
-					max_context_length: localsettings.max_context_length,
-					max_length: 256,
-					temperature: 0.2,
-					top_p: 1,
-					top_k: 0,
-					rep_pen: 1,
-					use_default_badwordsids: false,
-					bypass_eos: false
-				};
-				lastcheckgenkey = "WEBSEARCH" + Date.now();
-				payload.genkey = lastcheckgenkey;
-				let endpoint = kobold_custom_gen_endpoint;
-				if(use_chat)
-				{
-					endpoint = "/v1" + oai_submit_endpoint_chat;
-					payload.messages = [{role: "user", content: task}];
-					payload.max_tokens = payload.max_length;
-					delete payload.max_length;
-					payload.stream = false;
-					payload.continue_assistant_turn = false;
-					payload.chat_template_kwargs = {enable_thinking: false};
-				}
-				else
-				{
-					let start = get_instruct_starttag(false) || "\n### Instruction:\n";
-					let end = get_instruct_endtag(false) || "\n### Response:\n";
-					if(!is_using_kcpp_with_autotags())
-					{
-						start = start.replaceAll("{{[INPUT]}}", "\n### Instruction:\n");
-						end = end.replaceAll("{{[OUTPUT]}}", "\n### Response:\n");
-					}
-					payload.prompt = start + task + (localsettings.separate_end_tags ? get_instruct_starttag_end(false) : "") + end;
-					payload.replace_instruct_placeholders = true;
-				}
-				let response = await fetch(apply_proxy_url(custom_kobold_endpoint + endpoint), {
-					method: 'POST', headers: get_kobold_header(), body: JSON.stringify(payload), signal
-				});
-				if(!response.ok) throw new Error("Search rewrite HTTP " + response.status);
-				let data = await response.json();
-				let choice = use_chat ? data.choices?.[0] : data.results?.[0];
-				// A token-limit response may contain only reasoning or a cut-off query.
-				if(choice && choice.finish_reason !== "length")
-				{
-					let text = use_chat ? choice.message?.content : choice.text;
-					result = clean_websearch_query(text) || query;
-				}
+				endpoint = "/v1" + oai_submit_endpoint_chat;
+				payload.messages = [{role: "user", content: task}];
+				payload.max_tokens = payload.max_length;
+				delete payload.max_length;
+				payload.stream = false;
+				payload.continue_assistant_turn = false;
+				payload.chat_template_kwargs = {enable_thinking: false};
 			}
-			catch(error)
+			else
 			{
-				if(signal?.aborted) return;
-				console.log("Search rewrite failed; using original query:", error);
+				let start = get_instruct_starttag(false) || "\n### Instruction:\n";
+				let end = get_instruct_endtag(false) || "\n### Response:\n";
+				if(!is_using_kcpp_with_autotags())
+				{
+					start = start.split("{{[INPUT]}}").join("\n### Instruction:\n");
+					end = end.split("{{[OUTPUT]}}").join("\n### Response:\n");
+				}
+				payload.prompt = start + task + (localsettings.separate_end_tags ? get_instruct_starttag_end(false) : "") + end;
+				payload.replace_instruct_placeholders = true;
 			}
 		}
-		if(signal?.aborted) return;
-		if(onDoneFn) onDoneFn(result);
-		return result;
+		catch(error)
+		{
+			console.log("Search rewrite failed; using original query:", error);
+			return Promise.resolve(finish(query));
+		}
+
+		let request_options = {
+			method: 'POST', headers: get_kobold_header(), body: JSON.stringify(payload)
+		};
+		if(request_controller && request_controller.signal) request_options.signal = request_controller.signal;
+		return fetch(apply_proxy_url(custom_kobold_endpoint + endpoint), request_options)
+		.then(function(response)
+		{
+			if(!response.ok) throw new Error("Search rewrite HTTP " + response.status);
+			return response.json();
+		})
+		.then(function(data)
+		{
+			if(request_controller && request_controller.aborted) return;
+			let choices = use_chat ? data.choices : data.results;
+			let choice = choices && choices.length > 0 ? choices[0] : null;
+			let result = query;
+			// A token-limit response may contain only reasoning or a cut-off query.
+			if(choice && choice.finish_reason !== "length")
+			{
+				let text = use_chat ? (choice.message ? choice.message.content : "") : choice.text;
+				result = clean_websearch_query(text) || query;
+			}
+			return finish(result);
+		})
+		.catch(function(error)
+		{
+			if(request_controller && request_controller.aborted) return;
+			console.log("Search rewrite failed; using original query:", error);
+			return finish(query);
+		});
 	}
 
 	/* split: src/memory/memory.js */
@@ -21647,7 +21871,7 @@ Current version indicated by LITEVER below.
 							playDecodedAllTalkData(decodedData);
 						})
 						.catch((error) => {
-							console.log("AllTalk v2 Speak Error:", data);
+							console.log("AllTalk v2 Speak Error:", error);
 							tts_is_playing = false;
 							tts_is_processing = false;
 							update_submit_button(false);
@@ -21684,7 +21908,7 @@ Current version indicated by LITEVER below.
 								return response.json().then(data => {
 									if (data && data.output_file_url && data.status === "generate-success")
 									{
-										const audioUrl = `${localsettings.saved_alltalk_url}${data.output_file_url}`;
+										const audioUrl = new URL(data.output_file_url, `${localsettings.saved_alltalk_url}/`).href;
 										fetch(audioUrl)
 										.then(response => response.arrayBuffer())
 										.then(data => {
@@ -21703,7 +21927,7 @@ Current version indicated by LITEVER below.
 											playDecodedAllTalkData(decodedData);
 										})
 										.catch((error) => {
-											console.log("AllTalk v2 Speak Error:", data);
+											console.log("AllTalk v2 Speak Error:", error);
 											tts_is_playing = false;
 											tts_is_processing = false;
 											update_submit_button(false);
@@ -28254,7 +28478,10 @@ Current version indicated by LITEVER below.
 	{
 		let media = text.match(/(?:\s*\[<\|([hp])\|.+?\|\1\|>\])+\s*$/);
 		if(!media) return text.length;
-		let attachments = Array.from(media[0].matchAll(/\s*\[<\|([hp])\|(.+?)\|\1\|>\]/g));
+		let attachments = [];
+		let attachment_regex = /\s*\[<\|([hp])\|(.+?)\|\1\|>\]/g;
+		let attachment_match;
+		while((attachment_match = attachment_regex.exec(media[0])) !== null) attachments.push(attachment_match);
 		let shiftStart = text.length;
 		for(let j=attachments.length-1;j>=0;--j)
 		{
@@ -31522,7 +31749,7 @@ Current version indicated by LITEVER below.
 	/* split: src/websearch/websearch.js */
 	// end of aesthetic ui
 
-	async function PerformWebsearch(webSearchQuery, onDone)
+	function PerformWebsearch(webSearchQuery, onDone)
 	{
 		cancel_websearch();
 		if (!localsettings.websearch_enabled || !is_using_kcpp_with_websearch())
@@ -31553,46 +31780,50 @@ Current version indicated by LITEVER below.
 			return;
 		}
 
-		let controller = new AbortController();
+		let controller = create_websearch_request_controller();
 		websearch_request_controller = controller;
 		pending_response_id = "-1";
 		websearch_in_progress = true;
 		render_gametext(false);
-		try
+		let rewrite_promise = Promise.resolve(webSearchQuery);
+		if(localsettings.websearch_multipass)
 		{
-			if(localsettings.websearch_multipass)
-			{
-				webSearchQuery = await generate_websearch_prompt(concat_gametext(true, ""), webSearchQuery, null, controller.signal);
-			}
-			if(controller.signal.aborted) return;
+			rewrite_promise = generate_websearch_prompt(concat_gametext(true, ""), webSearchQuery, null, controller);
+		}
+
+		let search_promise = rewrite_promise.then(function(rewritten_query)
+		{
+			if(controller.aborted) return;
+			webSearchQuery = rewritten_query || webSearchQuery;
 			if(webSearchQuery && webSearchQuery !== lastSearchQuery)
 			{
-				let response = await fetch(apply_proxy_url(custom_kobold_endpoint + koboldcpp_websearch_endpoint), {
+				let request_options = {
 					method: 'POST', headers: get_kobold_header(),
-					body: JSON.stringify({q: webSearchQuery}), signal: controller.signal
-				});
-				if(!response.ok) throw new Error("WebSearch HTTP " + response.status);
-				let values = await response.json();
-				if(controller.signal.aborted) return;
-				if(!Array.isArray(values)) throw new Error("Invalid WebSearch response");
-				if(lastSearchResults && lastSearchResults.length > 0)
+					body: JSON.stringify({q: webSearchQuery})
+				};
+				if(controller.signal) request_options.signal = controller.signal;
+				return fetch(apply_proxy_url(custom_kobold_endpoint + koboldcpp_websearch_endpoint), request_options)
+				.then(function(response)
 				{
-					recentSearchQueries.push(lastSearchResults[0]);
-					if(recentSearchQueries.length > 2) recentSearchQueries.shift();
-				}
-				lastSearchQuery = webSearchQuery;
-				lastSearchResults = values;
+					if(!response.ok) throw new Error("WebSearch HTTP " + response.status);
+					return response.json();
+				})
+				.then(function(values)
+				{
+					if(controller.aborted) return;
+					if(!Array.isArray(values)) throw new Error("Invalid WebSearch response");
+					if(lastSearchResults && lastSearchResults.length > 0)
+					{
+						recentSearchQueries.push(lastSearchResults[0]);
+						if(recentSearchQueries.length > 2) recentSearchQueries.shift();
+					}
+					lastSearchQuery = webSearchQuery;
+					lastSearchResults = values;
+				});
 			}
-		}
-		catch(error)
-		{
-			if(controller.signal.aborted) return;
-			console.log("WebSearch Error:", error);
-			lastSearchResults = [];
-			recentSearchQueries = [];
-			lastSearchQuery = "";
-		}
-		finally
+		});
+
+		let finish = function()
 		{
 			if(websearch_request_controller === controller)
 			{
@@ -31602,8 +31833,20 @@ Current version indicated by LITEVER below.
 				show_abort_button(false);
 				render_gametext(false);
 			}
-		}
-		if(!controller.signal.aborted) onDone();
+			if(!controller.aborted) onDone();
+		};
+
+		return search_promise.then(finish, function(error)
+		{
+			if(!controller.aborted)
+			{
+				console.log("WebSearch Error:", error);
+				lastSearchResults = [];
+				recentSearchQueries = [];
+				lastSearchQuery = "";
+			}
+			finish();
+		});
 	}
 
 	/* split: src/textdb/textdb.js */
@@ -35149,7 +35392,7 @@ Current version indicated by LITEVER below.
 			<div class="workerTableDiv">
 			<table class="table workerTable" style="text-align: center;">
 			<thead class="sticky-top bg-white">
-			<tr><th><a class="color_blueurl" href="#" onclick="sort_display_workers('name')">Name</a></th><th><a class="color_blueurl" href="#" onclick="sort_display_workers('defaultmodel')">Model</a></th><th><a class="color_blueurl" href="#" onclick="sort_display_workers('tokenspersec')">Capabilities</a></th><th><a class="color_blueurl" href="#" onclick="sort_display_workers('uptime')">Uptime</a></th><th><a class="color_blueurl" href="#" onclick="sort_display_workers('kudos_rewards')">Kudos</a></th></tr>
+			<tr><th><a class="color_blueurl" href="#" onclick="sort_display_workers('name')">Name</a></th><th><a class="color_blueurl" href="#" onclick="sort_display_workers('defaultmodel')">Model</a></th><th class="workerCapabilities"><a class="color_blueurl" href="#" onclick="sort_display_workers('tokenspersec')">Capabilities</a></th><th class="workerJobs"><a class="color_blueurl" href="#" onclick="sort_display_workers('jobtypes')">Jobs</a></th><th class="workerUptime"><a class="color_blueurl" href="#" onclick="sort_display_workers('uptime')">Uptime</a></th><th class="workerKudos"><a class="color_blueurl" href="#" onclick="sort_display_workers('kudos_rewards')">Kudos</a></th><th class="workerDetails"><a class="color_blueurl" href="#" onclick="sort_display_workers('tokenspersec')">More Info</a></th></tr>
 			</thead>
 			<tbody id="workertable">
 			</tbody>

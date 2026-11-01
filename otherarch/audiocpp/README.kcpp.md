@@ -10,23 +10,23 @@ converters, tests, or unrelated model implementations.
 Run the repository script against an Audio.cpp checkout or source snapshot:
 
 ```powershell
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component supertonic
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component fish_audio
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component maya1
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox_turbo
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component kitten_tts2
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component soprano_tts
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component cosyvoice3
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm2
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm1
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component omnivoice
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component breeze_tts
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component ming3_tts
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component neutts
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component qwen3_tts
-./scripts/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2 -ModelSourcesOnly
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component supertonic
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component fish_audio
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component maya1
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox_turbo
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component kitten_tts2
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component soprano_tts
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component cosyvoice3
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm2
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component voxcpm1
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component omnivoice
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component breeze_tts
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component ming3_tts
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component neutts
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component qwen3_tts
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2 -ModelSourcesOnly
 ```
 
 The script is intentionally additive: it overwrites files in its explicit

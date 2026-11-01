@@ -303,6 +303,10 @@ public:
     }
 
     Yue2RunResult run(const Yue2Request & request) {
+        // A completed or failed prior request may have left the VAE weights
+        // resident. They are not used during AR/NAR and can prevent the large
+        // AR prefix-state cache from fitting on the next request.
+        vae.reset();
         if (engine::debug::trace_log_enabled()) {
             std::ostringstream settings;
             settings << "seed=" << request.seed
@@ -366,9 +370,9 @@ public:
         const auto vae_start = Clock::now();
         auto audio = decode_audio(latents, frames);
         engine::debug::timing_log_scalar("yue2.vae_decode_ms", engine::debug::elapsed_ms(vae_start, Clock::now()));
-        if (vae) {
-            vae->release_runtime_graphs();
-        }
+        // YuE2's phases are mutually exclusive. Release both the VAE graph and
+        // weights so the next request starts with enough room for its AR cache.
+        vae.reset();
         out.audio = std::move(audio);
         return out;
     }

@@ -854,6 +854,7 @@ struct Yue2ARRuntime::Impl {
     runtime::TransformerKVState prefill_state(const std::vector<int32_t> & tokens) {
         const int64_t steps = static_cast<int64_t>(tokens.size());
         if (!prefix_state_graph || !prefix_state_graph->matches(steps)) {
+            prefix_state_graph.reset();
             prefix_state_graph = std::make_unique<PrefixStateGraph>(*this, steps);
         }
         auto state = prefix_state_graph->run(tokens);
@@ -863,6 +864,9 @@ struct Yue2ARRuntime::Impl {
     Yue2ARDevicePrefixState prefill_device_state(const std::vector<int32_t> & tokens) {
         const int64_t steps = static_cast<int64_t>(tokens.size());
         if (!prefix_state_graph || !prefix_state_graph->matches(steps)) {
+            // Constructing first would keep the old cache alive during the new
+            // allocation, briefly doubling a buffer that can exceed 1 GiB.
+            prefix_state_graph.reset();
             prefix_state_graph = std::make_unique<PrefixStateGraph>(*this, steps);
         }
         auto state = prefix_state_graph->run_device(tokens);
