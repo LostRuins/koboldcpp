@@ -138,6 +138,9 @@ tests/test-tokenizer-1-bpe
 /koboldcpp_vulkan.so
 /koboldcpp_vulkan_noavx2.so
 /koboldcpp_common.so
+/koboldcpp_legacy_ggml.so
+/koboldcpp_legacy_ggml_noavx2.so
+/koboldcpp_legacy_ggml_failsafe.so
 /koboldcpp_default.dll
 /koboldcpp_failsafe.dll
 /koboldcpp_noavx2.dll
