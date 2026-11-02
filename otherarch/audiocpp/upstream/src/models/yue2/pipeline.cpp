@@ -222,7 +222,13 @@ public:
             semantic.plan.prefix,
             codec,
             [this](const std::vector<int32_t> & tokens) {
-                return ar->prefill_device_state(tokens);
+                ensure_ar();
+                auto state = ar->prefill_device_state(tokens);
+                // The returned state owns its K/V buffer. AR weights and the
+                // prefill graph are no longer needed while NAR solves this
+                // chunk, so release several GiB before its graph allocation.
+                ar.reset();
+                return state;
             },
             noise,
             seed,

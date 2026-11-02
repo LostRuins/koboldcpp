@@ -31,6 +31,17 @@ struct GgmlContextDeleter {
     }
 };
 
+struct DevicePrefixStorage {
+    ~DevicePrefixStorage() {
+        if (buffer != nullptr) {
+            ggml_backend_buffer_free(buffer);
+        }
+    }
+
+    std::unique_ptr<ggml_context, GgmlContextDeleter> context;
+    ggml_backend_buffer_t buffer = nullptr;
+};
+
 struct Yue2SamplerRange {
     int64_t begin = 0;
     int64_t end = 0;
@@ -621,11 +632,19 @@ struct Yue2ARRuntime::Impl {
                 ggml_backend_tensor_copy(keys[layer], key_values[layer].tensor);
                 ggml_backend_tensor_copy(values[layer], value_values[layer].tensor);
             }
+            auto storage = std::make_shared<DevicePrefixStorage>();
+            storage->context = std::move(state_ctx);
+            storage->buffer = std::exchange(state_buffer, nullptr);
             Yue2ARDevicePrefixState out;
             out.current_end = steps;
             out.keys = key_values;
             out.values = value_values;
+            out.storage = std::move(storage);
             return out;
+        }
+
+        bool has_device_storage() const noexcept {
+            return state_ctx != nullptr && state_buffer != nullptr;
         }
 
         void compute(const std::vector<int32_t> & tokens) {
@@ -863,7 +882,8 @@ struct Yue2ARRuntime::Impl {
 
     Yue2ARDevicePrefixState prefill_device_state(const std::vector<int32_t> & tokens) {
         const int64_t steps = static_cast<int64_t>(tokens.size());
-        if (!prefix_state_graph || !prefix_state_graph->matches(steps)) {
+        if (!prefix_state_graph || !prefix_state_graph->matches(steps) ||
+            !prefix_state_graph->has_device_storage()) {
             // Constructing first would keep the old cache alive during the new
             // allocation, briefly doubling a buffer that can exceed 1 GiB.
             prefix_state_graph.reset();

@@ -29,6 +29,8 @@ struct Yue2ARDevicePrefixState {
     int64_t current_end = 0;
     std::vector<core::TensorValue> keys;
     std::vector<core::TensorValue> values;
+    // Keeps the detached backend K/V buffer and its tensor metadata alive.
+    std::shared_ptr<void> storage;
 };
 
 class Yue2ARRuntime {

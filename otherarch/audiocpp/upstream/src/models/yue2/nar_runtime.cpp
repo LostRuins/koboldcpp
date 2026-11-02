@@ -166,16 +166,8 @@ std::shared_ptr<const Yue2NARWeights> load_nar_weights(
     return weights;
 }
 
-// NAR's graph workspace and the AR prefix-state cache both grow linearly with
-// the acoustic chunk. The model context permits almost an entire long song in
-// one chunk, but that creates a 500+ MiB graph and a roughly 1 GiB prefix cache
-// on typical full-length generations. Keep the working set bounded instead.
-// At 25 latent frames/second this is about 82 seconds per chunk.
-constexpr int64_t kMaxNarChunkFrames = 2048;
-
 std::vector<std::pair<int64_t, int64_t>> chunk_ranges(int64_t frames, int64_t prefix_tokens, int64_t context) {
-    const int64_t context_chunk = std::min((context - prefix_tokens - 3) / 2, context);
-    const int64_t chunk = std::min(context_chunk, kMaxNarChunkFrames);
+    const int64_t chunk = std::min((context - prefix_tokens - 3) / 2, context);
     if (frames < 1 || chunk < 1) {
         throw std::runtime_error("Yue2 NAR chunk leaves no acoustic context");
     }
@@ -491,10 +483,14 @@ struct Yue2NARRuntime::Impl {
             const Yue2ARDevicePrefixState & ar_state)
             : owner(&owner),
               frames(frames),
-              ar_length(ar_state.current_end) {
+              ar_length(ar_state.current_end),
+              ar_storage(ar_state.storage) {
             const auto & config = owner.assets->config.model;
             if (frames <= 0 || ar_length <= 0) {
                 throw std::runtime_error("Yue2 NAR graph requires positive shapes");
+            }
+            if (!ar_storage) {
+                throw std::runtime_error("Yue2 NAR graph requires owned AR prefix state");
             }
             if (static_cast<int64_t>(ar_state.keys.size()) != config.layers ||
                 static_cast<int64_t>(ar_state.values.size()) != config.layers) {
@@ -647,6 +643,7 @@ struct Yue2NARRuntime::Impl {
         int64_t ar_length = 0;
         int64_t nar_length = 0;
         int64_t total_length = 0;
+        std::shared_ptr<void> ar_storage;
         std::unique_ptr<ggml_context, GgmlContextDeleter> input_ctx;
         std::unique_ptr<ggml_context, GgmlContextDeleter> ctx;
         ggml_cgraph * graph = nullptr;
@@ -758,6 +755,9 @@ struct Yue2NARRuntime::Impl {
             const auto solve_start = Clock::now();
             auto chunk = solve_chunk(ar_state, noise, ode_steps);
             solve_ms += engine::debug::elapsed_ms(solve_start);
+            // Drop this graph (and its retained prefix cache) before preparing
+            // another context-forced chunk.
+            graph.reset();
             out.insert(out.end(), chunk.begin(), chunk.end());
         }
         engine::debug::timing_log_scalar("yue2.nar.synthesize.prefill_state_ms", prefill_ms);
