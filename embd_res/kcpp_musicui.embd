@@ -60,6 +60,11 @@ input,textarea{
 }
 textarea{resize:vertical;min-height:90px;}
 label{font-size:12px;color:var(--muted);}
+label[title]{
+  cursor:help;
+  text-decoration:underline dotted;
+  text-underline-offset:3px;
+}
 .hint{font-size:13px;color:var(--muted);line-height:1.5;margin:6px 0 10px;}
 .form-grid{
   display:grid;
@@ -202,25 +207,25 @@ select{
 <div id="musicTab">
   <h2>Song Setup</h2>
 
-  <label>Music Description (Caption)</label> <div style="float:right"><input title="Rewrite Caption" id="rewrite_caption" type="checkbox" style="width: auto;vertical-align: middle;" checked><label>Rewrite Caption</label></div>
+  <label for="caption" title="Describe the desired genre, mood, instrumentation, vocals, and production style. This text conditions music planning and generation.">Music Description (Caption)</label> <div style="float:right"><input title="Rewrite Caption" id="rewrite_caption" type="checkbox" style="width: auto;vertical-align: middle;" checked><label for="rewrite_caption" title="Allow the selected planner to expand or rewrite the caption. Turn this off to preserve the caption exactly during planning.">Rewrite Caption</label></div>
 
   <textarea id="caption" style="min-height:60px;" placeholder="Describe the song genre, mood, instruments."></textarea>
 
   <div style="margin-top:10px">
-    <label>Lyrics</label>
+    <label for="lyrics" title="Lyrics to sing, including optional section markers such as [Verse] and [Chorus]. Leave blank to request instrumental music where supported.">Lyrics</label>
     <textarea id="lyrics" placeholder="Enter song lyrics, or press 'Plan Lyrics' to generate them."></textarea>
   </div>
 
   <div class="form-grid" style="margin-top:12px">
     <div>
-      <label for="music_controls">Music Model Controls</label>
+      <label for="music_controls" title="Choose which model family's controls and request format to use. This does not load a model; it must match the music model loaded on the target server.">Music Model Controls</label>
       <select id="music_controls" title="Select the controls shown for the loaded music model">
         <option value="acestep">ACE-Step</option>
         <option value="yue2">YuE2</option>
       </select>
     </div>
     <div class="yue2-only hidden">
-      <label for="cot">YuE2 Score Mode</label>
+      <label for="cot" title="Choose YuE2's symbolic planning route. Full uses an ABC score with harmony, Melody uses melody-only ABC for cover-like guidance, and Off generates semantic tokens directly without an ABC score.">YuE2 Score Mode</label>
       <select id="cot" title="YuE2 symbolic planning mode">
         <option value="full">Full Score</option>
         <option value="melody">Melody / Cover</option>
@@ -230,19 +235,19 @@ select{
   </div>
 
   <div id="yue2_abc_section" class="yue2-only hidden" style="margin-top:10px">
-    <label>ABC Score</label>
+    <label for="abc" title="ABC notation used to guide YuE2. Full Score can retain chord annotations; Melody / Cover expects a melody-only score. Leave blank to let the planner create it.">ABC Score</label>
     <textarea id="abc" style="min-height:150px;" placeholder="Generate, paste, or import an ABC score here."></textarea>
     <p class="hint">Use Melody / Cover with melody-only ABC for a cover, or Full Score to retain chord annotations.</p>
   </div>
 
   <div class="form-grid" style="margin-top:12px">
-    <div class="acestep-only"><label>BPM</label><input title="BPM" id="bpm" type="number"></div>
-    <div class="acestep-only"><label>Duration (s)</label><input title="Duration" id="duration" type="number"></div>
-    <div class="acestep-only"><label>Key</label><input title="Keyscale" id="keyscale"></div>
-    <div class="acestep-only"><label>Time Sig</label><input title="Time Signature" id="timesignature"></div>
-    <div class="acestep-only"><label>Language</label><input title="Vocal Language" id="vocal_language"></div>
+    <div class="acestep-only"><label for="bpm" title="Target tempo in beats per minute. Leave blank to let the ACE-Step planner choose it.">BPM</label><input title="BPM" id="bpm" type="number"></div>
+    <div class="acestep-only"><label for="duration" title="Target ACE-Step song length in seconds. Blank defaults to 120 seconds during rendering; the backend caps it at 420 seconds.">Duration (s)</label><input title="Duration" id="duration" type="number"></div>
+    <div class="acestep-only"><label for="keyscale" title="Musical key or scale, such as C Major, A Minor, Dorian, or Pentatonic. Leave blank to let the planner choose.">Key</label><input title="Keyscale" id="keyscale"></div>
+    <div class="acestep-only"><label for="timesignature" title="Requested time signature, such as 4, 3, or 6. The planner normally supplies a value appropriate for the song.">Time Sig</label><input title="Time Signature" id="timesignature"></div>
+    <div class="acestep-only"><label for="vocal_language" title="Language code for sung lyrics, for example en, zh, ja, or es. This helps ACE-Step pronounce and plan vocals correctly.">Language</label><input title="Vocal Language" id="vocal_language"></div>
     <div>
-      <label>Seed</label>
+      <label for="seed" title="Random seed used by planning and generation. Reuse a seed and the same settings for reproducible output; blank or -1 is randomized before a request.">Seed</label>
       <div style="display:flex; gap:6px;">
         <input id="seed" title="Seed" type="number" style="flex:1;">
         <button type="button" title="Randomize Seed" class="secondary" onclick="randomizeSeed()">🎲</button>
@@ -252,14 +257,14 @@ select{
 
   <div style="display:flex; gap:12px; align-items:flex-end; margin-top:12px;">
     <div style="flex:1; min-width:0;">
-      <label for="planner">Lyrics Planner</label>
+      <label for="planner" title="Choose the model used to plan song details. Music LLM uses the loaded native music planner; Main LLM uses the general text model and can produce better lyrics when a capable model is loaded.">Lyrics Planner</label>
       <select id="planner" title="Song Planner" onchange="updatePlannerOptions()">
         <option value="music_lm">Music LLM</option>
         <option value="main_llm">Main LLM</option>
       </select>
     </div>
     <div id="gen_codes_option" class="acestep-only" style="padding:8px 0;">
-      <label for="gen_codes" style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
+      <label for="gen_codes" title="Ask the ACE-Step Music LLM to generate audio codes during planning. These codes provide stronger structural conditioning when the song is rendered, but add planning time." style="display:flex; align-items:center; gap:8px; white-space:nowrap;">
         <input title="Generate Audio Codes" id="gen_codes" type="checkbox" style="width:auto; margin:0;">
         Generate Audio Codes
       </label>
@@ -272,47 +277,47 @@ select{
 
   <div id="advanced">
     <div class="compact-row" style="margin-top:10px">
-      <div class="acestep-only"><label>Temp</label><input title="Temperature" id="lm_temperature" type="number" step="0.01" value="0.9"></div>
-      <div class="acestep-only"><label>CFG</label><input title="CFG Scale" id="lm_cfg_scale" type="number" step="0.1" value="3.0"></div>
-      <div class="acestep-only"><label>Top-P</label><input title="Top-P" id="lm_top_p" type="number" step="0.01" value="0.9"></div>
-      <div class="acestep-only"><label>Top-K</label><input title="Top-K" id="lm_top_k" type="number" value="50"></div>
-      <div class="acestep-only"><label>RepPen</label><input title="Repetition Penalty" id="lm_rep_pen" type="number" value="1.03"></div>
-      <div><label id="codes_top_p_label">Codes Top-P</label><input title="Codes Top-P" id="codes_top_p" type="number" step="0.01" value="0.99"></div>
-      <div><label id="codes_top_k_label">Codes Top-K</label><input title="Codes Top-K" id="codes_top_k" type="number" value="1000"></div>
-      <div><label id="codes_temperature_label">Codes Temp</label><input title="Codes Temperature" id="codes_temperature" type="number" step="0.01" value="1.0"></div>
-      <div><label id="inference_steps_label">Steps</label><input title="Generation Steps" id="inference_steps" type="number" value="8"></div>
-      <div><label id="guidance_scale_label">Guidance</label><input title="Guidance Scale" id="guidance_scale" type="number" step="0.01" value="1"></div>
-      <div class="acestep-only"><label>Shift</label><input title="Audio Shift" id="shift" type="number" value="3"></div>
-      <div class="yue2-only hidden"><label>ABC Temp</label><input title="ABC Planner Temperature" id="abc_temperature" type="number" step="0.01" value="0.7"></div>
-      <div class="yue2-only hidden"><label>ABC Top-P</label><input title="ABC Planner Top-P" id="abc_top_p" type="number" step="0.01" value="0.9"></div>
-      <div class="yue2-only hidden"><label>ABC Top-K</label><input title="ABC Planner Top-K" id="abc_top_k" type="number" value="30"></div>
-      <div class="yue2-only hidden"><label>Semantic RepPen</label><input title="Semantic Repetition Penalty" id="semantic_repetition_penalty" type="number" step="0.01" value="1.2"></div>
-      <div class="yue2-only hidden"><label>Min Tokens</label><input title="Minimum Semantic Tokens (25 per second)" id="semantic_min_tokens" type="number" value="200"></div>
-      <div class="yue2-only hidden"><label>Max Tokens</label><input title="Maximum Semantic Tokens (25 per second)" id="semantic_max_tokens" type="number" value="9000"></div>
-      <div><label>Save as MP3</label><input title="Save as MP3" id="use_mp3" type="checkbox"></div>
-      <div><label>Stereo</label><input title="Save as Stereo" id="stereo" type="checkbox" checked></div>
+      <div class="acestep-only"><label for="lm_temperature" title="Sampling temperature for ACE-Step Music LLM planning. Higher values increase variety; lower values make lyrics and metadata more predictable.">Temp</label><input title="Temperature" id="lm_temperature" type="number" step="0.01" value="0.9"></div>
+      <div class="acestep-only"><label for="lm_cfg_scale" title="Classifier-free guidance used by the ACE-Step Music LLM. Values above 1 strengthen conditioning on the song request; excessive values can reduce natural variation.">CFG</label><input title="CFG Scale" id="lm_cfg_scale" type="number" step="0.1" value="3.0"></div>
+      <div class="acestep-only"><label for="lm_top_p" title="Nucleus-sampling threshold for ACE-Step lyrics and metadata. Lower values restrict sampling to more likely tokens.">Top-P</label><input title="Top-P" id="lm_top_p" type="number" step="0.01" value="0.9"></div>
+      <div class="acestep-only"><label for="lm_top_k" title="Maximum number of candidate tokens considered by the ACE-Step planner at each step. Lower values are more conservative.">Top-K</label><input title="Top-K" id="lm_top_k" type="number" value="50"></div>
+      <div class="acestep-only"><label for="lm_rep_pen" title="Penalty applied to recently repeated tokens during ACE-Step planning. Values slightly above 1 discourage repetitive lyrics and metadata.">RepPen</label><input title="Repetition Penalty" id="lm_rep_pen" type="number" value="1.03"></div>
+      <div><label for="codes_top_p" id="codes_top_p_label" title="Nucleus-sampling threshold for ACE-Step audio-code generation. Lower values restrict sampling to more likely codes.">Codes Top-P</label><input title="Codes Top-P" id="codes_top_p" type="number" step="0.01" value="0.99"></div>
+      <div><label for="codes_top_k" id="codes_top_k_label" title="Maximum number of candidate ACE-Step audio codes considered at each step. Lower values make code generation more conservative.">Codes Top-K</label><input title="Codes Top-K" id="codes_top_k" type="number" value="1000"></div>
+      <div><label for="codes_temperature" id="codes_temperature_label" title="Sampling temperature for ACE-Step audio codes. Higher values add variation; lower values make generated structure more predictable.">Codes Temp</label><input title="Codes Temperature" id="codes_temperature" type="number" step="0.01" value="1.0"></div>
+      <div><label for="inference_steps" id="inference_steps_label" title="Number of ACE-Step diffusion denoising steps. More steps can improve refinement but take longer; the backend caps this at 100.">Steps</label><input title="Generation Steps" id="inference_steps" type="number" value="8"></div>
+      <div><label for="guidance_scale" id="guidance_scale_label" title="ACE-Step diffusion guidance strength. Higher values follow the conditioning more strongly; turbo models force this value to 1.">Guidance</label><input title="Guidance Scale" id="guidance_scale" type="number" step="0.01" value="1"></div>
+      <div class="acestep-only"><label for="shift" title="Adjusts ACE-Step's diffusion timestep schedule. Higher values keep the process in higher-noise stages longer; leave the default unless deliberately tuning the sampler.">Shift</label><input title="Audio Shift" id="shift" type="number" value="3"></div>
+      <div class="yue2-only hidden"><label for="abc_temperature" title="Sampling temperature for YuE2 ABC score planning. Higher values make the generated composition more varied; lower values are more predictable.">ABC Temp</label><input title="ABC Planner Temperature" id="abc_temperature" type="number" step="0.01" value="0.7"></div>
+      <div class="yue2-only hidden"><label for="abc_top_p" title="Nucleus-sampling threshold for YuE2 ABC score planning. Must be greater than 0 and no more than 1.">ABC Top-P</label><input title="ABC Planner Top-P" id="abc_top_p" type="number" step="0.01" value="0.9"></div>
+      <div class="yue2-only hidden"><label for="abc_top_k" title="Maximum number of candidate tokens considered at each step of YuE2 ABC score planning. Must be at least 1.">ABC Top-K</label><input title="ABC Planner Top-K" id="abc_top_k" type="number" value="30"></div>
+      <div class="yue2-only hidden"><label for="semantic_repetition_penalty" title="Penalty applied to repeated YuE2 semantic codec tokens. Values above 1 discourage repetitive musical patterns; the value must be positive.">Semantic RepPen</label><input title="Semantic Repetition Penalty" id="semantic_repetition_penalty" type="number" step="0.01" value="1.2"></div>
+      <div class="yue2-only hidden"><label for="semantic_min_tokens" title="Minimum YuE2 semantic tokens generated before end-of-sequence is allowed. YuE2 produces about 25 semantic tokens per second.">Min Tokens</label><input title="Minimum Semantic Tokens (25 per second)" id="semantic_min_tokens" type="number" value="200"></div>
+      <div class="yue2-only hidden"><label for="semantic_max_tokens" title="Maximum YuE2 semantic tokens to generate. At about 25 tokens per second, this places an upper bound on song duration.">Max Tokens</label><input title="Maximum Semantic Tokens (25 per second)" id="semantic_max_tokens" type="number" value="9000"></div>
+      <div><label for="use_mp3" title="Encode the generated track as MP3 instead of returning an uncompressed WAV file.">Save as MP3</label><input title="Save as MP3" id="use_mp3" type="checkbox"></div>
+      <div><label for="stereo" title="Request stereo output. In the native backend this option affects WAV output only.">Stereo</label><input title="Save as Stereo" id="stereo" type="checkbox" checked></div>
     </div>
     <div>
-      <div><label id="audio_codes_label">AudioCodes</label><textarea placeholder="Input or generate audio codes here" id="audio_codes"></textarea></div>
+      <div><label for="audio_codes" id="audio_codes_label" title="Optional comma-separated ACE-Step audio codes generated by the Music LLM. Reusing them preserves more of the planned musical structure.">AudioCodes</label><textarea placeholder="Input or generate audio codes here" id="audio_codes"></textarea></div>
     </div>
     <div class="acestep-only" style="margin-top:8px">
-      <label>Music Reference Audio (.wav / .mp3)</label>
+      <label for="music_reference_audio" title="Upload source audio for ACE-Step cover generation. Its encoded audio latents guide the result and its length determines the generated duration.">Music Reference Audio (.wav / .mp3)</label>
       <div style="display:flex; gap:6px; align-items:center;">
         <input title="Upload reference audio" id="music_reference_audio" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg">
         <button type="button" title="Clear Upload" class="secondary" onclick="clearReferenceAudio()">Clear</button>
       </div>
-      <div><label>Reference Audio Strength (0.0 to 1.0)</label><input title="Reference Audio Strength" id="audio_cover_strength" type="number" step="0.1" value="0.5"></div>
+      <div><label for="audio_cover_strength" title="Fraction of ACE-Step diffusion steps that retain the source-audio context. 0 disables reference conditioning; 1 keeps it for the entire generation.">Reference Audio Strength (0.0 to 1.0)</label><input title="Reference Audio Strength" id="audio_cover_strength" type="number" step="0.1" value="0.5"></div>
     </div>
   </div>
   </details>
 
 
   <details style="margin-top:14px"><summary class="advanced-toggle">Connection settings</summary>
-    <label>API Base URL (optional)</label>
+    <label for="baseUrl" title="Send music planning, generation, and capability requests to this server instead of the current origin. Do not include a trailing slash.">API Base URL (optional)</label>
     <div style="display:flex; gap:6px;">
       <input title="Custom API URL" id="baseUrl" placeholder="http://localhost:5001">
     </div>
-    <label>API Key (optional)</label>
+    <label for="baseUrlKey" title="Optional bearer token sent in the Authorization header to the selected music API server.">API Key (optional)</label>
     <div style="display:flex; gap:6px;">
       <input title="Custom API Key" type="password" id="baseUrlKey" placeholder="(Input Key)">
     </div>
@@ -345,11 +350,11 @@ select{
 
   <h2>TTS Generation</h2>
 
-  <label>Text</label>
+  <label for="tts_input" title="Text to synthesize as speech. Some models also accept a leading [instruction] when the separate voice-instruction field is empty.">Text</label>
   <textarea id="tts_input" placeholder="Enter text to speak using TTS..."></textarea>
 
   <div style="margin-top:10px">
-    <label>Voice</label>
+    <label for="tts_voice" title="Select a built-in speaker or a WAV/MP3 reference voice exposed by the server. Reference audio enables voice cloning on supported TTS models.">Voice</label>
     <div style="display:flex; gap:6px;">
       <select id="tts_voice" style="flex:1;"></select>
       <button title="Fetch Voices" class="secondary" onclick="fetchVoices()">↻</button>
@@ -357,12 +362,12 @@ select{
   </div>
 
   <div style="margin-top:10px">
-    <label>Seed (optional)</label>
+    <label for="tts_seed" title="Optional audio-generation seed for reproducible TTS variation. Leave blank to let the backend choose a random seed.">Seed (optional)</label>
     <input title="TTS Seed" id="tts_seed" type="number" min="1" step="1" placeholder="Random">
   </div>
 
   <div style="margin-top:10px">
-    <label>Reference text (optional)</label>
+    <label for="tts_reference_text" title="Exact transcript of the selected WAV/MP3 reference voice. Several voice-cloning models require this text to align the reference audio correctly.">Reference text (optional)</label>
     <div style="display:flex; gap:6px; align-items:center;">
       <input title="TTS Reference Audio Transcript" id="tts_reference_text" type="text" placeholder="Exact transcript of the selected reference audio">
       <button type="button" id="tts_auto_transcribe" class="secondary" title="Transcribe the selected WAV/MP3 voice using Whisper" onclick="autoTranscribeReference()">AutoTranscribe</button>
@@ -370,21 +375,21 @@ select{
   </div>
 
   <div style="margin-top:10px">
-    <label>Voice instruction (optional)</label>
+    <label for="tts_instruction" title="Optional description of the desired speaker or delivery, such as age, pitch, pacing, emotion, or accent. Support depends on the loaded TTS model.">Voice instruction (optional)</label>
     <input title="TTS Voice Instruction" id="tts_instruction" placeholder="e.g. Male voice in his 40s. Low pitch, gravelly timbre, slow pacing, angry tone.">
   </div>
 
   <div style="margin-top:10px">
-    <label>Save as MP3</label>
+    <label for="tts_use_mp3" title="Encode the generated speech as MP3 instead of returning an uncompressed WAV file.">Save as MP3</label>
     <input title="Save as MP3" id="tts_use_mp3" type="checkbox" style="max-width:30px">
   </div>
 
   <div style="margin-top:14px">
-    <label>API Base URL (optional)</label>
-    <input id="tts_baseUrl" placeholder="http://localhost:5001">
-    <label>API Key (optional)</label>
+    <label for="tts_baseUrl" title="Send voice-list, speech-generation, and reference-transcription requests to this server instead of the current origin. Do not include a trailing slash.">API Base URL (optional)</label>
+    <input title="Custom TTS API URL" id="tts_baseUrl" placeholder="http://localhost:5001">
+    <label for="tts_baseUrlKey" title="Optional bearer token sent in the Authorization header to the selected TTS API server.">API Key (optional)</label>
     <div style="display:flex; gap:6px;">
-      <input type="password" id="tts_baseUrlKey" placeholder="(Input Key)">
+      <input title="Custom TTS API Key" type="password" id="tts_baseUrlKey" placeholder="(Input Key)">
     </div>
   </div>
 
@@ -405,27 +410,27 @@ select{
   <h2>Audio Transcription</h2>
 
   <div style="margin-top:10px">
-    <label>Audio file</label>
+    <label for="transcribe_file" title="Select a WAV, MP3, or FLAC recording to send to the loaded Whisper transcription model.">Audio file</label>
     <input title="Upload audio to transcribe" id="transcribe_file" type="file" accept=".wav,.mp3,.flac,audio/wav,audio/mpeg,audio/flac">
   </div>
 
   <div style="margin-top:10px">
-    <label>Language (optional)</label>
+    <label for="transcribe_language" title="Optional spoken-language code, such as en, zh, ja, or es. Leave blank to let Whisper detect the language automatically.">Language (optional)</label>
     <input title="Transcription Language" id="transcribe_language" placeholder="e.g. en (leave blank to auto-detect)">
   </div>
 
   <div style="margin-top:10px">
-    <label>Transcription</label>
+    <label for="transcribe_output" title="The returned transcript appears here and can be edited or copied. It is temporary and is not saved in the generated-audio library.">Transcription</label>
     <textarea id="transcribe_output" style="min-height:180px;" placeholder="The transcription will appear here."></textarea>
     <button type="button" class="secondary" style="margin-top:6px" onclick="copyTranscription()">Copy</button>
   </div>
 
   <div style="margin-top:14px">
-    <label>API Base URL (optional)</label>
-    <input id="transcribe_baseUrl" placeholder="http://localhost:5001">
-    <label>API Key (optional)</label>
+    <label for="transcribe_baseUrl" title="Send capability checks and transcription requests to this server instead of the current origin. Do not include a trailing slash.">API Base URL (optional)</label>
+    <input title="Custom Transcription API URL" id="transcribe_baseUrl" placeholder="http://localhost:5001">
+    <label for="transcribe_baseUrlKey" title="Optional bearer token sent in the Authorization header to the selected transcription API server.">API Key (optional)</label>
     <div style="display:flex; gap:6px;">
-      <input type="password" id="transcribe_baseUrlKey" placeholder="(Input Key)">
+      <input title="Custom Transcription API Key" type="password" id="transcribe_baseUrlKey" placeholder="(Input Key)">
     </div>
   </div>
 
@@ -1022,15 +1027,59 @@ function updateMusicControls(){
   document.querySelectorAll(".yue2-only").forEach(el=>el.classList.toggle("hidden", !isYue2));
   const cot=document.getElementById("cot").value;
   document.getElementById("yue2_abc_section").classList.toggle("hidden", !isYue2 || cot === "off");
-  document.getElementById("audio_codes_label").textContent=isYue2 ? "Semantic Tokens" : "AudioCodes";
+  const audioCodesLabel=document.getElementById("audio_codes_label");
+  const audioCodesInput=document.getElementById("audio_codes");
+  audioCodesLabel.textContent=isYue2 ? "Semantic Tokens" : "AudioCodes";
+  audioCodesLabel.title=isYue2
+    ? "Optional JSON array of YuE2 semantic codec indices to force as the beginning of the music stream. Planning can generate this prefix for you."
+    : "Optional comma-separated ACE-Step audio codes generated by the Music LLM. Reusing them preserves more of the planned musical structure.";
+  audioCodesInput.title=audioCodesLabel.title;
   document.getElementById("audio_codes").placeholder=isYue2
     ? "Optional YuE2 semantic token JSON, for example [123,456,789]"
     : "Input or generate audio codes here";
-  document.getElementById("codes_top_p_label").textContent=isYue2 ? "Semantic Top-P" : "Codes Top-P";
-  document.getElementById("codes_top_k_label").textContent=isYue2 ? "Semantic Top-K" : "Codes Top-K";
-  document.getElementById("codes_temperature_label").textContent=isYue2 ? "Semantic Temp" : "Codes Temp";
-  document.getElementById("inference_steps_label").textContent=isYue2 ? "Acoustic Steps" : "Steps";
-  document.getElementById("guidance_scale_label").textContent=isYue2 ? "Semantic Guidance" : "Guidance";
+  const dynamicControls=[
+    {
+      label:"codes_top_p_label", input:"codes_top_p",
+      text:isYue2 ? "Semantic Top-P" : "Codes Top-P",
+      tooltip:isYue2
+        ? "Nucleus-sampling threshold for YuE2 semantic codec tokens. Lower values restrict sampling to more likely tokens; the value must be greater than 0 and no more than 1."
+        : "Nucleus-sampling threshold for ACE-Step audio-code generation. Lower values restrict sampling to more likely codes."
+    },
+    {
+      label:"codes_top_k_label", input:"codes_top_k",
+      text:isYue2 ? "Semantic Top-K" : "Codes Top-K",
+      tooltip:isYue2
+        ? "Maximum number of candidate YuE2 semantic codec tokens considered at each step. Lower values make semantic generation more conservative; the value must be at least 1."
+        : "Maximum number of candidate ACE-Step audio codes considered at each step. Lower values make code generation more conservative."
+    },
+    {
+      label:"codes_temperature_label", input:"codes_temperature",
+      text:isYue2 ? "Semantic Temp" : "Codes Temp",
+      tooltip:isYue2
+        ? "Sampling temperature for YuE2 semantic codec tokens. Higher values add musical variation; lower values make the semantic stream more predictable."
+        : "Sampling temperature for ACE-Step audio codes. Higher values add variation; lower values make generated structure more predictable."
+    },
+    {
+      label:"inference_steps_label", input:"inference_steps",
+      text:isYue2 ? "Acoustic Steps" : "Steps",
+      tooltip:isYue2
+        ? "Number of YuE2 non-autoregressive acoustic midpoint-ODE steps used to turn semantic tokens into audio. More steps take longer and may improve refinement; the value must be at least 1."
+        : "Number of ACE-Step diffusion denoising steps. More steps can improve refinement but take longer; the backend caps this at 100."
+    },
+    {
+      label:"guidance_scale_label", input:"guidance_scale",
+      text:isYue2 ? "Semantic Guidance" : "Guidance",
+      tooltip:isYue2
+        ? "Classifier-free guidance applied while YuE2 generates semantic tokens. Higher values strengthen conditioning but can reduce natural variation."
+        : "ACE-Step diffusion guidance strength. Higher values follow the conditioning more strongly; turbo models force this value to 1."
+    }
+  ];
+  dynamicControls.forEach(item=>{
+    const label=document.getElementById(item.label);
+    label.textContent=item.text;
+    label.title=item.tooltip;
+    document.getElementById(item.input).title=item.tooltip;
+  });
   document.getElementById("plan_song_button").textContent=isYue2 ? "Plan Score / Semantics" : "Plan Lyrics / Details";
   document.getElementById("music_help").innerHTML=isYue2
     ? "Plan first to generate an ABC score and semantic tokens. Editing style, lyrics, score, seed, or semantic sampling clears the old semantic plan.<br>When satisfied, click 'Generate Music' to render the audio."
