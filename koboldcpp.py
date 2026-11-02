@@ -960,6 +960,142 @@ lib_hipblas = pick_existant_file("koboldcpp_hipblas.dll","koboldcpp_hipblas.so")
 lib_vulkan = pick_existant_file("koboldcpp_vulkan.dll","koboldcpp_vulkan.so")
 lib_vulkan_noavx2 = pick_existant_file("koboldcpp_vulkan_noavx2.dll","koboldcpp_vulkan_noavx2.so")
 lib_common = pick_existant_file("koboldcpp_common.dll","koboldcpp_common.so")
+
+# CPU instruction set flavors, strongest first: (flavor, required CPU
+# features).  A flavor is runnable on a machine that has all of its
+# required features, as reported by the kobold_detect_isa tool.
+cpu_isa_flavors = [
+    ("default", {"avx2"}),
+    ("noavx2", {"avx"}),
+    ("failsafe", set()),
+]
+
+def detect_cpu_isa_features():
+    """return the set of CPU features this machine has, or None if detection is not
+    possible (tool missing, failed run, non-x86 machine)."""
+    status = old_cpu_check()
+    res = None
+    if status < 0:
+        return res
+    res = set()
+    if status <= 1:
+        res.add('avx')
+        if status <= 0:
+            res.add('avx2')
+    return res
+
+def select_cpu_flavor(available, isa_features):
+    """Pick the strongest flavor in `available` (mapping flavor -> library
+    name, containing only files that exist) that this machine can run.
+    Returns (name, matched): name is None when nothing is available;
+    matched is False when the pick is a best-effort fallback because no
+    available flavor matches the detected features (or the features are
+    unknown)."""
+    if isa_features is not None:
+        for flavor, required in cpu_isa_flavors:
+            name = available.get(flavor)
+            if name is not None and required <= isa_features:
+                return name, True
+    else:
+        # Features unknown: only the most general flavor is a safe pick
+        name = available.get(cpu_isa_flavors[-1][0])
+        if name is not None:
+            return name, False
+    for flavor, _ in reversed(cpu_isa_flavors):
+        name = available.get(flavor)
+        if name is not None:
+            return name, False
+    return None, False
+
+# Per-ISA backend library name stems, by backend family and flavor.  The
+# GPU-type dispatch stays in init_library(); select_isa_libraries() handles
+# one family at a time.
+isa_backend_names = {
+    "cpu": {"default": "koboldcpp_default",
+            "noavx2": "koboldcpp_noavx2",
+            "failsafe": "koboldcpp_failsafe"},
+    "vulkan": {"default": "koboldcpp_vulkan",
+               "noavx2": "koboldcpp_vulkan_noavx2",
+               "failsafe": "koboldcpp_vulkan_failsafe"},
+}
+
+# Legacy GGML (v1/2/3 compatibility) library name stems, by flavor.  These
+# are shared between the CPU and Vulkan families.
+isa_legacy_names = {
+    "default": "koboldcpp_legacy_ggml",
+    "noavx2": "koboldcpp_legacy_ggml_noavx2",
+    "failsafe": "koboldcpp_legacy_ggml_failsafe",
+}
+
+def select_isa_libraries(isa_features, available_files, flavor_names, options=None):
+    """Select the per-ISA (flavor) backend and legacy libraries to load.
+
+    Args:
+        isa_features: set of CPU feature names from detect_cpu_isa_features()
+            (or None when detection was not possible).
+        available_files: iterable of file names present in the library
+            directory.
+        flavor_names: mapping of flavor ("default", "noavx2", "failsafe") to
+            the backend library file name stem of one backend family (see
+            isa_backend_names).
+        options: dict of ISA selecting options: "noavx2" (rule out the
+            AVX2/default flavor) and "failsafe" (only the failsafe flavor).
+
+    Returns a dict with:
+        "backend": selected backend library file name, or None when no
+            flavor of the family is available
+        "legacy": legacy GGML library file name to preload, or None
+        "backend_matched" / "legacy_matched": False when the selection is a
+            best-effort fallback (no available flavor matches the detected
+            features, or the features are unknown)
+    """
+    options = options or {}
+    available = set(available_files)
+
+    def find(stem):
+        for ext in (".so", ".dll"):
+            name = stem + ext
+            if name in available:
+                return name
+        return None
+
+    # The explicit options limit which flavors are considered: "noavx2"
+    # rules out the AVX2/default flavor, "failsafe" rules out everything
+    # except the failsafe flavor.  They apply to both picks.
+    def allowed(flavor):
+        if options.get("failsafe") and flavor != "failsafe":
+            return False
+        if options.get("noavx2") and flavor == "default":
+            return False
+        return True
+
+    result = {"backend": None, "legacy": None,
+              "backend_matched": False, "legacy_matched": False}
+
+    flavor_available = {}
+    for flavor, stem in flavor_names.items():
+        if not allowed(flavor):
+            continue
+        name = find(stem)
+        if name is not None:
+            flavor_available[flavor] = name
+
+    result["backend"], result["backend_matched"] = select_cpu_flavor(flavor_available, isa_features)
+
+    # The legacy flavor is selected separately from the backend flavor: the
+    # available legacy libraries may not cover the backend's flavor, and
+    # any legacy flavor that runs on this machine composes a viable set
+    # with the backend.
+    legacy_available = {}
+    for flavor, stem in isa_legacy_names.items():
+        if not allowed(flavor):
+            continue
+        name = find(stem)
+        if name is not None:
+            legacy_available[flavor] = name
+    result["legacy"], result["legacy_matched"] = select_cpu_flavor(legacy_available, isa_features)
+    return result
+
 libname = ""
 lib_option_pairs = [
     (lib_default, "Use CPU"),
@@ -977,36 +1113,51 @@ def init_library():
     global handle, args, libname, common_backend_handle, dll_directory_handles
     global lib_default,lib_failsafe,lib_noavx2,lib_vulkan_failsafe,lib_cublas,lib_hipblas,lib_vulkan,lib_vulkan_noavx2
 
-    libname = lib_default
+    cpu_isa_features = detect_cpu_isa_features()
+    dir_path = getdirpath()
+    abs_path = getabspath()
+    libname = None
+    selection = None
 
     if not args: # debug helper: koboldcpp.py loaded by external script
-        pass
-    elif args.noavx2: #failsafe implies noavx2 always
-        if args.failsafe and (args.usevulkan is not None) and file_exists(lib_vulkan_failsafe):
-            libname = lib_vulkan_failsafe
-        elif (args.usevulkan is not None) and file_exists(lib_vulkan_noavx2):
-            libname = lib_vulkan_noavx2
-        elif (args.failsafe) and file_exists(lib_failsafe):
-            print("!!! Attempting to use FAILSAFE MODE !!!")
-            libname = lib_failsafe
-        elif file_exists(lib_noavx2):
-            libname = lib_noavx2
+        selection = select_isa_libraries(cpu_isa_features, os.listdir(dir_path),
+                                         isa_backend_names["cpu"], {})
+        libname = selection["backend"] if selection["backend"] is not None else lib_default
     elif (args.usecuda is not None):
         if file_exists(lib_cublas):
             libname = lib_cublas
         elif file_exists(lib_hipblas):
             libname = lib_hipblas
-    elif (args.usevulkan is not None):
-        if file_exists(lib_vulkan):
-            libname = lib_vulkan
-        elif file_exists(lib_vulkan_noavx2):
-            libname = lib_vulkan_noavx2
-    elif libname == lib_default and not file_exists(lib_default) and file_exists(lib_noavx2):
-        libname = lib_noavx2
+        else:
+            # No CUDA/HIP library: fall back to the CPU backend
+            selection = select_isa_libraries(cpu_isa_features, os.listdir(dir_path),
+                                             isa_backend_names["cpu"],
+                                             {"noavx2": args.noavx2,
+                                              "failsafe": args.failsafe})
+            libname = selection["backend"]
+    else:
+        # CPU or Vulkan: the explicit flags limit which flavors are
+        # considered, and from what remains the strongest flavor this
+        # machine's CPU can run is selected, so a GPU flavor (whose CPU
+        # code is compiled per flavor) always matches the machine's
+        # instruction set.
+        family = "vulkan" if (args.usevulkan is not None) else "cpu"
+        selection = select_isa_libraries(cpu_isa_features, os.listdir(dir_path),
+                                         isa_backend_names[family],
+                                         {"noavx2": args.noavx2,
+                                          "failsafe": args.failsafe})
+        libname = selection["backend"]
+        if libname is None:
+            raise RuntimeError("No " + family + " backend library available for the requested options")
+        if not selection["backend_matched"] and cpu_isa_features is not None:
+            print("Warning: no " + family + " library matches this machine's CPU features; loading " + libname + " anyway")
+        if args.failsafe:
+            print("!!! Attempting to use FAILSAFE MODE !!!")
+
+    if libname is None:
+        raise RuntimeError("No backend library available for the requested options")
 
     print("Initializing dynamic library: " + libname)
-    dir_path = getdirpath()
-    abs_path = getabspath()
 
     if os.name == 'posix' and "GGML_METAL_PATH_RESOURCES" not in os.environ:
         metal_resource_path = os.path.join(dir_path, "kernels")
@@ -1052,25 +1203,25 @@ def init_library():
             common_backend_handle = ctypes.CDLL(route_path)
             handle = ctypes.CDLL(common_path)
         else:
-            # CPU variants depend on the koboldcpp_legacy_ggml.so SONAME (the
-            # GGMLv1/2/3 compatibility libraries, shared between variants).
-            # Preload the matching flavor globally before the backend so the
-            # loader can resolve that dependency.  CUDA/HIP keep their legacy
-            # library linked into the variant, so no preload is needed there.
-            legacy_names = {
-                lib_default: "koboldcpp_legacy_ggml.so",
-                lib_vulkan: "koboldcpp_legacy_ggml.so",
-                lib_noavx2: "koboldcpp_legacy_ggml_noavx2.so",
-                lib_vulkan_noavx2: "koboldcpp_legacy_ggml_noavx2.so",
-                lib_failsafe: "koboldcpp_legacy_ggml_failsafe.so",
-                lib_vulkan_failsafe: "koboldcpp_legacy_ggml_failsafe.so",
-            }
-            legacy_name = legacy_names.get(libname)
+            # CPU and Vulkan variants depend on a koboldcpp_legacy_ggml*.so
+            # SONAME (the GGMLv1/2/3 compatibility libraries, shared between
+            # variants).  Preload the matching flavor globally before the
+            # backend so the loader can resolve that dependency.  CUDA/HIP
+            # keep their legacy library linked into the variant, so no
+            # preload is needed there.
+            #
+            # The legacy flavor comes from the ISA selection, where it is
+            # picked separately from the backend flavor: the available
+            # legacy libraries may not cover the backend's flavor, and any
+            # legacy flavor that runs on this machine composes a viable set
+            # with the backend.
+            legacy_name = selection["legacy"] if selection is not None else None
+            if selection is not None and legacy_name is None:
+                raise FileNotFoundError("Missing legacy GGML library: " + os.path.join(dir_path, "koboldcpp_legacy_ggml*.so"))
             if legacy_name is not None:
-                legacy_path = os.path.join(dir_path, legacy_name)
-                if not os.path.isfile(legacy_path):
-                    raise FileNotFoundError("Missing legacy GGML library: " + legacy_path)
-                ctypes.CDLL(legacy_path, mode=ctypes.RTLD_GLOBAL)
+                if not selection["legacy_matched"] and cpu_isa_features is not None:
+                    print("Warning: no legacy GGML library matches this machine's CPU features; loading " + legacy_name + " anyway")
+                ctypes.CDLL(os.path.join(dir_path, legacy_name), mode=ctypes.RTLD_GLOBAL)
             # Every variant has the common koboldcpp_backend.so SONAME. Loading
             # the selected file globally satisfies koboldcpp_common's dependency.
             common_backend_handle = ctypes.CDLL(backend_path, mode=ctypes.RTLD_GLOBAL)
