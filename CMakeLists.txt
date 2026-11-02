@@ -628,14 +628,14 @@ target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(sdtype_adapter PRIVATE common2 ggml tinylibwebp ${LLAMA_EXTRA_LIBS})
 set_target_properties(sdtype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_subdirectory(otherarch/audiocpp)
+
 add_library(whisper_adapter
             otherarch/whispercpp/whisper_adapter.cpp)
 target_include_directories(whisper_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/whispercpp ./tools ./common)
 target_compile_features(whisper_adapter PUBLIC cxx_std_17) # don't bump
-target_link_libraries(whisper_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
+target_link_libraries(whisper_adapter PRIVATE common2 ggml audiocpp ${LLAMA_EXTRA_LIBS})
 set_target_properties(whisper_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
-add_subdirectory(otherarch/audiocpp)
 
 add_library(music_adapter
             otherarch/acestep/music_adapter.cpp)
