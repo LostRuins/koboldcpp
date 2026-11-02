@@ -20,7 +20,7 @@ $(error LLAMA_CUBLAS and LLAMA_HIPBLAS share object files; enable only one and r
 endif
 endif
 
-.PHONY: finishedmsg tinylibwebp tinylibwebp-smoke koboldcpp_default_backend koboldcpp_common koboldcpp_vulkan_shaders koboldcpp_vulkan_noext_shaders
+.PHONY: finishedmsg tinylibwebp tinylibwebp-smoke koboldcpp_default_backend koboldcpp_common koboldcpp_vulkan_shaders koboldcpp_vulkan_noext_shaders koboldcpp_fat
 
 default: koboldcpp_default koboldcpp_failsafe koboldcpp_noavx2 koboldcpp_vulkan_failsafe koboldcpp_cublas koboldcpp_hipblas koboldcpp_vulkan koboldcpp_vulkan_noavx2 finishedmsg
 tools: quantize_gpt2 quantize_gptj quantize_gguf quantize_neox quantize_mpt ttsmain whispermain sdmain gguf-split
@@ -186,6 +186,13 @@ endif
 
 CCV := $(shell $(CC) --version | head -n 1)
 CXXV := $(shell $(CXX) --version | head -n 1)
+
+# Fat build: build all x86 instruction set flavors (default, noavx2,
+# failsafe) in one go.  Implies the portable flag set so every flavor is
+# compiled with fixed, explicit ISA flags instead of -march=native.
+ifdef LLAMA_FAT
+LLAMA_PORTABLE = 1
+endif
 
 # Architecture specific
 # For x86 based architectures
@@ -494,6 +501,11 @@ ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64 i686 amd64))
 FAILSAFE_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
 NOAVX2_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
 endif
+endif
+
+ifdef LLAMA_FAT
+FAILSAFE_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
+NOAVX2_BUILD = $(CXX) $(CXXFLAGS)  $^ -shared -o $@.so $(LDFLAGS)
 endif
 
 ifdef LLAMA_CUBLAS
@@ -1324,6 +1336,10 @@ koboldcpp_vulkan_failsafe:
 endif
 
 endif # KCPP_COMMONIZE
+
+# Fat build: all x86 CPU instruction set flavors at once.  Builds whatever
+# flavors are enabled (with LLAMA_FAT that is default + noavx2 + failsafe).
+koboldcpp_fat: koboldcpp_default koboldcpp_noavx2 koboldcpp_failsafe
 
 # tools
 quantize_gguf: tools/quantize/main.cpp tools/quantize/quantize.cpp common/imatrix-loader.cpp ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-tiled.o ggml-tiled-kernel.o ggml-unops.o llama.o chat.o llama-model.o clip_default.o mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
