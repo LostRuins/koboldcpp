@@ -1356,7 +1356,7 @@ quantize_ace: otherarch/acestep/quantize-acestep.cpp tools/mtmd/clip.cpp ggml_v3
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 
-#window simple clinfo
+#simple clinfo
 simplecpuinfo: kcpp_src/bin/simplecpuinfo
 
 kcpp_src/bin/simplecpuinfo: kcpp_src/simplecpuinfo.cpp
