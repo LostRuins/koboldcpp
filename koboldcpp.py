@@ -1030,11 +1030,12 @@ def init_library():
                 dll_directory_handles.append(os.add_dll_directory(newpath))
 
     # GNU/MinGW variants contain only the ISA/backend-specific runtime.  The
-    # public API and all portable model code live in koboldcpp_common.  CUDA and
-    # HIP remain monolithic for now, as do older/pre-commonized distributions.
+    # public API and all portable model code live in koboldcpp_common.  On
+    # Windows CUDA and HIP remain monolithic, as do older/pre-commonized
+    # distributions.
     use_common_library = (
         file_exists(lib_common)
-        and libname not in (lib_cublas, lib_hipblas)
+        and (os.name != 'nt' or libname not in (lib_cublas, lib_hipblas))
     )
 
     if use_common_library:
@@ -1057,6 +1058,25 @@ def init_library():
             common_backend_handle = ctypes.CDLL(route_path)
             handle = ctypes.CDLL(common_path)
         else:
+            # CPU variants depend on the koboldcpp_legacy_ggml.so SONAME (the
+            # GGMLv1/2/3 compatibility libraries, shared between variants).
+            # Preload the matching flavor globally before the backend so the
+            # loader can resolve that dependency.  CUDA/HIP keep their legacy
+            # library linked into the variant, so no preload is needed there.
+            legacy_names = {
+                lib_default: "koboldcpp_legacy_ggml.so",
+                lib_vulkan: "koboldcpp_legacy_ggml.so",
+                lib_noavx2: "koboldcpp_legacy_ggml_noavx2.so",
+                lib_vulkan_noavx2: "koboldcpp_legacy_ggml_noavx2.so",
+                lib_failsafe: "koboldcpp_legacy_ggml_failsafe.so",
+                lib_vulkan_failsafe: "koboldcpp_legacy_ggml_failsafe.so",
+            }
+            legacy_name = legacy_names.get(libname)
+            if legacy_name is not None:
+                legacy_path = os.path.join(dir_path, legacy_name)
+                if not os.path.isfile(legacy_path):
+                    raise FileNotFoundError("Missing legacy GGML library: " + legacy_path)
+                ctypes.CDLL(legacy_path, mode=ctypes.RTLD_GLOBAL)
             # Every variant has the common koboldcpp_backend.so SONAME. Loading
             # the selected file globally satisfies koboldcpp_common's dependency.
             common_backend_handle = ctypes.CDLL(backend_path, mode=ctypes.RTLD_GLOBAL)
