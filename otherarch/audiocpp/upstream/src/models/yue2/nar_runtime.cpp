@@ -166,8 +166,16 @@ std::shared_ptr<const Yue2NARWeights> load_nar_weights(
     return weights;
 }
 
+// NAR's graph workspace and the AR prefix-state cache both grow linearly with
+// the acoustic chunk. The model context permits almost an entire long song in
+// one chunk, but that creates a 500+ MiB graph and a roughly 1 GiB prefix cache
+// on typical full-length generations. Keep the working set bounded instead.
+// At 25 latent frames/second this is about 82 seconds per chunk.
+constexpr int64_t kMaxNarChunkFrames = 2048;
+
 std::vector<std::pair<int64_t, int64_t>> chunk_ranges(int64_t frames, int64_t prefix_tokens, int64_t context) {
-    const int64_t chunk = std::min((context - prefix_tokens - 3) / 2, context);
+    const int64_t context_chunk = std::min((context - prefix_tokens - 3) / 2, context);
+    const int64_t chunk = std::min(context_chunk, kMaxNarChunkFrames);
     if (frames < 1 || chunk < 1) {
         throw std::runtime_error("Yue2 NAR chunk leaves no acoustic context");
     }
