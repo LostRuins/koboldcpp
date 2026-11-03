@@ -13,6 +13,7 @@
 #include "ggml-vulkan-common.h"
 #include "ggml-vulkan-buffers.cpp" //kcpp: dirty include
 #include "ggml-vulkan-debug.cpp" //kcpp: dirty include
+#include "ggml-vulkan-comm.cpp" //kcpp: dirty include
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
     vk::PhysicalDeviceProperties props = device.getProperties();
